@@ -17,7 +17,6 @@ pub fn build(b: *Builder) void {
     app.install();
 
     const exe = b.addExecutable("dynhost", "host.zig");
-    exe.force_pic = true;
     exe.pie = true;
     exe.strip = true;
     exe.setTarget(target);

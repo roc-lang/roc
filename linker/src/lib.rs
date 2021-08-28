@@ -150,10 +150,10 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     let sh_num = exec_header.e_shnum.get(NativeEndian);
     if verbose {
         println!();
-        println!("PH Offset: 0x{:x}", ph_offset);
+        println!("PH Offset: {:+x}", ph_offset);
         println!("PH Entry Size: {}", ph_ent_size);
         println!("PH Entry Count: {}", ph_num);
-        println!("SH Offset: 0x{:x}", sh_offset);
+        println!("SH Offset: {:+x}", sh_offset);
         println!("SH Entry Size: {}", sh_ent_size);
         println!("SH Entry Count: {}", sh_num);
     }
@@ -188,7 +188,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     }
 
     println!(
-        "Found roc symbol definitions: {:x?}",
+        "Found roc symbol definitions: {:+x?}",
         md.roc_symbol_vaddresses
     );
 
@@ -220,8 +220,8 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         }
     };
     if verbose {
-        println!("PLT Address: 0x{:x}", plt_address);
-        println!("PLT File Offset: 0x{:x}", plt_offset);
+        println!("PLT Address: {:+x}", plt_address);
+        println!("PLT File Offset: {:+x}", plt_offset);
     }
 
     let plt_relocs = (match exec_obj.dynamic_relocations() {
@@ -251,7 +251,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         println!();
         println!("PLT Symbols for App Functions");
         for symbol in app_syms.iter() {
-            println!("{}: {:x?}", symbol.index().0, symbol);
+            println!("{}: {:+x?}", symbol.index().0, symbol);
         }
     }
 
@@ -273,7 +273,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
 
     if verbose {
         println!();
-        println!("App Function Address Map: {:x?}", app_func_addresses);
+        println!("App Function Address Map: {:+x?}", app_func_addresses);
     }
     let symbol_and_plt_processing_duration = symbol_and_plt_processing_start.elapsed().unwrap();
 
@@ -293,7 +293,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         println!();
         println!("Text Sections");
         for sec in text_sections.iter() {
-            println!("{:x?}", sec);
+            println!("{:+x?}", sec);
         }
     }
 
@@ -315,7 +315,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
             Ok(range) => (range.offset, true),
             Err(err) => {
                 println!(
-                    "Issues dealing with section compression for {:x?}: {}",
+                    "Issues dealing with section compression for {:+x?}: {}",
                     sec, err
                 );
                 return Ok(-1);
@@ -325,7 +325,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         let data = match sec.uncompressed_data() {
             Ok(data) => data,
             Err(err) => {
-                println!("Failed to load text section, {:x?}: {}", sec, err);
+                println!("Failed to load text section, {:+x?}: {}", sec, err);
                 return Ok(-1);
             }
         };
@@ -346,13 +346,13 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
                     let target = inst.near_branch_target();
                     if let Some(func_name) = app_func_addresses.get(&target) {
                         if compressed {
-                            println!("Surgical linking does not work with compressed text sections: {:x?}", sec);
+                            println!("Surgical linking does not work with compressed text sections: {:+x?}", sec);
                             return Ok(-1);
                         }
 
                         if verbose {
                             println!(
-                                "Found branch from 0x{:x} to 0x{:x}({})",
+                                "Found branch from {:+x} to {:+x}({})",
                                 inst.ip(),
                                 target,
                                 func_name
@@ -377,11 +377,11 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
                         let offset = inst.next_ip() - op_size as u64 - sec.address() + file_offset;
                         if verbose {
                             println!(
-                                "\tNeed to surgically replace {} bytes at file offset 0x{:x}",
+                                "\tNeed to surgically replace {} bytes at file offset {:+x}",
                                 op_size, offset,
                             );
                             println!(
-                                "\tIts current value is {:x?}",
+                                "\tIts current value is {:+x?}",
                                 &exec_data[offset as usize..(offset + op_size as u64) as usize]
                             )
                         }
@@ -397,7 +397,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
                 }
                 Ok(OpKind::FarBranch16 | OpKind::FarBranch32) => {
                     println!(
-                        "Found branch type instruction that is not yet support: {:x?}",
+                        "Found branch type instruction that is not yet support: {:+x?}",
                         inst
                     );
                     return Ok(-1);
@@ -628,7 +628,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     }
     if verbose {
         println!(
-            "Shifting all data after: 0x{:x}(0x{:x})",
+            "Shifting all data after: {:+x}({:+x})",
             physical_shift_start, virtual_shift_start
         );
     }
@@ -857,7 +857,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
 
     if verbose {
         println!();
-        println!("{:x?}", md);
+        println!("{:+x?}", md);
     }
 
     let saving_metadata_start = SystemTime::now();
@@ -963,10 +963,10 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         println!();
         println!("Is Elf64: {}", elf64);
         println!("Is Little Endian: {}", litte_endian);
-        println!("PH Offset: 0x{:x}", ph_offset);
+        println!("PH Offset: {:+x}", ph_offset);
         println!("PH Entry Size: {}", ph_ent_size);
         println!("PH Entry Count: {}", ph_num);
-        println!("SH Offset: 0x{:x}", sh_offset);
+        println!("SH Offset: {:+x}", sh_offset);
         println!("SH Entry Size: {}", sh_ent_size);
         println!("SH Entry Count: {}", sh_num);
     }
@@ -995,7 +995,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     };
     if verbose {
         println!();
-        println!("New Virtual Segment Address: {:x?}", new_segment_vaddr);
+        println!("New Virtual Segment Address: {:+x?}", new_segment_vaddr);
     }
 
     // Copy sections and resolve their symbols/relocations.
@@ -1023,7 +1023,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         let data = match sec.uncompressed_data() {
             Ok(data) => data,
             Err(err) => {
-                println!("Failed to load data section, {:x?}: {}", sec, err);
+                println!("Failed to load data section, {:+x?}: {}", sec, err);
                 return Ok(-1);
             }
         };
@@ -1031,7 +1031,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         offset = aligned_offset(offset);
         if verbose {
             println!(
-                "Adding Section {} at offset {:x} with size {:x}",
+                "Adding Section {} at offset {:+x} with size {:+x}",
                 sec.name().unwrap(),
                 offset,
                 size
@@ -1053,7 +1053,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     }
 
     if verbose {
-        println!("Data Relocation Offsets: {:x?}", symbol_offset_map);
+        println!("Data Relocation Offsets: {:+x?}", symbol_offset_map);
     }
 
     let text_sections: Vec<Section> = app_obj
@@ -1075,7 +1075,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         let data = match sec.uncompressed_data() {
             Ok(data) => data,
             Err(err) => {
-                println!("Failed to load text section, {:x?}: {}", sec, err);
+                println!("Failed to load text section, {:+x?}: {}", sec, err);
                 return Ok(-1);
             }
         };
@@ -1083,7 +1083,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         offset = aligned_offset(offset);
         if verbose {
             println!(
-                "Adding Section {} at offset {:x} with size {:x}",
+                "Adding Section {} at offset {:+x} with size {:+x}",
                 sec.name().unwrap(),
                 offset,
                 size
@@ -1093,7 +1093,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         // Deal with definitions and relocations for this section.
         if verbose {
             println!();
-            println!("Processing Section: {:x?}", sec);
+            println!("Processing Section: {:+x?}", sec);
         }
         let current_section_offset = (offset - new_segment_offset) as i64;
         for sym in symbols.iter() {
@@ -1118,7 +1118,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         let mut got_offset = offset;
         for rel in sec.relocations() {
             if verbose {
-                println!("\tFound Relocation: {:x?}", rel);
+                println!("\tFound Relocation: {:+x?}", rel);
             }
             match rel.1.target() {
                 RelocationTarget::Symbol(index) => {
@@ -1131,10 +1131,15 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                         // Not one of the apps symbols, check if it is from the roc host.
                         if let Ok(name) = sym.name() {
                             if let Some(address) = md.roc_symbol_vaddresses.get(name) {
-                                Some(
-                                    (*address + md.added_byte_count) as i64
-                                        - new_segment_vaddr as i64,
-                                )
+                                let relative_addr = (*address + md.added_byte_count) as i64
+                                    - new_segment_vaddr as i64;
+                                if verbose {
+                                    println!(
+                                    "\t\tRelocations targets symbol in host: {} @ {:+x} -> {} relative to new segment",
+                                    name, address, relative_addr
+                                );
+                                }
+                                Some(relative_addr)
                             } else {
                                 None
                             }
@@ -1145,7 +1150,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                         None
                     };
                     if let Some(target_offset) = target_offset {
-                        let target = match rel.1.kind() {
+                        let target: i64 = match rel.1.kind() {
                             RelocationKind::Relative | RelocationKind::PltRelative => {
                                 target_offset - (rel.0 as i64 + current_section_offset)
                                     + rel.1.addend()
@@ -1172,14 +1177,14 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                                 let base_offset = rel.0 as i64 + current_section_offset;
                                 if verbose {
                                     println!(
-                                        "\tThe base offset is: 0x{:x}",
+                                        "\tThe base offset is: {:+x}",
                                         base_offset + current_section_offset
                                     );
                                     println!(
-                                        "\tThe got target is: 0x{:x}",
+                                        "\tThe got target is: {:+x}",
                                         target_offset + current_section_offset
                                     );
-                                    println!("\tThe final target is: 0x{:x}", target_vaddr);
+                                    println!("\tThe final target is: {:+x}", target_vaddr);
                                 }
                                 target_offset - base_offset + rel.1.addend()
                             }
@@ -1188,15 +1193,19 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                                 return Ok(-1);
                             }
                         };
+                        let base =
+                            new_segment_offset + current_section_offset as usize + rel.0 as usize;
+                        if verbose {
+                            println!("\t\tRelocation base location: {:+x}", base);
+                            println!("\t\tFinal relocation target offset: {:+x}", target);
+                        }
                         match rel.1.size() {
                             32 => {
                                 let data = (target as i32).to_le_bytes();
-                                let base = offset + rel.0 as usize;
                                 exec_mmap[base..base + 4].copy_from_slice(&data);
                             }
                             64 => {
                                 let data = target.to_le_bytes();
-                                let base = offset + rel.0 as usize;
                                 exec_mmap[base..base + 8].copy_from_slice(&data);
                             }
                             x => {
@@ -1210,7 +1219,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                         continue;
                     } else {
                         println!(
-                            "Undefined Symbol in relocation, {:x?}: {:x?}",
+                            "Undefined Symbol in relocation, {:+x?}: {:+x?}",
                             rel,
                             app_obj.symbol_by_index(index)
                         );
@@ -1219,7 +1228,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                 }
 
                 _ => {
-                    println!("Relocation target not yet support: {:x?}", rel);
+                    println!("Relocation target not yet support: {:+x?}", rel);
                     return Ok(-1);
                 }
             }
@@ -1232,7 +1241,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
 
     if verbose {
         println!(
-            "Found App Function Symbols: {:x?}",
+            "Found App Function Symbols: {:+x?}",
             app_func_segment_offset_map
         );
     }
@@ -1325,14 +1334,14 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         };
         if verbose {
             println!(
-                "Updating calls to {} to the address: {:x}",
+                "Updating calls to {} to the address: {:+x}",
                 &func_name, virt_offset
             );
         }
 
         for s in md.surgeries.get(&func_name).unwrap_or(&vec![]) {
             if verbose {
-                println!("\tPerforming surgery: {:x?}", s);
+                println!("\tPerforming surgery: {:+x?}", s);
             }
             match s.size {
                 4 => {
@@ -1340,7 +1349,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                         - (s.virtual_offset + md.added_byte_count) as i64)
                         as i32;
                     if verbose {
-                        println!("\tTarget Jump: {:x}", target);
+                        println!("\tTarget Jump: {:+x}", target);
                     }
                     let data = target.to_le_bytes();
                     exec_mmap[(s.file_offset + md.added_byte_count) as usize
@@ -1362,8 +1371,8 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
             let jmp_inst_len = 5;
             let target = (virt_offset as i64 - (plt_vaddr as i64 + jmp_inst_len as i64)) as i32;
             if verbose {
-                println!("\tPLT: {:x}, {:x}", plt_off, plt_vaddr);
-                println!("\tTarget Jump: {:x}", target);
+                println!("\tPLT: {:+x}, {:+x}", plt_off, plt_vaddr);
+                println!("\tTarget Jump: {:+x}", target);
             }
             let data = target.to_le_bytes();
             exec_mmap[plt_off] = 0xE9;
