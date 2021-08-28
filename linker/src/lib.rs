@@ -5,10 +5,11 @@ use memmap2::{Mmap, MmapMut};
 use object::{elf, endian};
 use object::{
     Architecture, BinaryFormat, CompressedFileRange, CompressionFormat, LittleEndian, NativeEndian,
-    Object, ObjectSection, ObjectSymbol, Relocation, RelocationKind, RelocationTarget, Section,
-    Symbol, SymbolSection,
+    Object, ObjectSection, ObjectSymbol, RelocationKind, RelocationTarget, Section, Symbol,
+    SymbolSection,
 };
 use roc_collections::all::MutMap;
+use std::cmp::Ordering;
 use std::convert::TryFrom;
 use std::ffi::CStr;
 use std::fs;
@@ -216,7 +217,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         println!("PLT File Offset: 0x{:x}", plt_offset);
     }
 
-    let plt_relocs: Vec<Relocation> = (match exec_obj.dynamic_relocations() {
+    let plt_relocs = (match exec_obj.dynamic_relocations() {
         Some(relocs) => relocs,
         None => {
             println!("Executable never calls any application functions.");
@@ -225,8 +226,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         }
     })
     .map(|(_, reloc)| reloc)
-    .filter(|reloc| reloc.kind() == RelocationKind::Elf(7))
-    .collect();
+    .filter(|reloc| reloc.kind() == RelocationKind::Elf(7));
 
     let app_syms: Vec<Symbol> = exec_obj
         .dynamic_symbols()
@@ -249,7 +249,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     }
 
     let mut app_func_addresses: MutMap<u64, &str> = MutMap::default();
-    for (i, reloc) in plt_relocs.into_iter().enumerate() {
+    for (i, reloc) in plt_relocs.enumerate() {
         for symbol in app_syms.iter() {
             if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
                 let func_address = (i as u64 + 1) * PLT_ADDRESS_OFFSET + plt_address;
@@ -630,18 +630,8 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     for ph in program_headers.iter_mut() {
         let p_type = ph.p_type.get(NativeEndian);
         let p_offset = ph.p_offset.get(NativeEndian);
-        if p_type == elf::PT_LOAD && p_offset == 0 {
-            // Extend length for the first segment.
-            ph.p_filesz = endian::U64::new(
-                LittleEndian,
-                ph.p_filesz.get(NativeEndian) + md.added_byte_count,
-            );
-            ph.p_memsz = endian::U64::new(
-                LittleEndian,
-                ph.p_memsz.get(NativeEndian) + md.added_byte_count,
-            );
-        } else if p_type == elf::PT_PHDR {
-            // Also increase the length of the program header section.
+        if (p_type == elf::PT_LOAD && p_offset == 0) || p_type == elf::PT_PHDR {
+            // Extend length for the first segment and the program header.
             ph.p_filesz = endian::U64::new(
                 LittleEndian,
                 ph.p_filesz.get(NativeEndian) + md.added_byte_count,
@@ -740,14 +730,11 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
             if virtual_shift_start <= r_offset {
                 rel.r_offset = endian::U64::new(LittleEndian, r_offset + md.added_byte_count);
                 // Deal with potential adjusts to absolute jumps.
-                match rel.r_type(LittleEndian, false) {
-                    elf::R_X86_64_RELATIVE => {
-                        let r_addend = rel.r_addend.get(LittleEndian);
-                        rel.r_addend
-                            .set(LittleEndian, r_addend + md.added_byte_count as i64);
-                    }
-                    // TODO: Verify other relocation types.
-                    _ => {}
+                // TODO: Verify other relocation types.
+                if rel.r_type(LittleEndian, false) == elf::R_X86_64_RELATIVE {
+                    let r_addend = rel.r_addend.get(LittleEndian);
+                    rel.r_addend
+                        .set(LittleEndian, r_addend + md.added_byte_count as i64);
                 }
             }
         }
@@ -840,8 +827,8 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     let out_ptr = out_mmap.as_mut_ptr();
     unsafe {
         std::ptr::copy(
-            out_ptr.offset((dyn_offset as usize + 16 * (shared_lib_index + 1)) as isize),
-            out_ptr.offset((dyn_offset as usize + 16 * shared_lib_index) as isize),
+            out_ptr.add(dyn_offset as usize + 16 * (shared_lib_index + 1)),
+            out_ptr.add(dyn_offset as usize + 16 * shared_lib_index),
             16 * (dynamic_lib_count - shared_lib_index),
         );
     }
@@ -994,12 +981,10 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     // Align physical and virtual address of new segment.
     let remainder = new_segment_offset as u64 % md.load_align_constraint;
     let vremainder = md.last_vaddr % md.load_align_constraint;
-    let new_segment_vaddr = if remainder > vremainder {
-        md.last_vaddr + (remainder - vremainder)
-    } else if vremainder > remainder {
-        md.last_vaddr + ((remainder + md.load_align_constraint) - vremainder)
-    } else {
-        md.last_vaddr
+    let new_segment_vaddr = match remainder.cmp(&vremainder) {
+        Ordering::Greater => md.last_vaddr + (remainder - vremainder),
+        Ordering::Less => md.last_vaddr + ((remainder + md.load_align_constraint) - vremainder),
+        Ordering::Equal => md.last_vaddr,
     };
     if verbose {
         println!();
@@ -1132,6 +1117,8 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                     {
                         Some(*target_offset as i64)
                     } else if let Ok(sym) = app_obj.symbol_by_index(index) {
+                        // TODO: Is there a better way to deal with all this nesting in rust.
+                        // I really want the experimental multiple if let statement.
                         // Not one of the apps symbols, check if it is from the roc host.
                         if let Ok(name) = sym.name() {
                             if let Some(address) = md.roc_symbol_vaddresses.get(name) {
@@ -1208,6 +1195,10 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                                 return Ok(-1);
                             }
                         }
+                    } else if matches!(app_obj.symbol_by_index(index), Ok(sym) if ["__divti3", "__udivti3"].contains(&sym.name().unwrap_or_default()))
+                    {
+                        // Explicitly ignore some symbols that are currently always linked.
+                        continue;
                     } else {
                         println!(
                             "Undefined Symbol in relocation, {:x?}: {:x?}",
@@ -1430,15 +1421,15 @@ fn aligned_offset(offset: usize) -> usize {
     }
 }
 
-fn load_struct_inplace<'a, T>(bytes: &'a [u8], offset: usize) -> &'a T {
+fn load_struct_inplace<T>(bytes: &[u8], offset: usize) -> &T {
     &load_structs_inplace(bytes, offset, 1)[0]
 }
 
-fn load_struct_inplace_mut<'a, T>(bytes: &'a mut [u8], offset: usize) -> &'a mut T {
+fn load_struct_inplace_mut<T>(bytes: &mut [u8], offset: usize) -> &mut T {
     &mut load_structs_inplace_mut(bytes, offset, 1)[0]
 }
 
-fn load_structs_inplace<'a, T>(bytes: &'a [u8], offset: usize, count: usize) -> &'a [T] {
+fn load_structs_inplace<T>(bytes: &[u8], offset: usize, count: usize) -> &[T] {
     let (head, body, tail) =
         unsafe { bytes[offset..offset + count * mem::size_of::<T>()].align_to::<T>() };
     assert!(head.is_empty(), "Data was not aligned");
@@ -1447,11 +1438,7 @@ fn load_structs_inplace<'a, T>(bytes: &'a [u8], offset: usize, count: usize) -> 
     body
 }
 
-fn load_structs_inplace_mut<'a, T>(
-    bytes: &'a mut [u8],
-    offset: usize,
-    count: usize,
-) -> &'a mut [T] {
+fn load_structs_inplace_mut<T>(bytes: &mut [u8], offset: usize, count: usize) -> &mut [T] {
     let (head, body, tail) =
         unsafe { bytes[offset..offset + count * mem::size_of::<T>()].align_to_mut::<T>() };
     assert!(head.is_empty(), "Data was not aligned");
