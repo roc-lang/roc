@@ -25,6 +25,9 @@ comptime {
         @export(testing_roc_realloc, .{ .name = "roc_realloc", .linkage = .Strong });
         @export(testing_roc_dealloc, .{ .name = "roc_dealloc", .linkage = .Strong });
         @export(testing_roc_panic, .{ .name = "roc_panic", .linkage = .Strong });
+        @export(testing_roc_expect_failed, .{ .name = "roc_expect_failed", .linkage = .Strong });
+    } else {
+        @export(expect_failed, .{ .name = "roc_expect_failed", .linkage = .Strong });
     }
 }
 
@@ -43,6 +46,16 @@ fn testing_roc_dealloc(c_ptr: *c_void, _: u32) callconv(.C) void {
     const ptr = @ptrCast([*]u8, @alignCast(16, c_ptr));
 
     std.testing.allocator.destroy(ptr);
+}
+
+fn testing_roc_expect_failed() callconv(.C) void {
+    const stderr = std.io.getStdErr().writer();
+    stderr.print("Expect failed inside test\n", .{}) catch unreachable;
+}
+
+fn expect_failed() callconv(.C) void {
+    const stderr = std.io.getStdErr().writer();
+    stderr.print("Expect failed outside test\n", .{}) catch unreachable;
 }
 
 fn testing_roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {

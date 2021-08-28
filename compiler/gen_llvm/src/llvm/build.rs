@@ -5175,8 +5175,9 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             bd.position_at_end(throw_block);
 
-            throw_exception(env, "assert failed!");
+            call_void_bitcode_fn(env, &[], bitcode::EXPECT_FAILED);
 
+            bd.build_unconditional_branch(then_block);
             bd.position_at_end(then_block);
 
             cond
