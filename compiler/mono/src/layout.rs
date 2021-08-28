@@ -1054,7 +1054,6 @@ impl<'a> Builtin<'a> {
     const I16_SIZE: u32 = std::mem::size_of::<i16>() as u32;
     const I8_SIZE: u32 = std::mem::size_of::<i8>() as u32;
     const I1_SIZE: u32 = std::mem::size_of::<bool>() as u32;
-    const USIZE_SIZE: u32 = std::mem::size_of::<usize>() as u32;
     const DECIMAL_SIZE: u32 = std::mem::size_of::<i128>() as u32;
     const F128_SIZE: u32 = 16;
     const F64_SIZE: u32 = std::mem::size_of::<f64>() as u32;
@@ -1084,7 +1083,7 @@ impl<'a> Builtin<'a> {
             Int16 => Builtin::I16_SIZE,
             Int8 => Builtin::I8_SIZE,
             Int1 => Builtin::I1_SIZE,
-            Usize => Builtin::USIZE_SIZE,
+            Usize => pointer_size,
             Decimal => Builtin::DECIMAL_SIZE,
             Float128 => Builtin::F128_SIZE,
             Float64 => Builtin::F64_SIZE,
@@ -1111,7 +1110,7 @@ impl<'a> Builtin<'a> {
             Int16 => align_of::<i16>() as u32,
             Int8 => align_of::<i8>() as u32,
             Int1 => align_of::<bool>() as u32,
-            Usize => align_of::<usize>() as u32,
+            Usize => pointer_size,
             Decimal => align_of::<i128>() as u32,
             Float128 => align_of::<i128>() as u32,
             Float64 => align_of::<f64>() as u32,

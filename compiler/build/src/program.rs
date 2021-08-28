@@ -219,36 +219,54 @@ pub fn gen_from_mono_module(
             }
         }
 
-        // assemble the .ll into a .bc
-        let _ = Command::new("llvm-as")
-            .args(&[
-                app_ll_dbg_file.to_str().unwrap(),
-                "-o",
-                app_bc_file.to_str().unwrap(),
-            ])
-            .output()
-            .unwrap();
+        use target_lexicon::Architecture;
+        match target.architecture {
+            Architecture::X86_64 | Architecture::Aarch64(_) => {
+                // assemble the .ll into a .bc
+                let _ = Command::new("llvm-as")
+                    .args(&[
+                        app_ll_dbg_file.to_str().unwrap(),
+                        "-o",
+                        app_bc_file.to_str().unwrap(),
+                    ])
+                    .output()
+                    .unwrap();
 
-        let llc_args = &[
-            "-filetype=obj",
-            app_bc_file.to_str().unwrap(),
-            "-o",
-            app_o_file.to_str().unwrap(),
-        ];
+                let llc_args = &[
+                    "-filetype=obj",
+                    app_bc_file.to_str().unwrap(),
+                    "-o",
+                    app_o_file.to_str().unwrap(),
+                ];
 
-        // write the .o file. Note that this builds the .o for the local machine,
-        // and ignores the `target_machine` entirely.
-        //
-        // different systems name this executable differently, so we shotgun for
-        // the most common ones and then give up.
-        let _: Result<std::process::Output, std::io::Error> =
-            Command::new(format!("llc-{}", LLVM_VERSION))
-                .args(llc_args)
-                .output()
-                .or_else(|_| Command::new("llc").args(llc_args).output())
-                .map_err(|_| {
-                    panic!("We couldn't find llc-{} on your machine!", LLVM_VERSION);
-                });
+                // write the .o file. Note that this builds the .o for the local machine,
+                // and ignores the `target_machine` entirely.
+                //
+                // different systems name this executable differently, so we shotgun for
+                // the most common ones and then give up.
+                let _: Result<std::process::Output, std::io::Error> =
+                    Command::new(format!("llc-{}", LLVM_VERSION))
+                        .args(llc_args)
+                        .output()
+                        .or_else(|_| Command::new("llc").args(llc_args).output())
+                        .map_err(|_| {
+                            panic!("We couldn't find llc-{} on your machine!", LLVM_VERSION);
+                        });
+            }
+
+            Architecture::Wasm32 => {
+                // assemble the .ll into a .bc
+                let _ = Command::new("llvm-as")
+                    .args(&[
+                        app_ll_dbg_file.to_str().unwrap(),
+                        "-o",
+                        app_o_file.to_str().unwrap(),
+                    ])
+                    .output()
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
     } else {
         // Emit the .o file
         use target_lexicon::Architecture;
