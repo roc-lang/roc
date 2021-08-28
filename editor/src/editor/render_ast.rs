@@ -5,6 +5,7 @@ use crate::editor::slow_pool::SlowPool;
 use crate::editor::{ed_error::EdResult, theme::EdTheme, util::map_get};
 use crate::graphics::primitives::rect::Rect;
 use crate::graphics::primitives::text as gr_text;
+use crate::lang::ast::{DefId, ExprId};
 use cgmath::Vector2;
 use winit::dpi::PhysicalSize;
 
@@ -16,7 +17,7 @@ pub fn build_code_graphics<'a>(
     txt_coords: Vector2<f32>,
     config: &Config,
     glyph_dim_rect: Rect,
-    markup_node_pool: &'a SlowPool,
+    mark_node_pool: &'a SlowPool,
 ) -> EdResult<RenderedWgpu> {
     let area_bounds = (size.width as f32, size.height as f32);
     let layout = wgpu_glyph::Layout::default().h_align(wgpu_glyph::HorizontalAlign::Left);
@@ -27,7 +28,7 @@ pub fn build_code_graphics<'a>(
     let mut txt_row_col = (0, 0);
 
     for markup_id in markup_ids.iter() {
-        let mark_node = markup_node_pool.get(*markup_id);
+        let mark_node = mark_node_pool.get(*markup_id);
 
         let (mut glyph_text_vec, mut rects) = markup_to_wgpu(
             mark_node,
@@ -38,7 +39,7 @@ pub fn build_code_graphics<'a>(
                 glyph_dim_rect,
             },
             &mut txt_row_col,
-            markup_node_pool,
+            mark_node_pool,
         )?;
 
         all_glyph_text_vec.append(&mut glyph_text_vec);
@@ -69,7 +70,7 @@ fn markup_to_wgpu<'a>(
     markup_node: &'a MarkupNode,
     code_style: &CodeStyle,
     txt_row_col: &mut (usize, usize),
-    markup_node_pool: &'a SlowPool,
+    mark_node_pool: &'a SlowPool,
 ) -> EdResult<(Vec<glyph_brush::OwnedText>, Vec<Rect>)> {
     let mut wgpu_texts: Vec<glyph_brush::OwnedText> = Vec::new();
     let mut rects: Vec<Rect> = Vec::new();
@@ -80,7 +81,7 @@ fn markup_to_wgpu<'a>(
         &mut rects,
         code_style,
         txt_row_col,
-        markup_node_pool,
+        mark_node_pool,
     )?;
 
     Ok((wgpu_texts, rects))
@@ -92,7 +93,7 @@ fn markup_to_wgpu_helper<'a>(
     rects: &mut Vec<Rect>,
     code_style: &CodeStyle,
     txt_row_col: &mut (usize, usize),
-    markup_node_pool: &'a SlowPool,
+    mark_node_pool: &'a SlowPool,
 ) -> EdResult<()> {
     match markup_node {
         MarkupNode::Nested {
@@ -102,14 +103,14 @@ fn markup_to_wgpu_helper<'a>(
             newline_at_end,
         } => {
             for child_id in children_ids.iter() {
-                let child = markup_node_pool.get(*child_id);
+                let child = mark_node_pool.get(*child_id);
                 markup_to_wgpu_helper(
                     child,
                     wgpu_texts,
                     rects,
                     code_style,
                     txt_row_col,
-                    markup_node_pool,
+                    mark_node_pool,
                 )?;
             }
 

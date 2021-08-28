@@ -6,7 +6,7 @@ use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::util::first_last_index_of;
 use crate::editor::util::index_of;
-use crate::lang::ast::ExprId;
+use crate::lang::parse::ASTNodeId;
 use crate::ui::text::selection::Selection;
 use crate::ui::text::text_pos::TextPos;
 use crate::ui::ui_error::{OutOfBounds, UIResult};
@@ -153,10 +153,10 @@ impl GridNodeMap {
         &self,
         caret_pos: TextPos,
         ed_model: &EdModel,
-    ) -> EdResult<(TextPos, TextPos, ExprId, MarkNodeId)> {
+    ) -> EdResult<(TextPos, TextPos, ASTNodeId, MarkNodeId)> {
         let line = slice_get(caret_pos.line, &self.lines)?;
         let node_id = slice_get(caret_pos.column, line)?;
-        let node = ed_model.markup_node_pool.get(*node_id);
+        let node = ed_model.mark_node_pool.get(*node_id);
 
         if node.is_nested() {
             let (start_pos, end_pos) = self.get_nested_start_end_pos(*node_id, ed_model)?;
@@ -167,7 +167,7 @@ impl GridNodeMap {
 
             let curr_node_id = slice_get(first_node_index, line)?;
             let curr_ast_node_id = ed_model
-                .markup_node_pool
+                .mark_node_pool
                 .get(*curr_node_id)
                 .get_ast_node_id();
 
@@ -180,11 +180,11 @@ impl GridNodeMap {
             for i in (0..first_node_index).rev() {
                 let prev_pos_node_id = slice_get(i, line)?;
                 let prev_ast_node_id = ed_model
-                    .markup_node_pool
+                    .mark_node_pool
                     .get(*prev_pos_node_id)
                     .get_ast_node_id();
 
-                if prev_ast_node_id == curr_ast_node_id {
+                if prev_ast_node_id.equals(&curr_ast_node_id) {
                     if pos_extra_subtract > 0 {
                         expr_start_index -= pos_extra_subtract + 1;
                         pos_extra_subtract = 0;
@@ -202,11 +202,11 @@ impl GridNodeMap {
             for i in last_node_index..line.len() {
                 let next_pos_node_id = slice_get(i, line)?;
                 let next_ast_node_id = ed_model
-                    .markup_node_pool
+                    .mark_node_pool
                     .get(*next_pos_node_id)
                     .get_ast_node_id();
 
-                if next_ast_node_id == curr_ast_node_id {
+                if next_ast_node_id.equals(&curr_ast_node_id) {
                     if pos_extra_add > 0 {
                         expr_end_index += pos_extra_add + 1;
                         pos_extra_add = 0;
@@ -219,7 +219,7 @@ impl GridNodeMap {
             }
 
             let correct_mark_node_id =
-                GridNodeMap::get_top_node_with_expr_id(*curr_node_id, &ed_model.markup_node_pool);
+                GridNodeMap::get_top_node_with_expr_id(*curr_node_id, &ed_model.mark_node_pool);
 
             Ok((
                 TextPos {
@@ -240,14 +240,14 @@ impl GridNodeMap {
     // `{` is not the entire Expr2
     fn get_top_node_with_expr_id(
         curr_node_id: MarkNodeId,
-        markup_node_pool: &SlowPool,
+        mark_node_pool: &SlowPool,
     ) -> MarkNodeId {
-        let curr_node = markup_node_pool.get(curr_node_id);
+        let curr_node = mark_node_pool.get(curr_node_id);
 
         if let Some(parent_id) = curr_node.get_parent_id_opt() {
-            let parent = markup_node_pool.get(parent_id);
+            let parent = mark_node_pool.get(parent_id);
 
-            if parent.get_ast_node_id() == curr_node.get_ast_node_id() {
+            if parent.get_ast_node_id().equals(&curr_node.get_ast_node_id()) {
                 parent_id
             } else {
                 curr_node_id
@@ -262,7 +262,7 @@ impl GridNodeMap {
         nested_node_id: MarkNodeId,
         ed_model: &EdModel,
     ) -> EdResult<(TextPos, TextPos)> {
-        let parent_mark_node = ed_model.markup_node_pool.get(nested_node_id);
+        let parent_mark_node = ed_model.mark_node_pool.get(nested_node_id);
 
         let all_child_ids = parent_mark_node.get_children_ids();
         let first_child_id = all_child_ids

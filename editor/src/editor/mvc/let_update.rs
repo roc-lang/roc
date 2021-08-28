@@ -85,7 +85,7 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
 
     if is_blank_node {
         ed_model
-            .markup_node_pool
+            .mark_node_pool
             .replace_node(curr_mark_node_id, val_mark_node);
 
         // remove data corresponding to Blank node
@@ -118,7 +118,7 @@ pub fn update_let_value(
         let old_caret_pos = ed_model.get_caret();
 
         // update markup
-        let val_name_mn_mut = ed_model.markup_node_pool.get_mut(val_name_mn_id);
+        let val_name_mn_mut = ed_model.mark_node_pool.get_mut(val_name_mn_id);
         let content_str_mut = val_name_mn_mut.get_content_mut()?;
 
         let old_val_name = content_str_mut.clone();

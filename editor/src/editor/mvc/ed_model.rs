@@ -7,7 +7,7 @@ use crate::editor::{
     ed_error::{EdResult, EmptyCodeString, MissingParent, NoNodeAtCaretPosition},
 };
 use crate::graphics::primitives::rect::Rect;
-use crate::lang::ast::ExprId;
+use crate::lang::ast::{DefId, ExprId};
 use crate::lang::expr::Env;
 use crate::lang::parse::AST;
 use crate::lang::pool::PoolStr;
@@ -28,7 +28,7 @@ pub struct EdModel<'a> {
     // allows us to map window coordinates to MarkNodeId's
     pub grid_node_map: GridNodeMap,
     pub markup_ids: Vec<MarkNodeId>, // one root node for every expression
-    pub markup_node_pool: SlowPool,
+    pub mark_node_pool: SlowPool,
     // contains single char dimensions, used to calculate line height, column width...
     pub glyph_dim_rect_opt: Option<Rect>,
     pub has_focus: bool,
@@ -57,7 +57,7 @@ pub fn init_model<'a>(
 ) -> EdResult<EdModel<'a>> {
     let mut module = EdModule::new(code_str, env, code_arena)?;
 
-    let mut markup_node_pool = SlowPool::new();
+    let mut mark_node_pool = SlowPool::new();
 
     let markup_ids = if code_str.is_empty() {
         EmptyCodeString {}.fail()
@@ -66,13 +66,13 @@ pub fn init_model<'a>(
             code_arena,
             &mut module.env,
             &module.ast,
-            &mut markup_node_pool,
+            &mut mark_node_pool,
             &loaded_module.interns,
         )
     }?;
 
-    let code_lines = EdModel::build_code_lines_from_markup(&markup_ids, &markup_node_pool)?;
-    let grid_node_map = EdModel::build_node_map_from_markup(&markup_ids, &markup_node_pool)?;
+    let code_lines = EdModel::build_code_lines_from_markup(&markup_ids, &mark_node_pool)?;
+    let grid_node_map = EdModel::build_node_map_from_markup(&markup_ids, &mark_node_pool)?;
 
     let caret = match caret_pos {
         CaretPos::Start => CaretWSelect::default(),
@@ -86,7 +86,7 @@ pub fn init_model<'a>(
         code_lines,
         grid_node_map,
         markup_ids,
-        markup_node_pool,
+        mark_node_pool,
         glyph_dim_rect_opt: None,
         has_focus: true,
         caret_w_select_vec: NonEmpty::new((caret, None)),
@@ -135,11 +135,11 @@ impl<'a> EdModel<'a> {
     pub fn get_curr_child_indices(&self) -> EdResult<(usize, usize)> {
         if self.node_exists_at_caret() {
             let curr_mark_node_id = self.get_curr_mark_node_id()?;
-            let curr_mark_node = self.markup_node_pool.get(curr_mark_node_id);
+            let curr_mark_node = self.mark_node_pool.get(curr_mark_node_id);
 
             if let Some(parent_id) = curr_mark_node.get_parent_id_opt() {
-                let parent = self.markup_node_pool.get(parent_id);
-                parent.get_child_indices(curr_mark_node_id, &self.markup_node_pool)
+                let parent = self.mark_node_pool.get(parent_id);
+                parent.get_child_indices(curr_mark_node_id, &self.mark_node_pool)
             } else {
                 MissingParent {
                     node_id: curr_mark_node_id,

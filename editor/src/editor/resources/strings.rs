@@ -15,8 +15,9 @@ app "test-app"
     imports []
     provides [ main ] to base
 
-main = "Hello, world!"
+main = "Hello Main"
 
-yolo = "Hello, world!"
+mars = "Yo Mars!"
+
 
 "#;

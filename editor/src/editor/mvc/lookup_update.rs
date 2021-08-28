@@ -35,7 +35,7 @@ pub fn update_invalid_lookup(
             .set(ast_node_id, Expr2::InvalidLookup(new_pool_str));
 
         // update MarkupNode
-        let curr_mark_node_mut = ed_model.markup_node_pool.get_mut(curr_mark_node_id);
+        let curr_mark_node_mut = ed_model.mark_node_pool.get_mut(curr_mark_node_id);
         let content_str_mut = curr_mark_node_mut.get_content_mut()?;
         content_str_mut.insert_str(caret_offset, input_str);
 

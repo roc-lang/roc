@@ -26,8 +26,10 @@ use crate::editor::mvc::string_update::update_string;
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::syntax_highlight::HighlightStyle;
+use crate::lang::ast::Def2;
 use crate::lang::ast::{Expr2, ExprId};
 use crate::lang::constrain::constrain_expr;
+use crate::lang::parse::ASTNodeId;
 use crate::lang::pool::Pool;
 use crate::lang::pool::PoolStr;
 use crate::lang::types::Type2;
@@ -116,7 +118,7 @@ impl<'a> EdModel<'a> {
 
     pub fn build_node_map_from_markup(
         markup_ids: &[MarkNodeId],
-        markup_node_pool: &SlowPool,
+        mark_node_pool: &SlowPool,
     ) -> EdResult<GridNodeMap> {
         let mut grid_node_map = GridNodeMap::new();
         let mut line_ctr = 0;
@@ -126,28 +128,28 @@ impl<'a> EdModel<'a> {
                 *mark_id,
                 &mut grid_node_map,
                 &mut line_ctr,
-                markup_node_pool,
+                mark_node_pool,
             )?;
         }
 
         Ok(grid_node_map)
     }
 
-    pub fn add_mark_node(&mut self, node: MarkupNode) -> MarkNodeId {
-        self.markup_node_pool.add(node)
+    pub fn add_mark_node<T>(&mut self, node: MarkupNode) -> MarkNodeId {
+        self.mark_node_pool.add(node)
     }
 
     fn build_grid_node_map(
         node_id: MarkNodeId,
         grid_node_map: &mut GridNodeMap,
         line_ctr: &mut usize,
-        markup_node_pool: &SlowPool,
+        mark_node_pool: &SlowPool,
     ) -> EdResult<()> {
-        let node = markup_node_pool.get(node_id);
+        let node = mark_node_pool.get(node_id);
 
         if node.is_nested() {
             for child_id in node.get_children_ids() {
-                EdModel::build_grid_node_map(child_id, grid_node_map, line_ctr, markup_node_pool)?;
+                EdModel::build_grid_node_map(child_id, grid_node_map, line_ctr, mark_node_pool)?;
             }
         } else {
             let node_content_str = node.get_content();
@@ -165,12 +167,12 @@ impl<'a> EdModel<'a> {
 
     pub fn build_code_lines_from_markup(
         markup_node_ids: &[MarkNodeId],
-        markup_node_pool: &SlowPool,
+        mark_node_pool: &SlowPool,
     ) -> EdResult<CodeLines> {
         let mut all_code_string = String::new();
 
         for mark_node_id in markup_node_ids.iter() {
-            EdModel::build_markup_string(*mark_node_id, &mut all_code_string, markup_node_pool)?;
+            EdModel::build_markup_string(*mark_node_id, &mut all_code_string, mark_node_pool)?;
         }
 
         let code_lines = CodeLines::from_str(&all_code_string);
@@ -181,13 +183,13 @@ impl<'a> EdModel<'a> {
     fn build_markup_string(
         node_id: MarkNodeId,
         all_code_string: &mut String,
-        markup_node_pool: &SlowPool,
+        mark_node_pool: &SlowPool,
     ) -> EdResult<()> {
-        let node = markup_node_pool.get(node_id);
+        let node = mark_node_pool.get(node_id);
 
         if node.is_nested() {
             for child_id in node.get_children_ids() {
-                EdModel::build_markup_string(child_id, all_code_string, markup_node_pool)?;
+                EdModel::build_markup_string(child_id, all_code_string, mark_node_pool)?;
             }
         } else {
             let node_content_str = node.get_content();
@@ -224,7 +226,7 @@ impl<'a> EdModel<'a> {
         let mut col_nr = index;
 
         for &node_id in node_ids {
-            let node_content_str = self.markup_node_pool.get(node_id).get_content();
+            let node_content_str = self.mark_node_pool.get(node_id).get_content();
 
             self.grid_node_map.insert_between_line(
                 line_nr,
@@ -284,10 +286,10 @@ impl<'a> EdModel<'a> {
     pub fn select_expr(&mut self) -> EdResult<()> {
         // include parent in selection if an `Expr2` was already selected
         if let Some(selected_expr) = &self.selected_expr_opt {
-            let expr2_level_mark_node = self.markup_node_pool.get(selected_expr.mark_node_id);
+            let expr2_level_mark_node = self.mark_node_pool.get(selected_expr.mark_node_id);
 
             if let Some(parent_id) = expr2_level_mark_node.get_parent_id_opt() {
-                let parent_mark_node = self.markup_node_pool.get(parent_id);
+                let parent_mark_node = self.mark_node_pool.get(parent_id);
                 let ast_node_id = parent_mark_node.get_ast_node_id();
 
                 let (expr_start_pos, expr_end_pos) = self
@@ -433,7 +435,7 @@ impl<'a> EdModel<'a> {
 
     fn replace_selected_expr_with_blank(&mut self) -> EdResult<()> {
         let expr_mark_node_id_opt = if let Some(sel_expr) = &self.selected_expr_opt {
-            let expr2_level_mark_node = self.markup_node_pool.get(sel_expr.mark_node_id);
+            let expr2_level_mark_node = self.mark_node_pool.get(sel_expr.mark_node_id);
             let newline_at_end = expr2_level_mark_node.has_newline_at_end();
 
             let blank_replacement = MarkupNode::Blank {
@@ -444,7 +446,7 @@ impl<'a> EdModel<'a> {
                 newline_at_end,
             };
 
-            self.markup_node_pool
+            self.mark_node_pool
                 .replace_node(sel_expr.mark_node_id, blank_replacement);
 
             let active_selection = self.get_selection().context(MissingSelection {})?;
@@ -616,15 +618,15 @@ pub struct NodeContext<'a> {
     pub curr_mark_node_id: MarkNodeId,
     pub curr_mark_node: &'a MarkupNode,
     pub parent_id_opt: Option<MarkNodeId>,
-    pub ast_node_id: ExprId,
+    pub ast_node_id: ASTNodeId,
 }
 
-pub fn get_node_context<'a>(ed_model: &'a EdModel) -> EdResult<NodeContext<'a>> {
+pub fn get_node_context<'a, T>(ed_model: &'a EdModel) -> EdResult<NodeContext<'a>> {
     let old_caret_pos = ed_model.get_caret();
     let curr_mark_node_id = ed_model
         .grid_node_map
         .get_id_at_row_col(ed_model.get_caret())?;
-    let curr_mark_node = ed_model.markup_node_pool.get(curr_mark_node_id);
+    let curr_mark_node = ed_model.mark_node_pool.get(curr_mark_node_id);
     let parent_id_opt = curr_mark_node.get_parent_id_opt();
     let ast_node_id = curr_mark_node.get_ast_node_id();
 
@@ -662,7 +664,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                 let outcome =
                     if ed_model.node_exists_at_caret() {
                         let curr_mark_node_id = ed_model.get_curr_mark_node_id()?;
-                            let curr_mark_node = ed_model.markup_node_pool.get(curr_mark_node_id);
+                            let curr_mark_node = ed_model.mark_node_pool.get(curr_mark_node_id);
                             let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
 
                             let ast_node_id = curr_mark_node.get_ast_node_id();
@@ -743,7 +745,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                         _ => {
                                             let prev_ast_node_id =
                                                 ed_model
-                                                .markup_node_pool
+                                                .mark_node_pool
                                                 .get(prev_mark_node_id)
                                                 .get_ast_node_id();
 
@@ -763,7 +765,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                     )?
                                                 }
                                                 Expr2::Record{ record_var:_, fields } => {
-                                                    let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
+                                                    let prev_mark_node = ed_model.mark_node_pool.get(prev_mark_node_id);
 
                                                     if (curr_mark_node.get_content() == nodes::RIGHT_ACCOLADE || curr_mark_node.get_content() == nodes::COLON) &&
                                                         prev_mark_node.is_all_alphanumeric() {
@@ -787,7 +789,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                     }
                                                 }
                                                 Expr2::List{ elem_var: _, elems: _} => {
-                                                    let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
+                                                    let prev_mark_node = ed_model.mark_node_pool.get(prev_mark_node_id);
 
                                                     if prev_mark_node.get_content() == nodes::LEFT_SQUARE_BR && curr_mark_node.get_content() == nodes::RIGHT_SQUARE_BR {
                                                         // based on if, we are at the start of the list
@@ -806,7 +808,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                 _ => {
                                                     match ast_node_ref {
                                                         Expr2::EmptyRecord => {
-                                                            let sibling_ids = curr_mark_node.get_sibling_ids(&ed_model.markup_node_pool);
+                                                            let sibling_ids = curr_mark_node.get_sibling_ids(&ed_model.mark_node_pool);
 
                                                             update_empty_record(
                                                                 &ch.to_string(),
@@ -825,7 +827,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                     let mark_parent_id_opt = curr_mark_node.get_parent_id_opt();
 
                                     if let Some(mark_parent_id) = mark_parent_id_opt {
-                                        let parent_ast_id = ed_model.markup_node_pool.get(mark_parent_id).get_ast_node_id();
+                                        let parent_ast_id = ed_model.mark_node_pool.get(mark_parent_id).get_ast_node_id();
 
                                         update_record_colon(ed_model, parent_ast_id)?
                                     } else {
@@ -838,7 +840,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                         let mark_parent_id_opt = curr_mark_node.get_parent_id_opt();
 
                                         if let Some(mark_parent_id) = mark_parent_id_opt {
-                                            let parent_ast_id = ed_model.markup_node_pool.get(mark_parent_id).get_ast_node_id();
+                                            let parent_ast_id = ed_model.mark_node_pool.get(mark_parent_id).get_ast_node_id();
                                             let parent_expr2 = ed_model.module.env.pool.get(parent_ast_id);
 
                                             match parent_expr2 {
@@ -864,7 +866,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                         }
                                     }
                                 } else if "\"{[".contains(*ch) {
-                                    let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
+                                    let prev_mark_node = ed_model.mark_node_pool.get(prev_mark_node_id);
 
                                     if prev_mark_node.get_content() == nodes::LEFT_SQUARE_BR && curr_mark_node.get_content() == nodes::RIGHT_SQUARE_BR {
                                         let (new_child_index, new_ast_child_index) = ed_model.get_curr_child_indices()?;
@@ -943,7 +945,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                             } else {
                                 let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
                                 if let Some(prev_mark_node_id) = prev_mark_node_id_opt {
-                                    let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
+                                    let prev_mark_node = ed_model.mark_node_pool.get(prev_mark_node_id);
 
                                     let prev_ast_node = ed_model.module.env.pool.get(prev_mark_node.get_ast_node_id());
 
@@ -963,11 +965,11 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                 if caret_pos.line > 0 {
                                                     // TODO avoid code replication with '\r'
                                                     // insert blank first, this simplifies flow
-                                                    let new_blank = Expr2::Blank;
+                                                    let new_blank = Def2::Blank;
                                                     let new_blank_id = ed_model.module.env.pool.add(new_blank);
 
                                                     // TODO this should insert at caret line_nr, not push at end
-                                                    ed_model.module.ast.expression_ids.push(new_blank_id);
+                                                    ed_model.module.ast.def_ids.push(new_blank_id);
 
                                                     let blank_mn_id = ed_model
                                                         .add_mark_node(new_blank_mn(new_blank_id, None));

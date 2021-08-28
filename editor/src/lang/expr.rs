@@ -5,10 +5,7 @@ use bumpalo::{collections::Vec as BumpVec, Bump};
 use std::collections::HashMap;
 use std::iter::FromIterator;
 
-use crate::lang::ast::{
-    expr2_to_string, ClosureExtra, Expr2, ExprId, FloatVal, IntStyle, IntVal, RecordField,
-    ValueDef, WhenBranch,
-};
+use crate::lang::ast::{ClosureExtra, Def2, Expr2, ExprId, FloatVal, IntStyle, IntVal, RecordField, ValueDef, WhenBranch, expr2_to_string, value_def_to_string};
 use crate::lang::def::{
     canonicalize_defs, sort_can_defs, CanDefs, Declaration, Def, PendingDef, References,
 };
@@ -289,15 +286,15 @@ pub fn to_expr_id<'a>(
     (env.add(expr, region), output)
 }
 
-pub fn str_to_expr2_w_defs<'a>(
+pub fn str_to_def2<'a>(
     arena: &'a Bump,
     input: &'a str,
     env: &mut Env<'a>,
     scope: &mut Scope,
     region: Region,
-) -> Result<Vec<Expr2>, SyntaxError<'a>> {
+) -> Result<Vec<Def2>, SyntaxError<'a>> {
     match roc_parse::test_helpers::parse_defs_with(arena, input.trim()) {
-        Ok(vec_loc_def) => Ok(to_expr2_from_defs(
+        Ok(vec_loc_def) => Ok(defs_to_defs2(
             arena,
             env,
             scope,
@@ -990,38 +987,39 @@ pub fn to_expr2<'a>(
     }
 }
 
-pub fn to_expr2_from_defs<'a>(
+pub fn defs_to_defs2<'a>(
     arena: &'a Bump,
     env: &mut Env<'a>,
     scope: &mut Scope,
     parsed_defs: &'a BumpVec<roc_region::all::Loc<roc_parse::ast::Def<'a>>>,
     region: Region,
-) -> Vec<Expr2> {
+) -> Vec<Def2> {
     use roc_parse::ast::Expr::*;
 
     parsed_defs
         .iter()
-        .map(|loc| to_expr2_from_def(arena, env, scope, &loc.value, region))
+        .map(|loc| to_def2_from_def(arena, env, scope, &loc.value, region))
         .collect()
 }
 
-pub fn to_expr2_from_def<'a>(
+pub fn to_def2_from_def<'a>(
     arena: &'a Bump,
     env: &mut Env<'a>,
     scope: &mut Scope,
     parsed_def: &'a roc_parse::ast::Def<'a>,
     region: Region,
-) -> Expr2 {
+) -> Def2 {
     use roc_parse::ast::Def::*;
 
     match parsed_def {
-        SpaceBefore(inner_def, _) => to_expr2_from_def(arena, env, scope, inner_def, region),
-        SpaceAfter(inner_def, _) => to_expr2_from_def(arena, env, scope, inner_def, region),
+        SpaceBefore(inner_def, _) => to_def2_from_def(arena, env, scope, inner_def, region),
+        SpaceAfter(inner_def, _) => to_def2_from_def(arena, env, scope, inner_def, region),
         Body(&loc_pattern, &loc_expr) => {
             // TODO loc_pattern use identifier
-            let body_expr2 = loc_expr_to_expr2(arena, loc_expr, env, scope, region).0;
-
-            let body_expr_id = env.pool.add(body_expr2);
+            let expr2 = loc_expr_to_expr2(arena, loc_expr, env, scope, region).0;
+            dbg!(&expr2);
+            let expr_id = env.pool.add(expr2);
+            dbg!(expr_id);
 
             use roc_parse::ast::Pattern::*;
 
@@ -1037,24 +1035,9 @@ pub fn to_expr2_from_def<'a>(
                     let pattern_id = env.pool.add(pattern2);
 
                     // TODO support with annotation
-                    let value_def = ValueDef::NoAnnotation {
-                        pattern_id,
-                        expr_id: body_expr_id,
-                        expr_var: env.var_store.fresh(),
-                    };
-
-                    let value_def_id = env.pool.add(value_def);
-
-                    let ident_id = env.ident_ids.add(str_ref.into());
-                    dbg!(ident_id);
-                    let var_symbol = Symbol::new(env.home, ident_id);
-                    let body = Expr2::Var(var_symbol);
-                    let body_id = env.pool.add(body);
-
-                    Expr2::LetValue {
-                        def_id: value_def_id,
-                        body_var: env.var_store.fresh(),
-                        body_id,
+                    Def2::ValueDef {
+                        identifier_id: pattern_id,
+                        expr_id,
                     }
                 }
                 other => {

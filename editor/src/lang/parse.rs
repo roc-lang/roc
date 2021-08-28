@@ -1,19 +1,54 @@
-use crate::lang::scope::Scope;
+use std::fmt::Debug;
+
+use crate::{editor::ed_error::EdResult, editor::ed_error::ASTNodeIdWithoutExprId,lang::scope::Scope};
 use bumpalo::Bump;
 use roc_parse::parser::SyntaxError;
 use roc_region::all::Region;
 
-use super::{
-    ast::{Expr2, ExprId},
-    expr::{str_to_expr2_w_defs, Env},
-};
+use super::{ast::{DefId, Expr2, ExprId}, expr::{str_to_def2, Env}, pool::Pool};
 
 // WORK IN PROGRESS FILE
 
 #[derive(Debug)]
 pub struct AST {
     pub header: AppHeader,
-    pub expression_ids: Vec<ExprId>,
+    pub def_ids: Vec<DefId>,
+}
+
+#[derive(Debug)]
+pub struct ASTNodeId {
+    pub def_id_opt: Option<DefId>,
+    pub expr_id_opt: Option<ExprId>,
+}
+
+impl ASTNodeId {
+    pub fn to_expr_id(&self) -> EdResult<ExprId>{
+        if let Some(expr_id) = self.expr_id_opt {
+            Ok(expr_id)
+        } else {
+            ASTNodeIdWithoutExprId {
+                ast_node_id: self
+            }.fail()
+        }
+    }
+
+    pub fn equals(&self, other: &ASTNodeId) -> bool {
+        if let Some(def_id_self) = self.def_id_opt {
+            if let Some(def_id_other) = other.def_id_opt {
+                def_id_self == def_id_other
+            } else {
+                false
+            }
+        } else if let Some(expr_id_self) = self.expr_id_opt {
+            if let Some(expr_id_other) = other.expr_id_opt {
+                expr_id_self == expr_id_other
+            } else {
+                false
+            }
+        } else {
+            unreachable!()
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -41,21 +76,21 @@ impl AST {
         let mut scope = Scope::new(env.home, env.pool, env.var_store);
         let region = Region::new(0, 0, 0, 0);
 
-        let mut expression_ids = Vec::<ExprId>::new();
+        let mut def_ids = Vec::<DefId>::new();
 
-        let expr2_vec = str_to_expr2_w_defs(ast_arena, tail_str, env, &mut scope, region)?;
+        let def2_vec = str_to_def2(ast_arena, tail_str, env, &mut scope, region)?;
 
-        for expr2 in expr2_vec {
-            let expr_id = env.pool.add(expr2);
+        for def2 in def2_vec {
+            let def_id = env.pool.add(def2);
 
-            expression_ids.push(expr_id);
+            def_ids.push(def_id);
         }
 
         let ast_node_id = env.pool.add(Expr2::Blank);
 
         Ok(AST {
             header: AppHeader::parse_from_string(header_str, ast_node_id),
-            expression_ids,
+            def_ids,
         })
     }
 }

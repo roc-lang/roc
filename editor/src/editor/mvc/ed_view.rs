@@ -83,7 +83,7 @@ pub fn model_to_wgpu<'a>(
         txt_coords,
         config,
         glyph_dim_rect,
-        &ed_model.markup_node_pool,
+        &ed_model.mark_node_pool,
     )?;
 
     all_rendered.extend(rendered_code_graphics);

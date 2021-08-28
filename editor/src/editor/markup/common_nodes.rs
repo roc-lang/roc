@@ -1,7 +1,4 @@
-use crate::{
-    editor::{slow_pool::MarkNodeId, syntax_highlight::HighlightStyle},
-    lang::ast::ExprId,
-};
+use crate::{editor::{slow_pool::MarkNodeId, syntax_highlight::HighlightStyle}, lang::{ast::{ExprId}, pool::NodeId}};
 
 use super::{attribute::Attributes, nodes, nodes::MarkupNode};
 
@@ -27,7 +24,7 @@ pub fn new_comma_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> M
     }
 }
 
-pub fn new_blank_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
+pub fn new_blank_mn<T>(ast_node_id: NodeId<T>, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
     MarkupNode::Blank {
         ast_node_id,
         syn_high_style: HighlightStyle::Blank,
@@ -37,7 +34,7 @@ pub fn new_blank_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> M
     }
 }
 
-pub fn new_blank_mn_w_nl(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
+pub fn new_blank_mn_w_nl<T>(ast_node_id: NodeId<T>, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
     MarkupNode::Blank {
         ast_node_id,
         syn_high_style: HighlightStyle::Blank,

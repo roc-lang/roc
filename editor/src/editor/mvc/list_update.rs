@@ -49,7 +49,7 @@ pub fn start_new_list(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
 
     if is_blank_node {
         ed_model
-            .markup_node_pool
+            .mark_node_pool
             .replace_node(curr_mark_node_id, nested_node);
 
         // remove data corresponding to Blank node
@@ -94,7 +94,7 @@ pub fn add_blank_child(
 
     let trip_result: EdResult<(ExprId, ExprId, MarkNodeId)> = if let Some(parent_id) = parent_id_opt
     {
-        let parent = ed_model.markup_node_pool.get(parent_id);
+        let parent = ed_model.mark_node_pool.get(parent_id);
 
         let list_ast_node_id = parent.get_ast_node_id();
         let list_ast_node = ed_model.module.env.pool.get(list_ast_node_id);
@@ -162,7 +162,7 @@ pub fn add_blank_child(
         ed_model,
     )?;
 
-    let parent = ed_model.markup_node_pool.get_mut(parent_id);
+    let parent = ed_model.mark_node_pool.get_mut(parent_id);
 
     for (indx, child) in new_mark_children.iter().enumerate() {
         parent.add_child_at_index(new_child_index + indx, *child)?;

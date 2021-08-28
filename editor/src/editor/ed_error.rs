@@ -1,3 +1,4 @@
+use crate::lang::parse::ASTNodeId;
 use crate::ui::ui_error::UIResult;
 use crate::{editor::slow_pool::MarkNodeId, ui::text::text_pos::TextPos};
 use colored::*;
@@ -11,6 +12,16 @@ use snafu::{Backtrace, ErrorCompat, NoneError, ResultExt, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub))]
 pub enum EdError {
+
+    #[snafu(display(
+        "ASTNodeIdWithoutExprId: The expr_id_opt in ASTNode({:?}) was `None` but I was expexting `Some(ExprId)` .",
+        ast_node_id
+    ))]
+    ASTNodeIdWithoutExprId {
+        ast_node_id: ASTNodeId,
+        backtrace: Backtrace,
+    },
+
     #[snafu(display(
         "CaretNotFound: No carets were found in the expected node with id {}",
         node_id

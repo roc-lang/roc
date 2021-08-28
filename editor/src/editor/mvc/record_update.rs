@@ -51,7 +51,7 @@ pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
 
     if is_blank_node {
         ed_model
-            .markup_node_pool
+            .mark_node_pool
             .replace_node(curr_mark_node_id, nested_node);
 
         // remove data corresponding to Blank node
@@ -83,7 +83,7 @@ pub fn update_empty_record(
     if input_chars.all(|ch| ch.is_ascii_alphabetic())
         && input_chars.all(|ch| ch.is_ascii_lowercase())
     {
-        let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
+        let prev_mark_node = ed_model.mark_node_pool.get(prev_mark_node_id);
 
         let NodeContext {
             old_caret_pos,
@@ -123,7 +123,7 @@ pub fn update_empty_record(
             let record_field_node_id = ed_model.add_mark_node(record_field_node);
 
             if let Some(parent_id) = parent_id_opt {
-                let parent = ed_model.markup_node_pool.get_mut(parent_id);
+                let parent = ed_model.mark_node_pool.get_mut(parent_id);
 
                 let new_child_index = index_of(curr_mark_node_id, &sibling_ids)?;
 
@@ -171,7 +171,7 @@ pub fn update_record_colon(
 
         let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
         if let Some(prev_mark_node_id) = prev_mark_node_id_opt {
-            let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
+            let prev_mark_node = ed_model.mark_node_pool.get(prev_mark_node_id);
 
             let prev_ast_node = ed_model
                 .module
@@ -183,7 +183,7 @@ pub fn update_record_colon(
             if matches!(prev_ast_node, Expr2::Record { .. })
                 && matches!(curr_ast_node, Expr2::Record { .. })
             {
-                let sibling_ids = curr_mark_node.get_sibling_ids(&ed_model.markup_node_pool);
+                let sibling_ids = curr_mark_node.get_sibling_ids(&ed_model.mark_node_pool);
 
                 let new_child_index = index_of(curr_mark_node_id, &sibling_ids)?;
 
@@ -197,7 +197,7 @@ pub fn update_record_colon(
                         if ed_model.node_exists_at_caret() {
                             let next_mark_node_id =
                                 ed_model.grid_node_map.get_id_at_row_col(old_caret_pos)?;
-                            let next_mark_node = ed_model.markup_node_pool.get(next_mark_node_id);
+                            let next_mark_node = ed_model.mark_node_pool.get(next_mark_node_id);
                             if next_mark_node.get_content() == nodes::RIGHT_ACCOLADE {
                                 // update AST node
                                 let new_field_val = Expr2::Blank;
@@ -229,7 +229,7 @@ pub fn update_record_colon(
                                 let record_colon_node_id =
                                     ed_model.add_mark_node(record_colon_node);
                                 ed_model
-                                    .markup_node_pool
+                                    .mark_node_pool
                                     .get_mut(parent_id)
                                     .add_child_at_index(new_child_index, record_colon_node_id)?;
 
@@ -237,7 +237,7 @@ pub fn update_record_colon(
                                     .add_mark_node(new_blank_mn(new_field_val_id, Some(parent_id)));
 
                                 ed_model
-                                    .markup_node_pool
+                                    .mark_node_pool
                                     .get_mut(parent_id)
                                     .add_child_at_index(
                                         new_child_index + 1,
@@ -286,7 +286,7 @@ pub fn update_record_field(
     ed_model: &mut EdModel,
 ) -> EdResult<InputOutcome> {
     // update MarkupNode
-    let curr_mark_node_mut = ed_model.markup_node_pool.get_mut(curr_mark_node_id);
+    let curr_mark_node_mut = ed_model.mark_node_pool.get_mut(curr_mark_node_id);
     let content_str_mut = curr_mark_node_mut.get_content_mut()?;
     let node_caret_offset = ed_model
         .grid_node_map

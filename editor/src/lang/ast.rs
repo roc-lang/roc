@@ -224,6 +224,17 @@ pub enum Expr2 {
     RuntimeError(/* TODO make a version of RuntimeError that fits in 15B */),
 }
 
+// A top level definition, not inside a function. For example: `main = "Hello, world!"`
+#[derive(Debug)]
+pub enum Def2 {
+    // ValueDef example: `main = "Hello, world!"`. identifier -> `main`, expr -> "Hello, world!"
+    ValueDef {
+        identifier_id: NodeId<Pattern2>,
+        expr_id: NodeId<Expr2>,
+    },
+    Blank
+}
+
 #[derive(Debug)]
 pub enum ValueDef {
     WithAnnotation {
@@ -431,6 +442,8 @@ pub struct WhenBranch {
 // TODO make the inner types private?
 pub type ExprId = NodeId<Expr2>;
 
+pub type DefId = NodeId<Def2>;
+
 use RecordField::*;
 impl RecordField {
     pub fn get_record_field_var(&self) -> &Variable {
@@ -591,6 +604,25 @@ fn expr2_to_string_helper(
     }
 
     out_string.push('\n');
+}
+
+pub fn def2_to_string(node_id: DefId, pool: &Pool) -> String {
+    let mut full_string = String::new();
+    let def2 = pool.get(node_id);
+
+    match def2 {
+        Def2::ValueDef { identifier_id, expr_id } => {
+            full_string.push_str(&format!(
+                "Def2::ValueDef(identifier_id: >>{:?}), expr_id: >>{:?})",
+                pool.get(*identifier_id), expr2_to_string(*expr_id, pool)
+            ));
+        },
+        Def2::Blank => {
+            full_string.push_str(&format!("Def2::Blank"));
+        }
+    }
+
+    full_string
 }
 
 fn var_to_string(some_var: &Variable, indent_level: usize) -> String {

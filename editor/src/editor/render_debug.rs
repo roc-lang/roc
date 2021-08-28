@@ -4,7 +4,7 @@ use crate::editor::mvc::ed_model::EdModel;
 use crate::graphics::colors;
 use crate::graphics::colors::from_hsb;
 use crate::graphics::primitives::text as gr_text;
-use crate::lang::ast::expr2_to_string;
+use crate::lang::ast::{def2_to_string};
 use cgmath::Vector2;
 use winit::dpi::PhysicalSize;
 
@@ -38,7 +38,7 @@ pub fn build_debug_graphics(
 
     for mark_id in ed_model.markup_ids[1..].iter() {
         // 1.. -> skip header
-        mark_node_trees_string.push_str(&tree_as_string(*mark_id, &ed_model.markup_node_pool));
+        mark_node_trees_string.push_str(&tree_as_string(*mark_id, &ed_model.mark_node_pool));
 
         mark_node_trees_string.push('\n');
     }
@@ -47,14 +47,14 @@ pub fn build_debug_graphics(
         .with_color(colors::to_slice(from_hsb(266, 31, 96)))
         .with_scale(config.code_font_size);
 
-    let mark_node_pool_text = glyph_brush::OwnedText::new(format!("{}", ed_model.markup_node_pool))
+    let mark_node_pool_text = glyph_brush::OwnedText::new(format!("{}", ed_model.mark_node_pool))
         .with_color(colors::to_slice(from_hsb(110, 45, 82)))
         .with_scale(config.code_font_size);
 
     let mut ast_node_text_str = "AST:\n".to_owned();
 
-    for expr_id in ed_model.module.ast.expression_ids.iter() {
-        ast_node_text_str.push_str(&expr2_to_string(*expr_id, ed_model.module.env.pool))
+    for def_id in ed_model.module.ast.def_ids.iter() {
+        ast_node_text_str.push_str(&def2_to_string(*def_id, ed_model.module.env.pool))
     }
 
     let ast_node_text = glyph_brush::OwnedText::new(ast_node_text_str)
