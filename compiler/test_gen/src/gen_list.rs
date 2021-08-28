@@ -1,7 +1,6 @@
 #![cfg(test)]
 
 use crate::assert_evals_to;
-use crate::assert_llvm_evals_to;
 use crate::helpers::with_larger_debug_stack;
 use core::ffi::c_void;
 use indoc::indoc;

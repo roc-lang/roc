@@ -32,10 +32,11 @@ libc = "0.2"
 inkwell = { path = "../../vendor/inkwell" }
 target-lexicon = "0.12.2"
 libloading = "0.6"
-
-[dev-dependencies]
 wasmer = "2.0.0"
 wasmer-wasi = "2.0.0"
+tempfile = "3.1.0"
+
+[dev-dependencies]
 maplit = "1.0.1"
 quickcheck = "0.8"
 quickcheck_macros = "0.8"

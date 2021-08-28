@@ -3,9 +3,9 @@
 use crate::assert_evals_to;
 use crate::assert_llvm_evals_to;
 use crate::assert_non_opt_evals_to;
-use crate::helpers::eval;
+use crate::assert_wasm_evals_to;
 use indoc::indoc;
-use roc_std::RocStr;
+use roc_std::{RocList, RocStr};
 
 #[test]
 fn basic_int() {
@@ -2781,25 +2781,81 @@ fn value_not_exposed_hits_panic() {
 }
 
 #[test]
-fn wasm_test() {
-    use bumpalo::Bump;
-    use inkwell::context::Context;
+fn wasm_test_i32() {
+    assert_wasm_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
 
-    let arena = Bump::new();
-    let context = Context::create();
+                main : I32
+                main = 4 + 5
+            "#
+        ),
+        9,
+        i32
+    );
+}
 
-    // NOTE the stdlib must be in the arena; just taking a reference will segfault
-    let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
-
-    let source = indoc!(
-        r#"
+#[test]
+fn wasm_test_small_string() {
+    assert_wasm_evals_to!(
+        indoc!(
+            r#"
                 app "test" provides [ main ] to "./platform"
 
                 main : Str
-                main = "hellow"
+                main = "hello"
             "#
+        ),
+        RocStr::from_slice(b"hello"),
+        RocStr
     );
+}
 
-    let arena = bumpalo::Bump::new();
-    eval::helper_wasm(&arena, source, stdlib, true, false, &context);
+#[test]
+fn wasm_test_big_string() {
+    assert_wasm_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                main : Str
+                main = "goodday may fellow human"
+            "#
+        ),
+        RocStr::from_slice(b"goodday may fellow human"),
+        RocStr
+    );
+}
+
+#[test]
+fn wasm_test_u8() {
+    assert_wasm_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                main : U8
+                main = 3 + 6
+            "#
+        ),
+        3 + 6,
+        u8
+    );
+}
+
+#[test]
+fn wasm_test_list_u8() {
+    assert_wasm_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                main : List U8
+                main = [ 3 + 6 , 5, 6 ]
+            "#
+        ),
+        RocList::from_slice(&[3 + 6, 5, 6]),
+        RocList<u8>
+    );
 }

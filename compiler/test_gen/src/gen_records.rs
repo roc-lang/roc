@@ -1,7 +1,6 @@
 #![cfg(test)]
 
 use crate::assert_evals_to;
-use crate::assert_llvm_evals_to;
 use indoc::indoc;
 
 #[test]

@@ -8,7 +8,7 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::OptLevel;
-use roc_std::RocStr;
+use roc_std::{RocDec, RocList, RocOrder, RocStr};
 use roc_types::subs::VarStore;
 use target_lexicon::Triple;
 
@@ -290,7 +290,6 @@ pub fn helper<'a>(
     (main_fn_name, delayed_errors, lib)
 }
 
-#[cfg(test)]
 fn wasm32_target_tripple() -> Triple {
     use target_lexicon::{Architecture, BinaryFormat};
 
@@ -302,7 +301,6 @@ fn wasm32_target_tripple() -> Triple {
     triple
 }
 
-#[cfg(test)]
 pub fn helper_wasm<'a>(
     arena: &'a bumpalo::Bump,
     src: &str,
@@ -310,7 +308,7 @@ pub fn helper_wasm<'a>(
     is_gen_test: bool,
     ignore_problems: bool,
     context: &'a inkwell::context::Context,
-) -> (&'static str, String, Library) {
+) -> wasmer::Instance {
     let target = wasm32_target_tripple();
 
     let opt_level = if cfg!(debug_assertions) {
@@ -332,19 +330,26 @@ pub fn helper_wasm<'a>(
 
     use inkwell::targets::{InitializationConfig, Target, TargetTriple};
 
-    Target::initialize_webassembly(&InitializationConfig::default());
-    // let target = Target::from_name("wasm32-unknown-unknown").unwrap();
+    let dir = tempfile::tempdir().unwrap();
 
-    // let triple = TargetTriple::create("wasm32-wasi");
-    let triple = TargetTriple::create("wasm32-unknown-unknown-wasi");
-    let target_machine = Target::from_triple(&triple)
+    let test_a_path = dir.path().join("test.a");
+    let test_wasm_path = dir.path().join("main.wasm");
+
+    Target::initialize_webassembly(&InitializationConfig::default());
+
+    let triple = TargetTriple::create("wasm32-unknown-unknown-wasm");
+
+    llvm_module.set_triple(&triple);
+    llvm_module.set_source_file_name("Test.roc");
+
+    let target_machine = Target::from_name("wasm32")
         .unwrap()
         .create_target_machine(
             &triple,
-            "generic",
+            "",
             "", // TODO: this probably should be TargetMachine::get_host_cpu_features() to enable all features.
             inkwell::OptimizationLevel::None,
-            inkwell::targets::RelocMode::PIC,
+            inkwell::targets::RelocMode::Default,
             inkwell::targets::CodeModel::Default,
         )
         .unwrap();
@@ -352,11 +357,7 @@ pub fn helper_wasm<'a>(
     let file_type = inkwell::targets::FileType::Object;
 
     target_machine
-        .write_to_file(
-            llvm_module,
-            file_type,
-            std::path::Path::new("/home/folkertdev/roc/wasm/test.a"),
-        )
+        .write_to_file(llvm_module, file_type, &test_a_path)
         .unwrap();
 
     use std::process::Command;
@@ -364,11 +365,11 @@ pub fn helper_wasm<'a>(
         // .env_clear()
         // .env("PATH", env_path)
         // .env("HOME", env_home)
-        .current_dir("/home/folkertdev/roc/wasm")
+        .current_dir(dir.path())
         .args(&[
             "build-lib",
-            "main.zig",
-            "test.a",
+            "/home/folkertdev/roc/wasm/main.zig",
+            test_a_path.to_str().unwrap(),
             "-target",
             "wasm32-wasi",
             "-dynamic",
@@ -377,121 +378,87 @@ pub fn helper_wasm<'a>(
         .status()
         .unwrap();
 
-    {
-        use wasmer::{Function, Instance, Module, Store, Value};
+    // now, do wasmer stuff
 
-        let store = Store::default();
-        let module = Module::from_file(&store, "/home/folkertdev/roc/wasm/main.wasm").unwrap();
+    use wasmer::{Function, Instance, Module, Store};
 
-        // First, we create the `WasiEnv`
-        use wasmer_wasi::WasiState;
-        let mut wasi_env = WasiState::new("hello")
-            // .args(&["world"])
-            // .env("KEY", "Value")
-            .finalize()
-            .unwrap();
+    let store = Store::default();
+    let module = Module::from_file(&store, &test_wasm_path).unwrap();
 
-        println!("Instantiating module with WASI imports...");
-        // Then, we get the import object related to our WASI
-        // and attach it to the Wasm instance.
-        let mut import_object = wasi_env.import_object(&module).unwrap();
+    // First, we create the `WasiEnv`
+    use wasmer_wasi::WasiState;
+    let mut wasi_env = WasiState::new("hello")
+        // .args(&["world"])
+        // .env("KEY", "Value")
+        .finalize()
+        .unwrap();
 
-        let main_function = Function::new_native(&store, bar);
-        let ext = wasmer::Extern::Function(main_function);
-        let mut exts = wasmer::Exports::new();
-        exts.insert("main", ext);
-        import_object.register("env", exts);
+    // Then, we get the import object related to our WASI
+    // and attach it to the Wasm instance.
+    let mut import_object = wasi_env.import_object(&module).unwrap();
 
-        let instance = Instance::new(&module, &import_object).unwrap();
+    let main_function = Function::new_native(&store, fake_wasm_main_function);
+    let ext = wasmer::Extern::Function(main_function);
+    let mut exts = wasmer::Exports::new();
+    exts.insert("main", ext);
+    import_object.register("env", exts);
+
+    Instance::new(&module, &import_object).unwrap()
+}
+
+#[allow(dead_code)]
+fn fake_wasm_main_function(_: u32, _: u32) -> u32 {
+    panic!("wasm entered the main function; this should never happen!")
+}
+
+#[macro_export]
+macro_rules! assert_wasm_evals_to {
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
+        let arena = bumpalo::Bump::new();
+        let context = inkwell::context::Context::create();
+
+        // NOTE the stdlib must be in the arena; just taking a reference will segfault
+        let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
+
+        let is_gen_test = true;
+        let instance = $crate::helpers::eval::helper_wasm(
+            &arena,
+            $src,
+            stdlib,
+            is_gen_test,
+            $ignore_problems,
+            &context,
+        );
 
         let memory = instance.exports.get_memory("memory").unwrap();
 
-        let add_one = instance.exports.get_function("test_wrapper").unwrap();
-        let result = add_one.call(&[]).unwrap();
-        let address = match result[0] {
-            Value::I32(a) => a,
-            _ => panic!(),
-        };
+        let test_wrapper = instance.exports.get_function("test_wrapper").unwrap();
 
-        let output = <u64 as FromWasmMemory>::decode(&memory, address as u32 + 8);
+        match test_wrapper.call(&[]) {
+            Err(e) => println!("{:?}", e),
+            Ok(result) => {
+                let address = match result[0] {
+                    wasmer::Value::I32(a) => a,
+                    _ => panic!(),
+                };
 
-        dbg!(output);
+                let output = <$ty as $crate::helpers::eval::FromWasmMemory>::decode(
+                    memory,
+                    address as u32 + 8,
+                );
 
-        // assert_eq!(output, 222);
-    }
+                assert_eq!(output, $expected)
+            }
+        }
+    };
 
-    todo!()
-}
+    ($src:expr, $expected:expr, $ty:ty) => {
+        $crate::assert_wasm_evals_to!($src, $expected, $ty, |x| x, false);
+    };
 
-#[cfg(test)]
-trait FromWasmMemory {
-    fn decode(memory: &wasmer::Memory, offset: u32) -> Self;
-}
-
-#[cfg(test)]
-impl FromWasmMemory for u32 {
-    fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
-        let mut output: Self = 0;
-        let width = std::mem::size_of::<Self>();
-
-        let ptr = (&mut output) as *mut Self;
-        let raw_ptr = ptr as *mut u8;
-        let slice = unsafe { std::slice::from_raw_parts_mut(raw_ptr, width) };
-
-        let ptr: wasmer::WasmPtr<u8, wasmer::Array> = wasmer::WasmPtr::new(offset as u32);
-        let foobar = (ptr.deref(memory, 0, width as u32)).unwrap();
-        let wasm_slice = unsafe { std::mem::transmute(foobar) };
-
-        slice.copy_from_slice(wasm_slice);
-
-        output
-    }
-}
-
-#[cfg(test)]
-impl FromWasmMemory for u64 {
-    fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
-        let mut output: Self = 0;
-        let width = std::mem::size_of::<Self>();
-
-        let ptr = (&mut output) as *mut Self;
-        let raw_ptr = ptr as *mut u8;
-        let slice = unsafe { std::slice::from_raw_parts_mut(raw_ptr, width) };
-
-        let ptr: wasmer::WasmPtr<u8, wasmer::Array> = wasmer::WasmPtr::new(offset as u32);
-        let foobar = (ptr.deref(memory, 0, width as u32)).unwrap();
-        let wasm_slice = unsafe { std::mem::transmute(foobar) };
-
-        slice.copy_from_slice(wasm_slice);
-
-        output
-    }
-}
-
-#[cfg(test)]
-impl FromWasmMemory for RocStr {
-    fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
-        use core::mem::MaybeUninit;
-
-        let mut output = MaybeUninit::uninit();
-        let width = std::mem::size_of::<Self>();
-
-        let raw_ptr = (&mut output) as *mut _ as *mut u8;
-        let slice = unsafe { std::slice::from_raw_parts_mut(raw_ptr, width) };
-
-        let ptr: wasmer::WasmPtr<u8, wasmer::Array> = wasmer::WasmPtr::new(offset as u32);
-        let foobar = (ptr.deref(memory, 0, width as u32)).unwrap();
-        let wasm_slice = unsafe { std::mem::transmute(foobar) };
-
-        slice.copy_from_slice(wasm_slice);
-
-        unsafe { output.assume_init() }
-    }
-}
-
-fn bar(_: u32, _: u32) -> u32 {
-    println!("we are in main!");
-    return 0;
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
+        $crate::assert_wasm_evals_to!($src, $expected, $ty, $transform, false);
+    };
 }
 
 #[macro_export]
@@ -527,7 +494,7 @@ macro_rules! assert_llvm_evals_to {
     };
 
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
+        $crate::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
     };
 }
 
@@ -539,7 +506,7 @@ macro_rules! assert_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
         // Same as above, except with an additional transformation argument.
         {
-            assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
+            $crate::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
         }
     };
 }
@@ -547,15 +514,104 @@ macro_rules! assert_evals_to {
 #[macro_export]
 macro_rules! assert_non_opt_evals_to {
     ($src:expr, $expected:expr, $ty:ty) => {{
-        assert_llvm_evals_to!($src, $expected, $ty, (|val| val));
+        $crate::assert_llvm_evals_to!($src, $expected, $ty, (|val| val));
     }};
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
         // Same as above, except with an additional transformation argument.
         {
-            assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
+            $crate::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
         }
     };
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {{
-        assert_llvm_evals_to!($src, $expected, $ty, $transform);
+        $crate::assert_llvm_evals_to!($src, $expected, $ty, $transform);
     }};
+}
+
+pub trait FromWasmMemory {
+    fn decode(memory: &wasmer::Memory, offset: u32) -> Self;
+}
+
+macro_rules! from_wasm_memory_primitive_decode {
+    ($type_name:ident) => {
+        fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
+            use core::mem::MaybeUninit;
+
+            let mut output: MaybeUninit<Self> = MaybeUninit::uninit();
+            let width = std::mem::size_of::<Self>();
+
+            let ptr = output.as_mut_ptr();
+            let raw_ptr = ptr as *mut u8;
+            let slice = unsafe { std::slice::from_raw_parts_mut(raw_ptr, width) };
+
+            let ptr: wasmer::WasmPtr<u8, wasmer::Array> = wasmer::WasmPtr::new(offset as u32);
+            let foobar = (ptr.deref(memory, 0, width as u32)).unwrap();
+            let wasm_slice = unsafe { std::mem::transmute(foobar) };
+
+            slice.copy_from_slice(wasm_slice);
+
+            unsafe { output.assume_init() }
+        }
+    };
+}
+
+macro_rules! from_wasm_memory_primitive {
+    ($($type_name:ident ,)+) => {
+        $(
+            impl FromWasmMemory for $type_name {
+                from_wasm_memory_primitive_decode!($type_name);
+            }
+        )*
+    }
+}
+
+from_wasm_memory_primitive!(
+    u8, i8, u16, i16, u32, i32, u64, i64, u128, i128, f32, f64, bool, RocDec, RocOrder,
+);
+
+impl FromWasmMemory for RocStr {
+    fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
+        let bytes = <u64 as FromWasmMemory>::decode(memory, offset);
+
+        let length = (bytes >> 32) as u32;
+        let elements = bytes as u32;
+
+        if length == 0 {
+            RocStr::default()
+        } else if (length as i32) < 0 {
+            // this is a small string
+            let last_byte = bytes.to_ne_bytes()[7];
+            let actual_length = (last_byte ^ 0b1000_0000) as usize;
+
+            let slice = &bytes.to_ne_bytes()[..actual_length as usize];
+            RocStr::from_slice(slice)
+        } else {
+            // this is a big string
+            let ptr: wasmer::WasmPtr<u8, wasmer::Array> = wasmer::WasmPtr::new(elements);
+            let foobar = (ptr.deref(memory, 0, length)).unwrap();
+            let wasm_slice = unsafe { std::mem::transmute(foobar) };
+
+            RocStr::from_slice(wasm_slice)
+        }
+    }
+}
+
+impl<T: FromWasmMemory + Clone> FromWasmMemory for RocList<T> {
+    fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
+        let bytes = <u64 as FromWasmMemory>::decode(memory, offset);
+
+        let length = (bytes >> 32) as u32;
+        let elements = bytes as u32;
+
+        let ptr: wasmer::WasmPtr<u8, wasmer::Array> = wasmer::WasmPtr::new(elements);
+        let foobar = (ptr.deref(memory, 0, core::mem::size_of::<T>() as u32 * length)).unwrap();
+        let wasm_slice = unsafe { std::mem::transmute(foobar) };
+
+        RocList::from_slice(wasm_slice)
+    }
+}
+
+impl FromWasmMemory for usize {
+    fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
+        <u32 as FromWasmMemory>::decode(memory, offset) as usize
+    }
 }
