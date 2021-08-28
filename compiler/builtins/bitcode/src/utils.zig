@@ -79,7 +79,7 @@ pub fn test_panic(c_ptr: *c_void, alignment: u32) callconv(.C) void {
     // const stderr = std.io.getStdErr().writer();
     // stderr.print("Roc panicked: {s}!\n", .{cstr}) catch unreachable;
 
-    std.c.exit(1);
+    // std.c.exit(1);
 }
 
 pub const Inc = fn (?[*]u8) callconv(.C) void;

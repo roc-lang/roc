@@ -4358,6 +4358,7 @@ dependencies = [
  "roc_types",
  "roc_unify",
  "target-lexicon",
+ "tempfile",
  "tokio",
  "wasmer",
  "wasmer-wasi",
