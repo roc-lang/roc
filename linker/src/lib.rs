@@ -5,8 +5,8 @@ use memmap2::{Mmap, MmapMut};
 use object::{elf, endian};
 use object::{
     Architecture, BinaryFormat, CompressedFileRange, CompressionFormat, LittleEndian, NativeEndian,
-    Object, ObjectSection, ObjectSymbol, RelocationKind, RelocationTarget, Section, Symbol,
-    SymbolSection,
+    Object, ObjectSection, ObjectSymbol, RelocationKind, RelocationTarget, Section, SectionIndex,
+    Symbol, SymbolIndex, SymbolSection,
 };
 use roc_collections::all::MutMap;
 use std::cmp::Ordering;
@@ -33,7 +33,7 @@ pub const SHARED_LIB: &str = "SHARED_LIB";
 pub const APP: &str = "APP";
 pub const OUT: &str = "OUT";
 
-const MIN_FUNC_ALIGNMENT: usize = 0x40;
+const MIN_SECTION_ALIGNMENT: usize = 0x40;
 
 // TODO: Analyze if this offset is always correct.
 const PLT_ADDRESS_OFFSET: u64 = 0x10;
@@ -187,10 +187,12 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         md.roc_symbol_vaddresses.insert(name, sym.address() as u64);
     }
 
-    println!(
-        "Found roc symbol definitions: {:+x?}",
-        md.roc_symbol_vaddresses
-    );
+    if verbose {
+        println!(
+            "Found roc symbol definitions: {:+x?}",
+            md.roc_symbol_vaddresses
+        );
+    }
 
     let exec_parsing_duration = exec_parsing_start.elapsed().unwrap();
 
@@ -590,7 +592,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     let added_header_count = 1;
     md.added_byte_count = ph_ent_size as u64 * added_header_count;
     md.added_byte_count = md.added_byte_count
-        + (MIN_FUNC_ALIGNMENT as u64 - md.added_byte_count % MIN_FUNC_ALIGNMENT as u64);
+        + (MIN_SECTION_ALIGNMENT as u64 - md.added_byte_count % MIN_SECTION_ALIGNMENT as u64);
     let ph_end = ph_offset as usize + ph_num as usize * ph_ent_size as usize;
     let physical_shift_start = ph_end as u64;
 
@@ -941,7 +943,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         .write(true)
         .open(&matches.value_of(OUT).unwrap())?;
 
-    let max_out_len = md.exec_len + app_data.len() as u64 + 4096;
+    let max_out_len = md.exec_len + app_data.len() as u64 + md.load_align_constraint;
     exec_file.set_len(max_out_len)?;
 
     let mut exec_mmap = unsafe { MmapMut::map_mut(&exec_file)? };
@@ -978,155 +980,148 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     let mut sh_tab = vec![];
     sh_tab.extend_from_slice(&exec_mmap[sh_offset as usize..sh_offset as usize + sh_size]);
 
-    // TODO: I think this can move in by sh_size.
-    let mut offset = md.exec_len as usize;
-    offset = aligned_offset(offset);
+    let mut offset = sh_offset as usize;
+    offset = align_by_constraint(offset, MIN_SECTION_ALIGNMENT);
+
     // TODO: Switch to using multiple segments.
     let new_segment_offset = offset;
     let new_data_section_offset = offset;
 
     // Align physical and virtual address of new segment.
-    let remainder = new_segment_offset as u64 % md.load_align_constraint;
-    let vremainder = md.last_vaddr % md.load_align_constraint;
-    let new_segment_vaddr = match remainder.cmp(&vremainder) {
-        Ordering::Greater => md.last_vaddr + (remainder - vremainder),
-        Ordering::Less => md.last_vaddr + ((remainder + md.load_align_constraint) - vremainder),
-        Ordering::Equal => md.last_vaddr,
-    };
+    let mut virt_offset = align_to_offset_by_constraint(
+        md.last_vaddr as usize,
+        offset,
+        md.load_align_constraint as usize,
+    );
+    let new_segment_vaddr = virt_offset as u64;
     if verbose {
         println!();
         println!("New Virtual Segment Address: {:+x?}", new_segment_vaddr);
     }
 
+    // First decide on sections locations and then recode every exact symbol locations.
+
     // Copy sections and resolve their symbols/relocations.
     let symbols = app_obj.symbols().collect::<Vec<Symbol>>();
+    let mut section_offset_map: MutMap<SectionIndex, (usize, usize)> = MutMap::default();
+    let mut symbol_vaddr_map: MutMap<SymbolIndex, usize> = MutMap::default();
+    let mut app_func_vaddr_map: MutMap<String, usize> = MutMap::default();
+    let mut app_func_size_map: MutMap<String, u64> = MutMap::default();
 
+    // TODO: Does Roc ever create a data section? I think no cause it would mess up fully functional guarantees.
+    // If not we never need to think about it, but we should double check.
     let rodata_sections: Vec<Section> = app_obj
         .sections()
-        .filter(|sec| {
-            let name = sec.name();
-            // TODO: we should really split these out and use finer permission controls.
-            name.is_ok()
-                // TODO: Does Roc ever create a data section? I think no cause it would mess up fully functional guarantees.
-                && (name.unwrap().starts_with(".data")
-                    || name.unwrap().starts_with(".rodata")
-                    // TODO: bss sections we generate should not have a real file size.
-                    || name.unwrap().starts_with(".bss"))
-        })
+        .filter(|sec| sec.name().unwrap_or_default().starts_with(".rodata"))
         .collect();
 
-    let mut symbol_offset_map: MutMap<usize, usize> = MutMap::default();
-    // TODO: we don't yet deal with relocations for these sections (Do we need to?).
-    // We should probably first define where each section will go and resolve all symbol locations.
-    // Then we can support all relocations correctly.
-    for sec in rodata_sections {
-        let data = match sec.uncompressed_data() {
-            Ok(data) => data,
-            Err(err) => {
-                println!("Failed to load data section, {:+x?}: {}", sec, err);
-                return Ok(-1);
-            }
-        };
-        let size = sec.size() as usize;
-        offset = aligned_offset(offset);
-        if verbose {
-            println!(
-                "Adding Section {} at offset {:+x} with size {:+x}",
-                sec.name().unwrap(),
-                offset,
-                size
-            );
-        }
-        exec_mmap[offset..offset + data.len()].copy_from_slice(&data);
-        for sym in symbols.iter() {
-            if sym.section() == SymbolSection::Section(sec.index()) {
-                let name = sym.name().unwrap_or_default().to_string();
-                if !md.roc_symbol_vaddresses.contains_key(&name) {
-                    symbol_offset_map.insert(
-                        sym.index().0,
-                        offset + sym.address() as usize - new_segment_offset,
-                    );
-                }
-            }
-        }
-        offset += size;
-        // TODO: we need to deal with relocatoins in these sections.
-        // They may point to the text section, which means we need to know where it is.
-        // This currently breaks some roc apps with closures.
-    }
-
-    if verbose {
-        println!("Data Relocation Offsets: {:+x?}", symbol_offset_map);
-    }
+    let bss_sections: Vec<Section> = app_obj
+        .sections()
+        .filter(|sec| sec.name().unwrap_or_default().starts_with(".bss"))
+        .collect();
 
     let text_sections: Vec<Section> = app_obj
         .sections()
-        .filter(|sec| {
-            let name = sec.name();
-            name.is_ok() && name.unwrap().starts_with(".text")
-        })
+        .filter(|sec| sec.name().unwrap_or_default().starts_with(".text"))
         .collect();
     if text_sections.is_empty() {
         println!("No text sections found. This application has no code.");
         return Ok(-1);
     }
-    let new_text_section_offset = offset;
-    let mut app_func_size_map: MutMap<String, u64> = MutMap::default();
-    let mut app_func_segment_offset_map: MutMap<String, usize> = MutMap::default();
-    let mut got_sections: Vec<(usize, usize)> = vec![];
-    for sec in text_sections {
-        let data = match sec.uncompressed_data() {
-            Ok(data) => data,
-            Err(err) => {
-                println!("Failed to load text section, {:+x?}: {}", sec, err);
-                return Ok(-1);
-            }
-        };
-        let size = sec.size() as usize;
-        offset = aligned_offset(offset);
+
+    for sec in rodata_sections
+        .iter()
+        .chain(bss_sections.iter())
+        .chain(text_sections.iter())
+    {
+        offset = align_by_constraint(offset, MIN_SECTION_ALIGNMENT);
+        virt_offset =
+            align_to_offset_by_constraint(virt_offset, offset, md.load_align_constraint as usize);
         if verbose {
             println!(
-                "Adding Section {} at offset {:+x} with size {:+x}",
+                "Section, {}, is being put at offset: {:+x}(virt: {:+x})",
                 sec.name().unwrap(),
                 offset,
-                size
-            );
+                virt_offset
+            )
         }
-        exec_mmap[offset..offset + data.len()].copy_from_slice(&data);
-        // Deal with definitions and relocations for this section.
-        if verbose {
-            println!();
-            println!("Processing Section: {:+x?}", sec);
-        }
-        let current_section_offset = (offset - new_segment_offset) as i64;
+        section_offset_map.insert(sec.index(), (offset, virt_offset));
         for sym in symbols.iter() {
             if sym.section() == SymbolSection::Section(sec.index()) {
                 let name = sym.name().unwrap_or_default().to_string();
                 if !md.roc_symbol_vaddresses.contains_key(&name) {
-                    symbol_offset_map.insert(
-                        sym.index().0,
-                        offset + sym.address() as usize - new_segment_offset,
-                    );
+                    symbol_vaddr_map.insert(sym.index(), virt_offset + sym.address() as usize);
                 }
                 if md.app_functions.contains(&name) {
-                    app_func_segment_offset_map.insert(
-                        name.clone(),
-                        offset + sym.address() as usize - new_segment_offset,
-                    );
+                    app_func_vaddr_map.insert(name.clone(), virt_offset + sym.address() as usize);
                     app_func_size_map.insert(name, sym.size());
                 }
             }
         }
-        offset = aligned_offset(offset + size);
-        let mut got_offset = offset;
+        let section_size = match sec.file_range() {
+            Some((_, size)) => size,
+            None => 0,
+        };
+        if section_size != sec.size() {
+            println!(
+                "We do not yet deal with sections that have different on disk and in memory sizes"
+            );
+            return Ok(-1);
+        }
+        offset += section_size as usize;
+        virt_offset += sec.size() as usize;
+    }
+    if verbose {
+        println!("Data Relocation Offsets: {:+x?}", symbol_vaddr_map);
+        println!("Found App Function Symbols: {:+x?}", app_func_vaddr_map);
+    }
+
+    let new_text_section_offset = text_sections
+        .iter()
+        .map(|sec| section_offset_map.get(&sec.index()).unwrap().0)
+        .min()
+        .unwrap();
+    for sec in rodata_sections
+        .iter()
+        .chain(bss_sections.iter())
+        .chain(text_sections.iter())
+    {
+        let data = match sec.data() {
+            Ok(data) => data,
+            Err(err) => {
+                println!(
+                    "Failed to load data for section, {:+x?}: {}",
+                    sec.name().unwrap(),
+                    err
+                );
+                return Ok(-1);
+            }
+        };
+        let (section_offset, section_virtual_offset) =
+            section_offset_map.get(&sec.index()).unwrap();
+        let (section_offset, section_virtual_offset) = (*section_offset, *section_virtual_offset);
+        exec_mmap[section_offset..section_offset + data.len()].copy_from_slice(&data);
+        // Deal with definitions and relocations for this section.
+        if verbose {
+            println!();
+            println!(
+                "Processing Relocations for Section: {:+x?} @ {:+x} (virt: {:+x})",
+                sec, section_offset, section_virtual_offset
+            );
+        }
         for rel in sec.relocations() {
             if verbose {
                 println!("\tFound Relocation: {:+x?}", rel);
             }
             match rel.1.target() {
                 RelocationTarget::Symbol(index) => {
-                    let target_offset = if let Some(target_offset) = symbol_offset_map.get(&index.0)
-                    {
+                    let target_offset = if let Some(target_offset) = symbol_vaddr_map.get(&index) {
+                        if verbose {
+                            println!(
+                                "\t\tRelocation targets symbol in app at: {:+x}",
+                                target_offset
+                            );
+                        }
                         Some(*target_offset as i64)
                     } else if let Ok(sym) = app_obj.symbol_by_index(index) {
                         // TODO: Is there a better way to deal with all this nesting in rust.
@@ -1134,15 +1129,14 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                         // Not one of the apps symbols, check if it is from the roc host.
                         if let Ok(name) = sym.name() {
                             if let Some(address) = md.roc_symbol_vaddresses.get(name) {
-                                let relative_addr = (*address + md.added_byte_count) as i64
-                                    - new_segment_vaddr as i64;
+                                let vaddr = (*address + md.added_byte_count) as i64;
                                 if verbose {
                                     println!(
-                                    "\t\tRelocations targets symbol in host: {} @ {:+x} -> {} relative to new segment",
-                                    name, address, relative_addr
-                                );
+                                        "\t\tRelocation targets symbol in host: {} @ {:+x}",
+                                        name, vaddr
+                                    );
                                 }
-                                Some(relative_addr)
+                                Some(vaddr)
                             } else {
                                 None
                             }
@@ -1153,53 +1147,22 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                         None
                     };
                     if let Some(target_offset) = target_offset {
+                        let virt_base = section_virtual_offset as usize + rel.0 as usize;
+                        let base = section_offset as usize + rel.0 as usize;
                         let target: i64 = match rel.1.kind() {
                             RelocationKind::Relative | RelocationKind::PltRelative => {
-                                target_offset - (rel.0 as i64 + current_section_offset)
-                                    + rel.1.addend()
-                            }
-                            RelocationKind::GotRelative => {
-                                // If we see got relative store the address directly after this section.
-                                // GOT requires indirection if we don't modify the code.
-                                if verbose {
-                                    println!("GOT hacking this may not work right");
-                                }
-                                // TODO: This doesn't actually work. We also need to add a relocatoin to the rela section.
-                                // These offsets are not actually global offsets due to aslr.
-                                // We either need to actually put these in the GOT, add a new GOT section, or some other hack.
-                                // Putting them in the real GOT is the most correct solution.
-
-                                // Another solution may be to make the host define all global data.
-                                // The follow code assumes that is the case and will generate invalid code otherwise.
-                                // Also, I wonder if it is possible to avoid true globals somehow.
-                                let target_vaddr = target_offset + new_segment_vaddr as i64;
-                                let data = target_vaddr.to_le_bytes();
-                                exec_mmap[got_offset..got_offset + 8].copy_from_slice(&data);
-                                got_offset = aligned_offset(got_offset + 8);
-                                let target_offset = (got_offset - new_segment_offset) as i64;
-                                let base_offset = rel.0 as i64 + current_section_offset;
-                                if verbose {
-                                    println!(
-                                        "\tThe base offset is: {:+x}",
-                                        base_offset + current_section_offset
-                                    );
-                                    println!(
-                                        "\tThe got target is: {:+x}",
-                                        target_offset + current_section_offset
-                                    );
-                                    println!("\tThe final target is: {:+x}", target_vaddr);
-                                }
-                                target_offset - base_offset + rel.1.addend()
+                                target_offset - virt_base as i64 + rel.1.addend()
                             }
                             x => {
                                 println!("Relocation Kind not yet support: {:?}", x);
                                 return Ok(-1);
                             }
                         };
-                        let base =
-                            new_segment_offset + current_section_offset as usize + rel.0 as usize;
                         if verbose {
-                            println!("\t\tRelocation base location: {:+x}", base);
+                            println!(
+                                "\t\tRelocation base location: {:+x} (virt: {:+x})",
+                                base, virt_base
+                            );
                             println!("\t\tFinal relocation target offset: {:+x}", target);
                         }
                         match rel.1.size() {
@@ -1236,20 +1199,9 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                 }
             }
         }
-        if got_offset != offset {
-            got_sections.push((offset, got_offset - offset));
-            offset = got_offset;
-        }
     }
 
-    if verbose {
-        println!(
-            "Found App Function Symbols: {:+x?}",
-            app_func_segment_offset_map
-        );
-    }
-
-    offset = aligned_offset(offset);
+    offset = align_by_constraint(offset, MIN_SECTION_ALIGNMENT);
     let new_sh_offset = offset;
     exec_mmap[offset..offset + sh_size].copy_from_slice(&sh_tab);
     offset += sh_size;
@@ -1328,8 +1280,8 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     let dynsym_offset = md.dynamic_symbol_table_section_offset + md.added_byte_count;
 
     for func_name in md.app_functions {
-        let virt_offset = match app_func_segment_offset_map.get(&func_name) {
-            Some(offset) => new_segment_vaddr + *offset as u64,
+        let virt_offset = match app_func_vaddr_map.get(&func_name) {
+            Some(offset) => *offset as u64,
             None => {
                 println!("Function, {}, was not defined by the app", &func_name);
                 return Ok(-1);
@@ -1436,12 +1388,27 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     Ok(0)
 }
 
-fn aligned_offset(offset: usize) -> usize {
-    if offset % MIN_FUNC_ALIGNMENT == 0 {
+fn align_by_constraint(offset: usize, constraint: usize) -> usize {
+    if offset % constraint == 0 {
         offset
     } else {
-        offset + MIN_FUNC_ALIGNMENT - (offset % MIN_FUNC_ALIGNMENT)
+        offset + constraint - (offset % constraint)
     }
+}
+
+fn align_to_offset_by_constraint(
+    current_offset: usize,
+    target_offset: usize,
+    constraint: usize,
+) -> usize {
+    let target_remainder = target_offset % constraint;
+    let current_remainder = current_offset % constraint;
+    let out = match target_remainder.cmp(&current_remainder) {
+        Ordering::Greater => current_offset + (target_remainder - current_remainder),
+        Ordering::Less => current_offset + ((target_remainder + constraint) - current_remainder),
+        Ordering::Equal => current_offset,
+    };
+    out
 }
 
 fn load_struct_inplace<T>(bytes: &[u8], offset: usize) -> &T {
