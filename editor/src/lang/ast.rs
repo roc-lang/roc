@@ -4,7 +4,6 @@ use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasherDefault;
 
 use crate::editor::ed_error::{EdResult, UnexpectedASTNode};
-use crate::lang::def;
 use crate::lang::pattern::{Pattern2, PatternId};
 use crate::lang::pool::Pool;
 use crate::lang::pool::{NodeId, PoolStr, PoolVec, ShallowClone};
@@ -445,6 +444,8 @@ pub type ExprId = NodeId<Expr2>;
 pub type DefId = NodeId<Def2>;
 
 use RecordField::*;
+
+use super::parse::ASTNodeId;
 impl RecordField {
     pub fn get_record_field_var(&self) -> &Variable {
         match self {
@@ -478,6 +479,18 @@ impl RecordField {
         }
     }
 }
+
+pub fn ast_node_to_string(node_id: ASTNodeId, pool: &Pool) -> String {
+    match node_id {
+        ASTNodeId::ADefId(def_id) => {
+            def2_to_string(def_id, pool)
+        },
+        ASTNodeId::AExprId(expr_id) => {
+            expr2_to_string(expr_id, pool)
+        }
+    }
+}
+
 
 pub fn expr2_to_string(node_id: ExprId, pool: &Pool) -> String {
     let mut full_string = String::new();

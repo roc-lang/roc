@@ -184,7 +184,7 @@ impl GridNodeMap {
                     .get(*prev_pos_node_id)
                     .get_ast_node_id();
 
-                if prev_ast_node_id.equals(&curr_ast_node_id) {
+                if prev_ast_node_id == curr_ast_node_id {
                     if pos_extra_subtract > 0 {
                         expr_start_index -= pos_extra_subtract + 1;
                         pos_extra_subtract = 0;
@@ -206,7 +206,7 @@ impl GridNodeMap {
                     .get(*next_pos_node_id)
                     .get_ast_node_id();
 
-                if next_ast_node_id.equals(&curr_ast_node_id) {
+                if next_ast_node_id == curr_ast_node_id {
                     if pos_extra_add > 0 {
                         expr_end_index += pos_extra_add + 1;
                         pos_extra_add = 0;
@@ -247,7 +247,7 @@ impl GridNodeMap {
         if let Some(parent_id) = curr_node.get_parent_id_opt() {
             let parent = mark_node_pool.get(parent_id);
 
-            if parent.get_ast_node_id().equals(&curr_node.get_ast_node_id()) {
+            if parent.get_ast_node_id() == curr_node.get_ast_node_id() {
                 parent_id
             } else {
                 curr_node_id

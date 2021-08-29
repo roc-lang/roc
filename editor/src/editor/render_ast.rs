@@ -5,7 +5,6 @@ use crate::editor::slow_pool::SlowPool;
 use crate::editor::{ed_error::EdResult, theme::EdTheme, util::map_get};
 use crate::graphics::primitives::rect::Rect;
 use crate::graphics::primitives::text as gr_text;
-use crate::lang::ast::{DefId, ExprId};
 use cgmath::Vector2;
 use winit::dpi::PhysicalSize;
 

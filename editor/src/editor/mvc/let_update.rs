@@ -12,6 +12,7 @@ use crate::editor::mvc::ed_update::NodeContext;
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::syntax_highlight::HighlightStyle;
 use crate::lang::ast::{Expr2, ValueDef};
+use crate::lang::parse::ASTNodeId;
 use crate::lang::pattern::Pattern2;
 use crate::lang::pool::NodeId;
 use crate::ui::text::lines::SelectableLines;
@@ -58,7 +59,7 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
         body_var: ed_model.module.env.var_store.fresh(),
     };
 
-    ed_model.module.env.pool.set(ast_node_id, expr2_node);
+    ed_model.module.env.pool.set(ast_node_id.to_expr_id()?, expr2_node);
 
     let val_name_mark_node = MarkupNode::Text {
         content: val_name_string,
@@ -74,7 +75,7 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
     let equals_mn_id = ed_model.add_mark_node(new_equals_mn(ast_node_id, Some(curr_mark_node_id)));
 
     let body_mn_id =
-        ed_model.add_mark_node(new_blank_mn_w_nl(val_expr_id, Some(curr_mark_node_id)));
+        ed_model.add_mark_node(new_blank_mn_w_nl(ASTNodeId::AExprId(val_expr_id), Some(curr_mark_node_id)));
 
     let val_mark_node = MarkupNode::Nested {
         ast_node_id,

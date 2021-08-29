@@ -15,6 +15,7 @@ use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::syntax_highlight::HighlightStyle;
 use crate::editor::util::index_of;
 use crate::lang::ast::{Expr2, ExprId, RecordField};
+use crate::lang::parse::ASTNodeId;
 use crate::lang::pool::{PoolStr, PoolVec};
 use crate::ui::text::text_pos::TextPos;
 use snafu::OptionExt;
@@ -34,13 +35,23 @@ pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     let ast_pool = &mut ed_model.module.env.pool;
     let expr2_node = Expr2::EmptyRecord;
 
-    ast_pool.set(ast_node_id, expr2_node);
+    ast_pool.set(ast_node_id.to_expr_id()?, expr2_node);
 
     let left_bracket_node_id =
-        ed_model.add_mark_node(new_left_accolade_mn(ast_node_id, Some(curr_mark_node_id)));
+        ed_model.add_mark_node(
+            new_left_accolade_mn(
+                ast_node_id.to_expr_id()?, 
+                Some(curr_mark_node_id)
+            )
+        );
 
     let right_bracket_node_id =
-        ed_model.add_mark_node(new_right_accolade_mn(ast_node_id, Some(curr_mark_node_id)));
+        ed_model.add_mark_node(
+            new_right_accolade_mn(
+                ast_node_id.to_expr_id()?, 
+                Some(curr_mark_node_id)
+            )
+        );
 
     let nested_node = MarkupNode::Nested {
         ast_node_id,
@@ -107,7 +118,7 @@ pub fn update_empty_record(
 
             let new_ast_node = Expr2::Record { record_var, fields };
 
-            ed_model.module.env.pool.set(ast_node_id, new_ast_node);
+            ed_model.module.env.pool.set(ast_node_id.to_expr_id()?, new_ast_node);
 
             // update Markup
 
@@ -167,7 +178,7 @@ pub fn update_record_colon(
         ast_node_id,
     } = get_node_context(ed_model)?;
     if let Some(parent_id) = parent_id_opt {
-        let curr_ast_node = ed_model.module.env.pool.get(ast_node_id);
+        let curr_ast_node = ed_model.module.env.pool.get(ast_node_id.to_expr_id()?);
 
         let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
         if let Some(prev_mark_node_id) = prev_mark_node_id_opt {
@@ -177,7 +188,7 @@ pub fn update_record_colon(
                 .module
                 .env
                 .pool
-                .get(prev_mark_node.get_ast_node_id());
+                .get(prev_mark_node.get_ast_node_id().to_expr_id()?);
 
             // current and prev node should always point to record when in valid position to add ':'
             if matches!(prev_ast_node, Expr2::Record { .. })
@@ -219,7 +230,7 @@ pub fn update_record_colon(
 
                                 let record_colon_node = MarkupNode::Text {
                                     content: record_colon.to_owned(),
-                                    ast_node_id: record_ast_node_id,
+                                    ast_node_id: ASTNodeId::AExprId(record_ast_node_id),
                                     syn_high_style: HighlightStyle::Operator,
                                     attributes: Attributes::new(),
                                     parent_id_opt: Some(parent_id),
@@ -234,7 +245,12 @@ pub fn update_record_colon(
                                     .add_child_at_index(new_child_index, record_colon_node_id)?;
 
                                 let record_blank_node_id = ed_model
-                                    .add_mark_node(new_blank_mn(new_field_val_id, Some(parent_id)));
+                                    .add_mark_node(
+                                        new_blank_mn(
+                                        ASTNodeId::AExprId(new_field_val_id),
+                                        Some(parent_id)
+                                        )
+                                    );
 
                                 ed_model
                                     .mark_node_pool

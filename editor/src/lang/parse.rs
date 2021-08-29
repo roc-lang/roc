@@ -5,9 +5,7 @@ use bumpalo::Bump;
 use roc_parse::parser::SyntaxError;
 use roc_region::all::Region;
 
-use super::{ast::{DefId, Expr2, ExprId}, expr::{str_to_def2, Env}, pool::Pool};
-
-// WORK IN PROGRESS FILE
+use super::{ast::{DefId, Expr2, ExprId}, expr::{str_to_def2, Env}};
 
 #[derive(Debug)]
 pub struct AST {
@@ -15,38 +13,23 @@ pub struct AST {
     pub def_ids: Vec<DefId>,
 }
 
-#[derive(Debug)]
-pub struct ASTNodeId {
-    pub def_id_opt: Option<DefId>,
-    pub expr_id_opt: Option<ExprId>,
+#[derive(Debug, PartialEq)]
+pub enum ASTNodeId {
+    ADefId(DefId),
+    AExprId(ExprId),
 }
 
 impl ASTNodeId {
     pub fn to_expr_id(&self) -> EdResult<ExprId>{
-        if let Some(expr_id) = self.expr_id_opt {
-            Ok(expr_id)
-        } else {
-            ASTNodeIdWithoutExprId {
-                ast_node_id: self
-            }.fail()
-        }
-    }
-
-    pub fn equals(&self, other: &ASTNodeId) -> bool {
-        if let Some(def_id_self) = self.def_id_opt {
-            if let Some(def_id_other) = other.def_id_opt {
-                def_id_self == def_id_other
-            } else {
-                false
+        match self {
+            ASTNodeId::AExprId(expr_id) => {
+                Ok(*expr_id)
+            },
+            _ => {
+                ASTNodeIdWithoutExprId {
+                    ast_node_id: *self
+                }.fail()?
             }
-        } else if let Some(expr_id_self) = self.expr_id_opt {
-            if let Some(expr_id_other) = other.expr_id_opt {
-                expr_id_self == expr_id_other
-            } else {
-                false
-            }
-        } else {
-            unreachable!()
         }
     }
 }
@@ -57,7 +40,7 @@ pub struct AppHeader {
     pub packages_base: String,
     pub imports: Vec<String>,
     pub provides: Vec<String>,
-    pub ast_node_id: ExprId,
+    pub ast_node_id: ExprId, // TODO probably want to use HeaderId
 }
 
 impl AST {

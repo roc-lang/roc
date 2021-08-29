@@ -135,7 +135,7 @@ impl<'a> EdModel<'a> {
         Ok(grid_node_map)
     }
 
-    pub fn add_mark_node<T>(&mut self, node: MarkupNode) -> MarkNodeId {
+    pub fn add_mark_node(&mut self, node: MarkupNode) -> MarkNodeId {
         self.mark_node_pool.add(node)
     }
 
@@ -621,7 +621,7 @@ pub struct NodeContext<'a> {
     pub ast_node_id: ASTNodeId,
 }
 
-pub fn get_node_context<'a, T>(ed_model: &'a EdModel) -> EdResult<NodeContext<'a>> {
+pub fn get_node_context<'a>(ed_model: &'a EdModel) -> EdResult<NodeContext<'a>> {
     let old_caret_pos = ed_model.get_caret();
     let curr_mark_node_id = ed_model
         .grid_node_map
@@ -829,7 +829,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                     if let Some(mark_parent_id) = mark_parent_id_opt {
                                         let parent_ast_id = ed_model.mark_node_pool.get(mark_parent_id).get_ast_node_id();
 
-                                        update_record_colon(ed_model, parent_ast_id)?
+                                        update_record_colon(ed_model, parent_ast_id.to_expr_id()?)?
                                     } else {
                                         InputOutcome::Ignored
                                     }
@@ -917,14 +917,14 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                             ed_model.insert_empty_line(caret_line_nr + 1)?;
 
                                             // create Blank node at new line
-                                            let new_line_blank = Expr2::Blank;
+                                            let new_line_blank = Def2::Blank;
                                             let new_line_blank_id = ed_model.module.env.pool.add(new_line_blank);
 
                                             // TODO this should insert at caret line_nr, not push at end
-                                            ed_model.module.ast.expression_ids.push(new_line_blank_id);
+                                            ed_model.module.ast.def_ids.push(new_line_blank_id);
 
                                             let blank_mn_id = ed_model
-                                                .add_mark_node(new_blank_mn(new_line_blank_id, None));
+                                                .add_mark_node(new_blank_mn(ASTNodeId::ADefId(new_line_blank_id), None));
 
                                             // TODO this should insert at caret line_nr, not push at end
                                             ed_model.markup_ids.push(blank_mn_id);
@@ -947,7 +947,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                 if let Some(prev_mark_node_id) = prev_mark_node_id_opt {
                                     let prev_mark_node = ed_model.mark_node_pool.get(prev_mark_node_id);
 
-                                    let prev_ast_node = ed_model.module.env.pool.get(prev_mark_node.get_ast_node_id());
+                                    let prev_ast_node = ed_model.module.env.pool.get(prev_mark_node.get_ast_node_id().to_expr_id()?);
 
                                     match prev_ast_node {
                                         Expr2::SmallInt{ .. } => {
@@ -972,7 +972,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                     ed_model.module.ast.def_ids.push(new_blank_id);
 
                                                     let blank_mn_id = ed_model
-                                                        .add_mark_node(new_blank_mn(new_blank_id, None));
+                                                        .add_mark_node(new_blank_mn(ASTNodeId::ADefId(new_blank_id), None));
 
                                                     // TODO this should insert at caret line_nr, not push at end
                                                     ed_model.markup_ids.push(blank_mn_id);

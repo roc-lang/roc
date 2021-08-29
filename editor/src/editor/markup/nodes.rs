@@ -14,6 +14,8 @@ use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::syntax_highlight::HighlightStyle;
 use crate::editor::util::index_of;
+use crate::lang::ast::Def2;
+use crate::lang::ast::DefId;
 use crate::lang::ast::ExprId;
 use crate::lang::ast::RecordField;
 use crate::lang::ast::ValueDef;
@@ -258,7 +260,7 @@ pub const EQUALS: &str = " = ";
 
 fn new_markup_node(
     text: String,
-    node_id: ExprId,
+    node_id: ASTNodeId,
     highlight_style: HighlightStyle,
     mark_node_pool: &mut SlowPool,
 ) -> MarkNodeId {
@@ -274,6 +276,17 @@ fn new_markup_node(
     mark_node_pool.add(node)
 }
 
+pub fn def2_to_markup<'a, 'b>(
+    arena: &'a Bump,
+    env: &mut Env<'b>,
+    def2: &Def2,
+    def2_node_id: DefId,
+    mark_node_pool: &mut SlowPool,
+    interns: &Interns,
+) -> EdResult<MarkNodeId> {
+    unimplemented!();
+}
+
 // make Markup Nodes: generate String representation, assign Highlighting Style
 pub fn expr2_to_markup<'a, 'b>(
     arena: &'a Bump,
@@ -285,6 +298,8 @@ pub fn expr2_to_markup<'a, 'b>(
 ) -> EdResult<MarkNodeId> {
     dbg!(expr2_to_string(expr2_node_id, env.pool));
 
+    let ast_node_id = ASTNodeId::AExprId(expr2_node_id);
+
     let mark_node_id = match expr2 {
         Expr2::SmallInt { text, .. }
         | Expr2::I128 { text, .. }
@@ -294,20 +309,20 @@ pub fn expr2_to_markup<'a, 'b>(
 
             new_markup_node(
                 num_str,
-                expr2_node_id,
+                ast_node_id,
                 HighlightStyle::Number,
                 mark_node_pool,
             )
         }
         Expr2::Str(text) => new_markup_node(
             "\"".to_owned() + text.as_str(env.pool) + "\"",
-            expr2_node_id,
+            ast_node_id,
             HighlightStyle::String,
             mark_node_pool,
         ),
         Expr2::GlobalTag { name, .. } => new_markup_node(
             get_string(env, name),
-            expr2_node_id,
+            ast_node_id,
             HighlightStyle::Type,
             mark_node_pool,
         ),
@@ -320,7 +335,7 @@ pub fn expr2_to_markup<'a, 'b>(
             let text = format!("{:?}", symbol);
             new_markup_node(
                 text,
-                expr2_node_id,
+                ast_node_id,
                 HighlightStyle::Variable,
                 mark_node_pool,
             )
@@ -351,7 +366,7 @@ pub fn expr2_to_markup<'a, 'b>(
             children_ids.push(mark_node_pool.add(new_right_square_mn(expr2_node_id, None)));
 
             let list_node = MarkupNode::Nested {
-                ast_node_id: expr2_node_id,
+                ast_node_id: ast_node_id,
                 children_ids,
                 parent_id_opt: None,
                 newline_at_end: false,
@@ -366,7 +381,7 @@ pub fn expr2_to_markup<'a, 'b>(
             ];
 
             let record_node = MarkupNode::Nested {
-                ast_node_id: expr2_node_id,
+                ast_node_id,
                 children_ids,
                 parent_id_opt: None,
                 newline_at_end: false,
@@ -385,7 +400,7 @@ pub fn expr2_to_markup<'a, 'b>(
 
                 children_ids.push(new_markup_node(
                     field_name.as_str(env.pool).to_owned(),
-                    expr2_node_id,
+                    ast_node_id,
                     HighlightStyle::RecordField,
                     mark_node_pool,
                 ));
@@ -416,7 +431,7 @@ pub fn expr2_to_markup<'a, 'b>(
             children_ids.push(mark_node_pool.add(new_right_accolade_mn(expr2_node_id, None)));
 
             let record_node = MarkupNode::Nested {
-                ast_node_id: expr2_node_id,
+                ast_node_id: ast_node_id,
                 children_ids,
                 parent_id_opt: None,
                 newline_at_end: false,
@@ -424,7 +439,7 @@ pub fn expr2_to_markup<'a, 'b>(
 
             mark_node_pool.add(record_node)
         }
-        Expr2::Blank => mark_node_pool.add(new_blank_mn(expr2_node_id, None)),
+        Expr2::Blank => mark_node_pool.add(new_blank_mn(ast_node_id, None)),
         Expr2::LetValue {
             def_id,
             body_id,
@@ -442,7 +457,7 @@ pub fn expr2_to_markup<'a, 'b>(
 
             let val_name_mn = MarkupNode::Text {
                 content: val_name,
-                ast_node_id: expr2_node_id,
+                ast_node_id,
                 syn_high_style: HighlightStyle::Variable,
                 attributes: Attributes::new(),
                 parent_id_opt: None,
@@ -451,7 +466,7 @@ pub fn expr2_to_markup<'a, 'b>(
 
             let val_name_mn_id = mark_node_pool.add(val_name_mn);
 
-            let equals_mn_id = mark_node_pool.add(new_equals_mn(expr2_node_id, None));
+            let equals_mn_id = mark_node_pool.add(new_equals_mn(ast_node_id, None));
 
             let value_def = env.pool.get(*def_id);
 
@@ -474,7 +489,7 @@ pub fn expr2_to_markup<'a, 'b>(
                     body_mn.add_newline_at_end();
 
                     let full_let_node = MarkupNode::Nested {
-                        ast_node_id: expr2_node_id,
+                        ast_node_id,
                         children_ids: vec![val_name_mn_id, equals_mn_id, body_mn_id],
                         parent_id_opt: None,
                         newline_at_end: true,
@@ -492,7 +507,7 @@ pub fn expr2_to_markup<'a, 'b>(
         }
         Expr2::RuntimeError() => new_markup_node(
             "RunTimeError".to_string(),
-            expr2_node_id,
+            ast_node_id,
             HighlightStyle::Blank,
             mark_node_pool,
         ),
@@ -548,10 +563,10 @@ pub fn set_parent_for_all_helper(
     }
 }
 
-fn header_mn(content: String, ast_node_id: ExprId, mark_node_pool: &mut SlowPool) -> MarkNodeId {
+fn header_mn(content: String, expr_id: ExprId, mark_node_pool: &mut SlowPool) -> MarkNodeId {
     let mark_node = MarkupNode::Text {
         content,
-        ast_node_id,
+        ast_node_id: ASTNodeId::AExprId(expr_id),
         syn_high_style: HighlightStyle::PackageRelated,
         attributes: Attributes::new(),
         parent_id_opt: None,
@@ -563,13 +578,13 @@ fn header_mn(content: String, ast_node_id: ExprId, mark_node_pool: &mut SlowPool
 
 fn header_val_mn(
     content: String,
-    ast_node_id: ExprId,
+    expr_id: ExprId,
     highlight_style: HighlightStyle,
     mark_node_pool: &mut SlowPool,
 ) -> MarkNodeId {
     let mark_node = MarkupNode::Text {
         content,
-        ast_node_id,
+        ast_node_id: ASTNodeId::AExprId(expr_id),
         syn_high_style: highlight_style,
         attributes: Attributes::new(),
         parent_id_opt: None,
@@ -580,13 +595,14 @@ fn header_val_mn(
 }
 
 pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -> MarkNodeId {
-    let ast_node_id = app_header.ast_node_id;
+    let expr_id = app_header.ast_node_id;
+    let ast_node_id = ASTNodeId::AExprId(expr_id);
 
-    let app_node_id = header_mn("app ".to_owned(), ast_node_id, mark_node_pool);
+    let app_node_id = header_mn("app ".to_owned(), expr_id, mark_node_pool);
 
     let app_name_node_id = header_val_mn(
         app_header.app_name.clone(),
-        ast_node_id,
+        expr_id,
         HighlightStyle::String,
         mark_node_pool,
     );
@@ -598,25 +614,25 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
         newline_at_end: true,
     };
 
-    let packages_node_id = header_mn("    packages ".to_owned(), ast_node_id, mark_node_pool);
+    let packages_node_id = header_mn("    packages ".to_owned(), expr_id, mark_node_pool);
 
-    let pack_left_acc_node_id = mark_node_pool.add(new_left_accolade_mn(ast_node_id, None));
+    let pack_left_acc_node_id = mark_node_pool.add(new_left_accolade_mn(expr_id, None));
 
     let pack_base_node_id = header_val_mn(
         "base: ".to_owned(),
-        ast_node_id,
+        expr_id,
         HighlightStyle::RecordField,
         mark_node_pool,
     );
 
     let pack_val_node_id = header_val_mn(
         app_header.packages_base.clone(),
-        ast_node_id,
+        expr_id,
         HighlightStyle::String,
         mark_node_pool,
     );
 
-    let pack_right_acc_node_id = mark_node_pool.add(new_right_accolade_mn(ast_node_id, None));
+    let pack_right_acc_node_id = mark_node_pool.add(new_right_accolade_mn(expr_id, None));
 
     let full_packages_node = MarkupNode::Nested {
         ast_node_id,
@@ -631,9 +647,9 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
         newline_at_end: true,
     };
 
-    let imports_node_id = header_mn("    imports ".to_owned(), ast_node_id, mark_node_pool);
+    let imports_node_id = header_mn("    imports ".to_owned(), expr_id, mark_node_pool);
 
-    let imports_left_square_node_id = mark_node_pool.add(new_left_square_mn(ast_node_id, None));
+    let imports_left_square_node_id = mark_node_pool.add(new_left_square_mn(expr_id, None));
 
     let nr_of_imports = app_header.imports.len();
 
@@ -644,7 +660,7 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
         .map(|(indx, import)| {
             let import_val_mn_id = header_val_mn(
                 import.to_owned(),
-                ast_node_id,
+                expr_id,
                 HighlightStyle::Import,
                 mark_node_pool,
             );
@@ -652,7 +668,7 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
             if indx != nr_of_imports - 1 {
                 vec![
                     import_val_mn_id,
-                    mark_node_pool.add(new_comma_mn(ast_node_id, None)),
+                    mark_node_pool.add(new_comma_mn(expr_id, None)),
                 ]
             } else {
                 vec![import_val_mn_id]
@@ -661,7 +677,7 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
         .flatten()
         .collect();
 
-    let imports_right_square_node_id = mark_node_pool.add(new_right_square_mn(ast_node_id, None));
+    let imports_right_square_node_id = mark_node_pool.add(new_right_square_mn(expr_id, None));
 
     let mut full_import_children = vec![imports_node_id, imports_left_square_node_id];
 
@@ -675,21 +691,21 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
         newline_at_end: true,
     };
 
-    let provides_node_id = header_mn("    provides ".to_owned(), ast_node_id, mark_node_pool);
+    let provides_node_id = header_mn("    provides ".to_owned(), expr_id, mark_node_pool);
 
-    let provides_left_square_node_id = mark_node_pool.add(new_left_square_mn(ast_node_id, None));
+    let provides_left_square_node_id = mark_node_pool.add(new_left_square_mn(expr_id, None));
 
     let provides_val_node_id = header_val_mn(
         // TODO iter over provides like with imports
         app_header.provides.first().unwrap_or(&String::new()).to_owned(),
-        ast_node_id,
+        expr_id,
         HighlightStyle::Provides,
         mark_node_pool,
     );
 
-    let provides_right_square_node_id = mark_node_pool.add(new_right_square_mn(ast_node_id, None));
+    let provides_right_square_node_id = mark_node_pool.add(new_right_square_mn(expr_id, None));
 
-    let provides_end_node_id = header_mn(" to base".to_owned(), ast_node_id, mark_node_pool);
+    let provides_end_node_id = header_mn(" to base".to_owned(), expr_id, mark_node_pool);
 
     let full_provides_node = MarkupNode::Nested {
         ast_node_id,
@@ -737,10 +753,10 @@ pub fn ast_to_mark_nodes<'a, 'b>(
 ) -> EdResult<Vec<MarkNodeId>> {
     let mut all_mark_node_ids = vec![header_to_markup(&ast.header, mark_node_pool)];
 
-    for &expr_id in ast.expression_ids.iter() {
-        let expr2 = env.pool.get(expr_id);
+    for &def_id in ast.def_ids.iter() {
+        let def2 = env.pool.get(def_id);
 
-        let expr2_markup_id = expr2_to_markup(arena, env, expr2, expr_id, mark_node_pool, interns)?;
+        let expr2_markup_id = def2_to_markup(arena, env, def2, def_id, mark_node_pool, interns)?;
 
         set_parent_for_all(expr2_markup_id, mark_node_pool);
 

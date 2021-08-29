@@ -1,8 +1,8 @@
-use crate::{editor::{slow_pool::MarkNodeId, syntax_highlight::HighlightStyle}, lang::{ast::{ExprId}, pool::NodeId}};
+use crate::{editor::{slow_pool::MarkNodeId, syntax_highlight::HighlightStyle}, lang::{ast::ExprId, parse::ASTNodeId}};
 
 use super::{attribute::Attributes, nodes, nodes::MarkupNode};
 
-pub fn new_equals_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
+pub fn new_equals_mn(ast_node_id: ASTNodeId, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
     MarkupNode::Text {
         content: nodes::EQUALS.to_owned(),
         ast_node_id,
@@ -13,10 +13,10 @@ pub fn new_equals_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> 
     }
 }
 
-pub fn new_comma_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
+pub fn new_comma_mn(expr_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
     MarkupNode::Text {
         content: nodes::COMMA.to_owned(),
-        ast_node_id,
+        ast_node_id: ASTNodeId::AExprId(expr_id),
         syn_high_style: HighlightStyle::Blank,
         attributes: Attributes::new(),
         parent_id_opt,
@@ -24,7 +24,7 @@ pub fn new_comma_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> M
     }
 }
 
-pub fn new_blank_mn<T>(ast_node_id: NodeId<T>, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
+pub fn new_blank_mn(ast_node_id: ASTNodeId, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
     MarkupNode::Blank {
         ast_node_id,
         syn_high_style: HighlightStyle::Blank,
@@ -34,7 +34,7 @@ pub fn new_blank_mn<T>(ast_node_id: NodeId<T>, parent_id_opt: Option<MarkNodeId>
     }
 }
 
-pub fn new_blank_mn_w_nl<T>(ast_node_id: NodeId<T>, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
+pub fn new_blank_mn_w_nl(ast_node_id: ASTNodeId, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
     MarkupNode::Blank {
         ast_node_id,
         syn_high_style: HighlightStyle::Blank,
@@ -44,10 +44,10 @@ pub fn new_blank_mn_w_nl<T>(ast_node_id: NodeId<T>, parent_id_opt: Option<MarkNo
     }
 }
 
-pub fn new_colon_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
+pub fn new_colon_mn(expr_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
     MarkupNode::Text {
         content: nodes::COLON.to_owned(),
-        ast_node_id,
+        ast_node_id: ASTNodeId::AExprId(expr_id),
         syn_high_style: HighlightStyle::Operator,
         attributes: Attributes::new(),
         parent_id_opt,
@@ -55,10 +55,10 @@ pub fn new_colon_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> M
     }
 }
 
-pub fn new_left_accolade_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
+pub fn new_left_accolade_mn(expr_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
     MarkupNode::Text {
         content: nodes::LEFT_ACCOLADE.to_owned(),
-        ast_node_id,
+        ast_node_id: ASTNodeId::AExprId(expr_id),
         syn_high_style: HighlightStyle::Bracket,
         attributes: Attributes::new(),
         parent_id_opt,
@@ -66,10 +66,10 @@ pub fn new_left_accolade_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeI
     }
 }
 
-pub fn new_right_accolade_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
+pub fn new_right_accolade_mn(expr_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
     MarkupNode::Text {
         content: nodes::RIGHT_ACCOLADE.to_owned(),
-        ast_node_id,
+        ast_node_id: ASTNodeId::AExprId(expr_id),
         syn_high_style: HighlightStyle::Bracket,
         attributes: Attributes::new(),
         parent_id_opt,
@@ -77,10 +77,10 @@ pub fn new_right_accolade_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNode
     }
 }
 
-pub fn new_left_square_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
+pub fn new_left_square_mn(expr_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
     MarkupNode::Text {
         content: nodes::LEFT_SQUARE_BR.to_owned(),
-        ast_node_id,
+        ast_node_id: ASTNodeId::AExprId(expr_id),
         syn_high_style: HighlightStyle::Bracket,
         attributes: Attributes::new(),
         parent_id_opt,
@@ -88,10 +88,10 @@ pub fn new_left_square_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeId>
     }
 }
 
-pub fn new_right_square_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
+pub fn new_right_square_mn(expr_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
     MarkupNode::Text {
         content: nodes::RIGHT_SQUARE_BR.to_owned(),
-        ast_node_id,
+        ast_node_id: ASTNodeId::AExprId(expr_id),
         syn_high_style: HighlightStyle::Bracket,
         attributes: Attributes::new(),
         parent_id_opt,

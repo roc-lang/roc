@@ -7,7 +7,7 @@ use crate::editor::{
     ed_error::{EdResult, EmptyCodeString, MissingParent, NoNodeAtCaretPosition},
 };
 use crate::graphics::primitives::rect::Rect;
-use crate::lang::ast::{DefId, ExprId};
+use crate::lang::ast::{ExprId};
 use crate::lang::expr::Env;
 use crate::lang::parse::AST;
 use crate::lang::pool::PoolStr;

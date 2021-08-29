@@ -10,8 +10,9 @@ use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::mvc::ed_update::get_node_context;
 use crate::editor::mvc::ed_update::NodeContext;
 use crate::editor::slow_pool::MarkNodeId;
-use crate::lang::ast::Expr2;
-use crate::lang::ast::{expr2_to_string, ExprId};
+use crate::lang::ast::{Expr2, ast_node_to_string};
+use crate::lang::ast::{ExprId};
+use crate::lang::parse::ASTNodeId;
 use crate::lang::pool::PoolVec;
 use crate::ui::text::text_pos::TextPos;
 
@@ -32,13 +33,13 @@ pub fn start_new_list(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
         elems: PoolVec::empty(ed_model.module.env.pool),
     };
 
-    ed_model.module.env.pool.set(ast_node_id, expr2_node);
+    ed_model.module.env.pool.set(ast_node_id.to_expr_id()?, expr2_node);
 
     let left_bracket_node_id =
-        ed_model.add_mark_node(new_left_square_mn(ast_node_id, Some(curr_mark_node_id)));
+        ed_model.add_mark_node(new_left_square_mn(ast_node_id.to_expr_id()?, Some(curr_mark_node_id)));
 
     let right_bracket_node_id =
-        ed_model.add_mark_node(new_right_square_mn(ast_node_id, Some(curr_mark_node_id)));
+        ed_model.add_mark_node(new_right_square_mn(ast_node_id.to_expr_id()?, Some(curr_mark_node_id)));
 
     let nested_node = MarkupNode::Nested {
         ast_node_id,
@@ -97,7 +98,7 @@ pub fn add_blank_child(
         let parent = ed_model.mark_node_pool.get(parent_id);
 
         let list_ast_node_id = parent.get_ast_node_id();
-        let list_ast_node = ed_model.module.env.pool.get(list_ast_node_id);
+        let list_ast_node = ed_model.module.env.pool.get(list_ast_node_id.to_expr_id()?);
 
         match list_ast_node {
             Expr2::List {
@@ -107,11 +108,11 @@ pub fn add_blank_child(
                 let blank_elt = Expr2::Blank;
                 let blank_elt_id = ed_model.module.env.pool.add(blank_elt);
 
-                Ok((blank_elt_id, list_ast_node_id, parent_id))
+                Ok((blank_elt_id, list_ast_node_id.to_expr_id()?, parent_id))
             }
             _ => UnexpectedASTNode {
                 required_node_type: "List".to_string(),
-                encountered_node_type: expr2_to_string(ast_node_id, ed_model.module.env.pool),
+                encountered_node_type: ast_node_to_string(ast_node_id, ed_model.module.env.pool),
             }
             .fail(),
         }
@@ -148,7 +149,7 @@ pub fn add_blank_child(
         }
         _ => UnexpectedASTNode {
             required_node_type: "List".to_string(),
-            encountered_node_type: expr2_to_string(ast_node_id, ed_model.module.env.pool),
+            encountered_node_type: ast_node_to_string(ast_node_id, ed_model.module.env.pool),
         }
         .fail(),
     }?;
@@ -180,7 +181,7 @@ pub fn update_mark_children(
     parent_id_opt: Option<MarkNodeId>,
     ed_model: &mut EdModel,
 ) -> EdResult<Vec<MarkNodeId>> {
-    let blank_mark_node_id = ed_model.add_mark_node(new_blank_mn(blank_elt_id, parent_id_opt));
+    let blank_mark_node_id = ed_model.add_mark_node(new_blank_mn(ASTNodeId::AExprId(blank_elt_id), parent_id_opt));
 
     let mut children: Vec<MarkNodeId> = vec![];
 
