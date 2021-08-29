@@ -11,6 +11,7 @@ use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
 use roc_problem::can::Problem;
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
+use std::collections::HashMap;
 use std::hash::Hash;
 
 pub fn test_home() -> ModuleId {
@@ -56,7 +57,14 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
 
     let mut scope = Scope::new(home, &mut var_store);
     let dep_idents = IdentIds::exposed_builtins(0);
-    let mut env = Env::new(home, &dep_idents, &module_ids, IdentIds::default());
+    let imported_modules = HashMap::default();
+    let mut env = Env::new(
+        home,
+        &dep_idents,
+        &module_ids,
+        &imported_modules,
+        IdentIds::default(),
+    );
     let (loc_expr, output) = canonicalize_expr(
         &mut env,
         &mut var_store,

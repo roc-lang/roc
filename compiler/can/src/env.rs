@@ -15,6 +15,8 @@ pub struct Env<'a> {
 
     pub module_ids: &'a ModuleIds,
 
+    pub imported_modules: &'a MutMap<ModuleId, Region>,
+
     /// Problems we've encountered along the way, which will be reported to the user at the end.
     pub problems: Vec<Problem>,
 
@@ -41,12 +43,14 @@ impl<'a> Env<'a> {
         home: ModuleId,
         dep_idents: &'a MutMap<ModuleId, IdentIds>,
         module_ids: &'a ModuleIds,
+        imported_modules: &'a MutMap<ModuleId, Region>,
         exposed_ident_ids: IdentIds,
     ) -> Env<'a> {
         Env {
             home,
             dep_idents,
             module_ids,
+            imported_modules,
             ident_ids: exposed_ident_ids.clone(), // we start with these, but will add more later
             exposed_ident_ids,
             problems: Vec::new(),
@@ -75,13 +79,15 @@ impl<'a> Env<'a> {
         let ident = Ident::from(ident);
 
         match self.module_ids.get_id(&module_name) {
-            Some(&module_id) => {
+            Some(module_id)
+                if module_id.is_builtin() || self.imported_modules.contains_key(module_id) =>
+            {
                 // You can do qualified lookups on your own module, e.g.
                 // if I'm in the Foo module, I can do a `Foo.bar` lookup.
-                if module_id == self.home {
+                if *module_id == self.home {
                     match self.ident_ids.get_id(&ident) {
                         Some(ident_id) => {
-                            let symbol = Symbol::new(module_id, *ident_id);
+                            let symbol = Symbol::new(*module_id, *ident_id);
 
                             self.qualified_lookups.insert(symbol);
 
@@ -101,11 +107,11 @@ impl<'a> Env<'a> {
                 } else {
                     match self
                         .dep_idents
-                        .get(&module_id)
+                        .get(module_id)
                         .and_then(|exposed_ids| exposed_ids.get_id(&ident))
                     {
                         Some(ident_id) => {
-                            let symbol = Symbol::new(module_id, *ident_id);
+                            let symbol = Symbol::new(*module_id, *ident_id);
 
                             self.qualified_lookups.insert(symbol);
 
@@ -119,15 +125,19 @@ impl<'a> Env<'a> {
                     }
                 }
             }
-            None => Err(RuntimeError::ModuleNotImported {
+            Some(_) => Err(RuntimeError::ModuleNotImported {
                 module_name,
                 imported_modules: self
-                    .module_ids
-                    .available_modules()
-                    .map(|string| string.as_ref().into())
+                    .imported_modules
+                    .iter()
+                    .map(|(id, _)| self.module_ids.get_name(*id).unwrap().as_ref().into())
                     .collect(),
                 region,
             }),
+            None => unreachable!(
+                "Tried to import a module that does not exist: {}",
+                module_name
+            ),
         }
     }
 

@@ -53,6 +53,7 @@ pub fn canonicalize_module_defs<'a, F>(
     exposed_symbols: &MutSet<Symbol>,
     var_store: &mut VarStore,
     look_up_builtin: F,
+    imported_modules: &MutMap<ModuleId, Region>,
 ) -> Result<ModuleOutput, RuntimeError>
 where
     F: Fn(Symbol, &mut VarStore) -> Option<Def> + 'static + Send + Copy,
@@ -82,7 +83,13 @@ where
         }));
     }
 
-    let mut env = Env::new(home, dep_idents, module_ids, exposed_ident_ids);
+    let mut env = Env::new(
+        home,
+        dep_idents,
+        module_ids,
+        imported_modules,
+        exposed_ident_ids,
+    );
     let mut lookups = Vec::with_capacity(num_deps);
     let mut rigid_variables = MutMap::default();
 

@@ -3495,9 +3495,16 @@ fn fabricate_effects_module<'a>(
     let module_ids = { (*module_ids).lock().clone() }.into_module_ids();
 
     let mut scope = roc_can::scope::Scope::new(module_id, &mut var_store);
-    let mut can_env =
-        roc_can::env::Env::new(module_id, &dep_idents, &module_ids, exposed_ident_ids);
 
+    // Effects module doesn't import anything so this should be safe
+    let imported_modules = HashMap::default();
+    let mut can_env = roc_can::env::Env::new(
+        module_id,
+        &dep_idents,
+        &module_ids,
+        &imported_modules,
+        exposed_ident_ids,
+    );
     let effect_symbol = scope
         .introduce(
             name.into(),
@@ -3715,6 +3722,7 @@ where
         &exposed_symbols,
         &mut var_store,
         look_up_builtins,
+        &imported_modules,
     );
     let canonicalize_end = SystemTime::now();
 
