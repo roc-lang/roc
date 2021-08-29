@@ -1,7 +1,8 @@
 #![cfg(test)]
 
-use crate::assert_evals_to;
 use crate::helpers::with_larger_debug_stack;
+// use crate::assert_evals_to;
+use crate::assert_wasm_evals_to as assert_evals_to;
 use core::ffi::c_void;
 use indoc::indoc;
 use roc_std::{RocList, RocStr};
