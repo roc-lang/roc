@@ -592,8 +592,8 @@ macro_rules! assert_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
         // Same as above, except with an additional transformation argument.
         {
-            // $crate::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
-            $crate::assert_wasm_evals_to!($src, $expected, $ty, $transform, false);
+            $crate::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
+            // $crate::assert_wasm_evals_to!($src, $expected, $ty, $transform, false);
         }
     };
 }

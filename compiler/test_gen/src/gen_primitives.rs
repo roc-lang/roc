@@ -1,9 +1,9 @@
 #![cfg(test)]
 
-// use crate::assert_evals_to;
+use crate::assert_evals_to;
 use crate::assert_llvm_evals_to;
 use crate::assert_non_opt_evals_to;
-use crate::assert_wasm_evals_to as assert_evals_to;
+// use crate::assert_wasm_evals_to as assert_evals_to;
 use crate::assert_wasm_evals_to;
 use indoc::indoc;
 use roc_std::{RocList, RocStr};
