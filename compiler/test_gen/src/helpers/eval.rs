@@ -305,7 +305,7 @@ pub fn helper_wasm<'a>(
     arena: &'a bumpalo::Bump,
     src: &str,
     stdlib: &'a roc_builtins::std::StdLib,
-    is_gen_test: bool,
+    _is_gen_test: bool,
     ignore_problems: bool,
     context: &'a inkwell::context::Context,
 ) -> wasmer::Instance {
@@ -317,6 +317,7 @@ pub fn helper_wasm<'a>(
         OptLevel::Optimize
     };
 
+    let is_gen_test = false;
     let (main_fn_name, delayed_errors, llvm_module) = create_llvm_module(
         arena,
         src,
@@ -331,9 +332,11 @@ pub fn helper_wasm<'a>(
     use inkwell::targets::{InitializationConfig, Target, TargetTriple};
 
     let dir = tempfile::tempdir().unwrap();
+    let dir_path = dir.path();
+    let zig_global_cache_path = std::path::PathBuf::from("/home/folkertdev/roc/wasm/mess");
 
-    let test_a_path = dir.path().join("test.a");
-    let test_wasm_path = dir.path().join("main.wasm");
+    let test_a_path = dir_path.join("test.a");
+    let test_wasm_path = dir_path.join("libmain.wasm");
 
     Target::initialize_webassembly(&InitializationConfig::default());
 
@@ -361,22 +364,42 @@ pub fn helper_wasm<'a>(
         .unwrap();
 
     use std::process::Command;
+
+    Command::new("/opt/wasi-sdk/bin/clang")
+        .current_dir(dir_path)
+        .args(&[
+            "/home/folkertdev/roc/wasm/libmain.a",
+            test_a_path.to_str().unwrap(),
+            "-target",
+            "wasm32-wasi",
+            "-o",
+            test_wasm_path.to_str().unwrap(),
+            "--sysroot=/opt/wasi-sdk/share/wasi-sysroot/",
+            "-Xlinker", "--export-dynamic",
+            "-Xlinker", "--allow-undefined"
+            // "--global-cache-dir",
+            // zig_global_cache_path.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+
+    /*
     Command::new("/home/folkertdev/Downloads/zig-linux-x86_64-0.9.0-dev.848+d5ef5da59/zig")
-        // .env_clear()
-        // .env("PATH", env_path)
-        // .env("HOME", env_home)
-        .current_dir(dir.path())
+        .current_dir(dir_path)
         .args(&[
             "build-lib",
-            "/home/folkertdev/roc/wasm/main.zig",
+            "/home/folkertdev/roc/wasm/libmain.a",
             test_a_path.to_str().unwrap(),
             "-target",
             "wasm32-wasi",
             "-dynamic",
             "-lc",
+            // "--global-cache-dir",
+            // zig_global_cache_path.to_str().unwrap(),
         ])
         .status()
         .unwrap();
+        */
 
     // now, do wasmer stuff
 
@@ -395,15 +418,56 @@ pub fn helper_wasm<'a>(
 
     // Then, we get the import object related to our WASI
     // and attach it to the Wasm instance.
-    let mut import_object = wasi_env.import_object(&module).unwrap();
+    let mut import_object = wasi_env
+        .import_object(&module)
+        .unwrap_or_else(|_| wasmer::imports!());
 
-    let main_function = Function::new_native(&store, fake_wasm_main_function);
-    let ext = wasmer::Extern::Function(main_function);
-    let mut exts = wasmer::Exports::new();
-    exts.insert("main", ext);
-    import_object.register("env", exts);
+    {
+        let mut exts = wasmer::Exports::new();
+
+        let main_function = Function::new_native(&store, fake_wasm_main_function);
+        let ext = wasmer::Extern::Function(main_function);
+        exts.insert("main", ext);
+
+        let main_function = Function::new_native(&store, wasm_roc_panic);
+        let ext = wasmer::Extern::Function(main_function);
+        exts.insert("roc_panic", ext);
+
+        import_object.register("env", exts);
+    }
 
     Instance::new(&module, &import_object).unwrap()
+}
+
+#[allow(dead_code)]
+fn wasm_roc_panic(address: u32, tag_id: u32) {
+    match tag_id {
+        0 => {
+            let mut string = "";
+
+            MEMORY.with(|f| {
+                let memory = f.borrow().unwrap();
+
+                let ptr: wasmer::WasmPtr<u8, wasmer::Array> = wasmer::WasmPtr::new(address);
+                let width = 100;
+                let c_ptr = (ptr.deref(memory, 0, width)).unwrap();
+
+                use libc::c_char;
+                use std::ffi::CStr;
+                let slice = unsafe { CStr::from_ptr(c_ptr as *const _ as *const c_char) };
+                string = slice.to_str().unwrap();
+            });
+
+            panic!("Roc failed with message: {:?}", string)
+        }
+        _ => todo!(),
+    }
+}
+
+use std::cell::RefCell;
+
+thread_local! {
+    pub static MEMORY: RefCell<Option<&'static wasmer::Memory>> = RefCell::new(None);
 }
 
 #[allow(dead_code)]
@@ -411,50 +475,67 @@ fn fake_wasm_main_function(_: u32, _: u32) -> u32 {
     panic!("wasm entered the main function; this should never happen!")
 }
 
+pub fn assert_wasm_evals_to_help<T>(src: &str, ignore_problems: bool) -> Result<T, String>
+where
+    T: FromWasmMemory,
+{
+    let arena = bumpalo::Bump::new();
+    let context = inkwell::context::Context::create();
+
+    // NOTE the stdlib must be in the arena; just taking a reference will segfault
+    let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
+
+    let is_gen_test = true;
+    let instance = crate::helpers::eval::helper_wasm(
+        &arena,
+        src,
+        stdlib,
+        is_gen_test,
+        ignore_problems,
+        &context,
+    );
+
+    let memory = instance.exports.get_memory("memory").unwrap();
+
+    crate::helpers::eval::MEMORY.with(|f| {
+        *f.borrow_mut() = Some(unsafe { std::mem::transmute(memory) });
+    });
+
+    let test_wrapper = instance.exports.get_function("test_wrapper").unwrap();
+
+    match test_wrapper.call(&[]) {
+        Err(e) => Err(format!("{:?}", e)),
+        Ok(result) => {
+            let address = match result[0] {
+                wasmer::Value::I32(a) => a,
+                _ => panic!(),
+            };
+
+            let output = <T as crate::helpers::eval::FromWasmMemory>::decode(
+                memory,
+                // skip the RocCallResult tag id
+                address as u32 + 8,
+            );
+
+            Ok(output)
+        }
+    }
+}
+
 #[macro_export]
 macro_rules! assert_wasm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
-        let arena = bumpalo::Bump::new();
-        let context = inkwell::context::Context::create();
-
-        // NOTE the stdlib must be in the arena; just taking a reference will segfault
-        let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
-
-        let is_gen_test = true;
-        let instance = $crate::helpers::eval::helper_wasm(
-            &arena,
-            $src,
-            stdlib,
-            is_gen_test,
-            $ignore_problems,
-            &context,
-        );
-
-        let memory = instance.exports.get_memory("memory").unwrap();
-
-        let test_wrapper = instance.exports.get_function("test_wrapper").unwrap();
-
-        match test_wrapper.call(&[]) {
-            Err(e) => println!("{:?}", e),
-            Ok(result) => {
-                let address = match result[0] {
-                    wasmer::Value::I32(a) => a,
-                    _ => panic!(),
-                };
-
-                let output = <$ty as $crate::helpers::eval::FromWasmMemory>::decode(
-                    memory,
-                    // skip the RocCallResult tag id
-                    address as u32 + 8,
-                );
-
-                assert_eq!($transform(output), $expected)
+        match $crate::helpers::eval::assert_wasm_evals_to_help::<$ty>($src, $ignore_problems) {
+            Err(msg) => println!("{:?}", msg),
+            Ok(actual) => {
+                #[allow(clippy::bool_assert_comparison)]
+                assert_eq!($transform(actual), $expected)
             }
         }
     };
 
     ($src:expr, $expected:expr, $ty:ty) => {
-        $crate::assert_wasm_evals_to!($src, $expected, $ty, |x| x, false);
+        $crate::assert_wasm_evals_to!($src, $expected, $ty, $crate::helpers::eval::identity, false);
     };
 
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
@@ -494,6 +575,10 @@ macro_rules! assert_llvm_evals_to {
         run_jit_function!(lib, main_fn_name, $ty, transform, errors)
     };
 
+    ($src:expr, $expected:expr, $ty:ty) => {
+        $crate::assert_llvm_evals_to!($src, $expected, $ty, $crate::helpers::eval::identity, false);
+    };
+
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
         $crate::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
     };
@@ -502,20 +587,26 @@ macro_rules! assert_llvm_evals_to {
 #[macro_export]
 macro_rules! assert_evals_to {
     ($src:expr, $expected:expr, $ty:ty) => {{
-        assert_evals_to!($src, $expected, $ty, (|val| val));
+        assert_evals_to!($src, $expected, $ty, $crate::helpers::eval::identity);
     }};
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
         // Same as above, except with an additional transformation argument.
         {
-            $crate::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
+            // $crate::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
+            $crate::assert_wasm_evals_to!($src, $expected, $ty, $transform, false);
         }
     };
+}
+
+#[allow(dead_code)]
+pub fn identity<T>(value: T) -> T {
+    value
 }
 
 #[macro_export]
 macro_rules! assert_non_opt_evals_to {
     ($src:expr, $expected:expr, $ty:ty) => {{
-        $crate::assert_llvm_evals_to!($src, $expected, $ty, (|val| val));
+        $crate::assert_llvm_evals_to!($src, $expected, $ty, $crate::helpers::eval::identity);
     }};
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
         // Same as above, except with an additional transformation argument.

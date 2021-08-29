@@ -2,6 +2,7 @@
 
 use crate::assert_evals_to;
 use indoc::indoc;
+use roc_std::RocList;
 
 #[test]
 fn empty_len() {
@@ -37,8 +38,8 @@ fn single_to_list() {
             Set.toList (Set.single 42)
             "#
         ),
-        &[42],
-        &[i64]
+        RocList::from_slice(&[42]),
+        RocList<i64>
     );
 
     assert_evals_to!(
@@ -47,8 +48,8 @@ fn single_to_list() {
             Set.toList (Set.single 1)
             "#
         ),
-        &[1],
-        &[i64]
+        RocList::from_slice(&[1]),
+        RocList<i64>
     );
 
     assert_evals_to!(
@@ -57,8 +58,8 @@ fn single_to_list() {
             Set.toList (Set.single 1.0)
             "#
         ),
-        &[1.0],
-        &[f64]
+        RocList::from_slice(&[1.0]),
+        RocList<f64>
     );
 }
 
@@ -74,8 +75,8 @@ fn insert() {
                 |> Set.toList
             "#
         ),
-        &[0, 1, 2],
-        &[i64]
+        RocList::from_slice(&[0, 1, 2]),
+        RocList<i64>
     );
 }
 
@@ -92,8 +93,8 @@ fn remove() {
                 |> Set.toList
             "#
         ),
-        &[0],
-        &[i64]
+        RocList::from_slice(&[0]),
+        RocList<i64>
     );
 }
 
@@ -112,8 +113,8 @@ fn union() {
                 |> Set.toList
             "#
         ),
-        &[4, 2, 3, 1],
-        &[i64]
+        RocList::from_slice(&[4, 2, 3, 1]),
+        RocList<i64>
     );
 }
 
@@ -132,8 +133,8 @@ fn difference() {
                 |> Set.toList
             "#
         ),
-        &[2],
-        &[i64]
+        RocList::from_slice(&[2]),
+        RocList<i64>
     );
 }
 
@@ -152,8 +153,8 @@ fn intersection() {
                 |> Set.toList
             "#
         ),
-        &[1],
-        &[i64]
+        RocList::from_slice(&[1]),
+        RocList<i64>
     );
 }
 
@@ -195,7 +196,7 @@ fn contains() {
 
 #[test]
 fn from_list() {
-    let empty_list: &'static [i64] = &[];
+    let empty_list = RocList::default();
 
     assert_evals_to!(
         indoc!(
@@ -205,8 +206,8 @@ fn from_list() {
                 |> Set.toList
             "#
         ),
-        &[4, 2, 3, 1],
-        &[i64]
+        RocList::from_slice(&[4, 2, 3, 1]),
+        RocList<i64>
     );
 
     assert_evals_to!(
@@ -218,7 +219,7 @@ fn from_list() {
             "#
         ),
         empty_list,
-        &[i64]
+        RocList<i64>
     );
 
     assert_evals_to!(
@@ -233,6 +234,6 @@ fn from_list() {
             "#
         ),
         empty_list,
-        &[i64]
+        RocList<i64>
     );
 }

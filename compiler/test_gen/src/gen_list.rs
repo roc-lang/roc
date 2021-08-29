@@ -1422,10 +1422,8 @@ fn gen_wrap_first() {
                 wrapFirst [ 1, 2 ]
             "#
         ),
-        //            RocList::from_slice(&[1]),
-        //            RocList<i64>
-        &[1],
-        &'static [i64]
+        RocList::from_slice(&[1]),
+        RocList<i64>
     );
 }
 
@@ -1900,26 +1898,46 @@ fn list_product() {
 #[test]
 fn list_keep_oks() {
     assert_evals_to!("List.keepOks [] (\\x -> x)", 0, i64);
-    assert_evals_to!("List.keepOks [1,2] (\\x -> Ok x)", &[1, 2], &[i64]);
-    assert_evals_to!("List.keepOks [1,2] (\\x -> x % 2)", &[1, 0], &[i64]);
-    assert_evals_to!("List.keepOks [Ok 1, Err 2] (\\x -> x)", &[1], &[i64]);
+    assert_evals_to!(
+        "List.keepOks [1,2] (\\x -> Ok x)",
+        RocList::from_slice(&[1, 2]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.keepOks [1,2] (\\x -> x % 2)",
+        RocList::from_slice(&[1, 0]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.keepOks [Ok 1, Err 2] (\\x -> x)",
+        RocList::from_slice(&[1]),
+        RocList<i64>
+    );
 }
 
 #[test]
 fn list_keep_errs() {
     assert_evals_to!("List.keepErrs [] (\\x -> x)", 0, i64);
-    assert_evals_to!("List.keepErrs [1,2] (\\x -> Err x)", &[1, 2], &[i64]);
+    assert_evals_to!(
+        "List.keepErrs [1,2] (\\x -> Err x)",
+        RocList::from_slice(&[1, 2]),
+        RocList<i64>
+    );
     assert_evals_to!(
         indoc!(
             r#"
             List.keepErrs [0,1,2] (\x -> x % 0 |> Result.mapErr (\_ -> 32))
             "#
         ),
-        &[32, 32, 32],
-        &[i64]
+        RocList::from_slice(&[32, 32, 32]),
+        RocList<i64>
     );
 
-    assert_evals_to!("List.keepErrs [Ok 1, Err 2] (\\x -> x)", &[2], &[i64]);
+    assert_evals_to!(
+        "List.keepErrs [Ok 1, Err 2] (\\x -> x)",
+        RocList::from_slice(&[2]),
+        RocList<i64>
+    );
 }
 
 #[test]
@@ -1938,11 +1956,15 @@ fn cleanup_because_exception() {
         indoc!(
             r#"
             x = [ 1,2 ]
-            5 + Num.maxInt + 3 + List.len x
+
+            five : I64
+            five = 5
+
+            five + Num.maxInt + 3 + (Num.intCast (List.len x))
                "#
         ),
         9,
-        i32
+        i64
     );
 }
 
