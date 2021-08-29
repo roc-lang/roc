@@ -6028,7 +6028,7 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
         NumAbs => env.call_intrinsic(LLVM_FABS_F64, &[arg.into()]),
         NumSqrtUnchecked => env.call_intrinsic(LLVM_SQRT_F64, &[arg.into()]),
         NumLogUnchecked => env.call_intrinsic(LLVM_LOG_F64, &[arg.into()]),
-        NumRound => env.call_intrinsic(LLVM_LROUND_I64_F64, &[arg.into()]),
+        NumRound => call_bitcode_fn(env, &[arg.into()], bitcode::NUM_ROUND),
         NumSin => env.call_intrinsic(LLVM_SIN_F64, &[arg.into()]),
         NumCos => env.call_intrinsic(LLVM_COS_F64, &[arg.into()]),
         NumToFloat => arg.into(), /* Converting from Float to Float is a no-op */
