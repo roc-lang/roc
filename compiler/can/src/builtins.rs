@@ -2198,7 +2198,22 @@ fn dict_hash_test_only(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Dict.len : Dict * * -> Nat
 fn dict_len(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    lowlevel_1(symbol, LowLevel::DictSize, var_store)
+    let arg1_var = var_store.fresh();
+    let ret_var = Variable::NAT;
+
+    let body = RunLowLevel {
+        op: LowLevel::DictSize,
+        args: vec![(arg1_var, Var(Symbol::ARG_1))],
+        ret_var,
+    };
+
+    defn(
+        symbol,
+        vec![(arg1_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        ret_var,
+    )
 }
 
 /// Dict.empty : Dict * *
