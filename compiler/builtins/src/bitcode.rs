@@ -82,4 +82,3 @@ pub const DEC_MUL_WITH_OVERFLOW: &str = "roc_builtins.dec.mul_with_overflow";
 pub const DEC_DIV: &str = "roc_builtins.dec.div";
 
 pub const UTILS_TEST_PANIC: &str = "roc_builtins.utils.test_panic";
-pub const EXPECT_FAILED: &str = "roc_expect_failed";

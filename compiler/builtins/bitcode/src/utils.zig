@@ -45,11 +45,6 @@ fn testing_roc_dealloc(c_ptr: *c_void, _: u32) callconv(.C) void {
     std.testing.allocator.destroy(ptr);
 }
 
-export fn roc_expect_failed(func_ptr: usize) callconv(.C) void {
-    const func = @intToPtr(fn () void, func_ptr);
-    func();
-}
-
 fn testing_roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
     _ = c_ptr;
     _ = tag_id;
