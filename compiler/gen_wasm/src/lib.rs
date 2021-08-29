@@ -1,14 +1,16 @@
 use bumpalo::Bump;
 use parity_wasm::builder::{CodeLocation, ModuleBuilder};
-use parity_wasm::elements::{Instruction, Instructions, Internal, Local, ValueType};
+use parity_wasm::elements::{
+    Instruction, Instruction::*, Instructions, Internal, Local, ValueType,
+};
 use parity_wasm::{builder, elements};
 
 // use roc_builtins::bitcode;
 use roc_collections::all::{MutMap, MutSet};
 // use roc_module::ident::{ModuleName, TagName};
-// use roc_module::low_level::LowLevel;
+use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
-use roc_mono::ir::{Expr, JoinPointId, Literal, Proc, ProcLayout, Stmt};
+use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, ProcLayout, Stmt};
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
 pub struct Env<'a> {
@@ -44,7 +46,6 @@ struct SymbolStorage(LocalId, WasmLayout);
 
 // Don't allocate any constant data at the address zero or anywhere near it.
 // These addresses are not special in Wasm, but putting something there seems bug-prone.
-// Emscripten leaves 1kB free so let's do the same for now, although 4 bytes would probably do.
 const UNUSED_DATA_SECTION_BYTES: u32 = 1024;
 
 // State for generating a single function
@@ -170,16 +171,72 @@ impl<'a> BackendWasm<'a> {
         Ok(location)
     }
 
-    fn build_stmt(&mut self, func_gen: &mut FunctionGenerator, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) -> Result<(), String> {
-        Err("todo: everything".to_string())
+    fn build_stmt(
+        &mut self,
+        func_gen: &mut FunctionGenerator,
+        stmt: &Stmt<'a>,
+        ret_layout: &Layout<'a>,
+    ) -> Result<(), String> {
+        match stmt {
+            Stmt::Let(sym, expr, layout, following) => {
+                self.build_expr(func_gen, sym, expr, layout)?;
+
+                let wasm_layout = WasmLayout::new(layout)?;
+                let local_id = func_gen.insert_local(wasm_layout, *sym);
+                func_gen.instructions.push(SetLocal(local_id.0));
+
+                self.build_stmt(func_gen, following, ret_layout)?;
+                Ok(())
+            }
+            Stmt::Ret(sym) => {
+                if let Some(SymbolStorage(local_id, wasm_layout)) =
+                    func_gen.symbol_storage_map.get(sym)
+                {
+                    func_gen.instructions.push(GetLocal(local_id.0));
+                    func_gen.instructions.push(Return);
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "Not yet implemented: returning values with layout {:?}",
+                        ret_layout
+                    ))
+                }
+            }
+            x => Err(format!("statement not yet implemented: {:?}", x)),
+        }
     }
 
     fn build_expr(
         &mut self,
+        func_gen: &mut FunctionGenerator,
         sym: &Symbol,
         expr: &Expr<'a>,
         layout: &Layout<'a>,
     ) -> Result<(), String> {
-        Err("todo: everything".to_string())
+        match expr {
+            Expr::Literal(lit) => self.load_literal(func_gen, lit),
+            x => Err(format!("Expression is not yet implemented {:?}", x)),
+        }
+    }
+
+    fn load_literal(
+        &mut self,
+        func_gen: &mut FunctionGenerator,
+        lit: &Literal<'a>,
+    ) -> Result<(), String> {
+        match lit {
+            Literal::Int(x) => {
+                func_gen.instructions.push(I64Const(*x as i64));
+                Ok(())
+            }
+            Literal::Float(x) => {
+                // F64Const takes a u64??
+                // I've raised an issue in the library to check https://github.com/paritytech/parity-wasm/issues/314
+                let val: u64 = unsafe { std::mem::transmute(*x) };
+                func_gen.instructions.push(F64Const(val));
+                Ok(())
+            }
+            x => Err(format!("loading literal, {:?}, is not yet implemented", x)),
+        }
     }
 }
