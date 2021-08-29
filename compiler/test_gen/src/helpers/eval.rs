@@ -301,6 +301,7 @@ fn wasm32_target_tripple() -> Triple {
     triple
 }
 
+#[allow(dead_code)]
 pub fn helper_wasm<'a>(
     arena: &'a bumpalo::Bump,
     src: &str,
@@ -318,7 +319,7 @@ pub fn helper_wasm<'a>(
     };
 
     let is_gen_test = false;
-    let (main_fn_name, delayed_errors, llvm_module) = create_llvm_module(
+    let (_main_fn_name, _delayed_errors, llvm_module) = create_llvm_module(
         arena,
         src,
         stdlib,
@@ -333,7 +334,7 @@ pub fn helper_wasm<'a>(
 
     let dir = tempfile::tempdir().unwrap();
     let dir_path = dir.path();
-    let zig_global_cache_path = std::path::PathBuf::from("/home/folkertdev/roc/wasm/mess");
+    // let zig_global_cache_path = std::path::PathBuf::from("/home/folkertdev/roc/wasm/mess");
 
     let test_a_path = dir_path.join("test.a");
     let test_wasm_path = dir_path.join("libmain.wasm");
@@ -475,6 +476,7 @@ fn fake_wasm_main_function(_: u32, _: u32) -> u32 {
     panic!("wasm entered the main function; this should never happen!")
 }
 
+#[allow(dead_code)]
 pub fn assert_wasm_evals_to_help<T>(src: &str, ignore_problems: bool) -> Result<T, String>
 where
     T: FromWasmMemory,
