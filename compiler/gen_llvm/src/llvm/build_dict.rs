@@ -47,8 +47,6 @@ pub fn dict_len<'a, 'ctx, 'env>(
     scope: &Scope<'a, 'ctx>,
     dict_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
-    let ctx = env.context;
-
     let (_, dict_layout) = load_symbol_and_layout(scope, &dict_symbol);
 
     match dict_layout {
@@ -56,13 +54,17 @@ pub fn dict_len<'a, 'ctx, 'env>(
             // let dict_as_int = dict_symbol_to_i128(env, scope, dict_symbol);
             let dict_as_zig_dict = dict_symbol_to_zig_dict(env, scope, dict_symbol);
 
-            call_bitcode_fn(
+            let length_i64 = call_bitcode_fn(
                 env,
                 &[pass_dict_c_abi(env, dict_as_zig_dict.into())],
                 bitcode::DICT_LEN,
-            )
+            );
+
+            env.builder
+                .build_int_cast(length_i64.into_int_value(), env.ptr_int(), "to_usize")
+                .into()
         }
-        Layout::Builtin(Builtin::EmptyDict) => ctx.i64_type().const_zero().into(),
+        Layout::Builtin(Builtin::EmptyDict) => env.ptr_int().const_zero().into(),
         _ => unreachable!("Invalid layout given to Dict.len : {:?}", dict_layout),
     }
 }
