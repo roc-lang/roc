@@ -1100,7 +1100,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         let (section_offset, section_virtual_offset) =
             section_offset_map.get(&sec.index()).unwrap();
         let (section_offset, section_virtual_offset) = (*section_offset, *section_virtual_offset);
-        exec_mmap[section_offset..section_offset + data.len()].copy_from_slice(&data);
+        exec_mmap[section_offset..section_offset + data.len()].copy_from_slice(data);
         // Deal with definitions and relocations for this section.
         if verbose {
             println!();
@@ -1403,12 +1403,11 @@ fn align_to_offset_by_constraint(
 ) -> usize {
     let target_remainder = target_offset % constraint;
     let current_remainder = current_offset % constraint;
-    let out = match target_remainder.cmp(&current_remainder) {
+    match target_remainder.cmp(&current_remainder) {
         Ordering::Greater => current_offset + (target_remainder - current_remainder),
         Ordering::Less => current_offset + ((target_remainder + constraint) - current_remainder),
         Ordering::Equal => current_offset,
-    };
-    out
+    }
 }
 
 fn load_struct_inplace<T>(bytes: &[u8], offset: usize) -> &T {
