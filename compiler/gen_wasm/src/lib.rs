@@ -1,6 +1,6 @@
-use bumpalo::{Bump};
+use bumpalo::Bump;
 use parity_wasm::builder::{CodeLocation, ModuleBuilder};
-use parity_wasm::elements::{Internal, ValueType, Local};
+use parity_wasm::elements::{Instruction, Instructions, Internal, Local, ValueType};
 use parity_wasm::{builder, elements};
 
 // use roc_builtins::bitcode;
@@ -47,8 +47,9 @@ struct SymbolStorage(LocalId, WasmLayout);
 // Emscripten leaves 1kB free so let's do the same for now, although 4 bytes would probably do.
 const UNUSED_DATA_SECTION_BYTES: u32 = 1024;
 
-// State that gets reset for every generated function
+// State for generating a single function
 struct FunctionGenerator {
+    instructions: std::vec::Vec<Instruction>,
     joinpoint_label_map: MutMap<JoinPointId, LabelId>,
     locals: std::vec::Vec<Local>,
     symbol_storage_map: MutMap<Symbol, SymbolStorage>,
@@ -58,6 +59,7 @@ struct FunctionGenerator {
 impl FunctionGenerator {
     fn new() -> Self {
         FunctionGenerator {
+            instructions: std::vec::Vec::new(),
             joinpoint_label_map: MutMap::default(),
             symbol_storage_map: MutMap::default(),
             stack_memory: 0,
@@ -116,7 +118,6 @@ struct BackendWasm<'a> {
     module_builder: ModuleBuilder,
     data_offset_map: MutMap<Literal<'a>, u32>,
     data_offset_next: u32,
-    func_gen: FunctionGenerator,
 }
 
 impl<'a> BackendWasm<'a> {
@@ -126,12 +127,11 @@ impl<'a> BackendWasm<'a> {
             module_builder: builder::module(),
             data_offset_map: MutMap::default(),
             data_offset_next: UNUSED_DATA_SECTION_BYTES,
-            func_gen: FunctionGenerator::new(),
         }
     }
 
     fn build_proc(&mut self, proc: Proc<'a>) -> Result<CodeLocation, String> {
-        self.func_gen.reset();
+        let mut func_gen = FunctionGenerator::new(); // yeah probably don't need to allocate a new one every time, but tell that to the borrow checker! ;-)
 
         let ret_layout = WasmLayout::new(&proc.ret_layout)?;
         let ret_value_type = ret_layout.value_type;
@@ -148,7 +148,7 @@ impl<'a> BackendWasm<'a> {
         for (layout, symbol) in proc.args {
             let wasm_layout = WasmLayout::new(layout)?;
             arg_types.push(wasm_layout.value_type);
-            self.func_gen.insert_local(wasm_layout, *symbol);
+            func_gen.insert_local(wasm_layout, *symbol);
         }
 
         let signature = builder::signature()
@@ -156,16 +156,21 @@ impl<'a> BackendWasm<'a> {
             .with_result(ret_value_type)
             .build_sig();
 
-        self.build_stmt(&proc.body, &proc.ret_layout)?;
+        self.build_stmt(&mut func_gen, &proc.body, &proc.ret_layout)?;
 
-        let function_def = builder::function().with_signature(signature).build();
+        let function_def = builder::function()
+            .with_signature(signature)
+            .body()
+            .with_locals(func_gen.locals)
+            .with_instructions(Instructions::new(func_gen.instructions))
+            .build() // body
+            .build(); // function
 
         let location = self.module_builder.push_function(function_def);
         Ok(location)
     }
 
-
-    fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) -> Result<(), String> {
+    fn build_stmt(&mut self, func_gen: &mut FunctionGenerator, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) -> Result<(), String> {
         Err("todo: everything".to_string())
     }
 
