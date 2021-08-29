@@ -1,8 +1,8 @@
 #![cfg(test)]
 
+use crate::assert_evals_to;
 use crate::helpers::with_larger_debug_stack;
-// use crate::assert_evals_to;
-use crate::assert_wasm_evals_to as assert_evals_to;
+//use crate::assert_wasm_evals_to as assert_evals_to;
 use core::ffi::c_void;
 use indoc::indoc;
 use roc_std::{RocList, RocStr};
@@ -865,9 +865,12 @@ fn list_repeat() {
         RocList<i64>
     );
 
-    let empty_lists: &'static [&'static [i64]] = &[&[], &[]];
+    assert_evals_to!(
+        "List.repeat 2 []",
+        RocList::from_slice(&[RocList::default(), RocList::default()]),
+        RocList<RocList<i64>>
+    );
 
-    assert_evals_to!("List.repeat 2 []", empty_lists, &'static [&'static [i64]]);
     assert_evals_to!(
         indoc!(
             r#"
@@ -878,8 +881,8 @@ fn list_repeat() {
                 List.repeat 2 noStrs
             "#
         ),
-        empty_lists,
-        &'static [&'static [i64]]
+        RocList::from_slice(&[RocList::default(), RocList::default()]),
+        RocList<RocList<i64>>
     );
 
     assert_evals_to!(
@@ -1922,9 +1925,9 @@ fn list_keep_errs() {
 #[test]
 fn list_map_with_index() {
     assert_evals_to!(
-        "List.mapWithIndex [0,0,0] (\\index, x -> index + x)",
-        &[0, 1, 2],
-        &[i64]
+        "List.mapWithIndex [0,0,0] (\\index, x -> Num.intCast index + x)",
+        RocList::from_slice(&[0, 1, 2]),
+        RocList<i64>
     );
 }
 
@@ -1938,8 +1941,8 @@ fn cleanup_because_exception() {
             5 + Num.maxInt + 3 + List.len x
                "#
         ),
-        RocList::from_slice(&[false; 1]),
-        RocList<bool>
+        9,
+        i32
     );
 }
 

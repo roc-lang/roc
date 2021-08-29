@@ -44,6 +44,12 @@ pub struct RocList<T> {
     length: usize,
 }
 
+impl<T: Clone> Clone for RocList<T> {
+    fn clone(&self) -> Self {
+        Self::from_slice(self.as_slice())
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum Storage {
     ReadOnly,

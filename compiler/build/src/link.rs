@@ -195,9 +195,8 @@ pub fn build_zig_host_wasm32(
             "--library",
             "c",
             "-target",
-            // "i386-linux-musl",
+            "i386-linux-musl",
             // "wasm32-wasi",
-            "wasm32-unknown-unknown-wasi",
             // "-femit-llvm-ir=/home/folkertdev/roc/roc/examples/benchmarks/platform/host.ll",
         ])
         .output()

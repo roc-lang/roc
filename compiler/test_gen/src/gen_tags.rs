@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 use crate::assert_evals_to;
+//use crate::assert_wasm_evals_to as assert_evals_to;
 use indoc::indoc;
 use roc_std::{RocList, RocStr};
 
@@ -516,8 +517,8 @@ fn if_guard_multiple() {
             { a: f 0, b: f 1, c: f 2, d: f 4 }
                 "#
         ),
-        (0, 1, 2, 0),
-        (i64, i64, i64, i64)
+        [0, 1, 2, 0],
+        [i64; 4]
     );
 }
 
@@ -924,7 +925,7 @@ fn alignment_in_single_tag_pattern_match() {
 }
 
 #[test]
-fn alignment_in_multi_tag_construction() {
+fn alignment_in_multi_tag_construction_two() {
     assert_evals_to!(
         indoc!(
             r"#
@@ -938,7 +939,10 @@ fn alignment_in_multi_tag_construction() {
         ((32i64, true), 1),
         ((i64, bool), u8)
     );
+}
 
+#[test]
+fn alignment_in_multi_tag_construction_three() {
     assert_evals_to!(
         indoc!(
             r"#
