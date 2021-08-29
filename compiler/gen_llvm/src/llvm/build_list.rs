@@ -21,12 +21,12 @@ fn list_returned_from_zig<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     output: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    // per the C ABI, our list objects are passed between functions as an i128
+    // per the C ABI, our list objects are passed between functions as an i128/i64
     complex_bitcast(
         env.builder,
         output,
         super::convert::zig_list_type(env).into(),
-        "from_i128",
+        "from_str_list_int",
     )
 }
 
@@ -54,11 +54,16 @@ fn pass_element_as_opaque<'a, 'ctx, 'env>(
     )
 }
 
-fn pass_list_as_i128<'a, 'ctx, 'env>(
+fn pass_list_cc<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     list: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    complex_bitcast(env.builder, list, env.context.i128_type().into(), "to_i128")
+    complex_bitcast(
+        env.builder,
+        list,
+        env.str_list_c_abi().into(),
+        "to_str_list_int",
+    )
 }
 
 pub fn layout_width<'a, 'ctx, 'env>(
@@ -139,7 +144,7 @@ pub fn list_join<'a, 'ctx, 'env>(
             call_bitcode_fn_returns_list(
                 env,
                 &[
-                    pass_list_as_i128(env, outer_list),
+                    pass_list_cc(env, outer_list),
                     env.alignment_intvalue(element_layout),
                     layout_width(env, element_layout),
                 ],
@@ -172,7 +177,7 @@ pub fn list_reverse<'a, 'ctx, 'env>(
     call_bitcode_fn_returns_list(
         env,
         &[
-            pass_list_as_i128(env, list),
+            pass_list_cc(env, list),
             env.alignment_intvalue(&element_layout),
             layout_width(env, &element_layout),
         ],
@@ -227,7 +232,7 @@ pub fn list_append<'a, 'ctx, 'env>(
     call_bitcode_fn_returns_list(
         env,
         &[
-            pass_list_as_i128(env, original_wrapper.into()),
+            pass_list_cc(env, original_wrapper.into()),
             env.alignment_intvalue(element_layout),
             pass_element_as_opaque(env, element),
             layout_width(env, element_layout),
@@ -246,7 +251,7 @@ pub fn list_prepend<'a, 'ctx, 'env>(
     call_bitcode_fn_returns_list(
         env,
         &[
-            pass_list_as_i128(env, original_wrapper.into()),
+            pass_list_cc(env, original_wrapper.into()),
             env.alignment_intvalue(element_layout),
             pass_element_as_opaque(env, element),
             layout_width(env, element_layout),
@@ -266,7 +271,7 @@ pub fn list_swap<'a, 'ctx, 'env>(
     call_bitcode_fn_returns_list(
         env,
         &[
-            pass_list_as_i128(env, original_wrapper.into()),
+            pass_list_cc(env, original_wrapper.into()),
             env.alignment_intvalue(element_layout),
             layout_width(env, element_layout),
             index_1.into(),
@@ -288,7 +293,7 @@ pub fn list_drop<'a, 'ctx, 'env>(
     call_bitcode_fn_returns_list(
         env,
         &[
-            pass_list_as_i128(env, original_wrapper.into()),
+            pass_list_cc(env, original_wrapper.into()),
             env.alignment_intvalue(element_layout),
             layout_width(env, element_layout),
             count.into(),
@@ -406,7 +411,7 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
             call_void_bitcode_fn(
                 env,
                 &[
-                    pass_list_as_i128(env, list),
+                    pass_list_cc(env, list),
                     roc_function_call.caller.into(),
                     pass_as_opaque(env, roc_function_call.data),
                     roc_function_call.inc_n_data.into(),
@@ -437,7 +442,7 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
             call_void_bitcode_fn(
                 env,
                 &[
-                    pass_list_as_i128(env, list),
+                    pass_list_cc(env, list),
                     roc_function_call.caller.into(),
                     pass_as_opaque(env, roc_function_call.data),
                     roc_function_call.inc_n_data.into(),
@@ -539,7 +544,7 @@ pub fn list_contains<'a, 'ctx, 'env>(
     call_bitcode_fn(
         env,
         &[
-            pass_list_as_i128(env, list),
+            pass_list_cc(env, list),
             pass_element_as_opaque(env, element),
             layout_width(env, element_layout),
             eq_fn,
@@ -562,7 +567,7 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
     call_bitcode_fn_returns_list(
         env,
         &[
-            pass_list_as_i128(env, list),
+            pass_list_cc(env, list),
             roc_function_call.caller.into(),
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
@@ -604,7 +609,7 @@ pub fn list_keep_oks<'a, 'ctx, 'env>(
     call_bitcode_fn(
         env,
         &[
-            pass_list_as_i128(env, list),
+            pass_list_cc(env, list),
             roc_function_call.caller.into(),
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
@@ -648,7 +653,7 @@ pub fn list_keep_errs<'a, 'ctx, 'env>(
     call_bitcode_fn(
         env,
         &[
-            pass_list_as_i128(env, list),
+            pass_list_cc(env, list),
             roc_function_call.caller.into(),
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
@@ -675,7 +680,7 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
     call_bitcode_fn_returns_list(
         env,
         &[
-            pass_list_as_i128(env, list),
+            pass_list_cc(env, list),
             compare_wrapper.into(),
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
@@ -698,7 +703,7 @@ pub fn list_map_with_index<'a, 'ctx, 'env>(
     call_bitcode_fn_returns_list(
         env,
         &[
-            pass_list_as_i128(env, list),
+            pass_list_cc(env, list),
             roc_function_call.caller.into(),
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
@@ -722,7 +727,7 @@ pub fn list_map<'a, 'ctx, 'env>(
     call_bitcode_fn_returns_list(
         env,
         &[
-            pass_list_as_i128(env, list),
+            pass_list_cc(env, list),
             roc_function_call.caller.into(),
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
@@ -751,8 +756,8 @@ pub fn list_map2<'a, 'ctx, 'env>(
     call_bitcode_fn(
         env,
         &[
-            pass_list_as_i128(env, list1),
-            pass_list_as_i128(env, list2),
+            pass_list_cc(env, list1),
+            pass_list_cc(env, list2),
             roc_function_call.caller.into(),
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
@@ -787,9 +792,9 @@ pub fn list_map3<'a, 'ctx, 'env>(
     call_bitcode_fn_returns_list(
         env,
         &[
-            pass_list_as_i128(env, list1),
-            pass_list_as_i128(env, list2),
-            pass_list_as_i128(env, list3),
+            pass_list_cc(env, list1),
+            pass_list_cc(env, list2),
+            pass_list_cc(env, list3),
             roc_function_call.caller.into(),
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
@@ -824,8 +829,8 @@ pub fn list_concat<'a, 'ctx, 'env>(
         Layout::Builtin(Builtin::List(elem_layout)) => call_bitcode_fn_returns_list(
             env,
             &[
-                pass_list_as_i128(env, first_list),
-                pass_list_as_i128(env, second_list),
+                pass_list_cc(env, first_list),
+                pass_list_cc(env, second_list),
                 env.alignment_intvalue(elem_layout),
                 layout_width(env, elem_layout),
             ],
@@ -913,9 +918,8 @@ where
     index_alloca
 }
 
-pub fn incrementing_elem_loop<'ctx, LoopFn>(
-    builder: &Builder<'ctx>,
-    ctx: &'ctx Context,
+pub fn incrementing_elem_loop<'a, 'ctx, 'env, LoopFn>(
+    env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     ptr: PointerValue<'ctx>,
     len: IntValue<'ctx>,
@@ -925,7 +929,9 @@ pub fn incrementing_elem_loop<'ctx, LoopFn>(
 where
     LoopFn: FnMut(IntValue<'ctx>, BasicValueEnum<'ctx>),
 {
-    incrementing_index_loop(builder, ctx, parent, len, index_name, |index| {
+    let builder = env.builder;
+
+    incrementing_index_loop(env, parent, len, index_name, |index| {
         // The pointer to the element in the list
         let elem_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index], "load_index") };
 
@@ -937,9 +943,8 @@ where
 
 // This helper simulates a basic for loop, where
 // and index increments up from 0 to some end value
-pub fn incrementing_index_loop<'ctx, LoopFn>(
-    builder: &Builder<'ctx>,
-    ctx: &'ctx Context,
+pub fn incrementing_index_loop<'a, 'ctx, 'env, LoopFn>(
+    env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     end: IntValue<'ctx>,
     index_name: &str,
@@ -948,12 +953,15 @@ pub fn incrementing_index_loop<'ctx, LoopFn>(
 where
     LoopFn: FnMut(IntValue<'ctx>),
 {
+    let ctx = env.context;
+    let builder = env.builder;
+
     // constant 1i64
-    let one = ctx.i64_type().const_int(1, false);
+    let one = env.ptr_int().const_int(1, false);
 
     // allocate a stack slot for the current index
-    let index_alloca = builder.build_alloca(ctx.i64_type(), index_name);
-    builder.build_store(index_alloca, ctx.i64_type().const_zero());
+    let index_alloca = builder.build_alloca(env.ptr_int(), index_name);
+    builder.build_store(index_alloca, env.ptr_int().const_zero());
 
     let loop_bb = ctx.append_basic_block(parent, "loop");
     builder.build_unconditional_branch(loop_bb);

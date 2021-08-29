@@ -21,7 +21,7 @@ use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::Alias;
 use std::fmt::Debug;
-use std::{char, i64, u32};
+use std::{char, u32};
 
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct Output {
@@ -52,11 +52,11 @@ pub enum Expr {
 
     // Num stores the `a` variable in `Num a`. Not the same as the variable
     // stored in Int and Float below, which is strictly for better error messages
-    Num(Variable, i64),
+    Num(Variable, Box<str>, i64),
 
     // Int and Float store a variable to generate better error messages
-    Int(Variable, Variable, i128),
-    Float(Variable, Variable, f64),
+    Int(Variable, Variable, Box<str>, i128),
+    Float(Variable, Variable, Box<str>, f64),
     Str(Box<str>),
     List {
         elem_var: Variable,
@@ -206,14 +206,23 @@ pub fn canonicalize_expr<'a>(
     use Expr::*;
 
     let (expr, output) = match expr {
-        ast::Expr::Num(string) => {
-            let answer = num_expr_from_result(var_store, finish_parsing_int(*string), region, env);
+        ast::Expr::Num(str) => {
+            let answer = num_expr_from_result(
+                var_store,
+                finish_parsing_int(*str).map(|int| (*str, int)),
+                region,
+                env,
+            );
 
             (answer, Output::default())
         }
-        ast::Expr::Float(string) => {
-            let answer =
-                float_expr_from_result(var_store, finish_parsing_float(string), region, env);
+        ast::Expr::Float(str) => {
+            let answer = float_expr_from_result(
+                var_store,
+                finish_parsing_float(str).map(|f| (*str, f)),
+                region,
+                env,
+            );
 
             (answer, Output::default())
         }
@@ -795,8 +804,16 @@ pub fn canonicalize_expr<'a>(
             is_negative,
         } => {
             // the minus sign is added before parsing, to get correct overflow/underflow behavior
-            let result = finish_parsing_base(string, *base, *is_negative);
-            let answer = int_expr_from_result(var_store, result, region, *base, env);
+            let answer = match finish_parsing_base(string, *base, *is_negative) {
+                Ok(int) => {
+                    // Done in this kinda round about way with intermediate variables
+                    // to keep borrowed values around and make this compile
+                    let int_string = int.to_string();
+                    let int_str = int_string.as_str();
+                    int_expr_from_result(var_store, Ok((int_str, int as i128)), region, *base, env)
+                }
+                Err(e) => int_expr_from_result(var_store, Err(e), region, *base, env),
+            };
 
             (answer, Output::default())
         }
@@ -1217,9 +1234,9 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
     match expr {
         // Num stores the `a` variable in `Num a`. Not the same as the variable
         // stored in Int and Float below, which is strictly for better error messages
-        other @ Num(_, _)
-        | other @ Int(_, _, _)
-        | other @ Float(_, _, _)
+        other @ Num(_, _, _)
+        | other @ Int(_, _, _, _)
+        | other @ Float(_, _, _, _)
         | other @ Str { .. }
         | other @ RuntimeError(_)
         | other @ EmptyRecord

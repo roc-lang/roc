@@ -222,7 +222,8 @@ fn jit_to_ast_help<'a>(
                     let tags_map: roc_collections::all::MutMap<_, _> =
                         tags_vec.iter().cloned().collect();
 
-                    let union_variant = union_sorted_tags_help(env.arena, tags_vec, None, env.subs);
+                    let union_variant =
+                        union_sorted_tags_help(env.arena, tags_vec, None, env.subs, env.ptr_bytes);
 
                     let size = layout.stack_size(env.ptr_bytes);
                     use roc_mono::layout::WrappedVariant::*;
@@ -886,7 +887,8 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
                         .map(|(a, b)| (a.clone(), b.to_vec()))
                         .collect();
 
-                    let union_variant = union_sorted_tags_help(env.arena, tags_vec, None, env.subs);
+                    let union_variant =
+                        union_sorted_tags_help(env.arena, tags_vec, None, env.subs, env.ptr_bytes);
 
                     match union_variant {
                         UnionVariant::ByteUnion(tagnames) => {

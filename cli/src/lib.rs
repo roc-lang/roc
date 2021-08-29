@@ -15,7 +15,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::process::Command;
-use target_lexicon::Triple;
+use target_lexicon::BinaryFormat;
+use target_lexicon::{Architecture, Triple};
 
 pub mod build;
 pub mod repl;
@@ -29,7 +30,9 @@ pub const CMD_DOCS: &str = "docs";
 pub const FLAG_DEBUG: &str = "debug";
 pub const FLAG_OPTIMIZE: &str = "optimize";
 pub const FLAG_LIB: &str = "lib";
+pub const FLAG_BACKEND: &str = "backend";
 pub const ROC_FILE: &str = "ROC_FILE";
+pub const BACKEND: &str = "BACKEND";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
 pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 
@@ -48,6 +51,15 @@ pub fn build_app<'a>() -> App<'a> {
                 Arg::with_name(FLAG_OPTIMIZE)
                     .long(FLAG_OPTIMIZE)
                     .help("Optimize your compiled Roc program to run faster. (Optimization takes time to complete.)")
+                    .required(false),
+            )
+            .arg(
+                Arg::with_name(FLAG_BACKEND)
+                    .long(FLAG_BACKEND)
+                    .help("Choose a different backend")
+                    // .requires(BACKEND)
+                    .default_value("llvm")
+                    .possible_values(&["llvm", "wasm", "asm"])
                     .required(false),
             )
             .arg(
@@ -119,6 +131,15 @@ pub fn build_app<'a>() -> App<'a> {
                 .required(false),
         )
         .arg(
+            Arg::with_name(FLAG_BACKEND)
+                .long(FLAG_BACKEND)
+                .help("Choose a different backend")
+                // .requires(BACKEND)
+                .default_value("llvm")
+                .possible_values(&["llvm", "wasm", "asm"])
+                .required(false),
+        )
+        .arg(
             Arg::with_name(ROC_FILE)
                 .help("The .roc file of an app to build and run")
                 .required(false),
@@ -159,10 +180,24 @@ pub enum BuildConfig {
     BuildAndRun { roc_file_arg_index: usize },
 }
 
+fn wasm32_target_tripple() -> Triple {
+    let mut triple = Triple::unknown();
+
+    triple.architecture = Architecture::Wasm32;
+    triple.binary_format = BinaryFormat::Wasm;
+
+    triple
+}
+
 #[cfg(feature = "llvm")]
-pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
+pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     use build::build_file;
     use BuildConfig::*;
+
+    let target = match matches.value_of(FLAG_BACKEND) {
+        Some("wasm") => wasm32_target_tripple(),
+        _ => Triple::host(),
+    };
 
     let arena = Bump::new();
     let filename = matches.value_of(ROC_FILE).unwrap();
@@ -205,7 +240,7 @@ pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::
     let src_dir = path.parent().unwrap().canonicalize().unwrap();
     let res_binary_path = build_file(
         &arena,
-        target,
+        &target,
         src_dir,
         path,
         opt_level,
@@ -240,7 +275,14 @@ pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::
                     Ok(outcome.status_code())
                 }
                 BuildAndRun { roc_file_arg_index } => {
-                    let mut cmd = Command::new(binary_path);
+                    let mut cmd = match target.architecture {
+                        Architecture::Wasm32 => Command::new("wasmtime"),
+                        _ => Command::new(&binary_path),
+                    };
+
+                    if let Architecture::Wasm32 = target.architecture {
+                        cmd.arg(binary_path);
+                    }
 
                     // Forward all the arguments after the .roc file argument
                     // to the new process. This way, you can do things like:

@@ -6,42 +6,39 @@ use crate::llvm::build::{
     complex_bitcast, load_symbol, load_symbol_and_layout, Env, RocFunctionCall, Scope,
 };
 use crate::llvm::build_list::{layout_width, pass_as_opaque};
-use crate::llvm::convert::basic_type_from_layout;
+use crate::llvm::convert::{basic_type_from_layout, zig_dict_type, zig_list_type};
 use crate::llvm::refcounting::Mode;
 use inkwell::attributes::{Attribute, AttributeLoc};
+use inkwell::context::Context;
 use inkwell::types::BasicType;
-use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, StructValue};
+use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, IntValue, StructValue};
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
-#[repr(u8)]
-enum Alignment {
-    Align16KeyFirst = 0,
-    Align16ValueFirst = 1,
-    Align8KeyFirst = 2,
-    Align8ValueFirst = 3,
-}
+#[repr(transparent)]
+struct Alignment(u8);
 
 impl Alignment {
     fn from_key_value_layout(key: &Layout, value: &Layout, ptr_bytes: u32) -> Alignment {
         let key_align = key.alignment_bytes(ptr_bytes);
         let value_align = value.alignment_bytes(ptr_bytes);
 
-        if key_align >= value_align {
-            match key_align.max(value_align) {
-                8 => Alignment::Align8KeyFirst,
-                16 => Alignment::Align16KeyFirst,
-                _ => unreachable!(),
-            }
-        } else {
-            match key_align.max(value_align) {
-                8 => Alignment::Align8ValueFirst,
-                16 => Alignment::Align16ValueFirst,
-                _ => unreachable!(),
-            }
+        let mut bits = key_align.max(value_align) as u8;
+        debug_assert!(bits == 4 || bits == 8 || bits == 16);
+
+        let value_before_key_flag = 0b1000_0000;
+
+        if key_align < value_align {
+            bits |= value_before_key_flag;
         }
+
+        Alignment(bits)
+    }
+
+    fn as_int_value<'ctx>(&self, context: &'ctx Context) -> IntValue<'ctx> {
+        context.i8_type().const_int(self.0 as u64, false)
     }
 }
 
@@ -59,12 +56,11 @@ pub fn dict_len<'a, 'ctx, 'env>(
             // let dict_as_int = dict_symbol_to_i128(env, scope, dict_symbol);
             let dict_as_zig_dict = dict_symbol_to_zig_dict(env, scope, dict_symbol);
 
-            let dict_ptr = env
-                .builder
-                .build_alloca(dict_as_zig_dict.get_type(), "dict_ptr");
-            env.builder.build_store(dict_ptr, dict_as_zig_dict);
-
-            call_bitcode_fn(env, &[dict_ptr.into()], bitcode::DICT_LEN)
+            call_bitcode_fn(
+                env,
+                &[pass_dict_c_abi(env, dict_as_zig_dict.into())],
+                bitcode::DICT_LEN,
+            )
         }
         Layout::Builtin(Builtin::EmptyDict) => ctx.i64_type().const_zero().into(),
         _ => unreachable!("Invalid layout given to Dict.len : {:?}", dict_layout),
@@ -95,14 +91,11 @@ pub fn dict_insert<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
     let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
-    let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
     let key_ptr = builder.build_alloca(key.get_type(), "key_ptr");
     let value_ptr = builder.build_alloca(value.get_type(), "value_ptr");
 
-    env.builder.build_store(dict_ptr, dict);
     env.builder.build_store(key_ptr, key);
     env.builder.build_store(value_ptr, value);
 
@@ -114,10 +107,10 @@ pub fn dict_insert<'a, 'ctx, 'env>(
         .ptr_int()
         .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
 
-    let result_ptr = builder.build_alloca(zig_dict_type, "result_ptr");
+    let result_ptr = builder.build_alloca(zig_dict_type(env), "result_ptr");
 
     let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
-    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+    let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
     let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
@@ -128,7 +121,7 @@ pub fn dict_insert<'a, 'ctx, 'env>(
     call_void_bitcode_fn(
         env,
         &[
-            dict_ptr.into(),
+            pass_dict_c_abi(env, dict),
             alignment_iv.into(),
             env.builder.build_bitcast(key_ptr, u8_ptr, "to_u8_ptr"),
             key_width.into(),
@@ -157,13 +150,10 @@ pub fn dict_remove<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
     let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
-    let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
     let key_ptr = builder.build_alloca(key.get_type(), "key_ptr");
 
-    env.builder.build_store(dict_ptr, dict);
     env.builder.build_store(key_ptr, key);
 
     let key_width = env
@@ -174,10 +164,10 @@ pub fn dict_remove<'a, 'ctx, 'env>(
         .ptr_int()
         .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
 
-    let result_ptr = builder.build_alloca(zig_dict_type, "result_ptr");
+    let result_ptr = builder.build_alloca(zig_dict_type(env), "result_ptr");
 
     let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
-    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+    let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
     let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
@@ -188,7 +178,7 @@ pub fn dict_remove<'a, 'ctx, 'env>(
     call_void_bitcode_fn(
         env,
         &[
-            dict_ptr.into(),
+            pass_dict_c_abi(env, dict),
             alignment_iv.into(),
             env.builder.build_bitcast(key_ptr, u8_ptr, "to_u8_ptr"),
             key_width.into(),
@@ -216,13 +206,10 @@ pub fn dict_contains<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
     let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
-    let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
     let key_ptr = builder.build_alloca(key.get_type(), "key_ptr");
 
-    env.builder.build_store(dict_ptr, dict);
     env.builder.build_store(key_ptr, key);
 
     let key_width = env
@@ -234,7 +221,7 @@ pub fn dict_contains<'a, 'ctx, 'env>(
         .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
 
     let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
-    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+    let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
     let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
@@ -242,7 +229,7 @@ pub fn dict_contains<'a, 'ctx, 'env>(
     call_bitcode_fn(
         env,
         &[
-            dict_ptr.into(),
+            pass_dict_c_abi(env, dict),
             alignment_iv.into(),
             env.builder.build_bitcast(key_ptr, u8_ptr, "to_u8_ptr"),
             key_width.into(),
@@ -265,13 +252,10 @@ pub fn dict_get<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
     let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
-    let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
     let key_ptr = builder.build_alloca(key.get_type(), "key_ptr");
 
-    env.builder.build_store(dict_ptr, dict);
     env.builder.build_store(key_ptr, key);
 
     let key_width = env
@@ -283,7 +267,7 @@ pub fn dict_get<'a, 'ctx, 'env>(
         .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
 
     let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
-    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+    let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
     let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
@@ -294,7 +278,7 @@ pub fn dict_get<'a, 'ctx, 'env>(
     let result = call_bitcode_fn(
         env,
         &[
-            dict_ptr.into(),
+            pass_dict_c_abi(env, dict),
             alignment_iv.into(),
             env.builder.build_bitcast(key_ptr, u8_ptr, "to_u8_ptr"),
             key_width.into(),
@@ -376,13 +360,6 @@ pub fn dict_elements_rc<'a, 'ctx, 'env>(
     value_layout: &Layout<'a>,
     rc_operation: Mode,
 ) {
-    let builder = env.builder;
-
-    let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
-
-    let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
-    env.builder.build_store(dict_ptr, dict);
-
     let key_width = env
         .ptr_int()
         .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
@@ -392,7 +369,7 @@ pub fn dict_elements_rc<'a, 'ctx, 'env>(
         .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
 
     let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
-    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+    let alignment_iv = alignment.as_int_value(env.context);
 
     let (key_fn, value_fn) = match rc_operation {
         Mode::Inc => (
@@ -408,7 +385,7 @@ pub fn dict_elements_rc<'a, 'ctx, 'env>(
     call_void_bitcode_fn(
         env,
         &[
-            dict_ptr.into(),
+            pass_dict_c_abi(env, dict),
             alignment_iv.into(),
             key_width.into(),
             value_width.into(),
@@ -429,12 +406,6 @@ pub fn dict_keys<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
-    let zig_list_type = env.module.get_struct_type("list.RocList").unwrap();
-
-    let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
-    env.builder.build_store(dict_ptr, dict);
-
     let key_width = env
         .ptr_int()
         .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
@@ -444,16 +415,16 @@ pub fn dict_keys<'a, 'ctx, 'env>(
         .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
 
     let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
-    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+    let alignment_iv = alignment.as_int_value(env.context);
 
     let inc_key_fn = build_inc_wrapper(env, layout_ids, key_layout);
 
-    let list_ptr = builder.build_alloca(zig_list_type, "list_ptr");
+    let list_ptr = builder.build_alloca(zig_list_type(env), "list_ptr");
 
     call_void_bitcode_fn(
         env,
         &[
-            dict_ptr.into(),
+            pass_dict_c_abi(env, dict),
             alignment_iv.into(),
             key_width.into(),
             value_width.into(),
@@ -475,6 +446,26 @@ pub fn dict_keys<'a, 'ctx, 'env>(
     env.builder.build_load(list_ptr, "load_keys_list")
 }
 
+fn pass_dict_c_abi<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    dict: BasicValueEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    match env.ptr_bytes {
+        4 => {
+            let target_type = env.context.custom_width_int_type(96).into();
+
+            complex_bitcast(env.builder, dict, target_type, "to_i96")
+        }
+        8 => {
+            let dict_ptr = env.builder.build_alloca(zig_dict_type(env), "dict_ptr");
+            env.builder.build_store(dict_ptr, dict);
+
+            dict_ptr.into()
+        }
+        _ => unreachable!(),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn dict_union<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -486,14 +477,6 @@ pub fn dict_union<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
-
-    let dict1_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
-    let dict2_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
-
-    env.builder.build_store(dict1_ptr, dict1);
-    env.builder.build_store(dict2_ptr, dict2);
-
     let key_width = env
         .ptr_int()
         .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
@@ -503,7 +486,7 @@ pub fn dict_union<'a, 'ctx, 'env>(
         .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
 
     let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
-    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+    let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
     let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
@@ -511,13 +494,13 @@ pub fn dict_union<'a, 'ctx, 'env>(
     let inc_key_fn = build_inc_wrapper(env, layout_ids, key_layout);
     let inc_value_fn = build_inc_wrapper(env, layout_ids, value_layout);
 
-    let output_ptr = builder.build_alloca(zig_dict_type, "output_ptr");
+    let output_ptr = builder.build_alloca(zig_dict_type(env), "output_ptr");
 
     call_void_bitcode_fn(
         env,
         &[
-            dict1_ptr.into(),
-            dict2_ptr.into(),
+            pass_dict_c_abi(env, dict1),
+            pass_dict_c_abi(env, dict2),
             alignment_iv.into(),
             key_width.into(),
             value_width.into(),
@@ -587,12 +570,6 @@ fn dict_intersect_or_difference<'a, 'ctx, 'env>(
 
     let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
 
-    let dict1_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
-    let dict2_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
-
-    env.builder.build_store(dict1_ptr, dict1);
-    env.builder.build_store(dict2_ptr, dict2);
-
     let key_width = env
         .ptr_int()
         .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
@@ -602,7 +579,7 @@ fn dict_intersect_or_difference<'a, 'ctx, 'env>(
         .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
 
     let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
-    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+    let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
     let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
@@ -615,8 +592,8 @@ fn dict_intersect_or_difference<'a, 'ctx, 'env>(
     call_void_bitcode_fn(
         env,
         &[
-            dict1_ptr.into(),
-            dict2_ptr.into(),
+            pass_dict_c_abi(env, dict1),
+            pass_dict_c_abi(env, dict2),
             alignment_iv.into(),
             key_width.into(),
             value_width.into(),
@@ -645,24 +622,20 @@ pub fn dict_walk<'a, 'ctx, 'env>(
     let builder = env.builder;
 
     let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
-    let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
-
-    let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
-    env.builder.build_store(dict_ptr, dict);
 
     let accum_bt = basic_type_from_layout(env, accum_layout);
     let accum_ptr = builder.build_alloca(accum_bt, "accum_ptr");
     env.builder.build_store(accum_ptr, accum);
 
     let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
-    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+    let alignment_iv = alignment.as_int_value(env.context);
 
     let output_ptr = builder.build_alloca(accum_bt, "output_ptr");
 
     call_void_bitcode_fn(
         env,
         &[
-            dict_ptr.into(),
+            pass_dict_c_abi(env, dict),
             roc_function_call.caller.into(),
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
@@ -690,11 +663,7 @@ pub fn dict_values<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let zig_dict_type = super::convert::zig_dict_type(env);
     let zig_list_type = super::convert::zig_list_type(env);
-
-    let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
-    env.builder.build_store(dict_ptr, dict);
 
     let key_width = env
         .ptr_int()
@@ -705,7 +674,7 @@ pub fn dict_values<'a, 'ctx, 'env>(
         .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
 
     let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
-    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+    let alignment_iv = alignment.as_int_value(env.context);
 
     let inc_value_fn = build_inc_wrapper(env, layout_ids, value_layout);
 
@@ -714,7 +683,7 @@ pub fn dict_values<'a, 'ctx, 'env>(
     call_void_bitcode_fn(
         env,
         &[
-            dict_ptr.into(),
+            pass_dict_c_abi(env, dict),
             alignment_iv.into(),
             key_width.into(),
             value_width.into(),
@@ -748,7 +717,7 @@ pub fn set_from_list<'a, 'ctx, 'env>(
     let list_alloca = builder.build_alloca(list.get_type(), "list_alloca");
     let list_ptr = env.builder.build_bitcast(
         list_alloca,
-        env.context.i128_type().ptr_type(AddressSpace::Generic),
+        env.str_list_c_abi().ptr_type(AddressSpace::Generic),
         "to_zig_list",
     );
 
@@ -764,7 +733,7 @@ pub fn set_from_list<'a, 'ctx, 'env>(
 
     let alignment =
         Alignment::from_key_value_layout(key_layout, &Layout::Struct(&[]), env.ptr_bytes);
-    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+    let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
     let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
@@ -865,11 +834,11 @@ fn dict_symbol_to_zig_dict<'a, 'ctx, 'env>(
 ) -> StructValue<'ctx> {
     let dict = load_symbol(scope, &symbol);
 
-    let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
-
-    complex_bitcast(env.builder, dict, zig_dict_type.into(), "dict_to_zig_dict").into_struct_value()
-}
-
-fn zig_dict_type<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> inkwell::types::StructType<'ctx> {
-    env.module.get_struct_type("dict.RocDict").unwrap()
+    complex_bitcast(
+        env.builder,
+        dict,
+        crate::llvm::convert::zig_dict_type(env).into(),
+        "dict_to_zig_dict",
+    )
+    .into_struct_value()
 }
