@@ -1,6 +1,6 @@
-use bumpalo::{collections::Vec, Bump};
+use bumpalo::{Bump};
 use parity_wasm::builder::{CodeLocation, ModuleBuilder};
-use parity_wasm::elements::{Internal, ValueType};
+use parity_wasm::elements::{Internal, ValueType, Local};
 use parity_wasm::{builder, elements};
 
 // use roc_builtins::bitcode;
@@ -12,7 +12,7 @@ use roc_mono::ir::{Expr, JoinPointId, Literal, Proc, ProcLayout, Stmt};
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
 pub struct Env<'a> {
-    pub arena: &'a Bump,
+    pub arena: &'a Bump, // not really using this much, parity_wasm works with std::vec a lot
     pub interns: Interns,
     pub exposed_to_host: MutSet<Symbol>,
 }
@@ -50,6 +50,7 @@ const UNUSED_DATA_SECTION_BYTES: u32 = 1024;
 // State that gets reset for every generated function
 struct FunctionGenerator {
     joinpoint_label_map: MutMap<JoinPointId, LabelId>,
+    locals: std::vec::Vec<Local>,
     symbol_storage_map: MutMap<Symbol, SymbolStorage>,
     stack_memory: u32,
 }
@@ -60,13 +61,26 @@ impl FunctionGenerator {
             joinpoint_label_map: MutMap::default(),
             symbol_storage_map: MutMap::default(),
             stack_memory: 0,
+            locals: std::vec::Vec::new(),
         }
     }
 
     fn reset(&mut self) {
         self.joinpoint_label_map.clear();
+        self.locals.clear();
         self.symbol_storage_map.clear();
         self.stack_memory = 0;
+    }
+
+    fn insert_local(&mut self, layout: WasmLayout, symbol: Symbol) -> LocalId {
+        let local_id = LocalId(self.locals.len() as u32);
+        self.locals.push(Local::new(1, layout.value_type));
+        self.stack_memory += layout.stack_memory;
+
+        let storage = SymbolStorage(local_id, layout);
+        self.symbol_storage_map.insert(symbol, storage);
+
+        local_id
     }
 }
 
@@ -129,16 +143,16 @@ impl<'a> BackendWasm<'a> {
             ));
         }
 
-        let mut arg_types = Vec::with_capacity_in(proc.args.len(), self.env.arena);
+        let mut arg_types = std::vec::Vec::with_capacity(proc.args.len());
 
         for (layout, symbol) in proc.args {
             let wasm_layout = WasmLayout::new(layout)?;
             arg_types.push(wasm_layout.value_type);
-            self.allocate_local(wasm_layout, *symbol);
+            self.func_gen.insert_local(wasm_layout, *symbol);
         }
 
         let signature = builder::signature()
-            .with_params(arg_types.to_vec()) // TODO: yuck
+            .with_params(arg_types) // requires std::Vec, not Bumpalo
             .with_result(ret_value_type)
             .build_sig();
 
@@ -150,13 +164,6 @@ impl<'a> BackendWasm<'a> {
         Ok(location)
     }
 
-    fn allocate_local(&mut self, layout: WasmLayout, symbol: Symbol) -> LocalId {
-        let local_id = LocalId(self.func_gen.symbol_storage_map.len() as u32);
-        self.func_gen.stack_memory += layout.stack_memory;
-        let storage = SymbolStorage(local_id, layout);
-        self.func_gen.symbol_storage_map.insert(symbol, storage);
-        local_id
-    }
 
     fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) -> Result<(), String> {
         Err("todo: everything".to_string())
