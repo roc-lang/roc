@@ -1,7 +1,7 @@
 use bumpalo::{collections::Vec, Bump};
-use parity_wasm::{elements, builder};
-use parity_wasm::elements::{ValueType, Internal};
-use parity_wasm::builder::{ModuleBuilder, FunctionDefinition, FunctionBuilder, CodeLocation};
+use parity_wasm::builder::{CodeLocation, FunctionBuilder, FunctionDefinition, ModuleBuilder};
+use parity_wasm::elements::{Internal, ValueType};
+use parity_wasm::{builder, elements};
 
 // use roc_builtins::bitcode;
 use roc_collections::all::{MutMap, MutSet};
@@ -11,38 +11,72 @@ use roc_module::symbol::{Interns, Symbol};
 use roc_mono::ir::{BranchInfo, CallType, Expr, JoinPointId, Literal, Proc, ProcLayout, Stmt};
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
-
 pub struct Env<'a> {
     pub arena: &'a Bump,
     pub interns: Interns,
     pub exposed_to_host: MutSet<Symbol>,
 }
 
-pub enum SymbolStorage {
-    Local(ValueType, u32),
-    LocalAndBase(ValueType, u32, u32),
+#[derive(Clone, Copy)]
+struct LocalId(u32);
+
+#[derive(Clone, Copy)]
+struct LabelId(u32);
+
+struct WasmLayout {
+    value_type: ValueType,
+    stack_memory: u32,
 }
 
-pub struct LabelId(u32);
+impl WasmLayout {
+    fn new(layout: &Layout) -> Result<Self, String> {
+        match layout {
+            Layout::Builtin(Builtin::Int64) => Ok(Self {
+                value_type: ValueType::I64,
+                stack_memory: 0,
+            }),
+            x => Err(format!("layout, {:?}, not implemented yet", x)),
+        }
+    }
+}
+
+struct SymbolStorage(LocalId, WasmLayout);
 
 // Don't allocate any constant data at the address zero or anywhere near it.
 // These addresses are not special in Wasm, but putting something there seems bug-prone.
 // Emscripten leaves 1kB free so let's do the same for now, although 4 bytes would probably do.
 const UNUSED_DATA_SECTION_BYTES: u32 = 1024;
 
-pub struct BackendWasm<'a> {
-    // module-level state
-    env: &'a Env<'a>,
-    module_builder: ModuleBuilder,
-    data_offset_map: MutMap<Literal<'a>, u32>,
-    data_offset_next: u32,
-
-    // procedure-level state
-    symbol_storage_map: MutMap<Symbol, SymbolStorage>,
+// State that gets reset for every generated function
+struct FunctionGenerator {
     joinpoint_label_map: MutMap<JoinPointId, LabelId>,
+    symbol_storage_map: MutMap<Symbol, SymbolStorage>,
+    stack_memory: u32,
+    return_on_stack: bool,
 }
 
-pub fn build_module<'a>(env: &'a Env, procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>) -> Result<elements::Module, String> {
+impl FunctionGenerator {
+    fn new() -> Self {
+        FunctionGenerator {
+            joinpoint_label_map: MutMap::default(),
+            symbol_storage_map: MutMap::default(),
+            stack_memory: 0,
+            return_on_stack: false,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.joinpoint_label_map.clear();
+        self.symbol_storage_map.clear();
+        self.stack_memory = 0;
+        self.return_on_stack = false;
+    }
+}
+
+pub fn build_module<'a>(
+    env: &'a Env,
+    procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+) -> Result<elements::Module, String> {
     let mut backend = BackendWasm::new(env);
     let mut layout_ids = LayoutIds::default();
 
@@ -66,26 +100,68 @@ pub fn build_module<'a>(env: &'a Env, procedures: MutMap<(Symbol, ProcLayout<'a>
     Ok(backend.module_builder.build())
 }
 
-impl <'a>BackendWasm<'a> {
-    pub fn new(env: &'a Env) -> Self {
+struct BackendWasm<'a> {
+    env: &'a Env<'a>,
+    module_builder: ModuleBuilder,
+    data_offset_map: MutMap<Literal<'a>, u32>,
+    data_offset_next: u32,
+    func_gen: FunctionGenerator,
+}
+
+impl<'a> BackendWasm<'a> {
+    fn new(env: &'a Env) -> Self {
         BackendWasm {
             env,
             module_builder: builder::module(),
             data_offset_map: MutMap::default(),
             data_offset_next: UNUSED_DATA_SECTION_BYTES,
-            symbol_storage_map: MutMap::default(),
-            joinpoint_label_map: MutMap::default(),
+            func_gen: FunctionGenerator::new(),
         }
     }
 
     fn build_proc(&mut self, proc: Proc<'a>) -> Result<CodeLocation, String> {
-        let mut function_builder = builder::function();
-        // 
-        // ... generate stuff ...
-        // 
-        let def = function_builder.build();
-        let location = self.module_builder.push_function(def);
+        self.func_gen.reset();
+
+        let ret_layout = WasmLayout::new(&proc.ret_layout)?;
+        let ret_value_type = ret_layout.value_type;
+        let return_on_stack = ret_layout.stack_memory > 0;
+        self.func_gen.return_on_stack = return_on_stack;
+
+        let mut arg_types =
+            Vec::with_capacity_in(proc.args.len() + (return_on_stack as usize), self.env.arena);
+
+        if return_on_stack {
+            arg_types.push(ret_layout.value_type);
+            self.allocate_local(ret_layout, None);
+        }
+
+        for (layout, symbol) in proc.args {
+            let wasm_layout = WasmLayout::new(layout)?;
+            arg_types.push(wasm_layout.value_type);
+            self.allocate_local(wasm_layout, Some(*symbol));
+        }
+
+        let signature = builder::signature()
+            .with_params(arg_types.to_vec()) // TODO: yuck
+            .with_result(ret_value_type)
+            .build_sig();
+
+        self.build_stmt(&proc.body, &proc.ret_layout)?;
+
+        let function_def = builder::function().with_signature(signature).build();
+
+        let location = self.module_builder.push_function(function_def);
         Ok(location)
+    }
+
+    fn allocate_local(&mut self, layout: WasmLayout, maybe_symbol: Option<Symbol>) -> LocalId {
+        let local_id = LocalId(self.func_gen.symbol_storage_map.len() as u32);
+        self.func_gen.stack_memory += layout.stack_memory;
+        let storage = SymbolStorage(local_id, layout);
+        if let Some(symbol) = maybe_symbol {
+            self.func_gen.symbol_storage_map.insert(symbol, storage);
+        }
+        local_id
     }
 
     fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) -> Result<(), String> {
