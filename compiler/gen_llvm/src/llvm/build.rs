@@ -3101,21 +3101,6 @@ pub fn get_sjlj_buffer<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> PointerValu
         .into_pointer_value()
 }
 
-pub fn get_sjlj_message_buffer<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> PointerValue<'ctx> {
-    let type_ = env.context.i8_type().ptr_type(AddressSpace::Generic);
-
-    let global = match env.module.get_global("roc_sjlj_message_buffer") {
-        Some(global) => global,
-        None => env
-            .module
-            .add_global(type_, None, "roc_sjlj_message_buffer"),
-    };
-
-    global.set_initializer(&type_.const_zero());
-
-    global.as_pointer_value()
-}
-
 fn set_jump_and_catch_long_jump<'a, 'ctx, 'env, F, T>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
