@@ -1166,8 +1166,8 @@ fn num_max_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
 fn list_is_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let bool_var = var_store.fresh();
-    let len_var = var_store.fresh();
-    let unbound_zero_var = var_store.fresh();
+    let len_var = Variable::NAT;
+    let unbound_zero_var = Variable::NATURAL;
 
     let body = RunLowLevel {
         op: LowLevel::Eq,
@@ -2873,9 +2873,9 @@ fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_var = var_store.fresh();
     let bool_var = var_store.fresh();
     let list_var = var_store.fresh();
-    let len_var = var_store.fresh();
-    let num_var = var_store.fresh();
-    let num_precision_var = var_store.fresh();
+    let len_var = Variable::NAT;
+    let num_var = len_var;
+    let num_precision_var = Variable::NATURAL;
     let list_elem_var = var_store.fresh();
     let ret_var = var_store.fresh();
 
