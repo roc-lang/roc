@@ -1,5 +1,5 @@
 use bumpalo::{collections::Vec, Bump};
-use parity_wasm::builder::{CodeLocation, FunctionBuilder, FunctionDefinition, ModuleBuilder};
+use parity_wasm::builder::{CodeLocation, ModuleBuilder};
 use parity_wasm::elements::{Internal, ValueType};
 use parity_wasm::{builder, elements};
 
@@ -8,7 +8,7 @@ use roc_collections::all::{MutMap, MutSet};
 // use roc_module::ident::{ModuleName, TagName};
 // use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
-use roc_mono::ir::{BranchInfo, CallType, Expr, JoinPointId, Literal, Proc, ProcLayout, Stmt};
+use roc_mono::ir::{Expr, JoinPointId, Literal, Proc, ProcLayout, Stmt};
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
 pub struct Env<'a> {
@@ -52,7 +52,6 @@ struct FunctionGenerator {
     joinpoint_label_map: MutMap<JoinPointId, LabelId>,
     symbol_storage_map: MutMap<Symbol, SymbolStorage>,
     stack_memory: u32,
-    return_on_stack: bool,
 }
 
 impl FunctionGenerator {
@@ -61,7 +60,6 @@ impl FunctionGenerator {
             joinpoint_label_map: MutMap::default(),
             symbol_storage_map: MutMap::default(),
             stack_memory: 0,
-            return_on_stack: false,
         }
     }
 
@@ -69,7 +67,6 @@ impl FunctionGenerator {
         self.joinpoint_label_map.clear();
         self.symbol_storage_map.clear();
         self.stack_memory = 0;
-        self.return_on_stack = false;
     }
 }
 
@@ -124,21 +121,20 @@ impl<'a> BackendWasm<'a> {
 
         let ret_layout = WasmLayout::new(&proc.ret_layout)?;
         let ret_value_type = ret_layout.value_type;
-        let return_on_stack = ret_layout.stack_memory > 0;
-        self.func_gen.return_on_stack = return_on_stack;
-
-        let mut arg_types =
-            Vec::with_capacity_in(proc.args.len() + (return_on_stack as usize), self.env.arena);
-
-        if return_on_stack {
-            arg_types.push(ret_layout.value_type);
-            self.allocate_local(ret_layout, None);
+        if ret_layout.stack_memory > 0 {
+            // TODO: insert an extra param for a pointer to space allocated in callee's stack... or does Roc do something else?
+            return Err(format!(
+                "Not yet implemented: Return in stack memory for non-primtitive layouts like {:?}",
+                proc.ret_layout
+            ));
         }
+
+        let mut arg_types = Vec::with_capacity_in(proc.args.len(), self.env.arena);
 
         for (layout, symbol) in proc.args {
             let wasm_layout = WasmLayout::new(layout)?;
             arg_types.push(wasm_layout.value_type);
-            self.allocate_local(wasm_layout, Some(*symbol));
+            self.allocate_local(wasm_layout, *symbol);
         }
 
         let signature = builder::signature()
@@ -154,13 +150,11 @@ impl<'a> BackendWasm<'a> {
         Ok(location)
     }
 
-    fn allocate_local(&mut self, layout: WasmLayout, maybe_symbol: Option<Symbol>) -> LocalId {
+    fn allocate_local(&mut self, layout: WasmLayout, symbol: Symbol) -> LocalId {
         let local_id = LocalId(self.func_gen.symbol_storage_map.len() as u32);
         self.func_gen.stack_memory += layout.stack_memory;
         let storage = SymbolStorage(local_id, layout);
-        if let Some(symbol) = maybe_symbol {
-            self.func_gen.symbol_storage_map.insert(symbol, storage);
-        }
+        self.func_gen.symbol_storage_map.insert(symbol, storage);
         local_id
     }
 
