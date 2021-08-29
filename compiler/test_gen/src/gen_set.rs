@@ -196,8 +196,6 @@ fn contains() {
 
 #[test]
 fn from_list() {
-    let empty_list = RocList::default();
-
     assert_evals_to!(
         indoc!(
             r#"
@@ -218,7 +216,7 @@ fn from_list() {
                 |> Set.toList
             "#
         ),
-        empty_list,
+        RocList::default(),
         RocList<i64>
     );
 
@@ -233,7 +231,7 @@ fn from_list() {
                 |> Set.toList
             "#
         ),
-        empty_list,
+        RocList::default(),
         RocList<i64>
     );
 }
