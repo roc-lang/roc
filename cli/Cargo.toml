@@ -71,6 +71,9 @@ inkwell = { path = "../vendor/inkwell", optional = true }
 target-lexicon = "0.12.2"
 tempfile = "3.1.0"
 
+wasmer = "2.0.0"
+wasmer-wasi = "2.0.0"
+
 [dev-dependencies]
 pretty_assertions = "0.5.1"
 maplit = "1.0.1"

@@ -3452,6 +3452,8 @@ dependencies = [
  "serial_test",
  "target-lexicon",
  "tempfile",
+ "wasmer",
+ "wasmer-wasi",
 ]
 
 [[package]]
