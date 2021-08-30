@@ -10,7 +10,6 @@ succeed : val -> Task val *
 succeed = \val ->
     Effect.always (Ok val)
 
-
 fail : err -> Task * err
 fail = \val ->
     Effect.always (Err val)

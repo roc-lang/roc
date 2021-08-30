@@ -1,5 +1,7 @@
 #![allow(non_snake_case)]
 
+extern crate rand;
+
 use core::alloc::Layout;
 use core::ffi::c_void;
 use core::mem::MaybeUninit;
@@ -114,6 +116,11 @@ unsafe fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
         }
         Err(e) => panic!("failed with {}", e),
     }
+}
+
+#[no_mangle]
+pub fn roc_fx_randNat() -> usize {
+    rand::random::<usize>()
 }
 
 #[no_mangle]
