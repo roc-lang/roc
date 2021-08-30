@@ -7,6 +7,7 @@ platform examples/cli
     effects fx.Effect
         {
             putLine : Str -> Effect {},
+            randNat : {} -> Effect Nat,
             getLine : Effect Str
         }
 
