@@ -7,9 +7,8 @@ use crate::editor::{
     ed_error::{EdResult, EmptyCodeString, MissingParent, NoNodeAtCaretPosition},
 };
 use crate::graphics::primitives::rect::Rect;
-use crate::lang::ast::{ExprId};
 use crate::lang::expr::Env;
-use crate::lang::parse::AST;
+use crate::lang::parse::{AST, ASTNodeId};
 use crate::lang::pool::PoolStr;
 use crate::ui::text::caret_w_select::{CaretPos, CaretWSelect};
 use crate::ui::text::lines::SelectableLines;
@@ -33,7 +32,7 @@ pub struct EdModel<'a> {
     pub glyph_dim_rect_opt: Option<Rect>,
     pub has_focus: bool,
     pub caret_w_select_vec: NonEmpty<(CaretWSelect, Option<MarkNodeId>)>,
-    pub selected_expr_opt: Option<SelectedExpression>,
+    pub selected_block_opt: Option<SelectedBlock>,
     pub loaded_module: LoadedModule,
     pub show_debug_view: bool,
     // EdModel is dirty if it has changed since the previous render.
@@ -41,8 +40,8 @@ pub struct EdModel<'a> {
 }
 
 #[derive(Debug, Copy, Clone)]
-pub struct SelectedExpression {
-    pub ast_node_id: ExprId,
+pub struct SelectedBlock {
+    pub ast_node_id: ASTNodeId,
     pub mark_node_id: MarkNodeId,
     pub type_str: PoolStr,
 }
@@ -90,7 +89,7 @@ pub fn init_model<'a>(
         glyph_dim_rect_opt: None,
         has_focus: true,
         caret_w_select_vec: NonEmpty::new((caret, None)),
-        selected_expr_opt: None,
+        selected_block_opt: None,
         loaded_module,
         show_debug_view: false,
         dirty: true,

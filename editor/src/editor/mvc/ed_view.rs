@@ -1,7 +1,7 @@
 use super::ed_model::EdModel;
 use crate::editor::config::Config;
 use crate::editor::ed_error::EdResult;
-use crate::editor::mvc::ed_model::SelectedExpression;
+use crate::editor::mvc::ed_model::SelectedBlock;
 use crate::editor::render_ast::build_code_graphics;
 use crate::editor::render_debug::build_debug_graphics;
 use crate::editor::resources::strings::START_TIP;
@@ -96,7 +96,7 @@ pub fn model_to_wgpu<'a>(
 
     let rendered_selection = build_selection_graphics(
         caret_w_sel_vec,
-        &ed_model.selected_expr_opt,
+        &ed_model.selected_block_opt,
         txt_coords,
         config,
         glyph_dim_rect,
@@ -114,7 +114,7 @@ pub fn model_to_wgpu<'a>(
 
 pub fn build_selection_graphics(
     caret_w_select_vec: Vec<CaretWSelect>,
-    selected_expr_opt: &Option<SelectedExpression>,
+    selected_expr_opt: &Option<SelectedBlock>,
     txt_coords: Vector2<f32>,
     config: &Config,
     glyph_dim_rect: Rect,

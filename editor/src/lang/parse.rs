@@ -13,7 +13,7 @@ pub struct AST {
     pub def_ids: Vec<DefId>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 pub enum ASTNodeId {
     ADefId(DefId),
     AExprId(ExprId),
