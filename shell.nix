@@ -17,6 +17,7 @@ let
 
   linuxInputs = with pkgs;
     lib.optionals stdenv.isLinux [
+      glibc_multi
       valgrind
       vulkan-headers
       vulkan-loader
@@ -49,7 +50,6 @@ let
     zig
 
     # lib deps
-    glibc_multi
     llvmPkgs.libcxx
     llvmPkgs.libcxxabi
     libffi
@@ -73,7 +73,8 @@ in pkgs.mkShell {
 
   # Additional Env vars
   LLVM_SYS_120_PREFIX = "${llvmPkgs.llvm.dev}";
-  NIXOS_GLIBC_PATH = "${pkgs.glibc_multi.out}/lib";
+  NIXOS_GLIBC_PATH =
+    if pkgs.stdenv.isLinux then "${pkgs.glibc_multi.out}/lib" else "";
   LD_LIBRARY_PATH = with pkgs;
     lib.makeLibraryPath ([
       pkg-config
