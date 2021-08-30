@@ -261,36 +261,59 @@ fn record_type_field<'a>(
     }
 }
 
+/// Parse a record-like type. This is used both for actual record types as well
+/// as for things like `effects` declarations in platform modules.
+#[macro_export]
+macro_rules! record_like {
+    (
+        $min_indent: expr,
+        $to_open: expr,
+        $to_end: expr,
+        $to_indent_end: expr,
+        $to_space: expr,
+        $to_type: expr,
+    ) => {
+        move |arena, state| {
+            use crate::type_annotation::TypeAnnotation::*;
+
+            let (_, (fields, final_comments), state) = collection_trailing_sep_e!(
+                // word1_check_indent!(b'{', TRecord::Open, min_indent, TRecord::IndentOpen),
+                word1(b'{', $to_open),
+                loc!(record_type_field($min_indent)),
+                word1(b',', $to_end),
+                // word1_check_indent!(b'}', TRecord::End, min_indent, TRecord::IndentEnd),
+                word1(b'}', $to_end),
+                $min_indent,
+                $to_open,
+                $to_space,
+                $to_indent_end
+            )
+            .parse(arena, state)?;
+
+            let field_term = specialize_ref($to_type, term($min_indent));
+            let (_, ext, state) = optional(allocated(field_term)).parse(arena, state)?;
+
+            let result = Record {
+                fields: fields.into_bump_slice(),
+                ext,
+                final_comments,
+            };
+
+            Ok((MadeProgress, result, state))
+        }
+    };
+}
+
 #[inline(always)]
 fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, TRecord<'a>> {
-    use crate::type_annotation::TypeAnnotation::*;
-
-    move |arena, state| {
-        let (_, (fields, final_comments), state) = collection_trailing_sep_e!(
-            // word1_check_indent!(b'{', TRecord::Open, min_indent, TRecord::IndentOpen),
-            word1(b'{', TRecord::Open),
-            loc!(record_type_field(min_indent)),
-            word1(b',', TRecord::End),
-            // word1_check_indent!(b'}', TRecord::End, min_indent, TRecord::IndentEnd),
-            word1(b'}', TRecord::End),
-            min_indent,
-            TRecord::Open,
-            TRecord::Space,
-            TRecord::IndentEnd
-        )
-        .parse(arena, state)?;
-
-        let field_term = specialize_ref(TRecord::Type, term(min_indent));
-        let (_, ext, state) = optional(allocated(field_term)).parse(arena, state)?;
-
-        let result = Record {
-            fields: fields.into_bump_slice(),
-            ext,
-            final_comments,
-        };
-
-        Ok((MadeProgress, result, state))
-    }
+    record_like!(
+        min_indent,
+        TRecord::Open,
+        TRecord::End,
+        TRecord::IndentEnd,
+        TRecord::Space,
+        TRecord::Type,
+    )
 }
 
 fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, Type<'a>> {
