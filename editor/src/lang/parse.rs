@@ -32,6 +32,19 @@ impl ASTNodeId {
             }
         }
     }
+
+    pub fn to_def_id(&self) -> EdResult<DefId>{
+        match self {
+            ASTNodeId::ADefId(def_id) => {
+                Ok(*def_id)
+            },
+            _ => {
+                ASTNodeIdWithoutExprId {
+                    ast_node_id: *self
+                }.fail()?
+            }
+        }
+    }
 }
 
 #[derive(Debug)]

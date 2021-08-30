@@ -8,6 +8,7 @@ use crate::editor::grid_node_map::GridNodeMap;
 use crate::editor::markup::attribute::Attributes;
 use crate::editor::markup::common_nodes::new_blank_mn;
 use crate::editor::markup::nodes;
+use crate::editor::markup::nodes::EQUALS;
 use crate::editor::markup::nodes::MarkupNode;
 use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::mvc::ed_model::EdModel;
@@ -26,6 +27,7 @@ use crate::editor::mvc::string_update::update_string;
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::syntax_highlight::HighlightStyle;
+use crate::editor::mvc::tld_value_update::{start_new_tld_value, update_tld_val_name};
 use crate::lang::ast::Def2;
 use crate::lang::ast::{Expr2, ExprId};
 use crate::lang::constrain::constrain_expr;
@@ -87,6 +89,18 @@ impl<'a> EdModel<'a> {
 
     // disregards EdModel.code_lines because the caller knows the resulting caret position will be valid.
     // allows us to prevent multiple updates to EdModel.code_lines
+    // TODO error if no match was found for old_caret_pos
+    pub fn simple_move_caret_right(&mut self, old_caret_pos: TextPos, repeat: usize) {
+        for caret_tup in self.caret_w_select_vec.iter_mut() {
+            if caret_tup.0.caret_pos == old_caret_pos {
+                caret_tup.0.caret_pos.column += 1;
+                caret_tup.1 = None;
+            }
+        }
+    }
+
+    // disregards EdModel.code_lines because the caller knows the resulting caret position will be valid.
+    // allows us to prevent multiple updates to EdModel.code_lines
     pub fn simple_move_carets_left(&mut self, repeat: usize) {
         for caret_tup in self.caret_w_select_vec.iter_mut() {
             caret_tup.0.caret_pos.column -= repeat;
@@ -106,6 +120,7 @@ impl<'a> EdModel<'a> {
 
     // disregards EdModel.code_lines because the caller knows the resulting caret position will be valid.
     // allows us to prevent multiple updates to EdModel.code_lines
+    // TODO error if no match was found for old_caret_pos
     pub fn simple_move_caret_down(&mut self, old_caret_pos: TextPos, repeat: usize) {
         for caret_tup in self.caret_w_select_vec.iter_mut() {
             if caret_tup.0.caret_pos == old_caret_pos {
@@ -311,7 +326,7 @@ impl<'a> EdModel<'a> {
             if self.grid_node_map.node_exists_at_pos(caret_pos) {
                 let (expr_start_pos, expr_end_pos, ast_node_id, mark_node_id) = self
                     .grid_node_map
-                    .get_expr_start_end_pos(self.get_caret(), self)?;
+                    .get_block_start_end_pos(self.get_caret(), self)?;
 
                 self.set_selected_expr(expr_start_pos, expr_end_pos, ast_node_id, mark_node_id)?;
             } else if self
@@ -320,7 +335,7 @@ impl<'a> EdModel<'a> {
             {
                 let (expr_start_pos, expr_end_pos, ast_node_id, mark_node_id) = self
                     .grid_node_map
-                    .get_expr_start_end_pos(self.get_caret().decrement_col(), self)?;
+                    .get_block_start_end_pos(self.get_caret().decrement_col(), self)?;
 
                 self.set_selected_expr(expr_start_pos, expr_end_pos, ast_node_id, mark_node_id)?;
             }
@@ -686,10 +701,37 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                             let ast_node_id = curr_mark_node.get_ast_node_id();
 
                             match ast_node_id {
-                                ASTNodeId::ADefId(_) => {
-                                    //let def_ref = ed_model.module.env.pool.get(def_id);
+                                ASTNodeId::ADefId(def_id) => {
+                                    let def_ref = ed_model.module.env.pool.get(def_id);
 
-                                    unimplemented!("TODO")
+                                    match def_ref {
+                                        Def2::Blank {..} => {
+                                            match ch {
+                                                'a'..='z' => {
+                                                    start_new_tld_value(ed_model, ch)?
+                                                },
+                                                _ => InputOutcome::Ignored
+                                            }
+                                        }
+                                        Def2::ValueDef { .. } => {
+                                            let val_name_mn_id = if curr_mark_node.get_content() == EQUALS {
+                                                if let Some(prev_mark_node_id) = prev_mark_node_id_opt {
+                                                    prev_mark_node_id
+                                                } else {
+                                                    unreachable!()
+                                                }
+                                            } else {
+                                                curr_mark_node_id
+                                            };
+
+                                            update_tld_val_name(
+                                                val_name_mn_id,
+                                                ed_model.get_caret(), // TODO update for multiple carets
+                                                ed_model,
+                                                ch
+                                            )?
+                                        },
+                                    }
                                 },
                                 ASTNodeId::AExprId(expr_id) => {
                                     let expr_ref = ed_model.module.env.pool.get(expr_id);

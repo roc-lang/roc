@@ -3,6 +3,7 @@ use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::ExpectedTextNode;
 use crate::editor::ed_error::{NestedNodeMissingChild, NestedNodeRequired};
 use crate::editor::markup::common_nodes::new_blank_mn;
+use crate::editor::markup::common_nodes::new_blank_mn_w_nl;
 use crate::editor::markup::common_nodes::new_colon_mn;
 use crate::editor::markup::common_nodes::new_comma_mn;
 use crate::editor::markup::common_nodes::new_equals_mn;
@@ -19,7 +20,7 @@ use crate::lang::ast::DefId;
 use crate::lang::ast::ExprId;
 use crate::lang::ast::RecordField;
 use crate::lang::ast::ValueDef;
-use crate::lang::ast::expr2_to_string;
+use crate::editor::mvc::tld_value_update::tld_mark_node;
 use crate::lang::parse::ASTNodeId;
 use crate::lang::parse::{AppHeader, AST};
 use crate::lang::pattern::get_identifier_string;
@@ -284,7 +285,39 @@ pub fn def2_to_markup<'a, 'b>(
     mark_node_pool: &mut SlowPool,
     interns: &Interns,
 ) -> EdResult<MarkNodeId> {
-    unimplemented!();
+
+    let ast_node_id = ASTNodeId::ADefId(def2_node_id);
+
+    let mark_node_id = match def2 {
+        Def2::ValueDef { identifier_id, expr_id } => {
+
+            let expr_mn_id = expr2_to_markup(
+                arena,
+                env,
+                env.pool.get(*expr_id),
+                *expr_id,
+                mark_node_pool,
+                interns,
+            )?;
+
+            let expr_mn = mark_node_pool.get_mut(expr_mn_id);
+            expr_mn.add_newline_at_end();
+
+            
+            let tld_mn = tld_mark_node(*identifier_id, expr_mn_id, ast_node_id, mark_node_pool, env, interns)?;
+
+            mark_node_pool.add(
+                tld_mn
+            )
+        },
+        Def2::Blank => {
+            mark_node_pool.add(
+                new_blank_mn_w_nl(ast_node_id, None)
+            )
+        },
+    };
+
+    Ok(mark_node_id)
 }
 
 // make Markup Nodes: generate String representation, assign Highlighting Style
@@ -296,7 +329,6 @@ pub fn expr2_to_markup<'a, 'b>(
     mark_node_pool: &mut SlowPool,
     interns: &Interns,
 ) -> EdResult<MarkNodeId> {
-    dbg!(expr2_to_string(expr2_node_id, env.pool));
 
     let ast_node_id = ASTNodeId::AExprId(expr2_node_id);
 
@@ -442,17 +474,14 @@ pub fn expr2_to_markup<'a, 'b>(
         Expr2::Blank => mark_node_pool.add(new_blank_mn(ast_node_id, None)),
         Expr2::LetValue {
             def_id,
-            body_id,
-            body_var,
+            body_id:_,
+            body_var:_,
         } => {
-            /*dbg!(expr2);
-            dbg!(env.pool.get(*body_id));
-            dbg!(env.pool.get(*def_id));
-            dbg!(body_var);*/
+
             let pattern_id = env.pool.get(*def_id).get_pattern_id();
 
             let pattern2 = env.pool.get(pattern_id);
-            dbg!(pattern2);
+
             let val_name = get_identifier_string(pattern2, interns)?;
 
             let val_name_mn = MarkupNode::Text {

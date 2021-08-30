@@ -81,8 +81,6 @@ impl Symbol {
                 )
             });
 
-        dbg!(ident_ids);
-
         ident_ids
             .get_name(self.ident_id())
             .unwrap_or_else(|| {
@@ -576,7 +574,7 @@ impl IdentIds {
                     if let Some(vec_elt) = by_id.get_mut(key_index) {
                         *vec_elt = new_ident_name.into();
                     } else {
-                        // we get the index from by_id so unless there is a bug in the rust std lib, this is unreachable
+                        // we get the index from by_id
                         unreachable!()
                     }
 
@@ -592,7 +590,7 @@ impl IdentIds {
                 }
             }
             None => {
-                Err("Tried to update key in IdentIds but I could not find the key.".to_string())
+                Err(format!("Tried to update key in IdentIds ({:?}) but I could not find the key ({}).", self.by_ident, old_ident_name))
             }
         }
     }

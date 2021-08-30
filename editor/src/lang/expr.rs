@@ -1017,14 +1017,12 @@ pub fn to_def2_from_def<'a>(
         Body(&loc_pattern, &loc_expr) => {
             // TODO loc_pattern use identifier
             let expr2 = loc_expr_to_expr2(arena, loc_expr, env, scope, region).0;
-            dbg!(&expr2);
             let expr_id = env.pool.add(expr2);
-            dbg!(expr_id);
 
             use roc_parse::ast::Pattern::*;
 
             match loc_pattern.value {
-                Identifier(str_ref) => {
+                Identifier(_) => {
                     let (_, pattern2) = to_pattern2(
                         env,
                         scope,

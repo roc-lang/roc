@@ -14,6 +14,15 @@ use snafu::{Backtrace, ErrorCompat, NoneError, ResultExt, Snafu};
 pub enum EdError {
 
     #[snafu(display(
+        "ASTNodeIdWithoutDefId: The expr_id_opt in ASTNode({:?}) was `None` but I was expexting `Some(DefId)` .",
+        ast_node_id
+    ))]
+    ASTNodeIdWithoutDefId {
+        ast_node_id: ASTNodeId,
+        backtrace: Backtrace,
+    },
+
+    #[snafu(display(
         "ASTNodeIdWithoutExprId: The expr_id_opt in ASTNode({:?}) was `None` but I was expexting `Some(ExprId)` .",
         ast_node_id
     ))]

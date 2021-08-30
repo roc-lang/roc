@@ -148,8 +148,8 @@ impl GridNodeMap {
         }
     }
 
-    // returns start and end pos of Expr2, relevant AST node and MarkNodeId of the corresponding MarkupNode
-    pub fn get_expr_start_end_pos(
+    // returns start and end pos of Expr2/Def2, relevant AST node and MarkNodeId of the corresponding MarkupNode
+    pub fn get_block_start_end_pos(
         &self,
         caret_pos: TextPos,
         ed_model: &EdModel,

@@ -128,7 +128,7 @@ pub fn update_let_value(
             .grid_node_map
             .get_offset_to_node_id(old_caret_pos, val_name_mn_id)?;
 
-        if node_caret_offset != 0 && node_caret_offset <= content_str_mut.len() {
+        if node_caret_offset <= content_str_mut.len() {
             content_str_mut.insert(node_caret_offset, *new_char);
 
             // update ast
