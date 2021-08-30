@@ -91,10 +91,14 @@ impl<T> RocList<T> {
         }
     }
 
-    fn get_storage_ptr(&self) -> *const isize {
-        let ptr = self.elements as *const isize;
+    fn get_storage_ptr_help(elements: *mut T) -> *mut isize {
+        let ptr = elements as *mut isize;
 
         unsafe { ptr.offset(-1) }
+    }
+
+    fn get_storage_ptr(&self) -> *const isize {
+        Self::get_storage_ptr_help(self.elements)
     }
 
     fn get_storage_ptr_mut(&mut self) -> *mut isize {
@@ -277,6 +281,103 @@ impl<T> RocList<T> {
     /// to store both T values as well as the refcount/capacity storage slot.
     fn align_of_storage_ptr() -> u32 {
         mem::align_of::<T>().max(mem::align_of::<usize>()) as u32
+    }
+
+    unsafe fn drop_pointer_to_first_argument(ptr: *mut T) {
+        let storage_ptr = Self::get_storage_ptr_help(ptr);
+        let storage_val = *storage_ptr;
+
+        if storage_val == REFCOUNT_1 || storage_val > 0 {
+            // If we have no more references, or if this was unique,
+            // deallocate it.
+            roc_dealloc(storage_ptr as *mut c_void, Self::align_of_storage_ptr());
+        } else if storage_val < 0 {
+            // If this still has more references, decrement one.
+            *storage_ptr = storage_val - 1;
+        }
+
+        // The only remaining option is that this is in readonly memory,
+        // in which case we shouldn't attempt to do anything to it.
+    }
+}
+
+impl<'a, T> IntoIterator for &'a RocList<T> {
+    type Item = &'a T;
+
+    type IntoIter = <&'a [T] as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.as_slice().iter()
+    }
+}
+
+impl<T> IntoIterator for RocList<T> {
+    type Item = T;
+
+    type IntoIter = IntoIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        let remaining = self.len();
+
+        let buf = unsafe { NonNull::new_unchecked(self.elements as _) };
+        let ptr = self.elements;
+
+        IntoIter {
+            buf,
+            ptr,
+            remaining,
+        }
+    }
+}
+
+use core::ptr::NonNull;
+
+pub struct IntoIter<T> {
+    buf: NonNull<T>,
+    // pub cap: usize,
+    ptr: *const T,
+    remaining: usize,
+}
+
+impl<T> Iterator for IntoIter<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        next_help(self)
+    }
+}
+
+fn next_help<T>(this: &mut IntoIter<T>) -> Option<T> {
+    if this.remaining == 0 {
+        None
+    } else if mem::size_of::<T>() == 0 {
+        // purposefully don't use 'ptr.offset' because for
+        // vectors with 0-size elements this would return the
+        // same pointer.
+        this.remaining -= 1;
+
+        // Make up a value of this ZST.
+        Some(unsafe { mem::zeroed() })
+    } else {
+        let old = this.ptr;
+        this.ptr = unsafe { this.ptr.offset(1) };
+        this.remaining -= 1;
+
+        Some(unsafe { ptr::read(old) })
+    }
+}
+
+impl<T> Drop for IntoIter<T> {
+    fn drop(&mut self) {
+        // drop the elements that we have not yet returned.
+        while let Some(item) = next_help(self) {
+            drop(item);
+        }
+
+        // deallocate the whole buffer
+        unsafe {
+            RocList::drop_pointer_to_first_argument(self.buf.as_mut());
+        }
     }
 }
 
@@ -482,6 +583,10 @@ impl RocStr {
                 *capacity_ptr = capacity;
 
                 let raw_ptr = Self::get_element_ptr(raw_ptr as *mut u8);
+
+                // write the refcount
+                let refcount_ptr = raw_ptr as *mut isize;
+                *(refcount_ptr.offset(-1)) = isize::MIN;
 
                 {
                     // NOTE: using a memcpy here causes weird issues
@@ -731,11 +836,9 @@ impl RocDec {
             }
         };
 
-        let after_point = match parts.next() {
-            Some(answer) if answer.len() <= Self::DECIMAL_PLACES as usize => answer,
-            _ => {
-                return None;
-            }
+        let opt_after_point = match parts.next() {
+            Some(answer) if answer.len() <= Self::DECIMAL_PLACES as usize => Some(answer),
+            _ => None,
         };
 
         // There should have only been one "." in the string!
@@ -744,22 +847,27 @@ impl RocDec {
         }
 
         // Calculate the low digits - the ones after the decimal point.
-        let lo = match after_point.parse::<i128>() {
-            Ok(answer) => {
-                // Translate e.g. the 1 from 0.1 into 10000000000000000000
-                // by "restoring" the elided trailing zeroes to the number!
-                let trailing_zeroes = Self::DECIMAL_PLACES as usize - after_point.len();
-                let lo = answer * 10i128.pow(trailing_zeroes as u32);
+        let lo = match opt_after_point {
+            Some(after_point) => {
+                match after_point.parse::<i128>() {
+                    Ok(answer) => {
+                        // Translate e.g. the 1 from 0.1 into 10000000000000000000
+                        // by "restoring" the elided trailing zeroes to the number!
+                        let trailing_zeroes = Self::DECIMAL_PLACES as usize - after_point.len();
+                        let lo = answer * 10i128.pow(trailing_zeroes as u32);
 
-                if !before_point.starts_with('-') {
-                    lo
-                } else {
-                    -lo
+                        if !before_point.starts_with('-') {
+                            lo
+                        } else {
+                            -lo
+                        }
+                    }
+                    Err(_) => {
+                        return None;
+                    }
                 }
             }
-            Err(_) => {
-                return None;
-            }
+            None => 0,
         };
 
         // Calculate the high digits - the ones before the decimal point.

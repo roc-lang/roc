@@ -135,28 +135,6 @@ fn function_s<'a, 'i>(
 
             arena.alloc(new_join)
         }
-        Invoke {
-            symbol,
-            call,
-            layout,
-            pass,
-            fail,
-            exception_id,
-        } => {
-            let new_pass = function_s(env, w, c, pass);
-            let new_fail = function_s(env, w, c, fail);
-
-            let new_invoke = Invoke {
-                symbol: *symbol,
-                call: call.clone(),
-                layout: *layout,
-                pass: new_pass,
-                fail: new_fail,
-                exception_id: *exception_id,
-            };
-
-            arena.alloc(new_invoke)
-        }
         Switch {
             cond_symbol,
             cond_layout,
@@ -195,7 +173,7 @@ fn function_s<'a, 'i>(
                 arena.alloc(new_refcounting)
             }
         }
-        Resume(_) | Ret(_) | Jump(_, _) | RuntimeError(_) => stmt,
+        Ret(_) | Jump(_, _) | RuntimeError(_) => stmt,
     }
 }
 
@@ -318,37 +296,6 @@ fn function_d_main<'a, 'i>(
                 }
             }
         }
-        Invoke {
-            symbol,
-            call,
-            layout,
-            pass,
-            fail,
-            exception_id,
-        } => {
-            if has_live_var(&env.jp_live_vars, stmt, x) {
-                let new_pass = {
-                    let temp = function_d_main(env, x, c, pass);
-                    function_d_finalize(env, x, c, temp)
-                };
-                let new_fail = {
-                    let temp = function_d_main(env, x, c, fail);
-                    function_d_finalize(env, x, c, temp)
-                };
-                let new_switch = Invoke {
-                    symbol: *symbol,
-                    call: call.clone(),
-                    layout: *layout,
-                    pass: new_pass,
-                    fail: new_fail,
-                    exception_id: *exception_id,
-                };
-
-                (arena.alloc(new_switch), true)
-            } else {
-                (stmt, false)
-            }
-        }
         Switch {
             cond_symbol,
             cond_layout,
@@ -433,9 +380,7 @@ fn function_d_main<'a, 'i>(
 
             (arena.alloc(new_join), found)
         }
-        Ret(_) | Resume(_) | Jump(_, _) | RuntimeError(_) => {
-            (stmt, has_live_var(&env.jp_live_vars, stmt, x))
-        }
+        Ret(_) | Jump(_, _) | RuntimeError(_) => (stmt, has_live_var(&env.jp_live_vars, stmt, x)),
     }
 }
 
@@ -550,36 +495,13 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
 
             arena.alloc(Let(*symbol, expr.clone(), *layout, b))
         }
-        Invoke {
-            symbol,
-            call,
-            layout,
-            pass,
-            fail,
-            exception_id,
-        } => {
-            let branch_info = BranchInfo::None;
-            let new_pass = function_r_branch_body(env, &branch_info, pass);
-            let new_fail = function_r_branch_body(env, &branch_info, fail);
-
-            let invoke = Invoke {
-                symbol: *symbol,
-                call: call.clone(),
-                layout: *layout,
-                pass: new_pass,
-                fail: new_fail,
-                exception_id: *exception_id,
-            };
-
-            arena.alloc(invoke)
-        }
         Refcounting(modify_rc, continuation) => {
             let b = function_r(env, continuation);
 
             arena.alloc(Refcounting(*modify_rc, b))
         }
 
-        Resume(_) | Ret(_) | Jump(_, _) | RuntimeError(_) => {
+        Ret(_) | Jump(_, _) | RuntimeError(_) => {
             // terminals
             stmt
         }
@@ -593,19 +515,6 @@ fn has_live_var<'a>(jp_live_vars: &JPLiveVarMap, stmt: &'a Stmt<'a>, needle: Sym
         Let(s, e, _, c) => {
             debug_assert_ne!(*s, needle);
             has_live_var_expr(e, needle) || has_live_var(jp_live_vars, c, needle)
-        }
-        Invoke {
-            symbol,
-            call,
-            pass,
-            fail,
-            ..
-        } => {
-            debug_assert_ne!(*symbol, needle);
-
-            has_live_var_call(call, needle)
-                || has_live_var(jp_live_vars, pass, needle)
-                || has_live_var(jp_live_vars, fail, needle)
         }
         Switch { cond_symbol, .. } if *cond_symbol == needle => true,
         Switch {
@@ -647,7 +556,7 @@ fn has_live_var<'a>(jp_live_vars: &JPLiveVarMap, stmt: &'a Stmt<'a>, needle: Sym
         Jump(id, arguments) => {
             arguments.iter().any(|s| *s == needle) || jp_live_vars[id].contains(&needle)
         }
-        Resume(_) | RuntimeError(_) => false,
+        RuntimeError(_) => false,
     }
 }
 

@@ -53,7 +53,6 @@ let
     llvmPkgs.libcxx
     llvmPkgs.libcxxabi
     libffi
-    libunwind
     libxml2
     ncurses
     zlib
@@ -76,14 +75,6 @@ in pkgs.mkShell {
   NIXOS_GLIBC_PATH =
     if pkgs.stdenv.isLinux then "${pkgs.glibc_multi.out}/lib" else "";
   LD_LIBRARY_PATH = with pkgs;
-    lib.makeLibraryPath ([
-      pkg-config
-      stdenv.cc.cc.lib
-      llvmPkgs.libcxx
-      llvmPkgs.libcxxabi
-      libunwind
-      libffi
-      ncurses
-      zlib
-    ] ++ linuxInputs);
+    lib.makeLibraryPath
+    ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ] ++ linuxInputs);
 }
