@@ -412,7 +412,7 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
                 Ok((progress, first, state))
             } else {
                 // e.g. `Int,Int` without an arrow and return type
-                panic!()
+                todo!("Gracefully handle a type annotation without an arrow and return type, e.g. Int,Int - state was: {:?}", state);
             }
         }
     }
