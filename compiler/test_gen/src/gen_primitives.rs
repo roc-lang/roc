@@ -4,9 +4,8 @@ use crate::assert_evals_to;
 use crate::assert_llvm_evals_to;
 use crate::assert_non_opt_evals_to;
 // use crate::assert_wasm_evals_to as assert_evals_to;
-use crate::assert_wasm_evals_to;
 use indoc::indoc;
-use roc_std::{RocList, RocStr};
+use roc_std::{RocStr};
 
 #[test]
 fn basic_int() {
@@ -2779,85 +2778,5 @@ fn value_not_exposed_hits_panic() {
         ),
         32,
         i64
-    );
-}
-
-#[test]
-fn wasm_test_i32() {
-    assert_wasm_evals_to!(
-        indoc!(
-            r#"
-                app "test" provides [ main ] to "./platform"
-
-                main : I32
-                main = 4 + 5
-            "#
-        ),
-        9,
-        i32
-    );
-}
-
-#[test]
-fn wasm_test_small_string() {
-    assert_wasm_evals_to!(
-        indoc!(
-            r#"
-                app "test" provides [ main ] to "./platform"
-
-                main : Str
-                main = "hello"
-            "#
-        ),
-        RocStr::from_slice(b"hello"),
-        RocStr
-    );
-}
-
-#[test]
-fn wasm_test_big_string() {
-    assert_wasm_evals_to!(
-        indoc!(
-            r#"
-                app "test" provides [ main ] to "./platform"
-
-                main : Str
-                main = "goodday may fellow human"
-            "#
-        ),
-        RocStr::from_slice(b"goodday may fellow human"),
-        RocStr
-    );
-}
-
-#[test]
-fn wasm_test_u8() {
-    assert_wasm_evals_to!(
-        indoc!(
-            r#"
-                app "test" provides [ main ] to "./platform"
-
-                main : U8
-                main = 3 + 6
-            "#
-        ),
-        3 + 6,
-        u8
-    );
-}
-
-#[test]
-fn wasm_test_list_u8() {
-    assert_wasm_evals_to!(
-        indoc!(
-            r#"
-                app "test" provides [ main ] to "./platform"
-
-                main : List U8
-                main = [ 3 + 6 , 5, 6 ]
-            "#
-        ),
-        RocList::from_slice(&[3 + 6, 5, 6]),
-        RocList<u8>
     );
 }
