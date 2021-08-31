@@ -3,6 +3,7 @@ app "spycatcher"
     imports [ pf.Task.{ Task, await }, pf.Stdout, pf.Rand ]
     provides [ main ] to pf
 
+
 main : Task {} *
 main =
     nat <- await Rand.nat
@@ -14,21 +15,28 @@ main =
 
 EntityId : [ @EntityId Nat ]
 
+
 KristyId : [ @KristyId EntityId ]
+
 
 JanId : [ @JanId EntityId ]
 
+
 RichardId : [ @RichardId EntityId ]
+
 
 iterationsPerSim : Nat
 iterationsPerSim = 1_000
 
+
 maxSims : Nat
 maxSims = 100
+
 
 ## Any chains of this length or higher will be dropped.
 maxChainLength : Nat
 maxChainLength = 6
+
 
 ## Any chains of this length or smaller will not be dropped.
 ##
@@ -36,12 +44,6 @@ maxChainLength = 6
 ## have a 50% chance of being kept.
 shortChainLength : Nat
 shortChainLength = 4
-
-JanOrRichard :
-    [
-        IsJan JanId,
-        IsRichard RichardId
-    ]
 
 
 Entity :
@@ -52,107 +54,102 @@ Entity :
     ]
 
 
-# type alias Jan =
-#     { leftHand : Maybe KristyId
-#     , rightHand : Maybe KristyId
-#     }
+Jan :
+    {
+        leftHand : [ Kristy KristyId, None ],
+        rightHand : [ Kristy KristyId, None ]
+    }
 
 
-# initJan : Jan
-# initJan =
-#     { leftHand = Nothing, rightHand = Nothing }
+initJan : Jan
+initJan =
+    { leftHand: None, rightHand: None }
 
 
-# type alias Kristy =
-#     { leftHand : Maybe JanId
-#     , rightHand : Maybe JanOrRichard
-#     }
+Kristy :
+    {
+        leftHand : [ Jan JanId, None ],
+        rightHand : [ Jan JanId, Richard RichardId, None ]
+    }
 
 
-# initKristy : Kristy
-# initKristy =
-#     { leftHand = Nothing, rightHand = Nothing }
+initKristy : Kristy
+initKristy =
+    { leftHand: None, rightHand: None }
 
 
-# type alias Richard =
-#     { oneHand : Maybe KristyId }
+Richard : { oneHand : [ Kristy KristyId, None ] }
 
 
-# initRichard : Richard
-# initRichard =
-#     { oneHand = Nothing }
+initRichard : Richard
+initRichard =
+    { oneHand: None }
 
 
-# type alias Model =
-#     { seed : Seed
-#     , sims : List ( Mix, Sim )
-#     }
+Model :
+    {
+        sims : List { mix : Mix, sim : Sim }
+    }
 
 
-# initialModel : Model
-# initialModel =
-#     { seed = Random.initialSeed 12345
-#     , sims = []
-#     }
+initialModel : Model
+initialModel =
+    { sims: [] }
 
 
-# {-| 0 to 1000 by 10
-# -}
-# mixRanges : List Int
-# mixRanges =
-#     List.range 0 100
-#         |> List.map (\num -> num * 10)
+## 0 to 1000 by 10
+mixRanges : List Nat
+mixRanges =
+    List.range 0 100
+        |> List.map \num -> num * 10
 
 
-# type alias Sim =
-#     { entities : Dict EntityId Entity
-#     , chainsDropped : Int
-#     }
+Sim :
+    {
+        entities : List Entity,
+        chainsDropped : Nat
+    }
 
 
-# type alias Mix =
-#     { jans : Int, richards : Int, kristys : Int }
+Mix : { jans : Nat, richards : Nat, kristys : Nat }
 
 
-# initialSim : Mix -> Sim
-# initialSim { jans, richards, kristys } =
-#     let
-#         janEntities =
-#             List.repeat jans initJan
-#                 |> List.map EJan
+initialSim : Mix -> Sim
+initialSim = \{ jans, richards, kristys } ->
+    janEntities : List Entity
+    janEntities =
+        janz : List Jan
+        janz = List.repeat jans initJan
 
-#         richardEntities =
-#             List.repeat richards initRichard
-#                 |> List.map ERichard
+        List.map janz \jan ->
+            jan2 : Jan
+            jan2 = jan
 
-#         kristyEntities =
-#             List.repeat kristys initKristy
-#                 |> List.map EKristy
+            jan3 : Entity
+            jan3 = EJan jan
 
-#         entities =
-#             List.concat [ janEntities, richardEntities, kristyEntities ]
-#                 |> List.indexedMap (\index elem -> ( index, elem ))
-#                 |> Dict.fromList
-#     in
-#     { entities = entities, chainsDropped = 0 }
+            jan3
+
+    richardEntities =
+        List.repeat richards initRichard
+            |> List.map ERichard
+
+    kristyEntities =
+        List.repeat kristys initKristy
+            |> List.map EKristy
+
+    entities =
+        List.join [ janEntities, richardEntities, kristyEntities ]
+
+    { entities: entities, chainsDropped: 0 }
 
 
-# type Hand
-#     = Left
-#     | Right
-
-
-# handGenerator : Generator Hand
-# handGenerator =
-#     Random.int 0 1
-#         |> Random.map
-#             (\int ->
-#                 if int == 0 then
-#                     Left
-
-#                 else
-#                     Right
-#             )
+randHand : Task [ Left, Right ] *
+randHand =
+    Task.map Rand.nat \nat ->
+        when nat % 2 is
+            Ok(0) -> Left
+            _ -> Right
 
 
 # dropLongChains : Sim -> Sim
@@ -223,11 +220,11 @@ Entity :
 
 #         -- Pick a random hand
 #         ( hand1, seed3 ) =
-#             Random.step handGenerator seed2
+#             Random.step randHand seed2
 
 #         -- Pick another random hand
 #         ( hand2, seed4 ) =
-#             Random.step handGenerator seed3
+#             Random.step randHand seed3
 
 #         newDict =
 #             case ( Dict.get index1 dict, Dict.get index2 dict ) of
