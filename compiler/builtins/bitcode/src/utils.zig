@@ -175,7 +175,7 @@ pub fn allocateWithRefcount(
             }
 
             var as_u8_array = @ptrCast([*]u8, new_bytes);
-            const first_slot = as_u8_array + 2 * @sizeOf(usize);
+            const first_slot = as_u8_array + std.math.max(alignment, @sizeOf(usize)) - @sizeOf(usize);
 
             return first_slot;
         },
@@ -193,7 +193,7 @@ pub fn allocateWithRefcount(
             }
 
             var as_u8_array = @ptrCast([*]u8, new_bytes);
-            const first_slot = as_u8_array + alignment;
+            const first_slot = as_u8_array + std.math.max(alignment, @sizeOf(usize)) - @sizeOf(usize);
 
             return first_slot;
         },
@@ -211,27 +211,12 @@ pub fn allocateWithRefcount(
             }
 
             var as_u8_array = @ptrCast([*]u8, new_bytes);
-            const first_slot = as_u8_array + alignment;
+            const first_slot = as_u8_array + std.math.max(alignment, @sizeOf(usize)) - @sizeOf(usize);
 
             return first_slot;
         },
         else => {
-            const length = @sizeOf(usize) + data_bytes;
-
-            var raw = alloc(length, alignment);
-            var new_bytes: [*]align(8) u8 = @alignCast(8, raw);
-
-            var as_isize_array = @ptrCast([*]isize, new_bytes);
-            if (result_in_place) {
-                as_isize_array[0] = @intCast(isize, number_of_slots);
-            } else {
-                as_isize_array[0] = REFCOUNT_ONE_ISIZE;
-            }
-
-            var as_u8_array = @ptrCast([*]u8, new_bytes);
-            const first_slot = as_u8_array + @sizeOf(usize);
-
-            return first_slot;
+            @panic("allocateWithRefcount with invalid alignment");
         },
     }
 }
