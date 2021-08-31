@@ -1,18 +1,15 @@
-{ pkgs ? import <nixpkgs> {}}:
+{ pkgs ? import <nixpkgs> { } }:
 
 pkgs.stdenv.mkDerivation {
   name = "debugir";
+  # we can go back to upstream when https://github.com/vaivaswatha/debugir/pull/4 gets merged
   src = pkgs.fetchFromGitHub {
-    owner = "vaivaswatha";
+    owner = "Arkham";
     repo = "debugir";
-    rev = "ed454ba264f30d2a70264357a31d94db3dd676eb";
-    sha256 = "08hrn66zn5pa8jk45msl9ipa8d1p7r9gmpknh41fyjr6c7qpmfrk";
+    rev = "8d543e8796a1ab28ebf708e8e6883a574dd5e48c";
+    sha256 = "10sz3jwfkmqbp91d5aj9wd79k0cksl9qh4hirlivfyw8dcmbk384";
   };
-  buildInputs = with pkgs; [
-    cmake
-    libxml2
-    llvmPackages_12.llvm.dev
-  ];
+  buildInputs = with pkgs; [ cmake libxml2 llvmPackages_12.llvm.dev ];
   buildPhase = ''
     mkdir build
     cd build
