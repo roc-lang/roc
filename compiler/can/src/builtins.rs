@@ -2371,7 +2371,7 @@ fn dict_intersection(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::DictIntersection, var_store)
 }
 
-/// Dict.walk : Dict k v, (k, v, accum -> accum), accum -> accum
+/// Dict.walk : Dict k v, state, (state, k, v -> state) -> state
 fn dict_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_3(symbol, LowLevel::DictWalk, var_store)
 }

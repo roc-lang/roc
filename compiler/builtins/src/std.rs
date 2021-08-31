@@ -1090,17 +1090,17 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(dict_type(flex(TVAR1), flex(TVAR2))),
     );
 
-    // Dict.walk : Dict k v, (k, v, accum -> accum), accum -> accum
+    // Dict.walk : Dict k v, state, (state, k, v -> state) -> state
     add_top_level_function_type!(
         Symbol::DICT_WALK,
         vec![
             dict_type(flex(TVAR1), flex(TVAR2)),
+            flex(TVAR3),
             closure(
-                vec![flex(TVAR1), flex(TVAR2), flex(TVAR3)],
+                vec![flex(TVAR3), flex(TVAR1), flex(TVAR2)],
                 TVAR4,
                 Box::new(flex(TVAR3)),
             ),
-            flex(TVAR3),
         ],
         Box::new(flex(TVAR3)),
     );

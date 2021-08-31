@@ -502,7 +502,7 @@ fn walk_sum_keys() {
                     |> Dict.insert 4 4
                     |> Dict.insert 5 5
 
-            Dict.walk dict1 (\k, _, a -> k + a) 0 
+            Dict.walk dict1 0 \k, _, a -> k + a
             "#
         ),
         15,
