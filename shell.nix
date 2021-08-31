@@ -50,8 +50,6 @@ let
     zig
 
     # lib deps
-    llvmPkgs.libcxx
-    llvmPkgs.libcxxabi
     libffi
     libxml2
     ncurses
