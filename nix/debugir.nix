@@ -2,12 +2,11 @@
 
 pkgs.stdenv.mkDerivation {
   name = "debugir";
-  # we can go back to upstream when https://github.com/vaivaswatha/debugir/pull/4 gets merged
   src = pkgs.fetchFromGitHub {
-    owner = "Arkham";
+    owner = "vaivaswatha";
     repo = "debugir";
-    rev = "8d543e8796a1ab28ebf708e8e6883a574dd5e48c";
-    sha256 = "10sz3jwfkmqbp91d5aj9wd79k0cksl9qh4hirlivfyw8dcmbk384";
+    rev = "db871e6cee7f653e284b226e2567a2574635247c";
+    sha256 = "0rgh9gawf92mjya1plxlgi9azkwca3gq8qa5hri18k4b7sbjm6lx";
   };
   buildInputs = with pkgs; [ cmake libxml2 llvmPackages_12.llvm.dev ];
   buildPhase = ''
