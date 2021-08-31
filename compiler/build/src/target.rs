@@ -18,6 +18,10 @@ pub fn target_triple_str(target: &Triple) -> &'static str {
             ..
         } => "x86_64-unknown-linux-gnu",
         Triple {
+            architecture: Architecture::Wasm32,
+            ..
+        } => "wasm32-unknown-unknown",
+        Triple {
             architecture: Architecture::Aarch64(_),
             operating_system: OperatingSystem::Linux,
             ..

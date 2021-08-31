@@ -20,7 +20,7 @@ pub fn build(b: *Builder) void {
     test_step.dependOn(&main_tests.step);
 
     // LLVM IR
-    const obj_name = "builtins";
+    const obj_name = "builtins-64bit";
     const llvm_obj = b.addObject(obj_name, main_path);
     llvm_obj.setBuildMode(mode);
     llvm_obj.linkSystemLibrary("c");
@@ -29,6 +29,25 @@ pub fn build(b: *Builder) void {
     llvm_obj.emit_bin = false;
     const ir = b.step("ir", "Build LLVM ir");
     ir.dependOn(&llvm_obj.step);
+
+    // LLVM IR 32-bit (wasm)
+    var target = b.standardTargetOptions(.{});
+    target.os_tag = std.Target.Os.Tag.linux;
+    target.cpu_arch = std.Target.Cpu.Arch.i386;
+    // target.abi = std.Target.Abi.none;
+    target.abi = std.Target.Abi.musl;
+
+    const obj_name_32bit = "builtins-32bit";
+    const llvm_obj_32bit = b.addObject(obj_name_32bit, main_path);
+    llvm_obj_32bit.setBuildMode(mode);
+    llvm_obj_32bit.linkSystemLibrary("c");
+    llvm_obj_32bit.strip = true;
+    llvm_obj_32bit.emit_llvm_ir = true;
+    llvm_obj_32bit.emit_bin = false;
+    llvm_obj_32bit.target = target;
+
+    const ir32bit = b.step("ir-32bit", "Build LLVM ir for 32-bit targets (wasm)");
+    ir32bit.dependOn(&llvm_obj_32bit.step);
 
     // Object File
     // TODO: figure out how to get this to emit symbols that are only scoped to linkage (global but hidden).
