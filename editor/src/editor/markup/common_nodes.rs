@@ -1,4 +1,7 @@
-use crate::{editor::{slow_pool::MarkNodeId, syntax_highlight::HighlightStyle}, lang::{ast::ExprId, parse::ASTNodeId}};
+use crate::{
+    editor::{slow_pool::MarkNodeId, syntax_highlight::HighlightStyle},
+    lang::{ast::ExprId, parse::ASTNodeId},
+};
 
 use super::{attribute::Attributes, nodes, nodes::MarkupNode};
 

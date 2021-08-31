@@ -1,11 +1,16 @@
 use std::fmt::Debug;
 
-use crate::{editor::ed_error::EdResult, editor::ed_error::ASTNodeIdWithoutExprId,lang::scope::Scope};
+use crate::{
+    editor::ed_error::ASTNodeIdWithoutExprId, editor::ed_error::EdResult, lang::scope::Scope,
+};
 use bumpalo::Bump;
 use roc_parse::parser::SyntaxError;
 use roc_region::all::Region;
 
-use super::{ast::{DefId, Expr2, ExprId}, expr::{str_to_def2, Env}};
+use super::{
+    ast::{DefId, Expr2, ExprId},
+    expr::{str_to_def2, Env},
+};
 
 #[derive(Debug)]
 pub struct AST {
@@ -20,29 +25,17 @@ pub enum ASTNodeId {
 }
 
 impl ASTNodeId {
-    pub fn to_expr_id(&self) -> EdResult<ExprId>{
+    pub fn to_expr_id(&self) -> EdResult<ExprId> {
         match self {
-            ASTNodeId::AExprId(expr_id) => {
-                Ok(*expr_id)
-            },
-            _ => {
-                ASTNodeIdWithoutExprId {
-                    ast_node_id: *self
-                }.fail()?
-            }
+            ASTNodeId::AExprId(expr_id) => Ok(*expr_id),
+            _ => ASTNodeIdWithoutExprId { ast_node_id: *self }.fail()?,
         }
     }
 
-    pub fn to_def_id(&self) -> EdResult<DefId>{
+    pub fn to_def_id(&self) -> EdResult<DefId> {
         match self {
-            ASTNodeId::ADefId(def_id) => {
-                Ok(*def_id)
-            },
-            _ => {
-                ASTNodeIdWithoutExprId {
-                    ast_node_id: *self
-                }.fail()?
-            }
+            ASTNodeId::ADefId(def_id) => Ok(*def_id),
+            _ => ASTNodeIdWithoutExprId { ast_node_id: *self }.fail()?,
         }
     }
 }

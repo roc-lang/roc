@@ -8,8 +8,8 @@ use crate::editor::grid_node_map::GridNodeMap;
 use crate::editor::markup::attribute::Attributes;
 use crate::editor::markup::common_nodes::new_blank_mn;
 use crate::editor::markup::nodes;
-use crate::editor::markup::nodes::EQUALS;
 use crate::editor::markup::nodes::MarkupNode;
+use crate::editor::markup::nodes::EQUALS;
 use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::mvc::ed_model::SelectedBlock;
@@ -24,10 +24,10 @@ use crate::editor::mvc::record_update::update_record_field;
 use crate::editor::mvc::string_update::start_new_string;
 use crate::editor::mvc::string_update::update_small_string;
 use crate::editor::mvc::string_update::update_string;
+use crate::editor::mvc::tld_value_update::{start_new_tld_value, update_tld_val_name};
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::syntax_highlight::HighlightStyle;
-use crate::editor::mvc::tld_value_update::{start_new_tld_value, update_tld_val_name};
 use crate::lang::ast::Def2;
 use crate::lang::ast::{Expr2, ExprId};
 use crate::lang::constrain::constrain_expr;
@@ -93,7 +93,7 @@ impl<'a> EdModel<'a> {
     pub fn simple_move_caret_right(&mut self, old_caret_pos: TextPos, repeat: usize) {
         for caret_tup in self.caret_w_select_vec.iter_mut() {
             if caret_tup.0.caret_pos == old_caret_pos {
-                caret_tup.0.caret_pos.column += 1;
+                caret_tup.0.caret_pos.column += repeat;
                 caret_tup.1 = None;
             }
         }
@@ -285,12 +285,8 @@ impl<'a> EdModel<'a> {
         self.set_caret(expr_start_pos);
 
         let type_str = match ast_node_id {
-            ASTNodeId::ADefId(_) => {
-                PoolStr::new("TODO", self.module.env.pool)
-            },
-            ASTNodeId::AExprId(expr_id) => {
-                self.expr2_to_type(expr_id)
-            }
+            ASTNodeId::ADefId(_) => PoolStr::new("TODO", self.module.env.pool),
+            ASTNodeId::AExprId(expr_id) => self.expr2_to_type(expr_id),
         };
 
         self.selected_block_opt = Some(SelectedBlock {
@@ -479,13 +475,11 @@ impl<'a> EdModel<'a> {
             match sel_block.ast_node_id {
                 ASTNodeId::ADefId(def_id) => {
                     self.module.env.pool.set(def_id, Def2::Blank);
-                },
+                }
                 ASTNodeId::AExprId(expr_id) => {
                     self.module.env.pool.set(expr_id, Expr2::Blank);
                 }
             }
-
-            
 
             Some(sel_block.mark_node_id)
         } else {
@@ -803,10 +797,20 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                 _ => InputOutcome::Ignored
                                             }
                                         } else if ch.is_ascii_alphanumeric() { // prev_mark_node_id != curr_mark_node_id
-        
+
                                             match expr_ref {
                                                 Expr2::SmallInt{ .. } => {
                                                     update_int(ed_model, curr_mark_node_id, ch)?
+                                                }
+                                                Expr2::SmallStr(_) => {
+                                                    // prev_mark_node and curr_mark_node are different.
+                                                    // Caret is located before first quote, no input is allowed here
+                                                    InputOutcome::Ignored
+                                                }
+                                                Expr2::Str(_) => {
+                                                    // prev_mark_node and curr_mark_node are different. 
+                                                    // Caret is located before first quote, no input is allowed here
+                                                    InputOutcome::Ignored
                                                 }
                                                 _ => {
                                                     let prev_ast_node_id =
@@ -838,7 +842,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                                 }
                                                                 Expr2::Record{ record_var:_, fields } => {
                                                                     let prev_mark_node = ed_model.mark_node_pool.get(prev_mark_node_id);
-                
+
                                                                     if (curr_mark_node.get_content() == nodes::RIGHT_ACCOLADE || curr_mark_node.get_content() == nodes::COLON) &&
                                                                         prev_mark_node.is_all_alphanumeric() {
                                                                         update_record_field(
@@ -862,7 +866,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                                 }
                                                                 Expr2::List{ elem_var: _, elems: _} => {
                                                                     let prev_mark_node = ed_model.mark_node_pool.get(prev_mark_node_id);
-                
+
                                                                     if prev_mark_node.get_content() == nodes::LEFT_SQUARE_BR && curr_mark_node.get_content() == nodes::RIGHT_SQUARE_BR {
                                                                         // based on if, we are at the start of the list
                                                                         let new_child_index = 1;
@@ -881,7 +885,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                                     match prev_node_expr {
                                                                         Expr2::EmptyRecord => {
                                                                             let sibling_ids = curr_mark_node.get_sibling_ids(&ed_model.mark_node_pool);
-                
+
                                                                             update_empty_record(
                                                                                 &ch.to_string(),
                                                                                 prev_mark_node_id,
@@ -899,10 +903,10 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                             }
                                         } else if *ch == ':' {
                                             let mark_parent_id_opt = curr_mark_node.get_parent_id_opt();
-        
+
                                             if let Some(mark_parent_id) = mark_parent_id_opt {
                                                 let parent_ast_id = ed_model.mark_node_pool.get(mark_parent_id).get_ast_node_id();
-        
+
                                                 update_record_colon(ed_model, parent_ast_id.to_expr_id()?)?
                                             } else {
                                                 InputOutcome::Ignored
@@ -912,7 +916,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                 InputOutcome::Ignored
                                             } else {
                                                 let mark_parent_id_opt = curr_mark_node.get_parent_id_opt();
-        
+
                                                 if let Some(mark_parent_id) = mark_parent_id_opt {
                                                     let parent_ast_id = ed_model.mark_node_pool.get(mark_parent_id).get_ast_node_id();
 
@@ -925,7 +929,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 
                                                             match parent_expr2 {
                                                                 Expr2::List { elem_var:_, elems:_} => {
-                
+
                                                                     let (new_child_index, new_ast_child_index) = ed_model.get_curr_child_indices()?;
                                                                     // insert a Blank first, this results in cleaner code
                                                                     add_blank_child(
@@ -950,7 +954,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                             }
                                         } else if "\"{[".contains(*ch) {
                                             let prev_mark_node = ed_model.mark_node_pool.get(prev_mark_node_id);
-        
+
                                             if prev_mark_node.get_content() == nodes::LEFT_SQUARE_BR && curr_mark_node.get_content() == nodes::RIGHT_SQUARE_BR {
                                                 let (new_child_index, new_ast_child_index) = ed_model.get_curr_child_indices()?;
                                                 // insert a Blank first, this results in cleaner code
@@ -963,11 +967,11 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                             } else {
                                                 InputOutcome::Ignored
                                             }
-        
+
                                         } else {
                                             InputOutcome::Ignored
                                         }
-        
+
                                     } else {
                                         match expr_ref {
                                             Expr2::SmallInt{ .. } => {
@@ -1146,32 +1150,67 @@ pub mod test_ed_update {
     // Create ed_model from pre_lines DSL, do handle_new_char() with new_char, check if modified ed_model has expected
     // string representation of code, caret position and active selection.
     pub fn assert_insert(
-        pre_lines: &[&str],
-        expected_post_lines: &[&str],
+        pre_lines: Vec<String>,
+        expected_post_lines: Vec<String>,
         new_char: char,
     ) -> Result<(), String> {
         assert_insert_seq(pre_lines, expected_post_lines, &new_char.to_string())
     }
 
     pub fn assert_insert_no_pre(
-        expected_post_lines: &[&str],
+        expected_post_lines: Vec<String>,
         new_char: char,
     ) -> Result<(), String> {
         assert_insert_seq_no_pre(expected_post_lines, &new_char.to_string())
     }
 
     pub fn assert_insert_seq_no_pre(
-        expected_post_lines: &[&str],
+        expected_post_lines: Vec<String>,
         new_char_seq: &str,
     ) -> Result<(), String> {
-        assert_insert_seq(&["┃"], expected_post_lines, new_char_seq)
+        assert_insert_seq(vec!["┃".to_owned()], expected_post_lines, new_char_seq)
+    }
+
+    // pre-insert `val = `
+    pub fn assert_insert_in_def(
+        expected_post_lines: Vec<String>,
+        new_char: char,
+    ) -> Result<(), String> {
+        assert_insert_seq_in_def(expected_post_lines, &new_char.to_string())
+    }
+
+
+    // pre-insert `val = `
+    pub fn assert_insert_seq_in_def(
+        expected_post_lines: Vec<String>,
+        new_char_seq: &str,
+    ) -> Result<(), String> {
+        let prefix = "val🡲🡲🡲";
+
+        let full_input = merge_strings(vec![prefix, new_char_seq]);
+
+        let mut expected_post_lines_vec = expected_post_lines.to_vec();
+
+        let first_line_opt = expected_post_lines_vec.first();
+        let val_str = "val = ";
+        let mut new_first_line = String::new();
+
+        if let Some(first_line) = first_line_opt {
+            new_first_line = merge_strings(vec![val_str, first_line]);
+
+            expected_post_lines_vec[0] = new_first_line;
+        } else {
+            expected_post_lines_vec = vec![val_str.to_owned()];
+        }
+
+        assert_insert_seq_no_pre(expected_post_lines_vec, &full_input)
     }
 
     // Create ed_model from pre_lines DSL, do handle_new_char() for every char in new_char_seq, check if modified ed_model has expected
     // string representation of code, caret position and active selection.
     pub fn assert_insert_seq(
-        pre_lines: &[&str],
-        expected_post_lines: &[&str],
+        pre_lines: Vec<String>,
+        expected_post_lines: Vec<String>,
         new_char_seq: &str,
     ) -> Result<(), String> {
         let mut code_str = pre_lines.join("\n").replace("┃", "");
@@ -1183,7 +1222,6 @@ pub mod test_ed_update {
         let mut ed_model = ed_model_from_dsl(
             &mut code_str,
             pre_lines,
-
             &mut model_refs,
             &module_ids,
             &code_arena,
@@ -1209,43 +1247,83 @@ pub mod test_ed_update {
         Ok(())
     }
 
+    pub fn assert_insert_seq_ignore(lines: Vec<String>, new_char_seq: &str) -> Result<(), String> {
+        assert_insert_seq(lines.clone(), lines, new_char_seq)
+    }
+
+    pub fn assert_insert_ignore(lines: Vec<String>, new_char: char) -> Result<(), String> {
+        assert_insert_seq_ignore(lines, &new_char.to_string())
+    }
+
+    // to create Vec<String> from list of &str
+    macro_rules! ovec {
+        ( $( $x:expr ),* ) => {
+            {
+                let mut temp_vec = Vec::new();
+                $(
+                    temp_vec.push($x.to_owned());
+                )*
+                temp_vec
+            }
+        };
+    }
+
     #[test]
     fn test_ignore_basic() -> Result<(), String> {
-        assert_insert_no_pre( &["┃"], ';')?;
-        /*assert_insert_no_pre( &["┃"], '-')?;
-        assert_insert_no_pre( &["┃"], '_')?;*/
+        assert_insert_no_pre(ovec!["┃"], ';')?;
+        assert_insert_no_pre( ovec!["┃"], '-')?;
+        assert_insert_no_pre( ovec!["┃" ], '_')?;
+        // extra space because of Expr2::Blank placholder
+        assert_insert_in_def(ovec!["┃ "], ';')?;
+        assert_insert_in_def( ovec!["┃ "], '-')?;
+        assert_insert_in_def( ovec!["┃ "], '_')?;
 
         Ok(())
     }
 
+    // add newlines like the editor's formatting would add them
+    fn add_nls(lines: Vec<String>) -> Vec<String> {
+
+        let first_line_opt = lines.first();
+
+        let new_first_line = 
+            if let Some(old_first_line) = first_line_opt {
+                merge_strings(vec![old_first_line, "\n"])
+            } else {
+                "\n".to_owned()
+            };
+
+            vec![
+                new_first_line,
+                "\n".to_owned(),
+                "".to_owned(),
+            ]
+    }
+
+    //TODO test_int arch bit limit
     #[test]
     fn test_int() -> Result<(), String> {
-        // type val >> this will output "val = ". So we move the caret right three times to able to enter input
-        let prefix = "val🡲🡲🡲";
+        assert_insert_in_def(ovec!["0┃"], '0')?;
+        assert_insert_in_def(ovec!["1┃"], '1')?;
+        assert_insert_in_def(ovec!["2┃"], '2')?;
+        assert_insert_in_def(ovec!["3┃"], '3')?;
+        assert_insert_in_def(ovec!["4┃"], '4')?;
+        assert_insert_in_def(ovec!["5┃"], '5')?;
+        assert_insert_in_def(ovec!["6┃"], '6')?;
+        assert_insert_in_def(ovec!["7┃"], '7')?;
+        assert_insert_in_def(ovec!["8┃"], '8')?;
+        assert_insert_in_def(ovec!["9┃"], '9')?;
 
-        let wrap_f = |some_str: &str| merge_strings(vec![prefix, some_str]);
+        assert_insert(ovec!["val = 1┃"], add_nls(ovec!["val = 19┃"]), '9')?;
+        assert_insert(ovec!["val = 9876┃"], add_nls(ovec!["val = 98769┃"]), '9')?;
+        assert_insert(ovec!["val = 10┃"], add_nls(ovec!["val = 103┃"]), '3')?;
+        assert_insert(ovec!["val = ┃0"], add_nls(ovec!["val = 1┃0"]), '1')?;
+        assert_insert(ovec!["val = 10000┃"], add_nls(ovec!["val = 100000┃"]), '0')?;
 
-        /*assert_insert_seq_no_pre( &["val = 0┃"], &wrap_f("0"))?;
-        assert_insert_seq_no_pre( &["val = 1┃"], &wrap_f("1"))?;
-        assert_insert_seq_no_pre( &["val = 2┃"], &wrap_f("2"))?;
-        assert_insert_seq_no_pre( &["val = 3┃"], &wrap_f("3"))?;
-        assert_insert_seq_no_pre( &["val = 4┃"], &wrap_f("4"))?;
-        assert_insert_seq_no_pre( &["val = 5┃"], &wrap_f("5"))?;
-        assert_insert_seq_no_pre( &["val = 6┃"], &wrap_f("6"))?;
-        assert_insert_seq_no_pre( &["val = 7┃"], &wrap_f("7"))?;
-        assert_insert_seq_no_pre( &["val = 8┃"], &wrap_f("8"))?;
-        assert_insert_seq_no_pre( &["val = 9┃"], &wrap_f("9"))?;*/
-
-        assert_insert_seq( &["val = 1┃"],&["val = 19┃"], &wrap_f("19"))?;
-        /*YOLOassert_insert_seq( &["val = 98769┃"], &wrap_f("9"))?;
-        assert_insert_seq( &["val = 103┃"], &wrap_f("103"))?;
-        assert_insert_seq( &["val = 10┃"], &wrap_f("0🡰1"))?;
-        assert_insert_seq( &["val = 100000┃"], &wrap_f("100000"))?;
-
-        assert_insert_seq( &["val = 5┃1234"], &wrap_f("1234🡰🡰🡰🡰5"))?;
-        assert_insert_seq( &["val = 10┃234"], &wrap_f("1234🡰🡰🡰0"))?;
-        assert_insert_seq( &["val = 121┃34"], &wrap_f("1234🡰🡰1"))?;
-        assert_insert_seq( &["val = 1232┃4"], &wrap_f("1234🡰2"))?;*/
+        assert_insert(ovec!["val = ┃1234"], add_nls(ovec!["val = 5┃1234"]), '5')?;
+        assert_insert(ovec!["val = 1┃234"], add_nls(ovec!["val = 10┃234"]), '0')?;
+        assert_insert(ovec!["val = 12┃34"], add_nls(ovec!["val = 121┃34"]), '1')?;
+        assert_insert(ovec!["val = 123┃4"], add_nls(ovec!["val = 1232┃4"]), '2')?;
 
         Ok(())
     }
@@ -1260,94 +1338,68 @@ pub mod test_ed_update {
 
     #[test]
     fn test_ignore_int() -> Result<(), String> {
-        // type val >> this will output "val = ". So we move the caret right three times to able to enter input
-        let prefix = "val🡲🡲🡲";
-        let ignore_these = "{}()[]-><-_\"azAZ:@";
+        assert_insert_seq_ignore(ovec!["vec = ┃0"], "{}()[]-><-_\"azAZ:@")?;
+        assert_insert_seq_ignore(ovec!["vec = ┃7"], "{}()[]-><-_\"azAZ:@")?;
 
-        let wrap_f = |some_str: &str| merge_strings(vec![prefix, some_str, ignore_these]);
+        assert_insert_seq_ignore(ovec!["vec = 0┃"], ",{}()[]-><-_\"azAZ:@")?;
+        assert_insert_seq_ignore(ovec!["vec = 8┃"], ",{}()[]-><-_\"azAZ:@")?;
+        assert_insert_seq_ignore(ovec!["vec = 20┃"], ",{}()[]-><-_\"azAZ:@")?;
+        assert_insert_seq_ignore(ovec!["vec = 83┃"], ",{}()[]-><-_\"azAZ:@")?;
 
-        /*YOLOassert_insert_seq( &["val = ┃0"], &wrap_f("0🡰"))?;
-        assert_insert_seq( &["val = ┃7"], &wrap_f("7🡰"))?;
+        assert_insert_seq_ignore(ovec!["vec = 1┃0"], ",{}()[]-><-_\"azAZ:@")?;
+        assert_insert_seq_ignore(ovec!["vec = 8┃4"], ",{}()[]-><-_\"azAZ:@")?;
 
-        assert_insert_seq( &["val = 0┃"], &wrap_f("0"))?;
-        assert_insert_seq( &["val = 8┃"], &wrap_f("8"))?;
-        assert_insert_seq( &["val = 20┃"], &wrap_f("20"))?;
-        assert_insert_seq( &["val = 83┃"], &wrap_f("83"))?;
+        assert_insert_seq_ignore(ovec!["vec = ┃10"], ",{}()[]-><-_\"azAZ:@")?;
+        assert_insert_seq_ignore(ovec!["vec = ┃84"], ",{}()[]-><-_\"azAZ:@")?;
 
-        assert_insert_seq( &["val = 1┃0"], &wrap_f("10🡰"))?;
-        assert_insert_seq( &["val = 8┃4"], &wrap_f("84🡰"))?;
+        assert_insert_seq_ignore(ovec!["vec = 129┃96"], ",{}()[]-><-_\"azAZ:@")?;
+        assert_insert_seq_ignore(ovec!["vec = 97┃684"], ",{}()[]-><-_\"azAZ:@")?;
 
-        assert_insert_seq( &["val = ┃10"], &wrap_f("10🡰🡰"))?;
-        assert_insert_seq( &["val = ┃84"], &wrap_f("84🡰🡰"))?;
-
-        assert_insert_seq( &["val = 129┃96"], &wrap_f("12996🡰🡰"))?;
-        assert_insert_seq( &["val = 97┃684"], &wrap_f("97684🡰🡰🡰"))?;
-
-        // adding numbers after 0 is invalid
-        assert_insert_seq(
-            &["val = 0┃"],
-            &merge_strings(vec![prefix, "0", "09"]),
-        )?;
-        assert_insert_seq(
-            &["val = ┃0"],
-            &merge_strings(vec![prefix, "0🡰", "0"]),
-        )?;
-        assert_insert_seq(
-            &["val = ┃1234"],
-            &merge_strings(vec![prefix, "1234🡰🡰🡰🡰", "0"]),
-        )?;
-        assert_insert_seq(
-            &["val = ┃100"],
-            &merge_strings(vec![prefix, "100🡰🡰🡰", "0"]),
-        )?;*/
+        assert_insert_ignore(ovec!["vec = 0┃"], '0')?;
+        assert_insert_ignore(ovec!["vec = 0┃"], '9')?;
+        assert_insert_ignore(ovec!["vec = ┃0"], '0')?;
+        assert_insert_ignore(ovec!["vec = ┃1234"], '0')?;
+        assert_insert_ignore(ovec!["vec = ┃100"], '0')?;
 
         Ok(())
     }
 
-    //TODO test_int arch bit limit
-    fn wrap_val(some_str: &str) -> String {
-        let prefix = "val🡲🡲🡲";
-        merge_strings(vec![prefix, some_str])
-    }
-
     #[test]
     fn test_string() -> Result<(), String> {
-        let prefix = "val🡲🡲🡲";
+        assert_insert_in_def(ovec!["\"┃\""], '"')?;
+        assert_insert(ovec!["val = \"┃\""], add_nls(ovec!["val = \"a┃\""]), 'a')?;
+        assert_insert(ovec!["val = \"┃\""], add_nls(ovec!["val = \"{┃\""]), '{')?;
+        assert_insert(ovec!["val = \"┃\""], add_nls(ovec!["val = \"}┃\""]), '}')?;
+        assert_insert(ovec!["val = \"┃\""], add_nls(ovec!["val = \"[┃\""]), '[')?;
+        assert_insert(ovec!["val = \"┃\""], add_nls(ovec!["val = \"]┃\""]), ']')?;
+        assert_insert(ovec!["val = \"┃\""], add_nls(ovec!["val = \"-┃\""]), '-')?;
+        assert_insert(ovec!["val = \"┃-\""], add_nls(ovec!["val = \"<┃-\""]), '<')?;
+        assert_insert(ovec!["val = \"-┃\""], add_nls(ovec!["val = \"->┃\""]), '>')?;
 
-        /*YOLOassert_insert_seq( &["\"┃\""], &wrap_val("\""))?;
-        assert_insert_seq( &["\"a┃\""], &wrap_val("\"a"))?;
-        assert_insert_seq( &["\"{┃\""], &wrap_val("\"{"))?;
-        assert_insert_seq( &["\"}┃\""], &wrap_val("\"}"))?;
-        assert_insert_seq( &["\"[┃\""], &wrap_val("\"["))?;
-        assert_insert_seq( &["\"]┃\""], &wrap_val("\"]"))?;
-        assert_insert_seq( &["\"-┃\""], &wrap_val("\"-"))?;
-        assert_insert_seq( &["\"<┃-\""], &wrap_val("\"-🡰<"))?;
-        assert_insert_seq( &["\"->┃\""], &wrap_val("\"->"))?;
+        assert_insert(ovec!["val = \"a┃\""], add_nls(ovec!["val = \"ab┃\""]), 'b')?;
+        assert_insert(ovec!["val = \"ab┃\""], add_nls(ovec!["val = \"abc┃\""]), 'c')?;
+        assert_insert(ovec!["val = \"┃a\""], add_nls(ovec!["val = \"z┃a\""]), 'z')?;
+        assert_insert(ovec!["val = \"┃a\""], add_nls(ovec!["val = \" ┃a\""]), ' ')?;
+        assert_insert(ovec!["val = \"a┃b\""], add_nls(ovec!["val = \"az┃b\""]), 'z')?;
+        assert_insert(ovec!["val = \"a┃b\""], add_nls(ovec!["val = \"a ┃b\""]), ' ')?;
 
-        assert_insert_seq(&["\"ab┃\""], &wrap_val("\"ab"))?;
-        assert_insert_seq(&["\"ab┃\""], &["\"abc┃\""], &wrap_val("\"abc"))?;
-        assert_insert_seq(&["\"┃a\""], &["\"z┃a\""], &wrap_val("\"az"))?;
-        assert_insert_seq(&["\"┃a\""], &["\" ┃a\""], &wrap_val(" "))?;
-        assert_insert_seq(&["\"a┃b\""], &["\"az┃b\""], &wrap_val("z"))?;
-        assert_insert_seq(&["\"a┃b\""], &["\"a ┃b\""], &wrap_val(" "))?;*/
-
-        assert_insert_seq(&["\"ab ┃\""], &["\"ab {┃\""], &wrap_val("{"))?;
-        assert_insert_seq(&["\"ab ┃\""], &["\"ab }┃\""], &wrap_val("}"))?;
-        assert_insert_seq(&["\"{ str: 4┃}\""], &["\"{ str: 44┃}\""], &wrap_val("4"))?;
-        assert_insert_seq(
-            &["\"┃ello, hello, hello\""],
-            &["\"h┃ello, hello, hello\""],
-            "h",
+        assert_insert(ovec!["val = \"ab ┃\""], add_nls(ovec!["val = \"ab {┃\""]), '{')?;
+        assert_insert(ovec!["val = \"ab ┃\""], add_nls(ovec!["val = \"ab }┃\""]), '}')?;
+        assert_insert(ovec!["val = \"{ str: 4┃}\""], add_nls(ovec!["val = \"{ str: 44┃}\""]), '4')?;
+        assert_insert(
+            ovec!["val = \"┃ello, hello, hello\""],
+            add_nls(ovec!["val = \"h┃ello, hello, hello\""]),
+            'h',
         )?;
-        assert_insert_seq(
-            &["\"hello┃ hello, hello\""],
-            &["\"hello,┃ hello, hello\""],
-            ",",
+        assert_insert(
+            ovec!["val = \"hello┃ hello, hello\""],
+            add_nls(ovec!["val = \"hello,┃ hello, hello\""]),
+            ',',
         )?;
-        assert_insert_seq(
-            &["\"hello, hello, hello┃\""],
-            &["\"hello, hello, hello.┃\""],
-            ".",
+        assert_insert(
+            ovec!["val = \"hello, hello, hello┃\""],
+            add_nls(ovec!["val = \"hello, hello, hello.┃\""]),
+            '.',
         )?;
 
         Ok(())
@@ -1355,70 +1407,68 @@ pub mod test_ed_update {
 
     #[test]
     fn test_ignore_string() -> Result<(), String> {
-        assert_insert(&["┃\"\""], &["┃\"\""], 'a')?;
-        assert_insert(&["┃\"\""], &["┃\"\""], 'A')?;
-        assert_insert(&["┃\"\""], &["┃\"\""], '"')?;
-        assert_insert(&["┃\"\""], &["┃\"\""], '{')?;
-        assert_insert(&["┃\"\""], &["┃\"\""], '[')?;
-        assert_insert(&["┃\"\""], &["┃\"\""], '}')?;
-        assert_insert(&["┃\"\""], &["┃\"\""], ']')?;
-        assert_insert(&["┃\"\""], &["┃\"\""], '-')?;
+        assert_insert_ignore( add_nls(ovec!["val = ┃\"\""]), 'a')?;
+        assert_insert_ignore( add_nls(ovec!["val = ┃\"\""]), 'A')?;
+        assert_insert_ignore( add_nls(ovec!["val = ┃\"\""]), '"')?;
+        assert_insert_ignore( add_nls(ovec!["val = ┃\"\""]), '{')?;
+        assert_insert_ignore( add_nls(ovec!["val = ┃\"\""]), '[')?;
+        assert_insert_ignore( add_nls(ovec!["val = ┃\"\""]), '}')?;
+        assert_insert_ignore( add_nls(ovec!["val = ┃\"\""]), ']')?;
+        assert_insert_ignore( add_nls(ovec!["val = ┃\"\""]), '-')?;
 
-        assert_insert(&["\"\"┃"], &["\"\"┃"], 'a')?;
-        assert_insert(&["\"\"┃"], &["\"\"┃"], 'A')?;
-        assert_insert(&["\"\"┃"], &["\"\"┃"], '"')?;
-        assert_insert(&["\"\"┃"], &["\"\"┃"], '{')?;
-        assert_insert(&["\"\"┃"], &["\"\"┃"], '[')?;
-        assert_insert(&["\"\"┃"], &["\"\"┃"], '}')?;
-        assert_insert(&["\"\"┃"], &["\"\"┃"], ']')?;
-        assert_insert(&["\"\"┃"], &["\"\"┃"], '-')?;
+        assert_insert_ignore( add_nls(ovec!["val = \"\"┃"]), 'a')?;
+        assert_insert_ignore( add_nls(ovec!["val = \"\"┃"]), 'A')?;
+        assert_insert_ignore( add_nls(ovec!["val = \"\"┃"]), '"')?;
+        assert_insert_ignore( add_nls(ovec!["val = \"\"┃"]), '{')?;
+        assert_insert_ignore( add_nls(ovec!["val = \"\"┃"]), '[')?;
+        assert_insert_ignore( add_nls(ovec!["val = \"\"┃"]), '}')?;
+        assert_insert_ignore( add_nls(ovec!["val = \"\"┃"]), ']')?;
+        assert_insert_ignore( add_nls(ovec!["val = \"\"┃"]), '-')?;
 
-        assert_insert(&["┃\"a\""], &["┃\"a\""], 'a')?;
-        assert_insert(&["┃\"a\""], &["┃\"a\""], 'A')?;
-        assert_insert(&["┃\"a\""], &["┃\"a\""], '"')?;
-        assert_insert(&["┃\"a\""], &["┃\"a\""], '{')?;
-        assert_insert(&["┃\"a\""], &["┃\"a\""], '[')?;
-        assert_insert(&["┃\"a\""], &["┃\"a\""], '}')?;
-        assert_insert(&["┃\"a\""], &["┃\"a\""], ']')?;
-        assert_insert(&["┃\"a\""], &["┃\"a\""], '-')?;
+        assert_insert_ignore( add_nls(ovec!["val = ┃\"a\""]), 'a')?;
+        assert_insert_ignore( add_nls(ovec!["val = ┃\"a\""]), 'A')?;
+        assert_insert_ignore( add_nls(ovec!["val = ┃\"a\""]), '"')?;
+        assert_insert_ignore( add_nls(ovec!["val = ┃\"a\""]), '{')?;
+        assert_insert_ignore( add_nls(ovec!["val = ┃\"a\""]), '[')?;
+        assert_insert_ignore( add_nls(ovec!["val = ┃\"a\""]), '}')?;
+        assert_insert_ignore( add_nls(ovec!["val = ┃\"a\""]), ']')?;
+        assert_insert_ignore( add_nls(ovec!["val = ┃\"a\""]), '-')?;
+        
+        assert_insert_ignore( add_nls(ovec!["val = \"a\"┃"]), 'a')?;
+        assert_insert_ignore( add_nls(ovec!["val = \"a\"┃"]), 'A')?;
+        assert_insert_ignore( add_nls(ovec!["val = \"a\"┃"]), '"')?;
+        assert_insert_ignore( add_nls(ovec!["val = \"a\"┃"]), '{')?;
+        assert_insert_ignore( add_nls(ovec!["val = \"a\"┃"]), '[')?;
+        assert_insert_ignore( add_nls(ovec!["val = \"a\"┃"]), '}')?;
+        assert_insert_ignore( add_nls(ovec!["val = \"a\"┃"]), ']')?;
+        assert_insert_ignore( add_nls(ovec!["val = \"a\"┃"]), '-')?;
 
-        assert_insert(&["\"a\"┃"], &["\"a\"┃"], 'a')?;
-        assert_insert(&["\"a\"┃"], &["\"a\"┃"], 'A')?;
-        assert_insert(&["\"a\"┃"], &["\"a\"┃"], '"')?;
-        assert_insert(&["\"a\"┃"], &["\"a\"┃"], '{')?;
-        assert_insert(&["\"a\"┃"], &["\"a\"┃"], '[')?;
-        assert_insert(&["\"a\"┃"], &["\"a\"┃"], '}')?;
-        assert_insert(&["\"a\"┃"], &["\"a\"┃"], ']')?;
-        assert_insert(&["\"a\"┃"], &["\"a\"┃"], '-')?;
+        assert_insert_ignore( add_nls(ovec!["val = ┃\"{  }\""]), 'a')?;
+        assert_insert_ignore( add_nls(ovec!["val = ┃\"{  }\""]), 'A')?;
+        assert_insert_ignore( add_nls(ovec!["val = ┃\"{  }\""]), '"')?;
+        assert_insert_ignore( add_nls(ovec!["val = ┃\"{  }\""]), '{')?;
+        assert_insert_ignore( add_nls(ovec!["val = ┃\"{  }\""]), '[')?;
+        assert_insert_ignore( add_nls(ovec!["val = ┃\"{  }\""]), '}')?;
+        assert_insert_ignore( add_nls(ovec!["val = ┃\"{  }\""]), ']')?;
+        assert_insert_ignore( add_nls(ovec!["val = ┃\"{  }\""]), '-')?;
 
-        assert_insert(&["┃\"{  }\""], &["┃\"{  }\""], 'a')?;
-        assert_insert(&["┃\"{  }\""], &["┃\"{  }\""], 'A')?;
-        assert_insert(&["┃\"{  }\""], &["┃\"{  }\""], '"')?;
-        assert_insert(&["┃\"{  }\""], &["┃\"{  }\""], '{')?;
-        assert_insert(&["┃\"{  }\""], &["┃\"{  }\""], '[')?;
-        assert_insert(&["┃\"{  }\""], &["┃\"{  }\""], '}')?;
-        assert_insert(&["┃\"{  }\""], &["┃\"{  }\""], ']')?;
-        assert_insert(&["┃\"{  }\""], &["┃\"{  }\""], '-')?;
+        assert_insert_ignore( add_nls(ovec!["val = \"{  }\"┃"]), 'A')?;
+        assert_insert_ignore( add_nls(ovec!["val = \"{  }\"┃"]), 'a')?;
+        assert_insert_ignore( add_nls(ovec!["val = \"{  }\"┃"]), '"')?;
+        assert_insert_ignore( add_nls(ovec!["val = \"{  }\"┃"]), '{')?;
+        assert_insert_ignore( add_nls(ovec!["val = \"{  }\"┃"]), '[')?;
+        assert_insert_ignore( add_nls(ovec!["val = \"{  }\"┃"]), '}')?;
+        assert_insert_ignore( add_nls(ovec!["val = \"{  }\"┃"]), ']')?;
+        assert_insert_ignore( add_nls(ovec!["val = \"{  }\"┃"]), '-')?;
 
-        assert_insert(&["\"{  }\"┃"], &["\"{  }\"┃"], 'a')?;
-        assert_insert(&["\"{  }\"┃"], &["\"{  }\"┃"], 'A')?;
-        assert_insert(&["\"{  }\"┃"], &["\"{  }\"┃"], '"')?;
-        assert_insert(&["\"{  }\"┃"], &["\"{  }\"┃"], '{')?;
-        assert_insert(&["\"{  }\"┃"], &["\"{  }\"┃"], '[')?;
-        assert_insert(&["\"{  }\"┃"], &["\"{  }\"┃"], '}')?;
-        assert_insert(&["\"{  }\"┃"], &["\"{  }\"┃"], ']')?;
-        assert_insert(&["\"{  }\"┃"], &["\"{  }\"┃"], '-')?;
-
-        assert_insert(&["\"[ 1, 2, 3 ]\"┃"], &["\"[ 1, 2, 3 ]\"┃"], '{')?;
-        assert_insert(&["┃\"[ 1, 2, 3 ]\""], &["┃\"[ 1, 2, 3 ]\""], '{')?;
-        assert_insert(
-            &["\"hello, hello, hello\"┃"],
-            &["\"hello, hello, hello\"┃"],
+        assert_insert_ignore( add_nls(ovec!["val = \"[ 1, 2, 3 ]\"┃"]), '{')?;
+        assert_insert_ignore( add_nls(ovec!["val = ┃\"[ 1, 2, 3 ]\""]), '{')?;
+        assert_insert_ignore(
+            add_nls(ovec!["val = \"hello, hello, hello\"┃"]),
             '.',
         )?;
-        assert_insert(
-            &["┃\"hello, hello, hello\""],
-            &["┃\"hello, hello, hello\""],
+        assert_insert_ignore(
+            add_nls(ovec!["val = ┃\"hello, hello, hello\""]),
             '.',
         )?;
 
@@ -1427,234 +1477,234 @@ pub mod test_ed_update {
 
     #[test]
     fn test_record() -> Result<(), String> {
-        assert_insert_no_pre( &["{ ┃ }"], '{')?;
-        assert_insert(&["{ ┃ }"], &["{ a┃ }"], 'a')?;
-        assert_insert(&["{ a┃ }"], &["{ ab┃: RunTimeError }"], 'b')?;
-        assert_insert(&["{ a┃ }"], &["{ a1┃: RunTimeError }"], '1')?;
-        assert_insert(&["{ a1┃ }"], &["{ a1z┃: RunTimeError }"], 'z')?;
-        assert_insert(&["{ a1┃ }"], &["{ a15┃: RunTimeError }"], '5')?;
-        assert_insert(&["{ ab┃ }"], &["{ abc┃: RunTimeError }"], 'c')?;
-        assert_insert(&["{ ┃abc }"], &["{ z┃abc: RunTimeError }"], 'z')?;
-        assert_insert(&["{ a┃b }"], &["{ az┃b: RunTimeError }"], 'z')?;
-        assert_insert(&["{ a┃b }"], &["{ a9┃b: RunTimeError }"], '9')?;
+        assert_insert_no_pre(ovec!["{ ┃ }"], '{')?;
+        assert_insert(ovec!["{ ┃ }"], ovec!["{ a┃ }"], 'a')?;
+        assert_insert(ovec!["{ a┃ }"], ovec!["{ ab┃: RunTimeError }"], 'b')?;
+        assert_insert(ovec!["{ a┃ }"], ovec!["{ a1┃: RunTimeError }"], '1')?;
+        assert_insert(ovec!["{ a1┃ }"], ovec!["{ a1z┃: RunTimeError }"], 'z')?;
+        assert_insert(ovec!["{ a1┃ }"], ovec!["{ a15┃: RunTimeError }"], '5')?;
+        assert_insert(ovec!["{ ab┃ }"], ovec!["{ abc┃: RunTimeError }"], 'c')?;
+        assert_insert(ovec!["{ ┃abc }"], ovec!["{ z┃abc: RunTimeError }"], 'z')?;
+        assert_insert(ovec!["{ a┃b }"], ovec!["{ az┃b: RunTimeError }"], 'z')?;
+        assert_insert(ovec!["{ a┃b }"], ovec!["{ a9┃b: RunTimeError }"], '9')?;
 
         // extra space for Blank node
-        assert_insert(&["{ a┃ }"], &["{ a┃: RunTimeError }"], ':')?;
-        assert_insert(&["{ abc┃ }"], &["{ abc┃: RunTimeError }"], ':')?;
-        assert_insert(&["{ aBc┃ }"], &["{ aBc┃: RunTimeError }"], ':')?;
+        assert_insert(ovec!["{ a┃ }"], ovec!["{ a┃: RunTimeError }"], ':')?;
+        assert_insert(ovec!["{ abc┃ }"], ovec!["{ abc┃: RunTimeError }"], ':')?;
+        assert_insert(ovec!["{ aBc┃ }"], ovec!["{ aBc┃: RunTimeError }"], ':')?;
 
-        assert_insert_seq(&["{ a┃ }"], &["{ a┃: RunTimeError }"], ":\"")?;
-        assert_insert_seq(&["{ abc┃ }"], &["{ abc┃: RunTimeError }"], ":\"")?;
+        assert_insert_seq(ovec!["{ a┃ }"], ovec!["{ a┃: RunTimeError }"], ":\"")?;
+        assert_insert_seq(ovec!["{ abc┃ }"], ovec!["{ abc┃: RunTimeError }"], ":\"")?;
 
-        assert_insert_seq(&["{ a┃ }"], &["{ a0┃: RunTimeError }"], ":0")?;
-        assert_insert_seq(&["{ abc┃ }"], &["{ abc9┃: RunTimeError }"], ":9")?;
-        assert_insert_seq(&["{ a┃ }"], &["{ a1000┃: RunTimeError }"], ":1000")?;
-        assert_insert_seq(&["{ abc┃ }"], &["{ abc98761┃: RunTimeError }"], ":98761")?;
+        assert_insert_seq(ovec!["{ a┃ }"], ovec!["{ a0┃: RunTimeError }"], ":0")?;
+        assert_insert_seq(ovec!["{ abc┃ }"], ovec!["{ abc9┃: RunTimeError }"], ":9")?;
+        assert_insert_seq(ovec!["{ a┃ }"], ovec!["{ a1000┃: RunTimeError }"], ":1000")?;
+        assert_insert_seq(ovec!["{ abc┃ }"], ovec!["{ abc98761┃: RunTimeError }"], ":98761")?;
 
-        assert_insert(&["{ a: \"┃\" }"], &["{ a: \"a┃\" }"], 'a')?;
-        assert_insert(&["{ a: \"a┃\" }"], &["{ a: \"ab┃\" }"], 'b')?;
-        assert_insert(&["{ a: \"a┃b\" }"], &["{ a: \"az┃b\" }"], 'z')?;
-        assert_insert(&["{ a: \"┃ab\" }"], &["{ a: \"z┃ab\" }"], 'z')?;
+        assert_insert(ovec!["{ a: \"┃\" }"], ovec!["{ a: \"a┃\" }"], 'a')?;
+        assert_insert(ovec!["{ a: \"a┃\" }"], ovec!["{ a: \"ab┃\" }"], 'b')?;
+        assert_insert(ovec!["{ a: \"a┃b\" }"], ovec!["{ a: \"az┃b\" }"], 'z')?;
+        assert_insert(ovec!["{ a: \"┃ab\" }"], ovec!["{ a: \"z┃ab\" }"], 'z')?;
 
-        assert_insert(&["{ a: 1┃ }"], &["{ a: 10┃ }"], '0')?;
-        assert_insert(&["{ a: 100┃ }"], &["{ a: 1004┃ }"], '4')?;
-        assert_insert(&["{ a: 9┃76 }"], &["{ a: 98┃76 }"], '8')?;
-        assert_insert(&["{ a: 4┃691 }"], &["{ a: 40┃691 }"], '0')?;
-        assert_insert(&["{ a: 469┃1 }"], &["{ a: 4699┃1 }"], '9')?;
+        assert_insert(ovec!["{ a: 1┃ }"], ovec!["{ a: 10┃ }"], '0')?;
+        assert_insert(ovec!["{ a: 100┃ }"], ovec!["{ a: 1004┃ }"], '4')?;
+        assert_insert(ovec!["{ a: 9┃76 }"], ovec!["{ a: 98┃76 }"], '8')?;
+        assert_insert(ovec!["{ a: 4┃691 }"], ovec!["{ a: 40┃691 }"], '0')?;
+        assert_insert(ovec!["{ a: 469┃1 }"], ovec!["{ a: 4699┃1 }"], '9')?;
 
-        assert_insert(&["{ camelCase: \"┃\" }"], &["{ camelCase: \"a┃\" }"], 'a')?;
-        assert_insert(&["{ camelCase: \"a┃\" }"], &["{ camelCase: \"ab┃\" }"], 'b')?;
+        assert_insert(ovec!["{ camelCase: \"┃\" }"], ovec!["{ camelCase: \"a┃\" }"], 'a')?;
+        assert_insert(ovec!["{ camelCase: \"a┃\" }"], ovec!["{ camelCase: \"ab┃\" }"], 'b')?;
 
-        assert_insert(&["{ camelCase: 3┃ }"], &["{ camelCase: 35┃ }"], '5')?;
-        assert_insert(&["{ camelCase: ┃2 }"], &["{ camelCase: 5┃2 }"], '5')?;
-        assert_insert(&["{ camelCase: 10┃2 }"], &["{ camelCase: 106┃2 }"], '6')?;
+        assert_insert(ovec!["{ camelCase: 3┃ }"], ovec!["{ camelCase: 35┃ }"], '5')?;
+        assert_insert(ovec!["{ camelCase: ┃2 }"], ovec!["{ camelCase: 5┃2 }"], '5')?;
+        assert_insert(ovec!["{ camelCase: 10┃2 }"], ovec!["{ camelCase: 106┃2 }"], '6')?;
 
-        assert_insert(&["{ a┃: \"\" }"], &["{ ab┃: \"\" }"], 'b')?;
-        assert_insert(&["{ ┃a: \"\" }"], &["{ z┃a: \"\" }"], 'z')?;
-        assert_insert(&["{ ab┃: \"\" }"], &["{ abc┃: \"\" }"], 'c')?;
-        assert_insert(&["{ ┃ab: \"\" }"], &["{ z┃ab: \"\" }"], 'z')?;
+        assert_insert(ovec!["{ a┃: \"\" }"], ovec!["{ ab┃: \"\" }"], 'b')?;
+        assert_insert(ovec!["{ ┃a: \"\" }"], ovec!["{ z┃a: \"\" }"], 'z')?;
+        assert_insert(ovec!["{ ab┃: \"\" }"], ovec!["{ abc┃: \"\" }"], 'c')?;
+        assert_insert(ovec!["{ ┃ab: \"\" }"], ovec!["{ z┃ab: \"\" }"], 'z')?;
         assert_insert(
-            &["{ camelCase┃: \"hello\" }"],
-            &["{ camelCaseB┃: \"hello\" }"],
+            ovec!["{ camelCase┃: \"hello\" }"],
+            ovec!["{ camelCaseB┃: \"hello\" }"],
             'B',
         )?;
         assert_insert(
-            &["{ camel┃Case: \"hello\" }"],
-            &["{ camelZ┃Case: \"hello\" }"],
+            ovec!["{ camel┃Case: \"hello\" }"],
+            ovec!["{ camelZ┃Case: \"hello\" }"],
             'Z',
         )?;
         assert_insert(
-            &["{ ┃camelCase: \"hello\" }"],
-            &["{ z┃camelCase: \"hello\" }"],
+            ovec!["{ ┃camelCase: \"hello\" }"],
+            ovec!["{ z┃camelCase: \"hello\" }"],
             'z',
         )?;
 
-        assert_insert(&["{ a┃: 0 }"], &["{ ab┃: 0 }"], 'b')?;
-        assert_insert(&["{ ┃a: 2100 }"], &["{ z┃a: 2100 }"], 'z')?;
-        assert_insert(&["{ ab┃: 9876 }"], &["{ abc┃: 9876 }"], 'c')?;
-        assert_insert(&["{ ┃ab: 102 }"], &["{ z┃ab: 102 }"], 'z')?;
-        assert_insert(&["{ camelCase┃: 99999 }"], &["{ camelCaseB┃: 99999 }"], 'B')?;
-        assert_insert(&["{ camel┃Case: 88156 }"], &["{ camelZ┃Case: 88156 }"], 'Z')?;
-        assert_insert(&["{ ┃camelCase: 1 }"], &["{ z┃camelCase: 1 }"], 'z')?;
+        assert_insert(ovec!["{ a┃: 0 }"], ovec!["{ ab┃: 0 }"], 'b')?;
+        assert_insert(ovec!["{ ┃a: 2100 }"], ovec!["{ z┃a: 2100 }"], 'z')?;
+        assert_insert(ovec!["{ ab┃: 9876 }"], ovec!["{ abc┃: 9876 }"], 'c')?;
+        assert_insert(ovec!["{ ┃ab: 102 }"], ovec!["{ z┃ab: 102 }"], 'z')?;
+        assert_insert(ovec!["{ camelCase┃: 99999 }"], ovec!["{ camelCaseB┃: 99999 }"], 'B')?;
+        assert_insert(ovec!["{ camel┃Case: 88156 }"], ovec!["{ camelZ┃Case: 88156 }"], 'Z')?;
+        assert_insert(ovec!["{ ┃camelCase: 1 }"], ovec!["{ z┃camelCase: 1 }"], 'z')?;
 
-        /*YOLOassert_insert_seq( &["{ camelCase: \"hello┃\" }"], "{camelCase:\"hello")?;
-        assert_insert_seq( &["{ camelCase: 10009┃ }"], "{camelCase:10009")?;*/
+        /*YOLOassert_insert_seq( ovec!["{ camelCase: \"hello┃\" }"], "{camelCase:\"hello")?;
+        assert_insert_seq( ovec!["{ camelCase: 10009┃ }"], "{camelCase:10009")?;*/
 
         Ok(())
     }
 
     #[test]
     fn test_nested_record() -> Result<(), String> {
-        assert_insert_seq(&["{ a┃ }"], &["{ a┃: RunTimeError }"], ":{")?;
-        assert_insert_seq(&["{ abc┃ }"], &["{ abc┃: RunTimeError }"], ":{")?;
-        assert_insert_seq(&["{ camelCase┃ }"], &["{ camelCase┃: RunTimeError }"], ":{")?;
+        assert_insert_seq(ovec!["{ a┃ }"], ovec!["{ a┃: RunTimeError }"], ":{")?;
+        assert_insert_seq(ovec!["{ abc┃ }"], ovec!["{ abc┃: RunTimeError }"], ":{")?;
+        assert_insert_seq(ovec!["{ camelCase┃ }"], ovec!["{ camelCase┃: RunTimeError }"], ":{")?;
 
-        assert_insert_seq(&["{ a: { ┃ } }"], &["{ a: { zulu┃ } }"], "zulu")?;
+        assert_insert_seq(ovec!["{ a: { ┃ } }"], ovec!["{ a: { zulu┃ } }"], "zulu")?;
         assert_insert_seq(
-            &["{ abc: { ┃ } }"],
-            &["{ abc: { camelCase┃ } }"],
+            ovec!["{ abc: { ┃ } }"],
+            ovec!["{ abc: { camelCase┃ } }"],
             "camelCase",
         )?;
-        assert_insert_seq(&["{ camelCase: { ┃ } }"], &["{ camelCase: { z┃ } }"], "z")?;
+        assert_insert_seq(ovec!["{ camelCase: { ┃ } }"], ovec!["{ camelCase: { z┃ } }"], "z")?;
 
         assert_insert_seq(
-            &["{ a: { zulu┃ } }"],
-            &["{ a: { zulu┃: RunTimeError } }"],
+            ovec!["{ a: { zulu┃ } }"],
+            ovec!["{ a: { zulu┃: RunTimeError } }"],
             ":",
         )?;
         assert_insert_seq(
-            &["{ abc: { camelCase┃ } }"],
-            &["{ abc: { camelCase┃: RunTimeError } }"],
+            ovec!["{ abc: { camelCase┃ } }"],
+            ovec!["{ abc: { camelCase┃: RunTimeError } }"],
             ":",
         )?;
         assert_insert_seq(
-            &["{ camelCase: { z┃ } }"],
-            &["{ camelCase: { z┃: RunTimeError } }"],
+            ovec!["{ camelCase: { z┃ } }"],
+            ovec!["{ camelCase: { z┃: RunTimeError } }"],
             ":",
         )?;
 
         assert_insert_seq(
-            &["{ a┃: { zulu } }"],
-            &["{ a0┃: { zulu: RunTimeError } }"],
+            ovec!["{ a┃: { zulu } }"],
+            ovec!["{ a0┃: { zulu: RunTimeError } }"],
             "0",
         )?;
         assert_insert_seq(
-            &["{ ab┃c: { camelCase } }"],
-            &["{ abz┃c: { camelCase: RunTimeError } }"],
+            ovec!["{ ab┃c: { camelCase } }"],
+            ovec!["{ abz┃c: { camelCase: RunTimeError } }"],
             "z",
         )?;
         assert_insert_seq(
-            &["{ ┃camelCase: { z } }"],
-            &["{ x┃camelCase: { z: RunTimeError } }"],
+            ovec!["{ ┃camelCase: { z } }"],
+            ovec!["{ x┃camelCase: { z: RunTimeError } }"],
             "x",
         )?;
 
         assert_insert_seq(
-            &["{ a: { zulu┃ } }"],
-            &["{ a: { zulu┃: RunTimeError } }"],
+            ovec!["{ a: { zulu┃ } }"],
+            ovec!["{ a: { zulu┃: RunTimeError } }"],
             ":\"",
         )?;
         assert_insert_seq(
-            &["{ abc: { camelCase┃ } }"],
-            &["{ abc: { camelCase┃: RunTimeError } }"],
+            ovec!["{ abc: { camelCase┃ } }"],
+            ovec!["{ abc: { camelCase┃: RunTimeError } }"],
             ":\"",
         )?;
         assert_insert_seq(
-            &["{ camelCase: { z┃ } }"],
-            &["{ camelCase: { z┃: RunTimeError } }"],
+            ovec!["{ camelCase: { z┃ } }"],
+            ovec!["{ camelCase: { z┃: RunTimeError } }"],
             ":\"",
         )?;
 
         assert_insert_seq(
-            &["{ a: { zulu: \"┃\" } }"],
-            &["{ a: { zulu: \"azula┃\" } }"],
+            ovec!["{ a: { zulu: \"┃\" } }"],
+            ovec!["{ a: { zulu: \"azula┃\" } }"],
             "azula",
         )?;
         assert_insert_seq(
-            &["{ a: { zulu: \"az┃a\" } }"],
-            &["{ a: { zulu: \"azul┃a\" } }"],
+            ovec!["{ a: { zulu: \"az┃a\" } }"],
+            ovec!["{ a: { zulu: \"azul┃a\" } }"],
             "ul",
         )?;
 
         assert_insert_seq(
-            &["{ a: { zulu┃ } }"],
-            &["{ a: { zulu1┃: RunTimeError } }"],
+            ovec!["{ a: { zulu┃ } }"],
+            ovec!["{ a: { zulu1┃: RunTimeError } }"],
             ":1",
         )?;
         assert_insert_seq(
-            &["{ abc: { camelCase┃ } }"],
-            &["{ abc: { camelCase0┃: RunTimeError } }"],
+            ovec!["{ abc: { camelCase┃ } }"],
+            ovec!["{ abc: { camelCase0┃: RunTimeError } }"],
             ":0",
         )?;
         assert_insert_seq(
-            &["{ camelCase: { z┃ } }"],
-            &["{ camelCase: { z45┃: RunTimeError } }"],
+            ovec!["{ camelCase: { z┃ } }"],
+            ovec!["{ camelCase: { z45┃: RunTimeError } }"],
             ":45",
         )?;
 
-        assert_insert_seq(&["{ a: { zulu: ┃0 } }"], &["{ a: { zulu: 4┃0 } }"], "4")?;
+        assert_insert_seq(ovec!["{ a: { zulu: ┃0 } }"], ovec!["{ a: { zulu: 4┃0 } }"], "4")?;
         assert_insert_seq(
-            &["{ a: { zulu: 10┃98 } }"],
-            &["{ a: { zulu: 1077┃98 } }"],
+            ovec!["{ a: { zulu: 10┃98 } }"],
+            ovec!["{ a: { zulu: 1077┃98 } }"],
             "77",
         )?;
 
         assert_insert_seq(
-            &["{ a: { zulu┃ } }"],
-            &["{ a: { zulu┃: RunTimeError } }"],
+            ovec!["{ a: { zulu┃ } }"],
+            ovec!["{ a: { zulu┃: RunTimeError } }"],
             ":{",
         )?;
         assert_insert_seq(
-            &["{ abc: { camelCase┃ } }"],
-            &["{ abc: { camelCase┃: RunTimeError } }"],
+            ovec!["{ abc: { camelCase┃ } }"],
+            ovec!["{ abc: { camelCase┃: RunTimeError } }"],
             ":{",
         )?;
         assert_insert_seq(
-            &["{ camelCase: { z┃ } }"],
-            &["{ camelCase: { z┃: RunTimeError } }"],
+            ovec!["{ camelCase: { z┃ } }"],
+            ovec!["{ camelCase: { z┃: RunTimeError } }"],
             ":{",
         )?;
 
         assert_insert_seq(
-            &["{ a: { zulu: { ┃ } } }"],
-            &["{ a: { zulu: { he┃ } } }"],
+            ovec!["{ a: { zulu: { ┃ } } }"],
+            ovec!["{ a: { zulu: { he┃ } } }"],
             "he",
         )?;
         assert_insert_seq(
-            &["{ a: { ┃zulu: {  } } }"],
-            &["{ a: { x┃zulu: {  } } }"],
+            ovec!["{ a: { ┃zulu: {  } } }"],
+            ovec!["{ a: { x┃zulu: {  } } }"],
             "x",
         )?;
         assert_insert_seq(
-            &["{ a: { z┃ulu: {  } } }"],
-            &["{ a: { z9┃ulu: {  } } }"],
+            ovec!["{ a: { z┃ulu: {  } } }"],
+            ovec!["{ a: { z9┃ulu: {  } } }"],
             "9",
         )?;
         assert_insert_seq(
-            &["{ a: { zulu┃: {  } } }"],
-            &["{ a: { zulu7┃: {  } } }"],
+            ovec!["{ a: { zulu┃: {  } } }"],
+            ovec!["{ a: { zulu7┃: {  } } }"],
             "7",
         )?;
 
         assert_insert_seq(
-            &["{ a┃: { bcD: { eFgHij: { k15 } } } }"],
-            &["{ a4┃: { bcD: { eFgHij: { k15: RunTimeError } } } }"],
+            ovec!["{ a┃: { bcD: { eFgHij: { k15 } } } }"],
+            ovec!["{ a4┃: { bcD: { eFgHij: { k15: RunTimeError } } } }"],
             "4",
         )?;
         assert_insert_seq(
-            &["{ ┃a: { bcD: { eFgHij: { k15 } } } }"],
-            &["{ y┃a: { bcD: { eFgHij: { k15: RunTimeError } } } }"],
+            ovec!["{ ┃a: { bcD: { eFgHij: { k15 } } } }"],
+            ovec!["{ y┃a: { bcD: { eFgHij: { k15: RunTimeError } } } }"],
             "y",
         )?;
         assert_insert_seq(
-            &["{ a: { bcD: { eF┃gHij: { k15 } } } }"],
-            &["{ a: { bcD: { eFxyz┃gHij: { k15: RunTimeError } } } }"],
+            ovec!["{ a: { bcD: { eF┃gHij: { k15 } } } }"],
+            ovec!["{ a: { bcD: { eFxyz┃gHij: { k15: RunTimeError } } } }"],
             "xyz",
         )?;
 
         assert_insert_seq(
-            &["┃"],
-            &["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase┃ } } } } } } } }"],
+            ovec!["┃"],
+            ovec!["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase┃ } } } } } } } }"],
             "{g:{oi:{ng:{d:{e:{e:{p:{camelCase",
         )?;
 
@@ -1667,237 +1717,237 @@ pub mod test_ed_update {
 
     #[test]
     fn test_ignore_record() -> Result<(), String> {
-        /*YOLOassert_insert_seq(&["┃{  }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{  }┃"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{┃  }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{  ┃}"], IGNORE_CHARS)?;
+        /*YOLOassert_insert_seq(ovec!["┃{  }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{  }┃"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{┃  }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{  ┃}"], IGNORE_CHARS)?;
 
-        assert_insert_seq(&["{ ┃ }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{ ┃a: RunTimeError }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{ ┃abc: RunTimeError }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{ ┃ }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{ ┃a: RunTimeError }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{ ┃abc: RunTimeError }"], IGNORE_NO_LTR)?;
 
-        assert_insert_seq(&["┃{ a: RunTimeError }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{ a: ┃RunTimeError }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{┃ a: RunTimeError }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{ a:┃ RunTimeError }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["┃{ a: RunTimeError }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{ a: ┃RunTimeError }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{┃ a: RunTimeError }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{ a:┃ RunTimeError }"], IGNORE_CHARS)?;
 
-        assert_insert_seq(&["┃{ a15: RunTimeError }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{ a15: ┃RunTimeError }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{┃ a15: RunTimeError }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{ a15:┃ RunTimeError }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["┃{ a15: RunTimeError }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{ a15: ┃RunTimeError }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{┃ a15: RunTimeError }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{ a15:┃ RunTimeError }"], IGNORE_CHARS)?;
 
-        assert_insert_seq(&["┃{ camelCase: RunTimeError }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{ camelCase: ┃RunTimeError }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{┃ camelCase: RunTimeError }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{ camelCase:┃ RunTimeError }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["┃{ camelCase: RunTimeError }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{ camelCase: ┃RunTimeError }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{┃ camelCase: RunTimeError }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{ camelCase:┃ RunTimeError }"], IGNORE_CHARS)?;
 
-        assert_insert_seq(&["┃{ a: \"\" }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{┃ a: \"\" }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{ a: ┃\"\" }"], "0")?;
-        assert_insert_seq(&["{ a: ┃\"\" }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{ a: \"\"┃ }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{ a: \"\" }┃"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["┃{ a: \"\" }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{┃ a: \"\" }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{ a: ┃\"\" }"], "0")?;
+        assert_insert_seq(ovec!["{ a: ┃\"\" }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{ a: \"\"┃ }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{ a: \"\" }┃"], IGNORE_CHARS)?;
 
-        assert_insert_seq(&["┃{ a: 1 }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{┃ a: 2 }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{ a: ┃6 }"], IGNORE_NO_NUM)?;
-        assert_insert_seq(&["{ a: 8┃ }"], IGNORE_NO_NUM)?;
-        assert_insert_seq(&["{ a: 0 }┃"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["┃{ a: 1 }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{┃ a: 2 }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{ a: ┃6 }"], IGNORE_NO_NUM)?;
+        assert_insert_seq(ovec!["{ a: 8┃ }"], IGNORE_NO_NUM)?;
+        assert_insert_seq(ovec!["{ a: 0 }┃"], IGNORE_CHARS)?;
 
-        assert_insert_seq(&["┃{ camelCase: 1 }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{┃ camelCase: 7 }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{ camelCase: ┃2 }"], IGNORE_NO_NUM)?;
-        assert_insert_seq(&["{ camelCase: 4┃ }"], IGNORE_NO_NUM)?;
-        assert_insert_seq(&["{ camelCase: 9 }┃"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["┃{ camelCase: 1 }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{┃ camelCase: 7 }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{ camelCase: ┃2 }"], IGNORE_NO_NUM)?;
+        assert_insert_seq(ovec!["{ camelCase: 4┃ }"], IGNORE_NO_NUM)?;
+        assert_insert_seq(ovec!["{ camelCase: 9 }┃"], IGNORE_CHARS)?;
 
-        assert_insert_seq(&["┃{ camelCase: \"\" }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{┃ camelCase: \"\" }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{ camelCase: ┃\"\" }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{ camelCase: \"\"┃ }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{ camelCase: \"\" }┃"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["┃{ camelCase: \"\" }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{┃ camelCase: \"\" }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{ camelCase: ┃\"\" }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{ camelCase: \"\"┃ }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{ camelCase: \"\" }┃"], IGNORE_CHARS)?;
 
-        assert_insert_seq(&["┃{ a: \"z\" }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{┃ a: \"z\" }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{ a: ┃\"z\" }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{ a: \"z\"┃ }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{ a: \"z\" }┃"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["┃{ a: \"z\" }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{┃ a: \"z\" }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{ a: ┃\"z\" }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{ a: \"z\"┃ }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{ a: \"z\" }┃"], IGNORE_CHARS)?;
 
         assert_insert_seq(
-            &["┃{ a: \"hello, hello.0123456789ZXY{}[]-><-\" }"],
+            ovec!["┃{ a: \"hello, hello.0123456789ZXY{}[]-><-\" }"],
             IGNORE_CHARS,
         )?;
         assert_insert_seq(
-            &["{┃ a: \"hello, hello.0123456789ZXY{}[]-><-\" }"],
+            ovec!["{┃ a: \"hello, hello.0123456789ZXY{}[]-><-\" }"],
             IGNORE_CHARS,
         )?;
         assert_insert_seq(
-            &["{ a: ┃\"hello, hello.0123456789ZXY{}[]-><-\" }"],
+            ovec!["{ a: ┃\"hello, hello.0123456789ZXY{}[]-><-\" }"],
             IGNORE_CHARS,
         )?;
         assert_insert_seq(
-            &["{ a: \"hello, hello.0123456789ZXY{}[]-><-\"┃ }"],
+            ovec!["{ a: \"hello, hello.0123456789ZXY{}[]-><-\"┃ }"],
             IGNORE_CHARS,
         )?;
         assert_insert_seq(
-            &["{ a: \"hello, hello.0123456789ZXY{}[]-><-\" }┃"],
+            ovec!["{ a: \"hello, hello.0123456789ZXY{}[]-><-\" }┃"],
             IGNORE_CHARS,
         )?;
 
-        assert_insert_seq(&["┃{ a: 915480 }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{┃ a: 915480 }"], IGNORE_CHARS)?;
-        assert_insert_seq(&["{ a: ┃915480 }"], IGNORE_NO_NUM)?;
-        assert_insert_seq(&["{ a: 915480┃ }"], IGNORE_NO_NUM)?;
-        assert_insert_seq(&["{ a: 915480 }┃"], IGNORE_CHARS)?;*/
+        assert_insert_seq(ovec!["┃{ a: 915480 }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{┃ a: 915480 }"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["{ a: ┃915480 }"], IGNORE_NO_NUM)?;
+        assert_insert_seq(ovec!["{ a: 915480┃ }"], IGNORE_NO_NUM)?;
+        assert_insert_seq(ovec!["{ a: 915480 }┃"], IGNORE_CHARS)?;*/
 
         Ok(())
     }
 
     #[test]
     fn test_ignore_nested_record() -> Result<(), String> {
-        /*YOLOassert_insert_seq(&["{ a: { ┃ } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{ a: ┃{  } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{ a: {┃  } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{ a: {  }┃ }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{ a: {  } ┃}"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{ a: {  } }┃"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{ a:┃ {  } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{┃ a: {  } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["┃{ a: {  } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{ ┃a: {  } }"], "1")?;
+        /*YOLOassert_insert_seq(ovec!["{ a: { ┃ } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{ a: ┃{  } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{ a: {┃  } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{ a: {  }┃ }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{ a: {  } ┃}"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{ a: {  } }┃"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{ a:┃ {  } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{┃ a: {  } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["┃{ a: {  } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{ ┃a: {  } }"], "1")?;
 
-        assert_insert_seq(&["{ camelCaseB1: { z15a:┃ RunTimeError } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{ camelCaseB1: {┃ z15a: RunTimeError } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{ camelCaseB1: ┃{ z15a: RunTimeError } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{ camelCaseB1: { z15a: ┃RunTimeError } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{ camelCaseB1: { z15a: R┃unTimeError } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{ camelCaseB1: { z15a: Ru┃nTimeError } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{ camelCaseB1:┃ { z15a: RunTimeError } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{┃ camelCaseB1: { z15a: RunTimeError } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["┃{ camelCaseB1: { z15a: RunTimeError } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{ ┃camelCaseB1: { z15a: RunTimeError } }"], "1")?;
-        assert_insert_seq(&["{ camelCaseB1: { ┃z15a: RunTimeError } }"], "1")?;
+        assert_insert_seq(ovec!["{ camelCaseB1: { z15a:┃ RunTimeError } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{ camelCaseB1: {┃ z15a: RunTimeError } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{ camelCaseB1: ┃{ z15a: RunTimeError } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: ┃RunTimeError } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: R┃unTimeError } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: Ru┃nTimeError } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{ camelCaseB1:┃ { z15a: RunTimeError } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{┃ camelCaseB1: { z15a: RunTimeError } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["┃{ camelCaseB1: { z15a: RunTimeError } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{ ┃camelCaseB1: { z15a: RunTimeError } }"], "1")?;
+        assert_insert_seq(ovec!["{ camelCaseB1: { ┃z15a: RunTimeError } }"], "1")?;
 
-        assert_insert_seq(&["{ camelCaseB1: { z15a: \"\"┃ } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{ camelCaseB1: { z15a: ┃\"\" } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{ camelCaseB1: { z15a:┃ \"\" } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{ camelCaseB1: { z15a: \"\" ┃} }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{ camelCaseB1: {┃ z15a: \"\" } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{ camelCaseB1: ┃{ z15a: \"\" } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{ camelCaseB1: { z15a: \"\" }┃ }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{ camelCaseB1: { z15a: \"\" } ┃}"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{ camelCaseB1: { z15a: \"\" } }┃"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{ camelCaseB1:┃ { z15a: \"\" } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{┃ camelCaseB1: { z15a: \"\" } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["┃{ camelCaseB1: { z15a: \"\" } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(&["{ ┃camelCaseB1: { z15a: \"\" } }"], "1")?;
-        assert_insert_seq(&["{ camelCaseB1: { ┃z15a: \"\" } }"], "1")?;
+        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: \"\"┃ } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: ┃\"\" } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{ camelCaseB1: { z15a:┃ \"\" } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: \"\" ┃} }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{ camelCaseB1: {┃ z15a: \"\" } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{ camelCaseB1: ┃{ z15a: \"\" } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: \"\" }┃ }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: \"\" } ┃}"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: \"\" } }┃"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{ camelCaseB1:┃ { z15a: \"\" } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{┃ camelCaseB1: { z15a: \"\" } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["┃{ camelCaseB1: { z15a: \"\" } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq(ovec!["{ ┃camelCaseB1: { z15a: \"\" } }"], "1")?;
+        assert_insert_seq(ovec!["{ camelCaseB1: { ┃z15a: \"\" } }"], "1")?;
 
-        assert_insert_seq(&["{ camelCaseB1: { z15a: 0┃ } }"], IGNORE_NO_NUM)?;
-        assert_insert_seq(&["{ camelCaseB1: { z15a: ┃123 } }"], IGNORE_NO_NUM)?;
-        assert_insert_seq(&["{ camelCaseB1: { z15a:┃ 999 } }"], IGNORE_NO_NUM)?;
-        assert_insert_seq(&["{ camelCaseB1: { z15a: 80 ┃} }"], IGNORE_NO_NUM)?;
-        assert_insert_seq(&["{ camelCaseB1: {┃ z15a: 99000 } }"], IGNORE_NO_NUM)?;
-        assert_insert_seq(&["{ camelCaseB1: ┃{ z15a: 12 } }"], IGNORE_NO_NUM)?;
-        assert_insert_seq(&["{ camelCaseB1: { z15a: 7 }┃ }"], IGNORE_NO_NUM)?;
-        assert_insert_seq(&["{ camelCaseB1: { z15a: 98 } ┃}"], IGNORE_NO_NUM)?;
-        assert_insert_seq(&["{ camelCaseB1: { z15a: 4582 } }┃"], IGNORE_NO_NUM)?;
-        assert_insert_seq(&["{ camelCaseB1:┃ { z15a: 0 } }"], IGNORE_NO_NUM)?;
-        assert_insert_seq(&["{┃ camelCaseB1: { z15a: 44 } }"], IGNORE_NO_NUM)?;
-        assert_insert_seq(&["┃{ camelCaseB1: { z15a: 100123 } }"], IGNORE_NO_NUM)?;
-        assert_insert_seq(&["{ ┃camelCaseB1: { z15a: 5 } }"], "1")?;
-        assert_insert_seq(&["{ camelCaseB1: { ┃z15a: 6 } }"], "1")?;
+        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: 0┃ } }"], IGNORE_NO_NUM)?;
+        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: ┃123 } }"], IGNORE_NO_NUM)?;
+        assert_insert_seq(ovec!["{ camelCaseB1: { z15a:┃ 999 } }"], IGNORE_NO_NUM)?;
+        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: 80 ┃} }"], IGNORE_NO_NUM)?;
+        assert_insert_seq(ovec!["{ camelCaseB1: {┃ z15a: 99000 } }"], IGNORE_NO_NUM)?;
+        assert_insert_seq(ovec!["{ camelCaseB1: ┃{ z15a: 12 } }"], IGNORE_NO_NUM)?;
+        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: 7 }┃ }"], IGNORE_NO_NUM)?;
+        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: 98 } ┃}"], IGNORE_NO_NUM)?;
+        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: 4582 } }┃"], IGNORE_NO_NUM)?;
+        assert_insert_seq(ovec!["{ camelCaseB1:┃ { z15a: 0 } }"], IGNORE_NO_NUM)?;
+        assert_insert_seq(ovec!["{┃ camelCaseB1: { z15a: 44 } }"], IGNORE_NO_NUM)?;
+        assert_insert_seq(ovec!["┃{ camelCaseB1: { z15a: 100123 } }"], IGNORE_NO_NUM)?;
+        assert_insert_seq(ovec!["{ ┃camelCaseB1: { z15a: 5 } }"], "1")?;
+        assert_insert_seq(ovec!["{ camelCaseB1: { ┃z15a: 6 } }"], "1")?;
 
         assert_insert_seq(
-            &["{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\"┃ } }"],
+            ovec!["{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\"┃ } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq(
-            &["{ camelCaseB1: { z15a: ┃\"hello, hello.0123456789ZXY{}[]-><-\" } }"],
+            ovec!["{ camelCaseB1: { z15a: ┃\"hello, hello.0123456789ZXY{}[]-><-\" } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq(
-            &["{ camelCaseB1: { z15a:┃ \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
+            ovec!["{ camelCaseB1: { z15a:┃ \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq(
-            &["{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" ┃} }"],
+            ovec!["{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" ┃} }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq(
-            &["{ camelCaseB1: {┃ z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
+            ovec!["{ camelCaseB1: {┃ z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq(
-            &["{ camelCaseB1: ┃{ z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
+            ovec!["{ camelCaseB1: ┃{ z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq(
-            &["{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" }┃ }"],
+            ovec!["{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" }┃ }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq(
-            &["{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } ┃}"],
+            ovec!["{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } ┃}"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq(
-            &["{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }┃"],
+            ovec!["{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }┃"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq(
-            &["{ camelCaseB1:┃ { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
+            ovec!["{ camelCaseB1:┃ { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq(
-            &["{┃ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
+            ovec!["{┃ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq(
-            &["┃{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
+            ovec!["┃{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq(
-            &["{ ┃camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
+            ovec!["{ ┃camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
             "1",
         )?;
         assert_insert_seq(
-            &["{ camelCaseB1: { ┃z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
+            ovec!["{ camelCaseB1: { ┃z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
             "1",
         )?;
 
         assert_insert_seq(
-            &["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase:┃ RunTimeError } } } } } } } }"],
+            ovec!["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase:┃ RunTimeError } } } } } } } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq(
-            &["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase: R┃unTimeError } } } } } } } }"],
+            ovec!["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase: R┃unTimeError } } } } } } } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq(
-            &["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeError } } } } } } } }┃"],
+            ovec!["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeError } } } } } } } }┃"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq(
-            &["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeEr┃ror } } } } } } } }"],
+            ovec!["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeEr┃ror } } } } } } } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq(
-            &["{ g: { oi: { ng: { d: { e: {┃ e: { p: { camelCase: RunTimeError } } } } } } } }"],
+            ovec!["{ g: { oi: { ng: { d: { e: {┃ e: { p: { camelCase: RunTimeError } } } } } } } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq(
-            &["{ g: { oi: { ng: { d: { e: { e:┃ { p: { camelCase: RunTimeError } } } } } } } }"],
+            ovec!["{ g: { oi: { ng: { d: { e: { e:┃ { p: { camelCase: RunTimeError } } } } } } } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq(
-            &["{┃ g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeError } } } } } } } }"],
+            ovec!["{┃ g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeError } } } } } } } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq(
-            &["┃{ g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeError } } } } } } } }"],
+            ovec!["┃{ g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeError } } } } } } } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq(
-            &["{ ┃g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeError } } } } } } } }"],
+            ovec!["{ ┃g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeError } } } } } } } }"],
             "2",
         )?;*/
         Ok(())
@@ -1905,34 +1955,34 @@ pub mod test_ed_update {
 
     #[test]
     fn test_single_elt_list() -> Result<(), String> {
-        /*YOLOassert_insert( &["[ ┃ ]"], '[')?;
+        /*YOLOassert_insert( ovec!["[ ┃ ]"], '[')?;
 
-        assert_insert_seq( &["[ 0┃ ]"], "[0")?;
-        assert_insert_seq( &["[ 1┃ ]"], "[1")?;
-        assert_insert_seq( &["[ 9┃ ]"], "[9")?;
+        assert_insert_seq( ovec!["[ 0┃ ]"], "[0")?;
+        assert_insert_seq( ovec!["[ 1┃ ]"], "[1")?;
+        assert_insert_seq( ovec!["[ 9┃ ]"], "[9")?;
 
-        assert_insert_seq( &["[ \"┃\" ]"], "[\"")?;
+        assert_insert_seq( ovec!["[ \"┃\" ]"], "[\"")?;
         assert_insert_seq(
-            &["┃"],
-            &["[ \"hello, hello.0123456789ZXY{}[]-><-┃\" ]"],
+            ovec!["┃"],
+            ovec!["[ \"hello, hello.0123456789ZXY{}[]-><-┃\" ]"],
             "[\"hello, hello.0123456789ZXY{}[]-><-",
         )?;
 
-        assert_insert_seq( &["[ { ┃ } ]"], "[{")?;
-        assert_insert_seq( &["[ { a┃ } ]"], "[{a")?;
+        assert_insert_seq( ovec!["[ { ┃ } ]"], "[{")?;
+        assert_insert_seq( ovec!["[ { a┃ } ]"], "[{a")?;
         assert_insert_seq(
-            &["┃"],
-            &["[ { camelCase: { zulu: \"nested┃\" } } ]"],
+            ovec!["┃"],
+            ovec!["[ { camelCase: { zulu: \"nested┃\" } } ]"],
             "[{camelCase:{zulu:\"nested",
         )?;
 
-        assert_insert_seq( &["[ [ ┃ ] ]"], "[[")?;
-        assert_insert_seq( &["[ [ [ ┃ ] ] ]"], "[[[")?;
-        assert_insert_seq( &["[ [ 0┃ ] ]"], "[[0")?;
-        assert_insert_seq( &["[ [ \"abc┃\" ] ]"], "[[\"abc")?;
+        assert_insert_seq( ovec!["[ [ ┃ ] ]"], "[[")?;
+        assert_insert_seq( ovec!["[ [ [ ┃ ] ] ]"], "[[[")?;
+        assert_insert_seq( ovec!["[ [ 0┃ ] ]"], "[[0")?;
+        assert_insert_seq( ovec!["[ [ \"abc┃\" ] ]"], "[[\"abc")?;
         assert_insert_seq(
-            &["┃"],
-            &["[ [ { camelCase: { a: 79000┃ } } ] ]"],
+            ovec!["┃"],
+            ovec!["[ [ { camelCase: { a: 79000┃ } } ] ]"],
             "[[{camelCase:{a:79000",
         )?;*/
 
@@ -1941,87 +1991,87 @@ pub mod test_ed_update {
 
     #[test]
     fn test_ignore_single_elt_list() -> Result<(), String> {
-        /*YOLOassert_insert_seq(&["┃[  ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[  ]┃"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[┃  ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[  ┃]"], IGNORE_CHARS)?;
+        /*YOLOassert_insert_seq(ovec!["┃[  ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[  ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[┃  ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[  ┃]"], IGNORE_CHARS)?;
 
-        assert_insert_seq(&["┃[ 0 ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ 0 ]┃"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[┃ 0 ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ 0 ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["┃[ 0 ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ 0 ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[┃ 0 ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ 0 ┃]"], IGNORE_CHARS)?;
 
-        assert_insert_seq(&["┃[ 137 ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ 137 ]┃"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[┃ 137 ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ 137 ┃]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ ┃137 ]"], IGNORE_NO_NUM)?;
-        assert_insert_seq(&["[ 137┃ ]"], IGNORE_NO_NUM)?;
+        assert_insert_seq(ovec!["┃[ 137 ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ 137 ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[┃ 137 ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ 137 ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ ┃137 ]"], IGNORE_NO_NUM)?;
+        assert_insert_seq(ovec!["[ 137┃ ]"], IGNORE_NO_NUM)?;
 
-        assert_insert_seq(&["┃[ \"teststring\" ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ \"teststring\" ]┃"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[┃ \"teststring\" ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ \"teststring\" ┃]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ ┃\"teststring\" ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ \"teststring\"┃ ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["┃[ \"teststring\" ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ \"teststring\" ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[┃ \"teststring\" ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ \"teststring\" ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ ┃\"teststring\" ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ \"teststring\"┃ ]"], IGNORE_CHARS)?;
 
-        assert_insert_seq(&["┃[ { a: 1 } ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ { a: 1 } ]┃"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[┃ { a: 1 } ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ { a: 1 } ┃]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ ┃{ a: 1 } ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ {┃ a: 1 } ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ { a:┃ 1 } ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ { a: 1 ┃} ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ { a: 1 }┃ ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["┃[ { a: 1 } ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ { a: 1 } ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[┃ { a: 1 } ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ { a: 1 } ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ ┃{ a: 1 } ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ {┃ a: 1 } ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ { a:┃ 1 } ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ { a: 1 ┃} ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ { a: 1 }┃ ]"], IGNORE_CHARS)?;
 
-        assert_insert_seq(&["┃[ [  ] ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ [  ] ]┃"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[┃ [  ] ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ [  ] ┃]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ ┃[  ] ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ [  ]┃ ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ [┃  ] ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ [  ┃] ]"], IGNORE_CHARS)?;*/
+        assert_insert_seq(ovec!["┃[ [  ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ [  ] ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[┃ [  ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ [  ] ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ ┃[  ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ [  ]┃ ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ [┃  ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ [  ┃] ]"], IGNORE_CHARS)?;*/
 
         Ok(())
     }
 
     #[test]
     fn test_multi_elt_list() -> Result<(), String> {
-        /*YOLOassert_insert_seq( &["[ 0, 1┃ ]"], "[0,1")?;
-        assert_insert_seq( &["[ 987, 6543, 210┃ ]"], "[987,6543,210")?;
+        /*YOLOassert_insert_seq( ovec!["[ 0, 1┃ ]"], "[0,1")?;
+        assert_insert_seq( ovec!["[ 987, 6543, 210┃ ]"], "[987,6543,210")?;
 
         assert_insert_seq(
-            &["┃"],
-            &["[ \"a\", \"bcd\", \"EFGH┃\" ]"],
+            ovec!["┃"],
+            ovec!["[ \"a\", \"bcd\", \"EFGH┃\" ]"],
             "[\"a🡲,\"bcd🡲,\"EFGH",
         )?;
 
         assert_insert_seq(
-            &["┃"],
-            &["[ { a: 1 }, { b: 23 }, { c: 456┃ } ]"],
+            ovec!["┃"],
+            ovec!["[ { a: 1 }, { b: 23 }, { c: 456┃ } ]"],
             "[{a:1🡲🡲,{b:23🡲🡲,{c:456",
         )?;
 
-        assert_insert_seq( &["[ [ 1 ], [ 23 ], [ 456┃ ] ]"], "[[1🡲🡲,[23🡲🡲,[456")?;
+        assert_insert_seq( ovec!["[ [ 1 ], [ 23 ], [ 456┃ ] ]"], "[[1🡲🡲,[23🡲🡲,[456")?;
 
         // insert element in between
-        assert_insert_seq( &["[ 0, 2┃, 1 ]"], "[0,1🡰🡰🡰,2")?;
-        assert_insert_seq( &["[ 0, 2, 3┃, 1 ]"], "[0,1🡰🡰🡰,2,3")?;
-        assert_insert_seq( &["[ 0, 3┃, 2, 1 ]"], "[0,1🡰🡰🡰,2🡰🡰🡰,3")?;
+        assert_insert_seq( ovec!["[ 0, 2┃, 1 ]"], "[0,1🡰🡰🡰,2")?;
+        assert_insert_seq( ovec!["[ 0, 2, 3┃, 1 ]"], "[0,1🡰🡰🡰,2,3")?;
+        assert_insert_seq( ovec!["[ 0, 3┃, 2, 1 ]"], "[0,1🡰🡰🡰,2🡰🡰🡰,3")?;
 
         assert_insert_seq(
-            &["┃"],
-            &["[ \"abc\", \"f┃\", \"de\" ]"],
+            ovec!["┃"],
+            ovec!["[ \"abc\", \"f┃\", \"de\" ]"],
             "[\"abc🡲,\"de🡰🡰🡰🡰🡰,\"f",
         )?;
 
-        assert_insert_seq( &["[ [ 0 ], [ 2┃ ], [ 1 ] ]"], "[[0🡲🡲,[1🡰🡰🡰🡰🡰,[2")?;*/
+        assert_insert_seq( ovec!["[ [ 0 ], [ 2┃ ], [ 1 ] ]"], "[[0🡲🡲,[1🡰🡰🡰🡰🡰,[2")?;*/
 
         assert_insert_seq(
-            &["┃"],
-            &["[ { a: 0 }, { a: 2┃ }, { a: 1 } ]"],
+            ovec!["┃"],
+            ovec!["[ { a: 0 }, { a: 2┃ }, { a: 1 } ]"],
             "[{a:0🡲🡲,{a:1🡰🡰🡰🡰🡰🡰🡰🡰,{a:2",
         )?;
 
@@ -2030,70 +2080,70 @@ pub mod test_ed_update {
 
     #[test]
     fn test_ignore_multi_elt_list() -> Result<(), String> {
-        /*YOLOassert_insert_seq(&["┃[ 0, 1 ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ 0, 1 ]┃"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[┃ 0, 1 ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ 0, 1 ┃]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ 0,┃ 1 ]"], IGNORE_CHARS)?;
+        /*YOLOassert_insert_seq(ovec!["┃[ 0, 1 ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ 0, 1 ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[┃ 0, 1 ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ 0, 1 ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ 0,┃ 1 ]"], IGNORE_CHARS)?;
 
-        assert_insert_seq(&["┃[ 123, 56, 7 ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ 123, 56, 7 ]┃"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[┃ 123, 56, 7 ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ 123, 56, 7 ┃]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ 123,┃ 56, 7 ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ 123, 56,┃ 7 ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["┃[ 123, 56, 7 ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ 123, 56, 7 ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[┃ 123, 56, 7 ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ 123, 56, 7 ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ 123,┃ 56, 7 ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ 123, 56,┃ 7 ]"], IGNORE_CHARS)?;
 
-        assert_insert_seq(&["┃[ \"123\", \"56\", \"7\" ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ \"123\", \"56\", \"7\" ]┃"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[┃ \"123\", \"56\", \"7\" ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ \"123\", \"56\", \"7\" ┃]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ \"123\",┃ \"56\", \"7\" ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ \"123\", \"56\",┃ \"7\" ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["┃[ \"123\", \"56\", \"7\" ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ \"123\", \"56\", \"7\" ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[┃ \"123\", \"56\", \"7\" ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ \"123\", \"56\", \"7\" ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ \"123\",┃ \"56\", \"7\" ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ \"123\", \"56\",┃ \"7\" ]"], IGNORE_CHARS)?;
 
-        assert_insert_seq(&["┃[ { a: 0 }, { a: 1 } ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ { a: 0 }, { a: 1 } ]┃"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[┃ { a: 0 }, { a: 1 } ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ { a: 0 }, { a: 1 } ┃]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ { a: 0 },┃ { a: 1 } ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["┃[ { a: 0 }, { a: 1 } ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ { a: 0 }, { a: 1 } ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[┃ { a: 0 }, { a: 1 } ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ { a: 0 }, { a: 1 } ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ { a: 0 },┃ { a: 1 } ]"], IGNORE_CHARS)?;
 
-        assert_insert_seq(&["┃[ [ 0 ], [ 1 ] ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ [ 0 ], [ 1 ] ]┃"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[┃ [ 0 ], [ 1 ] ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ [ 0 ], [ 1 ] ┃]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ [ 0 ],┃ [ 1 ] ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ ┃[ 0 ], [ 1 ] ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ [ 0 ]┃, [ 1 ] ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ [┃ 0 ], [ 1 ] ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ [ 0 ┃], [ 1 ] ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ [ 0 ], ┃[ 1 ] ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ [ 0 ], [┃ 1 ] ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ [ 0 ], [ 1 ]┃ ]"], IGNORE_CHARS)?;
-        assert_insert_seq(&["[ [ 0 ], [ 1 ┃] ]"], IGNORE_CHARS)?;*/
+        assert_insert_seq(ovec!["┃[ [ 0 ], [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ [ 0 ], [ 1 ] ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[┃ [ 0 ], [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ [ 0 ], [ 1 ] ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ [ 0 ],┃ [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ ┃[ 0 ], [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ [ 0 ]┃, [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ [┃ 0 ], [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ [ 0 ┃], [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ [ 0 ], ┃[ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ [ 0 ], [┃ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ [ 0 ], [ 1 ]┃ ]"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["[ [ 0 ], [ 1 ┃] ]"], IGNORE_CHARS)?;*/
 
         Ok(())
     }
 
     #[test]
     fn test_let_value() -> Result<(), String> {
-        /*YOLOassert_insert( &["a┃ =  "], 'a')?;
-        assert_insert( &["m┃ =  "], 'm')?;
-        assert_insert( &["z┃ =  "], 'z')?;
+        /*YOLOassert_insert( ovec!["a┃ =  "], 'a')?;
+        assert_insert( ovec!["m┃ =  "], 'm')?;
+        assert_insert( ovec!["z┃ =  "], 'z')?;
 
-        assert_insert_seq( &["ab┃ =  "], "ab")?;
-        assert_insert_seq( &["mainVal┃ =  "], "mainVal")?;
-        assert_insert_seq( &["camelCase123┃ =  "], "camelCase123")?;
-        assert_insert_seq( &["c137┃ =  "], "c137")?;
-        assert_insert_seq( &["c137Bb┃ =  "], "c137Bb")?;
-        assert_insert_seq( &["bBbb┃ =  "], "bBbb")?;
-        assert_insert_seq( &["cC0Z┃ =  "], "cC0Z")?;*/
+        assert_insert_seq( ovec!["ab┃ =  "], "ab")?;
+        assert_insert_seq( ovec!["mainVal┃ =  "], "mainVal")?;
+        assert_insert_seq( ovec!["camelCase123┃ =  "], "camelCase123")?;
+        assert_insert_seq( ovec!["c137┃ =  "], "c137")?;
+        assert_insert_seq( ovec!["c137Bb┃ =  "], "c137Bb")?;
+        assert_insert_seq( ovec!["bBbb┃ =  "], "bBbb")?;
+        assert_insert_seq( ovec!["cC0Z┃ =  "], "cC0Z")?;*/
 
         Ok(())
     }
 
     #[test]
     fn test_ignore_let_value() -> Result<(), String> {
-        /*YOLOassert_insert_seq(&["a ┃= 0", "a"], IGNORE_CHARS)?;
-        assert_insert_seq(&["a =┃ 0", "a"], IGNORE_CHARS)?;*/
+        /*YOLOassert_insert_seq(ovec!["a ┃= 0", "a"], IGNORE_CHARS)?;
+        assert_insert_seq(ovec!["a =┃ 0", "a"], IGNORE_CHARS)?;*/
 
         Ok(())
     }
@@ -2101,8 +2151,8 @@ pub mod test_ed_update {
     // Create ed_model from pre_lines DSL, do ctrl+shift+up as many times as repeat.
     // check if modified ed_model has expected string representation of code, caret position and active selection.
     pub fn assert_ctrl_shift_up_repeat(
-        pre_lines: &[&str],
-        expected_post_lines: &[&str],
+        pre_lines: Vec<String>,
+        expected_post_lines: Vec<String>,
         repeats: usize,
     ) -> Result<(), String> {
         let mut code_str = pre_lines.join("").replace("┃", "");
@@ -2131,8 +2181,8 @@ pub mod test_ed_update {
     }
 
     pub fn assert_ctrl_shift_up(
-        pre_lines: &[&str],
-        expected_post_lines: &[&str],
+        pre_lines: Vec<String>,
+        expected_post_lines: Vec<String>,
     ) -> Result<(), String> {
         assert_ctrl_shift_up_repeat(pre_lines, expected_post_lines, 1)
     }
@@ -2140,44 +2190,44 @@ pub mod test_ed_update {
     #[test]
     fn test_ctrl_shift_up_blank() -> Result<(), String> {
         // Blank is auto-inserted
-        /*YOLOassert_ctrl_shift_up( &["┃❮ ❯"])?;
-        assert_ctrl_shift_up_repeat( &["┃❮ ❯"], 4)?;*/
+        /*YOLOassert_ctrl_shift_up( ovec!["┃❮ ❯"])?;
+        assert_ctrl_shift_up_repeat( ovec!["┃❮ ❯"], 4)?;*/
 
         Ok(())
     }
 
     #[test]
     fn test_ctrl_shift_up_int() -> Result<(), String> {
-        assert_ctrl_shift_up(&["5┃"], &["┃❮5❯"])?;
-        assert_ctrl_shift_up_repeat(&["0┃"], &["┃❮0❯"], 3)?;
-        assert_ctrl_shift_up(&["12345┃"], &["┃❮12345❯"])?;
-        assert_ctrl_shift_up(&["┃12345"], &["┃❮12345❯"])?;
-        assert_ctrl_shift_up(&["1┃2345"], &["┃❮12345❯"])?;
-        assert_ctrl_shift_up(&["12┃345"], &["┃❮12345❯"])?;
-        assert_ctrl_shift_up(&["123┃45"], &["┃❮12345❯"])?;
-        assert_ctrl_shift_up(&["1234┃5"], &["┃❮12345❯"])?;
+        assert_ctrl_shift_up(ovec!["5┃"], ovec!["┃❮5❯"])?;
+        assert_ctrl_shift_up_repeat(ovec!["0┃"], ovec!["┃❮0❯"], 3)?;
+        assert_ctrl_shift_up(ovec!["12345┃"], ovec!["┃❮12345❯"])?;
+        assert_ctrl_shift_up(ovec!["┃12345"], ovec!["┃❮12345❯"])?;
+        assert_ctrl_shift_up(ovec!["1┃2345"], ovec!["┃❮12345❯"])?;
+        assert_ctrl_shift_up(ovec!["12┃345"], ovec!["┃❮12345❯"])?;
+        assert_ctrl_shift_up(ovec!["123┃45"], ovec!["┃❮12345❯"])?;
+        assert_ctrl_shift_up(ovec!["1234┃5"], ovec!["┃❮12345❯"])?;
 
         Ok(())
     }
 
     #[test]
     fn test_ctrl_shift_up_string() -> Result<(), String> {
-        assert_ctrl_shift_up(&["\"┃\""], &["┃❮\"\"❯"])?;
-        assert_ctrl_shift_up(&["┃\"\""], &["┃❮\"\"❯"])?;
-        assert_ctrl_shift_up(&["\"┃0\""], &["┃❮\"0\"❯"])?;
-        assert_ctrl_shift_up(&["\"0┃\""], &["┃❮\"0\"❯"])?;
-        assert_ctrl_shift_up(&["\"abc┃\""], &["┃❮\"abc\"❯"])?;
-        assert_ctrl_shift_up(&["\"ab┃c\""], &["┃❮\"abc\"❯"])?;
-        assert_ctrl_shift_up(&["\"┃abc\""], &["┃❮\"abc\"❯"])?;
-        assert_ctrl_shift_up(&["┃\"abc\""], &["┃❮\"abc\"❯"])?;
-        assert_ctrl_shift_up_repeat(&["\"abc┃\""], &["┃❮\"abc\"❯"], 3)?;
+        assert_ctrl_shift_up(ovec!["\"┃\""], ovec!["┃❮\"\"❯"])?;
+        assert_ctrl_shift_up(ovec!["┃\"\""], ovec!["┃❮\"\"❯"])?;
+        assert_ctrl_shift_up(ovec!["\"┃0\""], ovec!["┃❮\"0\"❯"])?;
+        assert_ctrl_shift_up(ovec!["\"0┃\""], ovec!["┃❮\"0\"❯"])?;
+        assert_ctrl_shift_up(ovec!["\"abc┃\""], ovec!["┃❮\"abc\"❯"])?;
+        assert_ctrl_shift_up(ovec!["\"ab┃c\""], ovec!["┃❮\"abc\"❯"])?;
+        assert_ctrl_shift_up(ovec!["\"┃abc\""], ovec!["┃❮\"abc\"❯"])?;
+        assert_ctrl_shift_up(ovec!["┃\"abc\""], ovec!["┃❮\"abc\"❯"])?;
+        assert_ctrl_shift_up_repeat(ovec!["\"abc┃\""], ovec!["┃❮\"abc\"❯"], 3)?;
         assert_ctrl_shift_up(
-            &["\"hello, hello.0123456789ZXY{}[]-><-┃\""],
-            &["┃❮\"hello, hello.0123456789ZXY{}[]-><-\"❯"],
+            ovec!["\"hello, hello.0123456789ZXY{}[]-><-┃\""],
+            ovec!["┃❮\"hello, hello.0123456789ZXY{}[]-><-\"❯"],
         )?;
 
-        assert_ctrl_shift_up(&["\"\"┃"], &["┃❮\"\"❯"])?;
-        assert_ctrl_shift_up(&["\"abc\"┃"], &["┃❮\"abc\"❯"])?;
+        assert_ctrl_shift_up(ovec!["\"\"┃"], ovec!["┃❮\"\"❯"])?;
+        assert_ctrl_shift_up(ovec!["\"abc\"┃"], ovec!["┃❮\"abc\"❯"])?;
 
         Ok(())
     }
@@ -2185,73 +2235,73 @@ pub mod test_ed_update {
     #[test]
     fn test_ctrl_shift_up_record() -> Result<(), String> {
         // TODO uncomment tests once editor::lang::constrain::constrain_expr does not contain anymore todo's
-        assert_ctrl_shift_up(&["{ ┃ }"], &["┃❮{  }❯"])?;
-        assert_ctrl_shift_up(&["{┃  }"], &["┃❮{  }❯"])?;
-        assert_ctrl_shift_up(&["┃{  }"], &["┃❮{  }❯"])?;
-        assert_ctrl_shift_up(&["{  ┃}"], &["┃❮{  }❯"])?;
-        assert_ctrl_shift_up_repeat(&["{ ┃ }"], &["┃❮{  }❯"], 4)?;
-        assert_ctrl_shift_up(&["{  }┃"], &["┃❮{  }❯"])?;
+        assert_ctrl_shift_up(ovec!["{ ┃ }"], ovec!["┃❮{  }❯"])?;
+        assert_ctrl_shift_up(ovec!["{┃  }"], ovec!["┃❮{  }❯"])?;
+        assert_ctrl_shift_up(ovec!["┃{  }"], ovec!["┃❮{  }❯"])?;
+        assert_ctrl_shift_up(ovec!["{  ┃}"], ovec!["┃❮{  }❯"])?;
+        assert_ctrl_shift_up_repeat(ovec!["{ ┃ }"], ovec!["┃❮{  }❯"], 4)?;
+        assert_ctrl_shift_up(ovec!["{  }┃"], ovec!["┃❮{  }❯"])?;
 
-        /*assert_ctrl_shift_up(&["{ pear┃ }"], &["┃❮{ pear }❯"])?;
-        assert_ctrl_shift_up(&["{ pea┃r }"], &["┃❮{ pear }❯"])?;
-        assert_ctrl_shift_up(&["{ p┃ear }"], &["┃❮{ pear }❯"])?;
-        assert_ctrl_shift_up(&["{ ┃pear }"], &["┃❮{ pear }❯"])?;
-        assert_ctrl_shift_up(&["{┃ pear }"], &["┃❮{ pear }❯"])?;
-        assert_ctrl_shift_up(&["┃{ pear }"], &["┃❮{ pear }❯"])?;
-        assert_ctrl_shift_up(&["{ pear ┃}"], &["┃❮{ pear }❯"])?;
-        assert_ctrl_shift_up_repeat(&["{ pear┃ }"], &["┃❮{ pear }❯"], 3)?;
-        assert_ctrl_shift_up(&["{ pear }┃"], &["┃❮{ pear }❯"])?;
+        /*assert_ctrl_shift_up(ovec!["{ pear┃ }"], ovec!["┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up(ovec!["{ pea┃r }"], ovec!["┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up(ovec!["{ p┃ear }"], ovec!["┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up(ovec!["{ ┃pear }"], ovec!["┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up(ovec!["{┃ pear }"], ovec!["┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up(ovec!["┃{ pear }"], ovec!["┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up(ovec!["{ pear ┃}"], ovec!["┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up_repeat(ovec!["{ pear┃ }"], ovec!["┃❮{ pear }❯"], 3)?;
+        assert_ctrl_shift_up(ovec!["{ pear }┃"], ovec!["┃❮{ pear }❯"])?;
 
-        assert_ctrl_shift_up(&["{ camelCase123┃ }"], &["┃❮{ camelCase123 }❯"])?;*/
+        assert_ctrl_shift_up(ovec!["{ camelCase123┃ }"], ovec!["┃❮{ camelCase123 }❯"])?;*/
 
-        assert_ctrl_shift_up(&["{ a: \"┃\" }"], &["{ a: ┃❮\"\"❯ }"])?;
-        assert_ctrl_shift_up(&["{ a: ┃\"\" }"], &["{ a: ┃❮\"\"❯ }"])?;
-        assert_ctrl_shift_up(&["{ a: \"\"┃ }"], &["┃❮{ a: \"\" }❯"])?;
-        assert_ctrl_shift_up(&["{ a: \"\" ┃}"], &["┃❮{ a: \"\" }❯"])?;
-        assert_ctrl_shift_up_repeat(&["{ a: \"\" ┃}"], &["┃❮{ a: \"\" }❯"], 3)?;
-        assert_ctrl_shift_up(&["{ a: \"\" }┃"], &["┃❮{ a: \"\" }❯"])?;
-        assert_ctrl_shift_up(&["{ a:┃ \"\" }"], &["┃❮{ a: \"\" }❯"])?;
-        assert_ctrl_shift_up(&["{ a┃: \"\" }"], &["┃❮{ a: \"\" }❯"])?;
-        assert_ctrl_shift_up(&["{ ┃a: \"\" }"], &["┃❮{ a: \"\" }❯"])?;
-        assert_ctrl_shift_up(&["{┃ a: \"\" }"], &["┃❮{ a: \"\" }❯"])?;
-        assert_ctrl_shift_up(&["┃{ a: \"\" }"], &["┃❮{ a: \"\" }❯"])?;
-        assert_ctrl_shift_up_repeat(&["{ a: \"┃\" }"], &["┃❮{ a: \"\" }❯"], 2)?;
-        assert_ctrl_shift_up_repeat(&["{ a: \"┃\" }"], &["┃❮{ a: \"\" }❯"], 4)?;
+        assert_ctrl_shift_up(ovec!["{ a: \"┃\" }"], ovec!["{ a: ┃❮\"\"❯ }"])?;
+        assert_ctrl_shift_up(ovec!["{ a: ┃\"\" }"], ovec!["{ a: ┃❮\"\"❯ }"])?;
+        assert_ctrl_shift_up(ovec!["{ a: \"\"┃ }"], ovec!["┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up(ovec!["{ a: \"\" ┃}"], ovec!["┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up_repeat(ovec!["{ a: \"\" ┃}"], ovec!["┃❮{ a: \"\" }❯"], 3)?;
+        assert_ctrl_shift_up(ovec!["{ a: \"\" }┃"], ovec!["┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up(ovec!["{ a:┃ \"\" }"], ovec!["┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up(ovec!["{ a┃: \"\" }"], ovec!["┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up(ovec!["{ ┃a: \"\" }"], ovec!["┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up(ovec!["{┃ a: \"\" }"], ovec!["┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up(ovec!["┃{ a: \"\" }"], ovec!["┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up_repeat(ovec!["{ a: \"┃\" }"], ovec!["┃❮{ a: \"\" }❯"], 2)?;
+        assert_ctrl_shift_up_repeat(ovec!["{ a: \"┃\" }"], ovec!["┃❮{ a: \"\" }❯"], 4)?;
 
-        assert_ctrl_shift_up(&["{ a: 1┃0 }"], &["{ a: ┃❮10❯ }"])?;
-        assert_ctrl_shift_up(&["{ a: ┃9 }"], &["{ a: ┃❮9❯ }"])?;
-        assert_ctrl_shift_up(&["{ a: 98┃89 }"], &["{ a: ┃❮9889❯ }"])?;
-        assert_ctrl_shift_up(&["{ a: 44┃ }"], &["┃❮{ a: 44 }❯"])?;
-        assert_ctrl_shift_up(&["{ a: 0 ┃}"], &["┃❮{ a: 0 }❯"])?;
-        assert_ctrl_shift_up_repeat(&["{ a: 123 ┃}"], &["┃❮{ a: 123 }❯"], 3)?;
-        assert_ctrl_shift_up(&["{ a: 96 }┃"], &["┃❮{ a: 96 }❯"])?;
-        assert_ctrl_shift_up(&["{ a:┃ 985600 }"], &["┃❮{ a: 985600 }❯"])?;
-        assert_ctrl_shift_up(&["{ a┃: 5648 }"], &["┃❮{ a: 5648 }❯"])?;
-        assert_ctrl_shift_up(&["{ ┃a: 1000000 }"], &["┃❮{ a: 1000000 }❯"])?;
-        assert_ctrl_shift_up(&["{┃ a: 1 }"], &["┃❮{ a: 1 }❯"])?;
-        assert_ctrl_shift_up(&["┃{ a: 900600 }"], &["┃❮{ a: 900600 }❯"])?;
-        assert_ctrl_shift_up_repeat(&["{ a: 10┃000 }"], &["┃❮{ a: 10000 }❯"], 2)?;
-        assert_ctrl_shift_up_repeat(&["{ a: ┃45 }"], &["┃❮{ a: 45 }❯"], 4)?;
+        assert_ctrl_shift_up(ovec!["{ a: 1┃0 }"], ovec!["{ a: ┃❮10❯ }"])?;
+        assert_ctrl_shift_up(ovec!["{ a: ┃9 }"], ovec!["{ a: ┃❮9❯ }"])?;
+        assert_ctrl_shift_up(ovec!["{ a: 98┃89 }"], ovec!["{ a: ┃❮9889❯ }"])?;
+        assert_ctrl_shift_up(ovec!["{ a: 44┃ }"], ovec!["┃❮{ a: 44 }❯"])?;
+        assert_ctrl_shift_up(ovec!["{ a: 0 ┃}"], ovec!["┃❮{ a: 0 }❯"])?;
+        assert_ctrl_shift_up_repeat(ovec!["{ a: 123 ┃}"], ovec!["┃❮{ a: 123 }❯"], 3)?;
+        assert_ctrl_shift_up(ovec!["{ a: 96 }┃"], ovec!["┃❮{ a: 96 }❯"])?;
+        assert_ctrl_shift_up(ovec!["{ a:┃ 985600 }"], ovec!["┃❮{ a: 985600 }❯"])?;
+        assert_ctrl_shift_up(ovec!["{ a┃: 5648 }"], ovec!["┃❮{ a: 5648 }❯"])?;
+        assert_ctrl_shift_up(ovec!["{ ┃a: 1000000 }"], ovec!["┃❮{ a: 1000000 }❯"])?;
+        assert_ctrl_shift_up(ovec!["{┃ a: 1 }"], ovec!["┃❮{ a: 1 }❯"])?;
+        assert_ctrl_shift_up(ovec!["┃{ a: 900600 }"], ovec!["┃❮{ a: 900600 }❯"])?;
+        assert_ctrl_shift_up_repeat(ovec!["{ a: 10┃000 }"], ovec!["┃❮{ a: 10000 }❯"], 2)?;
+        assert_ctrl_shift_up_repeat(ovec!["{ a: ┃45 }"], ovec!["┃❮{ a: 45 }❯"], 4)?;
 
-        assert_ctrl_shift_up(&["{ abc: \"de┃\" }"], &["{ abc: ┃❮\"de\"❯ }"])?;
-        assert_ctrl_shift_up(&["{ abc: \"d┃e\" }"], &["{ abc: ┃❮\"de\"❯ }"])?;
-        assert_ctrl_shift_up(&["{ abc: \"┃de\" }"], &["{ abc: ┃❮\"de\"❯ }"])?;
-        assert_ctrl_shift_up(&["{ abc: ┃\"de\" }"], &["{ abc: ┃❮\"de\"❯ }"])?;
-        assert_ctrl_shift_up(&["{ abc: \"de\"┃ }"], &["┃❮{ abc: \"de\" }❯"])?;
-        assert_ctrl_shift_up_repeat(&["{ abc: \"d┃e\" }"], &["┃❮{ abc: \"de\" }❯"], 2)?;
-        assert_ctrl_shift_up_repeat(&["{ abc: \"d┃e\" }"], &["┃❮{ abc: \"de\" }❯"], 3)?;
+        assert_ctrl_shift_up(ovec!["{ abc: \"de┃\" }"], ovec!["{ abc: ┃❮\"de\"❯ }"])?;
+        assert_ctrl_shift_up(ovec!["{ abc: \"d┃e\" }"], ovec!["{ abc: ┃❮\"de\"❯ }"])?;
+        assert_ctrl_shift_up(ovec!["{ abc: \"┃de\" }"], ovec!["{ abc: ┃❮\"de\"❯ }"])?;
+        assert_ctrl_shift_up(ovec!["{ abc: ┃\"de\" }"], ovec!["{ abc: ┃❮\"de\"❯ }"])?;
+        assert_ctrl_shift_up(ovec!["{ abc: \"de\"┃ }"], ovec!["┃❮{ abc: \"de\" }❯"])?;
+        assert_ctrl_shift_up_repeat(ovec!["{ abc: \"d┃e\" }"], ovec!["┃❮{ abc: \"de\" }❯"], 2)?;
+        assert_ctrl_shift_up_repeat(ovec!["{ abc: \"d┃e\" }"], ovec!["┃❮{ abc: \"de\" }❯"], 3)?;
 
         assert_ctrl_shift_up(
-            &["{ camelCase123: \"hello, hello.012┃3456789ZXY{}[]-><-\" }"],
-            &["{ camelCase123: ┃❮\"hello, hello.0123456789ZXY{}[]-><-\"❯ }"],
+            ovec!["{ camelCase123: \"hello, hello.012┃3456789ZXY{}[]-><-\" }"],
+            ovec!["{ camelCase123: ┃❮\"hello, hello.0123456789ZXY{}[]-><-\"❯ }"],
         )?;
         assert_ctrl_shift_up(
-            &["{ camel┃Case123: \"hello, hello.0123456789ZXY{}[]-><-\" }"],
-            &["┃❮{ camelCase123: \"hello, hello.0123456789ZXY{}[]-><-\" }❯"],
+            ovec!["{ camel┃Case123: \"hello, hello.0123456789ZXY{}[]-><-\" }"],
+            ovec!["┃❮{ camelCase123: \"hello, hello.0123456789ZXY{}[]-><-\" }❯"],
         )?;
         assert_ctrl_shift_up_repeat(
-            &["{ camelCase123: \"hello, hello┃.0123456789ZXY{}[]-><-\" }"],
-            &["┃❮{ camelCase123: \"hello, hello.0123456789ZXY{}[]-><-\" }❯"],
+            ovec!["{ camelCase123: \"hello, hello┃.0123456789ZXY{}[]-><-\" }"],
+            ovec!["┃❮{ camelCase123: \"hello, hello.0123456789ZXY{}[]-><-\" }❯"],
             2,
         )?;
 
@@ -2261,102 +2311,102 @@ pub mod test_ed_update {
     #[test]
     fn test_ctrl_shift_up_nested_record() -> Result<(), String> {
         // TODO uncomment tests once editor::lang::constrain::constrain_expr does not contain anymore todo's
-        assert_ctrl_shift_up(&["{ abc: { ┃ } }"], &["{ abc: ┃❮{  }❯ }"])?;
-        assert_ctrl_shift_up(&["{ abc: {┃  } }"], &["{ abc: ┃❮{  }❯ }"])?;
-        assert_ctrl_shift_up(&["{ abc: ┃{  } }"], &["{ abc: ┃❮{  }❯ }"])?;
-        assert_ctrl_shift_up(&["{ abc: {  ┃} }"], &["{ abc: ┃❮{  }❯ }"])?;
-        assert_ctrl_shift_up(&["{ abc: {  }┃ }"], &["┃❮{ abc: {  } }❯"])?;
+        assert_ctrl_shift_up(ovec!["{ abc: { ┃ } }"], ovec!["{ abc: ┃❮{  }❯ }"])?;
+        assert_ctrl_shift_up(ovec!["{ abc: {┃  } }"], ovec!["{ abc: ┃❮{  }❯ }"])?;
+        assert_ctrl_shift_up(ovec!["{ abc: ┃{  } }"], ovec!["{ abc: ┃❮{  }❯ }"])?;
+        assert_ctrl_shift_up(ovec!["{ abc: {  ┃} }"], ovec!["{ abc: ┃❮{  }❯ }"])?;
+        assert_ctrl_shift_up(ovec!["{ abc: {  }┃ }"], ovec!["┃❮{ abc: {  } }❯"])?;
 
-        /*assert_ctrl_shift_up(&["{ abc: { ┃d } }"], &["{ abc: ┃❮{ d }❯ }"])?;
-        assert_ctrl_shift_up(&["{ abc: {┃ d } }"], &["{ abc: ┃❮{ d }❯ }"])?;
-        assert_ctrl_shift_up(&["{ abc: ┃{ d } }"], &["{ abc: ┃❮{ d }❯ }"])?;
-        assert_ctrl_shift_up(&["{ abc: { d ┃} }"], &["{ abc: ┃❮{ d }❯ }"])?;
-        assert_ctrl_shift_up(&["{ abc: { d┃e } }"], &["{ abc: ┃❮{ de }❯ }"])?;
-        assert_ctrl_shift_up(&["{ abc: { d }┃ }"], &["┃❮{ abc: { d } }❯"])?;
-        assert_ctrl_shift_up(&["┃{ abc: { d } }"], &["┃❮{ abc: { d } }❯"])?;*/
+        /*assert_ctrl_shift_up(ovec!["{ abc: { ┃d } }"], ovec!["{ abc: ┃❮{ d }❯ }"])?;
+        assert_ctrl_shift_up(ovec!["{ abc: {┃ d } }"], ovec!["{ abc: ┃❮{ d }❯ }"])?;
+        assert_ctrl_shift_up(ovec!["{ abc: ┃{ d } }"], ovec!["{ abc: ┃❮{ d }❯ }"])?;
+        assert_ctrl_shift_up(ovec!["{ abc: { d ┃} }"], ovec!["{ abc: ┃❮{ d }❯ }"])?;
+        assert_ctrl_shift_up(ovec!["{ abc: { d┃e } }"], ovec!["{ abc: ┃❮{ de }❯ }"])?;
+        assert_ctrl_shift_up(ovec!["{ abc: { d }┃ }"], ovec!["┃❮{ abc: { d } }❯"])?;
+        assert_ctrl_shift_up(ovec!["┃{ abc: { d } }"], ovec!["┃❮{ abc: { d } }❯"])?;*/
 
-        assert_ctrl_shift_up(&["{ abc: { de: { ┃ } } }"], &["{ abc: { de: ┃❮{  }❯ } }"])?;
-        assert_ctrl_shift_up(&["{ abc: { de: ┃{  } } }"], &["{ abc: { de: ┃❮{  }❯ } }"])?;
-        assert_ctrl_shift_up(&["{ abc: { de: {  }┃ } }"], &["{ abc: ┃❮{ de: {  } }❯ }"])?;
+        assert_ctrl_shift_up(ovec!["{ abc: { de: { ┃ } } }"], ovec!["{ abc: { de: ┃❮{  }❯ } }"])?;
+        assert_ctrl_shift_up(ovec!["{ abc: { de: ┃{  } } }"], ovec!["{ abc: { de: ┃❮{  }❯ } }"])?;
+        assert_ctrl_shift_up(ovec!["{ abc: { de: {  }┃ } }"], ovec!["{ abc: ┃❮{ de: {  } }❯ }"])?;
 
-        assert_ctrl_shift_up(&["{ abc: { de: \"┃\" } }"], &["{ abc: { de: ┃❮\"\"❯ } }"])?;
-        assert_ctrl_shift_up(&["{ abc: { de: ┃\"\" } }"], &["{ abc: { de: ┃❮\"\"❯ } }"])?;
-        assert_ctrl_shift_up(&["{ abc: { de: \"\"┃ } }"], &["{ abc: ┃❮{ de: \"\" }❯ }"])?;
+        assert_ctrl_shift_up(ovec!["{ abc: { de: \"┃\" } }"], ovec!["{ abc: { de: ┃❮\"\"❯ } }"])?;
+        assert_ctrl_shift_up(ovec!["{ abc: { de: ┃\"\" } }"], ovec!["{ abc: { de: ┃❮\"\"❯ } }"])?;
+        assert_ctrl_shift_up(ovec!["{ abc: { de: \"\"┃ } }"], ovec!["{ abc: ┃❮{ de: \"\" }❯ }"])?;
         assert_ctrl_shift_up(
-            &["{ abc: { de: \"f g┃\" } }"],
-            &["{ abc: { de: ┃❮\"f g\"❯ } }"],
+            ovec!["{ abc: { de: \"f g┃\" } }"],
+            ovec!["{ abc: { de: ┃❮\"f g\"❯ } }"],
         )?;
         assert_ctrl_shift_up(
-            &["{ abc: { de┃: \"f g\" } }"],
-            &["{ abc: ┃❮{ de: \"f g\" }❯ }"],
+            ovec!["{ abc: { de┃: \"f g\" } }"],
+            ovec!["{ abc: ┃❮{ de: \"f g\" }❯ }"],
         )?;
         assert_ctrl_shift_up(
-            &["{ abc: {┃ de: \"f g\" } }"],
-            &["{ abc: ┃❮{ de: \"f g\" }❯ }"],
+            ovec!["{ abc: {┃ de: \"f g\" } }"],
+            ovec!["{ abc: ┃❮{ de: \"f g\" }❯ }"],
         )?;
         assert_ctrl_shift_up(
-            &["{ abc: { de: \"f g\" ┃} }"],
-            &["{ abc: ┃❮{ de: \"f g\" }❯ }"],
+            ovec!["{ abc: { de: \"f g\" ┃} }"],
+            ovec!["{ abc: ┃❮{ de: \"f g\" }❯ }"],
         )?;
         assert_ctrl_shift_up(
-            &["{ abc: { de: \"f g\" }┃ }"],
-            &["┃❮{ abc: { de: \"f g\" } }❯"],
+            ovec!["{ abc: { de: \"f g\" }┃ }"],
+            ovec!["┃❮{ abc: { de: \"f g\" } }❯"],
         )?;
         assert_ctrl_shift_up(
-            &["┃{ abc: { de: \"f g\" } }"],
-            &["┃❮{ abc: { de: \"f g\" } }❯"],
+            ovec!["┃{ abc: { de: \"f g\" } }"],
+            ovec!["┃❮{ abc: { de: \"f g\" } }❯"],
         )?;
         assert_ctrl_shift_up(
-            &["{ abc: { de: \"f g\" } }┃"],
-            &["┃❮{ abc: { de: \"f g\" } }❯"],
+            ovec!["{ abc: { de: \"f g\" } }┃"],
+            ovec!["┃❮{ abc: { de: \"f g\" } }❯"],
         )?;
 
         assert_ctrl_shift_up_repeat(
-            &["{ abc: { de: \"f g┃\" } }"],
-            &["{ abc: ┃❮{ de: \"f g\" }❯ }"],
+            ovec!["{ abc: { de: \"f g┃\" } }"],
+            ovec!["{ abc: ┃❮{ de: \"f g\" }❯ }"],
             2,
         )?;
         assert_ctrl_shift_up_repeat(
-            &["{ abc: { de: ┃\"f g\" } }"],
-            &["┃❮{ abc: { de: \"f g\" } }❯"],
+            ovec!["{ abc: { de: ┃\"f g\" } }"],
+            ovec!["┃❮{ abc: { de: \"f g\" } }❯"],
             3,
         )?;
         assert_ctrl_shift_up_repeat(
-            &["{ abc: { de: ┃\"f g\" } }"],
-            &["┃❮{ abc: { de: \"f g\" } }❯"],
+            ovec!["{ abc: { de: ┃\"f g\" } }"],
+            ovec!["┃❮{ abc: { de: \"f g\" } }❯"],
             4,
         )?;
 
-        assert_ctrl_shift_up(&["{ abc: { de: ┃951 } }"], &["{ abc: { de: ┃❮951❯ } }"])?;
-        assert_ctrl_shift_up(&["{ abc: { de: 11┃0 } }"], &["{ abc: { de: ┃❮110❯ } }"])?;
-        assert_ctrl_shift_up(&["{ abc: { de: 444┃ } }"], &["{ abc: ┃❮{ de: 444 }❯ }"])?;
-        assert_ctrl_shift_up(&["{ abc: { de┃: 99 } }"], &["{ abc: ┃❮{ de: 99 }❯ }"])?;
-        assert_ctrl_shift_up(&["{ abc: {┃ de: 0 } }"], &["{ abc: ┃❮{ de: 0 }❯ }"])?;
-        assert_ctrl_shift_up(&["{ abc: { de: 230 ┃} }"], &["{ abc: ┃❮{ de: 230 }❯ }"])?;
-        assert_ctrl_shift_up(&["{ abc: { de: 7 }┃ }"], &["┃❮{ abc: { de: 7 } }❯"])?;
-        assert_ctrl_shift_up(&["┃{ abc: { de: 1 } }"], &["┃❮{ abc: { de: 1 } }❯"])?;
+        assert_ctrl_shift_up(ovec!["{ abc: { de: ┃951 } }"], ovec!["{ abc: { de: ┃❮951❯ } }"])?;
+        assert_ctrl_shift_up(ovec!["{ abc: { de: 11┃0 } }"], ovec!["{ abc: { de: ┃❮110❯ } }"])?;
+        assert_ctrl_shift_up(ovec!["{ abc: { de: 444┃ } }"], ovec!["{ abc: ┃❮{ de: 444 }❯ }"])?;
+        assert_ctrl_shift_up(ovec!["{ abc: { de┃: 99 } }"], ovec!["{ abc: ┃❮{ de: 99 }❯ }"])?;
+        assert_ctrl_shift_up(ovec!["{ abc: {┃ de: 0 } }"], ovec!["{ abc: ┃❮{ de: 0 }❯ }"])?;
+        assert_ctrl_shift_up(ovec!["{ abc: { de: 230 ┃} }"], ovec!["{ abc: ┃❮{ de: 230 }❯ }"])?;
+        assert_ctrl_shift_up(ovec!["{ abc: { de: 7 }┃ }"], ovec!["┃❮{ abc: { de: 7 } }❯"])?;
+        assert_ctrl_shift_up(ovec!["┃{ abc: { de: 1 } }"], ovec!["┃❮{ abc: { de: 1 } }❯"])?;
         assert_ctrl_shift_up(
-            &["{ abc: { de: 111111 } }┃"],
-            &["┃❮{ abc: { de: 111111 } }❯"],
+            ovec!["{ abc: { de: 111111 } }┃"],
+            ovec!["┃❮{ abc: { de: 111111 } }❯"],
         )?;
 
-        assert_ctrl_shift_up_repeat(&["{ abc: { de: 1┃5 } }"], &["{ abc: ┃❮{ de: 15 }❯ }"], 2)?;
-        assert_ctrl_shift_up_repeat(&["{ abc: { de: ┃55 } }"], &["┃❮{ abc: { de: 55 } }❯"], 3)?;
-        assert_ctrl_shift_up_repeat(&["{ abc: { de: ┃400 } }"], &["┃❮{ abc: { de: 400 } }❯"], 4)?;
+        assert_ctrl_shift_up_repeat(ovec!["{ abc: { de: 1┃5 } }"], ovec!["{ abc: ┃❮{ de: 15 }❯ }"], 2)?;
+        assert_ctrl_shift_up_repeat(ovec!["{ abc: { de: ┃55 } }"], ovec!["┃❮{ abc: { de: 55 } }❯"], 3)?;
+        assert_ctrl_shift_up_repeat(ovec!["{ abc: { de: ┃400 } }"], ovec!["┃❮{ abc: { de: 400 } }❯"], 4)?;
 
         /*assert_ctrl_shift_up_repeat(
-            &["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase┃ } } } } } } } }"],
-            &["{ g: { oi: { ng: { d: ┃❮{ e: { e: { p: { camelCase } } } }❯ } } } }"],
+            ovec!["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase┃ } } } } } } } }"],
+            ovec!["{ g: { oi: { ng: { d: ┃❮{ e: { e: { p: { camelCase } } } }❯ } } } }"],
             4,
         )?;
         assert_ctrl_shift_up_repeat(
-            &["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase┃ } } } } } } } }"],
-            &["{ g: ┃❮{ oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } }❯ }"],
+            ovec!["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase┃ } } } } } } } }"],
+            ovec!["{ g: ┃❮{ oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } }❯ }"],
             7,
         )?;
         assert_ctrl_shift_up_repeat(
-            &["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase┃ } } } } } } } }"],
-            &["┃❮{ g: { oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } } }❯"],
+            ovec!["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase┃ } } } } } } } }"],
+            ovec!["┃❮{ g: { oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } } }❯"],
             9,
         )?;*/
 
@@ -2366,8 +2416,8 @@ pub mod test_ed_update {
     // Create ed_model from pre_lines DSL, do handle_new_char() with new_char_seq, select current Expr2,
     // check if generated tooltips match expected_tooltips.
     pub fn assert_type_tooltips_seq(
-        pre_lines: &[&str],
-        expected_tooltips: &[&str],
+        pre_lines: Vec<String>,
+        expected_tooltips: Vec<String>,
         new_char_seq: &str,
     ) -> Result<(), String> {
         let mut code_str = pre_lines.join("").replace("┃", "");
@@ -2409,22 +2459,22 @@ pub mod test_ed_update {
     // Create ed_model from pre_lines DSL, do handle_new_char() with new_char, select current Expr2,
     // check if generated tooltip matches expected_tooltip.
     pub fn assert_type_tooltip(
-        pre_lines: &[&str],
+        pre_lines: Vec<String>,
         expected_tooltip: &str,
         new_char: char,
     ) -> Result<(), String> {
-        assert_type_tooltips_seq(pre_lines, &[expected_tooltip], &new_char.to_string())
+        assert_type_tooltips_seq(pre_lines, ovec![expected_tooltip], &new_char.to_string())
     }
 
-    pub fn assert_type_tooltip_clean(lines: &[&str], expected_tooltip: &str) -> Result<(), String> {
-        assert_type_tooltips_seq(lines, &[expected_tooltip], "")
+    pub fn assert_type_tooltip_clean(lines: Vec<String>, expected_tooltip: &str) -> Result<(), String> {
+        assert_type_tooltips_seq(lines, ovec![expected_tooltip], "")
     }
 
     // When doing ctrl+shift+up multiple times we select the surrounding expression every time,
     // every new selection should have the correct tooltip
     pub fn assert_type_tooltips_clean(
-        lines: &[&str],
-        expected_tooltips: &[&str],
+        lines: Vec<String>,
+        expected_tooltips: Vec<String>,
     ) -> Result<(), String> {
         assert_type_tooltips_seq(lines, expected_tooltips, "")
     }
@@ -2433,31 +2483,26 @@ pub mod test_ed_update {
     fn test_type_tooltip() -> Result<(), String> {
         /*YOLOassert_type_tooltip( "{}", '{')?;*/
 
-        assert_type_tooltip_clean(&["┃5"], "Num *")?;
-        assert_type_tooltip_clean(&["42┃"], "Num *")?;
-        assert_type_tooltip_clean(&["13┃7"], "Num *")?;
+        assert_type_tooltip_clean(ovec!["┃5"], "Num *")?;
+        assert_type_tooltip_clean(ovec!["42┃"], "Num *")?;
+        assert_type_tooltip_clean(ovec!["13┃7"], "Num *")?;
 
-        assert_type_tooltip_clean(&["\"┃abc\""], "Str")?;
-        assert_type_tooltip_clean(&["┃\"abc\""], "Str")?;
-        assert_type_tooltip_clean(&["\"abc\"┃"], "Str")?;
+        assert_type_tooltip_clean(ovec!["\"┃abc\""], "Str")?;
+        assert_type_tooltip_clean(ovec!["┃\"abc\""], "Str")?;
+        assert_type_tooltip_clean(ovec!["\"abc\"┃"], "Str")?;
 
-        assert_type_tooltip_clean(&["{ a: \"abc\" }┃"], "{ a : Str }")?;
-        assert_type_tooltip_clean(&["{ ┃a: 0 }"], "{ a : Num * }")?;
-        assert_type_tooltip_clean(&["{ ┃z: {  } }"], "{ z : {} }")?;
-        assert_type_tooltip_clean(&["{ camelCase: ┃0 }"], "Num *")?;
+        assert_type_tooltip_clean(ovec!["{ a: \"abc\" }┃"], "{ a : Str }")?;
+        assert_type_tooltip_clean(ovec!["{ ┃a: 0 }"], "{ a : Num * }")?;
+        assert_type_tooltip_clean(ovec!["{ ┃z: {  } }"], "{ z : {} }")?;
+        assert_type_tooltip_clean(ovec!["{ camelCase: ┃0 }"], "Num *")?;
 
-        /*YOLOassert_type_tooltips_seq( &["*"], "")?;
-        assert_type_tooltips_seq( &["*", "{ a : * }"], "{a:")?;*/
+        /*YOLOassert_type_tooltips_seq( ovec!["*"], "")?;
+        assert_type_tooltips_seq( ovec!["*", "{ a : * }"], "{a:")?;*/
 
-        assert_type_tooltips_clean(&["{ camelCase: ┃0 }"], &["Num *", "{ camelCase : Num * }"])?;
+        assert_type_tooltips_clean(ovec!["{ camelCase: ┃0 }"], ovec!["Num *", "{ camelCase : Num * }"])?;
         assert_type_tooltips_clean(
-            &["{ a: { b: { c: \"hello┃, hello.0123456789ZXY{}[]-><-\" } } }"],
-            &[
-                "Str",
-                "{ c : Str }",
-                "{ b : { c : Str } }",
-                "{ a : { b : { c : Str } } }",
-            ],
+            ovec!["{ a: { b: { c: \"hello┃, hello.0123456789ZXY{}[]-><-\" } } }"],
+            ovec!["Str", "{ c : Str }", "{ b : { c : Str } }", "{ a : { b : { c : Str } } }"],
         )?;
 
         Ok(())
@@ -2466,35 +2511,30 @@ pub mod test_ed_update {
     #[test]
     fn test_type_tooltip_list() -> Result<(), String> {
         /*YOLOassert_type_tooltip( "List *", '[')?;
-        assert_type_tooltips_seq( &["List (Num *)"], "[0")?;
-        assert_type_tooltips_seq( &["List (Num *)", "List (List (Num *))"], "[[0")?;
-        assert_type_tooltips_seq( &["Str", "List Str"], "[\"a")?;*/
+        assert_type_tooltips_seq( ovec!["List (Num *)"], "[0")?;
+        assert_type_tooltips_seq( ovec!["List (Num *)", "List (List (Num *))"], "[[0")?;
+        assert_type_tooltips_seq( ovec!["Str", "List Str"], "[\"a")?;*/
         assert_type_tooltips_seq(
-            &["┃"],
-            &[
-                "Str",
-                "List Str",
-                "List (List Str)",
-                "List (List (List Str))",
-            ],
+            ovec!["┃"],
+            ovec!["Str", "List Str", "List (List Str)", "List (List (List Str))"],
             "[[[\"a",
         )?;
         assert_type_tooltips_seq(
-            &["┃"],
-            &[
+            ovec!["┃"],
+            ovec![
                 "{ a : Num * }",
                 "List { a : Num * }",
-                "List (List { a : Num * })",
+                "List (List { a : Num * })"
             ],
             "[[{a:1",
         )?;
 
         // multi element lists
-        /*YOLOassert_type_tooltips_seq( &["List (Num *)"], "[1,2,3")?;
-        assert_type_tooltips_seq( &["Str", "List Str"], "[\"abc🡲,\"de🡲,\"f")?;*/
+        /*YOLOassert_type_tooltips_seq( ovec!["List (Num *)"], "[1,2,3")?;
+        assert_type_tooltips_seq( ovec!["Str", "List Str"], "[\"abc🡲,\"de🡲,\"f")?;*/
         assert_type_tooltips_seq(
-            &["┃"],
-            &["{ a : Num * }", "List { a : Num * }"],
+            ovec!["┃"],
+            ovec!["{ a : Num * }", "List { a : Num * }"],
             "[{a:0🡲🡲,{a:12🡲🡲,{a:444",
         )?;
         Ok(())
@@ -2502,18 +2542,18 @@ pub mod test_ed_update {
 
     #[test]
     fn test_type_tooltip_mismatch() -> Result<(), String> {
-        /*YOLOassert_type_tooltips_seq( &["Str", "List <type mismatch>"], "[1,\"abc")?;
-        assert_type_tooltips_seq( &["List <type mismatch>"], "[\"abc🡲,50")?;*/
+        /*YOLOassert_type_tooltips_seq( ovec!["Str", "List <type mismatch>"], "[1,\"abc")?;
+        assert_type_tooltips_seq( ovec!["List <type mismatch>"], "[\"abc🡲,50")?;*/
 
         assert_type_tooltips_seq(
-            &["┃"],
-            &["Str", "{ a : Str }", "List <type mismatch>"],
+            ovec!["┃"],
+            ovec!["Str", "{ a : Str }", "List <type mismatch>"],
             "[{a:0🡲🡲,{a:\"0",
         )?;
 
         assert_type_tooltips_seq(
-            &["┃"],
-            &["List (Num *)", "List (List <type mismatch>)"],
+            ovec!["┃"],
+            ovec!["List (Num *)", "List (List <type mismatch>)"],
             "[[0,1,\"2🡲🡲🡲,[3, 4, 5",
         )?;
 
@@ -2526,8 +2566,8 @@ pub mod test_ed_update {
     // move_caret_fun. Next check if modified ed_model has expected string representation of code, caret position and
     // active selection.
     fn assert_ctrl_shift_up_move(
-        pre_lines: &[&str],
-        expected_post_lines: &[&str],
+        pre_lines: Vec<String>,
+        expected_post_lines: Vec<String>,
         repeats: usize,
         move_caret_fun: ModelMoveCaretFun,
     ) -> Result<(), String> {
@@ -2559,8 +2599,8 @@ pub mod test_ed_update {
     }
 
     fn assert_ctrl_shift_single_up_move(
-        pre_lines: &[&str],
-        expected_post_lines: &[&str],
+        pre_lines: Vec<String>,
+        expected_post_lines: Vec<String>,
         move_caret_fun: ModelMoveCaretFun,
     ) -> Result<(), String> {
         assert_ctrl_shift_up_move(pre_lines, expected_post_lines, 1, move_caret_fun)
@@ -2591,28 +2631,28 @@ pub mod test_ed_update {
     #[test]
     fn test_ctrl_shift_up_move_blank() -> Result<(), String> {
         // Blank is auto-inserted
-        /*YOLOassert_ctrl_shift_single_up_move( &[" ┃"], move_right!())?;
-        assert_ctrl_shift_up_move( &["┃ "], 3, move_left!())?;*/
+        /*YOLOassert_ctrl_shift_single_up_move( ovec![" ┃"], move_right!())?;
+        assert_ctrl_shift_up_move( ovec!["┃ "], 3, move_left!())?;*/
 
         Ok(())
     }
 
     #[test]
     fn test_ctrl_shift_up_move_int() -> Result<(), String> {
-        assert_ctrl_shift_single_up_move(&["┃0"], &["0┃"], move_down!())?;
-        assert_ctrl_shift_single_up_move(&["┃9654"], &["┃9654"], move_up!())?;
-        assert_ctrl_shift_single_up_move(&["┃100546"], &["100546┃"], move_end!())?;
+        assert_ctrl_shift_single_up_move(ovec!["┃0"], ovec!["0┃"], move_down!())?;
+        assert_ctrl_shift_single_up_move(ovec!["┃9654"], ovec!["┃9654"], move_up!())?;
+        assert_ctrl_shift_single_up_move(ovec!["┃100546"], ovec!["100546┃"], move_end!())?;
 
         Ok(())
     }
 
     #[test]
     fn test_ctrl_shift_up_move_string() -> Result<(), String> {
-        assert_ctrl_shift_single_up_move(&["┃\"\""], &["\"\"┃"], move_down!())?;
-        assert_ctrl_shift_single_up_move(&["┃\"abc\""], &["┃\"abc\""], move_up!())?;
+        assert_ctrl_shift_single_up_move(ovec!["┃\"\""], ovec!["\"\"┃"], move_down!())?;
+        assert_ctrl_shift_single_up_move(ovec!["┃\"abc\""], ovec!["┃\"abc\""], move_up!())?;
         assert_ctrl_shift_single_up_move(
-            &["┃\"hello, hello.0123456789ZXY{}[]-><-\""],
-            &["\"hello, hello.0123456789ZXY{}[]-><-\"┃"],
+            ovec!["┃\"hello, hello.0123456789ZXY{}[]-><-\""],
+            ovec!["\"hello, hello.0123456789ZXY{}[]-><-\"┃"],
             move_end!(),
         )?;
 
@@ -2622,26 +2662,26 @@ pub mod test_ed_update {
     #[test]
     fn test_ctrl_shift_up_move_record() -> Result<(), String> {
         // TODO uncomment tests once editor::lang::constrain::constrain_expr does not contain anymore todo's
-        assert_ctrl_shift_single_up_move(&["┃{  }"], &["┃{  }"], move_home!())?;
-        //assert_ctrl_shift_single_up_move(&["┃{ a }"], &["{ a }┃"], move_down!())?;
-        //assert_ctrl_shift_single_up_move(&["┃{ a: { b } }"], &["{ a: { b } }┃"], move_right!())?;
-        assert_ctrl_shift_single_up_move(&["{ a: { ┃ } }"], &["{ a: {  } }┃"], move_end!())?;
+        assert_ctrl_shift_single_up_move(ovec!["┃{  }"], ovec!["┃{  }"], move_home!())?;
+        //assert_ctrl_shift_single_up_move(ovec!["┃{ a }"], ovec!["{ a }┃"], move_down!())?;
+        //assert_ctrl_shift_single_up_move(ovec!["┃{ a: { b } }"], ovec!["{ a: { b } }┃"], move_right!())?;
+        assert_ctrl_shift_single_up_move(ovec!["{ a: { ┃ } }"], ovec!["{ a: {  } }┃"], move_end!())?;
         assert_ctrl_shift_up_move(
-            &["{ a: { b: { ┃ } } }"],
-            &["{ a: ┃{ b: {  } } }"],
+            ovec!["{ a: { b: { ┃ } } }"],
+            ovec!["{ a: ┃{ b: {  } } }"],
             2,
             move_up!(),
         )?;
         assert_ctrl_shift_up_move(
-            &["{ camelCase: { cC123: \"hello┃, hello.0123456789ZXY{}[]-><-\" } }"],
-            &["{ camelCase: { cC123: \"hello, hello.0123456789ZXY{}[]-><-\" }┃ }"],
+            ovec!["{ camelCase: { cC123: \"hello┃, hello.0123456789ZXY{}[]-><-\" } }"],
+            ovec!["{ camelCase: { cC123: \"hello, hello.0123456789ZXY{}[]-><-\" }┃ }"],
             2,
             move_down!(),
         )?;
 
         assert_ctrl_shift_up_move(
-            &["{ camelCase: { cC123: 9┃5 } }"],
-            &["{ camelCase: { cC123: 95 }┃ }"],
+            ovec!["{ camelCase: { cC123: 9┃5 } }"],
+            ovec!["{ camelCase: { cC123: 95 }┃ }"],
             2,
             move_down!(),
         )?;
@@ -2653,8 +2693,8 @@ pub mod test_ed_update {
     // Next check if modified ed_model has expected string representation of code, caret position and
     // active selection.
     fn assert_ctrl_shift_up_backspace(
-        pre_lines: &[&str],
-        expected_post_lines: &[&str],
+        pre_lines: Vec<String>,
+        expected_post_lines: Vec<String>,
         repeats: usize,
     ) -> Result<(), String> {
         let mut code_str = pre_lines.join("").replace("┃", "");
@@ -2685,8 +2725,8 @@ pub mod test_ed_update {
     }
 
     fn assert_ctrl_shift_single_up_backspace(
-        pre_lines: &[&str],
-        expected_post_lines: &[&str],
+        pre_lines: Vec<String>,
+        expected_post_lines: Vec<String>,
     ) -> Result<(), String> {
         assert_ctrl_shift_up_backspace(pre_lines, expected_post_lines, 1)
     }
@@ -2694,7 +2734,7 @@ pub mod test_ed_update {
     #[test]
     fn test_ctrl_shift_up_backspace_blank() -> Result<(), String> {
         // Blank is inserted when root is deleted
-        /*YOLOassert_ctrl_shift_single_up_backspace( &["┃ "])?;*/
+        /*YOLOassert_ctrl_shift_single_up_backspace( ovec!["┃ "])?;*/
 
         Ok(())
     }
@@ -2702,9 +2742,9 @@ pub mod test_ed_update {
     #[test]
     fn test_ctrl_shift_up_backspace_int() -> Result<(), String> {
         // Blank is inserted when root is deleted
-        assert_ctrl_shift_single_up_backspace(&["95┃21"], &["┃ "])?;
-        assert_ctrl_shift_single_up_backspace(&["0┃"], &["┃ "])?;
-        assert_ctrl_shift_single_up_backspace(&["┃10000"], &["┃ "])?;
+        assert_ctrl_shift_single_up_backspace(ovec!["95┃21"], ovec!["┃ "])?;
+        assert_ctrl_shift_single_up_backspace(ovec!["0┃"], ovec!["┃ "])?;
+        assert_ctrl_shift_single_up_backspace(ovec!["┃10000"], ovec!["┃ "])?;
 
         Ok(())
     }
@@ -2712,12 +2752,12 @@ pub mod test_ed_update {
     #[test]
     fn test_ctrl_shift_up_backspace_string() -> Result<(), String> {
         // Blank is inserted when root is deleted
-        assert_ctrl_shift_single_up_backspace(&["\"┃\""], &["┃ "])?;
-        assert_ctrl_shift_single_up_backspace(&["\"\"┃"], &["┃ "])?;
-        assert_ctrl_shift_single_up_backspace(&["┃\"abc\""], &["┃ "])?;
+        assert_ctrl_shift_single_up_backspace(ovec!["\"┃\""], ovec!["┃ "])?;
+        assert_ctrl_shift_single_up_backspace(ovec!["\"\"┃"], ovec!["┃ "])?;
+        assert_ctrl_shift_single_up_backspace(ovec!["┃\"abc\""], ovec!["┃ "])?;
         assert_ctrl_shift_single_up_backspace(
-            &["\"hello┃, hello.0123456789ZXY{}[]-><-\""],
-            &["┃ "],
+            ovec!["\"hello┃, hello.0123456789ZXY{}[]-><-\""],
+            ovec!["┃ "],
         )?;
 
         Ok(())
@@ -2727,33 +2767,33 @@ pub mod test_ed_update {
     fn test_ctrl_shift_up_backspace_record() -> Result<(), String> {
         // TODO uncomment tests once editor::lang::constrain::constrain_expr does not contain anymore todo's
         // Blank is inserted when root is deleted
-        assert_ctrl_shift_single_up_backspace(&["{┃  }"], &["┃ "])?;
-        //assert_ctrl_shift_single_up_backspace(&["{ a┃ }"], &["┃ "])?;
-        //assert_ctrl_shift_single_up_backspace(&["{ a: { b }┃ }"], &["┃ "])?;
-        assert_ctrl_shift_single_up_backspace(&["{ a: \"b cd\"┃ }"], &["┃ "])?;
+        assert_ctrl_shift_single_up_backspace(ovec!["{┃  }"], ovec!["┃ "])?;
+        //assert_ctrl_shift_single_up_backspace(ovec!["{ a┃ }"], ovec!["┃ "])?;
+        //assert_ctrl_shift_single_up_backspace(ovec!["{ a: { b }┃ }"], ovec!["┃ "])?;
+        assert_ctrl_shift_single_up_backspace(ovec!["{ a: \"b cd\"┃ }"], ovec!["┃ "])?;
 
-        //assert_ctrl_shift_single_up_backspace(&["{ a: ┃{ b } }"], &["{ a: ┃  }"])?;
-        assert_ctrl_shift_single_up_backspace(&["{ a: \"┃b cd\" }"], &["{ a: ┃  }"])?;
-        assert_ctrl_shift_single_up_backspace(&["{ a: ┃12 }"], &["{ a: ┃  }"])?;
+        //assert_ctrl_shift_single_up_backspace(ovec!["{ a: ┃{ b } }"], ovec!["{ a: ┃  }"])?;
+        assert_ctrl_shift_single_up_backspace(ovec!["{ a: \"┃b cd\" }"], ovec!["{ a: ┃  }"])?;
+        assert_ctrl_shift_single_up_backspace(ovec!["{ a: ┃12 }"], ovec!["{ a: ┃  }"])?;
         /*assert_ctrl_shift_single_up_backspace(
-            &["{ g: { oi: { ng: { d: { ┃e: { e: { p: { camelCase } } } } } } } }"],
-            &["{ g: { oi: { ng: { d: ┃  } } } }"],
+            ovec!["{ g: { oi: { ng: { d: { ┃e: { e: { p: { camelCase } } } } } } } }"],
+            ovec!["{ g: { oi: { ng: { d: ┃  } } } }"],
         )?;*/
 
         assert_ctrl_shift_up_backspace(
-            &["{ a: { b: { c: \"abc┃  \" } } }"],
-            &["{ a: { b: ┃  } }"],
+            ovec!["{ a: { b: { c: \"abc┃  \" } } }"],
+            ovec!["{ a: { b: ┃  } }"],
             2,
         )?;
         assert_ctrl_shift_up_backspace(
-            &["{ a: { b: { c: 100┃000 } } }"],
-            &["{ a: { b: ┃  } }"],
+            ovec!["{ a: { b: { c: 100┃000 } } }"],
+            ovec!["{ a: { b: ┃  } }"],
             2,
         )?;
-        assert_ctrl_shift_up_backspace(&["{ a: { b: { c: {┃  } } } }"], &["{ a: { b: ┃  } }"], 2)?;
+        assert_ctrl_shift_up_backspace(ovec!["{ a: { b: { c: {┃  } } } }"], ovec!["{ a: { b: ┃  } }"], 2)?;
         /*assert_ctrl_shift_up_backspace(
-            &["{ g: { oi: { ng: { d: { e: { e: { p┃: { camelCase } } } } } } } }"],
-            &["{ g: ┃  }"],
+            ovec!["{ g: { oi: { ng: { d: { e: { e: { p┃: { camelCase } } } } } } } }"],
+            ovec!["{ g: ┃  }"],
             6,
         )?;*/
 

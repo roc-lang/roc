@@ -10,8 +10,8 @@ use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::mvc::ed_update::get_node_context;
 use crate::editor::mvc::ed_update::NodeContext;
 use crate::editor::slow_pool::MarkNodeId;
-use crate::lang::ast::{Expr2, ast_node_to_string};
-use crate::lang::ast::{ExprId};
+use crate::lang::ast::ExprId;
+use crate::lang::ast::{ast_node_to_string, Expr2};
 use crate::lang::parse::ASTNodeId;
 use crate::lang::pool::PoolVec;
 use crate::ui::text::text_pos::TextPos;
@@ -33,13 +33,21 @@ pub fn start_new_list(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
         elems: PoolVec::empty(ed_model.module.env.pool),
     };
 
-    ed_model.module.env.pool.set(ast_node_id.to_expr_id()?, expr2_node);
+    ed_model
+        .module
+        .env
+        .pool
+        .set(ast_node_id.to_expr_id()?, expr2_node);
 
-    let left_bracket_node_id =
-        ed_model.add_mark_node(new_left_square_mn(ast_node_id.to_expr_id()?, Some(curr_mark_node_id)));
+    let left_bracket_node_id = ed_model.add_mark_node(new_left_square_mn(
+        ast_node_id.to_expr_id()?,
+        Some(curr_mark_node_id),
+    ));
 
-    let right_bracket_node_id =
-        ed_model.add_mark_node(new_right_square_mn(ast_node_id.to_expr_id()?, Some(curr_mark_node_id)));
+    let right_bracket_node_id = ed_model.add_mark_node(new_right_square_mn(
+        ast_node_id.to_expr_id()?,
+        Some(curr_mark_node_id),
+    ));
 
     let nested_node = MarkupNode::Nested {
         ast_node_id,
@@ -181,7 +189,10 @@ pub fn update_mark_children(
     parent_id_opt: Option<MarkNodeId>,
     ed_model: &mut EdModel,
 ) -> EdResult<Vec<MarkNodeId>> {
-    let blank_mark_node_id = ed_model.add_mark_node(new_blank_mn(ASTNodeId::AExprId(blank_elt_id), parent_id_opt));
+    let blank_mark_node_id = ed_model.add_mark_node(new_blank_mn(
+        ASTNodeId::AExprId(blank_elt_id),
+        parent_id_opt,
+    ));
 
     let mut children: Vec<MarkNodeId> = vec![];
 

@@ -8,7 +8,7 @@ use crate::editor::{
 };
 use crate::graphics::primitives::rect::Rect;
 use crate::lang::expr::Env;
-use crate::lang::parse::{AST, ASTNodeId};
+use crate::lang::parse::{ASTNodeId, AST};
 use crate::lang::pool::PoolStr;
 use crate::ui::text::caret_w_select::{CaretPos, CaretWSelect};
 use crate::ui::text::lines::SelectableLines;
@@ -256,17 +256,13 @@ pub mod test_ed_model {
 
     pub fn ed_model_from_dsl<'a>(
         clean_code_str: &'a mut String,
-        code_lines: &[&str],
+        code_lines: Vec<String>,
         ed_model_refs: &'a mut EdModelRefs,
         module_ids: &'a ModuleIds,
         code_arena: &'a Bump,
     ) -> Result<EdModel<'a>, String> {
-        let code_lines_vec: Vec<String> = (*code_lines).iter().map(|s| s.to_string()).collect();
-        
         let full_code = vec![HELLO_WORLD, clean_code_str.as_str()];
         *clean_code_str = full_code.join("\n");
-
-        dbg!(&clean_code_str);
 
         let temp_dir = tempdir().expect("Failed to create temporary directory for test.");
         let temp_file_path_buf =
@@ -294,7 +290,7 @@ pub mod test_ed_model {
 
         // adjust for header and main function
         let nr_hello_world_lines = HELLO_WORLD.matches('\n').count() - 1;
-        let caret_w_select = convert_dsl_to_selection(&code_lines_vec)?;
+        let caret_w_select = convert_dsl_to_selection(&code_lines)?;
         let adjusted_caret_pos = TextPos {
             line: caret_w_select.caret_pos.line + nr_hello_world_lines,
             column: caret_w_select.caret_pos.column,

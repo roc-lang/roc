@@ -5,7 +5,10 @@ use bumpalo::{collections::Vec as BumpVec, Bump};
 use std::collections::HashMap;
 use std::iter::FromIterator;
 
-use crate::lang::ast::{ClosureExtra, Def2, Expr2, ExprId, FloatVal, IntStyle, IntVal, RecordField, ValueDef, WhenBranch, expr2_to_string, value_def_to_string};
+use crate::lang::ast::{
+    expr2_to_string, value_def_to_string, ClosureExtra, Def2, Expr2, ExprId, FloatVal, IntStyle,
+    IntVal, RecordField, ValueDef, WhenBranch,
+};
 use crate::lang::def::{
     canonicalize_defs, sort_can_defs, CanDefs, Declaration, Def, PendingDef, References,
 };

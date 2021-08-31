@@ -37,21 +37,15 @@ pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
 
     ast_pool.set(ast_node_id.to_expr_id()?, expr2_node);
 
-    let left_bracket_node_id =
-        ed_model.add_mark_node(
-            new_left_accolade_mn(
-                ast_node_id.to_expr_id()?, 
-                Some(curr_mark_node_id)
-            )
-        );
+    let left_bracket_node_id = ed_model.add_mark_node(new_left_accolade_mn(
+        ast_node_id.to_expr_id()?,
+        Some(curr_mark_node_id),
+    ));
 
-    let right_bracket_node_id =
-        ed_model.add_mark_node(
-            new_right_accolade_mn(
-                ast_node_id.to_expr_id()?, 
-                Some(curr_mark_node_id)
-            )
-        );
+    let right_bracket_node_id = ed_model.add_mark_node(new_right_accolade_mn(
+        ast_node_id.to_expr_id()?,
+        Some(curr_mark_node_id),
+    ));
 
     let nested_node = MarkupNode::Nested {
         ast_node_id,
@@ -118,7 +112,11 @@ pub fn update_empty_record(
 
             let new_ast_node = Expr2::Record { record_var, fields };
 
-            ed_model.module.env.pool.set(ast_node_id.to_expr_id()?, new_ast_node);
+            ed_model
+                .module
+                .env
+                .pool
+                .set(ast_node_id.to_expr_id()?, new_ast_node);
 
             // update Markup
 
@@ -244,13 +242,10 @@ pub fn update_record_colon(
                                     .get_mut(parent_id)
                                     .add_child_at_index(new_child_index, record_colon_node_id)?;
 
-                                let record_blank_node_id = ed_model
-                                    .add_mark_node(
-                                        new_blank_mn(
-                                        ASTNodeId::AExprId(new_field_val_id),
-                                        Some(parent_id)
-                                        )
-                                    );
+                                let record_blank_node_id = ed_model.add_mark_node(new_blank_mn(
+                                    ASTNodeId::AExprId(new_field_val_id),
+                                    Some(parent_id),
+                                ));
 
                                 ed_model
                                     .mark_node_pool

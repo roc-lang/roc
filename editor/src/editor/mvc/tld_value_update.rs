@@ -1,10 +1,31 @@
 use roc_module::symbol::{Interns, Symbol};
 
-use crate::{editor::{ed_error::{EdResult, KeyNotFound}, markup::{attribute::Attributes, common_nodes::{new_blank_mn_w_nl, new_equals_mn}, nodes::MarkupNode}, slow_pool::{MarkNodeId, SlowPool}, syntax_highlight::HighlightStyle}, lang::{ast::{Def2, Expr2}, expr::Env, parse::ASTNodeId, pattern::{Pattern2, get_identifier_string}, pool::NodeId}, ui::text::text_pos::TextPos};
+use crate::{
+    editor::{
+        ed_error::{EdResult, KeyNotFound},
+        markup::{
+            attribute::Attributes,
+            common_nodes::{new_blank_mn_w_nl, new_equals_mn},
+            nodes::MarkupNode,
+        },
+        slow_pool::{MarkNodeId, SlowPool},
+        syntax_highlight::HighlightStyle,
+    },
+    lang::{
+        ast::{Def2, Expr2},
+        expr::Env,
+        parse::ASTNodeId,
+        pattern::{get_identifier_string, Pattern2},
+        pool::NodeId,
+    },
+    ui::text::text_pos::TextPos,
+};
 
-use super::{app_update::InputOutcome, ed_model::EdModel, ed_update::{NodeContext, get_node_context}};
-
-
+use super::{
+    app_update::InputOutcome,
+    ed_model::EdModel,
+    ed_update::{get_node_context, NodeContext},
+};
 
 // Top Level Defined Value. example: `main = "Hello, World!"`
 
@@ -16,43 +37,41 @@ pub fn tld_mark_node<'a>(
     env: &Env<'a>,
     interns: &Interns,
 ) -> EdResult<MarkupNode> {
-        let pattern2 = env.pool.get(identifier_id);
-        let val_name = get_identifier_string(pattern2, interns)?;
+    let pattern2 = env.pool.get(identifier_id);
+    let val_name = get_identifier_string(pattern2, interns)?;
 
-        let val_name_mn = MarkupNode::Text {
-            content: val_name,
-            ast_node_id,
-            syn_high_style: HighlightStyle::Variable,
-            attributes: Attributes::new(),
-            parent_id_opt: None,
-            newline_at_end: false,
-        };
+    let val_name_mn = MarkupNode::Text {
+        content: val_name,
+        ast_node_id,
+        syn_high_style: HighlightStyle::Variable,
+        attributes: Attributes::new(),
+        parent_id_opt: None,
+        newline_at_end: false,
+    };
 
-        let val_name_mn_id = mark_node_pool.add(val_name_mn);
+    let val_name_mn_id = mark_node_pool.add(val_name_mn);
 
-        let equals_mn_id = mark_node_pool.add(new_equals_mn(ast_node_id, None));
+    let equals_mn_id = mark_node_pool.add(new_equals_mn(ast_node_id, None));
 
-        let expr_mn = mark_node_pool.get_mut(expr_mark_node_id);
-        expr_mn.add_newline_at_end();
+    let expr_mn = mark_node_pool.get_mut(expr_mark_node_id);
+    expr_mn.add_newline_at_end();
 
-        let full_let_node = MarkupNode::Nested {
-            ast_node_id,
-            children_ids: vec![val_name_mn_id, equals_mn_id, expr_mark_node_id],
-            parent_id_opt: None,
-            newline_at_end: true,
-        };
+    let full_let_node = MarkupNode::Nested {
+        ast_node_id,
+        children_ids: vec![val_name_mn_id, equals_mn_id, expr_mark_node_id],
+        parent_id_opt: None,
+        newline_at_end: true,
+    };
 
-        Ok(
-            full_let_node
-        )
+    Ok(full_let_node)
 }
 
 pub fn start_new_tld_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<InputOutcome> {
     let NodeContext {
         old_caret_pos,
         curr_mark_node_id,
-        curr_mark_node:_,
-        parent_id_opt:_,
+        curr_mark_node: _,
+        parent_id_opt: _,
         ast_node_id,
     } = get_node_context(ed_model)?;
 
@@ -69,16 +88,21 @@ pub fn start_new_tld_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
         .env
         .ident_ids
         .add(val_name_string.clone().into());
-    
-    let module_ident_ids_opt = ed_model.loaded_module.interns.all_ident_ids.get_mut(&ed_model.module.env.home);
+
+    let module_ident_ids_opt = ed_model
+        .loaded_module
+        .interns
+        .all_ident_ids
+        .get_mut(&ed_model.module.env.home);
 
     if let Some(module_ident_ids_ref) = module_ident_ids_opt {
         // this might create different IdentId for interns and env.ident_ids which may be a problem
-        module_ident_ids_ref.add(val_name_string.clone().into());
+        module_ident_ids_ref.add(val_name_string.into());
     } else {
         KeyNotFound {
-            key_str: format!("{:?}", ed_model.module.env.home)
-        }.fail()?
+            key_str: format!("{:?}", ed_model.module.env.home),
+        }
+        .fail()?
     }
 
     let val_symbol = Symbol::new(ed_model.module.env.home, ident_id);
@@ -87,42 +111,53 @@ pub fn start_new_tld_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
     let patt2_id = ed_model.module.env.pool.add(patt2);
 
     let tld_mark_node = tld_mark_node(
-               patt2_id, 
-            val_expr_mn_id,
-                            ast_node_id,
-                            &mut ed_model.mark_node_pool,
-                            &ed_model.module.env,
-                            &ed_model.loaded_module.interns
-                        )?;
+        patt2_id,
+        val_expr_mn_id,
+        ast_node_id,
+        &mut ed_model.mark_node_pool,
+        &ed_model.module.env,
+        &ed_model.loaded_module.interns,
+    )?;
 
-    let new_ast_node =
-                        Def2::ValueDef {
-                            identifier_id: patt2_id,
-                            expr_id: val_expr_id,
-                        };
-
-    ed_model.module.env.pool.set(ast_node_id.to_def_id()?, new_ast_node);
+    let new_ast_node = Def2::ValueDef {
+        identifier_id: patt2_id,
+        expr_id: val_expr_id,
+    };
 
     ed_model
-            .mark_node_pool
-            .replace_node(curr_mark_node_id, tld_mark_node);
+        .module
+        .env
+        .pool
+        .set(ast_node_id.to_def_id()?, new_ast_node);
+
+    ed_model
+        .mark_node_pool
+        .replace_node(curr_mark_node_id, tld_mark_node);
 
     // remove data corresponding to old Blank node
     ed_model.del_at_line(old_caret_pos.line, old_caret_pos.column)?;
 
     let char_len = 1;
-        ed_model.simple_move_carets_right(char_len);
+    ed_model.simple_move_carets_right(char_len);
 
     ed_model.insert_all_between_line(
         old_caret_pos.line,
         old_caret_pos.column,
-        &ed_model.mark_node_pool.get(curr_mark_node_id).get_children_ids(),
+        &ed_model
+            .mark_node_pool
+            .get(curr_mark_node_id)
+            .get_children_ids(),
     )?;
 
     Ok(InputOutcome::Accepted)
 }
 
-pub fn update_tld_val_name(val_name_mn_id: MarkNodeId, old_caret_pos: TextPos, ed_model: &mut EdModel, new_char: &char) -> EdResult<InputOutcome> {
+pub fn update_tld_val_name(
+    val_name_mn_id: MarkNodeId,
+    old_caret_pos: TextPos,
+    ed_model: &mut EdModel,
+    new_char: &char,
+) -> EdResult<InputOutcome> {
     if new_char.is_ascii_alphanumeric() {
         // update markup
         let val_name_mn_mut = ed_model.mark_node_pool.get_mut(val_name_mn_id);
@@ -155,10 +190,9 @@ pub fn update_tld_val_name(val_name_mn_id: MarkNodeId, old_caret_pos: TextPos, e
             ed_model.simple_move_caret_right(old_caret_pos, 1);
 
             Ok(InputOutcome::Accepted)
-
         } else {
             Ok(InputOutcome::Ignored)
-        }        
+        }
     } else {
         Ok(InputOutcome::Ignored)
     }

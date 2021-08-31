@@ -166,10 +166,7 @@ impl GridNodeMap {
             let (first_node_index, last_node_index) = first_last_index_of(*node_id, line)?;
 
             let curr_node_id = slice_get(first_node_index, line)?;
-            let curr_ast_node_id = ed_model
-                .mark_node_pool
-                .get(*curr_node_id)
-                .get_ast_node_id();
+            let curr_ast_node_id = ed_model.mark_node_pool.get(*curr_node_id).get_ast_node_id();
 
             let mut expr_start_index = first_node_index;
             let mut expr_end_index = last_node_index;

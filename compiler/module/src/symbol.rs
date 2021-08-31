@@ -589,9 +589,10 @@ impl IdentIds {
                     )
                 }
             }
-            None => {
-                Err(format!("Tried to update key in IdentIds ({:?}) but I could not find the key ({}).", self.by_ident, old_ident_name))
-            }
+            None => Err(format!(
+                "Tried to update key in IdentIds ({:?}) but I could not find the key ({}).",
+                self.by_ident, old_ident_name
+            )),
         }
     }
 

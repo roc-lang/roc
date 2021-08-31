@@ -38,7 +38,11 @@ pub fn start_new_int(ed_model: &mut EdModel, digit_char: &char) -> EdResult<Inpu
         text: PoolStr::new(&digit_string, &mut ed_model.module.env.pool),
     };
 
-    ed_model.module.env.pool.set(ast_node_id.to_expr_id()?, expr2_node);
+    ed_model
+        .module
+        .env
+        .pool
+        .set(ast_node_id.to_expr_id()?, expr2_node);
 
     let int_node = MarkupNode::Text {
         content: digit_string,
@@ -112,7 +116,11 @@ pub fn update_int(
 
             // update ast
             let new_pool_str = PoolStr::new(&content_str, ed_model.module.env.pool);
-            let int_ast_node = ed_model.module.env.pool.get_mut(int_ast_node_id.to_expr_id()?);
+            let int_ast_node = ed_model
+                .module
+                .env
+                .pool
+                .get_mut(int_ast_node_id.to_expr_id()?);
             match int_ast_node {
                 SmallInt { number, text, .. } => {
                     update_small_int_num(number, &content_str)?;

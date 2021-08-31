@@ -4,7 +4,7 @@ use crate::editor::mvc::ed_model::EdModel;
 use crate::graphics::colors;
 use crate::graphics::colors::from_hsb;
 use crate::graphics::primitives::text as gr_text;
-use crate::lang::ast::{def2_to_string};
+use crate::lang::ast::def2_to_string;
 use cgmath::Vector2;
 use winit::dpi::PhysicalSize;
 

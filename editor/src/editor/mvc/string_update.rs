@@ -52,7 +52,11 @@ pub fn update_small_string(
 
             let new_ast_node = Expr2::Str(PoolStr::new(&new_str, ed_model.module.env.pool));
 
-            ed_model.module.env.pool.set(ast_node_id.to_expr_id()?, new_ast_node);
+            ed_model
+                .module
+                .env
+                .pool
+                .set(ast_node_id.to_expr_id()?, new_ast_node);
         }
 
         content_str_mut.insert_str(node_caret_offset, new_input);
@@ -105,7 +109,7 @@ pub fn update_string(new_char: char, ed_model: &mut EdModel) -> EdResult<InputOu
         update_str_expr(
             ast_node_id.to_expr_id()?,
             new_char,
-            node_caret_offset,
+            node_caret_offset - 1, // -1 because offset was calculated with quotes
             &mut ed_model.module.env.pool,
         )?;
 
@@ -131,7 +135,11 @@ pub fn start_new_string(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
         let new_expr2_node = Expr2::SmallStr(arraystring::ArrayString::new());
         let curr_mark_node_has_nl = curr_mark_node.has_newline_at_end();
 
-        ed_model.module.env.pool.set(ast_node_id.to_expr_id()?, new_expr2_node);
+        ed_model
+            .module
+            .env
+            .pool
+            .set(ast_node_id.to_expr_id()?, new_expr2_node);
 
         let new_string_node = MarkupNode::Text {
             content: nodes::STRING_QUOTES.to_owned(),

@@ -231,7 +231,7 @@ pub enum Def2 {
         identifier_id: NodeId<Pattern2>,
         expr_id: NodeId<Expr2>,
     },
-    Blank
+    Blank,
 }
 
 #[derive(Debug)]
@@ -297,12 +297,27 @@ impl ValueDef {
 
 pub fn value_def_to_string(val_def: &ValueDef, pool: &Pool) -> String {
     match val_def {
-        ValueDef::WithAnnotation { pattern_id, expr_id, type_id, rigids, expr_var } => {
+        ValueDef::WithAnnotation {
+            pattern_id,
+            expr_id,
+            type_id,
+            rigids,
+            expr_var,
+        } => {
             format!("WithAnnotation {{ pattern_id: {:?}, expr_id: {:?}, type_id: {:?}, rigids: {:?}, expr_var: {:?}}}", pool.get(*pattern_id), expr2_to_string(*expr_id, pool), pool.get(*type_id), rigids, expr_var)
-        },
-        ValueDef::NoAnnotation { pattern_id, expr_id, expr_var } => {
-            format!("NoAnnotation {{ pattern_id: {:?}, expr_id: {:?}, expr_var: {:?}}}", pool.get(*pattern_id), expr2_to_string(*expr_id, pool), expr_var)
-        },
+        }
+        ValueDef::NoAnnotation {
+            pattern_id,
+            expr_id,
+            expr_var,
+        } => {
+            format!(
+                "NoAnnotation {{ pattern_id: {:?}, expr_id: {:?}, expr_var: {:?}}}",
+                pool.get(*pattern_id),
+                expr2_to_string(*expr_id, pool),
+                expr_var
+            )
+        }
     }
 }
 
@@ -482,15 +497,10 @@ impl RecordField {
 
 pub fn ast_node_to_string(node_id: ASTNodeId, pool: &Pool) -> String {
     match node_id {
-        ASTNodeId::ADefId(def_id) => {
-            def2_to_string(def_id, pool)
-        },
-        ASTNodeId::AExprId(expr_id) => {
-            expr2_to_string(expr_id, pool)
-        }
+        ASTNodeId::ADefId(def_id) => def2_to_string(def_id, pool),
+        ASTNodeId::AExprId(expr_id) => expr2_to_string(expr_id, pool),
     }
 }
-
 
 pub fn expr2_to_string(node_id: ExprId, pool: &Pool) -> String {
     let mut full_string = String::new();
@@ -610,7 +620,8 @@ fn expr2_to_string_helper(
         } => {
             out_string.push_str(&format!(
                 "LetValue(def_id: >>{:?}), body_id: >>{:?})",
-                value_def_to_string(pool.get(*def_id), pool) , pool.get(*body_id)
+                value_def_to_string(pool.get(*def_id), pool),
+                pool.get(*body_id)
             ));
         }
         other => todo!("Implement for {:?}", other),
@@ -624,14 +635,18 @@ pub fn def2_to_string(node_id: DefId, pool: &Pool) -> String {
     let def2 = pool.get(node_id);
 
     match def2 {
-        Def2::ValueDef { identifier_id, expr_id } => {
+        Def2::ValueDef {
+            identifier_id,
+            expr_id,
+        } => {
             full_string.push_str(&format!(
                 "Def2::ValueDef(identifier_id: >>{:?}), expr_id: >>{:?})",
-                pool.get(*identifier_id), expr2_to_string(*expr_id, pool)
+                pool.get(*identifier_id),
+                expr2_to_string(*expr_id, pool)
             ));
-        },
+        }
         Def2::Blank => {
-            full_string.push_str(&format!("Def2::Blank"));
+            full_string.push_str("Def2::Blank");
         }
     }
 
@@ -699,6 +714,7 @@ pub fn update_str_expr(
         }
         Either::MyPoolStr(old_pool_str) => {
             let mut new_string = old_pool_str.as_str(pool).to_owned();
+
             new_string.insert(insert_index, new_char);
 
             let new_pool_str = PoolStr::new(&new_string, pool);

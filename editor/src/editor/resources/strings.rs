@@ -17,7 +17,4 @@ app "test-app"
 
 main = "Hello Main"
 
-mars = "Yo Mars!"
-
-
 "#;
