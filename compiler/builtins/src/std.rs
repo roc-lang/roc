@@ -746,24 +746,24 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(num_type(flex(TVAR1))),
     );
 
-    // walk : List elem, (elem -> accum -> accum), accum -> accum
+    // walk : List elem, accum, (elem -> accum -> accum) -> accum
     add_top_level_function_type!(
         Symbol::LIST_WALK,
         vec![
             list_type(flex(TVAR1)),
-            closure(vec![flex(TVAR1), flex(TVAR2)], TVAR3, Box::new(flex(TVAR2))),
             flex(TVAR2),
+            closure(vec![flex(TVAR1), flex(TVAR2)], TVAR3, Box::new(flex(TVAR2))),
         ],
         Box::new(flex(TVAR2)),
     );
 
-    // walkBackwards : List elem, (elem -> accum -> accum), accum -> accum
+    // walkBackwards : List elem, accum, (elem -> accum -> accum) -> accum
     add_top_level_function_type!(
         Symbol::LIST_WALK_BACKWARDS,
         vec![
             list_type(flex(TVAR1)),
-            closure(vec![flex(TVAR1), flex(TVAR2)], TVAR3, Box::new(flex(TVAR2))),
             flex(TVAR2),
+            closure(vec![flex(TVAR1), flex(TVAR2)], TVAR3, Box::new(flex(TVAR2))),
         ],
         Box::new(flex(TVAR2)),
     );
@@ -779,17 +779,17 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     }
 
-    // walkUntil : List elem, (elem -> accum -> [ Continue accum, Stop accum ]), accum -> accum
+    // walkUntil : List elem, accum, (elem -> accum -> [ Continue accum, Stop accum ]) -> accum
     add_top_level_function_type!(
         Symbol::LIST_WALK_UNTIL,
         vec![
             list_type(flex(TVAR1)),
+            flex(TVAR2),
             closure(
                 vec![flex(TVAR1), flex(TVAR2)],
                 TVAR3,
                 Box::new(until_type(flex(TVAR2))),
             ),
-            flex(TVAR2),
         ],
         Box::new(flex(TVAR2)),
     );

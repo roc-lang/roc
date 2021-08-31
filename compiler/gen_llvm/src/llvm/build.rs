@@ -1,6 +1,5 @@
 use std::convert::TryFrom;
 use std::path::Path;
-
 use crate::llvm::bitcode::{call_bitcode_fn, call_void_bitcode_fn};
 use crate::llvm::build_dict::{
     self, dict_contains, dict_difference, dict_empty, dict_get, dict_insert, dict_intersection,
@@ -4183,9 +4182,9 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
         ($variant:expr) => {{
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            let (default, default_layout) = load_symbol_and_layout(scope, &args[1]);
+            let (default, default_layout) = load_symbol_and_layout(scope, &args[2]);
 
-            let function = passed_function_at_index!(2);
+            let function = passed_function_at_index!(3);
 
             let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[3]);
 
