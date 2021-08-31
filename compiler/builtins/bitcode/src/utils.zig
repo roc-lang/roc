@@ -74,12 +74,8 @@ pub fn panic(c_ptr: *c_void, alignment: u32) callconv(.C) void {
 pub fn test_panic(c_ptr: *c_void, alignment: u32) callconv(.C) void {
     _ = c_ptr;
     _ = alignment;
-    // const cstr = @ptrCast([*:0]u8, c_ptr);
 
-    // const stderr = std.io.getStdErr().writer();
-    // stderr.print("Roc panicked: {s}!\n", .{cstr}) catch unreachable;
-
-    std.c.exit(1);
+    @panic("A test called `test_panic`; this should never happen!");
 }
 
 pub const Inc = fn (?[*]u8) callconv(.C) void;

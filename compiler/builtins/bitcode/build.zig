@@ -15,7 +15,6 @@ pub fn build(b: *Builder) void {
     // Tests
     var main_tests = b.addTest(main_path);
     main_tests.setBuildMode(mode);
-    main_tests.linkSystemLibrary("c");
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&main_tests.step);
 
@@ -23,7 +22,6 @@ pub fn build(b: *Builder) void {
     const obj_name = "builtins-64bit";
     const llvm_obj = b.addObject(obj_name, main_path);
     llvm_obj.setBuildMode(mode);
-    llvm_obj.linkSystemLibrary("c");
     llvm_obj.strip = true;
     llvm_obj.emit_llvm_ir = true;
     llvm_obj.emit_bin = false;
@@ -40,7 +38,6 @@ pub fn build(b: *Builder) void {
     const obj_name_32bit = "builtins-32bit";
     const llvm_obj_32bit = b.addObject(obj_name_32bit, main_path);
     llvm_obj_32bit.setBuildMode(mode);
-    llvm_obj_32bit.linkSystemLibrary("c");
     llvm_obj_32bit.strip = true;
     llvm_obj_32bit.emit_llvm_ir = true;
     llvm_obj_32bit.emit_bin = false;
@@ -55,7 +52,6 @@ pub fn build(b: *Builder) void {
     // With both of those changes, unused zig functions will be cleaned up by the linker saving around 100k.
     const obj = b.addObject(obj_name, main_path);
     obj.setBuildMode(mode);
-    obj.linkSystemLibrary("c");
     obj.setOutputDir(".");
     obj.strip = true;
     const obj_step = b.step("object", "Build object file for linking");
