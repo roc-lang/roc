@@ -1,3 +1,4 @@
+use std::convert::TryFrom;
 use std::path::Path;
 
 use crate::llvm::bitcode::{call_bitcode_fn, call_void_bitcode_fn};
@@ -176,10 +177,18 @@ impl std::convert::TryFrom<u32> for PanicTagId {
 }
 
 impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
+    /// The integer type representing a pointer
+    ///
+    /// on 64-bit systems, this is i64
+    /// on 32-bit systems, this is i32
     pub fn ptr_int(&self) -> IntType<'ctx> {
         ptr_int(self.context, self.ptr_bytes)
     }
 
+    /// The integer type representing a RocList or RocStr when following the C ABI
+    ///
+    /// on 64-bit systems, this is i128
+    /// on 32-bit systems, this is i64
     pub fn str_list_c_abi(&self) -> IntType<'ctx> {
         crate::llvm::convert::str_list_int(self.context, self.ptr_bytes)
     }
@@ -374,10 +383,18 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     }
 }
 
-pub fn module_from_builtins<'ctx>(ctx: &'ctx Context, module_name: &str) -> Module<'ctx> {
+pub fn module_from_builtins<'ctx>(
+    ctx: &'ctx Context,
+    module_name: &str,
+    ptr_bytes: u32,
+) -> Module<'ctx> {
     // In the build script for the builtins module,
     // we compile the builtins into LLVM bitcode
-    let bitcode_bytes: &[u8] = include_bytes!("../../../builtins/bitcode/builtins.bc");
+    let bitcode_bytes: &[u8] = match ptr_bytes {
+        8 => include_bytes!("../../../builtins/bitcode/builtins-64bit.bc"),
+        4 => include_bytes!("../../../builtins/bitcode/builtins-32bit.bc"),
+        _ => unreachable!(),
+    };
 
     let memory_buffer = MemoryBuffer::create_from_memory_range(bitcode_bytes, module_name);
 
@@ -693,11 +710,6 @@ pub fn float_with_precision<'a, 'ctx, 'env>(
     precision: &Builtin,
 ) -> BasicValueEnum<'ctx> {
     match precision {
-        Builtin::Decimal => call_bitcode_fn(
-            env,
-            &[env.context.f64_type().const_float(value).into()],
-            bitcode::DEC_FROM_F64,
-        ),
         Builtin::Float64 => env.context.f64_type().const_float(value).into(),
         Builtin::Float32 => env.context.f32_type().const_float(value).into(),
         _ => panic!("Invalid layout for float literal = {:?}", precision),
@@ -722,6 +734,11 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
             _ => panic!("Invalid layout for float literal = {:?}", layout),
         },
 
+        Decimal(int) => env
+            .context
+            .i128_type()
+            .const_int(int.0 as u64, false)
+            .into(),
         Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
         Str(str_literal) => {
@@ -931,11 +948,7 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
         CallType::Foreign {
             foreign_symbol,
             ret_layout,
-        } => {
-            // we always initially invoke foreign symbols, but if there is nothing to clean up,
-            // we emit a normal call
-            build_foreign_symbol(env, scope, foreign_symbol, arguments, ret_layout)
-        }
+        } => build_foreign_symbol(env, scope, foreign_symbol, arguments, ret_layout),
     }
 }
 
@@ -4435,6 +4448,11 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
     }
 }
 
+// TODO: Fix me! I should be different in tests vs. user code!
+fn expect_failed() {
+    panic!("An expectation failed!");
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_low_level<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -4445,6 +4463,7 @@ fn run_low_level<'a, 'ctx, 'env>(
     op: LowLevel,
     args: &[Symbol],
     update_mode: Option<UpdateMode>,
+    // expect_failed: *const (),
 ) -> BasicValueEnum<'ctx> {
     use LowLevel::*;
 
@@ -5163,8 +5182,20 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             bd.position_at_end(throw_block);
 
-            throw_exception(env, "assert failed!");
+            let fn_ptr_type = context
+                .void_type()
+                .fn_type(&[], false)
+                .ptr_type(AddressSpace::Generic);
+            let fn_addr = env
+                .ptr_int()
+                .const_int(expect_failed as *const () as u64, false);
+            let func: PointerValue<'ctx> =
+                bd.build_int_to_ptr(fn_addr, fn_ptr_type, "cast_expect_failed_addr_to_ptr");
+            let callable = CallableValue::try_from(func).unwrap();
 
+            bd.build_call(callable, &[], "call_expect_failed");
+
+            bd.build_unconditional_branch(then_block);
             bd.position_at_end(then_block);
 
             cond

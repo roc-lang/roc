@@ -815,7 +815,7 @@ fn str_join_comma_single() {
 
 #[test]
 fn str_from_float() {
-    assert_evals_to!(r#"Str.fromFloat 3.14"#, RocStr::from("3.140000"), RocStr);
+    assert_evals_to!(r#"Str.fromFloat 3.14"#, RocStr::from("3.14"), RocStr);
 }
 
 #[test]

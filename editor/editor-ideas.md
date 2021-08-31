@@ -78,6 +78,14 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * [Utopia](https://utopia.app/) integrated design and development environment for React. Design and code update each other, in real time.
 * [Paredit](https://calva.io/paredit/) structural clojure editing, navigation and selection. [Another overview](http://danmidwood.com/content/2014/11/21/animated-paredit.html)
 
+### Project exploration
+
+* Tree view or circle view (like Github Next) of project where exposed values and functions can be seen on hover.
+
+#### Inspiration
+
+* [Github Next](https://next.github.com/projects/repo-visualization) each file and folder is visualised as a circle: the circle’s color is the type of file, and the circle’s size represents the size of the file. Sidenote, a cool addition to this might be to use heatmap colors for the circles; circles for files that have had lots of commits could be more red, files with few commits would be blue.
+
 ### Voice Interaction Related
 
 * We should label as many things as possible and expose jumps to those labels as shortkeys.
@@ -230,6 +238,11 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
     * Modern editors may guide developers to the source code too easily.
     The API and documentation are meant to interface with humans.
 * [DocC](https://developer.apple.com/videos/play/wwdc2021/10166/) neat documentation approach for swift. 
+
+## Tutorials
+
+* Inclusion of step-by-step tutrials in Roc libraries, platforms or business specific code.
+* Having to set up your own website for a tutorial can be a lot of work, making it easy to make quality tutorials would make for a more delightful experience.
 
 ## General Plugin Ideas
 

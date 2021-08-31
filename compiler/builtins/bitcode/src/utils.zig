@@ -115,7 +115,7 @@ pub fn decref(
 
     var bytes = bytes_or_null orelse return;
 
-    const isizes: [*]isize = @ptrCast([*]isize, @alignCast(8, bytes));
+    const isizes: [*]isize = @ptrCast([*]isize, @alignCast(@sizeOf(isize), bytes));
 
     const refcount = (isizes - 1)[0];
     const refcount_isize = @bitCast(isize, refcount);
@@ -124,6 +124,20 @@ pub fn decref(
         16 => {
             if (refcount == REFCOUNT_ONE_ISIZE) {
                 dealloc(bytes - 16, alignment);
+            } else if (refcount_isize < 0) {
+                (isizes - 1)[0] = refcount - 1;
+            }
+        },
+        8 => {
+            if (refcount == REFCOUNT_ONE_ISIZE) {
+                dealloc(bytes - 8, alignment);
+            } else if (refcount_isize < 0) {
+                (isizes - 1)[0] = refcount - 1;
+            }
+        },
+        4 => {
+            if (refcount == REFCOUNT_ONE_ISIZE) {
+                dealloc(bytes - 4, alignment);
             } else if (refcount_isize < 0) {
                 (isizes - 1)[0] = refcount - 1;
             }
