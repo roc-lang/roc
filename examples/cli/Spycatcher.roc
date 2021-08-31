@@ -46,14 +46,6 @@ shortChainLength : Nat
 shortChainLength = 4
 
 
-Entity :
-    [
-        EJan Jan,
-        EKristy Kristy,
-        ERichard Richard
-    ]
-
-
 Jan :
     {
         leftHand : [ Kristy KristyId, None ],
@@ -79,6 +71,14 @@ initKristy =
 
 
 Richard : { oneHand : [ Kristy KristyId, None ] }
+
+
+Entity :
+    [
+        EJan Jan,
+        EKristy Kristy,
+        ERichard Richard
+    ]
 
 
 initRichard : Richard
@@ -116,19 +116,9 @@ Mix : { jans : Nat, richards : Nat, kristys : Nat }
 
 initialSim : Mix -> Sim
 initialSim = \{ jans, richards, kristys } ->
-    janEntities : List Entity
     janEntities =
-        janz : List Jan
-        janz = List.repeat jans initJan
-
-        List.map janz \jan ->
-            jan2 : Jan
-            jan2 = jan
-
-            jan3 : Entity
-            jan3 = EJan jan
-
-            jan3
+        List.repeat jans initJan
+            |> List.map EJan
 
     richardEntities =
         List.repeat richards initRichard
@@ -150,6 +140,12 @@ randHand =
         when nat % 2 is
             Ok(0) -> Left
             _ -> Right
+
+
+dropLongChains : Sim -> Sim
+dropLongChains = \originalSim ->
+    List.walk originalSim.entities originalSim \sim, entity ->
+        sim
 
 
 # dropLongChains : Sim -> Sim
