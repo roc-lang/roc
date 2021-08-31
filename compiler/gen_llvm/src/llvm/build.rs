@@ -4176,11 +4176,11 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
         ($variant:expr) => {{
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            let (default, default_layout) = load_symbol_and_layout(scope, &args[1]);
+            let (default, default_layout) = load_symbol_and_layout(scope, &args[2]);
 
-            let function = passed_function_at_index!(2);
+            let function = passed_function_at_index!(3);
 
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[3]);
+            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[4]);
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => default,
