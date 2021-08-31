@@ -69,6 +69,19 @@ pub fn panic(c_ptr: *c_void, alignment: u32) callconv(.C) void {
     return @call(.{ .modifier = always_inline }, roc_panic, .{ c_ptr, alignment });
 }
 
+// indirection because otherwise zig creats an alias to the panic function which our LLVM code
+// does not know how to deal with
+pub fn test_panic(c_ptr: *c_void, alignment: u32) callconv(.C) void {
+    _ = c_ptr;
+    _ = alignment;
+    // const cstr = @ptrCast([*:0]u8, c_ptr);
+
+    // const stderr = std.io.getStdErr().writer();
+    // stderr.print("Roc panicked: {s}!\n", .{cstr}) catch unreachable;
+
+    std.c.exit(1);
+}
+
 pub const Inc = fn (?[*]u8) callconv(.C) void;
 pub const IncN = fn (?[*]u8, u64) callconv(.C) void;
 pub const Dec = fn (?[*]u8) callconv(.C) void;
