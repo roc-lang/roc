@@ -2048,88 +2048,88 @@ pub mod test_ed_update {
 
     #[test]
     fn test_ignore_single_elt_list() -> Result<(), String> {
-        /*YOLOassert_insert_seq(ovec!["┃[  ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[  ]┃"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[┃  ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[  ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = ┃[  ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [  ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [┃  ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [  ┃]"], IGNORE_CHARS)?;
 
-        assert_insert_seq(ovec!["┃[ 0 ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ 0 ]┃"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[┃ 0 ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ 0 ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = ┃[ 0 ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ 0 ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [┃ 0 ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ 0 ┃]"], IGNORE_CHARS)?;
 
-        assert_insert_seq(ovec!["┃[ 137 ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ 137 ]┃"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[┃ 137 ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ 137 ┃]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ ┃137 ]"], IGNORE_NO_NUM)?;
-        assert_insert_seq(ovec!["[ 137┃ ]"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore_nls(ovec!["val = ┃[ 137 ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ 137 ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [┃ 137 ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ 137 ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ ┃137 ]"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ 137┃ ]"], IGNORE_NO_NUM)?;
 
-        assert_insert_seq(ovec!["┃[ \"teststring\" ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ \"teststring\" ]┃"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[┃ \"teststring\" ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ \"teststring\" ┃]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ ┃\"teststring\" ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ \"teststring\"┃ ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = ┃[ \"teststring\" ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ \"teststring\" ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [┃ \"teststring\" ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ \"teststring\" ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ ┃\"teststring\" ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ \"teststring\"┃ ]"], IGNORE_CHARS)?;
 
-        assert_insert_seq(ovec!["┃[ { a: 1 } ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ { a: 1 } ]┃"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[┃ { a: 1 } ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ { a: 1 } ┃]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ ┃{ a: 1 } ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ {┃ a: 1 } ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ { a:┃ 1 } ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ { a: 1 ┃} ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ { a: 1 }┃ ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = ┃[ { a: 1 } ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ { a: 1 } ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [┃ { a: 1 } ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ { a: 1 } ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ ┃{ a: 1 } ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ {┃ a: 1 } ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ { a:┃ 1 } ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ { a: 1 ┃} ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ { a: 1 }┃ ]"], IGNORE_CHARS)?;
 
-        assert_insert_seq(ovec!["┃[ [  ] ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ [  ] ]┃"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[┃ [  ] ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ [  ] ┃]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ ┃[  ] ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ [  ]┃ ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ [┃  ] ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ [  ┃] ]"], IGNORE_CHARS)?;*/
+        assert_insert_seq_ignore_nls(ovec!["val = ┃[ [  ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ [  ] ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [┃ [  ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ [  ] ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ ┃[  ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ [  ]┃ ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ [┃  ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ [  ┃] ]"], IGNORE_CHARS)?;
 
         Ok(())
     }
 
     #[test]
     fn test_multi_elt_list() -> Result<(), String> {
-        /*YOLOassert_insert_seq( ovec!["[ 0, 1┃ ]"], "[0,1")?;
-        assert_insert_seq( ovec!["[ 987, 6543, 210┃ ]"], "[987,6543,210")?;
+        assert_insert_seq_nls( ovec!["val = [ ┃ ]"], ovec!["val = [ 0, 1┃ ]"], "0,1")?;
+        assert_insert_seq_nls(ovec!["val = [ ┃ ]"], ovec!["val = [ 987, 6543, 210┃ ]"], "987,6543,210")?;
 
-        assert_insert_seq(
-            ovec!["┃"],
-            ovec!["[ \"a\", \"bcd\", \"EFGH┃\" ]"],
-            "[\"a🡲,\"bcd🡲,\"EFGH",
+        assert_insert_seq_nls(
+            ovec!["val = [ ┃ ]"],
+            ovec!["val = [ \"a\", \"bcd\", \"EFGH┃\" ]"],
+            "\"a🡲,\"bcd🡲,\"EFGH",
         )?;
 
-        assert_insert_seq(
-            ovec!["┃"],
-            ovec!["[ { a: 1 }, { b: 23 }, { c: 456┃ } ]"],
-            "[{a:1🡲🡲,{b:23🡲🡲,{c:456",
+        assert_insert_seq_nls(
+            ovec!["val = [ ┃ ]"],
+            ovec!["val = [ { a: 1 }, { b: 23 }, { c: 456┃ } ]"],
+            "{a:1🡲🡲,{b:23🡲🡲,{c:456",
         )?;
 
-        assert_insert_seq( ovec!["[ [ 1 ], [ 23 ], [ 456┃ ] ]"], "[[1🡲🡲,[23🡲🡲,[456")?;
+        assert_insert_seq_nls(ovec!["val = [ ┃ ]"], ovec!["val = [ [ 1 ], [ 23 ], [ 456┃ ] ]"], "[1🡲🡲,[23🡲🡲,[456")?;
 
         // insert element in between
-        assert_insert_seq( ovec!["[ 0, 2┃, 1 ]"], "[0,1🡰🡰🡰,2")?;
-        assert_insert_seq( ovec!["[ 0, 2, 3┃, 1 ]"], "[0,1🡰🡰🡰,2,3")?;
-        assert_insert_seq( ovec!["[ 0, 3┃, 2, 1 ]"], "[0,1🡰🡰🡰,2🡰🡰🡰,3")?;
+        assert_insert_seq_nls(ovec!["val = [ ┃ ]"], ovec!["val = [ 0, 2┃, 1 ]"], "0,1🡰🡰🡰,2")?;
+        assert_insert_seq_nls(ovec!["val = [ ┃ ]"], ovec!["val = [ 0, 2, 3┃, 1 ]"], "0,1🡰🡰🡰,2,3")?;
+        assert_insert_seq_nls(ovec!["val = [ ┃ ]"], ovec!["val = [ 0, 3┃, 2, 1 ]"], "0,1🡰🡰🡰,2🡰🡰🡰,3")?;
 
-        assert_insert_seq(
-            ovec!["┃"],
-            ovec!["[ \"abc\", \"f┃\", \"de\" ]"],
-            "[\"abc🡲,\"de🡰🡰🡰🡰🡰,\"f",
+        assert_insert_seq_nls(
+            ovec!["val = [ ┃ ]"],
+            ovec!["val = [ \"abc\", \"f┃\", \"de\" ]"],
+            "\"abc🡲,\"de🡰🡰🡰🡰🡰,\"f",
         )?;
 
-        assert_insert_seq( ovec!["[ [ 0 ], [ 2┃ ], [ 1 ] ]"], "[[0🡲🡲,[1🡰🡰🡰🡰🡰,[2")?;*/
+        assert_insert_seq_nls(ovec!["val = [ ┃ ]"], ovec!["val = [ [ 0 ], [ 2┃ ], [ 1 ] ]"], "[0🡲🡲,[1🡰🡰🡰🡰🡰,[2")?;
 
-        assert_insert_seq(
-            ovec!["┃"],
-            ovec!["[ { a: 0 }, { a: 2┃ }, { a: 1 } ]"],
-            "[{a:0🡲🡲,{a:1🡰🡰🡰🡰🡰🡰🡰🡰,{a:2",
+        assert_insert_seq_nls(
+            ovec!["val = [ ┃ ]"],
+            ovec!["val = [ { a: 0 }, { a: 2┃ }, { a: 1 } ]"],
+            "{a:0🡲🡲,{a:1🡰🡰🡰🡰🡰🡰🡰🡰,{a:2",
         )?;
 
         Ok(())
@@ -2137,70 +2137,71 @@ pub mod test_ed_update {
 
     #[test]
     fn test_ignore_multi_elt_list() -> Result<(), String> {
-        /*YOLOassert_insert_seq(ovec!["┃[ 0, 1 ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ 0, 1 ]┃"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[┃ 0, 1 ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ 0, 1 ┃]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ 0,┃ 1 ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = ┃[ 0, 1 ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ 0, 1 ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [┃ 0, 1 ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ 0, 1 ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ 0,┃ 1 ]"], IGNORE_CHARS)?;
 
-        assert_insert_seq(ovec!["┃[ 123, 56, 7 ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ 123, 56, 7 ]┃"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[┃ 123, 56, 7 ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ 123, 56, 7 ┃]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ 123,┃ 56, 7 ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ 123, 56,┃ 7 ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = ┃[ 123, 56, 7 ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ 123, 56, 7 ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [┃ 123, 56, 7 ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ 123, 56, 7 ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ 123,┃ 56, 7 ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ 123, 56,┃ 7 ]"], IGNORE_CHARS)?;
 
-        assert_insert_seq(ovec!["┃[ \"123\", \"56\", \"7\" ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ \"123\", \"56\", \"7\" ]┃"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[┃ \"123\", \"56\", \"7\" ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ \"123\", \"56\", \"7\" ┃]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ \"123\",┃ \"56\", \"7\" ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ \"123\", \"56\",┃ \"7\" ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = ┃[ \"123\", \"56\", \"7\" ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ \"123\", \"56\", \"7\" ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [┃ \"123\", \"56\", \"7\" ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ \"123\", \"56\", \"7\" ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ \"123\",┃ \"56\", \"7\" ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ \"123\", \"56\",┃ \"7\" ]"], IGNORE_CHARS)?;
 
-        assert_insert_seq(ovec!["┃[ { a: 0 }, { a: 1 } ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ { a: 0 }, { a: 1 } ]┃"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[┃ { a: 0 }, { a: 1 } ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ { a: 0 }, { a: 1 } ┃]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ { a: 0 },┃ { a: 1 } ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = ┃[ { a: 0 }, { a: 1 } ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ { a: 0 }, { a: 1 } ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [┃ { a: 0 }, { a: 1 } ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ { a: 0 }, { a: 1 } ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ { a: 0 },┃ { a: 1 } ]"], IGNORE_CHARS)?;
 
-        assert_insert_seq(ovec!["┃[ [ 0 ], [ 1 ] ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ [ 0 ], [ 1 ] ]┃"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[┃ [ 0 ], [ 1 ] ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ [ 0 ], [ 1 ] ┃]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ [ 0 ],┃ [ 1 ] ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ ┃[ 0 ], [ 1 ] ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ [ 0 ]┃, [ 1 ] ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ [┃ 0 ], [ 1 ] ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ [ 0 ┃], [ 1 ] ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ [ 0 ], ┃[ 1 ] ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ [ 0 ], [┃ 1 ] ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ [ 0 ], [ 1 ]┃ ]"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["[ [ 0 ], [ 1 ┃] ]"], IGNORE_CHARS)?;*/
+        assert_insert_seq_ignore_nls(ovec!["val = ┃[ [ 0 ], [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ [ 0 ], [ 1 ] ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [┃ [ 0 ], [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ [ 0 ], [ 1 ] ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ [ 0 ],┃ [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ ┃[ 0 ], [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ [ 0 ]┃, [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ [┃ 0 ], [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ [ 0 ┃], [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ [ 0 ], ┃[ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ [ 0 ], [┃ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ [ 0 ], [ 1 ]┃ ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["val = [ [ 0 ], [ 1 ┃] ]"], IGNORE_CHARS)?;
 
         Ok(())
     }
 
     #[test]
-    fn test_let_value() -> Result<(), String> {
-        /*YOLOassert_insert( ovec!["a┃ =  "], 'a')?;
-        assert_insert( ovec!["m┃ =  "], 'm')?;
-        assert_insert( ovec!["z┃ =  "], 'z')?;
+    fn test_tld_value() -> Result<(), String> {
+        assert_insert(ovec!["┃"], ovec!["a┃ =  "], 'a')?;
+        assert_insert(ovec!["┃"],  ovec!["m┃ =  "], 'm')?;
+        assert_insert(ovec!["┃"],  ovec!["z┃ =  "], 'z')?;
 
-        assert_insert_seq( ovec!["ab┃ =  "], "ab")?;
-        assert_insert_seq( ovec!["mainVal┃ =  "], "mainVal")?;
-        assert_insert_seq( ovec!["camelCase123┃ =  "], "camelCase123")?;
-        assert_insert_seq( ovec!["c137┃ =  "], "c137")?;
-        assert_insert_seq( ovec!["c137Bb┃ =  "], "c137Bb")?;
-        assert_insert_seq( ovec!["bBbb┃ =  "], "bBbb")?;
-        assert_insert_seq( ovec!["cC0Z┃ =  "], "cC0Z")?;*/
+        assert_insert_seq(ovec!["┃"],  ovec!["ab┃ =  "], "ab")?;
+        assert_insert_seq(ovec!["┃"],  ovec!["mainVal┃ =  "], "mainVal")?;
+        assert_insert_seq(ovec!["┃"],  ovec!["camelCase123┃ =  "], "camelCase123")?;
+        assert_insert_seq(ovec!["┃"],  ovec!["c137┃ =  "], "c137")?;
+        assert_insert_seq(ovec!["┃"],  ovec!["c137Bb┃ =  "], "c137Bb")?;
+        assert_insert_seq(ovec!["┃"],  ovec!["bBbb┃ =  "], "bBbb")?;
+        assert_insert_seq(ovec!["┃"],  ovec!["cC0Z┃ =  "], "cC0Z")?;
 
         Ok(())
     }
 
     #[test]
     fn test_ignore_let_value() -> Result<(), String> {
-        /*YOLOassert_insert_seq(ovec!["a ┃= 0", "a"], IGNORE_CHARS)?;
-        assert_insert_seq(ovec!["a =┃ 0", "a"], IGNORE_CHARS)?;*/
+        // TODO fix me
+        assert_insert_seq_ignore(ovec!["a ┃= 0", "a"], IGNORE_CHARS)?;
+        //assert_insert_seq_ignore(ovec!["a =┃ 0", "a"], IGNORE_CHARS)?;
 
         Ok(())
     }
