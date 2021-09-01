@@ -69,7 +69,7 @@ const Alignment = extern struct {
     const VALUE_BEFORE_KEY_FLAG: u8 = 0b1000_0000;
 
     fn toU32(self: Alignment) u32 {
-        if (self.bits & Alignment.VALUE_BEFORE_KEY_FLAG == 1) {
+        if (self.bits >= VALUE_BEFORE_KEY_FLAG) {
             return self.bits ^ Alignment.VALUE_BEFORE_KEY_FLAG;
         } else {
             return self.bits;

@@ -155,13 +155,16 @@ pub fn decref(
 
 pub fn allocateWithRefcount(
     data_bytes: usize,
-    alignment: u32,
+    element_alignment: u32,
 ) [*]u8 {
     const result_in_place = false;
 
+    const alignment = std.math.max(@sizeOf(usize), element_alignment);
+    const first_slot_offset = std.math.max(@sizeOf(usize), element_alignment);
+
     switch (alignment) {
         16 => {
-            const length = std.math.max(alignment, @sizeOf(usize)) + data_bytes;
+            const length = 16 + data_bytes;
 
             var new_bytes: [*]align(16) u8 = @alignCast(16, alloc(length, alignment));
 
@@ -175,12 +178,12 @@ pub fn allocateWithRefcount(
             }
 
             var as_u8_array = @ptrCast([*]u8, new_bytes);
-            const first_slot = as_u8_array + std.math.max(alignment, @sizeOf(usize)) - @sizeOf(usize);
+            const first_slot = as_u8_array + first_slot_offset;
 
             return first_slot;
         },
         8 => {
-            const length = std.math.max(alignment, @sizeOf(usize)) + data_bytes;
+            const length = 8 + data_bytes;
 
             var raw = alloc(length, alignment);
             var new_bytes: [*]align(8) u8 = @alignCast(8, raw);
@@ -193,15 +196,15 @@ pub fn allocateWithRefcount(
             }
 
             var as_u8_array = @ptrCast([*]u8, new_bytes);
-            const first_slot = as_u8_array + std.math.max(alignment, @sizeOf(usize)) - @sizeOf(usize);
+            const first_slot = as_u8_array + first_slot_offset;
 
             return first_slot;
         },
         4 => {
-            const length = std.math.max(alignment, @sizeOf(usize)) + data_bytes;
+            const length = 4 + data_bytes;
 
             var raw = alloc(length, alignment);
-            var new_bytes: [*]align(4) u8 = @alignCast(4, raw);
+            var new_bytes: [*]align(@alignOf(isize)) u8 = @alignCast(@alignOf(isize), raw);
 
             var as_isize_array = @ptrCast([*]isize, new_bytes);
             if (result_in_place) {
@@ -211,11 +214,13 @@ pub fn allocateWithRefcount(
             }
 
             var as_u8_array = @ptrCast([*]u8, new_bytes);
-            const first_slot = as_u8_array + std.math.max(alignment, @sizeOf(usize)) - @sizeOf(usize);
+            const first_slot = as_u8_array + first_slot_offset;
 
             return first_slot;
         },
         else => {
+            const stdout = std.io.getStdOut().writer();
+            stdout.print("alignment: {d}", .{alignment}) catch unreachable;
             @panic("allocateWithRefcount with invalid alignment");
         },
     }
