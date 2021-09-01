@@ -105,14 +105,13 @@ pub const IntWidth = enum(u8) {
 };
 
 pub fn decrefC(
-    bytes_or_null: ?[*]u8,
-    data_bytes: usize,
+    bytes_or_null: ?[*]isize,
     alignment: u32,
 ) callconv(.C) void {
     // IMPORTANT: bytes_or_null is this case is expected to be a pointer to the refcount
     // (NOT the start of the data, or the start of the allocation)
     if (bytes_or_null) |bytes| {
-        return @call(.{ .modifier = always_inline }, decref, .{ bytes + @sizeOf(usize), data_bytes, alignment });
+        return @call(.{ .modifier = always_inline }, decref_ptr_to_refcount, .{ bytes, alignment });
     }
 }
 
@@ -129,39 +128,20 @@ pub fn decref(
 
     const isizes: [*]isize = @ptrCast([*]isize, @alignCast(@sizeOf(isize), bytes));
 
-    const refcount = (isizes - 1)[0];
-    const refcount_isize = @bitCast(isize, refcount);
+    decref_ptr_to_refcount(isizes - 1, alignment);
+}
 
-    switch (alignment) {
-        16 => {
-            if (refcount == REFCOUNT_ONE_ISIZE) {
-                dealloc(bytes - 16, alignment);
-            } else if (refcount_isize < 0) {
-                (isizes - 1)[0] = refcount - 1;
-            }
-        },
-        8 => {
-            if (refcount == REFCOUNT_ONE_ISIZE) {
-                dealloc(bytes - 8, alignment);
-            } else if (refcount_isize < 0) {
-                (isizes - 1)[0] = refcount - 1;
-            }
-        },
-        4 => {
-            if (refcount == REFCOUNT_ONE_ISIZE) {
-                dealloc(bytes - 4, alignment);
-            } else if (refcount_isize < 0) {
-                (isizes - 1)[0] = refcount - 1;
-            }
-        },
-        else => {
-            // NOTE enums can currently have an alignment of < 8
-            if (refcount == REFCOUNT_ONE_ISIZE) {
-                dealloc(bytes - 8, alignment);
-            } else if (refcount_isize < 0) {
-                (isizes - 1)[0] = refcount - 1;
-            }
-        },
+inline fn decref_ptr_to_refcount(
+    refcount_ptr: [*]isize,
+    alignment: u32,
+) void {
+    const refcount: isize = refcount_ptr[0];
+    const extra_bytes = std.math.max(alignment, @sizeOf(usize));
+
+    if (refcount == REFCOUNT_ONE_ISIZE) {
+        dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
+    } else if (refcount < 0) {
+        refcount_ptr[0] = refcount - 1;
     }
 }
 

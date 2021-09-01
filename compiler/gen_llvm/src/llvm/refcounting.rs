@@ -220,18 +220,14 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
         let alignment = env.context.i32_type().const_int(alignment as _, false);
 
-        // has to be non-zero, or the deallocation is skipped
-        let data_bytes = env.ptr_int().const_int(1, false);
-
         call_void_bitcode_fn(
             env,
             &[
                 env.builder.build_bitcast(
                     parent.get_nth_param(0).unwrap(),
-                    env.context.i8_type().ptr_type(AddressSpace::Generic),
+                    env.ptr_int().ptr_type(AddressSpace::Generic),
                     "foo",
                 ),
-                data_bytes.into(),
                 alignment.into(),
             ],
             roc_builtins::bitcode::UTILS_DECREF,
