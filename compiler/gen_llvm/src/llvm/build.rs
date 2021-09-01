@@ -5175,22 +5175,37 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             bd.build_conditional_branch(condition, then_block, throw_block);
 
-            bd.position_at_end(throw_block);
+            {
+                bd.position_at_end(throw_block);
 
-            let fn_ptr_type = context
-                .void_type()
-                .fn_type(&[], false)
-                .ptr_type(AddressSpace::Generic);
-            let fn_addr = env
-                .ptr_int()
-                .const_int(expect_failed as *const () as u64, false);
-            let func: PointerValue<'ctx> =
-                bd.build_int_to_ptr(fn_addr, fn_ptr_type, "cast_expect_failed_addr_to_ptr");
-            let callable = CallableValue::try_from(func).unwrap();
+                match env.ptr_bytes {
+                    8 => {
+                        let fn_ptr_type = context
+                            .void_type()
+                            .fn_type(&[], false)
+                            .ptr_type(AddressSpace::Generic);
+                        let fn_addr = env
+                            .ptr_int()
+                            .const_int(expect_failed as *const () as u64, false);
+                        let func: PointerValue<'ctx> = bd.build_int_to_ptr(
+                            fn_addr,
+                            fn_ptr_type,
+                            "cast_expect_failed_addr_to_ptr",
+                        );
+                        let callable = CallableValue::try_from(func).unwrap();
 
-            bd.build_call(callable, &[], "call_expect_failed");
+                        bd.build_call(callable, &[], "call_expect_failed");
 
-            bd.build_unconditional_branch(then_block);
+                        bd.build_unconditional_branch(then_block);
+                    }
+                    4 => {
+                        // temporary WASM implementation
+                        throw_exception(env, "An expectation failed!");
+                    }
+                    _ => unreachable!(),
+                }
+            }
+
             bd.position_at_end(then_block);
 
             cond

@@ -1,9 +1,8 @@
 use crate::debug_info_init;
-use crate::llvm::bitcode::{self, call_void_bitcode_fn};
+use crate::llvm::bitcode::call_void_bitcode_fn;
 use crate::llvm::build::{
     add_func, cast_basic_basic, cast_block_of_memory_to_tag, get_tag_id, get_tag_id_non_recursive,
-    tag_pointer_clear_tag_id, Env, FAST_CALL_CONV, LLVM_SADD_WITH_OVERFLOW_I32,
-    LLVM_SADD_WITH_OVERFLOW_I64, TAG_DATA_INDEX,
+    tag_pointer_clear_tag_id, Env, FAST_CALL_CONV, TAG_DATA_INDEX,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
 use crate::llvm::convert::{basic_type_from_layout, ptr_int};
@@ -213,20 +212,11 @@ impl<'ctx> PointerToRefcount<'ctx> {
     ) {
         let builder = env.builder;
         let ctx = env.context;
-        let refcount_type = ptr_int(ctx, env.ptr_bytes);
 
         let entry = ctx.append_basic_block(parent, "entry");
         builder.position_at_end(entry);
 
         debug_info_init!(env, parent);
-
-        let refcount_ptr = {
-            let raw_refcount_ptr = parent.get_nth_param(0).unwrap();
-            debug_assert!(raw_refcount_ptr.is_pointer_value());
-            Self {
-                value: raw_refcount_ptr.into_pointer_value(),
-            }
-        };
 
         let alignment = env.context.i32_type().const_int(alignment as _, false);
 
