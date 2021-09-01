@@ -70,16 +70,28 @@ impl<'a> WasmBackend<'a> {
             proc_symbol_map: MutMap::default(),
 
             // Functions: Wasm AST
-            instructions: std::vec::Vec::new(),
+            instructions: std::vec::Vec::with_capacity(256),
             ret_type: ValueType::I32,
-            arg_types: std::vec::Vec::new(),
-            locals: std::vec::Vec::new(),
+            arg_types: std::vec::Vec::with_capacity(8),
+            locals: std::vec::Vec::with_capacity(32),
 
             // Functions: internal state & IR mappings
             stack_memory: 0,
             symbol_storage_map: MutMap::default(),
             // joinpoint_label_map: MutMap::default(),
         }
+    }
+
+    fn reset(&mut self) {
+        // Functions: Wasm AST
+        self.instructions.clear();
+        self.arg_types.clear();
+        self.locals.clear();
+
+        // Functions: internal state & IR mappings
+        self.stack_memory = 0;
+        self.symbol_storage_map.clear();
+        // joinpoint_label_map.clear();
     }
 
     pub fn build_proc(&mut self, proc: Proc<'a>, sym: Symbol) -> Result<u32, String> {
@@ -93,7 +105,7 @@ impl<'a> WasmBackend<'a> {
         }
 
         self.ret_type = ret_layout.value_type;
-        self.arg_types = std::vec::Vec::with_capacity(proc.args.len());
+        self.arg_types.reserve(proc.args.len());
 
         for (layout, symbol) in proc.args {
             let wasm_layout = WasmLayout::new(layout)?;
@@ -119,6 +131,7 @@ impl<'a> WasmBackend<'a> {
         let location = self.builder.push_function(function_def);
         let function_index = location.body;
         self.proc_symbol_map.insert(sym, location);
+        self.reset();
 
         Ok(function_index)
     }
