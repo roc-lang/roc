@@ -104,6 +104,18 @@ pub const IntWidth = enum(u8) {
     Usize,
 };
 
+pub fn decrefC(
+    bytes_or_null: ?[*]u8,
+    data_bytes: usize,
+    alignment: u32,
+) callconv(.C) void {
+    // IMPORTANT: bytes_or_null is this case is expected to be a pointer to the refcount
+    // (NOT the start of the data, or the start of the allocation)
+    if (bytes_or_null) |bytes| {
+        return @call(.{ .modifier = always_inline }, decref, .{ bytes + @sizeOf(usize), data_bytes, alignment });
+    }
+}
+
 pub fn decref(
     bytes_or_null: ?[*]u8,
     data_bytes: usize,
