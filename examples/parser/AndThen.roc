@@ -83,6 +83,6 @@ testSecond = runU8 "abcd" (second  satisfyA satisfyB) == "b" |> showBool
 
 main : Task.Task {} []
 main =
-testAndThen
+testSecond
     |> Task.putLine  
 
