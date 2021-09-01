@@ -1,4 +1,6 @@
-use parity_wasm::elements::{Instruction, Instruction::*, Local, ValueType};
+use parity_wasm::builder;
+use parity_wasm::builder::{CodeLocation, ModuleBuilder};
+use parity_wasm::elements::{Instruction, Instruction::*, Instructions, Local, ValueType};
 
 use roc_collections::all::MutMap;
 use roc_module::low_level::LowLevel;
@@ -6,7 +8,9 @@ use roc_module::symbol::Symbol;
 use roc_mono::ir::{CallType, Expr, Literal, Proc, Stmt};
 use roc_mono::layout::{Builtin, Layout};
 
-use crate::module::ModuleState;
+// Don't allocate any constant data at address zero or near it. Would be valid, but bug-prone.
+// Follow Emscripten's example by using 1kB (4 bytes would probably do)
+const UNUSED_DATA_SECTION_BYTES: u32 = 1024;
 
 #[derive(Clone, Copy)]
 struct LocalId(u32);
@@ -14,12 +18,12 @@ struct LocalId(u32);
 #[derive(Clone, Copy)]
 struct LabelId(u32);
 
+struct SymbolStorage(LocalId, WasmLayout);
+
 struct WasmLayout {
     value_type: ValueType,
     stack_memory: u32,
 }
-
-struct SymbolStorage(LocalId, WasmLayout);
 
 impl WasmLayout {
     fn new(layout: &Layout) -> Result<Self, String> {
@@ -33,32 +37,52 @@ impl WasmLayout {
     }
 }
 
-pub struct FunctionGenerator<'a> {
-    pub instructions: std::vec::Vec<Instruction>,
-    pub ret_type: ValueType,
-    pub arg_types: std::vec::Vec<ValueType>,
-    pub locals: std::vec::Vec<Local>,
-    module_state: &'a mut ModuleState,
-    // joinpoint_label_map: MutMap<JoinPointId, LabelId>,
-    symbol_storage_map: MutMap<Symbol, SymbolStorage>,
+pub struct WasmBackend<'a> {
+    // Module: Wasm AST
+    pub builder: ModuleBuilder,
+
+    // Module: internal state & IR mappings
+    _data_offset_map: MutMap<Literal<'a>, u32>,
+    _data_offset_next: u32,
+    proc_symbol_map: MutMap<Symbol, CodeLocation>,
+
+    // Functions: Wasm AST
+    instructions: std::vec::Vec<Instruction>,
+    ret_type: ValueType,
+    arg_types: std::vec::Vec<ValueType>,
+    locals: std::vec::Vec<Local>,
+
+    // Functions: internal state & IR mappings
     stack_memory: u32,
+    symbol_storage_map: MutMap<Symbol, SymbolStorage>,
+    // joinpoint_label_map: MutMap<JoinPointId, LabelId>,
 }
 
-impl<'a> FunctionGenerator<'a> {
-    pub fn new(module_state: &'a mut ModuleState) -> Self {
-        FunctionGenerator {
+impl<'a> WasmBackend<'a> {
+    pub fn new() -> Self {
+        WasmBackend {
+            // Module: Wasm AST
+            builder: builder::module(),
+
+            // Module: internal state & IR mappings
+            _data_offset_map: MutMap::default(),
+            _data_offset_next: UNUSED_DATA_SECTION_BYTES,
+            proc_symbol_map: MutMap::default(),
+
+            // Functions: Wasm AST
             instructions: std::vec::Vec::new(),
             ret_type: ValueType::I32,
             arg_types: std::vec::Vec::new(),
             locals: std::vec::Vec::new(),
-            module_state: module_state,
-            // joinpoint_label_map: MutMap::default(),
-            symbol_storage_map: MutMap::default(),
+
+            // Functions: internal state & IR mappings
             stack_memory: 0,
+            symbol_storage_map: MutMap::default(),
+            // joinpoint_label_map: MutMap::default(),
         }
     }
 
-    pub fn build(&mut self, proc: Proc<'a>) -> Result<(), String> {
+    pub fn build_proc(&mut self, proc: Proc<'a>, sym: Symbol) -> Result<u32, String> {
         let ret_layout = WasmLayout::new(&proc.ret_layout)?;
         if ret_layout.stack_memory > 0 {
             // TODO: if returning a struct by value, add an extra argument for a pointer to callee's stack memory
@@ -78,7 +102,25 @@ impl<'a> FunctionGenerator<'a> {
         }
 
         self.build_stmt(&proc.body, &proc.ret_layout)?;
-        Ok(())
+
+        let signature = builder::signature()
+            .with_params(self.arg_types.clone()) // requires std::Vec, not Bumpalo
+            .with_result(self.ret_type.clone())
+            .build_sig();
+
+        let function_def = builder::function()
+            .with_signature(signature)
+            .body()
+            .with_locals(self.locals.clone())
+            .with_instructions(Instructions::new(self.instructions.clone()))
+            .build() // body
+            .build(); // function
+
+        let location = self.builder.push_function(function_def);
+        let function_index = location.body;
+        self.proc_symbol_map.insert(sym, location);
+
+        Ok(function_index)
     }
 
     fn insert_local(&mut self, layout: WasmLayout, symbol: Symbol) -> LocalId {
@@ -158,14 +200,10 @@ impl<'a> FunctionGenerator<'a> {
                     for arg in *arguments {
                         self.load_from_symbol(arg)?;
                     }
-                    let function_location =
-                        self.module_state
-                            .proc_symbol_map
-                            .get(func_sym)
-                            .ok_or(format!(
-                                "Cannot find function {:?} called from {:?}",
-                                func_sym, sym
-                            ))?;
+                    let function_location = self.proc_symbol_map.get(func_sym).ok_or(format!(
+                        "Cannot find function {:?} called from {:?}",
+                        func_sym, sym
+                    ))?;
                     self.instructions.push(Call(function_location.body));
                     self.store_to_symbol(sym)?;
                     Ok(())
