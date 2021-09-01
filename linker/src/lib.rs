@@ -588,8 +588,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     let platform_gen_start = SystemTime::now();
 
     // Copy header and shift everything to enable more program sections.
-    // We eventually want at least 3 new sections: executable code, read only data, read write data.
-    let added_header_count = 1;
+    let added_header_count = 2;
     md.added_byte_count = ph_ent_size as u64 * added_header_count;
     md.added_byte_count = md.added_byte_count
         + (MIN_SECTION_ALIGNMENT as u64 - md.added_byte_count % MIN_SECTION_ALIGNMENT as u64);
@@ -983,9 +982,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     let mut offset = sh_offset as usize;
     offset = align_by_constraint(offset, MIN_SECTION_ALIGNMENT);
 
-    // TODO: Switch to using multiple segments.
-    let new_segment_offset = offset;
-    let new_data_section_offset = offset;
+    let new_rodata_section_offset = offset;
 
     // Align physical and virtual address of new segment.
     let mut virt_offset = align_to_offset_by_constraint(
@@ -993,10 +990,13 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         offset,
         md.load_align_constraint as usize,
     );
-    let new_segment_vaddr = virt_offset as u64;
+    let new_rodata_section_vaddr = virt_offset;
     if verbose {
         println!();
-        println!("New Virtual Segment Address: {:+x?}", new_segment_vaddr);
+        println!(
+            "New Virtual Rodata Section Address: {:+x?}",
+            new_rodata_section_vaddr
+        );
     }
 
     // First decide on sections locations and then recode every exact symbol locations.
@@ -1015,6 +1015,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         .filter(|sec| sec.name().unwrap_or_default().starts_with(".rodata"))
         .collect();
 
+    // bss section is like rodata section, but it has zero file size and non-zero virtual size.
     let bss_sections: Vec<Section> = app_obj
         .sections()
         .filter(|sec| sec.name().unwrap_or_default().starts_with(".bss"))
@@ -1029,6 +1030,8 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         return Ok(-1);
     }
 
+    // Calculate addresses and load symbols.
+    // Note, it is important the bss sections come after the rodata sections.
     for sec in rodata_sections
         .iter()
         .chain(bss_sections.iter())
@@ -1062,25 +1065,33 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
             Some((_, size)) => size,
             None => 0,
         };
-        if section_size != sec.size() {
+        if sec.name().unwrap_or_default().starts_with(".bss") {
+            // bss sections only modify the virtual size.
+            virt_offset += sec.size() as usize;
+        } else if section_size != sec.size() {
             println!(
-                "We do not yet deal with sections that have different on disk and in memory sizes"
+                "We do not deal with non bss sections that have different on disk and in memory sizes"
             );
             return Ok(-1);
+        } else {
+            offset += section_size as usize;
+            virt_offset += sec.size() as usize;
         }
-        offset += section_size as usize;
-        virt_offset += sec.size() as usize;
     }
     if verbose {
         println!("Data Relocation Offsets: {:+x?}", symbol_vaddr_map);
         println!("Found App Function Symbols: {:+x?}", app_func_vaddr_map);
     }
 
-    let new_text_section_offset = text_sections
+    let (new_text_section_offset, new_text_section_vaddr) = text_sections
         .iter()
-        .map(|sec| section_offset_map.get(&sec.index()).unwrap().0)
+        .map(|sec| section_offset_map.get(&sec.index()).unwrap())
         .min()
         .unwrap();
+    let (new_text_section_offset, new_text_section_vaddr) =
+        (*new_text_section_offset, *new_text_section_vaddr);
+
+    // Move data and deal with relocations.
     for sec in rodata_sections
         .iter()
         .chain(bss_sections.iter())
@@ -1207,11 +1218,14 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     offset += sh_size;
 
     // Flush app only data to speed up write to disk.
-    exec_mmap.flush_async_range(new_segment_offset, offset - new_segment_offset)?;
+    exec_mmap.flush_async_range(
+        new_rodata_section_offset,
+        offset - new_rodata_section_offset,
+    )?;
 
     // TODO: look into merging symbol tables, debug info, and eh frames to enable better debugger experience.
 
-    // Add 2 new sections.
+    // Add 2 new sections and segments.
     let new_section_count = 2;
     offset += new_section_count * sh_ent_size as usize;
     let section_headers = load_structs_inplace_mut::<elf::SectionHeader64<LittleEndian>>(
@@ -1220,21 +1234,23 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         sh_num as usize + new_section_count,
     );
 
-    let new_data_section_vaddr = new_segment_vaddr;
-    let new_data_section_size = new_text_section_offset - new_data_section_offset;
-    let new_text_section_vaddr = new_data_section_vaddr + new_data_section_size as u64;
+    let new_rodata_section_size = new_text_section_offset as u64 - new_rodata_section_offset as u64;
+    let new_rodata_section_virtual_size =
+        new_text_section_vaddr as u64 - new_rodata_section_vaddr as u64;
+    let new_text_section_vaddr = new_rodata_section_vaddr as u64 + new_rodata_section_size as u64;
+    let new_text_section_size = new_sh_offset as u64 - new_text_section_offset as u64;
 
-    let new_data_section = &mut section_headers[section_headers.len() - 2];
-    new_data_section.sh_name = endian::U32::new(LittleEndian, 0);
-    new_data_section.sh_type = endian::U32::new(LittleEndian, elf::SHT_PROGBITS);
-    new_data_section.sh_flags = endian::U64::new(LittleEndian, (elf::SHF_ALLOC) as u64);
-    new_data_section.sh_addr = endian::U64::new(LittleEndian, new_data_section_vaddr);
-    new_data_section.sh_offset = endian::U64::new(LittleEndian, new_data_section_offset as u64);
-    new_data_section.sh_size = endian::U64::new(LittleEndian, new_data_section_size as u64);
-    new_data_section.sh_link = endian::U32::new(LittleEndian, 0);
-    new_data_section.sh_info = endian::U32::new(LittleEndian, 0);
-    new_data_section.sh_addralign = endian::U64::new(LittleEndian, 16);
-    new_data_section.sh_entsize = endian::U64::new(LittleEndian, 0);
+    let new_rodata_section = &mut section_headers[section_headers.len() - 2];
+    new_rodata_section.sh_name = endian::U32::new(LittleEndian, 0);
+    new_rodata_section.sh_type = endian::U32::new(LittleEndian, elf::SHT_PROGBITS);
+    new_rodata_section.sh_flags = endian::U64::new(LittleEndian, (elf::SHF_ALLOC) as u64);
+    new_rodata_section.sh_addr = endian::U64::new(LittleEndian, new_rodata_section_vaddr as u64);
+    new_rodata_section.sh_offset = endian::U64::new(LittleEndian, new_rodata_section_offset as u64);
+    new_rodata_section.sh_size = endian::U64::new(LittleEndian, new_rodata_section_size);
+    new_rodata_section.sh_link = endian::U32::new(LittleEndian, 0);
+    new_rodata_section.sh_info = endian::U32::new(LittleEndian, 0);
+    new_rodata_section.sh_addralign = endian::U64::new(LittleEndian, 16);
+    new_rodata_section.sh_entsize = endian::U64::new(LittleEndian, 0);
 
     let new_text_section_index = section_headers.len() - 1;
     let new_text_section = &mut section_headers[new_text_section_index];
@@ -1244,10 +1260,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         endian::U64::new(LittleEndian, (elf::SHF_ALLOC | elf::SHF_EXECINSTR) as u64);
     new_text_section.sh_addr = endian::U64::new(LittleEndian, new_text_section_vaddr);
     new_text_section.sh_offset = endian::U64::new(LittleEndian, new_text_section_offset as u64);
-    new_text_section.sh_size = endian::U64::new(
-        LittleEndian,
-        new_sh_offset as u64 - new_text_section_offset as u64,
-    );
+    new_text_section.sh_size = endian::U64::new(LittleEndian, new_text_section_size);
     new_text_section.sh_link = endian::U32::new(LittleEndian, 0);
     new_text_section.sh_info = endian::U32::new(LittleEndian, 0);
     new_text_section.sh_addralign = endian::U64::new(LittleEndian, 16);
@@ -1258,23 +1271,31 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     file_header.e_shoff = endian::U64::new(LittleEndian, new_sh_offset as u64);
     file_header.e_shnum = endian::U16::new(LittleEndian, sh_num + new_section_count as u16);
 
-    // Add new segment.
+    // Add 2 new segments that match the new sections.
     let program_headers = load_structs_inplace_mut::<elf::ProgramHeader64<LittleEndian>>(
         &mut exec_mmap,
         ph_offset as usize,
         ph_num as usize,
     );
-    let new_segment = program_headers.last_mut().unwrap();
-    new_segment.p_type = endian::U32::new(LittleEndian, elf::PT_LOAD);
-    // This is terrible but currently needed. Just bash everything to get how and make it read-write-execute.
-    new_segment.p_flags = endian::U32::new(LittleEndian, elf::PF_R | elf::PF_X | elf::PF_W);
-    new_segment.p_offset = endian::U64::new(LittleEndian, new_segment_offset as u64);
-    new_segment.p_vaddr = endian::U64::new(LittleEndian, new_segment_vaddr);
-    new_segment.p_paddr = endian::U64::new(LittleEndian, new_segment_vaddr);
-    let new_segment_size = (new_sh_offset - new_segment_offset) as u64;
-    new_segment.p_filesz = endian::U64::new(LittleEndian, new_segment_size);
-    new_segment.p_memsz = endian::U64::new(LittleEndian, new_segment_size);
-    new_segment.p_align = endian::U64::new(LittleEndian, md.load_align_constraint);
+    let new_rodata_segment = &mut program_headers[program_headers.len() - 2];
+    new_rodata_segment.p_type = endian::U32::new(LittleEndian, elf::PT_LOAD);
+    new_rodata_segment.p_flags = endian::U32::new(LittleEndian, elf::PF_R);
+    new_rodata_segment.p_offset = endian::U64::new(LittleEndian, new_rodata_section_offset as u64);
+    new_rodata_segment.p_vaddr = endian::U64::new(LittleEndian, new_rodata_section_vaddr as u64);
+    new_rodata_segment.p_paddr = endian::U64::new(LittleEndian, new_rodata_section_vaddr as u64);
+    new_rodata_segment.p_filesz = endian::U64::new(LittleEndian, new_rodata_section_size);
+    new_rodata_segment.p_memsz = endian::U64::new(LittleEndian, new_rodata_section_virtual_size);
+    new_rodata_segment.p_align = endian::U64::new(LittleEndian, md.load_align_constraint);
+
+    let new_text_segment = &mut program_headers[program_headers.len() - 1];
+    new_text_segment.p_type = endian::U32::new(LittleEndian, elf::PT_LOAD);
+    new_text_segment.p_flags = endian::U32::new(LittleEndian, elf::PF_R | elf::PF_X);
+    new_text_segment.p_offset = endian::U64::new(LittleEndian, new_text_section_offset as u64);
+    new_text_segment.p_vaddr = endian::U64::new(LittleEndian, new_text_section_vaddr);
+    new_text_segment.p_paddr = endian::U64::new(LittleEndian, new_text_section_vaddr);
+    new_text_segment.p_filesz = endian::U64::new(LittleEndian, new_text_section_size);
+    new_text_segment.p_memsz = endian::U64::new(LittleEndian, new_text_section_size);
+    new_text_segment.p_align = endian::U64::new(LittleEndian, md.load_align_constraint);
 
     // Update calls from platform and dynamic symbols.
     let dynsym_offset = md.dynamic_symbol_table_section_offset + md.added_byte_count;
