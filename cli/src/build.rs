@@ -79,6 +79,7 @@ pub fn build_file<'a>(
         Architecture::X86_64 => false,
         Architecture::Aarch64(_) => false,
         Architecture::Wasm32 => true,
+        Architecture::X86_32(_) => false,
         _ => panic!(
             "TODO gracefully handle unsupported architecture: {:?}",
             target.architecture

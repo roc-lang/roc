@@ -248,6 +248,16 @@ pub fn rebuild_host(target: &Triple, host_input_path: &Path) {
                     zig_str_path.to_str().unwrap(),
                 )
             }
+            Architecture::X86_32(_) => {
+                let emit_bin = format!("-femit-bin={}", host_dest_native.to_str().unwrap());
+                build_zig_host_native(
+                    &env_path,
+                    &env_home,
+                    &emit_bin,
+                    zig_host_src.to_str().unwrap(),
+                    zig_str_path.to_str().unwrap(),
+                )
+            }
             _ => panic!("Unsupported architecture {:?}", target.architecture),
         };
 
@@ -396,6 +406,8 @@ fn link_linux(
     let ld_linux = match target.architecture {
         Architecture::X86_64 => library_path(["/lib64", "ld-linux-x86-64.so.2"])
             .or_else(|| library_path([&nixos_path(), "ld-linux-x86-64.so.2"])),
+        Architecture::X86_32(_) => library_path(["/lib32", "ld-linux.so.2"])
+            .or_else(|| library_path([&nixos_path(), "ld-linux.so.2"])),
         Architecture::Aarch64(_) => library_path(["/lib", "ld-linux-aarch64.so.1"]),
         _ => panic!(
             "TODO gracefully handle unsupported linux architecture: {:?}",

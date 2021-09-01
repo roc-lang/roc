@@ -221,7 +221,7 @@ pub fn gen_from_mono_module(
 
         use target_lexicon::Architecture;
         match target.architecture {
-            Architecture::X86_64 | Architecture::Aarch64(_) => {
+            Architecture::X86_64 | Architecture::X86_32(_) | Architecture::Aarch64(_) => {
                 // assemble the .ll into a .bc
                 let _ = Command::new("llvm-as")
                     .args(&[
