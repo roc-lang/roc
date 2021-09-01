@@ -1166,8 +1166,8 @@ fn num_max_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
 fn list_is_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let bool_var = var_store.fresh();
-    let len_var = var_store.fresh();
-    let unbound_zero_var = var_store.fresh();
+    let len_var = Variable::NAT;
+    let unbound_zero_var = Variable::NATURAL;
 
     let body = RunLowLevel {
         op: LowLevel::Eq,
@@ -2198,7 +2198,22 @@ fn dict_hash_test_only(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Dict.len : Dict * * -> Nat
 fn dict_len(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    lowlevel_1(symbol, LowLevel::DictSize, var_store)
+    let arg1_var = var_store.fresh();
+    let ret_var = Variable::NAT;
+
+    let body = RunLowLevel {
+        op: LowLevel::DictSize,
+        args: vec![(arg1_var, Var(Symbol::ARG_1))],
+        ret_var,
+    };
+
+    defn(
+        symbol,
+        vec![(arg1_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        ret_var,
+    )
 }
 
 /// Dict.empty : Dict * *
@@ -2873,9 +2888,9 @@ fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_var = var_store.fresh();
     let bool_var = var_store.fresh();
     let list_var = var_store.fresh();
-    let len_var = var_store.fresh();
-    let num_var = var_store.fresh();
-    let num_precision_var = var_store.fresh();
+    let len_var = Variable::NAT;
+    let num_var = len_var;
+    let num_precision_var = Variable::NATURAL;
     let list_elem_var = var_store.fresh();
     let ret_var = var_store.fresh();
 

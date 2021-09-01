@@ -276,7 +276,23 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
                 }
                 BuildAndRun { roc_file_arg_index } => {
                     let mut cmd = match target.architecture {
-                        Architecture::Wasm32 => Command::new("wasmtime"),
+                        Architecture::Wasm32 => {
+                            // If possible, report the generated executable name relative to the current dir.
+                            let generated_filename = binary_path
+                                .strip_prefix(env::current_dir().unwrap())
+                                .unwrap_or(&binary_path);
+
+                            // No need to waste time freeing this memory,
+                            // since the process is about to exit anyway.
+                            std::mem::forget(arena);
+
+                            let args = std::env::args()
+                                .skip(roc_file_arg_index)
+                                .collect::<Vec<_>>();
+
+                            run_with_wasmer(generated_filename, &args);
+                            return Ok(0);
+                        }
                         _ => Command::new(&binary_path),
                     };
 
@@ -347,4 +363,27 @@ fn roc_run(cmd: &mut Command) -> io::Result<i32> {
             todo!("TODO gracefully handle the `roc [FILE]` subprocess terminating with a signal.");
         }
     }
+}
+
+fn run_with_wasmer(wasm_path: &std::path::Path, args: &[String]) {
+    use wasmer::{Instance, Module, Store};
+
+    let store = Store::default();
+    let module = Module::from_file(&store, &wasm_path).unwrap();
+
+    // First, we create the `WasiEnv`
+    use wasmer_wasi::WasiState;
+    let mut wasi_env = WasiState::new("hello").args(args).finalize().unwrap();
+
+    // Then, we get the import object related to our WASI
+    // and attach it to the Wasm instance.
+    let import_object = wasi_env
+        .import_object(&module)
+        .unwrap_or_else(|_| wasmer::imports!());
+
+    let instance = Instance::new(&module, &import_object).unwrap();
+
+    let start = instance.exports.get_function("_start").unwrap();
+
+    start.call(&[]).unwrap();
 }

@@ -30,10 +30,15 @@ pub fn build(b: *Builder) void {
 
     // LLVM IR 32-bit (wasm)
     var target = b.standardTargetOptions(.{});
-    target.os_tag = std.Target.Os.Tag.linux;
-    target.cpu_arch = std.Target.Cpu.Arch.i386;
-    // target.abi = std.Target.Abi.none;
-    target.abi = std.Target.Abi.musl;
+
+    // target.os_tag = std.Target.Os.Tag.linux;
+    // target.cpu_arch = std.Target.Cpu.Arch.i386;
+    // target.abi = std.Target.Abi.musl;
+
+    // Thisis what we want eventually, currently segfaults
+    target.os_tag = std.Target.Os.Tag.wasi;
+    target.cpu_arch = std.Target.Cpu.Arch.wasm32;
+    target.abi = std.Target.Abi.none;
 
     const obj_name_32bit = "builtins-32bit";
     const llvm_obj_32bit = b.addObject(obj_name_32bit, main_path);
