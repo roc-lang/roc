@@ -8,6 +8,7 @@ use crate::editor::grid_node_map::GridNodeMap;
 use crate::editor::markup::attribute::Attributes;
 use crate::editor::markup::common_nodes::new_blank_mn;
 use crate::editor::markup::nodes;
+use crate::editor::markup::nodes::LEFT_ACCOLADE;
 use crate::editor::markup::nodes::MarkupNode;
 use crate::editor::markup::nodes::EQUALS;
 use crate::editor::mvc::app_update::InputOutcome;
@@ -29,6 +30,7 @@ use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::syntax_highlight::HighlightStyle;
 use crate::lang::ast::Def2;
+use crate::lang::ast::DefId;
 use crate::lang::ast::{Expr2, ExprId};
 use crate::lang::constrain::constrain_expr;
 use crate::lang::parse::ASTNodeId;
@@ -664,6 +666,319 @@ pub fn get_node_context<'a>(ed_model: &'a EdModel) -> EdResult<NodeContext<'a>> 
     })
 }
 
+// current(=caret is here) MarkupNode correspondes to a Def2 in the AST
+pub fn handle_new_char_def(received_char: &char, def_id: DefId, ed_model: &mut EdModel) -> EdResult<InputOutcome> {
+    let def_ref = ed_model.module.env.pool.get(def_id);
+    let ch = received_char;
+
+    let NodeContext {
+        old_caret_pos,
+        curr_mark_node_id,
+        curr_mark_node,
+        parent_id_opt: _,
+        ast_node_id,
+    } = get_node_context(ed_model)?;
+
+    let outcome =match def_ref {
+        Def2::Blank {..} => {
+            match ch {
+                'a'..='z' => {
+                    start_new_tld_value(ed_model, ch)?
+                },
+                _ => InputOutcome::Ignored
+            }
+        }
+        Def2::ValueDef { .. } => {
+            let val_name_mn_id = if curr_mark_node.get_content() == EQUALS {
+
+                let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
+
+                if let Some(prev_mark_node_id) = prev_mark_node_id_opt {
+                    prev_mark_node_id
+                } else {
+                    unreachable!()
+                }
+            } else {
+                curr_mark_node_id
+            };
+
+            update_tld_val_name(
+                val_name_mn_id,
+                ed_model.get_caret(), // TODO update for multiple carets
+                ed_model,
+                ch
+            )?
+        },
+    };
+
+    Ok(outcome)
+}
+
+// current(=caret is here) MarkupNode correspondes to an Expr2 in the AST
+pub fn handle_new_char_expr(received_char: &char, expr_id: ExprId, ed_model: &mut EdModel) -> EdResult<InputOutcome> {
+    let expr_ref = ed_model.module.env.pool.get(expr_id);
+    let ch = received_char;
+
+    let NodeContext {
+        old_caret_pos,
+        curr_mark_node_id,
+        curr_mark_node,
+        parent_id_opt: _,
+        ast_node_id,
+    } = get_node_context(ed_model)?;
+
+    let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
+
+    let expr_ref = ed_model.module.env.pool.get(expr_id);
+
+    let outcome = 
+        if let Expr2::Blank {..} = expr_ref {
+            match ch {
+                'a'..='z' => {
+                    start_new_let_value(ed_model, ch)?
+                }
+                '"' => {
+                    start_new_string(ed_model)?
+                },
+                '{' => {
+                    start_new_record(ed_model)?
+                }
+                '0'..='9' => {
+                    start_new_int(ed_model, ch)?
+                }
+                '[' => {
+                    // this can also be a tag union or become a set, assuming list for now
+                    start_new_list(ed_model)?
+                }
+                '\r' => {
+                    // For convenience and consitency there is only one way to format Roc, you can't add extra blank lines.
+                    InputOutcome::Ignored
+                }
+                _ => InputOutcome::Ignored
+            }
+        } else if let Some(prev_mark_node_id) = prev_mark_node_id_opt{
+            if prev_mark_node_id == curr_mark_node_id {
+                match expr_ref {
+                    Expr2::SmallInt{ .. } => {
+                        update_int(ed_model, curr_mark_node_id, ch)?
+                    }
+                    Expr2::SmallStr(old_arr_str) => {
+                        update_small_string(
+                            ch, old_arr_str, ed_model
+                        )?
+                    }
+                    Expr2::Str(..) => {
+                        update_string(*ch, ed_model)?
+                    }
+                    Expr2::InvalidLookup(old_pool_str) => {
+                        update_invalid_lookup(
+                            &ch.to_string(),
+                            old_pool_str,
+                            curr_mark_node_id,
+                            expr_id,
+                            ed_model
+                        )?
+                    }
+                    Expr2::EmptyRecord => {
+                        // prev_mark_node_id and curr_mark_node_id should be different to allow creating field at current caret position
+                        InputOutcome::Ignored
+                    }
+                    Expr2::Record{ record_var:_, fields } => {
+                        if curr_mark_node.get_content().chars().all(|chr| chr.is_ascii_alphanumeric()){
+                            update_record_field(
+                                &ch.to_string(),
+                                ed_model.get_caret(),
+                                curr_mark_node_id,
+                                fields,
+                                ed_model,
+                            )?
+                        } else {
+                            InputOutcome::Ignored
+                        }
+                    }
+                    _ => InputOutcome::Ignored
+                }
+            } else if ch.is_ascii_alphanumeric() { // prev_mark_node_id != curr_mark_node_id
+
+                match expr_ref {
+                    Expr2::SmallInt{ .. } => {
+                        update_int(ed_model, curr_mark_node_id, ch)?
+                    }
+                    _ => {
+                        let prev_ast_node_id =
+                            ed_model
+                            .mark_node_pool
+                            .get(prev_mark_node_id)
+                            .get_ast_node_id();
+
+                        match prev_ast_node_id {
+                            ASTNodeId::ADefId(_) => {
+                                InputOutcome::Ignored
+                            },
+                            ASTNodeId::AExprId(prev_expr_id) => {
+                                handle_new_char_diff_mark_nodes_prev_is_expr(ch, prev_expr_id, expr_id, prev_mark_node_id, curr_mark_node_id, ed_model)?
+                            },
+                        }
+                    }
+                }
+            } else if *ch == ':' {
+                let mark_parent_id_opt = curr_mark_node.get_parent_id_opt();
+
+                if let Some(mark_parent_id) = mark_parent_id_opt {
+                    let parent_ast_id = ed_model.mark_node_pool.get(mark_parent_id).get_ast_node_id();
+
+                    match parent_ast_id {
+                        ASTNodeId::ADefId(_) => InputOutcome::Ignored,
+                        ASTNodeId::AExprId(parent_expr_id) => update_record_colon(ed_model, parent_expr_id)?
+                    }
+                } else {
+                    InputOutcome::Ignored
+                }
+            } else if *ch == ',' {
+                if curr_mark_node.get_content() == nodes::LEFT_SQUARE_BR {
+                    InputOutcome::Ignored
+                } else {
+                    let mark_parent_id_opt = curr_mark_node.get_parent_id_opt();
+
+                    if let Some(mark_parent_id) = mark_parent_id_opt {
+                        let parent_ast_id = ed_model.mark_node_pool.get(mark_parent_id).get_ast_node_id();
+
+                        match parent_ast_id {
+                            ASTNodeId::ADefId(_) => {
+                                InputOutcome::Ignored
+                            },
+                            ASTNodeId::AExprId(parent_expr_id) => {
+                                let parent_expr2 = ed_model.module.env.pool.get(parent_expr_id);
+
+                                match parent_expr2 {
+                                    Expr2::List { elem_var:_, elems:_} => {
+
+                                        let (new_child_index, new_ast_child_index) = ed_model.get_curr_child_indices()?;
+                                        // insert a Blank first, this results in cleaner code
+                                        add_blank_child(
+                                            new_child_index,
+                                            new_ast_child_index,
+                                            ed_model
+                                        )?
+                                    }
+                                    Expr2::Record { record_var:_, fields:_ } => {
+                                        todo!("multiple record fields")
+                                    }
+                                    _ => {
+                                        InputOutcome::Ignored
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        InputOutcome::Ignored
+                    }
+                }
+            } else if "\"{[".contains(*ch) {
+                let prev_mark_node = ed_model.mark_node_pool.get(prev_mark_node_id);
+
+                if prev_mark_node.get_content() == nodes::LEFT_SQUARE_BR && curr_mark_node.get_content() == nodes::RIGHT_SQUARE_BR {
+                    let (new_child_index, new_ast_child_index) = ed_model.get_curr_child_indices()?;
+                    // insert a Blank first, this results in cleaner code
+                    add_blank_child(
+                        new_child_index,
+                        new_ast_child_index,
+                        ed_model
+                    )?;
+                    handle_new_char(received_char, ed_model)?
+                } else {
+                    InputOutcome::Ignored
+                }
+
+            } else {
+                InputOutcome::Ignored
+            }
+        } else {
+            InputOutcome::Ignored
+        };
+
+    Ok(outcome)
+}
+
+// handle new char when prev_mark_node != curr_mark_node and prev_mark_node's AST node is an Expr2
+pub fn handle_new_char_diff_mark_nodes_prev_is_expr(received_char: &char, prev_expr_id: ExprId, curr_expr_id: ExprId, prev_mark_node_id: MarkNodeId, curr_mark_node_id: MarkNodeId, ed_model: &mut EdModel) -> EdResult<InputOutcome> {
+    
+    let prev_expr_ref = ed_model.module.env.pool.get(prev_expr_id);
+    let curr_expr_ref = ed_model.module.env.pool.get(curr_expr_id);
+    let ch = received_char;
+    let curr_mark_node = ed_model.mark_node_pool.get(curr_mark_node_id);
+                                
+    let outcome = match prev_expr_ref {
+        Expr2::SmallInt{ .. } => {
+            update_int(ed_model, prev_mark_node_id, ch)?
+        }
+        Expr2::InvalidLookup(old_pool_str) => {
+            update_invalid_lookup(
+                &ch.to_string(),
+                old_pool_str,
+                prev_mark_node_id,
+                prev_expr_id,
+                ed_model
+            )?
+        }
+        Expr2::Record{ record_var:_, fields } => {
+            let prev_mark_node = ed_model.mark_node_pool.get(prev_mark_node_id);
+
+            if (curr_mark_node.get_content() == nodes::RIGHT_ACCOLADE || curr_mark_node.get_content() == nodes::COLON) &&
+                prev_mark_node.is_all_alphanumeric() {
+                update_record_field(
+                    &ch.to_string(),
+                    ed_model.get_caret(),
+                    prev_mark_node_id,
+                    fields,
+                    ed_model,
+                )?
+            } else if prev_mark_node.get_content() == nodes::LEFT_ACCOLADE && curr_mark_node.is_all_alphanumeric() {
+                update_record_field(
+                    &ch.to_string(),
+                    ed_model.get_caret(),
+                    curr_mark_node_id,
+                    fields,
+                    ed_model,
+                )?
+            } else {
+                InputOutcome::Ignored
+            }
+        }
+        Expr2::List{ elem_var: _, elems: _} => {
+            let prev_mark_node = ed_model.mark_node_pool.get(prev_mark_node_id);
+
+            if prev_mark_node.get_content() == nodes::LEFT_SQUARE_BR && curr_mark_node.get_content() == nodes::RIGHT_SQUARE_BR {
+                // based on if, we are at the start of the list
+                let new_child_index = 1;
+                let new_ast_child_index = 0;
+                // insert a Blank first, this results in cleaner code
+                add_blank_child(new_child_index, new_ast_child_index, ed_model)?;
+                handle_new_char(received_char, ed_model)?
+            } else {
+                InputOutcome::Ignored
+            }
+        }
+        _ => {
+            match curr_expr_ref {
+                Expr2::EmptyRecord => {
+                    let sibling_ids = curr_mark_node.get_sibling_ids(&ed_model.mark_node_pool);
+
+                    update_empty_record(
+                        &ch.to_string(),
+                        prev_mark_node_id,
+                        sibling_ids,
+                        ed_model
+                    )?
+                }
+                _ => InputOutcome::Ignored
+            }
+        }
+    };
+
+    Ok(outcome)
+}
+
 pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     let input_outcome = match received_char {
             '\u{1}' // Ctrl + A
@@ -696,286 +1011,10 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 
                             match ast_node_id {
                                 ASTNodeId::ADefId(def_id) => {
-                                    let def_ref = ed_model.module.env.pool.get(def_id);
-
-                                    match def_ref {
-                                        Def2::Blank {..} => {
-                                            match ch {
-                                                'a'..='z' => {
-                                                    start_new_tld_value(ed_model, ch)?
-                                                },
-                                                _ => InputOutcome::Ignored
-                                            }
-                                        }
-                                        Def2::ValueDef { .. } => {
-                                            let val_name_mn_id = if curr_mark_node.get_content() == EQUALS {
-                                                if let Some(prev_mark_node_id) = prev_mark_node_id_opt {
-                                                    prev_mark_node_id
-                                                } else {
-                                                    unreachable!()
-                                                }
-                                            } else {
-                                                curr_mark_node_id
-                                            };
-
-                                            update_tld_val_name(
-                                                val_name_mn_id,
-                                                ed_model.get_caret(), // TODO update for multiple carets
-                                                ed_model,
-                                                ch
-                                            )?
-                                        },
-                                    }
+                                    handle_new_char_def(received_char, def_id, ed_model)?
                                 },
                                 ASTNodeId::AExprId(expr_id) => {
-                                    let expr_ref = ed_model.module.env.pool.get(expr_id);
-
-                                    if let Expr2::Blank {..} = expr_ref {
-                                        match ch {
-                                            'a'..='z' => {
-                                                start_new_let_value(ed_model, ch)?
-                                            }
-                                            '"' => {
-                                                start_new_string(ed_model)?
-                                            },
-                                            '{' => {
-                                                start_new_record(ed_model)?
-                                            }
-                                            '0'..='9' => {
-                                                start_new_int(ed_model, ch)?
-                                            }
-                                            '[' => {
-                                                // this can also be a tag union or become a set, assuming list for now
-                                                start_new_list(ed_model)?
-                                            }
-                                            '\r' => {
-                                                // For consistency and convenience there is only one way to format Roc, you can't add extra blank lines.
-                                                InputOutcome::Ignored
-                                            }
-                                            _ => InputOutcome::Ignored
-                                        }
-                                    } else if let Some(prev_mark_node_id) = prev_mark_node_id_opt{
-                                        if prev_mark_node_id == curr_mark_node_id {
-                                            match expr_ref {
-                                                Expr2::SmallInt{ .. } => {
-                                                    update_int(ed_model, curr_mark_node_id, ch)?
-                                                }
-                                                Expr2::SmallStr(old_arr_str) => {
-                                                    update_small_string(
-                                                        ch, old_arr_str, ed_model
-                                                    )?
-                                                }
-                                                Expr2::Str(..) => {
-                                                    update_string(*ch, ed_model)?
-                                                }
-                                                Expr2::InvalidLookup(old_pool_str) => {
-                                                    update_invalid_lookup(
-                                                        &ch.to_string(),
-                                                        old_pool_str,
-                                                        curr_mark_node_id,
-                                                        expr_id,
-                                                        ed_model
-                                                    )?
-                                                }
-                                                Expr2::EmptyRecord => {
-                                                    // prev_mark_node_id and curr_mark_node_id should be different to allow creating field at current caret position
-                                                    InputOutcome::Ignored
-                                                }
-                                                Expr2::Record{ record_var:_, fields } => {
-                                                    if curr_mark_node.get_content().chars().all(|chr| chr.is_ascii_alphanumeric()){
-                                                        update_record_field(
-                                                            &ch.to_string(),
-                                                            ed_model.get_caret(),
-                                                            curr_mark_node_id,
-                                                            fields,
-                                                            ed_model,
-                                                        )?
-                                                    } else {
-                                                        InputOutcome::Ignored
-                                                    }
-                                                }
-                                                _ => InputOutcome::Ignored
-                                            }
-                                        } else { // prev_mark_node_id != curr_mark_node_id
-                                            match expr_ref {
-                                                Expr2::SmallStr(_) | Expr2::Str(_) | Expr2::EmptyRecord | Expr2::Record{ .. } => {
-                                                    // prev_mark_node and curr_mark_node are different.
-                                                    // Caret is located before first quote or `{`, no input is allowed here
-                                                    InputOutcome::Ignored
-                                                }
-                                                _ => {
-                                                    if ch.is_ascii_alphanumeric() {
-                                                        match expr_ref {
-                                                            Expr2::SmallInt{ .. } => {
-                                                                update_int(ed_model, curr_mark_node_id, ch)?
-                                                            }
-            
-                                                        
-                                                            _ => {
-                                                                let prev_ast_node_id =
-                                                                    ed_model
-                                                                    .mark_node_pool
-                                                                    .get(prev_mark_node_id)
-                                                                    .get_ast_node_id();
-            
-                                                                match prev_ast_node_id {
-                                                                    ASTNodeId::ADefId(_) => {
-                                                                        //let prev_node_def = ed_model.module.env.pool.get(prev_def_id);
-                                                                        unimplemented!("TODO")
-                                                                    },
-                                                                    ASTNodeId::AExprId(prev_expr_id) => {
-                                                                        let prev_node_expr = ed_model.module.env.pool.get(prev_expr_id);
-            
-                                                                        match prev_node_expr {
-                                                                            Expr2::SmallInt{ .. } => {
-                                                                                update_int(ed_model, prev_mark_node_id, ch)?
-                                                                            }
-                                                                            Expr2::InvalidLookup(old_pool_str) => {
-                                                                                update_invalid_lookup(
-                                                                                    &ch.to_string(),
-                                                                                    old_pool_str,
-                                                                                    prev_mark_node_id,
-                                                                                    prev_expr_id,
-                                                                                    ed_model
-                                                                                )?
-                                                                            }
-                                                                            Expr2::Record{ record_var:_, fields } => {
-                                                                                let prev_mark_node = ed_model.mark_node_pool.get(prev_mark_node_id);
-            
-                                                                                if (curr_mark_node.get_content() == nodes::RIGHT_ACCOLADE || curr_mark_node.get_content() == nodes::COLON) &&
-                                                                                    prev_mark_node.is_all_alphanumeric() {
-                                                                                    update_record_field(
-                                                                                        &ch.to_string(),
-                                                                                        ed_model.get_caret(),
-                                                                                        prev_mark_node_id,
-                                                                                        fields,
-                                                                                        ed_model,
-                                                                                    )?
-                                                                                } else if prev_mark_node.get_content() == nodes::LEFT_ACCOLADE && curr_mark_node.is_all_alphanumeric() {
-                                                                                    update_record_field(
-                                                                                        &ch.to_string(),
-                                                                                        ed_model.get_caret(),
-                                                                                        curr_mark_node_id,
-                                                                                        fields,
-                                                                                        ed_model,
-                                                                                    )?
-                                                                                } else {
-                                                                                    InputOutcome::Ignored
-                                                                                }
-                                                                            }
-                                                                            Expr2::List{ elem_var: _, elems: _} => {
-                                                                                let prev_mark_node = ed_model.mark_node_pool.get(prev_mark_node_id);
-            
-                                                                                if prev_mark_node.get_content() == nodes::LEFT_SQUARE_BR && curr_mark_node.get_content() == nodes::RIGHT_SQUARE_BR {
-                                                                                    // based on if, we are at the start of the list
-                                                                                    let new_child_index = 1;
-                                                                                    let new_ast_child_index = 0;
-                                                                                    // insert a Blank first, this results in cleaner code
-                                                                                    add_blank_child(new_child_index, new_ast_child_index, ed_model)?;
-                                                                                    handle_new_char(received_char, ed_model)?
-                                                                                } else {
-                                                                                    InputOutcome::Ignored
-                                                                                }
-                                                                            }
-                                                                            Expr2::LetValue{ def_id, body_id, body_var:_ } => {
-                                                                                update_let_value(prev_mark_node_id, *def_id, *body_id, ed_model, ch)?
-                                                                            }
-                                                                            _ => {
-                                                                                match prev_node_expr {
-                                                                                    Expr2::EmptyRecord => {
-                                                                                        let sibling_ids = curr_mark_node.get_sibling_ids(&ed_model.mark_node_pool);
-            
-                                                                                        update_empty_record(
-                                                                                            &ch.to_string(),
-                                                                                            prev_mark_node_id,
-                                                                                            sibling_ids,
-                                                                                            ed_model
-                                                                                        )?
-                                                                                    }
-                                                                                    _ => InputOutcome::Ignored
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    } else if *ch == ':' {
-                                                        let mark_parent_id_opt = curr_mark_node.get_parent_id_opt();
-
-                                                        if let Some(mark_parent_id) = mark_parent_id_opt {
-                                                            let parent_ast_id = ed_model.mark_node_pool.get(mark_parent_id).get_ast_node_id();
-
-                                                            update_record_colon(ed_model, parent_ast_id.to_expr_id()?)?
-                                                        } else {
-                                                            InputOutcome::Ignored
-                                                        }
-                                                    } else if *ch == ',' {
-                                                        if curr_mark_node.get_content() == nodes::LEFT_SQUARE_BR {
-                                                            InputOutcome::Ignored
-                                                        } else {
-                                                            let mark_parent_id_opt = curr_mark_node.get_parent_id_opt();
-
-                                                            if let Some(mark_parent_id) = mark_parent_id_opt {
-                                                                let parent_ast_id = ed_model.mark_node_pool.get(mark_parent_id).get_ast_node_id();
-
-                                                                match parent_ast_id {
-                                                                    ASTNodeId::ADefId(_) => {
-                                                                        unimplemented!("TODO")
-                                                                    },
-                                                                    ASTNodeId::AExprId(parent_expr_id) => {
-                                                                        let parent_expr2 = ed_model.module.env.pool.get(parent_expr_id);
-
-                                                                        match parent_expr2 {
-                                                                            Expr2::List { elem_var:_, elems:_} => {
-
-                                                                                let (new_child_index, new_ast_child_index) = ed_model.get_curr_child_indices()?;
-                                                                                // insert a Blank first, this results in cleaner code
-                                                                                add_blank_child(
-                                                                                    new_child_index,
-                                                                                    new_ast_child_index,
-                                                                                    ed_model
-                                                                                )?
-                                                                            }
-                                                                            Expr2::Record { record_var:_, fields:_ } => {
-                                                                                todo!("multiple record fields")
-                                                                            }
-                                                                            _ => {
-                                                                                InputOutcome::Ignored
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                }
-
-                                                            } else {
-                                                                InputOutcome::Ignored
-                                                            }
-                                                        }
-                                                    } else if "\"{[".contains(*ch) {
-                                                        let prev_mark_node = ed_model.mark_node_pool.get(prev_mark_node_id);
-
-                                                        if prev_mark_node.get_content() == nodes::LEFT_SQUARE_BR && curr_mark_node.get_content() == nodes::RIGHT_SQUARE_BR {
-                                                            let (new_child_index, new_ast_child_index) = ed_model.get_curr_child_indices()?;
-                                                            // insert a Blank first, this results in cleaner code
-                                                            add_blank_child(
-                                                                new_child_index,
-                                                                new_ast_child_index,
-                                                                ed_model
-                                                            )?;
-                                                            handle_new_char(received_char, ed_model)?
-                                                        } else {
-                                                            InputOutcome::Ignored
-                                                        }
-
-                                                    } else {
-                                                        InputOutcome::Ignored
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    } else {
-                                        InputOutcome::Ignored
-                                    }
+                                    handle_new_char_expr(received_char, expr_id, ed_model)?
                                 }
                             }
                         
@@ -1233,6 +1272,7 @@ pub mod test_ed_update {
             } else if input_char == '🡰' {
                 ed_model.simple_move_carets_left(1);
             } else {
+                //dbg!(input_char);
                 ed_res_to_res(handle_new_char(&input_char, &mut ed_model))?;
             }
         }
@@ -1352,30 +1392,36 @@ pub mod test_ed_update {
             .join("")
     }
 
+
+    const IGNORE_CHARS: &str = "{}()[]-><-_\"azAZ:@09";
+    const IGNORE_CHARS_NO_NUM: &str = ",{}()[]-><-_\"azAZ:@";
+    const IGNORE_NO_LTR: &str = "{\"5";
+    const IGNORE_NO_NUM: &str = "a{\"";
+
     #[test]
     fn test_ignore_int() -> Result<(), String> {
-        assert_insert_seq_ignore(ovec!["vec = ┃0"], "{}()[]-><-_\"azAZ:@")?;
-        assert_insert_seq_ignore(ovec!["vec = ┃7"], "{}()[]-><-_\"azAZ:@")?;
+        assert_insert_seq_ignore_nls(ovec!["vec = ┃0"], IGNORE_CHARS_NO_NUM)?;
+        assert_insert_seq_ignore_nls(ovec!["vec = ┃7"], IGNORE_CHARS_NO_NUM)?;
 
-        assert_insert_seq_ignore(ovec!["vec = 0┃"], ",{}()[]-><-_\"azAZ:@")?;
-        assert_insert_seq_ignore(ovec!["vec = 8┃"], ",{}()[]-><-_\"azAZ:@")?;
-        assert_insert_seq_ignore(ovec!["vec = 20┃"], ",{}()[]-><-_\"azAZ:@")?;
-        assert_insert_seq_ignore(ovec!["vec = 83┃"], ",{}()[]-><-_\"azAZ:@")?;
+        assert_insert_seq_ignore_nls(ovec!["vec = 0┃"], IGNORE_CHARS_NO_NUM)?;
+        assert_insert_seq_ignore_nls(ovec!["vec = 8┃"], IGNORE_CHARS_NO_NUM)?;
+        assert_insert_seq_ignore_nls(ovec!["vec = 20┃"], IGNORE_CHARS_NO_NUM)?;
+        assert_insert_seq_ignore_nls(ovec!["vec = 83┃"], IGNORE_CHARS_NO_NUM)?;
 
-        assert_insert_seq_ignore(ovec!["vec = 1┃0"], ",{}()[]-><-_\"azAZ:@")?;
-        assert_insert_seq_ignore(ovec!["vec = 8┃4"], ",{}()[]-><-_\"azAZ:@")?;
+        assert_insert_seq_ignore_nls(ovec!["vec = 1┃0"], IGNORE_CHARS_NO_NUM)?;
+        assert_insert_seq_ignore_nls(ovec!["vec = 8┃4"], IGNORE_CHARS_NO_NUM)?;
 
-        assert_insert_seq_ignore(ovec!["vec = ┃10"], ",{}()[]-><-_\"azAZ:@")?;
-        assert_insert_seq_ignore(ovec!["vec = ┃84"], ",{}()[]-><-_\"azAZ:@")?;
+        assert_insert_seq_ignore_nls(ovec!["vec = ┃10"], IGNORE_CHARS_NO_NUM)?;
+        assert_insert_seq_ignore_nls(ovec!["vec = ┃84"], IGNORE_CHARS_NO_NUM)?;
 
-        assert_insert_seq_ignore(ovec!["vec = 129┃96"], ",{}()[]-><-_\"azAZ:@")?;
-        assert_insert_seq_ignore(ovec!["vec = 97┃684"], ",{}()[]-><-_\"azAZ:@")?;
+        assert_insert_seq_ignore_nls(ovec!["vec = 129┃96"], IGNORE_CHARS_NO_NUM)?;
+        assert_insert_seq_ignore_nls(ovec!["vec = 97┃684"], IGNORE_CHARS_NO_NUM)?;
 
-        assert_insert_ignore(ovec!["vec = 0┃"], '0')?;
-        assert_insert_ignore(ovec!["vec = 0┃"], '9')?;
-        assert_insert_ignore(ovec!["vec = ┃0"], '0')?;
-        assert_insert_ignore(ovec!["vec = ┃1234"], '0')?;
-        assert_insert_ignore(ovec!["vec = ┃100"], '0')?;
+        assert_insert_ignore_nls(ovec!["vec = 0┃"], '0')?;
+        assert_insert_ignore_nls(ovec!["vec = 0┃"], '9')?;
+        assert_insert_ignore_nls(ovec!["vec = ┃0"], '0')?;
+        assert_insert_ignore_nls(ovec!["vec = ┃1234"], '0')?;
+        assert_insert_ignore_nls(ovec!["vec = ┃100"], '0')?;
 
         Ok(())
     }
@@ -1727,10 +1773,6 @@ pub mod test_ed_update {
         Ok(())
     }
 
-    const IGNORE_CHARS: &str = "{}()[]-><-_\"azAZ:@09";
-    const IGNORE_NO_LTR: &str = "{\"5";
-    const IGNORE_NO_NUM: &str = "a{\"";
-
     #[test]
     fn test_ignore_record() -> Result<(), String> {
         assert_insert_seq_ignore_nls(ovec!["val = ┃{  }"], IGNORE_CHARS)?;
@@ -1819,187 +1861,187 @@ pub mod test_ed_update {
 
     #[test]
     fn test_ignore_nested_record() -> Result<(), String> {
-        assert_insert_seq(ovec!["{ a: { ┃ } }"], IGNORE_NO_LTR)?;
-        /*assert_insert_seq(ovec!["{ a: ┃{  } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["{ a: {┃  } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["{ a: {  }┃ }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["{ a: {  } ┃}"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["{ a: {  } }┃"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["{ a:┃ {  } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["{┃ a: {  } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["┃{ a: {  } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["{ ┃a: {  } }"], "1")?;
+        assert_insert_seq_ignore_nls(ovec!["val = { a: { ┃ } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { a: ┃{  } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { a: {┃  } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { a: {  }┃ }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { a: {  } ┃}"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { a: {  } }┃"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { a:┃ {  } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = {┃ a: {  } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = ┃{ a: {  } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { ┃a: {  } }"], "1")?;
 
-        assert_insert_seq(ovec!["{ camelCaseB1: { z15a:┃ RunTimeError } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["{ camelCaseB1: {┃ z15a: RunTimeError } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["{ camelCaseB1: ┃{ z15a: RunTimeError } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: ┃RunTimeError } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: R┃unTimeError } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: Ru┃nTimeError } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["{ camelCaseB1:┃ { z15a: RunTimeError } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["{┃ camelCaseB1: { z15a: RunTimeError } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["┃{ camelCaseB1: { z15a: RunTimeError } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["{ ┃camelCaseB1: { z15a: RunTimeError } }"], "1")?;
-        assert_insert_seq(ovec!["{ camelCaseB1: { ┃z15a: RunTimeError } }"], "1")?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: { z15a:┃ RunTimeError } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: {┃ z15a: RunTimeError } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: ┃{ z15a: RunTimeError } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: { z15a: ┃RunTimeError } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: { z15a: R┃unTimeError } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: { z15a: Ru┃nTimeError } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1:┃ { z15a: RunTimeError } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = {┃ camelCaseB1: { z15a: RunTimeError } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = ┃{ camelCaseB1: { z15a: RunTimeError } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { ┃camelCaseB1: { z15a: RunTimeError } }"], "1")?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: { ┃z15a: RunTimeError } }"], "1")?;
 
-        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: \"\"┃ } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: ┃\"\" } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["{ camelCaseB1: { z15a:┃ \"\" } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: \"\" ┃} }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["{ camelCaseB1: {┃ z15a: \"\" } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["{ camelCaseB1: ┃{ z15a: \"\" } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: \"\" }┃ }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: \"\" } ┃}"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: \"\" } }┃"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["{ camelCaseB1:┃ { z15a: \"\" } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["{┃ camelCaseB1: { z15a: \"\" } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["┃{ camelCaseB1: { z15a: \"\" } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq(ovec!["{ ┃camelCaseB1: { z15a: \"\" } }"], "1")?;
-        assert_insert_seq(ovec!["{ camelCaseB1: { ┃z15a: \"\" } }"], "1")?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: { z15a: \"\"┃ } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: { z15a: ┃\"\" } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: { z15a:┃ \"\" } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: { z15a: \"\" ┃} }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: {┃ z15a: \"\" } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: ┃{ z15a: \"\" } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: { z15a: \"\" }┃ }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: { z15a: \"\" } ┃}"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: { z15a: \"\" } }┃"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1:┃ { z15a: \"\" } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = {┃ camelCaseB1: { z15a: \"\" } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = ┃{ camelCaseB1: { z15a: \"\" } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { ┃camelCaseB1: { z15a: \"\" } }"], "1")?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: { ┃z15a: \"\" } }"], "1")?;
 
-        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: 0┃ } }"], IGNORE_NO_NUM)?;
-        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: ┃123 } }"], IGNORE_NO_NUM)?;
-        assert_insert_seq(ovec!["{ camelCaseB1: { z15a:┃ 999 } }"], IGNORE_NO_NUM)?;
-        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: 80 ┃} }"], IGNORE_NO_NUM)?;
-        assert_insert_seq(ovec!["{ camelCaseB1: {┃ z15a: 99000 } }"], IGNORE_NO_NUM)?;
-        assert_insert_seq(ovec!["{ camelCaseB1: ┃{ z15a: 12 } }"], IGNORE_NO_NUM)?;
-        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: 7 }┃ }"], IGNORE_NO_NUM)?;
-        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: 98 } ┃}"], IGNORE_NO_NUM)?;
-        assert_insert_seq(ovec!["{ camelCaseB1: { z15a: 4582 } }┃"], IGNORE_NO_NUM)?;
-        assert_insert_seq(ovec!["{ camelCaseB1:┃ { z15a: 0 } }"], IGNORE_NO_NUM)?;
-        assert_insert_seq(ovec!["{┃ camelCaseB1: { z15a: 44 } }"], IGNORE_NO_NUM)?;
-        assert_insert_seq(ovec!["┃{ camelCaseB1: { z15a: 100123 } }"], IGNORE_NO_NUM)?;
-        assert_insert_seq(ovec!["{ ┃camelCaseB1: { z15a: 5 } }"], "1")?;
-        assert_insert_seq(ovec!["{ camelCaseB1: { ┃z15a: 6 } }"], "1")?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: { z15a: 0┃ } }"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: { z15a: ┃123 } }"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: { z15a:┃ 999 } }"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: { z15a: 80 ┃} }"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: {┃ z15a: 99000 } }"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: ┃{ z15a: 12 } }"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: { z15a: 7 }┃ }"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: { z15a: 98 } ┃}"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: { z15a: 4582 } }┃"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1:┃ { z15a: 0 } }"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore_nls(ovec!["val = {┃ camelCaseB1: { z15a: 44 } }"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore_nls(ovec!["val = ┃{ camelCaseB1: { z15a: 100123 } }"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore_nls(ovec!["val = { ┃camelCaseB1: { z15a: 5 } }"], "1")?;
+        assert_insert_seq_ignore_nls(ovec!["val = { camelCaseB1: { ┃z15a: 6 } }"], "1")?;
 
-        assert_insert_seq(
-            ovec!["{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\"┃ } }"],
+        assert_insert_seq_ignore_nls(
+            ovec!["val = { camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\"┃ } }"],
             IGNORE_NO_LTR,
         )?;
-        assert_insert_seq(
-            ovec!["{ camelCaseB1: { z15a: ┃\"hello, hello.0123456789ZXY{}[]-><-\" } }"],
+        assert_insert_seq_ignore_nls(
+            ovec!["val = { camelCaseB1: { z15a: ┃\"hello, hello.0123456789ZXY{}[]-><-\" } }"],
             IGNORE_NO_LTR,
         )?;
-        assert_insert_seq(
-            ovec!["{ camelCaseB1: { z15a:┃ \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
+        assert_insert_seq_ignore_nls(
+            ovec!["val = { camelCaseB1: { z15a:┃ \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
             IGNORE_NO_LTR,
         )?;
-        assert_insert_seq(
-            ovec!["{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" ┃} }"],
+        assert_insert_seq_ignore_nls(
+            ovec!["val = { camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" ┃} }"],
             IGNORE_NO_LTR,
         )?;
-        assert_insert_seq(
-            ovec!["{ camelCaseB1: {┃ z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
+        assert_insert_seq_ignore_nls(
+            ovec!["val = { camelCaseB1: {┃ z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
             IGNORE_NO_LTR,
         )?;
-        assert_insert_seq(
-            ovec!["{ camelCaseB1: ┃{ z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
+        assert_insert_seq_ignore_nls(
+            ovec!["val = { camelCaseB1: ┃{ z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
             IGNORE_NO_LTR,
         )?;
-        assert_insert_seq(
-            ovec!["{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" }┃ }"],
+        assert_insert_seq_ignore_nls(
+            ovec!["val = { camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" }┃ }"],
             IGNORE_NO_LTR,
         )?;
-        assert_insert_seq(
-            ovec!["{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } ┃}"],
+        assert_insert_seq_ignore_nls(
+            ovec!["val = { camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } ┃}"],
             IGNORE_NO_LTR,
         )?;
-        assert_insert_seq(
-            ovec!["{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }┃"],
+        assert_insert_seq_ignore_nls(
+            ovec!["val = { camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }┃"],
             IGNORE_NO_LTR,
         )?;
-        assert_insert_seq(
-            ovec!["{ camelCaseB1:┃ { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
+        assert_insert_seq_ignore_nls(
+            ovec!["val = { camelCaseB1:┃ { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
             IGNORE_NO_LTR,
         )?;
-        assert_insert_seq(
-            ovec!["{┃ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
+        assert_insert_seq_ignore_nls(
+            ovec!["val = {┃ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
             IGNORE_NO_LTR,
         )?;
-        assert_insert_seq(
-            ovec!["┃{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
+        assert_insert_seq_ignore_nls(
+            ovec!["val = ┃{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
             IGNORE_NO_LTR,
         )?;
-        assert_insert_seq(
-            ovec!["{ ┃camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
+        assert_insert_seq_ignore_nls(
+            ovec!["val = { ┃camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
             "1",
         )?;
-        assert_insert_seq(
-            ovec!["{ camelCaseB1: { ┃z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
+        assert_insert_seq_ignore_nls(
+            ovec!["val = { camelCaseB1: { ┃z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
             "1",
         )?;
 
-        assert_insert_seq(
-            ovec!["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase:┃ RunTimeError } } } } } } } }"],
+        assert_insert_seq_ignore_nls(
+            ovec!["val = { g: { oi: { ng: { d: { e: { e: { p: { camelCase:┃ RunTimeError } } } } } } } }"],
             IGNORE_NO_LTR,
         )?;
-        assert_insert_seq(
-            ovec!["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase: R┃unTimeError } } } } } } } }"],
+        assert_insert_seq_ignore_nls(
+            ovec!["val = { g: { oi: { ng: { d: { e: { e: { p: { camelCase: R┃unTimeError } } } } } } } }"],
             IGNORE_NO_LTR,
         )?;
-        assert_insert_seq(
-            ovec!["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeError } } } } } } } }┃"],
+        assert_insert_seq_ignore_nls(
+            ovec!["val = { g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeError } } } } } } } }┃"],
             IGNORE_NO_LTR,
         )?;
-        assert_insert_seq(
-            ovec!["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeEr┃ror } } } } } } } }"],
+        assert_insert_seq_ignore_nls(
+            ovec!["val = { g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeEr┃ror } } } } } } } }"],
             IGNORE_NO_LTR,
         )?;
-        assert_insert_seq(
-            ovec!["{ g: { oi: { ng: { d: { e: {┃ e: { p: { camelCase: RunTimeError } } } } } } } }"],
+        assert_insert_seq_ignore_nls(
+            ovec!["val = { g: { oi: { ng: { d: { e: {┃ e: { p: { camelCase: RunTimeError } } } } } } } }"],
             IGNORE_NO_LTR,
         )?;
-        assert_insert_seq(
-            ovec!["{ g: { oi: { ng: { d: { e: { e:┃ { p: { camelCase: RunTimeError } } } } } } } }"],
+        assert_insert_seq_ignore_nls(
+            ovec!["val = { g: { oi: { ng: { d: { e: { e:┃ { p: { camelCase: RunTimeError } } } } } } } }"],
             IGNORE_NO_LTR,
         )?;
-        assert_insert_seq(
-            ovec!["{┃ g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeError } } } } } } } }"],
+        assert_insert_seq_ignore_nls(
+            ovec!["val = {┃ g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeError } } } } } } } }"],
             IGNORE_NO_LTR,
         )?;
-        assert_insert_seq(
-            ovec!["┃{ g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeError } } } } } } } }"],
+        assert_insert_seq_ignore_nls(
+            ovec!["val = ┃{ g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeError } } } } } } } }"],
             IGNORE_NO_LTR,
         )?;
-        assert_insert_seq(
-            ovec!["{ ┃g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeError } } } } } } } }"],
+        assert_insert_seq_ignore_nls(
+            ovec!["val = { ┃g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeError } } } } } } } }"],
             "2",
-        )?;*/
+        )?;
         Ok(())
     }
 
     #[test]
     fn test_single_elt_list() -> Result<(), String> {
-        /*YOLOassert_insert( ovec!["[ ┃ ]"], '[')?;
+        assert_insert_in_def( ovec!["[ ┃ ]"], '[')?;
 
-        assert_insert_seq( ovec!["[ 0┃ ]"], "[0")?;
-        assert_insert_seq( ovec!["[ 1┃ ]"], "[1")?;
-        assert_insert_seq( ovec!["[ 9┃ ]"], "[9")?;
+        assert_insert_nls( ovec!["val = [ ┃ ]"], ovec!["val = [ 0┃ ]"], '0')?;
+        assert_insert_nls( ovec!["val = [ ┃ ]"], ovec!["val = [ 1┃ ]"], '1')?;
+        assert_insert_nls( ovec!["val = [ ┃ ]"], ovec!["val = [ 9┃ ]"], '9')?;
 
-        assert_insert_seq( ovec!["[ \"┃\" ]"], "[\"")?;
-        assert_insert_seq(
-            ovec!["┃"],
-            ovec!["[ \"hello, hello.0123456789ZXY{}[]-><-┃\" ]"],
-            "[\"hello, hello.0123456789ZXY{}[]-><-",
+        assert_insert_nls( ovec!["val = [ ┃ ]"], ovec!["val = [ \"┃\" ]"], '\"')?;
+        assert_insert_seq_nls(
+            ovec!["val = [ ┃ ]"],
+            ovec!["val = [ \"hello, hello.0123456789ZXY{}[]-><-┃\" ]"],
+            "\"hello, hello.0123456789ZXY{}[]-><-",
         )?;
 
-        assert_insert_seq( ovec!["[ { ┃ } ]"], "[{")?;
-        assert_insert_seq( ovec!["[ { a┃ } ]"], "[{a")?;
-        assert_insert_seq(
-            ovec!["┃"],
-            ovec!["[ { camelCase: { zulu: \"nested┃\" } } ]"],
-            "[{camelCase:{zulu:\"nested",
+        assert_insert_nls( ovec!["val = [ ┃ ]"], ovec!["val = [ { ┃ } ]"], '{')?;
+        assert_insert_seq_nls( ovec!["val = [ ┃ ]"], ovec!["val = [ { a┃ } ]"], "{a")?;
+        assert_insert_seq_nls(
+            ovec!["val = [ ┃ ]"],
+            ovec!["val = [ { camelCase: { zulu: \"nested┃\" } } ]"],
+            "{camelCase:{zulu:\"nested",
         )?;
 
-        assert_insert_seq( ovec!["[ [ ┃ ] ]"], "[[")?;
-        assert_insert_seq( ovec!["[ [ [ ┃ ] ] ]"], "[[[")?;
-        assert_insert_seq( ovec!["[ [ 0┃ ] ]"], "[[0")?;
-        assert_insert_seq( ovec!["[ [ \"abc┃\" ] ]"], "[[\"abc")?;
-        assert_insert_seq(
-            ovec!["┃"],
-            ovec!["[ [ { camelCase: { a: 79000┃ } } ] ]"],
-            "[[{camelCase:{a:79000",
-        )?;*/
+        assert_insert_nls( ovec!["val = [ ┃ ]"], ovec!["val = [ [ ┃ ] ]"], '[')?;
+        assert_insert_seq_nls( ovec!["val = [ ┃ ]"],ovec!["val = [ [ [ ┃ ] ] ]"], "[[")?;
+        assert_insert_seq_nls( ovec!["val = [ ┃ ]"],ovec!["val = [ [ 0┃ ] ]"], "[0")?;
+        assert_insert_seq_nls( ovec!["val = [ ┃ ]"],ovec!["val = [ [ \"abc┃\" ] ]"], "[\"abc")?;
+        assert_insert_seq_nls(
+            ovec!["val = [ ┃ ]"],
+            ovec!["val = [ [ { camelCase: { a: 79000┃ } } ] ]"],
+            "[{camelCase:{a:79000",
+        )?;
 
         Ok(())
     }
