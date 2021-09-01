@@ -105,7 +105,7 @@ impl<'a> WasmBackend<'a> {
 
         let signature = builder::signature()
             .with_params(self.arg_types.clone()) // requires std::Vec, not Bumpalo
-            .with_result(self.ret_type.clone())
+            .with_result(self.ret_type)
             .build_sig();
 
         let function_def = builder::function()
@@ -261,7 +261,7 @@ impl<'a> WasmBackend<'a> {
         // For those, we'll need to pre-process each argument before the main op,
         // so simple arrays of instructions won't work. But there are common patterns.
         let instructions: &[Instruction] = match lowlevel {
-            // Matching on Wasm type might not be enough, maybe need Roc layout for sign-extension
+            // Wasm type might not be enough, may need to sign-extend i8 etc. Maybe in load_from_symbol?
             LowLevel::NumAdd => match value_type {
                 ValueType::I32 => &[I32Add],
                 ValueType::I64 => &[I64Add],

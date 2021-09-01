@@ -7,21 +7,9 @@ edition = "2018"
 
 [dependencies]
 roc_collections = { path = "../collections" }
-# roc_region = { path = "../region" }
-# roc_load = { path = "../load" }
 roc_module = { path = "../module" }
-# roc_problem = { path = "../problem" }
-# roc_types = { path = "../types" }
-# roc_builtins = { path = "../builtins" }
-# roc_constrain = { path = "../constrain" }
-# roc_unify = { path = "../unify" }
-# roc_solve = { path = "../solve" }
 roc_mono = { path = "../mono" }
-# im    = "14" # im and im-rc should always have the same version!
-# im-rc = "14" # im and im-rc should always have the same version!
 bumpalo = { version = "3.6.1", features = ["collections"] }
-# target-lexicon = "0.12.2"
-# libloading = "0.6"
 parity-wasm = "0.42"
 
 [dev-dependencies]

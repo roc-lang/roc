@@ -6,7 +6,7 @@ use parity_wasm::elements::Internal;
 
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::{Interns, Symbol};
-use roc_mono::ir::{CallType, Expr, Proc, ProcLayout, Stmt};
+use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::LayoutIds;
 
 use crate::backend::WasmBackend;
@@ -44,19 +44,4 @@ pub fn build_module<'a>(
     module
         .to_bytes()
         .map_err(|e| -> String { format!("Error serialising Wasm module {:?}", e) })
-}
-
-// TODO: use something like this for very simple inlining
-// Create a HashMap of inlined Procs, generate each call with different Symbol arguments
-fn _is_lowlevel_wrapper<'a>(proc: Proc<'a>) -> bool {
-    match proc.body {
-        Stmt::Let(_, expr, _, Stmt::Ret(..)) => match expr {
-            Expr::Call(roc_mono::ir::Call { call_type, .. }) => match call_type {
-                CallType::LowLevel { .. } => true,
-                _ => false,
-            },
-            _ => false,
-        },
-        _ => false,
-    }
 }
