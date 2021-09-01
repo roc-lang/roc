@@ -1706,7 +1706,11 @@ pub fn tag_pointer_read_tag_id<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     pointer: PointerValue<'ctx>,
 ) -> IntValue<'ctx> {
-    let mask: u64 = 0b0000_0111;
+    let mask: u64 = match env.ptr_bytes {
+        8 => 0b0000_0111,
+        4 => 0b0000_0011,
+        _ => unreachable!(),
+    };
 
     let ptr_int = env.ptr_int();
 
@@ -1725,11 +1729,17 @@ pub fn tag_pointer_clear_tag_id<'a, 'ctx, 'env>(
 ) -> PointerValue<'ctx> {
     let ptr_int = env.ptr_int();
 
+    let tag_id_bits_mask = match env.ptr_bytes {
+        8 => 3,
+        4 => 2,
+        _ => unreachable!(),
+    };
+
     let as_int = env.builder.build_ptr_to_int(pointer, ptr_int, "to_int");
 
     let mask = {
         let a = env.ptr_int().const_all_ones();
-        let tag_id_bits = env.ptr_int().const_int(3, false);
+        let tag_id_bits = env.ptr_int().const_int(tag_id_bits_mask, false);
         env.builder.build_left_shift(a, tag_id_bits, "make_mask")
     };
 
