@@ -120,11 +120,15 @@ impl<'a> WasmBackend<'a> {
             .with_result(self.ret_type)
             .build_sig();
 
+        // functions must end with an End instruction/opcode
+        let mut instructions = self.instructions.clone();
+        instructions.push(Instruction::End);
+
         let function_def = builder::function()
             .with_signature(signature)
             .body()
             .with_locals(self.locals.clone())
-            .with_instructions(Instructions::new(self.instructions.clone()))
+            .with_instructions(Instructions::new(instructions))
             .build() // body
             .build(); // function
 
