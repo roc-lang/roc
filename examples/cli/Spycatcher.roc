@@ -144,88 +144,49 @@ randHand =
 
 dropLongChains : Sim -> Sim
 dropLongChains = \originalSim ->
-    List.walk originalSim.entities
-        (\{ sim, index }, entity ->
-            finalSim =
-                # Only consider the Richard roots
-                when List.get index sim.entities is
-                    Just (ERichard { oneHand }) ->
-                        chainLen =
-                            sim.entities
-                                |> chainLength (RichardId id)
+    answer =
+        List.walk originalSim.entities
+            (\entity, { sim, index } ->
+                finalSim =
+                    # Only consider the Richard roots
+                    when List.get sim.entities index is
+                        Ok (ERichard { oneHand }) ->
+                            chainLen =
+                                sim.entities
+                                    |> chainLength (@RichardId id)
 
-                        remove =
-                            if chainLen >= maxChainLength then
-                                # if len >= 6, it gets removed
-                                True
+                            remove =
+                                if chainLen >= maxChainLength then
+                                    # if len >= 6, it gets removed
+                                    True
 
-                            else if chainLen < shortChainLength then
-                                # if len < 4, it doesn't get removed
-                                False
+                                else if chainLen < shortChainLength then
+                                    # if len < 4, it doesn't get removed
+                                    False
 
+                                else
+                                    # if len is 4 or 5, there's a 50% chance it gets removed.
+                                    # We base this on whether the richardId is odd,
+                                    # so we don't keep it on one run and remove it the next,
+                                    # even though the chain didn't change.
+                                    index % 2 == Ok 1
+
+                            if remove then
+                                {
+                                    entities: removeChain (@RichardId index) sim.entities,
+                                    chainsDropped: sim.chainsDropped + 1
+                                }
                             else
-                                # if len is 4 or 5, there's a 50% chance it gets removed.
-                                # We base this on whether the richardId is odd,
-                                # so we don't keep it on one run and remove it the next,
-                                # even though the chain didn't change.
-                                index % 2 == 1
+                                sim
 
-                        if remove then
-                            {
-                                entities: removeChain (RichardId index) sim.entities,
-                                chainsDropped: sim.chainsDropped + 1
-                            }
-                        else
+                        _ ->
                             sim
 
-                    _ ->
-                        sim
+                { sim: finalSim, index: index + 1 }
+            )
+            { sim: originalSim, index: 0 }
 
-            { sim: finalSim, index: index + 1 }
-        )
-        { sim: originalSim, index: 0 }
-
-# dropLongChains : Sim -> Sim
-# dropLongChains originalSim =
-#     Dict.foldl
-#         (\id entity sim ->
-#             -- Only consider the Richard roots
-#             case Dict.get id sim.entities of
-#                 Just (ERichard { oneHand }) ->
-#                     let
-#                         chainLen =
-#                             sim.entities
-#                                 |> chainLength (RichardId id)
-
-#                         remove =
-#                             if chainLen >= maxChainLength then
-#                                 -- if len >= 6, it gets removed
-#                                 True
-
-#                             else if chainLen < shortChainLength then
-#                                 -- if len < 4, it doesn't get removed
-#                                 False
-
-#                             else
-#                                 -- if len is 4 or 5, there's a 50% chance it gets removed.
-#                                 -- We base this on whether the richardId is odd,
-#                                 -- so we don't keep it on one run and remove it the next,
-#                                 -- even though the chain didn't change.
-#                                 remainderBy 2 id == 1
-#                     in
-#                     if remove then
-#                         { entities = removeChain (RichardId id) sim.entities
-#                         , chainsDropped = sim.chainsDropped + 1
-#                         }
-
-#                     else
-#                         sim
-
-#                 _ ->
-#                     sim
-#         )
-#         originalSim
-#         originalSim.entities
+    answer.sim
 
 
 # runSimulation : Seed -> Int -> Sim -> ( Sim, Seed )
@@ -550,9 +511,9 @@ dropLongChains = \originalSim ->
 #             Debug.todo "Found a Richard in the chain - this should be impossible!" ()
 
 
-# chainLength : RichardId, List Entity -> Nat
-# chainLength = \RichardId richardId, dict ->
-#     0
+chainLength : List Entity, RichardId -> Nat
+chainLength = \entries, @RichardId richardId ->
+    0
 #     case Dict.get richardId dict of
 #         Just (ERichard { oneHand }) ->
 #             case oneHand of
