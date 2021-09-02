@@ -90,41 +90,42 @@ pub fn update_int(
 
         let content_str_mut = int_mark_node.get_content_mut()?;
 
+        // I have left this slice of deceting zero logic here, not sure if needed
         // 00, 01 are not valid ints
-        if (content_str_mut == "0" && (node_caret_offset == 1 || *ch == '0'))
-            || (*ch == '0' && node_caret_offset == 0)
-        {
-            Ok(InputOutcome::Ignored)
-        } else {
-            content_str_mut.insert(node_caret_offset, *ch);
+        // if (content_str_mut == "0" && (node_caret_offset == 1 || *ch == '0'))
+        //     || (*ch == '0' && node_caret_offset == 0)
+        // {
+        //     Ok(InputOutcome::Accepted)
+        // } else {
+        content_str_mut.insert(node_caret_offset, *ch);
 
-            let content_str = int_mark_node.get_content()?;
+        let content_str = int_mark_node.get_content()?;
 
-            // update GridNodeMap and CodeLines
-            ed_model.insert_between_line(
-                old_caret_pos.line,
-                old_caret_pos.column,
-                &ch.to_string(),
-                int_mark_node_id,
-            )?;
+        // update GridNodeMap and CodeLines
+        ed_model.insert_between_line(
+            old_caret_pos.line,
+            old_caret_pos.column,
+            &ch.to_string(),
+            int_mark_node_id,
+        )?;
 
-            // update ast
-            let new_pool_str = PoolStr::new(&content_str, ed_model.module.env.pool);
-            let int_ast_node = ed_model.module.env.pool.get_mut(int_ast_node_id);
-            match int_ast_node {
-                SmallInt { number, text, .. } => {
-                    update_small_int_num(number, &content_str)?;
+        // update ast
+        let new_pool_str = PoolStr::new(&content_str, ed_model.module.env.pool);
+        let int_ast_node = ed_model.module.env.pool.get_mut(int_ast_node_id);
+        match int_ast_node {
+            SmallInt { number, text, .. } => {
+                update_small_int_num(number, &content_str)?;
 
-                    *text = new_pool_str;
-                }
-                _ => unimplemented!("TODO implement updating this type of Number"),
+                *text = new_pool_str;
             }
-
-            // update caret
-            ed_model.simple_move_carets_right(1);
-
-            Ok(InputOutcome::Accepted)
+            _ => unimplemented!("TODO implement updating this type of Number"),
         }
+
+        // update caret
+        ed_model.simple_move_carets_right(1);
+
+        Ok(InputOutcome::Accepted)
+        // }
     } else {
         Ok(InputOutcome::Ignored)
     }
