@@ -110,9 +110,11 @@ pub fn decrefC(
 ) callconv(.C) void {
     // IMPORTANT: bytes_or_null is this case is expected to be a pointer to the refcount
     // (NOT the start of the data, or the start of the allocation)
-    if (bytes_or_null) |bytes| {
-        return @call(.{ .modifier = always_inline }, decref_ptr_to_refcount, .{ bytes, alignment });
-    }
+
+    // this is of course unsafe, but we trust what we get from the llvm side
+    var bytes = @ptrCast([*]isize, bytes_or_null);
+
+    return @call(.{ .modifier = always_inline }, decref_ptr_to_refcount, .{ bytes, alignment });
 }
 
 pub fn decref(
