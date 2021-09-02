@@ -2401,103 +2401,104 @@ pub mod test_ed_update {
     #[test]
     fn test_ctrl_shift_up_nested_record() -> Result<(), String> {
 
-        assert_ctrl_shift_up_nls(ovec!["{ abc: { ┃ } }"], ovec!["{ abc: ┃❮{  }❯ }"])?;
-        assert_ctrl_shift_up_nls(ovec!["{ abc: {┃  } }"], ovec!["{ abc: ┃❮{  }❯ }"])?;
-        assert_ctrl_shift_up_nls(ovec!["{ abc: ┃{  } }"], ovec!["{ abc: ┃❮{  }❯ }"])?;
-        assert_ctrl_shift_up_nls(ovec!["{ abc: {  ┃} }"], ovec!["{ abc: ┃❮{  }❯ }"])?;
-        assert_ctrl_shift_up_nls(ovec!["{ abc: {  }┃ }"], ovec!["┃❮{ abc: {  } }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: { ┃ } }"], ovec!["val = { abc: ┃❮{  }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: {┃  } }"], ovec!["val = { abc: ┃❮{  }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: ┃{  } }"], ovec!["val = { abc: ┃❮{  }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: {  ┃} }"], ovec!["val = { abc: ┃❮{  }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: {  }┃ }"], ovec!["val = ┃❮{ abc: {  } }❯"])?;
 
-        // TODO uncomment tests once editor::lang::constrain::constrain_expr does not contain anymore todo's
-        /*assert_ctrl_shift_up_nls(ovec!["{ abc: { ┃d } }"], ovec!["{ abc: ┃❮{ d }❯ }"])?;
-        assert_ctrl_shift_up_nls(ovec!["{ abc: {┃ d } }"], ovec!["{ abc: ┃❮{ d }❯ }"])?;
-        assert_ctrl_shift_up_nls(ovec!["{ abc: ┃{ d } }"], ovec!["{ abc: ┃❮{ d }❯ }"])?;
-        assert_ctrl_shift_up_nls(ovec!["{ abc: { d ┃} }"], ovec!["{ abc: ┃❮{ d }❯ }"])?;
-        assert_ctrl_shift_up_nls(ovec!["{ abc: { d┃e } }"], ovec!["{ abc: ┃❮{ de }❯ }"])?;
-        assert_ctrl_shift_up_nls(ovec!["{ abc: { d }┃ }"], ovec!["┃❮{ abc: { d } }❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["┃{ abc: { d } }"], ovec!["┃❮{ abc: { d } }❯"])?;*/
+        // TODO uncomment tests once #1649 is fixed
+        /*assert_ctrl_shift_up_nls(ovec!["val = { abc: { ┃d } }"], ovec!["val = { abc: ┃❮{ d }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: {┃ d } }"], ovec!["val = { abc: ┃❮{ d }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: ┃{ d } }"], ovec!["val = { abc: ┃❮{ d }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: { d ┃} }"], ovec!["val = { abc: ┃❮{ d }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: { d┃e } }"], ovec!["val = { abc: ┃❮{ de }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: { d }┃ }"], ovec!["val = ┃❮{ abc: { d } }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = ┃{ abc: { d } }"], ovec!["val = ┃❮{ abc: { d } }❯"])?;*/
 
-        assert_ctrl_shift_up_nls(ovec!["{ abc: { de: { ┃ } } }"], ovec!["{ abc: { de: ┃❮{  }❯ } }"])?;
-        assert_ctrl_shift_up_nls(ovec!["{ abc: { de: ┃{  } } }"], ovec!["{ abc: { de: ┃❮{  }❯ } }"])?;
-        assert_ctrl_shift_up_nls(ovec!["{ abc: { de: {  }┃ } }"], ovec!["{ abc: ┃❮{ de: {  } }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: { de: { ┃ } } }"], ovec!["val = { abc: { de: ┃❮{  }❯ } }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: { de: ┃{  } } }"], ovec!["val = { abc: { de: ┃❮{  }❯ } }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: { de: {  }┃ } }"], ovec!["val = { abc: ┃❮{ de: {  } }❯ }"])?;
 
-        assert_ctrl_shift_up_nls(ovec!["{ abc: { de: \"┃\" } }"], ovec!["{ abc: { de: ┃❮\"\"❯ } }"])?;
-        assert_ctrl_shift_up_nls(ovec!["{ abc: { de: ┃\"\" } }"], ovec!["{ abc: { de: ┃❮\"\"❯ } }"])?;
-        assert_ctrl_shift_up_nls(ovec!["{ abc: { de: \"\"┃ } }"], ovec!["{ abc: ┃❮{ de: \"\" }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: { de: \"┃\" } }"], ovec!["val = { abc: { de: ┃❮\"\"❯ } }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: { de: ┃\"\" } }"], ovec!["val = { abc: { de: ┃❮\"\"❯ } }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: { de: \"\"┃ } }"], ovec!["val = { abc: ┃❮{ de: \"\" }❯ }"])?;
         assert_ctrl_shift_up_nls(
-            ovec!["{ abc: { de: \"f g┃\" } }"],
-            ovec!["{ abc: { de: ┃❮\"f g\"❯ } }"],
+            ovec!["val = { abc: { de: \"f g┃\" } }"],
+            ovec!["val = { abc: { de: ┃❮\"f g\"❯ } }"],
         )?;
         assert_ctrl_shift_up_nls(
-            ovec!["{ abc: { de┃: \"f g\" } }"],
-            ovec!["{ abc: ┃❮{ de: \"f g\" }❯ }"],
+            ovec!["val = { abc: { de┃: \"f g\" } }"],
+            ovec!["val = { abc: ┃❮{ de: \"f g\" }❯ }"],
         )?;
         assert_ctrl_shift_up_nls(
-            ovec!["{ abc: {┃ de: \"f g\" } }"],
-            ovec!["{ abc: ┃❮{ de: \"f g\" }❯ }"],
+            ovec!["val = { abc: {┃ de: \"f g\" } }"],
+            ovec!["val = { abc: ┃❮{ de: \"f g\" }❯ }"],
         )?;
         assert_ctrl_shift_up_nls(
-            ovec!["{ abc: { de: \"f g\" ┃} }"],
-            ovec!["{ abc: ┃❮{ de: \"f g\" }❯ }"],
+            ovec!["val = { abc: { de: \"f g\" ┃} }"],
+            ovec!["val = { abc: ┃❮{ de: \"f g\" }❯ }"],
         )?;
         assert_ctrl_shift_up_nls(
-            ovec!["{ abc: { de: \"f g\" }┃ }"],
-            ovec!["┃❮{ abc: { de: \"f g\" } }❯"],
+            ovec!["val = { abc: { de: \"f g\" }┃ }"],
+            ovec!["val = ┃❮{ abc: { de: \"f g\" } }❯"],
         )?;
         assert_ctrl_shift_up_nls(
-            ovec!["┃{ abc: { de: \"f g\" } }"],
-            ovec!["┃❮{ abc: { de: \"f g\" } }❯"],
+            ovec!["val = ┃{ abc: { de: \"f g\" } }"],
+            ovec!["val = ┃❮{ abc: { de: \"f g\" } }❯"],
         )?;
         assert_ctrl_shift_up_nls(
-            ovec!["{ abc: { de: \"f g\" } }┃"],
-            ovec!["┃❮{ abc: { de: \"f g\" } }❯"],
+            ovec!["val = { abc: { de: \"f g\" } }┃"],
+            ovec!["val = ┃❮{ abc: { de: \"f g\" } }❯"],
         )?;
 
-        assert_ctrl_shift_up_repeat(
-            ovec!["{ abc: { de: \"f g┃\" } }"],
-            ovec!["{ abc: ┃❮{ de: \"f g\" }❯ }"],
+        assert_ctrl_shift_up_repeat_nls(
+            ovec!["val = { abc: { de: \"f g┃\" } }"],
+            ovec!["val = { abc: ┃❮{ de: \"f g\" }❯ }"],
             2,
         )?;
-        assert_ctrl_shift_up_repeat(
-            ovec!["{ abc: { de: ┃\"f g\" } }"],
-            ovec!["┃❮{ abc: { de: \"f g\" } }❯"],
+        assert_ctrl_shift_up_repeat_nls(
+            ovec!["val = { abc: { de: ┃\"f g\" } }"],
+            ovec!["val = ┃❮{ abc: { de: \"f g\" } }❯"],
             3,
         )?;
-        assert_ctrl_shift_up_repeat(
-            ovec!["{ abc: { de: ┃\"f g\" } }"],
-            ovec!["┃❮{ abc: { de: \"f g\" } }❯"],
+        assert_ctrl_shift_up_repeat_nls(
+            ovec!["val = { abc: { de: ┃\"f g\" } }"],
+            ovec!["┃❮val = { abc: { de: \"f g\" } }❯"],
             4,
         )?;
 
-        assert_ctrl_shift_up_nls(ovec!["{ abc: { de: ┃951 } }"], ovec!["{ abc: { de: ┃❮951❯ } }"])?;
-        assert_ctrl_shift_up_nls(ovec!["{ abc: { de: 11┃0 } }"], ovec!["{ abc: { de: ┃❮110❯ } }"])?;
-        assert_ctrl_shift_up_nls(ovec!["{ abc: { de: 444┃ } }"], ovec!["{ abc: ┃❮{ de: 444 }❯ }"])?;
-        assert_ctrl_shift_up_nls(ovec!["{ abc: { de┃: 99 } }"], ovec!["{ abc: ┃❮{ de: 99 }❯ }"])?;
-        assert_ctrl_shift_up_nls(ovec!["{ abc: {┃ de: 0 } }"], ovec!["{ abc: ┃❮{ de: 0 }❯ }"])?;
-        assert_ctrl_shift_up_nls(ovec!["{ abc: { de: 230 ┃} }"], ovec!["{ abc: ┃❮{ de: 230 }❯ }"])?;
-        assert_ctrl_shift_up_nls(ovec!["{ abc: { de: 7 }┃ }"], ovec!["┃❮{ abc: { de: 7 } }❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["┃{ abc: { de: 1 } }"], ovec!["┃❮{ abc: { de: 1 } }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: { de: ┃951 } }"], ovec!["val = { abc: { de: ┃❮951❯ } }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: { de: 11┃0 } }"], ovec!["val = { abc: { de: ┃❮110❯ } }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: { de: 444┃ } }"], ovec!["val = { abc: ┃❮{ de: 444 }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: { de┃: 99 } }"], ovec!["val = { abc: ┃❮{ de: 99 }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: {┃ de: 0 } }"], ovec!["val = { abc: ┃❮{ de: 0 }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: { de: 230 ┃} }"], ovec!["val = { abc: ┃❮{ de: 230 }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: { de: 7 }┃ }"], ovec!["val = ┃❮{ abc: { de: 7 } }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = ┃{ abc: { de: 1 } }"], ovec!["val = ┃❮{ abc: { de: 1 } }❯"])?;
         assert_ctrl_shift_up_nls(
-            ovec!["{ abc: { de: 111111 } }┃"],
-            ovec!["┃❮{ abc: { de: 111111 } }❯"],
+            ovec!["val = { abc: { de: 111111 } }┃"],
+            ovec!["val = ┃❮{ abc: { de: 111111 } }❯"],
         )?;
 
-        assert_ctrl_shift_up_repeat(ovec!["{ abc: { de: 1┃5 } }"], ovec!["{ abc: ┃❮{ de: 15 }❯ }"], 2)?;
-        assert_ctrl_shift_up_repeat(ovec!["{ abc: { de: ┃55 } }"], ovec!["┃❮{ abc: { de: 55 } }❯"], 3)?;
-        assert_ctrl_shift_up_repeat(ovec!["{ abc: { de: ┃400 } }"], ovec!["┃❮{ abc: { de: 400 } }❯"], 4)?;
+        assert_ctrl_shift_up_repeat_nls(ovec!["val = { abc: { de: 1┃5 } }"], ovec!["val = { abc: ┃❮{ de: 15 }❯ }"], 2)?;
+        assert_ctrl_shift_up_repeat_nls(ovec!["val = { abc: { de: ┃55 } }"], ovec!["val = ┃❮{ abc: { de: 55 } }❯"], 3)?;
+        assert_ctrl_shift_up_repeat_nls(ovec!["val = { abc: { de: ┃400 } }"], ovec!["┃❮val = { abc: { de: 400 } }❯"], 5)?;
 
-        /*assert_ctrl_shift_up_repeat(
-            ovec!["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase┃ } } } } } } } }"],
-            ovec!["{ g: { oi: { ng: { d: ┃❮{ e: { e: { p: { camelCase } } } }❯ } } } }"],
+        // TODO uncomment tests once #1649 is fixed
+        /*assert_ctrl_shift_up_repeat_nls(
+            ovec!["val = { g: { oi: { ng: { d: { e: { e: { p: { camelCase┃ } } } } } } } }"],
+            ovec!["val = { g: { oi: { ng: { d: ┃❮{ e: { e: { p: { camelCase } } } }❯ } } } }"],
             4,
         )?;
-        assert_ctrl_shift_up_repeat(
-            ovec!["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase┃ } } } } } } } }"],
-            ovec!["{ g: ┃❮{ oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } }❯ }"],
+        assert_ctrl_shift_up_repeat_nls(
+            ovec!["val = { g: { oi: { ng: { d: { e: { e: { p: { camelCase┃ } } } } } } } }"],
+            ovec!["val = { g: ┃❮{ oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } }❯ }"],
             7,
         )?;
-        assert_ctrl_shift_up_repeat(
-            ovec!["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase┃ } } } } } } } }"],
-            ovec!["┃❮{ g: { oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } } }❯"],
+        assert_ctrl_shift_up_repeat_nls(
+            ovec!["val = { g: { oi: { ng: { d: { e: { e: { p: { camelCase┃ } } } } } } } }"],
+            ovec!["val = ┃❮{ g: { oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } } }❯"],
             9,
         )?;*/
 
@@ -2572,27 +2573,27 @@ pub mod test_ed_update {
 
     #[test]
     fn test_type_tooltip() -> Result<(), String> {
-        /*YOLOassert_type_tooltip( "{}", '{')?;*/
+        assert_type_tooltip_clean(ovec!["val = ┃5"], "Num *")?;
+        assert_type_tooltip_clean(ovec!["val = 42┃"], "Num *")?;
+        assert_type_tooltip_clean(ovec!["val = 13┃7"], "Num *")?;
 
-        assert_type_tooltip_clean(ovec!["┃5"], "Num *")?;
-        assert_type_tooltip_clean(ovec!["42┃"], "Num *")?;
-        assert_type_tooltip_clean(ovec!["13┃7"], "Num *")?;
+        assert_type_tooltip_clean(ovec!["val = \"┃abc\""], "Str")?;
+        assert_type_tooltip_clean(ovec!["val = ┃\"abc\""], "Str")?;
+        assert_type_tooltip_clean(ovec!["val = \"abc\"┃"], "Str")?;
 
-        assert_type_tooltip_clean(ovec!["\"┃abc\""], "Str")?;
-        assert_type_tooltip_clean(ovec!["┃\"abc\""], "Str")?;
-        assert_type_tooltip_clean(ovec!["\"abc\"┃"], "Str")?;
+        assert_type_tooltip_clean( ovec!["val = { ┃ }"], "{}")?;
+        assert_type_tooltip_clean(ovec!["val = { a: \"abc\" }┃"], "{ a : Str }")?;
+        assert_type_tooltip_clean(ovec!["val = { ┃a: 0 }"], "{ a : Num * }")?;
+        assert_type_tooltip_clean(ovec!["val = { ┃z: {  } }"], "{ z : {} }")?;
+        assert_type_tooltip_clean(ovec!["val = { camelCase: ┃0 }"], "Num *")?;
 
-        assert_type_tooltip_clean(ovec!["{ a: \"abc\" }┃"], "{ a : Str }")?;
-        assert_type_tooltip_clean(ovec!["{ ┃a: 0 }"], "{ a : Num * }")?;
-        assert_type_tooltip_clean(ovec!["{ ┃z: {  } }"], "{ z : {} }")?;
-        assert_type_tooltip_clean(ovec!["{ camelCase: ┃0 }"], "Num *")?;
-
-        /*YOLOassert_type_tooltips_seq( ovec!["*"], "")?;
+        // TODO allow input to check type tooltip for Blank
+        /*assert_type_tooltips_seq( ovec!["*"], "")?;
         assert_type_tooltips_seq( ovec!["*", "{ a : * }"], "{a:")?;*/
 
-        assert_type_tooltips_clean(ovec!["{ camelCase: ┃0 }"], ovec!["Num *", "{ camelCase : Num * }"])?;
+        assert_type_tooltips_clean(ovec!["val = { camelCase: ┃0 }"], ovec!["Num *", "{ camelCase : Num * }"])?;
         assert_type_tooltips_clean(
-            ovec!["{ a: { b: { c: \"hello┃, hello.0123456789ZXY{}[]-><-\" } } }"],
+            ovec!["val = { a: { b: { c: \"hello┃, hello.0123456789ZXY{}[]-><-\" } } }"],
             ovec!["Str", "{ c : Str }", "{ b : { c : Str } }", "{ a : { b : { c : Str } } }"],
         )?;
 
