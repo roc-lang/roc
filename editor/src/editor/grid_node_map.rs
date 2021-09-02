@@ -259,29 +259,74 @@ impl GridNodeMap {
         nested_node_id: MarkNodeId,
         ed_model: &EdModel,
     ) -> EdResult<(TextPos, TextPos)> {
-        let parent_mark_node = ed_model.mark_node_pool.get(nested_node_id);
 
-        let all_child_ids = parent_mark_node.get_children_ids();
-        let first_child_id = all_child_ids
-            .first()
-            .with_context(|| NestedNodeWithoutChildren {
-                node_id: nested_node_id,
-            })?;
-        let last_child_id = all_child_ids
-            .last()
-            .with_context(|| NestedNodeWithoutChildren {
-                node_id: nested_node_id,
-            })?;
+        let left_most_leaf =
+            self.get_leftmost_leaf(
+                nested_node_id,
+                ed_model,
+            )?;
+        
+        let right_most_leaf =
+            self.get_rightmost_leaf(
+                nested_node_id,
+                ed_model,
+            )?;
 
         let expr_start_pos = ed_model
             .grid_node_map
-            .get_node_position(*first_child_id, true)?;
+            .get_node_position(left_most_leaf, true)?;
         let expr_end_pos = ed_model
             .grid_node_map
-            .get_node_position(*last_child_id, false)?
+            .get_node_position(right_most_leaf, false)?
             .increment_col();
 
         Ok((expr_start_pos, expr_end_pos))
+    }
+
+    fn get_leftmost_leaf(
+        &self,
+        nested_node_id: MarkNodeId,
+        ed_model: &EdModel,
+    ) -> EdResult<MarkNodeId> {
+
+        let mut children_ids = ed_model.mark_node_pool.get(nested_node_id).get_children_ids();
+        let mut first_child_id = 0;
+
+        while !children_ids.is_empty() {
+            first_child_id =
+                *children_ids
+                    .first()
+                    .with_context(|| NestedNodeWithoutChildren {
+                        node_id: nested_node_id,
+                    })?;
+
+            children_ids = ed_model.mark_node_pool.get(first_child_id).get_children_ids();
+        }
+
+        Ok(first_child_id)
+    }
+
+    fn get_rightmost_leaf(
+        &self,
+        nested_node_id: MarkNodeId,
+        ed_model: &EdModel,
+    ) -> EdResult<MarkNodeId> {
+
+        let mut children_ids = ed_model.mark_node_pool.get(nested_node_id).get_children_ids();
+        let mut last_child_id = 0;
+
+        while !children_ids.is_empty() {
+            last_child_id =
+                *children_ids
+                    .last()
+                    .with_context(|| NestedNodeWithoutChildren {
+                        node_id: nested_node_id,
+                    })?;
+
+            children_ids = ed_model.mark_node_pool.get(last_child_id).get_children_ids();
+        }
+
+        Ok(last_child_id)
     }
 }
 

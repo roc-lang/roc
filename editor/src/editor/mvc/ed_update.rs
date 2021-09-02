@@ -8,7 +8,6 @@ use crate::editor::grid_node_map::GridNodeMap;
 use crate::editor::markup::attribute::Attributes;
 use crate::editor::markup::common_nodes::new_blank_mn;
 use crate::editor::markup::nodes;
-use crate::editor::markup::nodes::LEFT_ACCOLADE;
 use crate::editor::markup::nodes::MarkupNode;
 use crate::editor::markup::nodes::EQUALS;
 use crate::editor::mvc::app_update::InputOutcome;
@@ -61,7 +60,6 @@ use winit::event::VirtualKeyCode;
 use VirtualKeyCode::*;
 
 use super::let_update::start_new_let_value;
-use super::let_update::update_let_value;
 
 impl<'a> EdModel<'a> {
     pub fn move_caret(
@@ -287,7 +285,7 @@ impl<'a> EdModel<'a> {
         self.set_caret(expr_start_pos);
 
         let type_str = match ast_node_id {
-            ASTNodeId::ADefId(_) => PoolStr::new("TODO", self.module.env.pool),
+            ASTNodeId::ADefId(_) => PoolStr::new("TODO display type of Expr2 contained in Def2 if there is one", self.module.env.pool),
             ASTNodeId::AExprId(expr_id) => self.expr2_to_type(expr_id),
         };
 
@@ -676,7 +674,7 @@ pub fn handle_new_char_def(received_char: &char, def_id: DefId, ed_model: &mut E
         curr_mark_node_id,
         curr_mark_node,
         parent_id_opt: _,
-        ast_node_id,
+        ast_node_id:_,
     } = get_node_context(ed_model)?;
 
     let outcome =match def_ref {
@@ -689,25 +687,37 @@ pub fn handle_new_char_def(received_char: &char, def_id: DefId, ed_model: &mut E
             }
         }
         Def2::ValueDef { .. } => {
-            let val_name_mn_id = if curr_mark_node.get_content() == EQUALS {
 
-                let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
+            if curr_mark_node.get_content() == EQUALS {
 
-                if let Some(prev_mark_node_id) = prev_mark_node_id_opt {
-                    prev_mark_node_id
+                let node_caret_offset = ed_model
+                    .grid_node_map
+                    .get_offset_to_node_id(old_caret_pos, curr_mark_node_id)?;
+
+                if node_caret_offset == 0 || node_caret_offset == EQUALS.len() {
+                    let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
+
+                    if let Some(prev_mark_node_id) = prev_mark_node_id_opt {
+                        update_tld_val_name(
+                            prev_mark_node_id,
+                            ed_model.get_caret(), // TODO update for multiple carets
+                            ed_model,
+                            ch
+                        )?
+                    } else {
+                        unreachable!()
+                    }
                 } else {
-                    unreachable!()
+                    InputOutcome::Ignored
                 }
             } else {
-                curr_mark_node_id
-            };
-
-            update_tld_val_name(
-                val_name_mn_id,
-                ed_model.get_caret(), // TODO update for multiple carets
-                ed_model,
-                ch
-            )?
+                update_tld_val_name(
+                    curr_mark_node_id,
+                    ed_model.get_caret(), // TODO update for multiple carets
+                    ed_model,
+                    ch
+                )?
+            }
         },
     };
 
@@ -720,16 +730,14 @@ pub fn handle_new_char_expr(received_char: &char, expr_id: ExprId, ed_model: &mu
     let ch = received_char;
 
     let NodeContext {
-        old_caret_pos,
+        old_caret_pos:_,
         curr_mark_node_id,
         curr_mark_node,
         parent_id_opt: _,
-        ast_node_id,
+        ast_node_id:_,
     } = get_node_context(ed_model)?;
 
     let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
-
-    let expr_ref = ed_model.module.env.pool.get(expr_id);
 
     let outcome = 
         if let Expr2::Blank {..} = expr_ref {
@@ -1004,19 +1012,17 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                 let outcome =
                     if ed_model.node_exists_at_caret() {
                         let curr_mark_node_id = ed_model.get_curr_mark_node_id()?;
-                            let curr_mark_node = ed_model.mark_node_pool.get(curr_mark_node_id);
-                            let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
+                        let curr_mark_node = ed_model.mark_node_pool.get(curr_mark_node_id);
+                        let ast_node_id = curr_mark_node.get_ast_node_id();
 
-                            let ast_node_id = curr_mark_node.get_ast_node_id();
-
-                            match ast_node_id {
-                                ASTNodeId::ADefId(def_id) => {
-                                    handle_new_char_def(received_char, def_id, ed_model)?
-                                },
-                                ASTNodeId::AExprId(expr_id) => {
-                                    handle_new_char_expr(received_char, expr_id, ed_model)?
-                                }
+                        match ast_node_id {
+                            ASTNodeId::ADefId(def_id) => {
+                                handle_new_char_def(received_char, def_id, ed_model)?
+                            },
+                            ASTNodeId::AExprId(expr_id) => {
+                                handle_new_char_expr(received_char, expr_id, ed_model)?
                             }
+                        }
                         
                     } else { //no MarkupNode at the current position
                             if *received_char == '\r' {
@@ -1278,13 +1284,16 @@ pub mod test_ed_update {
         }
 
         let mut post_lines = ui_res_to_res(ed_model_to_dsl(&ed_model))?;
-
-        let nr_hello_world_lines = HELLO_WORLD.matches('\n').count() - 1;
-        post_lines.drain(0..nr_hello_world_lines);
+        strip_header(&mut post_lines);// remove header for clean tests
 
         assert_eq!(post_lines, expected_post_lines);
 
         Ok(())
+    }
+
+    fn strip_header(lines: &mut Vec<String>)  {
+        let nr_hello_world_lines = HELLO_WORLD.matches('\n').count() - 1;
+        lines.drain(0..nr_hello_world_lines);
     }
 
     pub fn assert_insert_seq_nls(
@@ -2199,9 +2208,15 @@ pub mod test_ed_update {
 
     #[test]
     fn test_ignore_let_value() -> Result<(), String> {
-        // TODO fix me
-        assert_insert_seq_ignore(ovec!["a ┃= 0", "a"], IGNORE_CHARS)?;
-        //assert_insert_seq_ignore(ovec!["a =┃ 0", "a"], IGNORE_CHARS)?;
+
+        assert_insert_seq_ignore_nls(ovec!["a ┃= 0"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["a =┃ 0"], IGNORE_CHARS)?;
+
+        assert_insert_seq_ignore_nls(ovec!["aBC ┃= 0"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["aBC =┃ 0"], IGNORE_CHARS)?;
+
+        assert_insert_seq_ignore_nls(ovec!["camelCase123 ┃= 0"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore_nls(ovec!["camelCase123 =┃ 0"], IGNORE_CHARS)?;
 
         Ok(())
     }
@@ -2231,7 +2246,8 @@ pub mod test_ed_update {
             ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up)?;
         }
 
-        let post_lines = ui_res_to_res(ed_model_to_dsl(&ed_model))?;
+        let mut post_lines = ui_res_to_res(ed_model_to_dsl(&ed_model))?;
+        strip_header(&mut post_lines); // remove header for clean tests
 
         assert_eq!(post_lines, expected_post_lines);
 
@@ -2245,10 +2261,26 @@ pub mod test_ed_update {
         assert_ctrl_shift_up_repeat(pre_lines, expected_post_lines, 1)
     }
 
+    pub fn assert_ctrl_shift_up_nls(
+        pre_lines: Vec<String>,
+        expected_post_lines: Vec<String>,
+    ) -> Result<(), String> {
+        assert_ctrl_shift_up_repeat(pre_lines, add_nls(expected_post_lines), 1)
+    }
+
+    pub fn assert_ctrl_shift_up_repeat_nls(
+        pre_lines: Vec<String>,
+        expected_post_lines: Vec<String>,
+        repeats: usize,
+    ) -> Result<(), String> {
+        assert_ctrl_shift_up_repeat(pre_lines, add_nls(expected_post_lines), repeats)
+    }
+
     #[test]
     fn test_ctrl_shift_up_blank() -> Result<(), String> {
         // Blank is auto-inserted
-        /*YOLOassert_ctrl_shift_up( ovec!["┃❮ ❯"])?;
+        // TODO allow input to create blank
+        /*assert_ctrl_shift_up_nls( ovec!["val ┃❮ ❯"], ovec!["┃❮ ❯"])?;
         assert_ctrl_shift_up_repeat( ovec!["┃❮ ❯"], 4)?;*/
 
         Ok(())
@@ -2256,110 +2288,110 @@ pub mod test_ed_update {
 
     #[test]
     fn test_ctrl_shift_up_int() -> Result<(), String> {
-        assert_ctrl_shift_up(ovec!["5┃"], ovec!["┃❮5❯"])?;
-        assert_ctrl_shift_up_repeat(ovec!["0┃"], ovec!["┃❮0❯"], 3)?;
-        assert_ctrl_shift_up(ovec!["12345┃"], ovec!["┃❮12345❯"])?;
-        assert_ctrl_shift_up(ovec!["┃12345"], ovec!["┃❮12345❯"])?;
-        assert_ctrl_shift_up(ovec!["1┃2345"], ovec!["┃❮12345❯"])?;
-        assert_ctrl_shift_up(ovec!["12┃345"], ovec!["┃❮12345❯"])?;
-        assert_ctrl_shift_up(ovec!["123┃45"], ovec!["┃❮12345❯"])?;
-        assert_ctrl_shift_up(ovec!["1234┃5"], ovec!["┃❮12345❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = 5┃"], ovec!["val = ┃❮5❯"])?;
+        assert_ctrl_shift_up_repeat_nls(ovec!["val = 0┃"], ovec!["┃❮val = 0❯"], 4)?;
+        assert_ctrl_shift_up_nls(ovec!["val = 12345┃"], ovec!["val = ┃❮12345❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = ┃12345"], ovec!["val = ┃❮12345❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = 1┃2345"], ovec!["val = ┃❮12345❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = 12┃345"], ovec!["val = ┃❮12345❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = 123┃45"], ovec!["val = ┃❮12345❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = 1234┃5"], ovec!["val = ┃❮12345❯"])?;
 
         Ok(())
     }
 
     #[test]
     fn test_ctrl_shift_up_string() -> Result<(), String> {
-        assert_ctrl_shift_up(ovec!["\"┃\""], ovec!["┃❮\"\"❯"])?;
-        assert_ctrl_shift_up(ovec!["┃\"\""], ovec!["┃❮\"\"❯"])?;
-        assert_ctrl_shift_up(ovec!["\"┃0\""], ovec!["┃❮\"0\"❯"])?;
-        assert_ctrl_shift_up(ovec!["\"0┃\""], ovec!["┃❮\"0\"❯"])?;
-        assert_ctrl_shift_up(ovec!["\"abc┃\""], ovec!["┃❮\"abc\"❯"])?;
-        assert_ctrl_shift_up(ovec!["\"ab┃c\""], ovec!["┃❮\"abc\"❯"])?;
-        assert_ctrl_shift_up(ovec!["\"┃abc\""], ovec!["┃❮\"abc\"❯"])?;
-        assert_ctrl_shift_up(ovec!["┃\"abc\""], ovec!["┃❮\"abc\"❯"])?;
-        assert_ctrl_shift_up_repeat(ovec!["\"abc┃\""], ovec!["┃❮\"abc\"❯"], 3)?;
-        assert_ctrl_shift_up(
-            ovec!["\"hello, hello.0123456789ZXY{}[]-><-┃\""],
-            ovec!["┃❮\"hello, hello.0123456789ZXY{}[]-><-\"❯"],
+        assert_ctrl_shift_up_nls(ovec!["val = \"┃\""], ovec!["val = ┃❮\"\"❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = ┃\"\""], ovec!["val = ┃❮\"\"❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = \"┃0\""], ovec!["val = ┃❮\"0\"❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = \"0┃\""], ovec!["val = ┃❮\"0\"❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = \"abc┃\""], ovec!["val = ┃❮\"abc\"❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = \"ab┃c\""], ovec!["val = ┃❮\"abc\"❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = \"┃abc\""], ovec!["val = ┃❮\"abc\"❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = ┃\"abc\""], ovec!["val = ┃❮\"abc\"❯"])?;
+        assert_ctrl_shift_up_repeat_nls(ovec!["val = \"abc┃\""], ovec!["┃❮val = \"abc\"❯"], 4)?;
+        assert_ctrl_shift_up_nls(
+            ovec!["val = \"hello, hello.0123456789ZXY{}[]-><-┃\""],
+            ovec!["val = ┃❮\"hello, hello.0123456789ZXY{}[]-><-\"❯"],
         )?;
 
-        assert_ctrl_shift_up(ovec!["\"\"┃"], ovec!["┃❮\"\"❯"])?;
-        assert_ctrl_shift_up(ovec!["\"abc\"┃"], ovec!["┃❮\"abc\"❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = \"\"┃"], ovec!["val = ┃❮\"\"❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = \"abc\"┃"], ovec!["val = ┃❮\"abc\"❯"])?;
 
         Ok(())
     }
 
     #[test]
     fn test_ctrl_shift_up_record() -> Result<(), String> {
-        // TODO uncomment tests once editor::lang::constrain::constrain_expr does not contain anymore todo's
-        assert_ctrl_shift_up(ovec!["{ ┃ }"], ovec!["┃❮{  }❯"])?;
-        assert_ctrl_shift_up(ovec!["{┃  }"], ovec!["┃❮{  }❯"])?;
-        assert_ctrl_shift_up(ovec!["┃{  }"], ovec!["┃❮{  }❯"])?;
-        assert_ctrl_shift_up(ovec!["{  ┃}"], ovec!["┃❮{  }❯"])?;
-        assert_ctrl_shift_up_repeat(ovec!["{ ┃ }"], ovec!["┃❮{  }❯"], 4)?;
-        assert_ctrl_shift_up(ovec!["{  }┃"], ovec!["┃❮{  }❯"])?;
+        
+        assert_ctrl_shift_up_nls(ovec!["val = { ┃ }"], ovec!["val = ┃❮{  }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = {┃  }"], ovec!["val = ┃❮{  }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = ┃{  }"], ovec!["val = ┃❮{  }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = {  ┃}"], ovec!["val = ┃❮{  }❯"])?;
+        assert_ctrl_shift_up_repeat_nls(ovec!["val = { ┃ }"], ovec!["┃❮val = {  }❯"], 4)?;
+        assert_ctrl_shift_up_nls(ovec!["val = {  }┃"], ovec!["val = ┃❮{  }❯"])?;
+        // TODO uncomment tests once #1649 is fixed
+        /*assert_ctrl_shift_up_nls(ovec!["val = { pear┃ }"], ovec!["val = ┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { pea┃r }"], ovec!["val = ┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { p┃ear }"], ovec!["val = ┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { ┃pear }"], ovec!["val = ┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = {┃ pear }"], ovec!["val = ┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = ┃{ pear }"], ovec!["val = ┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { pear ┃}"], ovec!["val = ┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up_repeat(ovec!["val = { pear┃ }"], ovec!["val = ┃❮{ pear }❯"], 3)?;
+        assert_ctrl_shift_up_nls(ovec!["val = { pear }┃"], ovec!["val = ┃❮{ pear }❯"])?;
 
-        /*assert_ctrl_shift_up(ovec!["{ pear┃ }"], ovec!["┃❮{ pear }❯"])?;
-        assert_ctrl_shift_up(ovec!["{ pea┃r }"], ovec!["┃❮{ pear }❯"])?;
-        assert_ctrl_shift_up(ovec!["{ p┃ear }"], ovec!["┃❮{ pear }❯"])?;
-        assert_ctrl_shift_up(ovec!["{ ┃pear }"], ovec!["┃❮{ pear }❯"])?;
-        assert_ctrl_shift_up(ovec!["{┃ pear }"], ovec!["┃❮{ pear }❯"])?;
-        assert_ctrl_shift_up(ovec!["┃{ pear }"], ovec!["┃❮{ pear }❯"])?;
-        assert_ctrl_shift_up(ovec!["{ pear ┃}"], ovec!["┃❮{ pear }❯"])?;
-        assert_ctrl_shift_up_repeat(ovec!["{ pear┃ }"], ovec!["┃❮{ pear }❯"], 3)?;
-        assert_ctrl_shift_up(ovec!["{ pear }┃"], ovec!["┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { camelCase123┃ }"], ovec!["val = ┃❮{ camelCase123 }❯"])?;*/
 
-        assert_ctrl_shift_up(ovec!["{ camelCase123┃ }"], ovec!["┃❮{ camelCase123 }❯"])?;*/
+        assert_ctrl_shift_up_nls(ovec!["val = { a: \"┃\" }"], ovec!["val = { a: ┃❮\"\"❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { a: ┃\"\" }"], ovec!["val = { a: ┃❮\"\"❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { a: \"\"┃ }"], ovec!["val = ┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { a: \"\" ┃}"], ovec!["val = ┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up_repeat_nls(ovec!["val = { a: \"\" ┃}"], ovec!["┃❮val = { a: \"\" }❯"], 3)?;
+        assert_ctrl_shift_up_nls(ovec!["val = { a: \"\" }┃"], ovec!["val = ┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { a:┃ \"\" }"], ovec!["val = ┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { a┃: \"\" }"], ovec!["val = ┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { ┃a: \"\" }"], ovec!["val = ┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = {┃ a: \"\" }"], ovec!["val = ┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = ┃{ a: \"\" }"], ovec!["val = ┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up_repeat_nls(ovec!["val = { a: \"┃\" }"], ovec!["val = ┃❮{ a: \"\" }❯"], 2)?;
+        assert_ctrl_shift_up_repeat_nls(ovec!["val = { a: \"┃\" }"], ovec!["┃❮val = { a: \"\" }❯"], 4)?;
 
-        assert_ctrl_shift_up(ovec!["{ a: \"┃\" }"], ovec!["{ a: ┃❮\"\"❯ }"])?;
-        assert_ctrl_shift_up(ovec!["{ a: ┃\"\" }"], ovec!["{ a: ┃❮\"\"❯ }"])?;
-        assert_ctrl_shift_up(ovec!["{ a: \"\"┃ }"], ovec!["┃❮{ a: \"\" }❯"])?;
-        assert_ctrl_shift_up(ovec!["{ a: \"\" ┃}"], ovec!["┃❮{ a: \"\" }❯"])?;
-        assert_ctrl_shift_up_repeat(ovec!["{ a: \"\" ┃}"], ovec!["┃❮{ a: \"\" }❯"], 3)?;
-        assert_ctrl_shift_up(ovec!["{ a: \"\" }┃"], ovec!["┃❮{ a: \"\" }❯"])?;
-        assert_ctrl_shift_up(ovec!["{ a:┃ \"\" }"], ovec!["┃❮{ a: \"\" }❯"])?;
-        assert_ctrl_shift_up(ovec!["{ a┃: \"\" }"], ovec!["┃❮{ a: \"\" }❯"])?;
-        assert_ctrl_shift_up(ovec!["{ ┃a: \"\" }"], ovec!["┃❮{ a: \"\" }❯"])?;
-        assert_ctrl_shift_up(ovec!["{┃ a: \"\" }"], ovec!["┃❮{ a: \"\" }❯"])?;
-        assert_ctrl_shift_up(ovec!["┃{ a: \"\" }"], ovec!["┃❮{ a: \"\" }❯"])?;
-        assert_ctrl_shift_up_repeat(ovec!["{ a: \"┃\" }"], ovec!["┃❮{ a: \"\" }❯"], 2)?;
-        assert_ctrl_shift_up_repeat(ovec!["{ a: \"┃\" }"], ovec!["┃❮{ a: \"\" }❯"], 4)?;
+        assert_ctrl_shift_up_nls(ovec!["val = { a: 1┃0 }"], ovec!["val = { a: ┃❮10❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { a: ┃9 }"], ovec!["val = { a: ┃❮9❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { a: 98┃89 }"], ovec!["val = { a: ┃❮9889❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { a: 44┃ }"], ovec!["val = ┃❮{ a: 44 }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { a: 0 ┃}"], ovec!["val = ┃❮{ a: 0 }❯"])?;
+        assert_ctrl_shift_up_repeat_nls(ovec!["val = { a: 123 ┃}"], ovec!["┃❮val = { a: 123 }❯"], 3)?;
+        assert_ctrl_shift_up_nls(ovec!["val = { a: 96 }┃"], ovec!["val = ┃❮{ a: 96 }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { a:┃ 985600 }"], ovec!["val = ┃❮{ a: 985600 }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { a┃: 5648 }"], ovec!["val = ┃❮{ a: 5648 }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { ┃a: 1000000 }"], ovec!["val = ┃❮{ a: 1000000 }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = {┃ a: 1 }"], ovec!["val = ┃❮{ a: 1 }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = ┃{ a: 900600 }"], ovec!["val = ┃❮{ a: 900600 }❯"])?;
+        assert_ctrl_shift_up_repeat_nls(ovec!["val = { a: 10┃000 }"], ovec!["val = ┃❮{ a: 10000 }❯"], 2)?;
+        assert_ctrl_shift_up_repeat_nls(ovec!["val = { a: ┃45 }"], ovec!["┃❮val = { a: 45 }❯"], 4)?;
 
-        assert_ctrl_shift_up(ovec!["{ a: 1┃0 }"], ovec!["{ a: ┃❮10❯ }"])?;
-        assert_ctrl_shift_up(ovec!["{ a: ┃9 }"], ovec!["{ a: ┃❮9❯ }"])?;
-        assert_ctrl_shift_up(ovec!["{ a: 98┃89 }"], ovec!["{ a: ┃❮9889❯ }"])?;
-        assert_ctrl_shift_up(ovec!["{ a: 44┃ }"], ovec!["┃❮{ a: 44 }❯"])?;
-        assert_ctrl_shift_up(ovec!["{ a: 0 ┃}"], ovec!["┃❮{ a: 0 }❯"])?;
-        assert_ctrl_shift_up_repeat(ovec!["{ a: 123 ┃}"], ovec!["┃❮{ a: 123 }❯"], 3)?;
-        assert_ctrl_shift_up(ovec!["{ a: 96 }┃"], ovec!["┃❮{ a: 96 }❯"])?;
-        assert_ctrl_shift_up(ovec!["{ a:┃ 985600 }"], ovec!["┃❮{ a: 985600 }❯"])?;
-        assert_ctrl_shift_up(ovec!["{ a┃: 5648 }"], ovec!["┃❮{ a: 5648 }❯"])?;
-        assert_ctrl_shift_up(ovec!["{ ┃a: 1000000 }"], ovec!["┃❮{ a: 1000000 }❯"])?;
-        assert_ctrl_shift_up(ovec!["{┃ a: 1 }"], ovec!["┃❮{ a: 1 }❯"])?;
-        assert_ctrl_shift_up(ovec!["┃{ a: 900600 }"], ovec!["┃❮{ a: 900600 }❯"])?;
-        assert_ctrl_shift_up_repeat(ovec!["{ a: 10┃000 }"], ovec!["┃❮{ a: 10000 }❯"], 2)?;
-        assert_ctrl_shift_up_repeat(ovec!["{ a: ┃45 }"], ovec!["┃❮{ a: 45 }❯"], 4)?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: \"de┃\" }"], ovec!["val = { abc: ┃❮\"de\"❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: \"d┃e\" }"], ovec!["val = { abc: ┃❮\"de\"❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: \"┃de\" }"], ovec!["val = { abc: ┃❮\"de\"❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: ┃\"de\" }"], ovec!["val = { abc: ┃❮\"de\"❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["val = { abc: \"de\"┃ }"], ovec!["val = ┃❮{ abc: \"de\" }❯"])?;
+        assert_ctrl_shift_up_repeat_nls(ovec!["val = { abc: \"d┃e\" }"], ovec!["val = ┃❮{ abc: \"de\" }❯"], 2)?;
+        assert_ctrl_shift_up_repeat_nls(ovec!["val = { abc: \"d┃e\" }"], ovec!["┃❮val = { abc: \"de\" }❯"], 3)?;
 
-        assert_ctrl_shift_up(ovec!["{ abc: \"de┃\" }"], ovec!["{ abc: ┃❮\"de\"❯ }"])?;
-        assert_ctrl_shift_up(ovec!["{ abc: \"d┃e\" }"], ovec!["{ abc: ┃❮\"de\"❯ }"])?;
-        assert_ctrl_shift_up(ovec!["{ abc: \"┃de\" }"], ovec!["{ abc: ┃❮\"de\"❯ }"])?;
-        assert_ctrl_shift_up(ovec!["{ abc: ┃\"de\" }"], ovec!["{ abc: ┃❮\"de\"❯ }"])?;
-        assert_ctrl_shift_up(ovec!["{ abc: \"de\"┃ }"], ovec!["┃❮{ abc: \"de\" }❯"])?;
-        assert_ctrl_shift_up_repeat(ovec!["{ abc: \"d┃e\" }"], ovec!["┃❮{ abc: \"de\" }❯"], 2)?;
-        assert_ctrl_shift_up_repeat(ovec!["{ abc: \"d┃e\" }"], ovec!["┃❮{ abc: \"de\" }❯"], 3)?;
-
-        assert_ctrl_shift_up(
-            ovec!["{ camelCase123: \"hello, hello.012┃3456789ZXY{}[]-><-\" }"],
-            ovec!["{ camelCase123: ┃❮\"hello, hello.0123456789ZXY{}[]-><-\"❯ }"],
+        assert_ctrl_shift_up_nls(
+            ovec!["val = { camelCase123: \"hello, hello.012┃3456789ZXY{}[]-><-\" }"],
+            ovec!["val = { camelCase123: ┃❮\"hello, hello.0123456789ZXY{}[]-><-\"❯ }"],
         )?;
-        assert_ctrl_shift_up(
-            ovec!["{ camel┃Case123: \"hello, hello.0123456789ZXY{}[]-><-\" }"],
-            ovec!["┃❮{ camelCase123: \"hello, hello.0123456789ZXY{}[]-><-\" }❯"],
+        assert_ctrl_shift_up_nls(
+            ovec!["val = { camel┃Case123: \"hello, hello.0123456789ZXY{}[]-><-\" }"],
+            ovec!["val = ┃❮{ camelCase123: \"hello, hello.0123456789ZXY{}[]-><-\" }❯"],
         )?;
-        assert_ctrl_shift_up_repeat(
-            ovec!["{ camelCase123: \"hello, hello┃.0123456789ZXY{}[]-><-\" }"],
-            ovec!["┃❮{ camelCase123: \"hello, hello.0123456789ZXY{}[]-><-\" }❯"],
+        assert_ctrl_shift_up_repeat_nls(
+            ovec!["val = { camelCase123: \"hello, hello┃.0123456789ZXY{}[]-><-\" }"],
+            ovec!["val = ┃❮{ camelCase123: \"hello, hello.0123456789ZXY{}[]-><-\" }❯"],
             2,
         )?;
 
@@ -2368,53 +2400,54 @@ pub mod test_ed_update {
 
     #[test]
     fn test_ctrl_shift_up_nested_record() -> Result<(), String> {
+
+        assert_ctrl_shift_up_nls(ovec!["{ abc: { ┃ } }"], ovec!["{ abc: ┃❮{  }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["{ abc: {┃  } }"], ovec!["{ abc: ┃❮{  }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["{ abc: ┃{  } }"], ovec!["{ abc: ┃❮{  }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["{ abc: {  ┃} }"], ovec!["{ abc: ┃❮{  }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["{ abc: {  }┃ }"], ovec!["┃❮{ abc: {  } }❯"])?;
+
         // TODO uncomment tests once editor::lang::constrain::constrain_expr does not contain anymore todo's
-        assert_ctrl_shift_up(ovec!["{ abc: { ┃ } }"], ovec!["{ abc: ┃❮{  }❯ }"])?;
-        assert_ctrl_shift_up(ovec!["{ abc: {┃  } }"], ovec!["{ abc: ┃❮{  }❯ }"])?;
-        assert_ctrl_shift_up(ovec!["{ abc: ┃{  } }"], ovec!["{ abc: ┃❮{  }❯ }"])?;
-        assert_ctrl_shift_up(ovec!["{ abc: {  ┃} }"], ovec!["{ abc: ┃❮{  }❯ }"])?;
-        assert_ctrl_shift_up(ovec!["{ abc: {  }┃ }"], ovec!["┃❮{ abc: {  } }❯"])?;
+        /*assert_ctrl_shift_up_nls(ovec!["{ abc: { ┃d } }"], ovec!["{ abc: ┃❮{ d }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["{ abc: {┃ d } }"], ovec!["{ abc: ┃❮{ d }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["{ abc: ┃{ d } }"], ovec!["{ abc: ┃❮{ d }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["{ abc: { d ┃} }"], ovec!["{ abc: ┃❮{ d }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["{ abc: { d┃e } }"], ovec!["{ abc: ┃❮{ de }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["{ abc: { d }┃ }"], ovec!["┃❮{ abc: { d } }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["┃{ abc: { d } }"], ovec!["┃❮{ abc: { d } }❯"])?;*/
 
-        /*assert_ctrl_shift_up(ovec!["{ abc: { ┃d } }"], ovec!["{ abc: ┃❮{ d }❯ }"])?;
-        assert_ctrl_shift_up(ovec!["{ abc: {┃ d } }"], ovec!["{ abc: ┃❮{ d }❯ }"])?;
-        assert_ctrl_shift_up(ovec!["{ abc: ┃{ d } }"], ovec!["{ abc: ┃❮{ d }❯ }"])?;
-        assert_ctrl_shift_up(ovec!["{ abc: { d ┃} }"], ovec!["{ abc: ┃❮{ d }❯ }"])?;
-        assert_ctrl_shift_up(ovec!["{ abc: { d┃e } }"], ovec!["{ abc: ┃❮{ de }❯ }"])?;
-        assert_ctrl_shift_up(ovec!["{ abc: { d }┃ }"], ovec!["┃❮{ abc: { d } }❯"])?;
-        assert_ctrl_shift_up(ovec!["┃{ abc: { d } }"], ovec!["┃❮{ abc: { d } }❯"])?;*/
+        assert_ctrl_shift_up_nls(ovec!["{ abc: { de: { ┃ } } }"], ovec!["{ abc: { de: ┃❮{  }❯ } }"])?;
+        assert_ctrl_shift_up_nls(ovec!["{ abc: { de: ┃{  } } }"], ovec!["{ abc: { de: ┃❮{  }❯ } }"])?;
+        assert_ctrl_shift_up_nls(ovec!["{ abc: { de: {  }┃ } }"], ovec!["{ abc: ┃❮{ de: {  } }❯ }"])?;
 
-        assert_ctrl_shift_up(ovec!["{ abc: { de: { ┃ } } }"], ovec!["{ abc: { de: ┃❮{  }❯ } }"])?;
-        assert_ctrl_shift_up(ovec!["{ abc: { de: ┃{  } } }"], ovec!["{ abc: { de: ┃❮{  }❯ } }"])?;
-        assert_ctrl_shift_up(ovec!["{ abc: { de: {  }┃ } }"], ovec!["{ abc: ┃❮{ de: {  } }❯ }"])?;
-
-        assert_ctrl_shift_up(ovec!["{ abc: { de: \"┃\" } }"], ovec!["{ abc: { de: ┃❮\"\"❯ } }"])?;
-        assert_ctrl_shift_up(ovec!["{ abc: { de: ┃\"\" } }"], ovec!["{ abc: { de: ┃❮\"\"❯ } }"])?;
-        assert_ctrl_shift_up(ovec!["{ abc: { de: \"\"┃ } }"], ovec!["{ abc: ┃❮{ de: \"\" }❯ }"])?;
-        assert_ctrl_shift_up(
+        assert_ctrl_shift_up_nls(ovec!["{ abc: { de: \"┃\" } }"], ovec!["{ abc: { de: ┃❮\"\"❯ } }"])?;
+        assert_ctrl_shift_up_nls(ovec!["{ abc: { de: ┃\"\" } }"], ovec!["{ abc: { de: ┃❮\"\"❯ } }"])?;
+        assert_ctrl_shift_up_nls(ovec!["{ abc: { de: \"\"┃ } }"], ovec!["{ abc: ┃❮{ de: \"\" }❯ }"])?;
+        assert_ctrl_shift_up_nls(
             ovec!["{ abc: { de: \"f g┃\" } }"],
             ovec!["{ abc: { de: ┃❮\"f g\"❯ } }"],
         )?;
-        assert_ctrl_shift_up(
+        assert_ctrl_shift_up_nls(
             ovec!["{ abc: { de┃: \"f g\" } }"],
             ovec!["{ abc: ┃❮{ de: \"f g\" }❯ }"],
         )?;
-        assert_ctrl_shift_up(
+        assert_ctrl_shift_up_nls(
             ovec!["{ abc: {┃ de: \"f g\" } }"],
             ovec!["{ abc: ┃❮{ de: \"f g\" }❯ }"],
         )?;
-        assert_ctrl_shift_up(
+        assert_ctrl_shift_up_nls(
             ovec!["{ abc: { de: \"f g\" ┃} }"],
             ovec!["{ abc: ┃❮{ de: \"f g\" }❯ }"],
         )?;
-        assert_ctrl_shift_up(
+        assert_ctrl_shift_up_nls(
             ovec!["{ abc: { de: \"f g\" }┃ }"],
             ovec!["┃❮{ abc: { de: \"f g\" } }❯"],
         )?;
-        assert_ctrl_shift_up(
+        assert_ctrl_shift_up_nls(
             ovec!["┃{ abc: { de: \"f g\" } }"],
             ovec!["┃❮{ abc: { de: \"f g\" } }❯"],
         )?;
-        assert_ctrl_shift_up(
+        assert_ctrl_shift_up_nls(
             ovec!["{ abc: { de: \"f g\" } }┃"],
             ovec!["┃❮{ abc: { de: \"f g\" } }❯"],
         )?;
@@ -2435,15 +2468,15 @@ pub mod test_ed_update {
             4,
         )?;
 
-        assert_ctrl_shift_up(ovec!["{ abc: { de: ┃951 } }"], ovec!["{ abc: { de: ┃❮951❯ } }"])?;
-        assert_ctrl_shift_up(ovec!["{ abc: { de: 11┃0 } }"], ovec!["{ abc: { de: ┃❮110❯ } }"])?;
-        assert_ctrl_shift_up(ovec!["{ abc: { de: 444┃ } }"], ovec!["{ abc: ┃❮{ de: 444 }❯ }"])?;
-        assert_ctrl_shift_up(ovec!["{ abc: { de┃: 99 } }"], ovec!["{ abc: ┃❮{ de: 99 }❯ }"])?;
-        assert_ctrl_shift_up(ovec!["{ abc: {┃ de: 0 } }"], ovec!["{ abc: ┃❮{ de: 0 }❯ }"])?;
-        assert_ctrl_shift_up(ovec!["{ abc: { de: 230 ┃} }"], ovec!["{ abc: ┃❮{ de: 230 }❯ }"])?;
-        assert_ctrl_shift_up(ovec!["{ abc: { de: 7 }┃ }"], ovec!["┃❮{ abc: { de: 7 } }❯"])?;
-        assert_ctrl_shift_up(ovec!["┃{ abc: { de: 1 } }"], ovec!["┃❮{ abc: { de: 1 } }❯"])?;
-        assert_ctrl_shift_up(
+        assert_ctrl_shift_up_nls(ovec!["{ abc: { de: ┃951 } }"], ovec!["{ abc: { de: ┃❮951❯ } }"])?;
+        assert_ctrl_shift_up_nls(ovec!["{ abc: { de: 11┃0 } }"], ovec!["{ abc: { de: ┃❮110❯ } }"])?;
+        assert_ctrl_shift_up_nls(ovec!["{ abc: { de: 444┃ } }"], ovec!["{ abc: ┃❮{ de: 444 }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["{ abc: { de┃: 99 } }"], ovec!["{ abc: ┃❮{ de: 99 }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["{ abc: {┃ de: 0 } }"], ovec!["{ abc: ┃❮{ de: 0 }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["{ abc: { de: 230 ┃} }"], ovec!["{ abc: ┃❮{ de: 230 }❯ }"])?;
+        assert_ctrl_shift_up_nls(ovec!["{ abc: { de: 7 }┃ }"], ovec!["┃❮{ abc: { de: 7 } }❯"])?;
+        assert_ctrl_shift_up_nls(ovec!["┃{ abc: { de: 1 } }"], ovec!["┃❮{ abc: { de: 1 } }❯"])?;
+        assert_ctrl_shift_up_nls(
             ovec!["{ abc: { de: 111111 } }┃"],
             ovec!["┃❮{ abc: { de: 111111 } }❯"],
         )?;

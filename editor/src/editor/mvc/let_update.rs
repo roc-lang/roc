@@ -9,13 +9,10 @@ use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::mvc::ed_update::get_node_context;
 use crate::editor::mvc::ed_update::NodeContext;
-use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::syntax_highlight::HighlightStyle;
 use crate::lang::ast::{Expr2, ValueDef};
 use crate::lang::parse::ASTNodeId;
 use crate::lang::pattern::Pattern2;
-use crate::lang::pool::NodeId;
-use crate::ui::text::lines::SelectableLines;
 
 pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<InputOutcome> {
     let NodeContext {
@@ -114,6 +111,8 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
     }
 }
 
+// TODO reenable this for updating non-top level value defs
+/*
 pub fn update_let_value(
     val_name_mn_id: MarkNodeId,
     def_id: NodeId<ValueDef>,
@@ -182,3 +181,4 @@ pub fn update_let_value(
         Ok(InputOutcome::Ignored)
     }
 }
+*/
