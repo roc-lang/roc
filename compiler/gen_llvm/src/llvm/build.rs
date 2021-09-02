@@ -4182,9 +4182,9 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
         ($variant:expr) => {{
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            let (default, default_layout) = load_symbol_and_layout(scope, &args[2]);
+            let (default, default_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            let function = passed_function_at_index!(3);
+            let function = passed_function_at_index!(2);
 
             let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[3]);
 

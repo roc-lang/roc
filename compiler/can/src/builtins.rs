@@ -2050,8 +2050,8 @@ fn list_sum(symbol: Symbol, var_store: &mut VarStore) -> Def {
         op: LowLevel::ListWalk,
         args: vec![
             (list_var, Var(Symbol::ARG_1)),
-            (num_var, num(var_store.fresh(), 0)),
             (closure_var, list_sum_add(num_var, var_store)),
+            (num_var, num(var_store.fresh(), 0)),
         ],
         ret_var,
     };
@@ -2092,8 +2092,8 @@ fn list_product(symbol: Symbol, var_store: &mut VarStore) -> Def {
         op: LowLevel::ListWalk,
         args: vec![
             (list_var, Var(Symbol::ARG_1)),
-            (num_var, num(var_store.fresh(), 1)),
             (closure_var, list_product_mul(num_var, var_store)),
+            (num_var, num(var_store.fresh(), 1)),
         ],
         ret_var,
     };
