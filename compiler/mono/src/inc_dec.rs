@@ -638,7 +638,7 @@ impl<'a> Context<'a> {
                     | roc_module::low_level::LowLevel::ListWalkUntil
                     | roc_module::low_level::LowLevel::ListWalkBackwards
                     | roc_module::low_level::LowLevel::DictWalk => {
-                        match self.param_map.get_symbol(arguments[3], function_layout) {
+                        match self.param_map.get_symbol(arguments[2], function_layout) {
                             Some(function_ps) => {
                                 // borrow data structure based on first argument of the folded function
                                 // borrow the default based on second argument of the folded function
