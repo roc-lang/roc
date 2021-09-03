@@ -67,6 +67,12 @@ pub enum EdError {
     ))]
     EmptyCodeString { backtrace: Backtrace },
 
+    #[snafu(display(
+        "FailedToUpdateIdentIdName: {}",
+        err_str
+    ))]
+    FailedToUpdateIdentIdName { err_str: String, backtrace: Backtrace },
+
     #[snafu(display("GetContentOnNestedNode: tried to get string content from Nested MarkupNode. Can only get content from Text or Blank nodes."))]
     GetContentOnNestedNode { backtrace: Backtrace },
 
@@ -120,6 +126,12 @@ pub enum EdError {
     #[snafu(display("NestedNodeWithoutChildren: tried to retrieve child from Nested MarkupNode with id {} but it had no children.", node_id))]
     NestedNodeWithoutChildren {
         node_id: MarkNodeId,
+        backtrace: Backtrace,
+    },
+
+    #[snafu(display("NoDefMarkNodeBeforeLineNr: I could not find a MarkupNode whose root parent points to a DefId located before the given line number: {}.", line_nr))]
+    NoDefMarkNodeBeforeLineNr {
+        line_nr: usize,
         backtrace: Backtrace,
     },
 

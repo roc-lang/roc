@@ -1,25 +1,12 @@
 use roc_module::symbol::{Interns, Symbol};
 
-use crate::{
-    editor::{
-        ed_error::{EdResult, KeyNotFound},
-        markup::{
-            attribute::Attributes,
-            common_nodes::{new_blank_mn_w_nl, new_equals_mn},
-            nodes::MarkupNode,
-        },
-        slow_pool::{MarkNodeId, SlowPool},
-        syntax_highlight::HighlightStyle,
-    },
-    lang::{
+use crate::{editor::{ed_error::{EdResult, KeyNotFound, FailedToUpdateIdentIdName}, markup::{attribute::Attributes, common_nodes::{new_blank_mn_w_nl, new_equals_mn}, nodes::{MarkupNode, set_parent_for_all}}, slow_pool::{MarkNodeId, SlowPool}, syntax_highlight::HighlightStyle}, lang::{
         ast::{Def2, Expr2},
         expr::Env,
         parse::ASTNodeId,
         pattern::{get_identifier_string, Pattern2},
         pool::NodeId,
-    },
-    ui::text::text_pos::TextPos,
-};
+    }, ui::text::text_pos::TextPos};
 
 use super::{
     app_update::InputOutcome,
@@ -134,6 +121,8 @@ pub fn start_new_tld_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
         .mark_node_pool
         .replace_node(curr_mark_node_id, tld_mark_node);
 
+    set_parent_for_all(curr_mark_node_id, &mut ed_model.mark_node_pool);
+
     // remove data corresponding to old Blank node
     ed_model.del_at_line(old_caret_pos.line, old_caret_pos.column)?;
 
@@ -172,13 +161,21 @@ pub fn update_tld_val_name(
         if node_caret_offset <= content_str_mut.len() {
             content_str_mut.insert(node_caret_offset, *new_char);
 
-            // TODO no unwrap
-            ed_model
+            let update_val_name_res = ed_model
                 .module
                 .env
                 .ident_ids
-                .update_key(&old_val_name, content_str_mut)
-                .unwrap();
+                .update_key(&old_val_name, content_str_mut);
+
+            match update_val_name_res {
+                Err(err_str) => {
+                    FailedToUpdateIdentIdName {
+                        err_str
+                    }.fail()?;
+                }
+                _ => (),
+            }
+                
 
             ed_model.insert_between_line(
                 old_caret_pos.line,

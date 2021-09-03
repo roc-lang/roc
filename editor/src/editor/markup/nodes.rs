@@ -829,3 +829,20 @@ fn tree_as_string_helper(
         tree_as_string_helper(child, level + 1, tree_string, mark_node_pool);
     }
 }
+
+// return to the the root parent_id of the current node
+pub fn get_root_mark_node_id(
+    mark_node_id: MarkNodeId,
+    mark_node_pool: &SlowPool,
+) -> MarkNodeId {
+
+    let mut curr_mark_node_id = mark_node_id;
+    let mut curr_parent_id_opt = mark_node_pool.get(curr_mark_node_id).get_parent_id_opt();
+
+    while let Some(curr_parent_id) = curr_parent_id_opt {
+        curr_mark_node_id = curr_parent_id;
+        curr_parent_id_opt = mark_node_pool.get(curr_mark_node_id).get_parent_id_opt();
+    }
+
+    curr_mark_node_id
+}

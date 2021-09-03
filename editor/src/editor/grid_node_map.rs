@@ -1,6 +1,6 @@
 use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::NestedNodeWithoutChildren;
-use crate::editor::ed_error::NodeIdNotInGridNodeMap;
+use crate::editor::ed_error::{NodeIdNotInGridNodeMap, NoDefMarkNodeBeforeLineNr};
 use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
@@ -13,6 +13,8 @@ use crate::ui::ui_error::{OutOfBounds, UIResult};
 use crate::ui::util::{slice_get, slice_get_mut};
 use snafu::OptionExt;
 use std::fmt;
+
+use super::markup::nodes::get_root_mark_node_id;
 
 #[derive(Debug)]
 pub struct GridNodeMap {
@@ -79,15 +81,12 @@ impl GridNodeMap {
 
             line_ref.drain(selection.start_pos.column..selection.end_pos.column);
         } else {
-            // TODO support multiline
+            unimplemented!("TODO support deleting multiline selection")
+            
         }
 
         Ok(())
     }
-
-    /*pub fn new_line(&mut self) {
-        self.lines.push(vec![])
-    }*/
 
     pub fn get_id_at_row_col(&self, caret_pos: TextPos) -> UIResult<MarkNodeId> {
         let line = slice_get(caret_pos.line, &self.lines)?;
@@ -326,6 +325,38 @@ impl GridNodeMap {
         }
 
         Ok(last_child_id)
+    }
+
+    // get id of root mark_node whose ast_node_id points to a DefId
+    pub fn get_def_mark_node_id_before_line(
+        &self,
+        line_nr: usize,
+        mark_node_pool: &SlowPool,
+    ) -> EdResult<MarkNodeId> {
+
+        for curr_line_nr in (0..line_nr).rev() {
+            let first_col_pos = 
+                TextPos {
+                    line: curr_line_nr,
+                    column: 0
+                };
+
+            if self.node_exists_at_pos(first_col_pos) {
+                let mark_node_id = self.get_id_at_row_col(first_col_pos)?;
+                let root_mark_node_id = get_root_mark_node_id(mark_node_id, mark_node_pool);
+
+                let ast_node_id = mark_node_pool.get(root_mark_node_id).get_ast_node_id();
+
+                match ast_node_id {
+                    ASTNodeId::ADefId(_) => return Ok(root_mark_node_id),
+                    _ => (),
+                }
+            }
+        }
+
+        NoDefMarkNodeBeforeLineNr {
+            line_nr
+        }.fail()
     }
 }
 

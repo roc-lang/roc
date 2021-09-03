@@ -28,6 +28,7 @@ use crate::editor::mvc::tld_value_update::{start_new_tld_value, update_tld_val_n
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::syntax_highlight::HighlightStyle;
+use crate::editor::util::index_of;
 use crate::lang::ast::Def2;
 use crate::lang::ast::DefId;
 use crate::lang::ast::{Expr2, ExprId};
@@ -755,7 +756,7 @@ pub fn handle_new_char_expr(
                 start_new_list(ed_model)?
             }
             '\r' => {
-                // For convenience and consistency there is only one way to format Roc, you can't add extra blank lines.
+                println!("For convenience and consistency there is only one way to format Roc, you can't add extra blank lines.");
                 InputOutcome::Ignored
             }
             _ => InputOutcome::Ignored,
@@ -1032,7 +1033,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 
                     } else { //no MarkupNode at the current position
                             if *received_char == '\r' {
-                                // TODO move to separate file
+                                // TODO move to separate function
                                 let carets = ed_model.get_carets();
 
                                 for caret_pos in carets.iter() {
@@ -1055,14 +1056,14 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                             let new_line_blank = Def2::Blank;
                                             let new_line_blank_id = ed_model.module.env.pool.add(new_line_blank);
 
-                                            // TODO this should insert at caret line_nr, not push at end
-                                            ed_model.module.ast.def_ids.push(new_line_blank_id);
+                                            let prev_def_mn_id = ed_model.grid_node_map.get_def_mark_node_id_before_line(caret_pos.line + 1, &ed_model.mark_node_pool)?;
+                                            let prev_def_mn_id_indx = index_of(prev_def_mn_id, &ed_model.markup_ids)?;
+                                            ed_model.module.ast.def_ids.insert(prev_def_mn_id_indx, new_line_blank_id);
 
                                             let blank_mn_id = ed_model
                                                 .add_mark_node(new_blank_mn(ASTNodeId::ADefId(new_line_blank_id), None));
 
-                                            // TODO this should insert at caret line_nr, not push at end
-                                            ed_model.markup_ids.push(blank_mn_id);
+                                            ed_model.markup_ids.insert(prev_def_mn_id_indx + 1,blank_mn_id); // + 1 because first markup node is header
 
                                             ed_model.insert_all_between_line(
                                                 caret_pos.line + 2, // one blank line between top level definitions
@@ -1103,14 +1104,14 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                     let new_blank = Def2::Blank;
                                                     let new_blank_id = ed_model.module.env.pool.add(new_blank);
 
-                                                    // TODO this should insert at caret line_nr, not push at end
-                                                    ed_model.module.ast.def_ids.push(new_blank_id);
+                                                    let prev_def_mn_id = ed_model.grid_node_map.get_def_mark_node_id_before_line(caret_pos.line, &ed_model.mark_node_pool)?;
+                                                    let prev_def_mn_id_indx = index_of(prev_def_mn_id, &ed_model.markup_ids)?;
+                                                    ed_model.module.ast.def_ids.insert(prev_def_mn_id_indx, new_blank_id);
 
                                                     let blank_mn_id = ed_model
                                                         .add_mark_node(new_blank_mn(ASTNodeId::ADefId(new_blank_id), None));
 
-                                                    // TODO this should insert at caret line_nr, not push at end
-                                                    ed_model.markup_ids.push(blank_mn_id);
+                                                    ed_model.markup_ids.insert(prev_def_mn_id_indx + 1,blank_mn_id); // + 1 because first mark_node is header
 
                                                     if ed_model.code_lines.line_is_only_newline(caret_pos.line - 1)? {
 
@@ -1124,7 +1125,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                         ed_model.simple_move_caret_down(caret_pos, 1);
 
                                                         ed_model.insert_all_between_line(
-                                                            caret_pos.line + 1,
+                                                            caret_pos.line,
                                                             0,
                                                             &[blank_mn_id],
                                                         )?;
