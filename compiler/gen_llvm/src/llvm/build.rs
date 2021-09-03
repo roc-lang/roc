@@ -53,6 +53,7 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{BranchInfo, CallType, EntryPoint, JoinPointId, ModifyRc, OptLevel, ProcLayout};
 use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, UnionLayout};
+use target_lexicon::{Architecture, OperatingSystem, Triple, X86_32Architecture};
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
 /// output in debug builds, but we don't want it to print to stdout in release builds!
@@ -384,16 +385,34 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
 }
 
 pub fn module_from_builtins<'ctx>(
+    target: &target_lexicon::Triple,
     ctx: &'ctx Context,
     module_name: &str,
-    ptr_bytes: u32,
 ) -> Module<'ctx> {
-    // In the build script for the builtins module,
-    // we compile the builtins into LLVM bitcode
-    let bitcode_bytes: &[u8] = match ptr_bytes {
-        8 => include_bytes!("../../../builtins/bitcode/builtins-64bit.bc"),
-        4 => include_bytes!("../../../builtins/bitcode/builtins-32bit.bc"),
-        _ => unreachable!(),
+    // In the build script for the builtins module, we compile the builtins into LLVM bitcode
+
+    let bitcode_bytes: &[u8] = if target == &target_lexicon::Triple::host() {
+        include_bytes!("../../../builtins/bitcode/builtins-host.bc")
+    } else {
+        match target {
+            Triple {
+                architecture: Architecture::Wasm32,
+                ..
+            } => {
+                include_bytes!("../../../builtins/bitcode/builtins-wasm32.bc")
+            }
+            Triple {
+                architecture: Architecture::X86_32(_),
+                operating_system: OperatingSystem::Linux,
+                ..
+            } => {
+                include_bytes!("../../../builtins/bitcode/builtins-i386.bc")
+            }
+            _ => panic!(
+                "The zig builtins are not currently built for this target: {:?}",
+                target
+            ),
+        }
     };
 
     let memory_buffer = MemoryBuffer::create_from_memory_range(bitcode_bytes, module_name);
@@ -3664,14 +3683,26 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
         *param = builder.build_load(param.into_pointer_value(), "load_param");
     }
 
-    let call_result = set_jump_and_catch_long_jump(
-        env,
-        function_value,
-        evaluator,
-        evaluator.get_call_conventions(),
-        closure_data,
-        result_type,
-    );
+    let call_result = if env.is_gen_test {
+        set_jump_and_catch_long_jump(
+            env,
+            function_value,
+            evaluator,
+            evaluator.get_call_conventions(),
+            closure_data,
+            result_type,
+        )
+    } else {
+        let call = env
+            .builder
+            .build_call(evaluator, closure_data, "call_function");
+
+        call.set_call_convention(evaluator.get_call_conventions());
+
+        let call_result = call.try_as_basic_value().left().unwrap();
+
+        make_good_roc_result(env, call_result)
+    };
 
     builder.build_store(output, call_result);
 

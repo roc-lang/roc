@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::process::Command;
 use target_lexicon::BinaryFormat;
-use target_lexicon::{Architecture, Triple, X86_32Architecture};
+use target_lexicon::{Architecture, OperatingSystem, Triple, X86_32Architecture};
 
 pub mod build;
 pub mod repl;
@@ -427,6 +427,9 @@ impl Backend {
             Backend::X86_32 => {
                 triple.architecture = Architecture::X86_32(X86_32Architecture::I386);
                 triple.binary_format = BinaryFormat::Elf;
+
+                // TODO make this user-specified?
+                triple.operating_system = OperatingSystem::Linux;
 
                 triple
             }
