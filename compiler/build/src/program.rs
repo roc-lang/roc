@@ -42,10 +42,12 @@ pub fn gen_from_mono_module(
     use std::time::SystemTime;
 
     use roc_reporting::report::{
-        can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
+        can_problem, mono_problem, type_problem, Report, RocDocAllocator, DEFAULT_PALETTE,
     };
 
     let code_gen_start = SystemTime::now();
+    let total_problems = loaded.total_problems();
+    let palette = DEFAULT_PALETTE;
 
     for (home, (module_path, src)) in loaded.sources {
         let mut src_lines: Vec<&str> = Vec::new();
@@ -56,7 +58,6 @@ pub fn gen_from_mono_module(
         } else {
             src_lines.extend(src.split('\n'));
         }
-        let palette = DEFAULT_PALETTE;
 
         // Report parsing and canonicalization problems
         let alloc = RocDocAllocator::new(&src_lines, home, &loaded.interns);
@@ -90,6 +91,16 @@ pub fn gen_from_mono_module(
 
             println!("\n{}\n", buf);
         }
+    }
+
+    // If we printed any problems, print a horizontal rule at the end,
+    // and then clear any ANSI escape codes (e.g. colors) we've used.
+    //
+    // The horizontal rule is nice when running the program right after
+    // compiling it, as it lets you clearly see where the compiler
+    // errors/warnings end and the program output begins.
+    if total_problems > 0 {
+        println!("{}\u{001B}[0m\n", Report::horizontal_rule(&palette));
     }
 
     // Generate the binary

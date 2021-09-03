@@ -119,6 +119,10 @@ impl<'b> Report<'b> {
             ])
         }
     }
+
+    pub fn horizontal_rule(palette: &'b Palette) -> String {
+        format!("{}{}", palette.header, "─".repeat(80))
+    }
 }
 
 pub struct Palette<'a> {

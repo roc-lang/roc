@@ -721,6 +721,12 @@ pub struct MonomorphizedModule<'a> {
     pub timings: MutMap<ModuleId, ModuleTiming>,
 }
 
+impl<'a> MonomorphizedModule<'a> {
+    pub fn total_problems(&self) -> usize {
+        self.can_problems.len() + self.type_problems.len() + self.mono_problems.len()
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct VariablySizedLayouts<'a> {
     rigids: MutMap<Lowercase, Layout<'a>>,
