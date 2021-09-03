@@ -259,18 +259,9 @@ impl GridNodeMap {
         nested_node_id: MarkNodeId,
         ed_model: &EdModel,
     ) -> EdResult<(TextPos, TextPos)> {
+        let left_most_leaf = self.get_leftmost_leaf(nested_node_id, ed_model)?;
 
-        let left_most_leaf =
-            self.get_leftmost_leaf(
-                nested_node_id,
-                ed_model,
-            )?;
-        
-        let right_most_leaf =
-            self.get_rightmost_leaf(
-                nested_node_id,
-                ed_model,
-            )?;
+        let right_most_leaf = self.get_rightmost_leaf(nested_node_id, ed_model)?;
 
         let expr_start_pos = ed_model
             .grid_node_map
@@ -288,19 +279,23 @@ impl GridNodeMap {
         nested_node_id: MarkNodeId,
         ed_model: &EdModel,
     ) -> EdResult<MarkNodeId> {
-
-        let mut children_ids = ed_model.mark_node_pool.get(nested_node_id).get_children_ids();
+        let mut children_ids = ed_model
+            .mark_node_pool
+            .get(nested_node_id)
+            .get_children_ids();
         let mut first_child_id = 0;
 
         while !children_ids.is_empty() {
-            first_child_id =
-                *children_ids
-                    .first()
-                    .with_context(|| NestedNodeWithoutChildren {
-                        node_id: nested_node_id,
-                    })?;
+            first_child_id = *children_ids
+                .first()
+                .with_context(|| NestedNodeWithoutChildren {
+                    node_id: nested_node_id,
+                })?;
 
-            children_ids = ed_model.mark_node_pool.get(first_child_id).get_children_ids();
+            children_ids = ed_model
+                .mark_node_pool
+                .get(first_child_id)
+                .get_children_ids();
         }
 
         Ok(first_child_id)
@@ -311,19 +306,23 @@ impl GridNodeMap {
         nested_node_id: MarkNodeId,
         ed_model: &EdModel,
     ) -> EdResult<MarkNodeId> {
-
-        let mut children_ids = ed_model.mark_node_pool.get(nested_node_id).get_children_ids();
+        let mut children_ids = ed_model
+            .mark_node_pool
+            .get(nested_node_id)
+            .get_children_ids();
         let mut last_child_id = 0;
 
         while !children_ids.is_empty() {
-            last_child_id =
-                *children_ids
-                    .last()
-                    .with_context(|| NestedNodeWithoutChildren {
-                        node_id: nested_node_id,
-                    })?;
+            last_child_id = *children_ids
+                .last()
+                .with_context(|| NestedNodeWithoutChildren {
+                    node_id: nested_node_id,
+                })?;
 
-            children_ids = ed_model.mark_node_pool.get(last_child_id).get_children_ids();
+            children_ids = ed_model
+                .mark_node_pool
+                .get(last_child_id)
+                .get_children_ids();
         }
 
         Ok(last_child_id)

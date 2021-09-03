@@ -185,11 +185,7 @@ pub fn update_record_colon(
             match prev_mark_node.get_ast_node_id() {
                 ASTNodeId::ADefId(_) => Ok(InputOutcome::Ignored),
                 ASTNodeId::AExprId(prev_expr_id) => {
-                    let prev_expr = ed_model
-                        .module
-                        .env
-                        .pool
-                        .get(prev_expr_id);
+                    let prev_expr = ed_model.module.env.pool.get(prev_expr_id);
 
                     // current and prev node should always point to record when in valid position to add ':'
                     if matches!(prev_expr, Expr2::Record { .. })
@@ -209,11 +205,13 @@ pub fn update_record_colon(
                                 if ed_model.node_exists_at_caret() {
                                     let next_mark_node_id =
                                         ed_model.grid_node_map.get_id_at_row_col(old_caret_pos)?;
-                                    let next_mark_node = ed_model.mark_node_pool.get(next_mark_node_id);
+                                    let next_mark_node =
+                                        ed_model.mark_node_pool.get(next_mark_node_id);
                                     if next_mark_node.get_content() == nodes::RIGHT_ACCOLADE {
                                         // update AST node
                                         let new_field_val = Expr2::Blank;
-                                        let new_field_val_id = ed_model.module.env.pool.add(new_field_val);
+                                        let new_field_val_id =
+                                            ed_model.module.env.pool.add(new_field_val);
 
                                         let first_field_mut = fields
                                             .iter_mut(ed_model.module.env.pool)
@@ -243,12 +241,16 @@ pub fn update_record_colon(
                                         ed_model
                                             .mark_node_pool
                                             .get_mut(parent_id)
-                                            .add_child_at_index(new_child_index, record_colon_node_id)?;
+                                            .add_child_at_index(
+                                                new_child_index,
+                                                record_colon_node_id,
+                                            )?;
 
-                                        let record_blank_node_id = ed_model.add_mark_node(new_blank_mn(
-                                            ASTNodeId::AExprId(new_field_val_id),
-                                            Some(parent_id),
-                                        ));
+                                        let record_blank_node_id =
+                                            ed_model.add_mark_node(new_blank_mn(
+                                                ASTNodeId::AExprId(new_field_val_id),
+                                                Some(parent_id),
+                                            ));
 
                                         ed_model
                                             .mark_node_pool
