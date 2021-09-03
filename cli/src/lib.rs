@@ -15,7 +15,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::process::Command;
-use target_lexicon::Triple;
+use target_lexicon::BinaryFormat;
+use target_lexicon::{Architecture, Triple};
 
 pub mod build;
 pub mod repl;
@@ -29,7 +30,9 @@ pub const CMD_DOCS: &str = "docs";
 pub const FLAG_DEBUG: &str = "debug";
 pub const FLAG_OPTIMIZE: &str = "optimize";
 pub const FLAG_LIB: &str = "lib";
+pub const FLAG_BACKEND: &str = "backend";
 pub const ROC_FILE: &str = "ROC_FILE";
+pub const BACKEND: &str = "BACKEND";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
 pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 
@@ -48,6 +51,15 @@ pub fn build_app<'a>() -> App<'a> {
                 Arg::with_name(FLAG_OPTIMIZE)
                     .long(FLAG_OPTIMIZE)
                     .help("Optimize your compiled Roc program to run faster. (Optimization takes time to complete.)")
+                    .required(false),
+            )
+            .arg(
+                Arg::with_name(FLAG_BACKEND)
+                    .long(FLAG_BACKEND)
+                    .help("Choose a different backend")
+                    // .requires(BACKEND)
+                    .default_value("llvm")
+                    .possible_values(&["llvm", "wasm", "asm"])
                     .required(false),
             )
             .arg(
@@ -119,6 +131,15 @@ pub fn build_app<'a>() -> App<'a> {
                 .required(false),
         )
         .arg(
+            Arg::with_name(FLAG_BACKEND)
+                .long(FLAG_BACKEND)
+                .help("Choose a different backend")
+                // .requires(BACKEND)
+                .default_value("llvm")
+                .possible_values(&["llvm", "wasm", "asm"])
+                .required(false),
+        )
+        .arg(
             Arg::with_name(ROC_FILE)
                 .help("The .roc file of an app to build and run")
                 .required(false),
@@ -159,10 +180,24 @@ pub enum BuildConfig {
     BuildAndRun { roc_file_arg_index: usize },
 }
 
+fn wasm32_target_tripple() -> Triple {
+    let mut triple = Triple::unknown();
+
+    triple.architecture = Architecture::Wasm32;
+    triple.binary_format = BinaryFormat::Wasm;
+
+    triple
+}
+
 #[cfg(feature = "llvm")]
-pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
+pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     use build::build_file;
     use BuildConfig::*;
+
+    let target = match matches.value_of(FLAG_BACKEND) {
+        Some("wasm") => wasm32_target_tripple(),
+        _ => Triple::host(),
+    };
 
     let arena = Bump::new();
     let filename = matches.value_of(ROC_FILE).unwrap();
@@ -205,7 +240,7 @@ pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::
     let src_dir = path.parent().unwrap().canonicalize().unwrap();
     let res_binary_path = build_file(
         &arena,
-        target,
+        &target,
         src_dir,
         path,
         opt_level,
@@ -240,7 +275,30 @@ pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::
                     Ok(outcome.status_code())
                 }
                 BuildAndRun { roc_file_arg_index } => {
-                    let mut cmd = Command::new(binary_path);
+                    let mut cmd = match target.architecture {
+                        Architecture::Wasm32 => {
+                            // If possible, report the generated executable name relative to the current dir.
+                            let generated_filename = binary_path
+                                .strip_prefix(env::current_dir().unwrap())
+                                .unwrap_or(&binary_path);
+
+                            // No need to waste time freeing this memory,
+                            // since the process is about to exit anyway.
+                            std::mem::forget(arena);
+
+                            let args = std::env::args()
+                                .skip(roc_file_arg_index)
+                                .collect::<Vec<_>>();
+
+                            run_with_wasmer(generated_filename, &args);
+                            return Ok(0);
+                        }
+                        _ => Command::new(&binary_path),
+                    };
+
+                    if let Architecture::Wasm32 = target.architecture {
+                        cmd.arg(binary_path);
+                    }
 
                     // Forward all the arguments after the .roc file argument
                     // to the new process. This way, you can do things like:
@@ -305,4 +363,27 @@ fn roc_run(cmd: &mut Command) -> io::Result<i32> {
             todo!("TODO gracefully handle the `roc [FILE]` subprocess terminating with a signal.");
         }
     }
+}
+
+fn run_with_wasmer(wasm_path: &std::path::Path, args: &[String]) {
+    use wasmer::{Instance, Module, Store};
+
+    let store = Store::default();
+    let module = Module::from_file(&store, &wasm_path).unwrap();
+
+    // First, we create the `WasiEnv`
+    use wasmer_wasi::WasiState;
+    let mut wasi_env = WasiState::new("hello").args(args).finalize().unwrap();
+
+    // Then, we get the import object related to our WASI
+    // and attach it to the Wasm instance.
+    let import_object = wasi_env
+        .import_object(&module)
+        .unwrap_or_else(|_| wasmer::imports!());
+
+    let instance = Instance::new(&module, &import_object).unwrap();
+
+    let start = instance.exports.get_function("_start").unwrap();
+
+    start.call(&[]).unwrap();
 }

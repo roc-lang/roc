@@ -30,14 +30,19 @@ either = "1.6.1"
 indoc = "0.3.3"
 libc = "0.2"
 inkwell = { path = "../../vendor/inkwell" }
-target-lexicon = "0.10"
+target-lexicon = "0.12.2"
 libloading = "0.6"
+wasmer = "2.0.0"
+wasmer-wasi = "2.0.0"
+tempfile = "3.1.0"
 
 [dev-dependencies]
-
-
 maplit = "1.0.1"
 quickcheck = "0.8"
 quickcheck_macros = "0.8"
 tokio = { version = "0.2", features = ["blocking", "fs", "sync", "rt-threaded"] }
 bumpalo = { version = "3.6.1", features = ["collections"] }
+
+[features]
+default = []
+wasm-cli-run = []

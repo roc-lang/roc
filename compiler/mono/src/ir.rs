@@ -14,6 +14,7 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_region::all::{Located, Region};
+use roc_std::RocDec;
 use roc_types::solved_types::SolvedType;
 use roc_types::subs::{Content, FlatType, Subs, Variable, VariableSubsSlice};
 use std::collections::HashMap;
@@ -694,10 +695,8 @@ impl<'a> Procs<'a> {
         layout: ProcLayout<'a>,
         layout_cache: &mut LayoutCache<'a>,
     ) {
-        let tuple = (name, layout);
-
         // If we've already specialized this one, no further work is needed.
-        if self.specialized.contains_key(&tuple) {
+        if self.specialized.contains_key(&(name, layout)) {
             return;
         }
 
@@ -707,15 +706,12 @@ impl<'a> Procs<'a> {
             return;
         }
 
-        // We're done with that tuple, so move layout back out to avoid cloning it.
-        let (name, layout) = tuple;
-
-        let pending = PendingSpecialization::from_var(env.arena, env.subs, fn_var);
-
         // This should only be called when pending_specializations is Some.
         // Otherwise, it's being called in the wrong pass!
         match &mut self.pending_specializations {
             Some(pending_specializations) => {
+                let pending = PendingSpecialization::from_var(env.arena, env.subs, fn_var);
+
                 // register the pending specialization, so this gets code genned later
                 if self.module_thunks.contains(&name) {
                     debug_assert!(layout.arguments.is_empty());
@@ -736,7 +732,26 @@ impl<'a> Procs<'a> {
                 // (We had a bug around this before this system existed!)
                 self.specialized.insert((symbol, layout), InProgress);
 
-                match specialize(env, self, symbol, layout_cache, pending, partial_proc) {
+                // See https://github.com/rtfeldman/roc/issues/1600
+                //
+                // The annotation variable is the generic/lifted/top-level annotation.
+                // It is connected to the variables of the function's body
+                //
+                // fn_var is the variable representing the type that we actually need for the
+                // function right here.
+                //
+                // For some reason, it matters that we unify with the original variable. Extracting
+                // that variable into a SolvedType and then introducing it again severs some
+                // connection that turns out to be important
+                match specialize_variable(
+                    env,
+                    self,
+                    symbol,
+                    layout_cache,
+                    fn_var,
+                    Default::default(),
+                    partial_proc,
+                ) {
                     Ok((proc, _ignore_layout)) => {
                         // the `layout` is a function pointer, while `_ignore_layout` can be a
                         // closure. We only specialize functions, storing this value with a closure
@@ -1010,6 +1025,7 @@ pub enum Literal<'a> {
     // Literals
     Int(i128),
     Float(f64),
+    Decimal(RocDec),
     Str(&'a str),
     /// Closed tag unions containing exactly two (0-arity) tags compile to Expr::Bool,
     /// so they can (at least potentially) be emitted as 1-bit machine bools.
@@ -1191,6 +1207,8 @@ impl<'a> Literal<'a> {
         match self {
             Int(lit) => alloc.text(format!("{}i64", lit)),
             Float(lit) => alloc.text(format!("{}f64", lit)),
+            // TODO: Add proper Dec.to_str
+            Decimal(lit) => alloc.text(format!("{}Dec", lit.0)),
             Bool(lit) => alloc.text(format!("{}", lit)),
             Byte(lit) => alloc.text(format!("{}u8", lit)),
             Str(lit) => alloc.text(format!("{:?}", lit)),
@@ -1688,7 +1706,7 @@ fn pattern_to_when<'a>(
             (symbol, Located::at_zero(wrapped_body))
         }
 
-        IntLiteral(_, _) | NumLiteral(_, _) | FloatLiteral(_, _) | StrLiteral(_) => {
+        IntLiteral(_, _, _) | NumLiteral(_, _, _) | FloatLiteral(_, _, _) | StrLiteral(_) => {
             // These patters are refutable, and thus should never occur outside a `when` expression
             // They should have been replaced with `UnsupportedPattern` during canonicalization
             unreachable!("refutable pattern {:?} where irrefutable pattern is expected. This should never happen!", pattern.value)
@@ -2448,13 +2466,57 @@ fn specialize_solved_type<'a>(
     host_exposed_aliases: BumpMap<Symbol, SolvedType>,
     partial_proc: PartialProc<'a>,
 ) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
+    specialize_variable_help(
+        env,
+        procs,
+        proc_name,
+        layout_cache,
+        |env| introduce_solved_type_to_subs(env, &solved_type),
+        host_exposed_aliases,
+        partial_proc,
+    )
+}
+
+fn specialize_variable<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    proc_name: Symbol,
+    layout_cache: &mut LayoutCache<'a>,
+    fn_var: Variable,
+    host_exposed_aliases: BumpMap<Symbol, SolvedType>,
+    partial_proc: PartialProc<'a>,
+) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
+    specialize_variable_help(
+        env,
+        procs,
+        proc_name,
+        layout_cache,
+        |_| fn_var,
+        host_exposed_aliases,
+        partial_proc,
+    )
+}
+
+fn specialize_variable_help<'a, F>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    proc_name: Symbol,
+    layout_cache: &mut LayoutCache<'a>,
+    fn_var_thunk: F,
+    host_exposed_aliases: BumpMap<Symbol, SolvedType>,
+    partial_proc: PartialProc<'a>,
+) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>>
+where
+    F: FnOnce(&mut Env<'a, '_>) -> Variable,
+{
     // add the specializations that other modules require of us
     use roc_solve::solve::instantiate_rigids;
 
     let snapshot = env.subs.snapshot();
     let cache_snapshot = layout_cache.snapshot();
 
-    let fn_var = introduce_solved_type_to_subs(env, &solved_type);
+    // important: evaluate after the snapshot has been created!
+    let fn_var = fn_var_thunk(env);
 
     // for debugging only
     let raw = layout_cache
@@ -2680,17 +2742,17 @@ pub fn with_hole<'a>(
     let arena = env.arena;
 
     match can_expr {
-        Int(_, precision, num) => {
+        Int(_, precision, _, int) => {
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, precision, false) {
                 IntOrFloat::SignedIntType(precision) => Stmt::Let(
                     assigned,
-                    Expr::Literal(Literal::Int(num)),
+                    Expr::Literal(Literal::Int(int)),
                     Layout::Builtin(int_precision_to_builtin(precision)),
                     hole,
                 ),
                 IntOrFloat::UnsignedIntType(precision) => Stmt::Let(
                     assigned,
-                    Expr::Literal(Literal::Int(num)),
+                    Expr::Literal(Literal::Int(int)),
                     Layout::Builtin(int_precision_to_builtin(precision)),
                     hole,
                 ),
@@ -2698,20 +2760,26 @@ pub fn with_hole<'a>(
             }
         }
 
-        Float(_, precision, num) => {
+        Float(_, precision, float_str, float) => {
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, precision, true) {
                 IntOrFloat::BinaryFloatType(precision) => Stmt::Let(
                     assigned,
-                    Expr::Literal(Literal::Float(num as f64)),
+                    Expr::Literal(Literal::Float(float)),
                     Layout::Builtin(float_precision_to_builtin(precision)),
                     hole,
                 ),
-                IntOrFloat::DecimalFloatType => Stmt::Let(
-                    assigned,
-                    Expr::Literal(Literal::Float(num as f64)),
-                    Layout::Builtin(Builtin::Decimal),
-                    hole,
-                ),
+                IntOrFloat::DecimalFloatType => {
+                    let dec = match RocDec::from_str(&float_str) {
+                            Some(d) => d,
+                            None => panic!("Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message", float_str),
+                        };
+                    Stmt::Let(
+                        assigned,
+                        Expr::Literal(Literal::Decimal(dec)),
+                        Layout::Builtin(Builtin::Decimal),
+                        hole,
+                    )
+                }
                 _ => unreachable!("unexpected float precision for integer"),
             }
         }
@@ -2723,32 +2791,41 @@ pub fn with_hole<'a>(
             hole,
         ),
 
-        Num(var, num) => match num_argument_to_int_or_float(env.subs, env.ptr_bytes, var, false) {
-            IntOrFloat::SignedIntType(precision) => Stmt::Let(
-                assigned,
-                Expr::Literal(Literal::Int(num.into())),
-                Layout::Builtin(int_precision_to_builtin(precision)),
-                hole,
-            ),
-            IntOrFloat::UnsignedIntType(precision) => Stmt::Let(
-                assigned,
-                Expr::Literal(Literal::Int(num.into())),
-                Layout::Builtin(int_precision_to_builtin(precision)),
-                hole,
-            ),
-            IntOrFloat::BinaryFloatType(precision) => Stmt::Let(
-                assigned,
-                Expr::Literal(Literal::Float(num as f64)),
-                Layout::Builtin(float_precision_to_builtin(precision)),
-                hole,
-            ),
-            IntOrFloat::DecimalFloatType => Stmt::Let(
-                assigned,
-                Expr::Literal(Literal::Float(num as f64)),
-                Layout::Builtin(Builtin::Decimal),
-                hole,
-            ),
-        },
+        Num(var, num_str, num) => {
+            // first figure out what kind of number this is
+            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, var, false) {
+                IntOrFloat::SignedIntType(precision) => Stmt::Let(
+                    assigned,
+                    Expr::Literal(Literal::Int(num.into())),
+                    Layout::Builtin(int_precision_to_builtin(precision)),
+                    hole,
+                ),
+                IntOrFloat::UnsignedIntType(precision) => Stmt::Let(
+                    assigned,
+                    Expr::Literal(Literal::Int(num.into())),
+                    Layout::Builtin(int_precision_to_builtin(precision)),
+                    hole,
+                ),
+                IntOrFloat::BinaryFloatType(precision) => Stmt::Let(
+                    assigned,
+                    Expr::Literal(Literal::Float(num as f64)),
+                    Layout::Builtin(float_precision_to_builtin(precision)),
+                    hole,
+                ),
+                IntOrFloat::DecimalFloatType => {
+                    let dec = match RocDec::from_str(&num_str) {
+                            Some(d) => d,
+                            None => panic!("Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message", num_str),
+                        };
+                    Stmt::Let(
+                        assigned,
+                        Expr::Literal(Literal::Decimal(dec)),
+                        Layout::Builtin(Builtin::Decimal),
+                        hole,
+                    )
+                }
+            }
+        }
         LetNonRec(def, cont, _) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
                 if let Closure {
@@ -3047,7 +3124,8 @@ pub fn with_hole<'a>(
             mut fields,
             ..
         } => {
-            let sorted_fields = crate::layout::sort_record_fields(env.arena, record_var, env.subs);
+            let sorted_fields =
+                crate::layout::sort_record_fields(env.arena, record_var, env.subs, env.ptr_bytes);
 
             let mut field_symbols = Vec::with_capacity_in(fields.len(), env.arena);
             let mut can_fields = Vec::with_capacity_in(fields.len(), env.arena);
@@ -3382,7 +3460,8 @@ pub fn with_hole<'a>(
             loc_expr,
             ..
         } => {
-            let sorted_fields = crate::layout::sort_record_fields(env.arena, record_var, env.subs);
+            let sorted_fields =
+                crate::layout::sort_record_fields(env.arena, record_var, env.subs, env.ptr_bytes);
 
             let mut index = None;
             let mut field_layouts = Vec::with_capacity_in(sorted_fields.len(), env.arena);
@@ -3524,7 +3603,8 @@ pub fn with_hole<'a>(
             // This has the benefit that we don't need to do anything special for reference
             // counting
 
-            let sorted_fields = crate::layout::sort_record_fields(env.arena, record_var, env.subs);
+            let sorted_fields =
+                crate::layout::sort_record_fields(env.arena, record_var, env.subs, env.ptr_bytes);
 
             let mut field_layouts = Vec::with_capacity_in(sorted_fields.len(), env.arena);
 
@@ -4128,7 +4208,8 @@ fn convert_tag_union<'a>(
     arena: &'a Bump,
 ) -> Stmt<'a> {
     use crate::layout::UnionVariant::*;
-    let res_variant = crate::layout::union_sorted_tags(env.arena, variant_var, env.subs);
+    let res_variant =
+        crate::layout::union_sorted_tags(env.arena, variant_var, env.subs, env.ptr_bytes);
     let variant = match res_variant {
         Ok(cached) => cached,
         Err(LayoutProblem::UnresolvedTypeVar(_)) => {
@@ -4464,7 +4545,7 @@ fn sorted_field_symbols<'a>(
             }
         };
 
-        let alignment = layout.alignment_bytes(8);
+        let alignment = layout.alignment_bytes(env.ptr_bytes);
 
         let symbol = possible_reuse_symbol(env, procs, &arg.value);
         field_symbols_temp.push((alignment, symbol, ((var, arg), &*env.arena.alloc(symbol))));
@@ -5511,6 +5592,7 @@ fn store_pattern_help<'a>(
         }
         IntLiteral(_)
         | FloatLiteral(_)
+        | DecimalLiteral(_)
         | EnumLiteral { .. }
         | BitLiteral { .. }
         | StrLiteral(_) => {
@@ -5645,6 +5727,7 @@ fn store_tag_pattern<'a>(
             }
             IntLiteral(_)
             | FloatLiteral(_)
+            | DecimalLiteral(_)
             | EnumLiteral { .. }
             | BitLiteral { .. }
             | StrLiteral(_) => {}
@@ -5720,6 +5803,7 @@ fn store_newtype_pattern<'a>(
             }
             IntLiteral(_)
             | FloatLiteral(_)
+            | DecimalLiteral(_)
             | EnumLiteral { .. }
             | BitLiteral { .. }
             | StrLiteral(_) => {}
@@ -5795,6 +5879,7 @@ fn store_record_destruct<'a>(
             }
             IntLiteral(_)
             | FloatLiteral(_)
+            | DecimalLiteral(_)
             | EnumLiteral { .. }
             | BitLiteral { .. }
             | StrLiteral(_) => {
@@ -6766,6 +6851,7 @@ pub enum Pattern<'a> {
     Underscore,
     IntLiteral(i128),
     FloatLiteral(u64),
+    DecimalLiteral(RocDec),
     BitLiteral {
         value: bool,
         tag_name: TagName,
@@ -6842,8 +6928,26 @@ fn from_can_pattern_help<'a>(
     match can_pattern {
         Underscore => Ok(Pattern::Underscore),
         Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
-        IntLiteral(_, int) => Ok(Pattern::IntLiteral(*int as i128)),
-        FloatLiteral(_, float) => Ok(Pattern::FloatLiteral(f64::to_bits(*float))),
+        IntLiteral(_, _, int) => Ok(Pattern::IntLiteral(*int as i128)),
+        FloatLiteral(var, float_str, float) => {
+            // TODO: Can I reuse num_argument_to_int_or_float here if I pass in true?
+            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, true) {
+                IntOrFloat::SignedIntType(_) => {
+                    panic!("Invalid percision for float literal = {:?}", var)
+                }
+                IntOrFloat::UnsignedIntType(_) => {
+                    panic!("Invalid percision for float literal = {:?}", var)
+                }
+                IntOrFloat::BinaryFloatType(_) => Ok(Pattern::FloatLiteral(f64::to_bits(*float))),
+                IntOrFloat::DecimalFloatType => {
+                    let dec = match RocDec::from_str(float_str) {
+                            Some(d) => d,
+                            None => panic!("Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message", float_str),
+                        };
+                    Ok(Pattern::DecimalLiteral(dec))
+                }
+            }
+        }
         StrLiteral(v) => Ok(Pattern::StrLiteral(v.clone())),
         Shadowed(region, ident) => Err(RuntimeError::Shadowing {
             original_region: *region,
@@ -6854,12 +6958,18 @@ fn from_can_pattern_help<'a>(
             // TODO preserve malformed problem information here?
             Err(RuntimeError::UnsupportedPattern(*region))
         }
-        NumLiteral(var, num) => {
+        NumLiteral(var, num_str, num) => {
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, false) {
                 IntOrFloat::SignedIntType(_) => Ok(Pattern::IntLiteral(*num as i128)),
                 IntOrFloat::UnsignedIntType(_) => Ok(Pattern::IntLiteral(*num as i128)),
                 IntOrFloat::BinaryFloatType(_) => Ok(Pattern::FloatLiteral(*num as u64)),
-                IntOrFloat::DecimalFloatType => Ok(Pattern::FloatLiteral(*num as u64)),
+                IntOrFloat::DecimalFloatType => {
+                    let dec = match RocDec::from_str(num_str) {
+                            Some(d) => d,
+                            None => panic!("Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message", num_str),
+                        };
+                    Ok(Pattern::DecimalLiteral(dec))
+                }
             }
         }
 
@@ -6872,7 +6982,8 @@ fn from_can_pattern_help<'a>(
             use crate::exhaustive::Union;
             use crate::layout::UnionVariant::*;
 
-            let res_variant = crate::layout::union_sorted_tags(env.arena, *whole_var, env.subs);
+            let res_variant =
+                crate::layout::union_sorted_tags(env.arena, *whole_var, env.subs, env.ptr_bytes);
 
             let variant = match res_variant {
                 Ok(cached) => cached,
@@ -7291,7 +7402,8 @@ fn from_can_pattern_help<'a>(
             ..
         } => {
             // sorted fields based on the type
-            let sorted_fields = crate::layout::sort_record_fields(env.arena, *whole_var, env.subs);
+            let sorted_fields =
+                crate::layout::sort_record_fields(env.arena, *whole_var, env.subs, env.ptr_bytes);
 
             // sorted fields based on the destruct
             let mut mono_destructs = Vec::with_capacity_in(destructs.len(), env.arena);
@@ -7432,7 +7544,9 @@ fn from_can_record_destruct<'a>(
     })
 }
 
+#[derive(Debug)]
 pub enum IntPrecision {
+    Usize,
     I128,
     I64,
     I32,
@@ -7468,6 +7582,7 @@ fn int_precision_to_builtin(precision: IntPrecision) -> Builtin<'static> {
         I32 => Builtin::Int32,
         I16 => Builtin::Int16,
         I8 => Builtin::Int8,
+        Usize => Builtin::Usize,
     }
 }
 
@@ -7566,16 +7681,8 @@ pub fn num_argument_to_int_or_float(
         Content::Alias(Symbol::NUM_NAT, _, _)
         | Content::Alias(Symbol::NUM_NATURAL, _, _)
         | Content::Alias(Symbol::NUM_AT_NATURAL, _, _) => {
-            match ptr_bytes {
-                1 => IntOrFloat::UnsignedIntType(IntPrecision::I8),
-                2 => IntOrFloat::UnsignedIntType(IntPrecision::I16),
-                4 => IntOrFloat::UnsignedIntType(IntPrecision::I32),
-                8 => IntOrFloat::UnsignedIntType(IntPrecision::I64),
-                _ => panic!(
-                    "Invalid target for Num type argument: Roc does't support compiling to {}-bit systems.",
-                    ptr_bytes * 8
-                ),
-            }
+            IntOrFloat::UnsignedIntType(IntPrecision::Usize)
+
         }
         other => {
             panic!(
@@ -7865,7 +7972,15 @@ fn union_lambda_set_to_switch<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    debug_assert!(!lambda_set.is_empty());
+    if lambda_set.is_empty() {
+        // NOTE this can happen if there is a type error somewhere. Since the lambda set is empty,
+        // there is really nothing we can do here. We generate a runtime error here which allows
+        // code gen to proceed. We then assume that we hit another (more descriptive) error before
+        // hitting this one
+
+        let msg = "a Lambda Set isempty. Most likely there is a type error in your program.";
+        return Stmt::RuntimeError(msg);
+    }
 
     let join_point_id = JoinPointId(env.unique_symbol());
 

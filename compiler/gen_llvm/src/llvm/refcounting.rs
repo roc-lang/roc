@@ -1,7 +1,8 @@
 use crate::debug_info_init;
+use crate::llvm::bitcode::call_void_bitcode_fn;
 use crate::llvm::build::{
     add_func, cast_basic_basic, cast_block_of_memory_to_tag, get_tag_id, get_tag_id_non_recursive,
-    tag_pointer_clear_tag_id, Env, FAST_CALL_CONV, LLVM_SADD_WITH_OVERFLOW_I64, TAG_DATA_INDEX,
+    tag_pointer_clear_tag_id, Env, FAST_CALL_CONV, TAG_DATA_INDEX,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
 use crate::llvm::convert::{basic_type_from_layout, ptr_int};
@@ -170,7 +171,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
             None => {
                 // inc and dec return void
                 let fn_type = context.void_type().fn_type(
-                    &[context.i64_type().ptr_type(AddressSpace::Generic).into()],
+                    &[env.ptr_int().ptr_type(AddressSpace::Generic).into()],
                     false,
                 );
 
@@ -211,121 +212,28 @@ impl<'ctx> PointerToRefcount<'ctx> {
     ) {
         let builder = env.builder;
         let ctx = env.context;
-        let refcount_type = ptr_int(ctx, env.ptr_bytes);
 
         let entry = ctx.append_basic_block(parent, "entry");
         builder.position_at_end(entry);
 
         debug_info_init!(env, parent);
 
-        let refcount_ptr = {
-            let raw_refcount_ptr = parent.get_nth_param(0).unwrap();
-            debug_assert!(raw_refcount_ptr.is_pointer_value());
-            Self {
-                value: raw_refcount_ptr.into_pointer_value(),
-            }
-        };
+        let alignment = env.context.i32_type().const_int(alignment as _, false);
 
-        let refcount = refcount_ptr.get_refcount(env);
-
-        let is_static_allocation = builder.build_int_compare(
-            IntPredicate::EQ,
-            refcount,
-            env.ptr_int().const_zero(),
-            "is_static_allocation",
+        call_void_bitcode_fn(
+            env,
+            &[
+                env.builder.build_bitcast(
+                    parent.get_nth_param(0).unwrap(),
+                    env.ptr_int().ptr_type(AddressSpace::Generic),
+                    "foo",
+                ),
+                alignment.into(),
+            ],
+            roc_builtins::bitcode::UTILS_DECREF,
         );
 
-        // build blocks
-        let branch_block = ctx.append_basic_block(parent, "branch");
-        let then_block = ctx.append_basic_block(parent, "then");
-        let else_block = ctx.append_basic_block(parent, "else");
-        let return_block = ctx.append_basic_block(parent, "return");
-
-        builder.build_conditional_branch(is_static_allocation, return_block, branch_block);
-
-        let add_with_overflow;
-
-        {
-            builder.position_at_end(branch_block);
-
-            add_with_overflow = env
-                .call_intrinsic(
-                    LLVM_SADD_WITH_OVERFLOW_I64,
-                    &[
-                        refcount.into(),
-                        refcount_type.const_int(-1_i64 as u64, true).into(),
-                    ],
-                )
-                .into_struct_value();
-
-            let has_overflowed = builder
-                .build_extract_value(add_with_overflow, 1, "has_overflowed")
-                .unwrap();
-
-            let has_overflowed_comparison = builder.build_int_compare(
-                IntPredicate::EQ,
-                has_overflowed.into_int_value(),
-                ctx.bool_type().const_int(1_u64, false),
-                "has_overflowed",
-            );
-
-            // TODO what would be most optimial for the branch predictor
-            //
-            // are most refcounts 1 most of the time? or not?
-            builder.build_conditional_branch(has_overflowed_comparison, then_block, else_block);
-        }
-
-        // build then block
-        {
-            builder.position_at_end(then_block);
-            if !env.is_gen_test {
-                let ptr = builder.build_pointer_cast(
-                    refcount_ptr.value,
-                    ctx.i8_type().ptr_type(AddressSpace::Generic),
-                    "cast_to_i8_ptr",
-                );
-
-                match alignment {
-                    n if env.ptr_bytes == n => {
-                        // the refcount ptr is also the ptr to the allocated region
-                        env.call_dealloc(ptr, alignment);
-                    }
-                    n if 2 * env.ptr_bytes == n => {
-                        // we need to step back another ptr_bytes to get the allocated ptr
-                        let allocated = Self::from_ptr_to_data(env, ptr);
-                        env.call_dealloc(allocated.value, alignment);
-                    }
-                    n => unreachable!("invalid extra_bytes {:?}", n),
-                }
-            }
-            builder.build_unconditional_branch(return_block);
-        }
-
-        // build else block
-        {
-            builder.position_at_end(else_block);
-
-            let max = builder.build_int_compare(
-                IntPredicate::EQ,
-                refcount,
-                refcount_type.const_int(REFCOUNT_MAX as u64, false),
-                "refcount_max_check",
-            );
-            let decremented = builder
-                .build_extract_value(add_with_overflow, 0, "decrement_refcount")
-                .unwrap()
-                .into_int_value();
-            let selected = builder.build_select(max, refcount, decremented, "select_refcount");
-
-            refcount_ptr.set_refcount(env, selected.into_int_value());
-
-            builder.build_unconditional_branch(return_block);
-        }
-
-        {
-            builder.position_at_end(return_block);
-            builder.build_return(None);
-        }
+        builder.build_return(None);
     }
 }
 
@@ -774,7 +682,7 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
     let is_non_empty = builder.build_int_compare(
         IntPredicate::UGT,
         len,
-        ctx.i64_type().const_zero(),
+        env.ptr_int().const_zero(),
         "len > 0",
     );
 
@@ -803,15 +711,7 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
             );
         };
 
-        incrementing_elem_loop(
-            env.builder,
-            env.context,
-            parent,
-            ptr,
-            len,
-            "modify_rc_index",
-            loop_fn,
-        );
+        incrementing_elem_loop(env, parent, ptr, len, "modify_rc_index", loop_fn);
     }
 
     let refcount_ptr = PointerToRefcount::from_list_wrapper(env, original_wrapper);

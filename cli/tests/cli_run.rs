@@ -108,6 +108,35 @@ mod cli_run {
         assert!(out.status.success());
     }
 
+    #[cfg(feature = "wasm-cli-run")]
+    fn check_wasm_output_with_stdin(
+        file: &Path,
+        stdin: &[&str],
+        executable_filename: &str,
+        flags: &[&str],
+        expected_ending: &str,
+    ) {
+        let mut flags = flags.to_vec();
+        flags.push("--backend=wasm");
+
+        let compile_out = run_roc(&[&["build", file.to_str().unwrap()], flags.as_slice()].concat());
+        if !compile_out.stderr.is_empty() {
+            panic!("{}", compile_out.stderr);
+        }
+
+        assert!(compile_out.status.success(), "bad status {:?}", compile_out);
+
+        let path = file.with_file_name(executable_filename);
+        let stdout = crate::run_with_wasmer(&path, stdin);
+
+        if !stdout.ends_with(expected_ending) {
+            panic!(
+                "expected output to end with {:?} but instead got {:#?}",
+                expected_ending, stdout
+            );
+        }
+    }
+
     /// This macro does two things.
     ///
     /// First, it generates and runs a separate test for each of the given
@@ -223,13 +252,13 @@ mod cli_run {
         //     expected_ending: "",
         //     use_valgrind: true,
         // },
-        // cli:"cli" => Example {
-        //     filename: "Echo.roc",
-        //     executable_filename: "echo",
-        //     stdin: &["Giovanni\n", "Giorgio\n"],
-        //     expected_ending: "Giovanni Giorgio!\n",
-        //     use_valgrind: true,
-        // },
+        cli:"cli" => Example {
+            filename: "Echo.roc",
+            executable_filename: "echo",
+            stdin: &["Giovanni\n", "Giorgio\n"],
+            expected_ending: "Hi, Giovanni Giorgio!\n",
+            use_valgrind: true,
+        },
         // custom_malloc:"custom-malloc" => Example {
         //     filename: "Main.roc",
         //     executable_filename: "custom-malloc-example",
@@ -255,9 +284,9 @@ mod cli_run {
                     let benchmark = $benchmark;
                     let file_name = examples_dir("benchmarks").join(benchmark.filename);
 
-                    // TODO fix QuicksortApp and RBTreeCk and then remove this!
+                    // TODO fix QuicksortApp and then remove this!
                     match benchmark.filename {
-                        "QuicksortApp.roc" | "RBTreeCk.roc" => {
+                        "QuicksortApp.roc" => {
                             eprintln!("WARNING: skipping testing benchmark {} because the test is broken right now!", benchmark.filename);
                             return;
                         }
@@ -283,7 +312,47 @@ mod cli_run {
                         benchmark.use_valgrind,
                     );
                 }
+
             )*
+
+            #[cfg(feature = "wasm-cli-run")]
+            mod wasm {
+                use super::*;
+            $(
+                #[test]
+                #[cfg_attr(not(debug_assertions), serial(benchmark))]
+                fn $test_name() {
+                    let benchmark = $benchmark;
+                    let file_name = examples_dir("benchmarks").join(benchmark.filename);
+
+                    // TODO fix QuicksortApp and then remove this!
+                    match benchmark.filename {
+                        "QuicksortApp.roc" | "TestBase64.roc" => {
+                            eprintln!("WARNING: skipping testing benchmark {} because the test is broken right now!", benchmark.filename);
+                            return;
+                        }
+                        _ => {}
+                    }
+
+                    // Check with and without optimizations
+                    check_wasm_output_with_stdin(
+                        &file_name,
+                        benchmark.stdin,
+                        benchmark.executable_filename,
+                        &[],
+                        benchmark.expected_ending,
+                    );
+
+                    check_wasm_output_with_stdin(
+                        &file_name,
+                        benchmark.stdin,
+                        benchmark.executable_filename,
+                        &["--optimize"],
+                        benchmark.expected_ending,
+                    );
+                }
+            )*
+            }
 
             #[test]
             #[cfg(not(debug_assertions))]
@@ -326,8 +395,8 @@ mod cli_run {
         rbtree_ck => Example {
             filename: "RBTreeCk.roc",
             executable_filename: "rbtree-ck",
-            stdin: &[],
-            expected_ending: "Node Black 0 {} Empty Empty\n",
+            stdin: &["100"],
+            expected_ending: "10\n",
             use_valgrind: true,
         },
         rbtree_insert => Example {
@@ -490,5 +559,60 @@ mod cli_run {
             "I am Dep2.value2\n",
             true,
         );
+    }
+}
+
+#[cfg(feature = "wasm-cli-run")]
+fn run_with_wasmer(wasm_path: &std::path::Path, stdin: &[&str]) -> String {
+    use std::io::Write;
+    use wasmer::{Instance, Module, Store};
+
+    let store = Store::default();
+    let module = Module::from_file(&store, &wasm_path).unwrap();
+
+    let mut fake_stdin = wasmer_wasi::Pipe::new();
+    let fake_stdout = wasmer_wasi::Pipe::new();
+    let fake_stderr = wasmer_wasi::Pipe::new();
+
+    for line in stdin {
+        write!(fake_stdin, "{}", line).unwrap();
+    }
+
+    // First, we create the `WasiEnv`
+    use wasmer_wasi::WasiState;
+    let mut wasi_env = WasiState::new("hello")
+        .stdin(Box::new(fake_stdin))
+        .stdout(Box::new(fake_stdout))
+        .stderr(Box::new(fake_stderr))
+        .finalize()
+        .unwrap();
+
+    // Then, we get the import object related to our WASI
+    // and attach it to the Wasm instance.
+    let import_object = wasi_env
+        .import_object(&module)
+        .unwrap_or_else(|_| wasmer::imports!());
+
+    let instance = Instance::new(&module, &import_object).unwrap();
+
+    let start = instance.exports.get_function("_start").unwrap();
+
+    match start.call(&[]) {
+        Ok(_) => {
+            let mut state = wasi_env.state.lock().unwrap();
+
+            match state.fs.stdout_mut() {
+                Ok(Some(stdout)) => {
+                    let mut buf = String::new();
+                    stdout.read_to_string(&mut buf).unwrap();
+
+                    return buf;
+                }
+                _ => todo!(),
+            }
+        }
+        Err(e) => {
+            panic!("Something went wrong running a wasm test:\n{:?}", e);
+        }
     }
 }
