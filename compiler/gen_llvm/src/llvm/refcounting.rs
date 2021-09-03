@@ -1115,11 +1115,11 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
 
     debug_assert!(arg_val.is_pointer_value());
     let current_tag_id = get_tag_id(env, fn_val, &union_layout, arg_val);
-    let value_ptr = tag_pointer_clear_tag_id(env, arg_val.into_pointer_value());
-
-    // to increment/decrement the cons-cell itself
-    let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
-    let call_mode = mode_to_call_mode(fn_val, mode);
+    let value_ptr = if union_layout.stores_tag_id_in_pointer(env.ptr_bytes) {
+        tag_pointer_clear_tag_id(env, arg_val.into_pointer_value())
+    } else {
+        arg_val.into_pointer_value()
+    };
 
     let should_recurse_block = env.context.append_basic_block(parent, "should_recurse");
 
