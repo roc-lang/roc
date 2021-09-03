@@ -66,11 +66,14 @@ fn capacityOfLevel(input: usize) usize {
 const Alignment = extern struct {
     bits: u8,
 
-    const VALUE_BEFORE_KEY_FLAG = 0b1000_0000;
+    const VALUE_BEFORE_KEY_FLAG: u8 = 0b1000_0000;
 
     fn toU32(self: Alignment) u32 {
-        // xor to wipe the leftmost bit
-        return self.bits ^ Alignment.VALUE_BEFORE_KEY_FLAG;
+        if (self.bits >= VALUE_BEFORE_KEY_FLAG) {
+            return self.bits ^ Alignment.VALUE_BEFORE_KEY_FLAG;
+        } else {
+            return self.bits;
+        }
     }
 
     fn keyFirst(self: Alignment) bool {

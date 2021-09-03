@@ -527,7 +527,7 @@ where
     let test_wrapper = instance.exports.get_function("test_wrapper").unwrap();
 
     match test_wrapper.call(&[]) {
-        Err(e) => Err(format!("{:?}", e)),
+        Err(e) => Err(format!("call to `test_wrapper`: {:?}", e)),
         Ok(result) => {
             let address = match result[0] {
                 wasmer::Value::I32(a) => a,
@@ -549,10 +549,10 @@ where
 macro_rules! assert_wasm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
         match $crate::helpers::eval::assert_wasm_evals_to_help::<$ty>($src, $ignore_problems) {
-            Err(msg) => println!("{:?}", msg),
+            Err(msg) => panic!("Wasm test failed: {:?}", msg),
             Ok(actual) => {
                 #[allow(clippy::bool_assert_comparison)]
-                assert_eq!($transform(actual), $expected)
+                assert_eq!($transform(actual), $expected, "Wasm test failed")
             }
         }
     };
@@ -593,7 +593,7 @@ macro_rules! assert_llvm_evals_to {
             let expected = $expected;
             #[allow(clippy::redundant_closure_call)]
             let given = $transform(success);
-            assert_eq!(&given, &expected);
+            assert_eq!(&given, &expected, "LLVM test failed");
         };
         run_jit_function!(lib, main_fn_name, $ty, transform, errors)
     };
@@ -615,8 +615,10 @@ macro_rules! assert_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
         // Same as above, except with an additional transformation argument.
         {
+            #[cfg(feature = "wasm-cli-run")]
+            $crate::assert_wasm_evals_to!($src, $expected, $ty, $transform, false);
+
             $crate::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
-            // $crate::assert_wasm_evals_to!($src, $expected, $ty, $transform, false);
         }
     };
 }
