@@ -19,7 +19,7 @@ pub fn type_problem<'b>(
 ) -> Report<'b> {
     use solve::TypeError::*;
 
-    fn report<'b>(title: String, doc: RocDocBuilder<'_>, filename: PathBuf) -> Report<'_> {
+    fn report(title: String, doc: RocDocBuilder<'_>, filename: PathBuf) -> Report<'_> {
         Report {
             title,
             filename,
