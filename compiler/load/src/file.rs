@@ -4293,7 +4293,7 @@ where
 }
 
 fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
-    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
+    use roc_reporting::report::{Report, RocDocAllocator, Severity, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
 
     let src_lines: Vec<&str> = Vec::new();
@@ -4324,6 +4324,7 @@ fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
                 filename: "UNKNOWN.roc".into(),
                 doc,
                 title: "FILE NOT FOUND".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
         io::ErrorKind::PermissionDenied => {
@@ -4340,7 +4341,8 @@ fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
             Report {
                 filename: "UNKNOWN.roc".into(),
                 doc,
-                title: "PERMISSION DENIED".to_string(),
+                title: "FILE PERMISSION DENIED".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
         _ => {
@@ -4356,6 +4358,7 @@ fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
                 filename: "UNKNOWN.roc".into(),
                 doc,
                 title: "FILE PROBLEM".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
     };
@@ -4401,7 +4404,7 @@ fn to_parse_problem_report<'a>(
 }
 
 fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> String {
-    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
+    use roc_reporting::report::{Report, RocDocAllocator, Severity, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
     use PlatformPath::*;
 
@@ -4426,6 +4429,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
                     filename: "UNKNOWN.roc".into(),
                     doc,
                     title: "NO PLATFORM".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
             RootIsInterface => {
@@ -4441,6 +4445,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
                     filename: "UNKNOWN.roc".into(),
                     doc,
                     title: "NO PLATFORM".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
             RootIsPkgConfig => {
@@ -4456,6 +4461,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
                     filename: "UNKNOWN.roc".into(),
                     doc,
                     title: "NO PLATFORM".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
         }
