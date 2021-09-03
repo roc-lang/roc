@@ -1,6 +1,6 @@
 pub const NOTHING_OPENED: &str =
     "Execute `cargo run edit` from the root folder of the repo to try the editor.";
-    
+
 pub const START_TIP: &str = r#"Currently supported: lists, records, string, numbers and value definitions.
 
 Use `Ctrl+Shift+Up` or `Cmd+Shift+Up` to select surrounding expression.

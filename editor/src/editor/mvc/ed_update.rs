@@ -667,7 +667,7 @@ pub fn get_node_context<'a>(ed_model: &'a EdModel) -> EdResult<NodeContext<'a>> 
     })
 }
 
-// current(=caret is here) MarkupNode correspondes to a Def2 in the AST
+// current(=caret is here) MarkupNode corresponds to a Def2 in the AST
 pub fn handle_new_char_def(
     received_char: &char,
     def_id: DefId,
@@ -725,7 +725,7 @@ pub fn handle_new_char_def(
     Ok(outcome)
 }
 
-// current(=caret is here) MarkupNode correspondes to an Expr2 in the AST
+// current(=caret is here) MarkupNode corresponds to an Expr2 in the AST
 pub fn handle_new_char_expr(
     received_char: &char,
     expr_id: ExprId,
@@ -755,7 +755,7 @@ pub fn handle_new_char_expr(
                 start_new_list(ed_model)?
             }
             '\r' => {
-                // For convenience and consitency there is only one way to format Roc, you can't add extra blank lines.
+                // For convenience and consistency there is only one way to format Roc, you can't add extra blank lines.
                 InputOutcome::Ignored
             }
             _ => InputOutcome::Ignored,
