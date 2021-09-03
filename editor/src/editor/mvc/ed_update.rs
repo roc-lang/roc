@@ -2602,51 +2602,44 @@ pub mod test_ed_update {
 
     #[test]
     fn test_type_tooltip_list() -> Result<(), String> {
-        /*YOLOassert_type_tooltip( "List *", '[')?;
-        assert_type_tooltips_seq( ovec!["List (Num *)"], "[0")?;
-        assert_type_tooltips_seq( ovec!["List (Num *)", "List (List (Num *))"], "[[0")?;
-        assert_type_tooltips_seq( ovec!["Str", "List Str"], "[\"a")?;*/
-        assert_type_tooltips_seq(
-            ovec!["┃"],
+        assert_type_tooltip_clean( ovec!["val = [ ┃ ]"],"List *")?;
+        assert_type_tooltips_clean( ovec!["val = [ ┃0 ]"],ovec!["Num *", "List (Num *)"])?;
+        assert_type_tooltips_clean( ovec!["val = [ [ ┃0 ] ]"],ovec!["Num *", "List (Num *)", "List (List (Num *))"])?;
+
+        assert_type_tooltips_clean(
+            ovec!["val = [ [ [ \"ab┃c\" ] ] ]"],
             ovec!["Str", "List Str", "List (List Str)", "List (List (List Str))"],
-            "[[[\"a",
         )?;
-        assert_type_tooltips_seq(
-            ovec!["┃"],
+        assert_type_tooltips_clean(
+            ovec!["val = [ [ { a┃: 1 } ] ]"],
             ovec![
                 "{ a : Num * }",
                 "List { a : Num * }",
                 "List (List { a : Num * })"
-            ],
-            "[[{a:1",
+            ]
         )?;
 
         // multi element lists
-        /*YOLOassert_type_tooltips_seq( ovec!["List (Num *)"], "[1,2,3")?;
-        assert_type_tooltips_seq( ovec!["Str", "List Str"], "[\"abc🡲,\"de🡲,\"f")?;*/
-        assert_type_tooltips_seq(
-            ovec!["┃"],
-            ovec!["{ a : Num * }", "List { a : Num * }"],
-            "[{a:0🡲🡲,{a:12🡲🡲,{a:444",
-        )?;
+        assert_type_tooltips_clean(ovec!["val = [ ┃1, 2, 3 ]"], ovec!["Num *", "List (Num *)"])?;
+        assert_type_tooltips_clean(ovec!["val = [ \"┃abc\", \"de\", \"f\" ]"], ovec!["Str", "List Str"])?;
+        assert_type_tooltips_clean(ovec!["val = [ { a:┃ 1 }, { a: 12 }, { a: 444 } ]"], ovec!["{ a : Num * }", "List { a : Num * }"])?;
+
         Ok(())
     }
 
     #[test]
     fn test_type_tooltip_mismatch() -> Result<(), String> {
-        /*YOLOassert_type_tooltips_seq( ovec!["Str", "List <type mismatch>"], "[1,\"abc")?;
-        assert_type_tooltips_seq( ovec!["List <type mismatch>"], "[\"abc🡲,50")?;*/
+        assert_type_tooltips_clean(ovec!["val = [ 1, \"ab┃c\" ]"], ovec!["Str", "List <type mismatch>"])?;
+        assert_type_tooltips_clean(ovec!["val = [ \"abc\", 5┃0 ]"], ovec!["Num *", "List <type mismatch>"])?;
 
-        assert_type_tooltips_seq(
-            ovec!["┃"],
+        assert_type_tooltips_clean(
+            ovec!["val = [ { a: 0 }, { a: \"0┃\" } ]"],
             ovec!["Str", "{ a : Str }", "List <type mismatch>"],
-            "[{a:0🡲🡲,{a:\"0",
         )?;
 
-        assert_type_tooltips_seq(
-            ovec!["┃"],
+        assert_type_tooltips_clean(
+            ovec!["val = [ [ 0, 1, \"2\" ], [ 3, 4, 5 ┃] ]"],
             ovec!["List (Num *)", "List (List <type mismatch>)"],
-            "[[0,1,\"2🡲🡲🡲,[3, 4, 5",
         )?;
 
         Ok(())
@@ -2683,11 +2676,26 @@ pub mod test_ed_update {
 
         move_caret_fun(&mut ed_model, &no_mods())?;
 
-        let post_lines = ui_res_to_res(ed_model_to_dsl(&ed_model))?;
+        let mut post_lines = ui_res_to_res(ed_model_to_dsl(&ed_model))?;
+        strip_header(&mut post_lines); // remove header for clean tests
 
         assert_eq!(post_lines, expected_post_lines);
 
         Ok(())
+    }
+
+    fn assert_ctrl_shift_up_move_nls(
+        pre_lines: Vec<String>,
+        expected_post_lines: Vec<String>,
+        repeats: usize,
+        move_caret_fun: ModelMoveCaretFun,
+    ) -> Result<(), String> {
+        assert_ctrl_shift_up_move(
+            pre_lines,
+            add_nls(expected_post_lines),
+            repeats,
+            move_caret_fun,
+        )
     }
 
     fn assert_ctrl_shift_single_up_move(
@@ -2696,6 +2704,14 @@ pub mod test_ed_update {
         move_caret_fun: ModelMoveCaretFun,
     ) -> Result<(), String> {
         assert_ctrl_shift_up_move(pre_lines, expected_post_lines, 1, move_caret_fun)
+    }
+
+    fn assert_ctrl_shift_single_up_move_nls(
+        pre_lines: Vec<String>,
+        expected_post_lines: Vec<String>,
+        move_caret_fun: ModelMoveCaretFun,
+    ) -> Result<(), String> {
+        assert_ctrl_shift_single_up_move(pre_lines, add_nls(expected_post_lines), move_caret_fun)
     }
 
     // because complex lifetime stuff
@@ -2723,7 +2739,8 @@ pub mod test_ed_update {
     #[test]
     fn test_ctrl_shift_up_move_blank() -> Result<(), String> {
         // Blank is auto-inserted
-        /*YOLOassert_ctrl_shift_single_up_move( ovec![" ┃"], move_right!())?;
+        // TODO
+        /*assert_ctrl_shift_single_up_move( ovec![" ┃"], move_right!())?;
         assert_ctrl_shift_up_move( ovec!["┃ "], 3, move_left!())?;*/
 
         Ok(())
@@ -2731,20 +2748,20 @@ pub mod test_ed_update {
 
     #[test]
     fn test_ctrl_shift_up_move_int() -> Result<(), String> {
-        assert_ctrl_shift_single_up_move(ovec!["┃0"], ovec!["0┃"], move_down!())?;
-        assert_ctrl_shift_single_up_move(ovec!["┃9654"], ovec!["┃9654"], move_up!())?;
-        assert_ctrl_shift_single_up_move(ovec!["┃100546"], ovec!["100546┃"], move_end!())?;
+        assert_ctrl_shift_single_up_move_nls(ovec!["val = ┃0"], ovec!["val = 0┃"], move_down!())?;
+        assert_ctrl_shift_single_up_move_nls(ovec!["val = ┃9654"], ovec!["val = ┃9654"], move_up!())?;
+        assert_ctrl_shift_single_up_move_nls(ovec!["val = ┃100546"], ovec!["val = 100546┃"], move_end!())?;
 
         Ok(())
     }
 
     #[test]
     fn test_ctrl_shift_up_move_string() -> Result<(), String> {
-        assert_ctrl_shift_single_up_move(ovec!["┃\"\""], ovec!["\"\"┃"], move_down!())?;
-        assert_ctrl_shift_single_up_move(ovec!["┃\"abc\""], ovec!["┃\"abc\""], move_up!())?;
-        assert_ctrl_shift_single_up_move(
-            ovec!["┃\"hello, hello.0123456789ZXY{}[]-><-\""],
-            ovec!["\"hello, hello.0123456789ZXY{}[]-><-\"┃"],
+        assert_ctrl_shift_single_up_move_nls(ovec!["val = ┃\"\""], ovec!["val = \"\"┃"], move_down!())?;
+        assert_ctrl_shift_single_up_move_nls(ovec!["val = ┃\"abc\""], ovec!["val = ┃\"abc\""], move_up!())?;
+        assert_ctrl_shift_single_up_move_nls(
+            ovec!["val = ┃\"hello, hello.0123456789ZXY{}[]-><-\""],
+            ovec!["val = \"hello, hello.0123456789ZXY{}[]-><-\"┃"],
             move_end!(),
         )?;
 
@@ -2753,27 +2770,27 @@ pub mod test_ed_update {
 
     #[test]
     fn test_ctrl_shift_up_move_record() -> Result<(), String> {
-        // TODO uncomment tests once editor::lang::constrain::constrain_expr does not contain anymore todo's
-        assert_ctrl_shift_single_up_move(ovec!["┃{  }"], ovec!["┃{  }"], move_home!())?;
+        assert_ctrl_shift_single_up_move_nls(ovec!["val = ┃{  }"], ovec!["┃val = {  }"], move_home!())?;
+        // TODO uncomment tests once #1649 is fixed.
         //assert_ctrl_shift_single_up_move(ovec!["┃{ a }"], ovec!["{ a }┃"], move_down!())?;
         //assert_ctrl_shift_single_up_move(ovec!["┃{ a: { b } }"], ovec!["{ a: { b } }┃"], move_right!())?;
-        assert_ctrl_shift_single_up_move(ovec!["{ a: { ┃ } }"], ovec!["{ a: {  } }┃"], move_end!())?;
-        assert_ctrl_shift_up_move(
-            ovec!["{ a: { b: { ┃ } } }"],
-            ovec!["{ a: ┃{ b: {  } } }"],
+        assert_ctrl_shift_single_up_move_nls(ovec!["val = { a: { ┃ } }"], ovec!["val = { a: {  } }┃"], move_end!())?;
+        assert_ctrl_shift_up_move_nls(
+            ovec!["val = { a: { b: { ┃ } } }"],
+            ovec!["val = { a: ┃{ b: {  } } }"],
             2,
             move_up!(),
         )?;
-        assert_ctrl_shift_up_move(
-            ovec!["{ camelCase: { cC123: \"hello┃, hello.0123456789ZXY{}[]-><-\" } }"],
-            ovec!["{ camelCase: { cC123: \"hello, hello.0123456789ZXY{}[]-><-\" }┃ }"],
+        assert_ctrl_shift_up_move_nls(
+            ovec!["val = { camelCase: { cC123: \"hello┃, hello.0123456789ZXY{}[]-><-\" } }"],
+            ovec!["val = { camelCase: { cC123: \"hello, hello.0123456789ZXY{}[]-><-\" }┃ }"],
             2,
             move_down!(),
         )?;
 
-        assert_ctrl_shift_up_move(
-            ovec!["{ camelCase: { cC123: 9┃5 } }"],
-            ovec!["{ camelCase: { cC123: 95 }┃ }"],
+        assert_ctrl_shift_up_move_nls(
+            ovec!["val = { camelCase: { cC123: 9┃5 } }"],
+            ovec!["val = { camelCase: { cC123: 95 }┃ }"],
             2,
             move_down!(),
         )?;
@@ -2809,11 +2826,23 @@ pub mod test_ed_update {
 
         handle_new_char(&'\u{8}', &mut ed_model)?; // \u{8} is the char for backspace on linux
 
-        let post_lines = ui_res_to_res(ed_model_to_dsl(&ed_model))?;
+        let mut post_lines = ui_res_to_res(ed_model_to_dsl(&ed_model))?;
+        strip_header(&mut post_lines);
 
         assert_eq!(post_lines, expected_post_lines);
 
         Ok(())
+    }
+    fn assert_ctrl_shift_up_backspace_nls(
+        pre_lines: Vec<String>,
+        expected_post_lines: Vec<String>,
+        repeats: usize,
+    ) -> Result<(), String> {
+        assert_ctrl_shift_up_backspace(
+            pre_lines,
+            add_nls(expected_post_lines),
+            repeats
+        )
     }
 
     fn assert_ctrl_shift_single_up_backspace(
@@ -2823,10 +2852,18 @@ pub mod test_ed_update {
         assert_ctrl_shift_up_backspace(pre_lines, expected_post_lines, 1)
     }
 
+    fn assert_ctrl_shift_single_up_backspace_nls(
+        pre_lines: Vec<String>,
+        expected_post_lines: Vec<String>,
+    ) -> Result<(), String> {
+        assert_ctrl_shift_single_up_backspace(pre_lines, add_nls(expected_post_lines))
+    }
+
     #[test]
     fn test_ctrl_shift_up_backspace_blank() -> Result<(), String> {
         // Blank is inserted when root is deleted
-        /*YOLOassert_ctrl_shift_single_up_backspace( ovec!["┃ "])?;*/
+        // TODO
+        /*assert_ctrl_shift_single_up_backspace( ovec!["┃ "])?;*/
 
         Ok(())
     }
@@ -2834,9 +2871,9 @@ pub mod test_ed_update {
     #[test]
     fn test_ctrl_shift_up_backspace_int() -> Result<(), String> {
         // Blank is inserted when root is deleted
-        assert_ctrl_shift_single_up_backspace(ovec!["95┃21"], ovec!["┃ "])?;
-        assert_ctrl_shift_single_up_backspace(ovec!["0┃"], ovec!["┃ "])?;
-        assert_ctrl_shift_single_up_backspace(ovec!["┃10000"], ovec!["┃ "])?;
+        assert_ctrl_shift_single_up_backspace_nls(ovec!["val = 95┃21"], ovec!["val = ┃ "])?;
+        assert_ctrl_shift_single_up_backspace_nls(ovec!["val = 0┃"], ovec!["val = ┃ "])?;
+        assert_ctrl_shift_single_up_backspace_nls(ovec!["val = ┃10000"], ovec!["val = ┃ "])?;
 
         Ok(())
     }
@@ -2844,12 +2881,12 @@ pub mod test_ed_update {
     #[test]
     fn test_ctrl_shift_up_backspace_string() -> Result<(), String> {
         // Blank is inserted when root is deleted
-        assert_ctrl_shift_single_up_backspace(ovec!["\"┃\""], ovec!["┃ "])?;
-        assert_ctrl_shift_single_up_backspace(ovec!["\"\"┃"], ovec!["┃ "])?;
-        assert_ctrl_shift_single_up_backspace(ovec!["┃\"abc\""], ovec!["┃ "])?;
-        assert_ctrl_shift_single_up_backspace(
-            ovec!["\"hello┃, hello.0123456789ZXY{}[]-><-\""],
-            ovec!["┃ "],
+        assert_ctrl_shift_single_up_backspace_nls(ovec!["val = \"┃\""], ovec!["val = ┃ "])?;
+        assert_ctrl_shift_single_up_backspace_nls(ovec!["val = \"\"┃"], ovec!["val = ┃ "])?;
+        assert_ctrl_shift_single_up_backspace_nls(ovec!["val = ┃\"abc\""], ovec!["val = ┃ "])?;
+        assert_ctrl_shift_single_up_backspace_nls(
+            ovec!["val = \"hello┃, hello.0123456789ZXY{}[]-><-\""],
+            ovec!["val = ┃ "],
         )?;
 
         Ok(())
@@ -2857,32 +2894,33 @@ pub mod test_ed_update {
 
     #[test]
     fn test_ctrl_shift_up_backspace_record() -> Result<(), String> {
-        // TODO uncomment tests once editor::lang::constrain::constrain_expr does not contain anymore todo's
-        // Blank is inserted when root is deleted
-        assert_ctrl_shift_single_up_backspace(ovec!["{┃  }"], ovec!["┃ "])?;
+        // Blank is inserted when root of Expr2 is deleted
+        assert_ctrl_shift_single_up_backspace_nls(ovec!["val = {┃  }"], ovec!["val = ┃ "])?;
+
+        // TODO: uncomment tests, once isue #1649 is fixed 
         //assert_ctrl_shift_single_up_backspace(ovec!["{ a┃ }"], ovec!["┃ "])?;
         //assert_ctrl_shift_single_up_backspace(ovec!["{ a: { b }┃ }"], ovec!["┃ "])?;
-        assert_ctrl_shift_single_up_backspace(ovec!["{ a: \"b cd\"┃ }"], ovec!["┃ "])?;
+        assert_ctrl_shift_single_up_backspace_nls(ovec!["val = { a: \"b cd\"┃ }"], ovec!["val = ┃ "])?;
 
         //assert_ctrl_shift_single_up_backspace(ovec!["{ a: ┃{ b } }"], ovec!["{ a: ┃  }"])?;
-        assert_ctrl_shift_single_up_backspace(ovec!["{ a: \"┃b cd\" }"], ovec!["{ a: ┃  }"])?;
-        assert_ctrl_shift_single_up_backspace(ovec!["{ a: ┃12 }"], ovec!["{ a: ┃  }"])?;
+        assert_ctrl_shift_single_up_backspace_nls(ovec!["val = { a: \"┃b cd\" }"], ovec!["val = { a: ┃  }"])?;
+        assert_ctrl_shift_single_up_backspace_nls(ovec!["val = { a: ┃12 }"], ovec!["val = { a: ┃  }"])?;
         /*assert_ctrl_shift_single_up_backspace(
             ovec!["{ g: { oi: { ng: { d: { ┃e: { e: { p: { camelCase } } } } } } } }"],
             ovec!["{ g: { oi: { ng: { d: ┃  } } } }"],
         )?;*/
 
-        assert_ctrl_shift_up_backspace(
-            ovec!["{ a: { b: { c: \"abc┃  \" } } }"],
-            ovec!["{ a: { b: ┃  } }"],
+        assert_ctrl_shift_up_backspace_nls(
+            ovec!["val = { a: { b: { c: \"abc┃  \" } } }"],
+            ovec!["val = { a: { b: ┃  } }"],
             2,
         )?;
-        assert_ctrl_shift_up_backspace(
-            ovec!["{ a: { b: { c: 100┃000 } } }"],
-            ovec!["{ a: { b: ┃  } }"],
+        assert_ctrl_shift_up_backspace_nls(
+            ovec!["val = { a: { b: { c: 100┃000 } } }"],
+            ovec!["val = { a: { b: ┃  } }"],
             2,
         )?;
-        assert_ctrl_shift_up_backspace(ovec!["{ a: { b: { c: {┃  } } } }"], ovec!["{ a: { b: ┃  } }"], 2)?;
+        assert_ctrl_shift_up_backspace_nls(ovec!["val = { a: { b: { c: {┃  } } } }"], ovec!["val = { a: { b: ┃  } }"], 2)?;
         /*assert_ctrl_shift_up_backspace(
             ovec!["{ g: { oi: { ng: { d: { e: { e: { p┃: { camelCase } } } } } } } }"],
             ovec!["{ g: ┃  }"],
