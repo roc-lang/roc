@@ -24,7 +24,6 @@ pub fn build_module<'a>(
     let mut backend = WasmBackend::new();
     let mut layout_ids = LayoutIds::default();
 
-    let mut exports = std::vec::Vec::new();
     for ((sym, layout), proc) in procedures {
         let function_index = backend.build_proc(proc, sym)?;
         if env.exposed_to_host.contains(&sym) {
@@ -37,9 +36,24 @@ pub fn build_module<'a>(
                 .with_internal(Internal::Function(function_index))
                 .build();
 
-            exports.push(export);
+            backend.builder.push_export(export);
         }
     }
+
+    const MIN_MEMORY_SIZE_KB: u32 = 1024;
+    const PAGE_SIZE_KB: u32 = 64;
+
+    let memory = builder::MemoryBuilder::new()
+        .with_min(MIN_MEMORY_SIZE_KB / PAGE_SIZE_KB)
+        .build();
+    backend.builder.push_memory(memory);
+
+    let memory_export = builder::export()
+        .field("memory")
+        .with_internal(Internal::Memory(0))
+        .build();
+    backend.builder.push_export(memory_export);
+
     let module = backend.builder.build();
     module
         .to_bytes()

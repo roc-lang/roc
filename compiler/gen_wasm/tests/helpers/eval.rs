@@ -67,6 +67,22 @@ pub fn helper_wasm<'a>(
         procedures.insert(key, proc);
     }
 
+    // You can comment and uncomment this block out to get more useful information
+    // while you're working on the wasm backend!
+    // {
+    //     println!("=========== Procedures ==========");
+    //     println!("{:?}", procedures);
+    //     println!("=================================\n");
+
+    //     println!("=========== Interns    ==========");
+    //     println!("{:?}", interns);
+    //     println!("=================================\n");
+
+    //     println!("=========== Exposed    ==========");
+    //     println!("{:?}", exposed_to_host);
+    //     println!("=================================\n");
+    // }
+
     let exposed_to_host = exposed_to_host.keys().copied().collect::<MutSet<_>>();
 
     let env = gen_wasm::Env {
@@ -80,7 +96,8 @@ pub fn helper_wasm<'a>(
     // for debugging (e.g. with wasm2wat)
     if false {
         use std::io::Write;
-        let mut file = std::fs::File::create("/home/folkertdev/roc/wasm/manual.wasm").unwrap();
+        let mut file =
+            std::fs::File::create("/home/brian/Documents/roc/compiler/gen_wasm/debug.wasm").unwrap();
         file.write_all(&module_bytes).unwrap();
     }
 
@@ -90,7 +107,7 @@ pub fn helper_wasm<'a>(
 
     let store = Store::default();
     // let module = Module::from_file(&store, &test_wasm_path).unwrap();
-    let module = Module::new(&store, &module_bytes).unwrap();
+    let module = Module::from_binary(&store, &module_bytes).unwrap();
 
     // First, we create the `WasiEnv`
     use wasmer_wasi::WasiState;

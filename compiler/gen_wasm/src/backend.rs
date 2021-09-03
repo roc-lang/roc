@@ -12,14 +12,16 @@ use roc_mono::layout::{Builtin, Layout};
 // Follow Emscripten's example by using 1kB (4 bytes would probably do)
 const UNUSED_DATA_SECTION_BYTES: u32 = 1024;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct LocalId(u32);
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct LabelId(u32);
 
+#[derive(Debug)]
 struct SymbolStorage(LocalId, WasmLayout);
 
+#[derive(Debug)]
 struct WasmLayout {
     value_type: ValueType,
     stack_memory: u32,
@@ -154,7 +156,7 @@ impl<'a> WasmBackend<'a> {
     fn get_symbol_storage(&self, sym: &Symbol) -> Result<&SymbolStorage, String> {
         self.symbol_storage_map
             .get(sym)
-            .ok_or(format!("Symbol not found in function scope {:?}", sym))
+            .ok_or_else(|| format!("Symbol {:?} not found in function scope:\n{:?}", sym, self.symbol_storage_map))
     }
 
     fn load_from_symbol(&mut self, sym: &Symbol) -> Result<(), String> {
@@ -164,21 +166,13 @@ impl<'a> WasmBackend<'a> {
         Ok(())
     }
 
-    // Store whatever value is on top of the VM's stack
-    fn store_to_symbol(&mut self, sym: &Symbol) -> Result<(), String> {
-        let SymbolStorage(LocalId(local_id), _) = self.get_symbol_storage(sym)?;
-        let id: u32 = *local_id;
-        self.instructions.push(SetLocal(id));
-        Ok(())
-    }
-
     fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) -> Result<(), String> {
         match stmt {
             Stmt::Let(sym, expr, layout, following) => {
-                self.build_expr(sym, expr, layout)?;
-
                 let wasm_layout = WasmLayout::new(layout)?;
                 let local_id = self.insert_local(wasm_layout, *sym);
+
+                self.build_expr(sym, expr, layout)?;
                 self.instructions.push(SetLocal(local_id.0));
 
                 self.build_stmt(following, ret_layout)?;
@@ -222,12 +216,11 @@ impl<'a> WasmBackend<'a> {
                         func_sym, sym
                     ))?;
                     self.instructions.push(Call(function_location.body));
-                    self.store_to_symbol(sym)?;
                     Ok(())
                 }
 
                 CallType::LowLevel { op: lowlevel, .. } => {
-                    self.build_call_low_level(sym, lowlevel, arguments, layout)
+                    self.build_call_low_level(lowlevel, arguments, layout)
                 }
                 x => Err(format!("the call type, {:?}, is not yet implemented", x)),
             },
@@ -253,7 +246,6 @@ impl<'a> WasmBackend<'a> {
 
     fn build_call_low_level(
         &mut self,
-        sym: &Symbol,
         lowlevel: &LowLevel,
         args: &'a [Symbol],
         layout: &Layout<'a>,
@@ -263,7 +255,6 @@ impl<'a> WasmBackend<'a> {
         }
         let wasm_layout = WasmLayout::new(layout)?;
         self.build_instructions_lowlevel(lowlevel, wasm_layout.value_type)?;
-        self.store_to_symbol(sym)?;
         Ok(())
     }
 
