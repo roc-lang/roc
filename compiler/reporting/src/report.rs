@@ -57,7 +57,7 @@ pub fn cycle<'b>(
         .annotate(Annotation::TypeBlock)
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Severity {
     /// This will cause a runtime error if some code get srun
     /// (e.g. type mismatch, naming error)
