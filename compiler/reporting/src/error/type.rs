@@ -19,6 +19,15 @@ pub fn type_problem<'b>(
 ) -> Report<'b> {
     use solve::TypeError::*;
 
+    fn report<'b>(title: String, doc: RocDocBuilder<'_>, filename: PathBuf) -> Report<'_> {
+        Report {
+            title,
+            filename,
+            doc,
+            severity: Severity::RuntimeError,
+        }
+    }
+
     match problem {
         BadExpr(region, category, found, expected) => {
             to_expr_report(alloc, filename, region, category, found, expected)
@@ -39,11 +48,7 @@ pub fn type_problem<'b>(
                     .append(alloc.symbol_unqualified(symbol))])
                 .append(alloc.reflow("."));
 
-            Report {
-                title,
-                filename,
-                doc,
-            }
+            report(title, doc, filename)
         }
         BadType(type_problem) => {
             use roc_types::types::Problem::*;
@@ -84,20 +89,12 @@ pub fn type_problem<'b>(
                         "TOO FEW TYPE ARGUMENTS".to_string()
                     };
 
-                    Report {
-                        title,
-                        filename,
-                        doc,
-                    }
+                    report(title, doc, filename)
                 }
                 CyclicAlias(symbol, region, others) => {
                     let (doc, title) = cyclic_alias(alloc, symbol, region, others);
 
-                    Report {
-                        title,
-                        filename,
-                        doc,
-                    }
+                    report(title, doc, filename)
                 }
 
                 other => panic!("unhandled bad type: {:?}", other),
