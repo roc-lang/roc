@@ -261,6 +261,7 @@ where
                         let layout_map = self.layout_map();
                         for arg in *arguments {
                             if let Some(layout) = layout_map.get(arg) {
+                                // This is safe because every value in the map is always set with a valid layout and cannot be null.
                                 arg_layouts.push(unsafe { *(*layout) });
                             } else {
                                 return Err(format!("the argument, {:?}, has no know layout", arg));
