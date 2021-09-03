@@ -34,10 +34,17 @@ extern fn malloc(size: usize) callconv(.C) ?*align(@alignOf(Align)) c_void;
 extern fn realloc(c_ptr: [*]align(@alignOf(Align)) u8, size: usize) callconv(.C) ?*c_void;
 extern fn free(c_ptr: [*]align(@alignOf(Align)) u8) callconv(.C) void;
 
-export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
-    _ = alignment;
+const DEBUG: bool = false;
 
-    return malloc(size);
+export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
+    if (DEBUG) {
+        var ptr = malloc(size);
+        const stdout = std.io.getStdOut().writer();
+        stdout.print("alloc:   {d} (alignment {d})\n", .{ ptr, alignment }) catch unreachable;
+        return ptr;
+    } else {
+        return malloc(size);
+    }
 }
 
 export fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*c_void {
@@ -48,7 +55,10 @@ export fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignmen
 }
 
 export fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
-    _ = alignment;
+    if (DEBUG) {
+        const stdout = std.io.getStdOut().writer();
+        stdout.print("dealloc: {d} (alignment {d})\n", .{ c_ptr, alignment }) catch unreachable;
+    }
 
     free(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)));
 }
@@ -155,24 +165,48 @@ export fn roc_fx_putLine(rocPath: str.RocStr) callconv(.C) void {
 
 const GetInt = extern struct {
     value: i64,
-    error_code: u8,
+    error_code: bool,
     is_error: bool,
 };
 
-pub export fn roc_fx_getInt() GetInt {
+comptime {
+    if (@sizeOf(usize) == 8) {
+        @export(roc_fx_getInt_64bit, .{ .name = "roc_fx_getInt" });
+    } else {
+        @export(roc_fx_getInt_32bit, .{ .name = "roc_fx_getInt" });
+    }
+}
+
+fn roc_fx_getInt_64bit() callconv(.C) GetInt {
     if (roc_fx_getInt_help()) |value| {
-        const get_int = GetInt{ .is_error = false, .value = value, .error_code = 0 };
+        const get_int = GetInt{ .is_error = false, .value = value, .error_code = false };
         return get_int;
     } else |err| switch (err) {
         error.InvalidCharacter => {
-            return GetInt{ .is_error = true, .value = 0, .error_code = 0 };
+            return GetInt{ .is_error = true, .value = 0, .error_code = false };
         },
         else => {
-            return GetInt{ .is_error = true, .value = 0, .error_code = 1 };
+            return GetInt{ .is_error = true, .value = 0, .error_code = true };
         },
     }
 
     return 0;
+}
+
+fn roc_fx_getInt_32bit(output: *GetInt) callconv(.C) void {
+    if (roc_fx_getInt_help()) |value| {
+        const get_int = GetInt{ .is_error = false, .value = value, .error_code = false };
+        output.* = get_int;
+    } else |err| switch (err) {
+        error.InvalidCharacter => {
+            output.* = GetInt{ .is_error = true, .value = 0, .error_code = false };
+        },
+        else => {
+            output.* = GetInt{ .is_error = true, .value = 0, .error_code = true };
+        },
+    }
+
+    return;
 }
 
 fn roc_fx_getInt_help() !i64 {
