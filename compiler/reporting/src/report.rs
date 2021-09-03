@@ -57,11 +57,24 @@ pub fn cycle<'b>(
         .annotate(Annotation::TypeBlock)
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum Severity {
+    /// This will cause a runtime error if some code get srun
+    /// (e.g. type mismatch, naming error)
+    RuntimeError,
+
+    /// This will never cause the code to misbehave,
+    /// but should be cleaned up
+    /// (e.g. unused def, unused import)
+    Warning,
+}
+
 /// A textual report.
 pub struct Report<'b> {
     pub title: String,
     pub filename: PathBuf,
     pub doc: RocDocBuilder<'b>,
+    pub severity: Severity,
 }
 
 impl<'b> Report<'b> {
