@@ -126,19 +126,15 @@ mod cli_run {
 
         assert!(compile_out.status.success(), "bad status {:?}", compile_out);
 
-        let out = run_cmd(
-            "wasmtime",
-            stdin,
-            &[file.with_file_name(executable_filename).to_str().unwrap()],
-        );
+        let path = file.with_file_name(executable_filename);
+        let stdout = crate::run_with_wasmer(&path, stdin);
 
-        if !&out.stdout.ends_with(expected_ending) {
+        if !stdout.ends_with(expected_ending) {
             panic!(
                 "expected output to end with {:?} but instead got {:#?}",
-                expected_ending, out
+                expected_ending, stdout
             );
         }
-        assert!(out.status.success());
     }
 
     /// This macro does two things.
@@ -563,5 +559,60 @@ mod cli_run {
             "I am Dep2.value2\n",
             true,
         );
+    }
+}
+
+#[cfg(feature = "wasm-cli-run")]
+fn run_with_wasmer(wasm_path: &std::path::Path, stdin: &[&str]) -> String {
+    use std::io::Write;
+    use wasmer::{Instance, Module, Store};
+
+    let store = Store::default();
+    let module = Module::from_file(&store, &wasm_path).unwrap();
+
+    let mut fake_stdin = wasmer_wasi::Pipe::new();
+    let fake_stdout = wasmer_wasi::Pipe::new();
+    let fake_stderr = wasmer_wasi::Pipe::new();
+
+    for line in stdin {
+        write!(fake_stdin, "{}", line).unwrap();
+    }
+
+    // First, we create the `WasiEnv`
+    use wasmer_wasi::WasiState;
+    let mut wasi_env = WasiState::new("hello")
+        .stdin(Box::new(fake_stdin))
+        .stdout(Box::new(fake_stdout))
+        .stderr(Box::new(fake_stderr))
+        .finalize()
+        .unwrap();
+
+    // Then, we get the import object related to our WASI
+    // and attach it to the Wasm instance.
+    let import_object = wasi_env
+        .import_object(&module)
+        .unwrap_or_else(|_| wasmer::imports!());
+
+    let instance = Instance::new(&module, &import_object).unwrap();
+
+    let start = instance.exports.get_function("_start").unwrap();
+
+    match start.call(&[]) {
+        Ok(_) => {
+            let mut state = wasi_env.state.lock().unwrap();
+
+            match state.fs.stdout_mut() {
+                Ok(Some(stdout)) => {
+                    let mut buf = String::new();
+                    stdout.read_to_string(&mut buf).unwrap();
+
+                    return buf;
+                }
+                _ => todo!(),
+            }
+        }
+        Err(e) => {
+            panic!("Something went wrong running a wasm test:\n{:?}", e);
+        }
     }
 }

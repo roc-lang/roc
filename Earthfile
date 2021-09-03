@@ -77,6 +77,9 @@ check-typos:
 test-rust:
     FROM +copy-dirs
     ENV RUST_BACKTRACE=1
+    # run one of the benchmarks to make sure the host is compiled
+    # not pre-compiling the host can cause race conditions
+    RUN echo "4" | cargo run --release examples/benchmarks/NQueens.roc
     RUN --mount=type=cache,target=$SCCACHE_DIR \
         cargo test --release && sccache --show-stats
 
