@@ -44,6 +44,12 @@ pub struct RocList<T> {
     length: usize,
 }
 
+impl<T: Clone> Clone for RocList<T> {
+    fn clone(&self) -> Self {
+        Self::from_slice(self.as_slice())
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum Storage {
     ReadOnly,
@@ -614,7 +620,9 @@ impl RocStr {
     }
 
     pub fn as_slice(&self) -> &[u8] {
-        if self.is_small_str() {
+        if self.is_empty() {
+            &[]
+        } else if self.is_small_str() {
             unsafe { core::slice::from_raw_parts(self.get_small_str_ptr(), self.len()) }
         } else {
             unsafe { core::slice::from_raw_parts(self.elements, self.length) }
@@ -718,7 +726,7 @@ impl Clone for RocStr {
 
 impl Drop for RocStr {
     fn drop(&mut self) {
-        if !self.is_small_str() {
+        if !self.is_small_str() && !self.is_empty() {
             let storage_ptr = self.get_storage_ptr_mut();
 
             unsafe {

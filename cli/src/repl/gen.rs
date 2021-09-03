@@ -179,7 +179,7 @@ pub fn gen_and_eval<'a>(
             interns,
             module,
             ptr_bytes,
-            is_gen_test: false,
+            is_gen_test: true, // so roc_panic is generated
             // important! we don't want any procedures to get the C calling convention
             exposed_to_host: MutSet::default(),
         };
@@ -196,6 +196,9 @@ pub fn gen_and_eval<'a>(
         );
 
         env.dibuilder.finalize();
+
+        // we don't use the debug info, and it causes weird errors.
+        module.strip_debug_info();
 
         // Uncomment this to see the module's un-optimized LLVM instruction output:
         // env.module.print_to_stderr();
