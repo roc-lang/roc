@@ -125,6 +125,7 @@ pub fn gen_from_mono_module(
             || name.starts_with("roc_builtins.dec")
             || name.starts_with("list.RocList")
             || name.starts_with("dict.RocDict")
+            || name.contains("decref")
         {
             function.add_attribute(AttributeLoc::Function, enum_attr);
         }

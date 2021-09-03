@@ -105,15 +105,16 @@ pub const IntWidth = enum(u8) {
 };
 
 pub fn decrefC(
-    bytes_or_null: ?[*]u8,
-    data_bytes: usize,
+    bytes_or_null: ?[*]isize,
     alignment: u32,
 ) callconv(.C) void {
     // IMPORTANT: bytes_or_null is this case is expected to be a pointer to the refcount
     // (NOT the start of the data, or the start of the allocation)
-    if (bytes_or_null) |bytes| {
-        return @call(.{ .modifier = always_inline }, decref, .{ bytes + @sizeOf(usize), data_bytes, alignment });
-    }
+
+    // this is of course unsafe, but we trust what we get from the llvm side
+    var bytes = @ptrCast([*]isize, bytes_or_null);
+
+    return @call(.{ .modifier = always_inline }, decref_ptr_to_refcount, .{ bytes, alignment });
 }
 
 pub fn decref(
@@ -129,39 +130,20 @@ pub fn decref(
 
     const isizes: [*]isize = @ptrCast([*]isize, @alignCast(@sizeOf(isize), bytes));
 
-    const refcount = (isizes - 1)[0];
-    const refcount_isize = @bitCast(isize, refcount);
+    decref_ptr_to_refcount(isizes - 1, alignment);
+}
 
-    switch (alignment) {
-        16 => {
-            if (refcount == REFCOUNT_ONE_ISIZE) {
-                dealloc(bytes - 16, alignment);
-            } else if (refcount_isize < 0) {
-                (isizes - 1)[0] = refcount - 1;
-            }
-        },
-        8 => {
-            if (refcount == REFCOUNT_ONE_ISIZE) {
-                dealloc(bytes - 8, alignment);
-            } else if (refcount_isize < 0) {
-                (isizes - 1)[0] = refcount - 1;
-            }
-        },
-        4 => {
-            if (refcount == REFCOUNT_ONE_ISIZE) {
-                dealloc(bytes - 4, alignment);
-            } else if (refcount_isize < 0) {
-                (isizes - 1)[0] = refcount - 1;
-            }
-        },
-        else => {
-            // NOTE enums can currently have an alignment of < 8
-            if (refcount == REFCOUNT_ONE_ISIZE) {
-                dealloc(bytes - 8, alignment);
-            } else if (refcount_isize < 0) {
-                (isizes - 1)[0] = refcount - 1;
-            }
-        },
+inline fn decref_ptr_to_refcount(
+    refcount_ptr: [*]isize,
+    alignment: u32,
+) void {
+    const refcount: isize = refcount_ptr[0];
+    const extra_bytes = std.math.max(alignment, @sizeOf(usize));
+
+    if (refcount == REFCOUNT_ONE_ISIZE) {
+        dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
+    } else if (refcount < 0) {
+        refcount_ptr[0] = refcount - 1;
     }
 }
 
@@ -169,25 +151,17 @@ pub fn allocateWithRefcount(
     data_bytes: usize,
     element_alignment: u32,
 ) [*]u8 {
-    const result_in_place = false;
-
     const alignment = std.math.max(@sizeOf(usize), element_alignment);
     const first_slot_offset = std.math.max(@sizeOf(usize), element_alignment);
+    const length = alignment + data_bytes;
 
     switch (alignment) {
         16 => {
-            const length = 16 + data_bytes;
-
             var new_bytes: [*]align(16) u8 = @alignCast(16, alloc(length, alignment));
 
             var as_usize_array = @ptrCast([*]usize, new_bytes);
-            if (result_in_place) {
-                as_usize_array[0] = 0;
-                as_usize_array[1] = @intCast(usize, number_of_slots);
-            } else {
-                as_usize_array[0] = 0;
-                as_usize_array[1] = REFCOUNT_ONE;
-            }
+            as_usize_array[0] = 0;
+            as_usize_array[1] = REFCOUNT_ONE;
 
             var as_u8_array = @ptrCast([*]u8, new_bytes);
             const first_slot = as_u8_array + first_slot_offset;
@@ -195,17 +169,11 @@ pub fn allocateWithRefcount(
             return first_slot;
         },
         8 => {
-            const length = 8 + data_bytes;
-
             var raw = alloc(length, alignment);
             var new_bytes: [*]align(8) u8 = @alignCast(8, raw);
 
             var as_isize_array = @ptrCast([*]isize, new_bytes);
-            if (result_in_place) {
-                as_isize_array[0] = @intCast(isize, number_of_slots);
-            } else {
-                as_isize_array[0] = REFCOUNT_ONE_ISIZE;
-            }
+            as_isize_array[0] = REFCOUNT_ONE_ISIZE;
 
             var as_u8_array = @ptrCast([*]u8, new_bytes);
             const first_slot = as_u8_array + first_slot_offset;
@@ -213,17 +181,11 @@ pub fn allocateWithRefcount(
             return first_slot;
         },
         4 => {
-            const length = 4 + data_bytes;
-
             var raw = alloc(length, alignment);
             var new_bytes: [*]align(@alignOf(isize)) u8 = @alignCast(@alignOf(isize), raw);
 
             var as_isize_array = @ptrCast([*]isize, new_bytes);
-            if (result_in_place) {
-                as_isize_array[0] = @intCast(isize, number_of_slots);
-            } else {
-                as_isize_array[0] = REFCOUNT_ONE_ISIZE;
-            }
+            as_isize_array[0] = REFCOUNT_ONE_ISIZE;
 
             var as_u8_array = @ptrCast([*]u8, new_bytes);
             const first_slot = as_u8_array + first_slot_offset;
@@ -231,9 +193,10 @@ pub fn allocateWithRefcount(
             return first_slot;
         },
         else => {
-            const stdout = std.io.getStdOut().writer();
-            stdout.print("alignment: {d}", .{alignment}) catch unreachable;
-            @panic("allocateWithRefcount with invalid alignment");
+            // const stdout = std.io.getStdOut().writer();
+            // stdout.print("alignment: {d}", .{alignment}) catch unreachable;
+            // @panic("allocateWithRefcount with invalid alignment");
+            unreachable;
         },
     }
 }
