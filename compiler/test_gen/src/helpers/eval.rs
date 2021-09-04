@@ -172,7 +172,7 @@ fn create_llvm_module<'a>(
     }
 
     let builder = context.create_builder();
-    let module = roc_gen_llvm::llvm::build::module_from_builtins(context, "app", ptr_bytes);
+    let module = roc_gen_llvm::llvm::build::module_from_builtins(target, context, "app");
 
     let module = arena.alloc(module);
     let (module_pass, function_pass) =
