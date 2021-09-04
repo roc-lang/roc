@@ -1154,10 +1154,12 @@ impl<'a> Builtin<'a> {
             Dict(_, _) | EmptyDict => pointer_size,
             Set(_) | EmptySet => pointer_size,
             // we often treat these as i128 (64-bit systems)
-            // or i64 (32-bit systems). For that to be safe
+            // or i64 (32-bit systems).
+            //
+            // In webassembly, For that to be safe
             // they must be aligned to allow such access
-            List(_) | EmptyList => 2 * pointer_size,
-            Str | EmptyStr => 2 * pointer_size,
+            List(_) | EmptyList => pointer_size.max(8),
+            Str | EmptyStr => pointer_size.max(8),
         }
     }
 
