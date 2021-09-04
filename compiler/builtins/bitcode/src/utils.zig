@@ -208,13 +208,7 @@ pub fn unsafeReallocate(
     new_length: usize,
     element_width: usize,
 ) [*]u8 {
-    const align_width: usize = blk: {
-        if (alignment > 8) {
-            break :blk (2 * @sizeOf(usize));
-        } else {
-            break :blk @sizeOf(usize);
-        }
-    };
+    const align_width: usize = std.math.max(alignment, @sizeOf(usize));
 
     const old_width = align_width + old_length * element_width;
     const new_width = align_width + new_length * element_width;
