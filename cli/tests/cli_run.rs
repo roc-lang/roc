@@ -117,7 +117,7 @@ mod cli_run {
         expected_ending: &str,
     ) {
         let mut flags = flags.to_vec();
-        flags.push("--backend=wasm");
+        flags.push("--backend=wasm32");
 
         let compile_out = run_roc(&[&["build", file.to_str().unwrap()], flags.as_slice()].concat());
         if !compile_out.stderr.is_empty() {
@@ -316,7 +316,7 @@ mod cli_run {
             )*
 
             #[cfg(feature = "wasm32-cli-run")]
-            mod wasm {
+            mod wasm32 {
                 use super::*;
             $(
                 #[test]
