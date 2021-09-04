@@ -143,13 +143,10 @@ impl<'a> WasmBackend<'a> {
     }
 
     fn insert_local(&mut self, layout: WasmLayout, symbol: Symbol) -> LocalId {
-        let local_id = LocalId(self.locals.len() as u32);
-        self.locals.push(Local::new(1, layout.value_type));
         self.stack_memory += layout.stack_memory;
-
+        let local_id = LocalId(self.locals.len() as u32);
         let storage = SymbolStorage(local_id, layout);
         self.symbol_storage_map.insert(symbol, storage);
-
         local_id
     }
 
@@ -170,6 +167,7 @@ impl<'a> WasmBackend<'a> {
         match stmt {
             Stmt::Let(sym, expr, layout, following) => {
                 let wasm_layout = WasmLayout::new(layout)?;
+                self.locals.push(Local::new(1, wasm_layout.value_type));
                 let local_id = self.insert_local(wasm_layout, *sym);
 
                 self.build_expr(sym, expr, layout)?;
