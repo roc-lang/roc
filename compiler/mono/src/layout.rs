@@ -386,6 +386,32 @@ impl<'a> UnionLayout<'a> {
             UnionLayout::NullableWrapped { .. } | UnionLayout::NullableUnwrapped { .. } => true,
         }
     }
+
+    fn tags_alignment_bytes(tags: &[&[Layout]], pointer_size: u32) -> u32 {
+        tags.iter()
+            .map(|fields| Layout::Struct(fields).alignment_bytes(pointer_size))
+            .max()
+            .unwrap_or(0)
+    }
+
+    pub fn allocation_alignment_bytes(&self, pointer_size: u32) -> u32 {
+        let allocation = match self {
+            UnionLayout::NonRecursive(_) => unreachable!("not heap-allocated"),
+            UnionLayout::Recursive(tags) => Self::tags_alignment_bytes(tags, pointer_size),
+            UnionLayout::NonNullableUnwrapped(fields) => {
+                Layout::Struct(fields).alignment_bytes(pointer_size)
+            }
+            UnionLayout::NullableWrapped { other_tags, .. } => {
+                Self::tags_alignment_bytes(other_tags, pointer_size)
+            }
+            UnionLayout::NullableUnwrapped { other_fields, .. } => {
+                Layout::Struct(other_fields).alignment_bytes(pointer_size)
+            }
+        };
+
+        // because we store a refcount, the alignment must be at least the size of a pointer
+        allocation.max(pointer_size)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -898,6 +924,15 @@ impl<'a> Layout<'a> {
         }
     }
 
+    pub fn allocation_alignment_bytes(&self, pointer_size: u32) -> u32 {
+        match self {
+            Layout::Builtin(builtin) => builtin.allocation_alignment_bytes(pointer_size),
+            Layout::Struct(_) => unreachable!("not heap-allocated"),
+            Layout::Union(union_layout) => union_layout.allocation_alignment_bytes(pointer_size),
+            Layout::RecursivePointer => unreachable!("should be looked up to get an actual layout"),
+        }
+    }
+
     pub fn is_refcounted(&self) -> bool {
         use self::Builtin::*;
         use Layout::*;
@@ -1186,6 +1221,34 @@ impl<'a> Builtin<'a> {
                 .append(" ")
                 .append(value_layout.to_doc(alloc, Parens::InTypeParam)),
         }
+    }
+
+    pub fn allocation_alignment_bytes(&self, pointer_size: u32) -> u32 {
+        let allocation = match self {
+            Builtin::Int128
+            | Builtin::Int64
+            | Builtin::Int32
+            | Builtin::Int16
+            | Builtin::Int8
+            | Builtin::Int1
+            | Builtin::Usize
+            | Builtin::Decimal
+            | Builtin::Float128
+            | Builtin::Float64
+            | Builtin::Float32
+            | Builtin::Float16 => unreachable!("not heap-allocated"),
+            Builtin::Str => pointer_size,
+            Builtin::Dict(k, v) => k
+                .alignment_bytes(pointer_size)
+                .max(v.alignment_bytes(pointer_size)),
+            Builtin::Set(k) => k.alignment_bytes(pointer_size),
+            Builtin::List(e) => e.alignment_bytes(pointer_size),
+            Builtin::EmptyStr | Builtin::EmptyList | Builtin::EmptyDict | Builtin::EmptySet => {
+                unreachable!("not heap-allocated")
+            }
+        };
+
+        allocation.max(pointer_size)
     }
 }
 
