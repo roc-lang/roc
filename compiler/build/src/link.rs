@@ -617,11 +617,13 @@ fn link_wasm32(
                 // include libc
                 "-lc",
                 "-target",
-                "wasm32-wasi",
+                "wasm32-wasi-musl",
                 "--pkg-begin",
                 "str",
                 zig_str_path.to_str().unwrap(),
                 "--pkg-end",
+                "--strip",
+                // "-O", "ReleaseSmall",
                 // useful for debugging
                 // "-femit-llvm-ir=/home/folkertdev/roc/roc/examples/benchmarks/platform/host.ll",
             ])
