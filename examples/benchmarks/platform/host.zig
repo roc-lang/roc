@@ -40,7 +40,7 @@ export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
     if (DEBUG) {
         var ptr = malloc(size);
         const stdout = std.io.getStdOut().writer();
-        stdout.print("alloc:   {d} (alignment {d})\n", .{ ptr, alignment }) catch unreachable;
+        stdout.print("alloc:   {d} (alignment {d}, size {d})\n", .{ ptr, alignment, size }) catch unreachable;
         return ptr;
     } else {
         return malloc(size);
@@ -48,8 +48,10 @@ export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
 }
 
 export fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*c_void {
-    _ = old_size;
-    _ = alignment;
+    if (DEBUG) {
+        const stdout = std.io.getStdOut().writer();
+        stdout.print("realloc: {d} (alignment {d}, old_size {d})\n", .{ c_ptr, alignment, old_size }) catch unreachable;
+    }
 
     return realloc(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)), new_size);
 }
