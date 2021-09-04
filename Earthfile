@@ -83,7 +83,7 @@ test-rust:
     RUN --mount=type=cache,target=$SCCACHE_DIR \
         cargo test --release && sccache --show-stats
     # run i386 (32-bit linux) cli tests
-    RUN echo "4" | cargo run --release --target=x86_32 examples/benchmarks/NQueens.roc
+    RUN echo "4" | cargo run --release -- --target=x86_32 examples/benchmarks/NQueens.roc
     RUN --mount=type=cache,target=$SCCACHE_DIR \
         cargo test --release --test cli_run wasm32 --features="wasm32-cli-run" && sccache --show-stats
 
