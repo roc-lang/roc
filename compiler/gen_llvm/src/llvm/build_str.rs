@@ -295,8 +295,8 @@ pub fn str_from_utf8_range<'a, 'ctx, 'env>(
 
     let record_type = env.context.struct_type(
         &[
-            env.ptr_int().into(),
             super::convert::zig_str_type(env).into(),
+            env.ptr_int().into(),
             env.context.bool_type().into(),
             ctx.i8_type().into(),
         ],
@@ -343,8 +343,8 @@ pub fn str_from_utf8<'a, 'ctx, 'env>(
 
     let record_type = env.context.struct_type(
         &[
-            env.ptr_int().into(),
             super::convert::zig_str_type(env).into(),
+            env.ptr_int().into(),
             env.context.bool_type().into(),
             ctx.i8_type().into(),
         ],
