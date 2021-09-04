@@ -144,16 +144,23 @@ impl<'a> WasmBackend<'a> {
 
     fn insert_local(&mut self, layout: WasmLayout, symbol: Symbol) -> LocalId {
         self.stack_memory += layout.stack_memory;
-        let local_id = LocalId(self.locals.len() as u32);
+        let index = self.symbol_storage_map.len();
+        if index >= self.arg_types.len() {
+            self.locals.push(Local::new(1, layout.value_type));
+        }
+        let local_id = LocalId(index as u32);
         let storage = SymbolStorage(local_id, layout);
         self.symbol_storage_map.insert(symbol, storage);
         local_id
     }
 
     fn get_symbol_storage(&self, sym: &Symbol) -> Result<&SymbolStorage, String> {
-        self.symbol_storage_map
-            .get(sym)
-            .ok_or_else(|| format!("Symbol {:?} not found in function scope:\n{:?}", sym, self.symbol_storage_map))
+        self.symbol_storage_map.get(sym).ok_or_else(|| {
+            format!(
+                "Symbol {:?} not found in function scope:\n{:?}",
+                sym, self.symbol_storage_map
+            )
+        })
     }
 
     fn load_from_symbol(&mut self, sym: &Symbol) -> Result<(), String> {
@@ -165,9 +172,16 @@ impl<'a> WasmBackend<'a> {
 
     fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) -> Result<(), String> {
         match stmt {
+            // This pattern is a simple optimisation to get rid of one local and two instructions per proc.
+            // If we are just returning the expression result, then don't SetLocal and immediately GetLocal
+            Stmt::Let(let_sym, expr, layout, Stmt::Ret(ret_sym)) if let_sym == ret_sym => {
+                self.build_expr(let_sym, expr, layout)?;
+                self.instructions.push(Return);
+                Ok(())
+            }
+
             Stmt::Let(sym, expr, layout, following) => {
                 let wasm_layout = WasmLayout::new(layout)?;
-                self.locals.push(Local::new(1, wasm_layout.value_type));
                 let local_id = self.insert_local(wasm_layout, *sym);
 
                 self.build_expr(sym, expr, layout)?;
@@ -176,6 +190,7 @@ impl<'a> WasmBackend<'a> {
                 self.build_stmt(following, ret_layout)?;
                 Ok(())
             }
+
             Stmt::Ret(sym) => {
                 if let Some(SymbolStorage(local_id, _)) = self.symbol_storage_map.get(sym) {
                     self.instructions.push(GetLocal(local_id.0));
