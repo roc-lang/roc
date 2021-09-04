@@ -85,7 +85,7 @@ test-rust:
     # run i386 (32-bit linux) cli tests
     RUN echo "4" | cargo run --release -- --backend=x86_32 examples/benchmarks/NQueens.roc
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test --release --test cli_run wasm32 --features="wasm32-cli-run" && sccache --show-stats
+        cargo test --release --test cli_run i386 --features="i386-cli-run" && sccache --show-stats
 
 verify-no-git-changes:
     FROM +test-rust
