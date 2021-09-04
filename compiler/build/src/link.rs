@@ -66,6 +66,7 @@ pub fn build_zig_host_native(
     emit_bin: &str,
     zig_host_src: &str,
     zig_str_path: &str,
+    target: &str,
 ) -> Output {
     Command::new("zig")
         .env_clear()
@@ -87,6 +88,9 @@ pub fn build_zig_host_native(
             "-fPIC",
             "-O",
             "ReleaseSafe",
+            // cross-compile?
+            "-target",
+            target,
         ])
         .output()
         .unwrap()
@@ -99,6 +103,7 @@ pub fn build_zig_host_native(
     emit_bin: &str,
     zig_host_src: &str,
     zig_str_path: &str,
+    _target: &str,
 ) -> Output {
     use serde_json::Value;
 
@@ -255,6 +260,18 @@ pub fn rebuild_host(target: &Triple, host_input_path: &Path) {
                     &emit_bin,
                     zig_host_src.to_str().unwrap(),
                     zig_str_path.to_str().unwrap(),
+                    "native",
+                )
+            }
+            Architecture::X86_32(_) => {
+                let emit_bin = format!("-femit-bin={}", host_dest_native.to_str().unwrap());
+                build_zig_host_native(
+                    &env_path,
+                    &env_home,
+                    &emit_bin,
+                    zig_host_src.to_str().unwrap(),
+                    zig_str_path.to_str().unwrap(),
+                    "i386-linux-gnu",
                 )
             }
             _ => panic!("Unsupported architecture {:?}", target.architecture),
@@ -391,6 +408,32 @@ fn link_linux(
     link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
     let architecture = format!("{}-linux-gnu", target.architecture);
+
+    //    Command::new("cp")
+    //        .args(&[input_paths[0], "/home/folkertdev/roc/wasm/host.o"])
+    //        .output()
+    //        .unwrap();
+    //
+    //    Command::new("cp")
+    //        .args(&[input_paths[1], "/home/folkertdev/roc/wasm/app.o"])
+    //        .output()
+    //        .unwrap();
+
+    if let Architecture::X86_32(_) = target.architecture {
+        return Ok((
+            Command::new("zig")
+                .args(&["build-exe"])
+                .args(input_paths)
+                .args(&[
+                    "-target",
+                    "i386-linux-musl",
+                    "-lc",
+                    &format!("-femit-bin={}", output_path.to_str().unwrap()),
+                ])
+                .spawn()?,
+            output_path,
+        ));
+    }
 
     let libcrt_path = library_path(["/usr", "lib", &architecture])
         .or_else(|| library_path(["/usr", "lib"]))

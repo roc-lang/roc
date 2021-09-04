@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::process::Command;
 use target_lexicon::BinaryFormat;
-use target_lexicon::{Architecture, Triple};
+use target_lexicon::{Architecture, OperatingSystem, Triple, X86_32Architecture};
 
 pub mod build;
 pub mod repl;
@@ -58,8 +58,8 @@ pub fn build_app<'a>() -> App<'a> {
                     .long(FLAG_BACKEND)
                     .help("Choose a different backend")
                     // .requires(BACKEND)
-                    .default_value("llvm")
-                    .possible_values(&["llvm", "wasm", "asm"])
+                .default_value(Backend::default().as_str())
+                    .possible_values(Backend::OPTIONS)
                     .required(false),
             )
             .arg(
@@ -135,8 +135,8 @@ pub fn build_app<'a>() -> App<'a> {
                 .long(FLAG_BACKEND)
                 .help("Choose a different backend")
                 // .requires(BACKEND)
-                .default_value("llvm")
-                .possible_values(&["llvm", "wasm", "asm"])
+                .default_value(Backend::default().as_str())
+                .possible_values(Backend::OPTIONS)
                 .required(false),
         )
         .arg(
@@ -180,24 +180,18 @@ pub enum BuildConfig {
     BuildAndRun { roc_file_arg_index: usize },
 }
 
-fn wasm32_target_tripple() -> Triple {
-    let mut triple = Triple::unknown();
-
-    triple.architecture = Architecture::Wasm32;
-    triple.binary_format = BinaryFormat::Wasm;
-
-    triple
-}
-
 #[cfg(feature = "llvm")]
 pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     use build::build_file;
+    use std::str::FromStr;
     use BuildConfig::*;
 
-    let target = match matches.value_of(FLAG_BACKEND) {
-        Some("wasm") => wasm32_target_tripple(),
-        _ => Triple::host(),
+    let backend = match matches.value_of(FLAG_BACKEND) {
+        Some(name) => Backend::from_str(name).unwrap(),
+        None => Backend::default(),
     };
+
+    let target = backend.to_triple();
 
     let arena = Bump::new();
     let filename = matches.value_of(ROC_FILE).unwrap();
@@ -276,7 +270,23 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
                 }
                 BuildAndRun { roc_file_arg_index } => {
                     let mut cmd = match target.architecture {
-                        Architecture::Wasm32 => Command::new("wasmtime"),
+                        Architecture::Wasm32 => {
+                            // If possible, report the generated executable name relative to the current dir.
+                            let generated_filename = binary_path
+                                .strip_prefix(env::current_dir().unwrap())
+                                .unwrap_or(&binary_path);
+
+                            // No need to waste time freeing this memory,
+                            // since the process is about to exit anyway.
+                            std::mem::forget(arena);
+
+                            let args = std::env::args()
+                                .skip(roc_file_arg_index)
+                                .collect::<Vec<_>>();
+
+                            run_with_wasmer(generated_filename, &args);
+                            return Ok(0);
+                        }
                         _ => Command::new(&binary_path),
                     };
 
@@ -345,6 +355,119 @@ fn roc_run(cmd: &mut Command) -> io::Result<i32> {
         Some(code) => Ok(code),
         None => {
             todo!("TODO gracefully handle the `roc [FILE]` subprocess terminating with a signal.");
+        }
+    }
+}
+
+fn run_with_wasmer(wasm_path: &std::path::Path, args: &[String]) {
+    use wasmer::{Instance, Module, Store};
+
+    let store = Store::default();
+    let module = Module::from_file(&store, &wasm_path).unwrap();
+
+    // First, we create the `WasiEnv`
+    use wasmer_wasi::WasiState;
+    let mut wasi_env = WasiState::new("hello").args(args).finalize().unwrap();
+
+    // Then, we get the import object related to our WASI
+    // and attach it to the Wasm instance.
+    let import_object = wasi_env
+        .import_object(&module)
+        .unwrap_or_else(|_| wasmer::imports!());
+
+    let instance = Instance::new(&module, &import_object).unwrap();
+
+    let start = instance.exports.get_function("_start").unwrap();
+
+    start.call(&[]).unwrap();
+}
+
+enum Backend {
+    Host,
+    X86_32,
+    X86_64,
+    Dev,
+    Wasm32,
+    Wasm32Dev,
+}
+
+impl Default for Backend {
+    fn default() -> Self {
+        Backend::Host
+    }
+}
+
+impl Backend {
+    const fn as_str(&self) -> &'static str {
+        match self {
+            Backend::Host => "host",
+            Backend::X86_32 => "x86_32",
+            Backend::X86_64 => "x86_64",
+            Backend::Dev => "dev",
+            Backend::Wasm32 => "wasm32",
+            Backend::Wasm32Dev => "wasm32_dev",
+        }
+    }
+
+    /// NOTE keep up to date!
+    const OPTIONS: &'static [&'static str] = &[
+        Backend::Host.as_str(),
+        Backend::X86_32.as_str(),
+        Backend::X86_64.as_str(),
+        Backend::Dev.as_str(),
+        Backend::Wasm32.as_str(),
+        Backend::Wasm32Dev.as_str(),
+    ];
+
+    fn to_triple(&self) -> Triple {
+        let mut triple = Triple::unknown();
+
+        match self {
+            Backend::Host => Triple::host(),
+            Backend::X86_32 => {
+                triple.architecture = Architecture::X86_32(X86_32Architecture::I386);
+                triple.binary_format = BinaryFormat::Elf;
+
+                // TODO make this user-specified?
+                triple.operating_system = OperatingSystem::Linux;
+
+                triple
+            }
+            Backend::X86_64 => {
+                triple.architecture = Architecture::X86_64;
+                triple.binary_format = BinaryFormat::Elf;
+
+                triple
+            }
+            Backend::Dev => todo!(),
+            Backend::Wasm32 | Backend::Wasm32Dev => {
+                triple.architecture = Architecture::Wasm32;
+                triple.binary_format = BinaryFormat::Wasm;
+
+                triple
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for Backend {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl std::str::FromStr for Backend {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "host" => Ok(Backend::Host),
+            "x86_32" => Ok(Backend::X86_32),
+            "x86_64" => Ok(Backend::X86_64),
+            "dev" => Ok(Backend::Dev),
+            "wasm32" => Ok(Backend::Wasm32),
+            "wasm32_dev" => Ok(Backend::Wasm32Dev),
+            _ => Err(()),
         }
     }
 }

@@ -1,3 +1,4 @@
+use std::convert::TryFrom;
 use std::path::Path;
 
 use crate::llvm::bitcode::{call_bitcode_fn, call_void_bitcode_fn};
@@ -52,6 +53,7 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{BranchInfo, CallType, EntryPoint, JoinPointId, ModifyRc, OptLevel, ProcLayout};
 use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, UnionLayout};
+use target_lexicon::{Architecture, OperatingSystem, Triple};
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
 /// output in debug builds, but we don't want it to print to stdout in release builds!
@@ -383,16 +385,34 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
 }
 
 pub fn module_from_builtins<'ctx>(
+    target: &target_lexicon::Triple,
     ctx: &'ctx Context,
     module_name: &str,
-    ptr_bytes: u32,
 ) -> Module<'ctx> {
-    // In the build script for the builtins module,
-    // we compile the builtins into LLVM bitcode
-    let bitcode_bytes: &[u8] = match ptr_bytes {
-        8 => include_bytes!("../../../builtins/bitcode/builtins-64bit.bc"),
-        4 => include_bytes!("../../../builtins/bitcode/builtins-32bit.bc"),
-        _ => unreachable!(),
+    // In the build script for the builtins module, we compile the builtins into LLVM bitcode
+
+    let bitcode_bytes: &[u8] = if target == &target_lexicon::Triple::host() {
+        include_bytes!("../../../builtins/bitcode/builtins-host.bc")
+    } else {
+        match target {
+            Triple {
+                architecture: Architecture::Wasm32,
+                ..
+            } => {
+                include_bytes!("../../../builtins/bitcode/builtins-wasm32.bc")
+            }
+            Triple {
+                architecture: Architecture::X86_32(_),
+                operating_system: OperatingSystem::Linux,
+                ..
+            } => {
+                include_bytes!("../../../builtins/bitcode/builtins-i386.bc")
+            }
+            _ => panic!(
+                "The zig builtins are not currently built for this target: {:?}",
+                target
+            ),
+        }
     };
 
     let memory_buffer = MemoryBuffer::create_from_memory_range(bitcode_bytes, module_name);
@@ -1705,7 +1725,11 @@ pub fn tag_pointer_read_tag_id<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     pointer: PointerValue<'ctx>,
 ) -> IntValue<'ctx> {
-    let mask: u64 = 0b0000_0111;
+    let mask: u64 = match env.ptr_bytes {
+        8 => 0b0000_0111,
+        4 => 0b0000_0011,
+        _ => unreachable!(),
+    };
 
     let ptr_int = env.ptr_int();
 
@@ -1724,11 +1748,17 @@ pub fn tag_pointer_clear_tag_id<'a, 'ctx, 'env>(
 ) -> PointerValue<'ctx> {
     let ptr_int = env.ptr_int();
 
+    let tag_id_bits_mask = match env.ptr_bytes {
+        8 => 3,
+        4 => 2,
+        _ => unreachable!(),
+    };
+
     let as_int = env.builder.build_ptr_to_int(pointer, ptr_int, "to_int");
 
     let mask = {
         let a = env.ptr_int().const_all_ones();
-        let tag_id_bits = env.ptr_int().const_int(3, false);
+        let tag_id_bits = env.ptr_int().const_int(tag_id_bits_mask, false);
         env.builder.build_left_shift(a, tag_id_bits, "make_mask")
     };
 
@@ -3101,21 +3131,6 @@ pub fn get_sjlj_buffer<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> PointerValu
         .into_pointer_value()
 }
 
-pub fn get_sjlj_message_buffer<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> PointerValue<'ctx> {
-    let type_ = env.context.i8_type().ptr_type(AddressSpace::Generic);
-
-    let global = match env.module.get_global("roc_sjlj_message_buffer") {
-        Some(global) => global,
-        None => env
-            .module
-            .add_global(type_, None, "roc_sjlj_message_buffer"),
-    };
-
-    global.set_initializer(&type_.const_zero());
-
-    global.as_pointer_value()
-}
-
 fn set_jump_and_catch_long_jump<'a, 'ctx, 'env, F, T>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
@@ -3668,14 +3683,26 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
         *param = builder.build_load(param.into_pointer_value(), "load_param");
     }
 
-    let call_result = set_jump_and_catch_long_jump(
-        env,
-        function_value,
-        evaluator,
-        evaluator.get_call_conventions(),
-        closure_data,
-        result_type,
-    );
+    let call_result = if env.is_gen_test {
+        set_jump_and_catch_long_jump(
+            env,
+            function_value,
+            evaluator,
+            evaluator.get_call_conventions(),
+            closure_data,
+            result_type,
+        )
+    } else {
+        let call = env
+            .builder
+            .build_call(evaluator, closure_data, "call_function");
+
+        call.set_call_convention(evaluator.get_call_conventions());
+
+        let call_result = call.try_as_basic_value().left().unwrap();
+
+        make_good_roc_result(env, call_result)
+    };
 
     builder.build_store(output, call_result);
 
@@ -4447,6 +4474,11 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
     }
 }
 
+// TODO: Fix me! I should be different in tests vs. user code!
+fn expect_failed() {
+    panic!("An expectation failed!");
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_low_level<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -4457,6 +4489,7 @@ fn run_low_level<'a, 'ctx, 'env>(
     op: LowLevel,
     args: &[Symbol],
     update_mode: Option<UpdateMode>,
+    // expect_failed: *const (),
 ) -> BasicValueEnum<'ctx> {
     use LowLevel::*;
 
@@ -4731,7 +4764,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                     complex_bitcast(
                         env.builder,
                         list.into(),
-                        env.context.i128_type().into(),
+                        env.str_list_c_abi().into(),
                         "to_i128",
                     ),
                     position,
@@ -4749,7 +4782,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                     complex_bitcast(
                         env.builder,
                         list.into(),
-                        env.context.i128_type().into(),
+                        env.str_list_c_abi().into(),
                         "to_i128",
                     ),
                     position,
@@ -5173,9 +5206,36 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             bd.build_conditional_branch(condition, then_block, throw_block);
 
-            bd.position_at_end(throw_block);
+            {
+                bd.position_at_end(throw_block);
 
-            throw_exception(env, "assert failed!");
+                match env.ptr_bytes {
+                    8 => {
+                        let fn_ptr_type = context
+                            .void_type()
+                            .fn_type(&[], false)
+                            .ptr_type(AddressSpace::Generic);
+                        let fn_addr = env
+                            .ptr_int()
+                            .const_int(expect_failed as *const () as u64, false);
+                        let func: PointerValue<'ctx> = bd.build_int_to_ptr(
+                            fn_addr,
+                            fn_ptr_type,
+                            "cast_expect_failed_addr_to_ptr",
+                        );
+                        let callable = CallableValue::try_from(func).unwrap();
+
+                        bd.build_call(callable, &[], "call_expect_failed");
+
+                        bd.build_unconditional_branch(then_block);
+                    }
+                    4 => {
+                        // temporary WASM implementation
+                        throw_exception(env, "An expectation failed!");
+                    }
+                    _ => unreachable!(),
+                }
+            }
 
             bd.position_at_end(then_block);
 
@@ -6028,7 +6088,7 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
         NumAbs => env.call_intrinsic(LLVM_FABS_F64, &[arg.into()]),
         NumSqrtUnchecked => env.call_intrinsic(LLVM_SQRT_F64, &[arg.into()]),
         NumLogUnchecked => env.call_intrinsic(LLVM_LOG_F64, &[arg.into()]),
-        NumRound => env.call_intrinsic(LLVM_LROUND_I64_F64, &[arg.into()]),
+        NumRound => call_bitcode_fn(env, &[arg.into()], bitcode::NUM_ROUND),
         NumSin => env.call_intrinsic(LLVM_SIN_F64, &[arg.into()]),
         NumCos => env.call_intrinsic(LLVM_COS_F64, &[arg.into()]),
         NumToFloat => arg.into(), /* Converting from Float to Float is a no-op */

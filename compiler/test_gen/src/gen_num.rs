@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod gen_num {
     use crate::assert_evals_to;
-    use crate::assert_llvm_evals_to;
+    // use crate::assert_wasm_evals_to as assert_evals_to;
     use indoc::indoc;
     use roc_std::{RocDec, RocOrder};
 
@@ -752,7 +752,7 @@ mod gen_num {
 
                     y : Dec
                     y = 2.4
-                    
+
                     z : Dec
                     z = 3
 

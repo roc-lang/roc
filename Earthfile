@@ -8,7 +8,7 @@ install-other-libs:
     FROM +prep-debian
     RUN apt -y install wget git
     RUN apt -y install libxcb-shape0-dev libxcb-xfixes0-dev # for editor clipboard
-    RUN apt -y install libc++-dev libc++abi-dev g++ libunwind-dev pkg-config libx11-dev zlib1g-dev
+    RUN apt -y install libunwind-dev pkg-config libx11-dev zlib1g-dev
 
 install-zig-llvm-valgrind-clippy-rustfmt:
     FROM +install-other-libs
@@ -77,6 +77,9 @@ check-typos:
 test-rust:
     FROM +copy-dirs
     ENV RUST_BACKTRACE=1
+    # run one of the benchmarks to make sure the host is compiled
+    # not pre-compiling the host can cause race conditions
+    RUN echo "4" | cargo run --release examples/benchmarks/NQueens.roc
     RUN --mount=type=cache,target=$SCCACHE_DIR \
         cargo test --release && sccache --show-stats
 

@@ -79,6 +79,9 @@ where
     fn build_proc(&mut self, proc: Proc<'a>) -> Result<(&'a [u8], &[Relocation]), String> {
         self.reset();
         self.load_args(proc.args, &proc.ret_layout)?;
+        for (layout, sym) in proc.args {
+            self.set_layout_map(*sym, layout)?;
+        }
         // let start = std::time::Instant::now();
         self.scan_ast(&proc.body);
         self.create_free_map();
@@ -94,6 +97,7 @@ where
         match stmt {
             Stmt::Let(sym, expr, layout, following) => {
                 self.build_expr(sym, expr, layout)?;
+                self.set_layout_map(*sym, layout)?;
                 self.free_symbols(stmt);
                 self.build_stmt(following, ret_layout)?;
                 Ok(())
@@ -165,42 +169,76 @@ where
                     } => {
                         // For most builtins instead of calling a function, we can just inline the low level.
                         match *func_sym {
-                            Symbol::NUM_ABS => {
-                                self.build_run_low_level(sym, &LowLevel::NumAbs, arguments, layout)
-                            }
-                            Symbol::NUM_ADD => {
-                                self.build_run_low_level(sym, &LowLevel::NumAdd, arguments, layout)
-                            }
-                            Symbol::NUM_ACOS => {
-                                self.build_run_low_level(sym, &LowLevel::NumAcos, arguments, layout)
-                            }
-                            Symbol::NUM_ASIN => {
-                                self.build_run_low_level(sym, &LowLevel::NumAsin, arguments, layout)
-                            }
-                            Symbol::NUM_ATAN => {
-                                self.build_run_low_level(sym, &LowLevel::NumAtan, arguments, layout)
-                            }
-                            Symbol::NUM_MUL => {
-                                self.build_run_low_level(sym, &LowLevel::NumMul, arguments, layout)
-                            }
+                            Symbol::NUM_ABS => self.build_run_low_level(
+                                sym,
+                                &LowLevel::NumAbs,
+                                arguments,
+                                arg_layouts,
+                                ret_layout,
+                            ),
+                            Symbol::NUM_ADD => self.build_run_low_level(
+                                sym,
+                                &LowLevel::NumAdd,
+                                arguments,
+                                arg_layouts,
+                                ret_layout,
+                            ),
+                            Symbol::NUM_ACOS => self.build_run_low_level(
+                                sym,
+                                &LowLevel::NumAcos,
+                                arguments,
+                                arg_layouts,
+                                ret_layout,
+                            ),
+                            Symbol::NUM_ASIN => self.build_run_low_level(
+                                sym,
+                                &LowLevel::NumAsin,
+                                arguments,
+                                arg_layouts,
+                                ret_layout,
+                            ),
+                            Symbol::NUM_ATAN => self.build_run_low_level(
+                                sym,
+                                &LowLevel::NumAtan,
+                                arguments,
+                                arg_layouts,
+                                ret_layout,
+                            ),
+                            Symbol::NUM_MUL => self.build_run_low_level(
+                                sym,
+                                &LowLevel::NumMul,
+                                arguments,
+                                arg_layouts,
+                                ret_layout,
+                            ),
                             Symbol::NUM_POW_INT => self.build_run_low_level(
                                 sym,
                                 &LowLevel::NumPowInt,
                                 arguments,
-                                layout,
+                                arg_layouts,
+                                ret_layout,
                             ),
-                            Symbol::NUM_SUB => {
-                                self.build_run_low_level(sym, &LowLevel::NumSub, arguments, layout)
-                            }
+                            Symbol::NUM_SUB => self.build_run_low_level(
+                                sym,
+                                &LowLevel::NumSub,
+                                arguments,
+                                arg_layouts,
+                                ret_layout,
+                            ),
                             Symbol::NUM_ROUND => self.build_run_low_level(
                                 sym,
                                 &LowLevel::NumRound,
                                 arguments,
-                                layout,
+                                arg_layouts,
+                                ret_layout,
                             ),
-                            Symbol::BOOL_EQ => {
-                                self.build_run_low_level(sym, &LowLevel::Eq, arguments, layout)
-                            }
+                            Symbol::BOOL_EQ => self.build_run_low_level(
+                                sym,
+                                &LowLevel::Eq,
+                                arguments,
+                                arg_layouts,
+                                ret_layout,
+                            ),
                             x if x
                                 .module_string(&self.env().interns)
                                 .starts_with(ModuleName::APP) =>
@@ -217,7 +255,25 @@ where
                     }
 
                     CallType::LowLevel { op: lowlevel, .. } => {
-                        self.build_run_low_level(sym, lowlevel, arguments, layout)
+                        let mut arg_layouts: bumpalo::collections::Vec<Layout<'a>> =
+                            bumpalo::vec![in self.env().arena];
+                        arg_layouts.reserve(arguments.len());
+                        let layout_map = self.layout_map();
+                        for arg in *arguments {
+                            if let Some(layout) = layout_map.get(arg) {
+                                // This is safe because every value in the map is always set with a valid layout and cannot be null.
+                                arg_layouts.push(unsafe { *(*layout) });
+                            } else {
+                                return Err(format!("the argument, {:?}, has no know layout", arg));
+                            }
+                        }
+                        self.build_run_low_level(
+                            sym,
+                            lowlevel,
+                            arguments,
+                            arg_layouts.into_bump_slice(),
+                            layout,
+                        )
                     }
                     x => Err(format!("the call type, {:?}, is not yet implemented", x)),
                 }
@@ -242,76 +298,119 @@ where
         sym: &Symbol,
         lowlevel: &LowLevel,
         args: &'a [Symbol],
-        layout: &Layout<'a>,
+        arg_layouts: &[Layout<'a>],
+        ret_layout: &Layout<'a>,
     ) -> Result<(), String> {
         // Now that the arguments are needed, load them if they are literals.
         self.load_literal_symbols(args)?;
         match lowlevel {
             LowLevel::NumAbs => {
-                // TODO: when this is expanded to floats. deal with typecasting here, and then call correct low level method.
-                match layout {
-                    Layout::Builtin(Builtin::Int64) => self.build_num_abs_i64(sym, &args[0]),
-                    Layout::Builtin(Builtin::Float64) => self.build_num_abs_f64(sym, &args[0]),
-                    x => Err(format!("layout, {:?}, not implemented yet", x)),
-                }
+                debug_assert_eq!(
+                    1,
+                    args.len(),
+                    "NumAbs: expected to have exactly one argument"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], *ret_layout,
+                    "NumAbs: expected to have the same argument and return layout"
+                );
+                self.build_num_abs(sym, &args[0], ret_layout)
             }
             LowLevel::NumAdd => {
-                // TODO: when this is expanded to floats. deal with typecasting here, and then call correct low level method.
-                match layout {
-                    Layout::Builtin(Builtin::Int64) => {
-                        self.build_num_add_i64(sym, &args[0], &args[1])
-                    }
-                    Layout::Builtin(Builtin::Float64) => {
-                        self.build_num_add_f64(sym, &args[0], &args[1])
-                    }
-                    x => Err(format!("layout, {:?}, not implemented yet", x)),
-                }
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "NumAdd: expected to have exactly two argument"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], arg_layouts[1],
+                    "NumAdd: expected all arguments of to have the same layout"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], *ret_layout,
+                    "NumAdd: expected to have the same argument and return layout"
+                );
+                self.build_num_add(sym, &args[0], &args[1], ret_layout)
             }
-            LowLevel::NumAcos => {
-                self.build_fn_call(sym, bitcode::NUM_ACOS.to_string(), args, &[*layout], layout)
-            }
-            LowLevel::NumAsin => {
-                self.build_fn_call(sym, bitcode::NUM_ASIN.to_string(), args, &[*layout], layout)
-            }
-            LowLevel::NumAtan => {
-                self.build_fn_call(sym, bitcode::NUM_ATAN.to_string(), args, &[*layout], layout)
-            }
+            LowLevel::NumAcos => self.build_fn_call(
+                sym,
+                bitcode::NUM_ACOS.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::NumAsin => self.build_fn_call(
+                sym,
+                bitcode::NUM_ASIN.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::NumAtan => self.build_fn_call(
+                sym,
+                bitcode::NUM_ATAN.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
             LowLevel::NumMul => {
-                // TODO: when this is expanded to floats. deal with typecasting here, and then call correct low level method.
-                match layout {
-                    Layout::Builtin(Builtin::Int64) => {
-                        self.build_num_mul_i64(sym, &args[0], &args[1])
-                    }
-                    x => Err(format!("layout, {:?}, not implemented yet", x)),
-                }
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "NumMul: expected to have exactly two argument"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], arg_layouts[1],
+                    "NumMul: expected all arguments of to have the same layout"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], *ret_layout,
+                    "NumMul: expected to have the same argument and return layout"
+                );
+                self.build_num_mul(sym, &args[0], &args[1], ret_layout)
             }
             LowLevel::NumPowInt => self.build_fn_call(
                 sym,
                 bitcode::NUM_POW_INT.to_string(),
                 args,
-                &[*layout, *layout],
-                layout,
+                arg_layouts,
+                ret_layout,
             ),
             LowLevel::NumSub => {
-                // TODO: when this is expanded to floats. deal with typecasting here, and then call correct low level method.
-                match layout {
-                    Layout::Builtin(Builtin::Int64) => {
-                        self.build_num_sub_i64(sym, &args[0], &args[1])
-                    }
-                    x => Err(format!("layout, {:?}, not implemented yet", x)),
-                }
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "NumSub: expected to have exactly two argument"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], arg_layouts[1],
+                    "NumSub: expected all arguments of to have the same layout"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], *ret_layout,
+                    "NumSub: expected to have the same argument and return layout"
+                );
+                self.build_num_sub(sym, &args[0], &args[1], ret_layout)
             }
-            LowLevel::Eq => match layout {
-                Layout::Builtin(Builtin::Int1) => self.build_eq_i64(sym, &args[0], &args[1]),
-                // Should we panic?
-                x => Err(format!("wrong layout, {:?}, for LowLevel::Eq", x)),
-            },
+            LowLevel::Eq => {
+                debug_assert_eq!(2, args.len(), "Eq: expected to have exactly two argument");
+                debug_assert_eq!(
+                    arg_layouts[0], arg_layouts[1],
+                    "Eq: expected all arguments of to have the same layout"
+                );
+                debug_assert_eq!(
+                    Layout::Builtin(Builtin::Int1),
+                    *ret_layout,
+                    "Eq: expected to have return layout of type I1"
+                );
+                self.build_eq(sym, &args[0], &args[1], &arg_layouts[0])
+            }
             LowLevel::NumRound => self.build_fn_call(
                 sym,
                 bitcode::NUM_ROUND.to_string(),
                 args,
-                &[Layout::Builtin(Builtin::Float64)],
-                layout,
+                arg_layouts,
+                ret_layout,
             ),
             x => Err(format!("low level, {:?}. is not yet implemented", x)),
         }
@@ -328,53 +427,49 @@ where
         ret_layout: &Layout<'a>,
     ) -> Result<(), String>;
 
-    /// build_num_abs_i64 stores the absolute value of src into dst.
-    /// It only deals with inputs and outputs of i64 type.
-    fn build_num_abs_i64(&mut self, dst: &Symbol, src: &Symbol) -> Result<(), String>;
+    /// build_num_abs stores the absolute value of src into dst.
+    fn build_num_abs(
+        &mut self,
+        dst: &Symbol,
+        src: &Symbol,
+        layout: &Layout<'a>,
+    ) -> Result<(), String>;
 
-    /// build_num_abs_f64 stores the absolute value of src into dst.
-    /// It only deals with inputs and outputs of f64 type.
-    fn build_num_abs_f64(&mut self, dst: &Symbol, src: &Symbol) -> Result<(), String>;
-
-    /// build_num_add_i64 stores the sum of src1 and src2 into dst.
-    /// It only deals with inputs and outputs of i64 type.
-    fn build_num_add_i64(
+    /// build_num_add stores the sum of src1 and src2 into dst.
+    fn build_num_add(
         &mut self,
         dst: &Symbol,
         src1: &Symbol,
         src2: &Symbol,
+        layout: &Layout<'a>,
     ) -> Result<(), String>;
 
-    /// build_num_add_f64 stores the sum of src1 and src2 into dst.
-    /// It only deals with inputs and outputs of f64 type.
-    fn build_num_add_f64(
+    /// build_num_mul stores `src1 * src2` into dst.
+    fn build_num_mul(
         &mut self,
         dst: &Symbol,
         src1: &Symbol,
         src2: &Symbol,
+        layout: &Layout<'a>,
     ) -> Result<(), String>;
 
-    /// build_num_mul_i64 stores `src1 * src2` into dst.
-    /// It only deals with inputs and outputs of i64 type.
-    fn build_num_mul_i64(
+    /// build_num_sub stores the `src1 - src2` difference into dst.
+    fn build_num_sub(
         &mut self,
         dst: &Symbol,
         src1: &Symbol,
         src2: &Symbol,
+        layout: &Layout<'a>,
     ) -> Result<(), String>;
 
-    /// build_num_sub_i64 stores the `src1 - src2` difference into dst.
-    /// It only deals with inputs and outputs of i64 type.
-    fn build_num_sub_i64(
+    /// build_eq stores the result of `src1 == src2` into dst.
+    fn build_eq(
         &mut self,
         dst: &Symbol,
         src1: &Symbol,
         src2: &Symbol,
+        arg_layout: &Layout<'a>,
     ) -> Result<(), String>;
-
-    /// build_eq_i64 stores the result of `src1 == src2` into dst.
-    /// It only deals with inputs and outputs of i64 type.
-    fn build_eq_i64(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol) -> Result<(), String>;
 
     /// literal_map gets the map from symbol to literal, used for lazy loading and literal folding.
     fn literal_map(&mut self) -> &mut MutMap<Symbol, Literal<'a>>;
@@ -433,6 +528,29 @@ where
 
     /// last_seen_map gets the map from symbol to when it is last seen in the function.
     fn last_seen_map(&mut self) -> &mut MutMap<Symbol, *const Stmt<'a>>;
+
+    /// set_layout_map sets the layout for a specific symbol.
+    fn set_layout_map(&mut self, sym: Symbol, layout: &Layout<'a>) -> Result<(), String> {
+        if let Some(x) = self.layout_map().insert(sym, layout) {
+            // Layout map already contains the symbol. We should never need to overwrite.
+            // If the layout is not the same, that is a bug.
+            // There is always an old layout value and this dereference is safe.
+            let old_layout = unsafe { *x };
+            if old_layout != *layout {
+                Err(format!(
+                    "Overwriting layout for symbol, {:?}. This should never happen. got {:?}, want {:?}",
+                    sym, layout, old_layout
+                ))
+            } else {
+                Ok(())
+            }
+        } else {
+            Ok(())
+        }
+    }
+
+    /// layout_map gets the map from symbol to layout.
+    fn layout_map(&mut self) -> &mut MutMap<Symbol, *const Layout<'a>>;
 
     fn create_free_map(&mut self) {
         let mut free_map = MutMap::default();
