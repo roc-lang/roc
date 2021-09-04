@@ -108,7 +108,7 @@ mod cli_run {
         assert!(out.status.success());
     }
 
-    #[cfg(feature = "wasm-cli-run")]
+    #[cfg(feature = "wasm32-cli-run")]
     fn check_wasm_output_with_stdin(
         file: &Path,
         stdin: &[&str],
@@ -315,7 +315,7 @@ mod cli_run {
 
             )*
 
-            #[cfg(feature = "wasm-cli-run")]
+            #[cfg(feature = "wasm32-cli-run")]
             mod wasm {
                 use super::*;
             $(
@@ -349,6 +349,47 @@ mod cli_run {
                         benchmark.executable_filename,
                         &["--optimize"],
                         benchmark.expected_ending,
+                    );
+                }
+            )*
+            }
+
+            #[cfg(feature = "i386-cli-run")]
+            mod i386 {
+                use super::*;
+            $(
+                #[test]
+                #[cfg_attr(not(debug_assertions), serial(benchmark))]
+                fn $test_name() {
+                    let benchmark = $benchmark;
+                    let file_name = examples_dir("benchmarks").join(benchmark.filename);
+
+                    // TODO fix QuicksortApp and then remove this!
+                    match benchmark.filename {
+                        "QuicksortApp.roc" => {
+                            eprintln!("WARNING: skipping testing benchmark {} because the test is broken right now!", benchmark.filename);
+                            return;
+                        }
+                        _ => {}
+                    }
+
+                    // Check with and without optimizations
+                    check_output_with_stdin(
+                        &file_name,
+                        benchmark.stdin,
+                        benchmark.executable_filename,
+                        &["--backend=x86_32"],
+                        benchmark.expected_ending,
+                        benchmark.use_valgrind,
+                    );
+
+                    check_output_with_stdin(
+                        &file_name,
+                        benchmark.stdin,
+                        benchmark.executable_filename,
+                        &["--backend=x86_32", "--optimize"],
+                        benchmark.expected_ending,
+                        benchmark.use_valgrind,
                     );
                 }
             )*
@@ -562,7 +603,7 @@ mod cli_run {
     }
 }
 
-#[cfg(feature = "wasm-cli-run")]
+#[cfg(feature = "wasm32-cli-run")]
 fn run_with_wasmer(wasm_path: &std::path::Path, stdin: &[&str]) -> String {
     use std::io::Write;
     use wasmer::{Instance, Module, Store};
