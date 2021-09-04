@@ -200,6 +200,7 @@ pub struct Backend64Bit<
     relocs: Vec<'a, Relocation>,
 
     last_seen_map: MutMap<Symbol, *const Stmt<'a>>,
+    layout_map: MutMap<Symbol, *const Layout<'a>>,
     free_map: MutMap<*const Stmt<'a>, Vec<'a, Symbol>>,
     symbol_storage_map: MutMap<Symbol, SymbolStorage<GeneralReg, FloatReg>>,
     literal_map: MutMap<Symbol, Literal<'a>>,
@@ -237,9 +238,10 @@ impl<
             phantom_asm: PhantomData,
             phantom_cc: PhantomData,
             env,
-            buf: bumpalo::vec!(in env.arena),
-            relocs: bumpalo::vec!(in env.arena),
+            buf: bumpalo::vec![in env.arena],
+            relocs: bumpalo::vec![in env.arena],
             last_seen_map: MutMap::default(),
+            layout_map: MutMap::default(),
             free_map: MutMap::default(),
             symbol_storage_map: MutMap::default(),
             literal_map: MutMap::default(),
@@ -262,6 +264,7 @@ impl<
         self.stack_size = 0;
         self.fn_call_stack_size = 0;
         self.last_seen_map.clear();
+        self.layout_map.clear();
         self.free_map.clear();
         self.symbol_storage_map.clear();
         self.buf.clear();
@@ -283,6 +286,10 @@ impl<
 
     fn last_seen_map(&mut self) -> &mut MutMap<Symbol, *const Stmt<'a>> {
         &mut self.last_seen_map
+    }
+
+    fn layout_map(&mut self) -> &mut MutMap<Symbol, *const Layout<'a>> {
+        &mut self.layout_map
     }
 
     fn set_free_map(&mut self, map: MutMap<*const Stmt<'a>, Vec<'a, Symbol>>) {
@@ -428,7 +435,7 @@ impl<
                 Ok(())
             }
             x => Err(format!(
-                "receiving return type, {:?}, is not yet implemented",
+                "FnCall: receiving return type, {:?}, is not yet implemented",
                 x
             )),
         }
@@ -475,7 +482,7 @@ impl<
                 }
             } else {
                 return Err(format!(
-                    "branch info, {:?}, is not yet implemented in switch statemens",
+                    "Switch: branch info, {:?}, is not yet implemented",
                     branch_info
                 ));
             }
@@ -497,86 +504,116 @@ impl<
             Ok(())
         } else {
             Err(format!(
-                "branch info, {:?}, is not yet implemented in switch statemens",
+                "Switch: branch info, {:?}, is not yet implemented",
                 branch_info
             ))
         }
     }
 
-    fn build_num_abs_i64(&mut self, dst: &Symbol, src: &Symbol) -> Result<(), String> {
-        let dst_reg = self.claim_general_reg(dst)?;
-        let src_reg = self.load_to_general_reg(src)?;
-        ASM::abs_reg64_reg64(&mut self.buf, dst_reg, src_reg);
-        Ok(())
+    fn build_num_abs(
+        &mut self,
+        dst: &Symbol,
+        src: &Symbol,
+        layout: &Layout<'a>,
+    ) -> Result<(), String> {
+        match layout {
+            Layout::Builtin(Builtin::Int64) => {
+                let dst_reg = self.claim_general_reg(dst)?;
+                let src_reg = self.load_to_general_reg(src)?;
+                ASM::abs_reg64_reg64(&mut self.buf, dst_reg, src_reg);
+                Ok(())
+            }
+            Layout::Builtin(Builtin::Float64) => {
+                let dst_reg = self.claim_float_reg(dst)?;
+                let src_reg = self.load_to_float_reg(src)?;
+                ASM::abs_freg64_freg64(&mut self.buf, &mut self.relocs, dst_reg, src_reg);
+                Ok(())
+            }
+            x => Err(format!("NumAbs: layout, {:?}, not implemented yet", x)),
+        }
     }
 
-    fn build_num_abs_f64(&mut self, dst: &Symbol, src: &Symbol) -> Result<(), String> {
-        let dst_reg = self.claim_float_reg(dst)?;
-        let src_reg = self.load_to_float_reg(src)?;
-
-        ASM::abs_freg64_freg64(&mut self.buf, &mut self.relocs, dst_reg, src_reg);
-
-        Ok(())
-    }
-
-    fn build_num_add_i64(
+    fn build_num_add(
         &mut self,
         dst: &Symbol,
         src1: &Symbol,
         src2: &Symbol,
+        layout: &Layout<'a>,
     ) -> Result<(), String> {
-        let dst_reg = self.claim_general_reg(dst)?;
-        let src1_reg = self.load_to_general_reg(src1)?;
-        let src2_reg = self.load_to_general_reg(src2)?;
-        ASM::add_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
-        Ok(())
+        match layout {
+            Layout::Builtin(Builtin::Int64) => {
+                let dst_reg = self.claim_general_reg(dst)?;
+                let src1_reg = self.load_to_general_reg(src1)?;
+                let src2_reg = self.load_to_general_reg(src2)?;
+                ASM::add_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+                Ok(())
+            }
+            Layout::Builtin(Builtin::Float64) => {
+                let dst_reg = self.claim_float_reg(dst)?;
+                let src1_reg = self.load_to_float_reg(src1)?;
+                let src2_reg = self.load_to_float_reg(src2)?;
+                ASM::add_freg64_freg64_freg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+                Ok(())
+            }
+            x => Err(format!("NumAdd: layout, {:?}, not implemented yet", x)),
+        }
     }
 
-    fn build_num_add_f64(
+    fn build_num_mul(
         &mut self,
         dst: &Symbol,
         src1: &Symbol,
         src2: &Symbol,
+        layout: &Layout<'a>,
     ) -> Result<(), String> {
-        let dst_reg = self.claim_float_reg(dst)?;
-        let src1_reg = self.load_to_float_reg(src1)?;
-        let src2_reg = self.load_to_float_reg(src2)?;
-        ASM::add_freg64_freg64_freg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
-        Ok(())
+        match layout {
+            Layout::Builtin(Builtin::Int64) => {
+                let dst_reg = self.claim_general_reg(dst)?;
+                let src1_reg = self.load_to_general_reg(src1)?;
+                let src2_reg = self.load_to_general_reg(src2)?;
+                ASM::imul_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+                Ok(())
+            }
+            x => Err(format!("NumMul: layout, {:?}, not implemented yet", x)),
+        }
     }
 
-    fn build_num_mul_i64(
+    fn build_num_sub(
         &mut self,
         dst: &Symbol,
         src1: &Symbol,
         src2: &Symbol,
+        layout: &Layout<'a>,
     ) -> Result<(), String> {
-        let dst_reg = self.claim_general_reg(dst)?;
-        let src1_reg = self.load_to_general_reg(src1)?;
-        let src2_reg = self.load_to_general_reg(src2)?;
-        ASM::imul_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
-        Ok(())
+        match layout {
+            Layout::Builtin(Builtin::Int64) => {
+                let dst_reg = self.claim_general_reg(dst)?;
+                let src1_reg = self.load_to_general_reg(src1)?;
+                let src2_reg = self.load_to_general_reg(src2)?;
+                ASM::sub_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+                Ok(())
+            }
+            x => Err(format!("NumSub: layout, {:?}, not implemented yet", x)),
+        }
     }
 
-    fn build_num_sub_i64(
+    fn build_eq(
         &mut self,
         dst: &Symbol,
         src1: &Symbol,
         src2: &Symbol,
+        arg_layout: &Layout<'a>,
     ) -> Result<(), String> {
-        let dst_reg = self.claim_general_reg(dst)?;
-        let src1_reg = self.load_to_general_reg(src1)?;
-        let src2_reg = self.load_to_general_reg(src2)?;
-        ASM::sub_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
-        Ok(())
-    }
-
-    fn build_eq_i64(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol) -> Result<(), String> {
-        let dst_reg = self.claim_general_reg(dst)?;
-        let src1_reg = self.load_to_general_reg(src1)?;
-        let src2_reg = self.load_to_general_reg(src2)?;
-        ASM::eq_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
-        Ok(())
+        match arg_layout {
+            Layout::Builtin(Builtin::Int64) => {
+                let dst_reg = self.claim_general_reg(dst)?;
+                let src1_reg = self.load_to_general_reg(src1)?;
+                let src2_reg = self.load_to_general_reg(src2)?;
+                ASM::eq_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+                Ok(())
+            }
+            x => Err(format!("NumEq: layout, {:?}, not implemented yet", x)),
+        }
     }
 
     fn create_struct(
@@ -849,7 +886,7 @@ impl<
                 Ok(reg)
             }
             Some(SymbolStorage::GeneralReg(_)) | Some(SymbolStorage::BaseAndGeneralReg(_, _)) => {
-                Err("Cannot load integer point symbol into FloatReg".to_string())
+                Err("Cannot load integer symbol into FloatReg".to_string())
             }
             None => Err(format!("Unknown symbol: {}", sym)),
         }
