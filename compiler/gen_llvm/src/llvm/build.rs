@@ -51,7 +51,10 @@ use roc_builtins::bitcode;
 use roc_collections::all::{ImMap, MutMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_mono::ir::{BranchInfo, CallType, EntryPoint, JoinPointId, ModifyRc, OptLevel, ProcLayout};
+use roc_mono::ir::{
+    BranchInfo, CallType, EntryPoint, JoinPointId, ListLiteralElement, ModifyRc, OptLevel,
+    ProcLayout,
+};
 use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, UnionLayout};
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 
@@ -2157,7 +2160,7 @@ fn list_literal<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
     elem_layout: &Layout<'a>,
-    elems: &&[Symbol],
+    elems: &[ListLiteralElement],
 ) -> BasicValueEnum<'ctx> {
     let ctx = env.context;
     let builder = env.builder;
@@ -2172,8 +2175,11 @@ fn list_literal<'a, 'ctx, 'env>(
     };
 
     // Copy the elements from the list literal into the array
-    for (index, symbol) in elems.iter().enumerate() {
-        let val = load_symbol(scope, symbol);
+    for (index, element) in elems.iter().enumerate() {
+        let val = match element {
+            ListLiteralElement::Literal(literal) => build_exp_literal(env, elem_layout, literal),
+            ListLiteralElement::Symbol(symbol) => load_symbol(scope, symbol),
+        };
         let index_val = ctx.i64_type().const_int(index as u64, false);
         let elem_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
 

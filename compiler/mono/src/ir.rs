@@ -1020,7 +1020,7 @@ impl ModifyRc {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Literal<'a> {
     // Literals
     Int(i128),
@@ -1036,6 +1036,21 @@ pub enum Literal<'a> {
     /// Closed tag unions containing between 3 and 256 tags (all of 0 arity)
     /// compile to bytes, e.g. [ Blue, Black, Red, Green, White ]
     Byte(u8),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ListLiteralElement<'a> {
+    Literal(Literal<'a>),
+    Symbol(Symbol),
+}
+
+impl<'a> ListLiteralElement<'a> {
+    pub fn to_symbol(&self) -> Option<Symbol> {
+        match self {
+            Self::Symbol(s) => Some(*s),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1177,7 +1192,7 @@ pub enum Expr<'a> {
 
     Array {
         elem_layout: Layout<'a>,
-        elems: &'a [Symbol],
+        elems: &'a [ListLiteralElement<'a>],
     },
     EmptyArray,
 
@@ -1317,7 +1332,10 @@ impl<'a> Expr<'a> {
                     .append(alloc.text("}"))
             }
             Array { elems, .. } => {
-                let it = elems.iter().map(|s| symbol_to_doc(alloc, *s));
+                let it = elems.iter().map(|e| match e {
+                    ListLiteralElement::Literal(l) => l.to_doc(alloc),
+                    ListLiteralElement::Symbol(s) => symbol_to_doc(alloc, *s),
+                });
 
                 alloc
                     .text("Array [")
@@ -3423,8 +3441,12 @@ pub fn with_hole<'a>(
             loc_elems,
         } => {
             let mut arg_symbols = Vec::with_capacity_in(loc_elems.len(), env.arena);
+            let mut elements = Vec::with_capacity_in(loc_elems.len(), env.arena);
             for arg_expr in loc_elems.iter() {
-                arg_symbols.push(possible_reuse_symbol(env, procs, &arg_expr.value));
+                let symbol = possible_reuse_symbol(env, procs, &arg_expr.value);
+
+                elements.push(ListLiteralElement::Symbol(symbol));
+                arg_symbols.push(symbol)
             }
             let arg_symbols = arg_symbols.into_bump_slice();
 
@@ -3434,7 +3456,7 @@ pub fn with_hole<'a>(
 
             let expr = Expr::Array {
                 elem_layout,
-                elems: arg_symbols,
+                elems: elements.into_bump_slice(),
             };
 
             let stmt = Stmt::Let(
@@ -5485,11 +5507,17 @@ fn substitute_in_expr<'a>(
         } => {
             let mut did_change = false;
             let new_args = Vec::from_iter_in(
-                args.iter().map(|s| match substitute(subs, *s) {
-                    None => *s,
-                    Some(s) => {
-                        did_change = true;
-                        s
+                args.iter().map(|e| {
+                    if let ListLiteralElement::Symbol(s) = e {
+                        match substitute(subs, *s) {
+                            None => ListLiteralElement::Symbol(*s),
+                            Some(s) => {
+                                did_change = true;
+                                ListLiteralElement::Symbol(s)
+                            }
+                        }
+                    } else {
+                        *e
                     }
                 }),
                 arena,
