@@ -524,23 +524,23 @@ chainLength = \entries, @RichardId (@EntityId richardId) ->
         Ok (ERichard { oneHand: None }) ->
             0
 
-        #Ok (ERichard { oneHand: Kristy (@KristyId (@EntityId kristyId)) }) ->
-        #    when List.get entries kristyId is
-        #        Ok (EKristy kristy) ->
-        #            chainLengthHelp entries
-        #                (@EntityId richardId)
-        #                Left
-        #                (@EntityId kristyId)
-        #                (EKristy kristy)
-        #                1
+        Ok (ERichard { oneHand: Kristy (@KristyId (@EntityId kristyId)) }) ->
+            when List.get entries kristyId is
+                Ok (EKristy kristy) ->
+                    chainLengthHelp entries
+                        (@EntityId richardId)
+                        Left
+                        (@EntityId kristyId)
+                        (EKristy kristy)
+                        1
 
-        #        Ok _ ->
-        #            #Debug.todo ("kristyId " ++ String.fromInt kristyId ++ " did not have a Kristy")
-        #            entries
+                Ok _ ->
+                    #Debug.todo ("kristyId " ++ String.fromInt kristyId ++ " did not have a Kristy")
+                    0
 
-        #        None ->
-        #            #Debug.todo ("Could not find kristyId " ++ String.fromInt kristyId)
-        #            entries
+                Err OutOfBounds ->
+                    #Debug.todo ("Could not find kristyId " ++ String.fromInt kristyId)
+                    0
 
         Ok _ ->
             #Debug.todo ("richardId " ++ String.fromInt richardId ++ " did not have a Richard")
@@ -551,44 +551,42 @@ chainLength = \entries, @RichardId (@EntityId richardId) ->
             0
 
 
-chainLengthHelp : List Entries, EntityId, [ Left, Right ], EntityId, Entity, Nat -> Nat
+chainLengthHelp : List Entity, EntityId, [ Left, Right ], EntityId, Entity, Nat -> Nat
 chainLengthHelp = \entries, chainStart, hand, entityId, entity, len ->
-    9
-#     case ( entity, hand ) of
-#         ( EJan jan, Left ) ->
-#             case jan.leftHand of
-#                 Nothing ->
-#                     -- Her left hand is empty; end of the chain!
-#                     len
+    when T hand entity is
+        T Left (EJan { leftHand: None }) ->
+            # Her left hand is empty; end of the chain!
+            len
 
-#                 Just (KristyId kristyId) ->
-#                     case Dict.get kristyId dict of
-#                         Just (EKristy kristy) ->
-#                             -- Verify the symmetry - that Kristy's
-#                             -- left hand is indeed bound to this Jan's
-#                             if kristy.leftHand == Just (JanId entityId) then
-#                                 if kristyId == chainStart then
-#                                     -- We've encountered a cycle!
-#                                     -- This chain is a loop; we're done.
-#                                     len + 1
+        T Left (EJan { leftHand: Kristy (@KristyId (@EntityId kristyId)) }) ->
+            0
+                    # case Dict.get kristyId dict of
+                    #     Just (EKristy kristy) ->
+                    #         -- Verify the symmetry - that Kristy's
+                    #         -- left hand is indeed bound to this Jan's
+                    #         if kristy.leftHand == Just (JanId entityId) then
+                    #             if kristyId == chainStart then
+                    #                 -- We've encountered a cycle!
+                    #                 -- This chain is a loop; we're done.
+                    #                 len + 1
 
-#                                 else
-#                                     -- Recurse on this Jan's left hand
-#                                     chainLengthHelp chainStart
-#                                         Left
-#                                         kristyId
-#                                         (EKristy kristy)
-#                                         dict
-#                                         (len + 1)
+                    #             else
+                    #                 -- Recurse on this Jan's left hand
+                    #                 chainLengthHelp chainStart
+                    #                     Left
+                    #                     kristyId
+                    #                     (EKristy kristy)
+                    #                     dict
+                    #                     (len + 1)
 
-#                             else
-#                                 Debug.todo "Asymmetrical hand joins!" ()
+                    #         else
+                    #             Debug.todo "Asymmetrical hand joins!" ()
 
-#                         Just _ ->
-#                             Debug.todo "Type mismatch: non-EKristy behind a KristyId!" ()
+                    #     Just _ ->
+                    #         Debug.todo "Type mismatch: non-EKristy behind a KristyId!" ()
 
-#                         Nothing ->
-#                             Debug.todo "No entry found for KristyId!" ()
+                    #     Nothing ->
+                    #         Debug.todo "No entry found for KristyId!" ()
 
 #         ( EJan jan, Right ) ->
 #             case jan.rightHand of
@@ -700,6 +698,7 @@ chainLengthHelp = \entries, chainStart, hand, entityId, entity, len ->
 
 #         ( ERichard richard, _ ) ->
 #             Debug.todo "Found a Richard in the chain - this should be impossible!" ()
+
 
 
 # main : Program () Model Msg
