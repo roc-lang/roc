@@ -2167,13 +2167,13 @@ fn list_literal<'a, 'ctx, 'env>(
 
     let element_type = basic_type_from_layout(env, elem_layout);
 
-    let len_u64 = elems.len() as u64;
-    let ptr;
+    let list_length = elems.len();
+    let list_length_intval = env.ptr_int().const_int(list_length as _, false);
 
     if element_type.is_int_type() {
         let element_type = element_type.into_int_type();
         let element_width = elem_layout.stack_size(env.ptr_bytes);
-        let size = elems.len() * element_width as usize;
+        let size = list_length * element_width as usize;
         let alignment = elem_layout
             .alignment_bytes(env.ptr_bytes)
             .max(env.ptr_bytes);
@@ -2181,36 +2181,48 @@ fn list_literal<'a, 'ctx, 'env>(
         let mut is_all_constant = true;
         let zero_elements = (env.ptr_bytes as f64 / element_width as f64).ceil() as usize;
 
+        // runtime-evaluated elements
+        let mut runtime_evaluated_elements = Vec::with_capacity_in(list_length, env.arena);
+
         // set up a global that contains all the literal elements of the array
         // any variables or expressions are represented as `undef`
         let global = {
-            let mut bytes = Vec::with_capacity_in(size, env.arena);
+            let mut global_elements = Vec::with_capacity_in(list_length, env.arena);
 
             // insert NULL bytes for the refcount
+            // these elements are (dropped again if the list contains non-constants)
             for _ in 0..zero_elements {
-                bytes.push(element_type.const_zero());
+                global_elements.push(element_type.const_zero());
             }
 
             // Copy the elements from the list literal into the array
-            for element in elems.iter() {
+            for (index, element) in elems.iter().enumerate() {
                 match element {
                     ListLiteralElement::Literal(literal) => {
                         let val = build_exp_literal(env, elem_layout, literal);
-                        bytes.push(val.into_int_value());
+                        global_elements.push(val.into_int_value());
                     }
-                    ListLiteralElement::Symbol(_) => {
-                        is_all_constant = false;
+                    ListLiteralElement::Symbol(symbol) => {
+                        let val = load_symbol(scope, symbol);
+                        let intval = val.into_int_value();
 
-                        let val = element_type.get_undef();
-                        bytes.push(val);
+                        if intval.is_const() {
+                            global_elements.push(intval);
+                        } else {
+                            is_all_constant = false;
+
+                            runtime_evaluated_elements.push((index, val));
+
+                            global_elements.push(element_type.get_undef());
+                        }
                     }
                 };
             }
 
             let const_elements = if is_all_constant {
-                bytes.into_bump_slice()
+                global_elements.into_bump_slice()
             } else {
-                &bytes[zero_elements..]
+                &global_elements[zero_elements..]
             };
 
             // use None for the address space (e.g. Const does not work)
@@ -2226,23 +2238,24 @@ fn list_literal<'a, 'ctx, 'env>(
             global.as_pointer_value()
         };
 
-        let len_type = env.ptr_int();
-        let len = len_type.const_int(len_u64, false);
-
-        ptr = if is_all_constant {
+        if is_all_constant {
+            // all elements are constants, so we can use the memory in the constants section directly
+            // here we make a pointer to the first actual element (skipping the 0 bytes that
+            // represent the refcount)
             let zero = env.ptr_int().const_zero();
             let offset = env.ptr_int().const_int(zero_elements as _, false);
-            let first_element_pointer = unsafe {
+
+            let ptr = unsafe {
                 env.builder
                     .build_in_bounds_gep(global, &[zero, offset], "first_element_pointer")
             };
 
-            // store_list(env, first_element_pointer, len)
-            first_element_pointer
+            super::build_list::store_list(env, ptr, list_length_intval)
         } else {
-            let ptr = allocate_list(env, elem_layout, len);
+            // some of our elements are non-constant, so we must allocate space on the heap
+            let ptr = allocate_list(env, elem_layout, list_length_intval);
 
-            // at runtime, copy the elements from the constant section into the heap
+            // then, copy the relevant segment from the constant section into the heap
             env.builder
                 .build_memcpy(
                     ptr,
@@ -2253,32 +2266,18 @@ fn list_literal<'a, 'ctx, 'env>(
                 )
                 .unwrap();
 
-            // Copy the elements from the list literal into the array
-            for (index, element) in elems.iter().enumerate() {
-                match element {
-                    ListLiteralElement::Literal(_) => {
-                        // do nothing, value is already copied from constants section
-                    }
-                    ListLiteralElement::Symbol(symbol) => {
-                        let val = load_symbol(scope, symbol);
-                        let index_val = ctx.i64_type().const_int(index as u64, false);
-                        let elem_ptr =
-                            unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
+            // then replace the `undef`s with the values that we evaluate at runtime
+            for (index, val) in runtime_evaluated_elements {
+                let index_val = ctx.i64_type().const_int(index as u64, false);
+                let elem_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
 
-                        builder.build_store(elem_ptr, val);
-                    }
-                };
+                builder.build_store(elem_ptr, val);
             }
 
-            ptr
+            super::build_list::store_list(env, ptr, list_length_intval)
         }
     } else {
-        ptr = {
-            let len_type = env.ptr_int();
-            let len = len_type.const_int(len_u64, false);
-
-            allocate_list(env, elem_layout, len)
-        };
+        let ptr = allocate_list(env, elem_layout, list_length_intval);
 
         // Copy the elements from the list literal into the array
         for (index, element) in elems.iter().enumerate() {
@@ -2293,36 +2292,9 @@ fn list_literal<'a, 'ctx, 'env>(
 
             builder.build_store(elem_ptr, val);
         }
+
+        super::build_list::store_list(env, ptr, list_length_intval)
     }
-
-    let u8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
-    let generic_ptr = builder.build_bitcast(ptr, u8_ptr_type, "to_generic_ptr");
-
-    let struct_type = super::convert::zig_list_type(env);
-    let len = BasicValueEnum::IntValue(env.ptr_int().const_int(len_u64, false));
-    let mut struct_val;
-
-    // Store the pointer
-    struct_val = builder
-        .build_insert_value(
-            struct_type.get_undef(),
-            generic_ptr,
-            Builtin::WRAPPER_PTR,
-            "insert_ptr_list_literal",
-        )
-        .unwrap();
-
-    // Store the length
-    struct_val = builder
-        .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
-        .unwrap();
-
-    // Bitcast to an array of raw bytes
-    builder.build_bitcast(
-        struct_val.into_struct_value(),
-        super::convert::zig_list_type(env),
-        "cast_collection",
-    )
 }
 
 fn decrement_with_size_check<'a, 'ctx, 'env>(
