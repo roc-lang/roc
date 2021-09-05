@@ -2165,8 +2165,9 @@ fn list_literal<'a, 'ctx, 'env>(
     let ctx = env.context;
     let builder = env.builder;
 
-    let len_u64 = elems.len() as u64;
+    let element_type = basic_type_from_layout(env, elem_layout);
 
+    let len_u64 = elems.len() as u64;
     let ptr = {
         let len_type = env.ptr_int();
         let len = len_type.const_int(len_u64, false);
@@ -2174,16 +2175,92 @@ fn list_literal<'a, 'ctx, 'env>(
         allocate_list(env, elem_layout, len)
     };
 
-    // Copy the elements from the list literal into the array
-    for (index, element) in elems.iter().enumerate() {
-        let val = match element {
-            ListLiteralElement::Literal(literal) => build_exp_literal(env, elem_layout, literal),
-            ListLiteralElement::Symbol(symbol) => load_symbol(scope, symbol),
-        };
-        let index_val = ctx.i64_type().const_int(index as u64, false);
-        let elem_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
+    if element_type.is_int_type() {
+        let element_type = element_type.into_int_type();
+        let size = elems.len() * elem_layout.stack_size(env.ptr_bytes) as usize;
+        let alignment = elem_layout
+            .alignment_bytes(env.ptr_bytes)
+            .max(env.ptr_bytes);
 
-        builder.build_store(elem_ptr, val);
+        // set up a global that contains all the literal elements of the array
+        // any variables or expressions are represented as `undef`
+        let global = {
+            let mut bytes = Vec::with_capacity_in(size, env.arena);
+
+            //            // insert NULL bytes for the refcount
+            //            for _ in 0..env.ptr_bytes {
+            //                bytes.push(env.context.i8_type().const_zero());
+            //            }
+
+            // Copy the elements from the list literal into the array
+            for element in elems.iter() {
+                match element {
+                    ListLiteralElement::Literal(literal) => {
+                        let val = build_exp_literal(env, elem_layout, literal);
+                        bytes.push(val.into_int_value());
+                    }
+                    ListLiteralElement::Symbol(_) => {
+                        let val = element_type.get_undef();
+                        bytes.push(val);
+                    }
+                };
+            }
+
+            // use None for the address space (e.g. Const does not work)
+            let typ = element_type.array_type(bytes.len() as u32);
+            let global = env.module.add_global(typ, None, "roc__list_literal");
+
+            global.set_initializer(&element_type.const_array(bytes.into_bump_slice()));
+
+            global.set_constant(true);
+            global.set_alignment(alignment);
+            global.set_unnamed_addr(true);
+            global.set_linkage(inkwell::module::Linkage::Private);
+
+            global
+        };
+
+        // at runtime, copy the elements from the constant section into the heap
+        env.builder
+            .build_memcpy(
+                ptr,
+                alignment,
+                global.as_pointer_value(),
+                alignment,
+                env.ptr_int().const_int(size as _, false),
+            )
+            .unwrap();
+
+        // Copy the elements from the list literal into the array
+        for (index, element) in elems.iter().enumerate() {
+            match element {
+                ListLiteralElement::Literal(_) => {
+                    // do nothing, it's copied in already
+                }
+                ListLiteralElement::Symbol(symbol) => {
+                    let val = load_symbol(scope, symbol);
+                    let index_val = ctx.i64_type().const_int(index as u64, false);
+                    let elem_ptr =
+                        unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
+
+                    builder.build_store(elem_ptr, val);
+                }
+            };
+        }
+    } else {
+        // Copy the elements from the list literal into the array
+        for (index, element) in elems.iter().enumerate() {
+            let val = match element {
+                ListLiteralElement::Literal(literal) => {
+                    build_exp_literal(env, elem_layout, literal)
+                }
+                ListLiteralElement::Symbol(symbol) => load_symbol(scope, symbol),
+            };
+            let index_val = ctx.i64_type().const_int(index as u64, false);
+            let elem_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
+
+            builder.build_store(elem_ptr, val);
+        }
     }
 
     let u8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
