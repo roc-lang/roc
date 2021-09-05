@@ -366,29 +366,6 @@ pub fn helper_wasm<'a>(
 
     use std::process::Command;
 
-    // Command::new("/opt/wasi-sdk/bin/clang")
-
-    /*
-    Command::new("zig")
-        .current_dir(dir_path)
-        .args(&[
-            "cc",
-            "/home/folkertdev/roc/wasm/libmain.a",
-            test_a_path.to_str().unwrap(),
-            "-target",
-            "wasm32-wasi",
-            "-o",
-            test_wasm_path.to_str().unwrap(),
-            "--sysroot=/opt/wasi-sdk/share/wasi-sysroot/",
-            "-Xlinker", "--export-dynamic",
-            // "-Xlinker", "--allow-undefined"
-            // "--global-cache-dir",
-            // zig_global_cache_path.to_str().unwrap(),
-        ])
-        .status()
-        .unwrap();
-        */
-
     Command::new("/home/folkertdev/Downloads/zig-linux-x86_64-0.9.0-dev.848+d5ef5da59/zig")
         .current_dir(dir_path)
         .args(&[
@@ -404,24 +381,6 @@ pub fn helper_wasm<'a>(
         ])
         .status()
         .unwrap();
-
-    /*
-    Command::new("/home/folkertdev/Downloads/zig-linux-x86_64-0.9.0-dev.848+d5ef5da59/zig")
-        .current_dir(dir_path)
-        .args(&[
-            "build-lib",
-            "/home/folkertdev/roc/wasm/libmain.a",
-            test_a_path.to_str().unwrap(),
-            "-target",
-            "wasm32-wasi",
-            "-dynamic",
-            "-lc",
-            // "--global-cache-dir",
-            // zig_global_cache_path.to_str().unwrap(),
-        ])
-        .status()
-        .unwrap();
-        */
 
     // now, do wasmer stuff
 
