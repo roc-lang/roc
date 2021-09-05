@@ -1,4 +1,4 @@
-FROM rust:1.54-slim-buster
+FROM rust:1.54-slim-bullseye
 WORKDIR /earthbuild
 
 prep-debian:
@@ -27,14 +27,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN ln -s /usr/bin/lld-12 /usr/bin/ld.lld
     ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld -C target-cpu=native"
     # valgrind
-    RUN apt -y install autotools-dev cmake automake libc6-dbg
-    RUN wget https://sourceware.org/pub/valgrind/valgrind-3.16.1.tar.bz2
-    RUN tar -xf valgrind-3.16.1.tar.bz2
-    # need to cd every time, every command starts at WORKDIR
-    RUN cd valgrind-3.16.1 && ./autogen.sh
-    RUN cd valgrind-3.16.1 && ./configure --disable-dependency-tracking
-    RUN cd valgrind-3.16.1 && make -j`nproc`
-    RUN cd valgrind-3.16.1 && make install
+    RUN apt -y install valgrind
     # clippy
     RUN rustup component add clippy
     # rustfmt
