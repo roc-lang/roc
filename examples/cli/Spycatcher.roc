@@ -78,6 +78,7 @@ Entity :
         EJan Jan,
         EKristy Kristy,
         ERichard Richard
+        None
     ]
 
 
@@ -153,7 +154,7 @@ dropLongChains = \originalSim ->
                         Ok (ERichard { oneHand }) ->
                             chainLen =
                                 sim.entities
-                                    |> chainLength (@RichardId id)
+                                    |> chainLength (@RichardId index)
 
                             remove =
                                 if chainLen >= maxChainLength then
@@ -330,38 +331,40 @@ dropLongChains = \originalSim ->
 #         dict
 
 
-# removeChain : RichardId -> Dict EntityId Entity -> Dict EntityId Entity
-# removeChain (RichardId richardId) dict =
-#     case Dict.get richardId dict of
-#         Just (ERichard { oneHand }) ->
-#             case oneHand of
-#                 Just (KristyId kristyId) ->
-#                     case Dict.get kristyId dict of
-#                         Just (EKristy kristy) ->
-#                             let
-#                                 newDict =
-#                                     Dict.remove richardId dict
-#                             in
-#                             removeChainHelp richardId Left kristyId (EKristy kristy) newDict
+removeChain : RichardId, List Entity -> List Entity
+removeChain = \RichardId richardId, entries ->
+    when List.get richardId entries is
+        Ok (ERichard { oneHand }) ->
+            when oneHand is
+                Kristy (KristyId kristyId) ->
+                    when List.get kristyId entries is
+                        Ok (EKristy kristy) ->
+                            entries
+                                |> List.set richardId None
+                                |> removeChainHelp richardId Left kristyId (EKristy kristy)
 
-#                         Just _ ->
-#                             Debug.todo ("kristyId " ++ String.fromInt kristyId ++ " did not have a Kristy")
+                        Ok _ ->
+                            # Debug.todo ("kristyId " ++ String.fromInt kristyId ++ " did not have a Kristy")
+                            entries
 
-#                         Nothing ->
-#                             Debug.todo ("Could not find kristyId " ++ String.fromInt kristyId)
+                        Err ListWasEmpty ->
+                            # Debug.todo ("Could not find kristyId " ++ String.fromInt kristyId)
+                            entries
 
-#                 Nothing ->
-#                     dict
+                None ->
+                    entries
 
-#         Just _ ->
-#             Debug.todo ("richardId " ++ String.fromInt richardId ++ " did not have a Richard")
+        Just _ ->
+            # Debug.todo ("richardId " ++ String.fromInt richardId ++ " did not have a Richard")
+            entries
 
-#         Nothing ->
-#             Debug.todo ("Could not find richardId " ++ String.fromInt richardId)
+        Nothing ->
+            # Debug.todo ("Could not find richardId " ++ String.fromInt richardId)
+            entries
 
 
-# removeChainHelp : EntityId -> Hand -> EntityId -> Entity -> Dict EntityId Entity -> Dict EntityId Entity
-# removeChainHelp chainStart hand entityId entity originalDict =
+# removeChainHelp : Dict EntityId Entity -> EntityId -> Hand -> EntityId -> Entity -> Dict EntityId Entity
+# removeChainHelp originalDict chainStart hand entityId entity =
 #     let
 #         -- Remove this entity from the chain
 #         dict =
