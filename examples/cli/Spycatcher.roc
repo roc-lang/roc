@@ -4,15 +4,6 @@ app "spycatcher"
     provides [ main ] to pf
 
 
-main : Task {} *
-main =
-    nat <- await Rand.nat
-
-    natStr = Str.fromInt nat
-
-    Stdout.line "Here's a random number: \(natStr)"
-
-
 EntityId : [ @EntityId Nat ]
 
 
@@ -25,12 +16,54 @@ JanId : [ @JanId EntityId ]
 RichardId : [ @RichardId EntityId ]
 
 
+Richard : { oneHand : [ Kristy KristyId, None ] }
+
+
+Jan :
+    {
+        leftHand : [ Kristy KristyId, None ],
+        rightHand : [ Kristy KristyId, None ]
+    }
+
+
+Kristy :
+    {
+        leftHand : [ Jan JanId, None ],
+        rightHand : [ Jan JanId, Richard RichardId, None ]
+    }
+
+
+Entity :
+    [
+        EJan Jan,
+        EKristy Kristy,
+        ERichard Richard,
+        None
+    ]
+
+
+Sim :
+    {
+        entities : List Entity,
+        chainsDropped : Nat
+    }
+
+
+Mix : { jans : Nat, richards : Nat, kristys : Nat }
+
+
+Model :
+    {
+        sims : List { mix : Mix, sim : Sim }
+    }
+
+
 iterationsPerSim : Nat
 iterationsPerSim = 1_000
 
 
 maxSims : Nat
-maxSims = 100
+maxSims = 10
 
 
 ## Any chains of this length or higher will be dropped.
@@ -46,23 +79,9 @@ shortChainLength : Nat
 shortChainLength = 4
 
 
-Jan :
-    {
-        leftHand : [ Kristy KristyId, None ],
-        rightHand : [ Kristy KristyId, None ]
-    }
-
-
 initJan : Jan
 initJan =
     { leftHand: None, rightHand: None }
-
-
-Kristy :
-    {
-        leftHand : [ Jan JanId, None ],
-        rightHand : [ Jan JanId, Richard RichardId, None ]
-    }
 
 
 initKristy : Kristy
@@ -70,32 +89,10 @@ initKristy =
     { leftHand: None, rightHand: None }
 
 
-Richard : { oneHand : [ Kristy KristyId, None ] }
-
-
-Entity :
-    [
-        EJan Jan,
-        EKristy Kristy,
-        ERichard Richard,
-        None
-    ]
-
 
 initRichard : Richard
 initRichard =
     { oneHand: None }
-
-
-Model :
-    {
-        sims : List { mix : Mix, sim : Sim }
-    }
-
-
-initialModel : Model
-initialModel =
-    { sims: [] }
 
 
 ## 0 to 1000 by 10
@@ -105,14 +102,9 @@ mixRanges =
         |> List.map \num -> num * 10
 
 
-Sim :
-    {
-        entities : List Entity,
-        chainsDropped : Nat
-    }
-
-
-Mix : { jans : Nat, richards : Nat, kristys : Nat }
+initialModel : Model
+initialModel =
+    { sims: [] }
 
 
 initialSim : Mix -> Sim
@@ -132,15 +124,7 @@ initialSim = \{ jans, richards, kristys } ->
     entities =
         List.join [ janEntities, richardEntities, kristyEntities ]
 
-    { entities: entities, chainsDropped: 0 }
-
-
-randHand : Task [ Left, Right ] *
-randHand =
-    Task.map Rand.nat \nat ->
-        when nat % 2 is
-            Ok 0 -> Left
-            _ -> Right
+    { entities, chainsDropped: 0 }
 
 
 dropLongChains : Sim -> Sim
@@ -160,11 +144,9 @@ dropLongChains = \originalSim ->
                                 if chainLen >= maxChainLength then
                                     # if len >= 6, it gets removed
                                     True
-
                                 else if chainLen < shortChainLength then
                                     # if len < 4, it doesn't get removed
                                     False
-
                                 else
                                     # if len is 4 or 5, there's a 50% chance it gets removed.
                                     # We base this on whether the richardId is odd,
@@ -189,146 +171,112 @@ dropLongChains = \originalSim ->
 
     answer.sim
 
+randHand : Task [ Left, Right ] *
+randHand =
+    index <- await (Rand.natBetween 0 1)
 
-# runSimulation : Seed -> Int -> Sim -> ( Sim, Seed )
-# runSimulation seed iterations originalSim =
-#     let
-#         sim =
-#             -- Drop any chains of length maxChainLength or higher
-#             dropLongChains originalSim
+    if index == 0 then
+        Task.succeed Left
+    else
+        Task.succeed Right
 
-#         dict =
-#             sim.entities
+runSimulation : Nat, Sim -> Task Sim *
+runSimulation = \iterations, originalSim ->
+    sim =
+        # Drop any chains of length maxChainLength or higher
+        dropLongChains originalSim
 
-#         -- Drop long chains
-#         -- Pick a random entity
-#         ( index1, seed1 ) =
-#             Random.step
-#                 (Random.int 0 (Dict.size dict - 1))
-#                 seed
+    entities =
+        sim.entities
 
-#         -- Pick another random entity
-#         ( index2, seed2 ) =
-#             Random.step
-#                 (Random.int 0 (Dict.size dict - 1))
-#                 seed1
+    # Pick random entities
+    index1 <- await (Rand.natBetween 0 (List.len entities - 1))
+    index2 <- await (Rand.natBetween 0 (List.len entities - 1))
 
-#         -- Pick a random hand
-#         ( hand1, seed3 ) =
-#             Random.step randHand seed2
+    # Pick random hands
+    hand1 <- await randHand
+    hand2 <- await randHand
 
-#         -- Pick another random hand
-#         ( hand2, seed4 ) =
-#             Random.step randHand seed3
+    newEntities =
+        when T (List.get entities index1) (List.get entities index2) is
+            T (Ok entity1) (Ok entity2) ->
+                when T entity1 entity2 is
+                    T (EJan jan) (EKristy kristy) ->
+                        janKristy entities jan (@EntityId index1) hand1 kristy (@EntityId index2) hand2
 
-#         newDict =
-#             case ( Dict.get index1 dict, Dict.get index2 dict ) of
-#                 ( Just entity1, Just entity2 ) ->
-#                     case ( entity1, entity2 ) of
-#                         ( EJan jan, EKristy kristy ) ->
-#                             janKristy jan index1 hand1 kristy index2 hand2 dict
+                    T (EKristy kristy) (EJan jan) ->
+                        janKristy entities jan (@EntityId index2) hand2 kristy (@EntityId index1) hand1
 
-#                         ( EKristy kristy, EJan jan ) ->
-#                             janKristy jan index2 hand2 kristy index1 hand1 dict
+                    T (ERichard richard) (EKristy kristy) ->
+                        richardKristy entities richard (@EntityId index1) kristy (@EntityId index2) hand2
 
-#                         ( ERichard richard, EKristy kristy ) ->
-#                             richardKristy richard index1 kristy index2 hand2 dict
+                    T (EKristy kristy) (ERichard richard) ->
+                        richardKristy entities richard (@EntityId index2) kristy (@EntityId index1) hand1
 
-#                         ( EKristy kristy, ERichard richard ) ->
-#                             richardKristy richard index2 kristy index1 hand1 dict
+                    T (EJan _) (ERichard _) | T (ERichard _) (EJan _) ->
+                        # Jan and Richard can't bind
+                        entities
 
-#                         ( EJan jan, ERichard richard ) ->
-#                             -- Jan and Richard can't bind
-#                             dict
+                    T (EJan _) (EJan _) | T (ERichard _) (ERichard _) | T (EKristy _) (EKristy _) ->
+                        # Same can't bind with same
+                        entities
 
-#                         ( ERichard richard, EJan jan ) ->
-#                             -- Jan and Richard can't bind
-#                             dict
+                    _ ->
+                        # TODO the compiler should report this as redundant!
+                        entities
 
-#                         ( EJan j1, EJan j2 ) ->
-#                             -- Same can't bind with same
-#                             dict
+            T (Err OutOfBounds) (Ok _) | T (Ok _) (Err OutOfBounds) ->
+                # The entity wasn't in the dict, presumably because it was in
+                # a chain that got removed.
+                entities
 
-#                         ( ERichard j1, ERichard j2 ) ->
-#                             -- Same can't bind with same
-#                             dict
+            _ ->
+                # TODO the compiler should report this as redundant!
+                entities
 
-#                         ( EKristy k1, EKristy k2 ) ->
-#                             -- Same can't bind with same
-#                             dict
-
-#                 ( Nothing, _ ) ->
-#                     -- The entity wasn't in the dict, presumably because it was in
-#                     -- a chain that got removed.
-#                     dict
-
-#                 ( _, Nothing ) ->
-#                     -- The entity wasn't in the dict, presumably because it was in
-#                     -- a chain that got removed.
-#                     dict
-#     in
-#     if iterations > 0 then
-#         runSimulation seed4 (iterations - 1) { sim | entities = newDict }
-
-#     else
-#         ( { sim | entities = newDict }, seed4 )
+    if iterations > 0 then
+        runSimulation (iterations - 1) { sim & entities: newEntities }
+    else
+        Task.succeed { sim & entities: newEntities }
 
 
-# janKristy : Jan -> EntityId -> Hand -> Kristy -> EntityId -> Hand -> Dict EntityId Entity -> Dict EntityId Entity
-# janKristy jan janId janHand kristy kristyId kristyHand dict =
-#     -- Jan's left hand can only bind to Kristy's left hand
-#     if janHand == Right && kristyHand == Right && jan.rightHand == Nothing && kristy.rightHand == Nothing then
-#         let
-#             newJan =
-#                 { jan | rightHand = Just (KristyId kristyId) }
+janKristy : List Entity, Jan, EntityId, [ Left, Right ], Kristy, EntityId, [ Left, Right ] -> List Entity
+janKristy = \entities, jan, @EntityId janId, janHand, kristy, @EntityId kristyId, kristyHand ->
+    # Jan's left hand can only bind to Kristy's left hand
+    if janHand == Right && kristyHand == Right && jan.rightHand == None && kristy.rightHand == None then
+        newJan = { jan & rightHand: Kristy (@KristyId (@EntityId kristyId)) }
 
-#             newKristy =
-#                 { kristy | rightHand = Just (IsJan (JanId janId)) }
+        newKristy = { kristy & rightHand: Jan (@JanId (@EntityId janId)) }
 
-#             newDict =
-#                 Dict.insert janId (EJan newJan) dict
-#                     |> Dict.insert kristyId (EKristy newKristy)
-#         in
-#         newDict
-#         -- Jan's left hand can bind to Kristy's left hand
+        entities
+            |> List.set janId (EJan newJan)
+            |> List.set kristyId (EKristy newKristy)
+    # Jan's left hand can bind to Kristy's left hand
+    else if janHand == Left && kristyHand == Left && jan.leftHand == None && kristy.leftHand == None then
+        newJan = { jan & leftHand: Kristy (@KristyId (@EntityId kristyId)) }
 
-#     else if janHand == Left && kristyHand == Left && jan.leftHand == Nothing && kristy.leftHand == Nothing then
-#         let
-#             newJan =
-#                 { jan | leftHand = Just (KristyId kristyId) }
+        newKristy = { kristy & leftHand: Jan (@JanId (@EntityId janId)) }
 
-#             newKristy =
-#                 { kristy | leftHand = Just (JanId janId) }
-
-#             newDict =
-#                 Dict.insert janId (EJan newJan) dict
-#                     |> Dict.insert kristyId (EKristy newKristy)
-#         in
-#         newDict
-
-#     else
-#         dict
+        entities
+            |> List.set janId (EJan newJan)
+            |> List.set kristyId (EKristy newKristy)
+    else
+        entities
 
 
-# richardKristy : Richard -> EntityId -> Kristy -> EntityId -> Hand -> Dict EntityId Entity -> Dict EntityId Entity
-# richardKristy richard richardId kristy kristyId kristyHand dict =
-#     -- Richard's one hand can bind to Kristy's right hand
-#     if kristyHand == Right && richard.oneHand == Nothing && kristy.rightHand == Nothing then
-#         let
-#             newRichard =
-#                 ERichard { richard | oneHand = Just (KristyId kristyId) }
+richardKristy : List Entity, Richard, EntityId, Kristy, EntityId, [ Left, Right ] -> List Entity
+richardKristy = \entities, richard, @EntityId richardId, kristy, @EntityId kristyId, kristyHand ->
+    # Richard's one hand can bind to Kristy's right hand
+    if kristyHand == Right && richard.oneHand == None && kristy.rightHand == None then
+        newRichard = ERichard { richard & oneHand: Kristy (@KristyId (@EntityId kristyId)) }
 
-#             newKristy =
-#                 EKristy { kristy | rightHand = Just (IsRichard (RichardId richardId)) }
+        newKristy = EKristy { kristy & rightHand: Richard (@RichardId (@EntityId richardId)) }
 
-#             newDict =
-#                 Dict.insert richardId newRichard dict
-#                     |> Dict.insert kristyId newKristy
-#         in
-#         newDict
-
-#     else
-#         dict
+        entities
+            |> List.set richardId newRichard
+            |> List.set kristyId newKristy
+    else
+        entities
 
 
 removeChain : List Entity, RichardId -> List Entity
@@ -383,7 +331,6 @@ removeChainHelp = \originalList, @EntityId chainStart, hand, @EntityId entityId,
                             # We've encountered a cycle!
                             # This chain is a loop; we're done.
                             entries
-
                         else
                             # Recurse on this Jan's left hand
                             removeChainHelp entries
@@ -391,7 +338,6 @@ removeChainHelp = \originalList, @EntityId chainStart, hand, @EntityId entityId,
                                 Left
                                 (@EntityId kristyId)
                                 (EKristy kristy)
-
                     else
                         #Debug.todo "Asymmetrical hand joins!" ()
                         entries
@@ -418,7 +364,6 @@ removeChainHelp = \originalList, @EntityId chainStart, hand, @EntityId entityId,
                             # We've encountered a cycle!
                             # This chain is a loop; we're done.
                             entries
-
                         else
                             # Recurse on this Jan's left hand
                             removeChainHelp entries
@@ -426,7 +371,6 @@ removeChainHelp = \originalList, @EntityId chainStart, hand, @EntityId entityId,
                                 Left
                                 (@EntityId kristyId)
                                 (EKristy kristy)
-
                     else
                         # Debug.todo "Asymmetrical hand joins!" ()
                         entries
@@ -453,7 +397,6 @@ removeChainHelp = \originalList, @EntityId chainStart, hand, @EntityId entityId,
                             # We've encountered a cycle!
                             # This chain is a loop; we're done.
                             entries
-
                         else
                             # Recurse on Jan's right hand
                             removeChainHelp entries
@@ -461,7 +404,6 @@ removeChainHelp = \originalList, @EntityId chainStart, hand, @EntityId entityId,
                                 Right
                                 (@EntityId janId)
                                 (EJan jan)
-
                     else
                         #Debug.todo "Asymmetrical hand joins!" ()
                         entries
@@ -492,7 +434,6 @@ removeChainHelp = \originalList, @EntityId chainStart, hand, @EntityId entityId,
                             # We've encountered a cycle!
                             # This chain is a loop; we're done.
                             entries
-
                         else
                             # Recurse on this Jan's right hand
                             removeChainHelp entries
@@ -500,7 +441,6 @@ removeChainHelp = \originalList, @EntityId chainStart, hand, @EntityId entityId,
                                 Right
                                 (@EntityId janId)
                                 (EJan jan)
-
                     else
                         #Debug.todo "Asymmetrical hand joins!" ()
                         entries
@@ -516,6 +456,10 @@ removeChainHelp = \originalList, @EntityId chainStart, hand, @EntityId entityId,
         T _ (ERichard _) ->
             # Debug.todo "Found a Richard in the chain - this should be impossible!" ()
             entries
+
+        _ ->
+            # TODO the compiler should report this as redundant!
+            entities
 
 
 chainLength : List Entity, RichardId -> Nat
@@ -552,214 +496,203 @@ chainLength = \entries, @RichardId (@EntityId richardId) ->
 
 
 chainLengthHelp : List Entity, EntityId, [ Left, Right ], EntityId, Entity, Nat -> Nat
-chainLengthHelp = \entries, chainStart, hand, entityId, entity, len ->
+chainLengthHelp = \entities, @EntityId chainStart, hand, @EntityId entityId, entity, len ->
     when T hand entity is
         T Left (EJan { leftHand: None }) ->
             # Her left hand is empty; end of the chain!
             len
 
         T Left (EJan { leftHand: Kristy (@KristyId (@EntityId kristyId)) }) ->
+            when List.get entities kristyId is
+                Ok (EKristy kristy) ->
+                    # Verify the symmetry - that Kristy's
+                    # left hand is indeed bound to this Jan's
+                    if kristy.leftHand == Jan (@JanId (@EntityId entityId)) then
+                        if kristyId == chainStart then
+                            # We've encountered a cycle!
+                            # This chain is a loop; we're done.
+                            len + 1
+                        else
+                            # Recurse on this Jan's left hand
+                            chainLengthHelp entities
+                                (@EntityId chainStart)
+                                Left
+                                (@EntityId kristyId)
+                                (EKristy kristy)
+                                (len + 1)
+                    else
+                        #Debug.todo "Asymmetrical hand joins!" ()
+                        0
+
+                Ok _ ->
+                    #Debug.todo "Type mismatch: non-EKristy behind a KristyId!" ()
+                    0
+
+                Err OutOfBounds ->
+                    #Debug.todo "No entry found for KristyId!" ()
+                    0
+
+        T Right (EJan { rightHand: None }) ->
+            # Her right hand is empty; end of the chain!
+            len
+
+        T Right (EJan { rightHand: Kristy (@KristyId (@EntityId kristyId)) }) ->
+            when List.get entities kristyId is
+                Ok (EKristy kristy) ->
+                    # Verify the symmetry - that Kristy's
+                    # right hand is indeed bound to this Jan's
+                    if kristy.rightHand == Jan (@JanId (@EntityId entityId)) then
+                        if kristyId == chainStart then
+                            # We've encountered a cycle!
+                            # This chain is a loop; we're done.
+                            len + 1
+                        else
+                            # Recurse on this Jan's left hand
+                            chainLengthHelp
+                                entities
+                                (@EntityId chainStart)
+                                Left
+                                (@EntityId kristyId)
+                                (EKristy kristy)
+                                (len + 1)
+                    else
+                        #Debug.todo "Asymmetrical hand joins!" ()
+                        0
+
+                Ok _ ->
+                    #Debug.todo "Type mismatch: non-EKristy behind a KristyId!" ()
+                    0
+
+                Err OutOfBounds ->
+                    #Debug.todo "No entry found for KristyId!" ()
+                    0
+
+        T Left (EKristy { leftHand: None }) ->
+            # Her left hand is empty; end of the chain!
+            len
+
+        T Left (EKristy { leftHand: Jan (@JanId (@EntityId janId)) }) ->
+            when List.get entities janId is
+                Ok (EJan jan) ->
+                    # Verify the symmetry - that Jan's
+                    # left hand is indeed bound to Kristy's
+                    if jan.leftHand == Kristy (@KristyId (@EntityId entityId)) then
+                        if janId == chainStart then
+                            # We've encountered a cycle!
+                            # This chain is a loop; we're done.
+                            len + 1
+                        else
+                            # Recurse on Jan's right hand
+                            chainLengthHelp entities
+                                (@EntityId chainStart)
+                                Right
+                                (@EntityId janId)
+                                (EJan jan)
+                                (len + 1)
+                    else
+                        # Debug.todo "Asymmetrical hand joins!" ()
+                        0
+
+                Ok _ ->
+                    # Debug.todo "Type mismatch: non-EJan behind a JanId!" ()
+                    0
+
+                Err OutOfBounds ->
+                    # Debug.todo "No entry found for JanId!" ()
+                    0
+
+        T Right (EKristy { rightHand: None }) ->
+            # Her right hand is empty; end of the chain!
+            len
+
+        T Right (EKristy { rightHand: Richard _ }) ->
+            #Debug.todo "Found a Richard in the chain - this should be impossible!" ()
             0
-                    # case Dict.get kristyId dict of
-                    #     Just (EKristy kristy) ->
-                    #         -- Verify the symmetry - that Kristy's
-                    #         -- left hand is indeed bound to this Jan's
-                    #         if kristy.leftHand == Just (JanId entityId) then
-                    #             if kristyId == chainStart then
-                    #                 -- We've encountered a cycle!
-                    #                 -- This chain is a loop; we're done.
-                    #                 len + 1
 
-                    #             else
-                    #                 -- Recurse on this Jan's left hand
-                    #                 chainLengthHelp chainStart
-                    #                     Left
-                    #                     kristyId
-                    #                     (EKristy kristy)
-                    #                     dict
-                    #                     (len + 1)
+        T Right (EKristy { rightHand: Jan (@JanId (@EntityId janId)) }) ->
+            when List.get entities janId is
+                Ok (EJan jan) ->
+                    # Verify the symmetry - that Jan's
+                    # left hand is indeed bound to this Kristy's
+                    if jan.leftHand == Kristy (@KristyId (@EntityId entityId)) then
+                        if janId == chainStart then
+                            # We've encountered a cycle!
+                            # This chain is a loop; we're done.
+                            len + 1
+                        else
+                            # Recurse on this Jan's right hand
+                            chainLengthHelp entities
+                                (@EntityId chainStart)
+                                Right
+                                (@EntityId janId)
+                                (EJan jan)
+                                (len + 1)
+                    else
+                        #Debug.todo "Asymmetrical hand joins!" ()
+                        0
 
-                    #         else
-                    #             Debug.todo "Asymmetrical hand joins!" ()
+                Ok _ ->
+                    #Debug.todo "Type mismatch: non-EJan behind a JanId!" ()
+                    0
 
-                    #     Just _ ->
-                    #         Debug.todo "Type mismatch: non-EKristy behind a KristyId!" ()
+                Err OutOfBounds ->
+                    #Debug.todo "No entry found for JanId!" ()
+                    0
 
-                    #     Nothing ->
-                    #         Debug.todo "No entry found for KristyId!" ()
+        T _ (ERichard richard) ->
+            #Debug.todo "Found a Richard in the chain - this should be impossible!" ()
+            0
 
-#         ( EJan jan, Right ) ->
-#             case jan.rightHand of
-#                 Nothing ->
-#                     -- Her right hand is empty; end of the chain!
-#                     len
+        _ ->
+            # TODO the compiler should report this as redundant!
+            entities
 
-#                 Just (KristyId kristyId) ->
-#                     case Dict.get kristyId dict of
-#                         Just (EKristy kristy) ->
-#                             -- Verify the symmetry - that Kristy's
-#                             -- right hand is indeed bound to this Jan's
-#                             if kristy.rightHand == Just (IsJan (JanId entityId)) then
-#                                 if kristyId == chainStart then
-#                                     -- We've encountered a cycle!
-#                                     -- This chain is a loop; we're done.
-#                                     len + 1
+step : Model -> Task Model *
+step = \model ->
+    allMixes : List (List (List Mix))
+    allMixes =
+        List.map mixRanges \richards ->
+            List.map mixRanges \kristys ->
+                List.map mixRanges \jans ->
+                    { richards, jans, kristys }
 
-#                                 else
-#                                     -- Recurse on this Jan's left hand
-#                                     chainLengthHelp chainStart
-#                                         Left
-#                                         kristyId
-#                                         (EKristy kristy)
-#                                         dict
-#                                         (len + 1)
+    mixes : List Mix
+    mixes = List.join (List.join allMixes)
 
-#                             else
-#                                 Debug.todo "Asymmetrical hand joins!" ()
+    simNum = Str.fromInt (List.len model.sims)
 
-#                         Just _ ->
-#                             Debug.todo "Type mismatch: non-EKristy behind a KristyId!" ()
+    totalSims = Str.fromInt maxSims
 
-#                         Nothing ->
-#                             Debug.todo "No entry found for KristyId!" ()
+    {} <- await (Stdout.line "Running simulation #\(simNum) of \(totalSims)...")
 
-#         ( EKristy kristy, Left ) ->
-#             case kristy.leftHand of
-#                 Nothing ->
-#                     -- Her left hand is empty; end of the chain!
-#                     len
+    newSims <- await
+        (
+            List.walk mixes
+                (\mix, task ->
+                    sims <- await task
 
-#                 Just (JanId janId) ->
-#                     case Dict.get janId dict of
-#                         Just (EJan jan) ->
-#                             -- Verify the symmetry - that Jan's
-#                             -- left hand is indeed bound to Kristy's
-#                             if jan.leftHand == Just (KristyId entityId) then
-#                                 if janId == chainStart then
-#                                     -- We've encountered a cycle!
-#                                     -- This chain is a loop; we're done.
-#                                     len + 1
+                    sim <- await (runSimulation iterationsPerSim (initialSim mix))
 
-#                                 else
-#                                     -- Recurse on Jan's right hand
-#                                     chainLengthHelp chainStart
-#                                         Right
-#                                         janId
-#                                         (EJan jan)
-#                                         dict
-#                                         (len + 1)
+                    List.append sims { mix, sim }
+                        |> Task.succeed
+                )
+                (Task.succeed [])
+        )
 
-#                             else
-#                                 Debug.todo "Asymmetrical hand joins!" ()
+    # Workaround for https://github.com/rtfeldman/roc/issues/1677
+    newSimsAnn : List { mix : Mix, sim : Sim }
+    newSimsAnn = newSims
 
-#                         Just _ ->
-#                             Debug.todo "Type mismatch: non-EJan behind a JanId!" ()
+    sims : List { mix : Mix, sim : Sim }
+    sims = List.concat model.sims newSims
 
-#                         Nothing ->
-#                             Debug.todo "No entry found for JanId!" ()
+    newModel = { model & sims }
 
-#         ( EKristy kristy, Right ) ->
-#             case kristy.rightHand of
-#                 Nothing ->
-#                     -- Her right hand is empty; end of the chain!
-#                     len
-
-#                 Just (IsRichard _) ->
-#                     Debug.todo "Found a Richard in the chain - this should be impossible!" ()
-
-#                 Just (IsJan (JanId janId)) ->
-#                     case Dict.get janId dict of
-#                         Just (EJan jan) ->
-#                             -- Verify the symmetry - that Jan's
-#                             -- left hand is indeed bound to this Kristy's
-#                             if jan.leftHand == Just (KristyId entityId) then
-#                                 if janId == chainStart then
-#                                     -- We've encountered a cycle!
-#                                     -- This chain is a loop; we're done.
-#                                     len + 1
-
-#                                 else
-#                                     -- Recurse on this Jan's right hand
-#                                     chainLengthHelp chainStart
-#                                         Right
-#                                         janId
-#                                         (EJan jan)
-#                                         dict
-#                                         (len + 1)
-
-#                             else
-#                                 Debug.todo "Asymmetrical hand joins!" ()
-
-#                         Just _ ->
-#                             Debug.todo "Type mismatch: non-EJan behind a JanId!" ()
-
-#                         Nothing ->
-#                             Debug.todo "No entry found for JanId!" ()
-
-#         ( ERichard richard, _ ) ->
-#             Debug.todo "Found a Richard in the chain - this should be impossible!" ()
-
-
-
-# main : Program () Model Msg
-# main =
-#     Browser.element
-#         { init = \_ -> step initialModel
-#         , update = update
-#         , view = view
-#         , subscriptions = \_ -> Sub.none
-#         }
-
-
-# type Msg
-#     = Step
-
-
-# update : Msg -> Model -> ( Model, Cmd Msg )
-# update msg model =
-#     case msg of
-#         Step ->
-#             if List.length model.sims < maxSims then
-#                 step model
-
-#             else
-#                 ( model, Cmd.none )
-
-
-# step : Model -> ( Model, Cmd Msg )
-# step model =
-#     let
-#         allMixes : List Mix
-#         allMixes =
-#             mixRanges
-#                 |> List.concatMap
-#                     (\richards ->
-#                         mixRanges
-#                             |> List.concatMap
-#                                 (\kristys ->
-#                                     mixRanges
-#                                         |> List.map
-#                                             (\jans -> { richards = richards, jans = jans, kristys = kristys })
-#                                 )
-#                     )
-
-#         ( finalSeed, simMixPairs ) =
-#             List.foldl
-#                 (\mix ( seed, sims ) ->
-#                     let
-#                         ( sim, nextSeed ) =
-#                             runSimulation model.seed iterationsPerSim (initialSim mix)
-#                     in
-#                     ( nextSeed, ( mix, sim ) :: sims )
-#                 )
-#                 ( model.seed, [] )
-#                 allMixes
-
-#         cmd =
-#             Process.sleep 1
-#                 |> Task.perform (\() -> Step)
-#     in
-#     ( { model | sims = model.sims ++ simMixPairs, seed = finalSeed }, cmd )
+    # Recurse until we no longer need to run more sims
+    if List.len sims < maxSims then
+        step newModel
+    else
+        Task.succeed newModel
 
 
 # mixToString : Mix -> String
@@ -937,24 +870,41 @@ chainLengthHelp = \entries, chainStart, hand, entityId, entity, len ->
 #             "J" ++ String.fromInt janId
 
 
-# scoreSim : Sim -> Int
-# scoreSim sim =
-#     Dict.foldl
-#         (\id entity score ->
-#             -- Only the Richard roots can add to the score
-#             case Dict.get id sim.entities of
-#                 Just (ERichard { oneHand }) ->
-#                     -- Any chain of length > 4 is long
-#                     if chainLength (RichardId id) sim.entities > shortChainLength then
-#                         score + 1
+scoreSim : Sim -> Nat
+scoreSim = \sim ->
+    answer = List.walk sim.entities
+        (\entity, { index, score } ->
+            # Only the Richard roots can add to the score
+            newScore =
+                when List.get sim.entities index is
+                    Ok (ERichard { oneHand }) ->
+                        len = sim.entities
+                            |> chainLength (@RichardId (@EntityId index))
 
-#                     else
-#                         score
+                        # Any chain of length > 4 is long
+                        if len > shortChainLength then
+                            score + 1
+                        else
+                            score
 
-#                 _ ->
-#                     score
-#         )
-#         -- All the dropped chains count for 1
-#         -- (they were dropped because they were long)
-#         sim.chainsDropped
-#         sim.entities
+                    _ ->
+                        score
+
+            { index: index + 1, score: newScore }
+        )
+        # All the dropped chains count for 1
+        # (they were dropped because they were long)
+        { index: 0, score: sim.chainsDropped }
+
+    answer.score
+
+
+main : Task {} *
+main =
+    times = Str.fromInt maxSims
+
+    {} <- await (Stdout.line "Running simulation \(times) times...")
+
+    model <- await (step initialModel)
+
+    Stdout.line "Done!"

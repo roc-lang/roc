@@ -124,6 +124,15 @@ pub fn roc_fx_randNat() -> usize {
 }
 
 #[no_mangle]
+pub fn roc_fx_randNatBetween(lo: usize, hi: usize) -> usize {
+    use rand::{thread_rng, Rng};
+
+    let mut rng = thread_rng();
+
+    rng.gen_range(lo..hi)
+}
+
+#[no_mangle]
 pub fn roc_fx_getLine() -> RocStr {
     use std::io::{self, BufRead};
 

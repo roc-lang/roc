@@ -8,6 +8,7 @@ platform examples/cli
         {
             putLine : Str -> Effect {},
             randNat : {} -> Effect Nat,
+            randNatBetween : Nat, Nat -> Effect Nat,
             getLine : Effect Str
         }
 
