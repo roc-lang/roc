@@ -517,40 +517,43 @@ removeChainHelp = \originalList, @EntityId chainStart, hand, @EntityId entityId,
             # Debug.todo "Found a Richard in the chain - this should be impossible!" ()
             entries
 
-        _ ->
-            # TODO the others
-            entries
-
 
 chainLength : List Entity, RichardId -> Nat
 chainLength = \entries, @RichardId (@EntityId richardId) ->
-    0
-#     case Dict.get richardId dict of
-#         Just (ERichard { oneHand }) ->
-#             case oneHand of
-#                 Just (KristyId kristyId) ->
-#                     case Dict.get kristyId dict of
-#                         Just (EKristy kristy) ->
-#                             chainLengthHelp richardId Left kristyId (EKristy kristy) dict 1
+    when List.get entries richardId is
+        Ok (ERichard { oneHand: None }) ->
+            0
 
-#                         Just _ ->
-#                             Debug.todo ("kristyId " ++ String.fromInt kristyId ++ " did not have a Kristy")
+        #Ok (ERichard { oneHand: Kristy (@KristyId (@EntityId kristyId)) }) ->
+        #    when List.get entries kristyId is
+        #        Ok (EKristy kristy) ->
+        #            chainLengthHelp entries
+        #                (@EntityId richardId)
+        #                Left
+        #                (@EntityId kristyId)
+        #                (EKristy kristy)
+        #                1
 
-#                         Nothing ->
-#                             Debug.todo ("Could not find kristyId " ++ String.fromInt kristyId)
+        #        Ok _ ->
+        #            #Debug.todo ("kristyId " ++ String.fromInt kristyId ++ " did not have a Kristy")
+        #            entries
 
-#                 Nothing ->
-#                     0
+        #        None ->
+        #            #Debug.todo ("Could not find kristyId " ++ String.fromInt kristyId)
+        #            entries
 
-#         Just _ ->
-#             Debug.todo ("richardId " ++ String.fromInt richardId ++ " did not have a Richard")
+        Ok _ ->
+            #Debug.todo ("richardId " ++ String.fromInt richardId ++ " did not have a Richard")
+            0
 
-#         Nothing ->
-#             Debug.todo ("Could not find richardId " ++ String.fromInt richardId)
+        Err OutOfBounds ->
+            #Debug.todo ("Could not find richardId " ++ String.fromInt richardId)
+            0
 
 
-# chainLengthHelp : EntityId -> Hand -> EntityId -> Entity -> Dict EntityId Entity -> Int -> Int
-# chainLengthHelp chainStart hand entityId entity dict len =
+chainLengthHelp : List Entries, EntityId, [ Left, Right ], EntityId, Entity, Nat -> Nat
+chainLengthHelp = \entries, chainStart, hand, entityId, entity, len ->
+    9
 #     case ( entity, hand ) of
 #         ( EJan jan, Left ) ->
 #             case jan.leftHand of
