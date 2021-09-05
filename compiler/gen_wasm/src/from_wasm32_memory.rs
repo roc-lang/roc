@@ -156,7 +156,7 @@ impl<T: FromWasm32Memory, U: FromWasm32Memory> FromWasm32Memory for (T, U) {
     const ALIGN_OF_WASM: usize = max2(T::SIZE_OF_WASM, U::SIZE_OF_WASM);
 
     fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
-        assert!(
+        debug_assert!(
             T::ALIGN_OF_WASM >= U::ALIGN_OF_WASM,
             "this function does not handle alignment"
         );
@@ -186,12 +186,12 @@ impl<T: FromWasm32Memory, U: FromWasm32Memory, V: FromWasm32Memory> FromWasm32Me
     const ALIGN_OF_WASM: usize = max3(T::SIZE_OF_WASM, U::SIZE_OF_WASM, V::SIZE_OF_WASM);
 
     fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
-        assert!(
+        debug_assert!(
             T::ALIGN_OF_WASM >= U::ALIGN_OF_WASM,
             "this function does not handle alignment"
         );
 
-        assert!(
+        debug_assert!(
             U::ALIGN_OF_WASM >= V::ALIGN_OF_WASM,
             "this function does not handle alignment"
         );
