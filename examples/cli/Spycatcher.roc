@@ -77,7 +77,7 @@ Entity :
     [
         EJan Jan,
         EKristy Kristy,
-        ERichard Richard
+        ERichard Richard,
         None
     ]
 
@@ -139,7 +139,7 @@ randHand : Task [ Left, Right ] *
 randHand =
     Task.map Rand.nat \nat ->
         when nat % 2 is
-            Ok(0) -> Left
+            Ok 0 -> Left
             _ -> Right
 
 
@@ -154,7 +154,7 @@ dropLongChains = \originalSim ->
                         Ok (ERichard { oneHand }) ->
                             chainLen =
                                 sim.entities
-                                    |> chainLength (@RichardId index)
+                                    |> chainLength (@RichardId (@EntityId index))
 
                             remove =
                                 if chainLen >= maxChainLength then
@@ -174,7 +174,7 @@ dropLongChains = \originalSim ->
 
                             if remove then
                                 {
-                                    entities: removeChain (@RichardId index) sim.entities,
+                                    entities: removeChain sim.entities (@RichardId (@EntityId index)),
                                     chainsDropped: sim.chainsDropped + 1
                                 }
                             else
@@ -331,191 +331,199 @@ dropLongChains = \originalSim ->
 #         dict
 
 
-removeChain : RichardId, List Entity -> List Entity
-removeChain = \RichardId richardId, entries ->
-    when List.get richardId entries is
-        Ok (ERichard { oneHand }) ->
-            when oneHand is
-                Kristy (KristyId kristyId) ->
-                    when List.get kristyId entries is
-                        Ok (EKristy kristy) ->
-                            entries
-                                |> List.set richardId None
-                                |> removeChainHelp richardId Left kristyId (EKristy kristy)
+removeChain : List Entity, RichardId -> List Entity
+removeChain = \entries, @RichardId (@EntityId richardId) ->
+    when List.get entries richardId is
+        Ok (ERichard { oneHand: Kristy (@KristyId (@EntityId kristyId)) }) ->
+            when List.get entries kristyId is
+                Ok (EKristy kristy) ->
+                    entries
+                        |> List.set richardId None
+                        |> removeChainHelp
+                            (@EntityId richardId)
+                            Left
+                            (@EntityId kristyId)
+                            (EKristy kristy)
 
-                        Ok _ ->
-                            # Debug.todo ("kristyId " ++ String.fromInt kristyId ++ " did not have a Kristy")
-                            entries
-
-                        Err ListWasEmpty ->
-                            # Debug.todo ("Could not find kristyId " ++ String.fromInt kristyId)
-                            entries
-
-                None ->
+                Ok _ ->
+                    # Debug.todo ("kristyId " ++ String.fromInt kristyId ++ " did not have a Kristy")
                     entries
 
-        Just _ ->
+                Err OutOfBounds ->
+                    # Debug.todo ("Could not find kristyId " ++ String.fromInt kristyId)
+                    entries
+
+
+        Ok _ ->
             # Debug.todo ("richardId " ++ String.fromInt richardId ++ " did not have a Richard")
             entries
 
-        Nothing ->
+        Err OutOfBounds ->
             # Debug.todo ("Could not find richardId " ++ String.fromInt richardId)
             entries
 
 
-# removeChainHelp : Dict EntityId Entity -> EntityId -> Hand -> EntityId -> Entity -> Dict EntityId Entity
-# removeChainHelp originalDict chainStart hand entityId entity =
-#     let
-#         -- Remove this entity from the chain
-#         dict =
-#             Dict.remove entityId originalDict
-#     in
-#     case ( entity, hand ) of
-#         ( EJan jan, Left ) ->
-#             case jan.leftHand of
-#                 Nothing ->
-#                     -- Her left hand is empty; we're done!
-#                     dict
+removeChainHelp : List Entity, EntityId, [ Left, Right ], EntityId, Entity -> List Entity
+removeChainHelp = \originalList, @EntityId chainStart, hand, @EntityId entityId, entity ->
+    # Remove this entity from the chain
+    entries = List.set originalList entityId None
 
-#                 Just (KristyId kristyId) ->
-#                     case Dict.get kristyId dict of
-#                         Just (EKristy kristy) ->
-#                             -- Verify the symmetry - that Kristy's
-#                             -- left hand is indeed bound to this Jan's
-#                             if kristy.leftHand == Just (JanId entityId) then
-#                                 if kristyId == chainStart then
-#                                     -- We've encountered a cycle!
-#                                     -- This chain is a loop; we're done.
-#                                     dict
+    when T hand entity is
+        T Left (EJan { leftHand: None }) ->
+            # Her left hand is empty; we're done!
+            entries
 
-#                                 else
-#                                     -- Recurse on this Jan's left hand
-#                                     removeChainHelp chainStart
-#                                         Left
-#                                         kristyId
-#                                         (EKristy kristy)
-#                                         dict
+        T Left (EJan { leftHand: Kristy (@KristyId (@EntityId kristyId)) }) ->
+            when List.get entries kristyId is
+                Ok (EKristy kristy) ->
+                    # Verify the symmetry - that Kristy's
+                    # left hand is indeed bound to this Jan's
+                    if kristy.leftHand == Jan (@JanId (@EntityId entityId)) then
+                        if kristyId == chainStart then
+                            # We've encountered a cycle!
+                            # This chain is a loop; we're done.
+                            entries
 
-#                             else
-#                                 Debug.todo "Asymmetrical hand joins!" ()
+                        else
+                            # Recurse on this Jan's left hand
+                            removeChainHelp entries
+                                (@EntityId chainStart)
+                                Left
+                                (@EntityId kristyId)
+                                (EKristy kristy)
 
-#                         Just _ ->
-#                             Debug.todo "Type mismatch: non-EKristy behind a KristyId!" ()
+                    else
+                        #Debug.todo "Asymmetrical hand joins!" ()
+                        entries
 
-#                         Nothing ->
-#                             Debug.todo "No entry found for KristyId!" ()
+                Ok _ ->
+                    #Debug.todo "Type mismatch: non-EKristy behind a KristyId!" ()
+                    entries
 
-#         ( EJan jan, Right ) ->
-#             case jan.rightHand of
-#                 Nothing ->
-#                     -- Her right hand is empty; end of the chain!
-#                     dict
+                Err OutOfBounds ->
+                    #Debug.todo "No entry found for KristyId!" ()
+                    entries
 
-#                 Just (KristyId kristyId) ->
-#                     case Dict.get kristyId dict of
-#                         Just (EKristy kristy) ->
-#                             -- Verify the symmetry - that Kristy's
-#                             -- right hand is indeed bound to this Jan's
-#                             if kristy.rightHand == Just (IsJan (JanId entityId)) then
-#                                 if kristyId == chainStart then
-#                                     -- We've encountered a cycle!
-#                                     -- This chain is a loop; we're done.
-#                                     dict
+        T Right (EJan { rightHand: None }) ->
+            # Her right hand is empty; end of the chain!
+            entries
 
-#                                 else
-#                                     -- Recurse on this Jan's left hand
-#                                     removeChainHelp chainStart
-#                                         Left
-#                                         kristyId
-#                                         (EKristy kristy)
-#                                         dict
+        T Right (EJan { rightHand: Kristy (@KristyId (@EntityId kristyId)) }) ->
+            when List.get entries kristyId is
+                Ok (EKristy kristy) ->
+                    # Verify the symmetry - that Kristy's
+                    # right hand is indeed bound to this Jan's
+                    if kristy.rightHand == Jan (@JanId (@EntityId entityId)) then
+                        if kristyId == chainStart then
+                            # We've encountered a cycle!
+                            # This chain is a loop; we're done.
+                            entries
 
-#                             else
-#                                 Debug.todo "Asymmetrical hand joins!" ()
+                        else
+                            # Recurse on this Jan's left hand
+                            removeChainHelp entries
+                                (@EntityId chainStart)
+                                Left
+                                (@EntityId kristyId)
+                                (EKristy kristy)
 
-#                         Just _ ->
-#                             Debug.todo "Type mismatch: non-EKristy behind a KristyId!" ()
+                    else
+                        # Debug.todo "Asymmetrical hand joins!" ()
+                        entries
 
-#                         Nothing ->
-#                             Debug.todo "No entry found for KristyId!" ()
+                Ok _ ->
+                    #Debug.todo "Type mismatch: non-EKristy behind a KristyId!" ()
+                    entries
 
-#         ( EKristy kristy, Left ) ->
-#             case kristy.leftHand of
-#                 Nothing ->
-#                     -- Her left hand is empty; end of the chain!
-#                     dict
+                Err OutOfBounds ->
+                    #Debug.todo "No entry found for KristyId!" ()
+                    entries
 
-#                 Just (JanId janId) ->
-#                     case Dict.get janId dict of
-#                         Just (EJan jan) ->
-#                             -- Verify the symmetry - that Jan's
-#                             -- left hand is indeed bound to Kristy's
-#                             if jan.leftHand == Just (KristyId entityId) then
-#                                 if janId == chainStart then
-#                                     -- We've encountered a cycle!
-#                                     -- This chain is a loop; we're done.
-#                                     dict
+        T Left (EKristy { leftHand: None }) ->
+            # Her left hand is empty; end of the chain!
+            entries
 
-#                                 else
-#                                     -- Recurse on Jan's right hand
-#                                     removeChainHelp chainStart
-#                                         Right
-#                                         janId
-#                                         (EJan jan)
-#                                         dict
+        T Left (EKristy { leftHand: Jan (@JanId (@EntityId janId)) }) ->
+            when List.get entries janId is
+                Ok (EJan jan) ->
+                    # Verify the symmetry - that Jan's
+                    # left hand is indeed bound to Kristy's
+                    if jan.leftHand == Kristy (@KristyId (@EntityId entityId)) then
+                        if janId == chainStart then
+                            # We've encountered a cycle!
+                            # This chain is a loop; we're done.
+                            entries
 
-#                             else
-#                                 Debug.todo "Asymmetrical hand joins!" ()
+                        else
+                            # Recurse on Jan's right hand
+                            removeChainHelp entries
+                                (@EntityId chainStart)
+                                Right
+                                (@EntityId janId)
+                                (EJan jan)
 
-#                         Just _ ->
-#                             Debug.todo "Type mismatch: non-EJan behind a JanId!" ()
+                    else
+                        #Debug.todo "Asymmetrical hand joins!" ()
+                        entries
 
-#                         Nothing ->
-#                             Debug.todo "No entry found for JanId!" ()
+                Ok _ ->
+                    #Debug.todo "Type mismatch: non-EJan behind a JanId!" ()
+                    entries
 
-#         ( EKristy kristy, Right ) ->
-#             case kristy.rightHand of
-#                 Nothing ->
-#                     -- Her right hand is empty; end of the chain!
-#                     dict
+                Err OutOfBounds ->
+                    #Debug.todo "No entry found for JanId!" ()
+                    entries
 
-#                 Just (IsRichard _) ->
-#                     Debug.todo "Found a Richard in the chain - this should be impossible!" ()
+        T Right (EKristy { rightHand: None }) ->
+            # Her right hand is empty; end of the chain!
+            entries
 
-#                 Just (IsJan (JanId janId)) ->
-#                     case Dict.get janId dict of
-#                         Just (EJan jan) ->
-#                             -- Verify the symmetry - that Jan's
-#                             -- left hand is indeed bound to this Kristy's
-#                             if jan.leftHand == Just (KristyId entityId) then
-#                                 if janId == chainStart then
-#                                     -- We've encountered a cycle!
-#                                     -- This chain is a loop; we're done.
-#                                     dict
+        T Right (EKristy { rightHand: Richard _ }) ->
+            #Debug.todo "Found a Richard in the chain - this should be impossible!" ()
+            entries
 
-#                                 else
-#                                     -- Recurse on this Jan's right hand
-#                                     removeChainHelp chainStart
-#                                         Right
-#                                         janId
-#                                         (EJan jan)
-#                                         dict
+        T Right (EKristy { rightHand: Jan (@JanId (@EntityId janId)) }) ->
+            when List.get entries janId is
+                Ok (EJan jan) ->
+                    # Verify the symmetry - that Jan's
+                    # left hand is indeed bound to this Kristy's
+                    if jan.leftHand == Kristy (@KristyId (@EntityId entityId)) then
+                        if janId == chainStart then
+                            # We've encountered a cycle!
+                            # This chain is a loop; we're done.
+                            entries
 
-#                             else
-#                                 Debug.todo "Asymmetrical hand joins!" ()
+                        else
+                            # Recurse on this Jan's right hand
+                            removeChainHelp entries
+                                (@EntityId chainStart)
+                                Right
+                                (@EntityId janId)
+                                (EJan jan)
 
-#                         Just _ ->
-#                             Debug.todo "Type mismatch: non-EJan behind a JanId!" ()
+                    else
+                        #Debug.todo "Asymmetrical hand joins!" ()
+                        entries
 
-#                         Nothing ->
-#                             Debug.todo "No entry found for JanId!" ()
+                Ok _ ->
+                    #Debug.todo "Type mismatch: non-EJan behind a JanId!" ()
+                    entries
 
-#         ( ERichard richard, _ ) ->
-#             Debug.todo "Found a Richard in the chain - this should be impossible!" ()
+                Err OutOfBounds ->
+                    #Debug.todo "No entry found for JanId!" ()
+                    entries
+
+        T _ (ERichard _) ->
+            # Debug.todo "Found a Richard in the chain - this should be impossible!" ()
+            entries
+
+        _ ->
+            # TODO the others
+            entries
 
 
 chainLength : List Entity, RichardId -> Nat
-chainLength = \entries, @RichardId richardId ->
+chainLength = \entries, @RichardId (@EntityId richardId) ->
     0
 #     case Dict.get richardId dict of
 #         Just (ERichard { oneHand }) ->
