@@ -2168,29 +2168,28 @@ fn list_literal<'a, 'ctx, 'env>(
     let element_type = basic_type_from_layout(env, elem_layout);
 
     let len_u64 = elems.len() as u64;
-    let ptr = {
-        let len_type = env.ptr_int();
-        let len = len_type.const_int(len_u64, false);
-
-        allocate_list(env, elem_layout, len)
-    };
+    let ptr;
 
     if element_type.is_int_type() {
         let element_type = element_type.into_int_type();
-        let size = elems.len() * elem_layout.stack_size(env.ptr_bytes) as usize;
+        let element_width = elem_layout.stack_size(env.ptr_bytes);
+        let size = elems.len() * element_width as usize;
         let alignment = elem_layout
             .alignment_bytes(env.ptr_bytes)
             .max(env.ptr_bytes);
+
+        let mut is_all_constant = true;
+        let zero_elements = (env.ptr_bytes as f64 / element_width as f64).ceil() as usize;
 
         // set up a global that contains all the literal elements of the array
         // any variables or expressions are represented as `undef`
         let global = {
             let mut bytes = Vec::with_capacity_in(size, env.arena);
 
-            //            // insert NULL bytes for the refcount
-            //            for _ in 0..env.ptr_bytes {
-            //                bytes.push(env.context.i8_type().const_zero());
-            //            }
+            // insert NULL bytes for the refcount
+            for _ in 0..zero_elements {
+                bytes.push(element_type.const_zero());
+            }
 
             // Copy the elements from the list literal into the array
             for element in elems.iter() {
@@ -2200,54 +2199,87 @@ fn list_literal<'a, 'ctx, 'env>(
                         bytes.push(val.into_int_value());
                     }
                     ListLiteralElement::Symbol(_) => {
+                        is_all_constant = false;
+
                         let val = element_type.get_undef();
                         bytes.push(val);
                     }
                 };
             }
 
-            // use None for the address space (e.g. Const does not work)
-            let typ = element_type.array_type(bytes.len() as u32);
-            let global = env.module.add_global(typ, None, "roc__list_literal");
+            let const_elements = if is_all_constant {
+                bytes.into_bump_slice()
+            } else {
+                &bytes[zero_elements..]
+            };
 
-            global.set_initializer(&element_type.const_array(bytes.into_bump_slice()));
+            // use None for the address space (e.g. Const does not work)
+            let typ = element_type.array_type(const_elements.len() as u32);
+            let global = env.module.add_global(typ, None, "roc__list_literal");
 
             global.set_constant(true);
             global.set_alignment(alignment);
             global.set_unnamed_addr(true);
             global.set_linkage(inkwell::module::Linkage::Private);
 
-            global
+            global.set_initializer(&element_type.const_array(const_elements));
+            global.as_pointer_value()
         };
 
-        // at runtime, copy the elements from the constant section into the heap
-        env.builder
-            .build_memcpy(
-                ptr,
-                alignment,
-                global.as_pointer_value(),
-                alignment,
-                env.ptr_int().const_int(size as _, false),
-            )
-            .unwrap();
+        let len_type = env.ptr_int();
+        let len = len_type.const_int(len_u64, false);
 
-        // Copy the elements from the list literal into the array
-        for (index, element) in elems.iter().enumerate() {
-            match element {
-                ListLiteralElement::Literal(_) => {
-                    // do nothing, it's copied in already
-                }
-                ListLiteralElement::Symbol(symbol) => {
-                    let val = load_symbol(scope, symbol);
-                    let index_val = ctx.i64_type().const_int(index as u64, false);
-                    let elem_ptr =
-                        unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
-
-                    builder.build_store(elem_ptr, val);
-                }
+        ptr = if is_all_constant {
+            let zero = env.ptr_int().const_zero();
+            let offset = env.ptr_int().const_int(zero_elements as _, false);
+            let first_element_pointer = unsafe {
+                env.builder
+                    .build_in_bounds_gep(global, &[zero, offset], "first_element_pointer")
             };
+
+            // store_list(env, first_element_pointer, len)
+            first_element_pointer
+        } else {
+            let ptr = allocate_list(env, elem_layout, len);
+
+            // at runtime, copy the elements from the constant section into the heap
+            env.builder
+                .build_memcpy(
+                    ptr,
+                    alignment,
+                    global,
+                    alignment,
+                    env.ptr_int().const_int(size as _, false),
+                )
+                .unwrap();
+
+            // Copy the elements from the list literal into the array
+            for (index, element) in elems.iter().enumerate() {
+                match element {
+                    ListLiteralElement::Literal(_) => {
+                        // do nothing, value is already copied from constants section
+                    }
+                    ListLiteralElement::Symbol(symbol) => {
+                        let val = load_symbol(scope, symbol);
+                        let index_val = ctx.i64_type().const_int(index as u64, false);
+                        let elem_ptr =
+                            unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
+
+                        builder.build_store(elem_ptr, val);
+                    }
+                };
+            }
+
+            ptr
         }
     } else {
+        ptr = {
+            let len_type = env.ptr_int();
+            let len = len_type.const_int(len_u64, false);
+
+            allocate_list(env, elem_layout, len)
+        };
+
         // Copy the elements from the list literal into the array
         for (index, element) in elems.iter().enumerate() {
             let val = match element {
