@@ -59,8 +59,7 @@ pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
             .mark_node_pool
             .replace_node(curr_mark_node_id, nested_node);
 
-        // remove data corresponding to Blank node
-        ed_model.del_at_line(old_caret_pos.line, old_caret_pos.column)?;
+        ed_model.del_blank_node(old_caret_pos, curr_mark_node_has_nl)?;
 
         ed_model.simple_move_carets_right(nodes::LEFT_ACCOLADE.len());
 
@@ -148,11 +147,13 @@ pub fn update_empty_record(
             ed_model.simple_move_carets_right(1);
 
             // update GridNodeMap and CodeLines
-            ed_model.insert_between_line(
+            EdModel::insert_between_line(
                 old_caret_pos.line,
                 old_caret_pos.column,
                 new_input,
                 record_field_node_id,
+                &mut ed_model.grid_node_map,
+                &mut ed_model.code_lines,
             )?;
 
             Ok(InputOutcome::Accepted)
@@ -326,11 +327,13 @@ pub fn update_record_field(
     ed_model.simple_move_carets_right(new_input.len());
 
     // update GridNodeMap and CodeLines
-    ed_model.insert_between_line(
+    EdModel::insert_between_line(
         old_caret_pos.line,
         old_caret_pos.column,
         new_input,
         curr_mark_node_id,
+        &mut ed_model.grid_node_map,
+        &mut ed_model.code_lines,
     )?;
 
     // update AST Node

@@ -43,11 +43,13 @@ pub fn update_invalid_lookup(
         ed_model.simple_move_carets_right(input_str.len());
 
         // update GridNodeMap and CodeLines
-        ed_model.insert_between_line(
+        EdModel::insert_between_line(
             old_caret_pos.line,
             old_caret_pos.column,
             input_str,
             curr_mark_node_id,
+            &mut ed_model.grid_node_map,
+            &mut ed_model.code_lines,
         )?;
 
         Ok(InputOutcome::Accepted)

@@ -40,9 +40,6 @@ pub fn tld_mark_node<'a>(
 
     let equals_mn_id = mark_node_pool.add(new_equals_mn(ast_node_id, None));
 
-    let expr_mn = mark_node_pool.get_mut(expr_mark_node_id);
-    expr_mn.add_newline_at_end();
-
     let full_let_node = MarkupNode::Nested {
         ast_node_id,
         children_ids: vec![val_name_mn_id, equals_mn_id, expr_mark_node_id],
@@ -57,10 +54,12 @@ pub fn start_new_tld_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
     let NodeContext {
         old_caret_pos,
         curr_mark_node_id,
-        curr_mark_node: _,
+        curr_mark_node,
         parent_id_opt: _,
         ast_node_id,
     } = get_node_context(ed_model)?;
+
+    let curr_mark_node_has_nl = curr_mark_node.has_newline_at_end();
 
     let val_expr_node = Expr2::Blank;
     let val_expr_id = ed_model.module.env.pool.add(val_expr_node);
@@ -124,18 +123,21 @@ pub fn start_new_tld_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
     set_parent_for_all(curr_mark_node_id, &mut ed_model.mark_node_pool);
 
     // remove data corresponding to old Blank node
-    ed_model.del_at_line(old_caret_pos.line, old_caret_pos.column)?;
+    ed_model.del_blank_node(old_caret_pos, curr_mark_node_has_nl)?;
 
     let char_len = 1;
     ed_model.simple_move_carets_right(char_len);
 
-    ed_model.insert_all_between_line(
-        old_caret_pos.line,
-        old_caret_pos.column,
-        &ed_model
-            .mark_node_pool
-            .get(curr_mark_node_id)
-            .get_children_ids(),
+    let mut curr_line = old_caret_pos.line;
+    let mut curr_column = old_caret_pos.column;
+
+    EdModel::insert_mark_node_between_line(
+        &mut curr_line,
+        &mut curr_column,
+        curr_mark_node_id,
+        &mut ed_model.grid_node_map,
+        &mut ed_model.code_lines,
+        &ed_model.mark_node_pool,
     )?;
 
     Ok(InputOutcome::Accepted)
@@ -177,11 +179,13 @@ pub fn update_tld_val_name(
             }
                 
 
-            ed_model.insert_between_line(
+            EdModel::insert_between_line(
                 old_caret_pos.line,
                 old_caret_pos.column,
                 &new_char.to_string(),
                 val_name_mn_id,
+                &mut ed_model.grid_node_map,
+                &mut ed_model.code_lines,
             )?;
 
             ed_model.simple_move_caret_right(old_caret_pos, 1);

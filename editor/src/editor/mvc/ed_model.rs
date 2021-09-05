@@ -70,8 +70,15 @@ pub fn init_model<'a>(
         )
     }?;
 
-    let code_lines = EdModel::build_code_lines_from_markup(&markup_ids, &mark_node_pool)?;
-    let grid_node_map = EdModel::build_node_map_from_markup(&markup_ids, &mark_node_pool)?;
+    let mut code_lines = CodeLines::default();
+    let mut grid_node_map = GridNodeMap::default();
+
+    let mut line_nr = 0;
+    let mut col_nr = 0;
+
+    for mark_node_id in &markup_ids {
+        EdModel::insert_mark_node_between_line(&mut line_nr, &mut col_nr, *mark_node_id, &mut grid_node_map, &mut code_lines, &mark_node_pool)?
+    }
 
     let caret = match caret_pos {
         CaretPos::Start => CaretWSelect::default(),

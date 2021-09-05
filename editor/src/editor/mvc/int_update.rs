@@ -65,11 +65,13 @@ pub fn start_new_int(ed_model: &mut EdModel, digit_char: &char) -> EdResult<Inpu
         ed_model.simple_move_carets_right(char_len);
 
         // update GridNodeMap and CodeLines
-        ed_model.insert_between_line(
+        EdModel::insert_between_line(
             old_caret_pos.line,
             old_caret_pos.column,
             &digit_char.to_string(),
             curr_mark_node_id,
+            &mut ed_model.grid_node_map,
+            &mut ed_model.code_lines,
         )?;
 
         Ok(InputOutcome::Accepted)
@@ -107,11 +109,13 @@ pub fn update_int(
             let content_str = int_mark_node.get_content();
 
             // update GridNodeMap and CodeLines
-            ed_model.insert_between_line(
+            EdModel::insert_between_line(
                 old_caret_pos.line,
                 old_caret_pos.column,
                 &ch.to_string(),
                 int_mark_node_id,
+                &mut ed_model.grid_node_map,
+                &mut ed_model.code_lines,
             )?;
 
             // update ast

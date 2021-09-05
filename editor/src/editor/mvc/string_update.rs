@@ -62,11 +62,13 @@ pub fn update_small_string(
         content_str_mut.insert_str(node_caret_offset, new_input);
 
         // update GridNodeMap and CodeLines
-        ed_model.insert_between_line(
+        EdModel::insert_between_line(
             old_caret_pos.line,
             old_caret_pos.column,
             new_input,
             curr_mark_node_id,
+            &mut ed_model.grid_node_map,
+            &mut ed_model.code_lines,
         )?;
 
         // update caret
@@ -98,11 +100,13 @@ pub fn update_string(new_char: char, ed_model: &mut EdModel) -> EdResult<InputOu
         content_str_mut.insert(node_caret_offset, new_char);
 
         // update GridNodeMap and CodeLines
-        ed_model.insert_between_line(
+        EdModel::insert_between_line(
             old_caret_pos.line,
             old_caret_pos.column,
             &new_char.to_string(),
             curr_mark_node_id,
+            &mut ed_model.grid_node_map,
+            &mut ed_model.code_lines,
         )?;
 
         // update ast
@@ -155,14 +159,16 @@ pub fn start_new_string(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
             .replace_node(curr_mark_node_id, new_string_node);
 
         // remove data corresponding to Blank node
-        ed_model.del_at_line(old_caret_pos.line, old_caret_pos.column)?;
+        ed_model.del_blank_node(old_caret_pos, curr_mark_node_has_nl)?;
 
         // update GridNodeMap and CodeLines
-        ed_model.insert_between_line(
+        EdModel::insert_between_line(
             old_caret_pos.line,
             old_caret_pos.column,
             nodes::STRING_QUOTES,
             curr_mark_node_id,
+            &mut ed_model.grid_node_map,
+            &mut ed_model.code_lines,
         )?;
 
         ed_model.simple_move_carets_right(1);

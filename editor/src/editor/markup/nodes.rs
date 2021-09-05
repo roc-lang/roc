@@ -175,6 +175,17 @@ impl MarkupNode {
         }
     }
 
+    // gets content and adds newline from newline_at_end
+    pub fn get_full_content(&self) -> String {
+        let mut full_content = self.get_content();
+
+        if self.has_newline_at_end() {
+            full_content.push('\n')
+        }
+
+        full_content
+    }
+
     pub fn get_content_mut(&mut self) -> EdResult<&mut String> {
         match self {
             MarkupNode::Nested { .. } => ExpectedTextNode {

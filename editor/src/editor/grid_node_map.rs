@@ -9,7 +9,7 @@ use crate::editor::util::index_of;
 use crate::lang::parse::ASTNodeId;
 use crate::ui::text::selection::Selection;
 use crate::ui::text::text_pos::TextPos;
-use crate::ui::ui_error::{OutOfBounds, UIResult};
+use crate::ui::ui_error::{OutOfBounds, UIResult, LineInsertionFailed};
 use crate::ui::util::{slice_get, slice_get_mut};
 use snafu::OptionExt;
 use std::fmt;
@@ -22,20 +22,6 @@ pub struct GridNodeMap {
 }
 
 impl GridNodeMap {
-    pub fn new() -> GridNodeMap {
-        GridNodeMap {
-            lines: vec![vec![]],
-        }
-    }
-
-    pub fn add_to_line(&mut self, line_nr: usize, len: usize, node_id: MarkNodeId) -> UIResult<()> {
-        let line_ref = slice_get_mut(line_nr, &mut self.lines)?;
-        let mut new_cols_vec: Vec<MarkNodeId> = std::iter::repeat(node_id).take(len).collect();
-
-        line_ref.append(&mut new_cols_vec);
-
-        Ok(())
-    }
 
     pub fn insert_between_line(
         &mut self,
@@ -44,10 +30,26 @@ impl GridNodeMap {
         len: usize,
         node_id: MarkNodeId,
     ) -> UIResult<()> {
-        let line_ref = slice_get_mut(line_nr, &mut self.lines)?;
-        let new_cols_vec: Vec<MarkNodeId> = std::iter::repeat(node_id).take(len).collect();
+        let nr_of_lines = self.lines.len();
 
-        line_ref.splice(index..index, new_cols_vec);
+        if line_nr < nr_of_lines {
+            let line_ref = slice_get_mut(line_nr, &mut self.lines)?;
+            let new_cols_vec: Vec<MarkNodeId> = std::iter::repeat(node_id).take(len).collect();
+    
+            line_ref.splice(index..index, new_cols_vec);
+        } else if line_nr >= nr_of_lines {
+
+            for _ in 0..((line_nr - nr_of_lines) + 1) {
+                self.push_empty_line()?;
+            }
+            
+            self.insert_between_line(line_nr, index, len, node_id)?;
+        } else {
+            LineInsertionFailed {
+                line_nr,
+                nr_of_lines,
+            }.fail()?;
+        }
 
         Ok(())
     }
@@ -67,10 +69,22 @@ impl GridNodeMap {
         }
     }
 
-    pub fn del_at_line(&mut self, line_nr: usize, index: usize) -> UIResult<()> {
+    pub fn push_empty_line(&mut self) -> UIResult<()> {
+        self.insert_empty_line(self.lines.len())
+    }
+
+    pub fn del_at_line(&mut self, line_nr: usize, column: usize) -> UIResult<()> {
         let line_ref = slice_get_mut(line_nr, &mut self.lines)?;
 
-        line_ref.remove(index);
+        line_ref.remove(column);
+
+        Ok(())
+    }
+
+    pub fn del_range_at_line(&mut self, line_nr: usize, col_range: std::ops::Range<usize>) -> UIResult<()> {
+        let line_ref = slice_get_mut(line_nr, &mut self.lines)?;
+
+        line_ref.drain(col_range);
 
         Ok(())
     }
@@ -357,6 +371,14 @@ impl GridNodeMap {
         NoDefMarkNodeBeforeLineNr {
             line_nr
         }.fail()
+    }
+}
+
+impl Default for GridNodeMap {
+    fn default() -> Self {
+        GridNodeMap {
+            lines: vec![Vec::new()],
+        }
     }
 }
 

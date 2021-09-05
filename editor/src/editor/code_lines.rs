@@ -1,8 +1,8 @@
 use crate::ui::text::lines::Lines;
 use crate::ui::text::selection::Selection;
 use crate::ui::text::text_pos::TextPos;
-use crate::ui::ui_error::{OutOfBounds, UIResult};
-use crate::ui::util::slice_get;
+use crate::ui::ui_error::{OutOfBounds, UIResult, LineInsertionFailed};
+use crate::ui::util::{slice_get};
 use crate::ui::util::slice_get_mut;
 use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
@@ -15,21 +15,6 @@ pub struct CodeLines {
 }
 
 impl CodeLines {
-    pub fn from_str(code_str: &str) -> CodeLines {
-        let mut lines: Vec<String> = code_str
-            .split_inclusive('\n')
-            .map(|s| s.to_owned())
-            .collect();
-
-        if code_str.ends_with('\n') {
-            lines.push(String::new());
-        }
-
-        CodeLines {
-            lines,
-            nr_of_chars: code_str.len(),
-        }
-    }
 
     pub fn insert_between_line(
         &mut self,
@@ -37,9 +22,25 @@ impl CodeLines {
         index: usize,
         new_str: &str,
     ) -> UIResult<()> {
-        let line_ref = slice_get_mut(line_nr, &mut self.lines)?;
+        let nr_of_lines = self.lines.len();
 
-        line_ref.insert_str(index, new_str);
+        if line_nr < nr_of_lines {
+            let line_ref = slice_get_mut(line_nr, &mut self.lines)?;
+            
+            line_ref.insert_str(index, new_str);
+        } else if line_nr >= self.lines.len() {
+            
+            for _ in 0..((line_nr - nr_of_lines) + 1) {
+                self.push_empty_line()?;
+            }
+
+            self.insert_between_line(line_nr, index, new_str)?;
+        } else {
+            LineInsertionFailed {
+                line_nr,
+                nr_of_lines,
+            }.fail()?;
+        }
 
         self.nr_of_chars += new_str.len();
 
@@ -61,12 +62,24 @@ impl CodeLines {
         }
     }
 
+    pub fn push_empty_line(&mut self) -> UIResult<()> {
+        self.insert_empty_line(self.lines.len())
+    }
+
     pub fn del_at_line(&mut self, line_nr: usize, index: usize) -> UIResult<()> {
         let line_ref = slice_get_mut(line_nr, &mut self.lines)?;
 
         line_ref.remove(index);
 
         self.nr_of_chars -= 1;
+
+        Ok(())
+    }
+
+    pub fn del_range_at_line(&mut self, line_nr: usize, col_range: std::ops::Range<usize>) -> UIResult<()> {
+        let line_ref = slice_get_mut(line_nr, &mut self.lines)?;
+
+        line_ref.drain(col_range);
 
         Ok(())
     }
@@ -85,11 +98,11 @@ impl CodeLines {
 
     // last column of last line
     pub fn end_txt_pos(&self) -> TextPos {
-        let last_line = self.nr_of_lines() - 1;
-
+        let last_line_nr = self.nr_of_lines() - 1;
+        
         TextPos {
-            line: last_line,
-            column: self.line_len(last_line).unwrap(), // safe because we just calculated last_line
+            line: last_line_nr,
+            column: self.line_len(last_line_nr).unwrap(), // safe because we just calculated last_line
         }
     }
 
@@ -97,6 +110,15 @@ impl CodeLines {
         let line = self.get_line(line_nr)?;
 
         Ok((*line).eq("\n"))
+    }
+}
+
+impl Default for CodeLines {
+    fn default() -> Self {
+        CodeLines {
+            lines: Vec::new(),
+            nr_of_chars: 0,
+        }
     }
 }
 

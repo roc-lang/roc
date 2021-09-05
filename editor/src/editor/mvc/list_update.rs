@@ -57,28 +57,32 @@ pub fn start_new_list(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     };
 
     if is_blank_node {
+
         ed_model
             .mark_node_pool
             .replace_node(curr_mark_node_id, nested_node);
 
-        // remove data corresponding to Blank node
-        ed_model.del_at_line(old_caret_pos.line, old_caret_pos.column)?;
+        ed_model.del_blank_node(old_caret_pos, curr_mark_node_has_nl)?;
 
         ed_model.simple_move_carets_right(nodes::LEFT_SQUARE_BR.len());
 
         // update GridNodeMap and CodeLines
-        ed_model.insert_between_line(
+        EdModel::insert_between_line(
             old_caret_pos.line,
             old_caret_pos.column,
             nodes::LEFT_SQUARE_BR,
             left_bracket_node_id,
+            &mut ed_model.grid_node_map,
+            &mut ed_model.code_lines,
         )?;
 
-        ed_model.insert_between_line(
+        EdModel::insert_between_line(
             old_caret_pos.line,
             old_caret_pos.column + nodes::LEFT_SQUARE_BR.len(),
             nodes::RIGHT_SQUARE_BR,
             right_bracket_node_id,
+            &mut ed_model.grid_node_map,
+            &mut ed_model.code_lines,
         )?;
 
         Ok(InputOutcome::Accepted)
@@ -202,11 +206,13 @@ pub fn update_mark_children(
 
         ed_model.simple_move_carets_right(nodes::COMMA.len());
 
-        ed_model.insert_between_line(
+        EdModel::insert_between_line(
             old_caret_pos.line,
             old_caret_pos.column,
             nodes::COMMA,
             comma_mark_node_id,
+            &mut ed_model.grid_node_map,
+            &mut ed_model.code_lines,
         )?;
 
         children.push(comma_mark_node_id);
@@ -221,11 +227,13 @@ pub fn update_mark_children(
     };
 
     // update GridNodeMap and CodeLines
-    ed_model.insert_between_line(
+    EdModel::insert_between_line(
         old_caret_pos.line,
         old_caret_pos.column + comma_shift,
         nodes::BLANK_PLACEHOLDER,
         blank_mark_node_id,
+        &mut ed_model.grid_node_map,
+        &mut ed_model.code_lines,
     )?;
 
     Ok(children)

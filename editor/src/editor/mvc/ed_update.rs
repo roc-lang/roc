@@ -6,7 +6,7 @@ use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::MissingSelection;
 use crate::editor::grid_node_map::GridNodeMap;
 use crate::editor::markup::attribute::Attributes;
-use crate::editor::markup::common_nodes::new_blank_mn;
+use crate::editor::markup::common_nodes::new_blank_mn_w_nl;
 use crate::editor::markup::nodes;
 use crate::editor::markup::nodes::MarkupNode;
 use crate::editor::markup::nodes::EQUALS;
@@ -132,68 +132,8 @@ impl<'a> EdModel<'a> {
         }
     }
 
-    pub fn build_node_map_from_markup(
-        markup_ids: &[MarkNodeId],
-        mark_node_pool: &SlowPool,
-    ) -> EdResult<GridNodeMap> {
-        let mut grid_node_map = GridNodeMap::new();
-        let mut line_ctr = 0;
-
-        for mark_id in markup_ids.iter() {
-            EdModel::build_grid_node_map(
-                *mark_id,
-                &mut grid_node_map,
-                &mut line_ctr,
-                mark_node_pool,
-            )?;
-        }
-
-        Ok(grid_node_map)
-    }
-
     pub fn add_mark_node(&mut self, node: MarkupNode) -> MarkNodeId {
         self.mark_node_pool.add(node)
-    }
-
-    fn build_grid_node_map(
-        node_id: MarkNodeId,
-        grid_node_map: &mut GridNodeMap,
-        line_ctr: &mut usize,
-        mark_node_pool: &SlowPool,
-    ) -> EdResult<()> {
-        let node = mark_node_pool.get(node_id);
-
-        if node.is_nested() {
-            for child_id in node.get_children_ids() {
-                EdModel::build_grid_node_map(child_id, grid_node_map, line_ctr, mark_node_pool)?;
-            }
-        } else {
-            let node_content_str = node.get_content();
-
-            grid_node_map.add_to_line(*line_ctr, node_content_str.len(), node_id)?;
-        }
-
-        if node.has_newline_at_end() {
-            *line_ctr += 1;
-            grid_node_map.lines.push(vec![]);
-        }
-
-        Ok(())
-    }
-
-    pub fn build_code_lines_from_markup(
-        markup_node_ids: &[MarkNodeId],
-        mark_node_pool: &SlowPool,
-    ) -> EdResult<CodeLines> {
-        let mut all_code_string = String::new();
-
-        for mark_node_id in markup_node_ids.iter() {
-            EdModel::build_markup_string(*mark_node_id, &mut all_code_string, mark_node_pool)?;
-        }
-
-        let code_lines = CodeLines::from_str(&all_code_string);
-
-        Ok(code_lines)
     }
 
     fn build_markup_string(
@@ -222,39 +162,118 @@ impl<'a> EdModel<'a> {
 
     // updates grid_node_map and code_lines but nothing else.
     pub fn insert_between_line(
-        &mut self,
         line_nr: usize,
         index: usize,
         new_str: &str,
         node_id: MarkNodeId,
+        grid_node_map: &mut GridNodeMap,
+        code_lines: &mut CodeLines,
     ) -> UIResult<()> {
-        self.grid_node_map
+        grid_node_map
             .insert_between_line(line_nr, index, new_str.len(), node_id)?;
-        self.code_lines.insert_between_line(line_nr, index, new_str)
+        code_lines
+            .insert_between_line(line_nr, index, new_str)
     }
 
     pub fn insert_all_between_line(
         &mut self,
         line_nr: usize,
         index: usize,
-        node_ids: &[MarkNodeId],
+        leaf_node_ids: &[MarkNodeId],
     ) -> UIResult<()> {
         let mut col_nr = index;
+        let mut curr_line_nr = line_nr;
 
-        for &node_id in node_ids {
-            let node_content_str = self.mark_node_pool.get(node_id).get_content();
+        for &node_id in leaf_node_ids {
+            let mark_node = self.mark_node_pool.get(node_id);
+            let node_content_str = mark_node.get_full_content();
 
-            self.grid_node_map.insert_between_line(
-                line_nr,
-                col_nr,
-                node_content_str.len(),
-                node_id,
+            if node_content_str.contains('\n') {
+                //insert seperate lines separately
+                let split_lines = node_content_str.split_inclusive('\n');
+
+                for line in split_lines {
+
+                    self.grid_node_map.insert_between_line(
+                        curr_line_nr,
+                        col_nr,
+                        line.len(),
+                        node_id,
+                    )?;
+        
+                    self.code_lines
+                        .insert_between_line(curr_line_nr, col_nr, line)?;
+                    
+                    curr_line_nr += 1;
+                    col_nr = 0;
+                }
+            } else {
+                self.grid_node_map.insert_between_line(
+                    line_nr,
+                    col_nr,
+                    node_content_str.len(),
+                    node_id,
+                )?;
+    
+                self.code_lines
+                    .insert_between_line(line_nr, col_nr, &node_content_str)?;
+
+                col_nr += node_content_str.len();
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn insert_mark_node_between_line(
+        line_nr: &mut usize,
+        col_nr: &mut usize,
+        mark_node_id: MarkNodeId,
+        grid_node_map: &mut GridNodeMap,
+        code_lines: &mut CodeLines,
+        mark_node_pool: &SlowPool,
+    ) -> UIResult<()> {
+        let mark_node = mark_node_pool.get(mark_node_id);
+        let node_has_newline = mark_node.has_newline_at_end();
+
+        if mark_node.is_nested() {
+
+            let children_ids = mark_node.get_children_ids();
+
+            for child_id in children_ids {
+                EdModel::insert_mark_node_between_line(
+                    line_nr,
+                    col_nr,
+                    child_id,
+                    grid_node_map,
+                    code_lines,
+                    mark_node_pool,
+                )?;
+            }
+
+            if node_has_newline {
+                *line_nr += 1;
+                *col_nr = 0;
+            }
+        } else {
+            let node_content = mark_node.get_content();
+
+            EdModel::insert_between_line(
+                *line_nr,
+                *col_nr,
+                &node_content,
+                mark_node_id,
+                grid_node_map,
+                code_lines,
             )?;
 
-            self.code_lines
-                .insert_between_line(line_nr, col_nr, &node_content_str)?;
-
-            col_nr += node_content_str.len();
+            if node_has_newline {
+                *line_nr += 1;
+                *col_nr = 0;
+            } else {
+                *col_nr += node_content.len();
+            }
+            
         }
 
         Ok(())
@@ -269,6 +288,24 @@ impl<'a> EdModel<'a> {
     pub fn del_at_line(&mut self, line_nr: usize, index: usize) -> UIResult<()> {
         self.grid_node_map.del_at_line(line_nr, index)?;
         self.code_lines.del_at_line(line_nr, index)
+    }
+
+    // updates grid_node_map and code_lines but nothing else.
+    pub fn del_range_at_line(&mut self, line_nr: usize,  col_range: std::ops::Range<usize>) -> UIResult<()> {
+        self.grid_node_map.del_range_at_line(line_nr,  col_range.clone())?;
+        self.code_lines.del_range_at_line(line_nr,  col_range)
+    }
+
+    pub fn del_blank_node(&mut self, txt_pos: TextPos, with_newline: bool) -> UIResult<()> {
+
+        let line_nr = txt_pos.line;
+        let column = txt_pos.column;
+
+        if with_newline {
+            self.del_range_at_line(line_nr, column..column + 2) // 1 for newline + 1 because range excludes end
+        } else {
+            self.del_at_line(line_nr, column)
+        }
     }
 
     pub fn set_selected_expr(
@@ -494,11 +531,13 @@ impl<'a> EdModel<'a> {
         if let Some(expr_mark_node_id) = expr_mark_node_id_opt {
             let caret_pos = self.get_caret();
 
-            self.insert_between_line(
+            EdModel::insert_between_line(
                 caret_pos.line,
                 caret_pos.column,
                 nodes::BLANK_PLACEHOLDER,
                 expr_mark_node_id,
+                &mut self.grid_node_map,
+                &mut self.code_lines,
             )?;
         }
 
@@ -1061,7 +1100,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                             ed_model.module.ast.def_ids.insert(prev_def_mn_id_indx, new_line_blank_id);
 
                                             let blank_mn_id = ed_model
-                                                .add_mark_node(new_blank_mn(ASTNodeId::ADefId(new_line_blank_id), None));
+                                                .add_mark_node(new_blank_mn_w_nl(ASTNodeId::ADefId(new_line_blank_id), None));
 
                                             ed_model.markup_ids.insert(prev_def_mn_id_indx + 1,blank_mn_id); // + 1 because first markup node is header
 
@@ -1109,7 +1148,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                     ed_model.module.ast.def_ids.insert(prev_def_mn_id_indx, new_blank_id);
 
                                                     let blank_mn_id = ed_model
-                                                        .add_mark_node(new_blank_mn(ASTNodeId::ADefId(new_blank_id), None));
+                                                        .add_mark_node(new_blank_mn_w_nl(ASTNodeId::ADefId(new_blank_id), None));
 
                                                     ed_model.markup_ids.insert(prev_def_mn_id_indx + 1,blank_mn_id); // + 1 because first mark_node is header
 

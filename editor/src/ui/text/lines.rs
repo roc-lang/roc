@@ -185,7 +185,7 @@ pub fn move_caret_right<T: Lines>(
         let is_last_line = lines.is_last_line(old_line_nr);
 
         if !is_last_line {
-            if old_col_nr + 1 > curr_line_len - 1 {
+            if old_col_nr + 2 > curr_line_len {
                 (old_line_nr + 1, 0)
             } else {
                 (old_line_nr, old_col_nr + 1)
@@ -260,10 +260,18 @@ pub fn move_caret_up<T: Lines>(
     } else if old_line_nr == 0 {
         (old_line_nr, 0)
     } else {
+        
         let prev_line_len = lines.line_len(old_line_nr - 1)?;
 
         if prev_line_len <= old_col_nr {
-            (old_line_nr - 1, prev_line_len - 1)
+            let new_column = 
+                if prev_line_len > 0 {
+                    prev_line_len - 1
+                } else {
+                    0
+                };
+
+            (old_line_nr - 1, new_column)
         } else {
             (old_line_nr - 1, old_col_nr)
         }
@@ -331,7 +339,14 @@ pub fn move_caret_down<T: Lines>(
 
         if next_line_len <= old_col_nr {
             if !is_last_line {
-                (old_line_nr + 1, next_line_len - 1)
+                let new_column = 
+                    if next_line_len > 0 {
+                        next_line_len - 1
+                    } else {
+                        0
+                    };
+
+                (old_line_nr + 1, new_column)
             } else {
                 (old_line_nr + 1, next_line_len)
             }
