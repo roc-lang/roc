@@ -2746,6 +2746,63 @@ macro_rules! match_on_closure_argument {
     }};
 }
 
+fn try_make_literal<'a>(
+    env: &mut Env<'a, '_>,
+    can_expr: &roc_can::expr::Expr,
+) -> Option<Literal<'a>> {
+    use roc_can::expr::Expr::*;
+
+    match can_expr {
+        Int(_, precision, _, int) => {
+            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *precision, false) {
+                IntOrFloat::SignedIntType(_) | IntOrFloat::UnsignedIntType(_) => {
+                    Some(Literal::Int(*int))
+                }
+                _ => unreachable!("unexpected float precision for integer"),
+            }
+        }
+
+        Float(_, precision, float_str, float) => {
+            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *precision, true) {
+                IntOrFloat::BinaryFloatType(_) => Some(Literal::Float(*float)),
+                IntOrFloat::DecimalFloatType => {
+                    let dec = match RocDec::from_str(float_str) {
+                            Some(d) => d,
+                            None => panic!("Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message", float_str),
+                        };
+
+                    Some(Literal::Decimal(dec))
+                }
+                _ => unreachable!("unexpected float precision for integer"),
+            }
+        }
+
+        // TODO investigate lifetime trouble
+        // Str(string) => Some(Literal::Str(env.arena.alloc(string))),
+        Num(var, num_str, num) => {
+            // first figure out what kind of number this is
+            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, false) {
+                IntOrFloat::SignedIntType(_) | IntOrFloat::UnsignedIntType(_) => {
+                    Some(Literal::Int((*num).into()))
+                }
+                IntOrFloat::BinaryFloatType(_) => Some(Literal::Float(*num as f64)),
+                IntOrFloat::DecimalFloatType => {
+                    let dec = match RocDec::from_str(num_str) {
+                        Some(d) => d,
+                        None => panic!(
+                            r"Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message",
+                            num_str
+                        ),
+                    };
+
+                    Some(Literal::Decimal(dec))
+                }
+            }
+        }
+        _ => None,
+    }
+}
+
 pub fn with_hole<'a>(
     env: &mut Env<'a, '_>,
     can_expr: roc_can::expr::Expr,
@@ -3442,11 +3499,19 @@ pub fn with_hole<'a>(
         } => {
             let mut arg_symbols = Vec::with_capacity_in(loc_elems.len(), env.arena);
             let mut elements = Vec::with_capacity_in(loc_elems.len(), env.arena);
-            for arg_expr in loc_elems.iter() {
-                let symbol = possible_reuse_symbol(env, procs, &arg_expr.value);
 
-                elements.push(ListLiteralElement::Symbol(symbol));
-                arg_symbols.push(symbol)
+            let mut symbol_exprs = Vec::with_capacity_in(loc_elems.len(), env.arena);
+
+            for arg_expr in loc_elems.into_iter() {
+                if let Some(literal) = try_make_literal(env, &arg_expr.value) {
+                    elements.push(ListLiteralElement::Literal(literal));
+                } else {
+                    let symbol = possible_reuse_symbol(env, procs, &arg_expr.value);
+
+                    elements.push(ListLiteralElement::Symbol(symbol));
+                    arg_symbols.push(symbol);
+                    symbol_exprs.push(arg_expr);
+                }
             }
             let arg_symbols = arg_symbols.into_bump_slice();
 
@@ -3466,7 +3531,7 @@ pub fn with_hole<'a>(
                 hole,
             );
 
-            let iter = loc_elems
+            let iter = symbol_exprs
                 .into_iter()
                 .rev()
                 .map(|e| (elem_var, e))
