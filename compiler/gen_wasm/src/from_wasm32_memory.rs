@@ -113,26 +113,6 @@ impl<T: FromWasm32Memory + Clone> FromWasm32Memory for RocList<T> {
     }
 }
 
-impl<T: FromWasm32Memory + Clone> FromWasm32Memory for &'_ [T] {
-    const SIZE_OF_WASM: usize = 8;
-    const ALIGN_OF_WASM: usize = 4;
-
-    fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
-        let bytes = <u64 as FromWasm32Memory>::decode(memory, offset);
-
-        let length = (bytes >> 32) as u32;
-        let elements = bytes as u32;
-
-        let ptr: wasmer::WasmPtr<u8, wasmer::Array> = wasmer::WasmPtr::new(elements);
-        let width = <T as FromWasm32Memory>::SIZE_OF_WASM as u32 * length;
-        let foobar = (ptr.deref(memory, 0, width)).unwrap();
-        let wasm_slice =
-            unsafe { std::slice::from_raw_parts(foobar as *const _ as *const _, length as usize) };
-
-        wasm_slice
-    }
-}
-
 impl<T: FromWasm32Memory> FromWasm32Memory for &'_ T {
     const SIZE_OF_WASM: usize = 4;
     const ALIGN_OF_WASM: usize = 4;
