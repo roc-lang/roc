@@ -152,7 +152,7 @@ where
         match expr {
             Expr::Literal(lit) => {
                 if self.env().lazy_literals {
-                    self.literal_map().insert(*sym, lit.clone());
+                    self.literal_map().insert(*sym, *lit);
                 } else {
                     self.load_literal(sym, lit)?;
                 }
