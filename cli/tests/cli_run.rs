@@ -380,9 +380,7 @@ mod cli_run {
                         benchmark.executable_filename,
                         &["--backend=x86_32"],
                         benchmark.expected_ending,
-                        // TODO enable valgrind when CI has 32-bit valgrind support
-                        // benchmark.use_valgrind,
-                        false
+                        benchmark.use_valgrind,
                     );
 
                     check_output_with_stdin(
@@ -391,9 +389,7 @@ mod cli_run {
                         benchmark.executable_filename,
                         &["--backend=x86_32", "--optimize"],
                         benchmark.expected_ending,
-                        // TODO enable valgrind when CI has 32-bit valgrind support
-                        // benchmark.use_valgrind,
-                        false
+                        benchmark.use_valgrind,
                     );
                 }
             )*
