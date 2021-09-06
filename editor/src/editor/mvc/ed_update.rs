@@ -187,7 +187,7 @@ impl<'a> EdModel<'a> {
             let node_full_content = mark_node.get_full_content();
 
             if node_full_content.contains('\n') {
-                //insert seperate lines separately
+                //insert separate lines separately
                 let split_lines = node_full_content.split('\n');
 
                 for line in split_lines {
