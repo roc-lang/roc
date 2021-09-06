@@ -699,6 +699,14 @@ impl<
                 break;
             }
         }
+        for i in 0..self.float_used_regs.len() {
+            let (reg, saved_sym) = self.float_used_regs[i];
+            if saved_sym == *sym {
+                self.float_free_regs.push(reg);
+                self.float_used_regs.remove(i);
+                break;
+            }
+        }
     }
 
     fn return_symbol(&mut self, sym: &Symbol, layout: &Layout<'a>) -> Result<(), String> {
