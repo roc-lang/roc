@@ -186,11 +186,11 @@ impl<'a> EdModel<'a> {
 
         for &node_id in leaf_node_ids {
             let mark_node = self.mark_node_pool.get(node_id);
-            let node_content_str = mark_node.get_full_content();
+            let node_full_content = mark_node.get_full_content();
 
-            if node_content_str.contains('\n') {
+            if node_full_content.contains('\n') {
                 //insert seperate lines separately
-                let split_lines = node_content_str.split_inclusive('\n');
+                let split_lines = node_full_content.split('\n');
 
                 for line in split_lines {
 
@@ -208,17 +208,19 @@ impl<'a> EdModel<'a> {
                     col_nr = 0;
                 }
             } else {
+                let node_content = mark_node.get_content();
+
                 self.grid_node_map.insert_between_line(
                     line_nr,
                     col_nr,
-                    node_content_str.len(),
+                    node_content.len(),
                     node_id,
                 )?;
     
                 self.code_lines
-                    .insert_between_line(line_nr, col_nr, &node_content_str)?;
+                    .insert_between_line(line_nr, col_nr, &node_content)?;
 
-                col_nr += node_content_str.len();
+                col_nr += node_content.len();
             }
         }
 
@@ -296,16 +298,9 @@ impl<'a> EdModel<'a> {
         self.code_lines.del_range_at_line(line_nr,  col_range)
     }
 
-    pub fn del_blank_node(&mut self, txt_pos: TextPos, with_newline: bool) -> UIResult<()> {
+    pub fn del_blank_node(&mut self, txt_pos: TextPos) -> UIResult<()> {
 
-        let line_nr = txt_pos.line;
-        let column = txt_pos.column;
-
-        if with_newline {
-            self.del_range_at_line(line_nr, column..column + 2) // 1 for newline + 1 because range excludes end
-        } else {
-            self.del_at_line(line_nr, column)
-        }
+        self.del_at_line(txt_pos.line, txt_pos.column)
     }
 
     pub fn set_selected_expr(

@@ -54,12 +54,10 @@ pub fn start_new_tld_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
     let NodeContext {
         old_caret_pos,
         curr_mark_node_id,
-        curr_mark_node,
+        curr_mark_node:_,
         parent_id_opt: _,
         ast_node_id,
     } = get_node_context(ed_model)?;
-
-    let curr_mark_node_has_nl = curr_mark_node.has_newline_at_end();
 
     let val_expr_node = Expr2::Blank;
     let val_expr_id = ed_model.module.env.pool.add(val_expr_node);
@@ -123,7 +121,7 @@ pub fn start_new_tld_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
     set_parent_for_all(curr_mark_node_id, &mut ed_model.mark_node_pool);
 
     // remove data corresponding to old Blank node
-    ed_model.del_blank_node(old_caret_pos, curr_mark_node_has_nl)?;
+    ed_model.del_blank_node(old_caret_pos)?;
 
     let char_len = 1;
     ed_model.simple_move_carets_right(char_len);

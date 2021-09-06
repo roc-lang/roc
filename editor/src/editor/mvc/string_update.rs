@@ -159,7 +159,7 @@ pub fn start_new_string(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
             .replace_node(curr_mark_node_id, new_string_node);
 
         // remove data corresponding to Blank node
-        ed_model.del_blank_node(old_caret_pos, curr_mark_node_has_nl)?;
+        ed_model.del_blank_node(old_caret_pos)?;
 
         // update GridNodeMap and CodeLines
         EdModel::insert_between_line(

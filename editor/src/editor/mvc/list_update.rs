@@ -62,7 +62,7 @@ pub fn start_new_list(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
             .mark_node_pool
             .replace_node(curr_mark_node_id, nested_node);
 
-        ed_model.del_blank_node(old_caret_pos, curr_mark_node_has_nl)?;
+        ed_model.del_blank_node(old_caret_pos)?;
 
         ed_model.simple_move_carets_right(nodes::LEFT_SQUARE_BR.len());
 

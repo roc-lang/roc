@@ -93,7 +93,7 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
             .replace_node(curr_mark_node_id, val_mark_node);
 
         // remove data corresponding to Blank node
-        ed_model.del_blank_node(old_caret_pos, curr_mark_node_has_nl)?;
+        ed_model.del_blank_node(old_caret_pos)?;
 
         let char_len = 1;
         ed_model.simple_move_carets_right(char_len);
