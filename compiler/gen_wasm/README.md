@@ -27,12 +27,16 @@ Implications:
 
 Roc, like most modern languages, is already enforcing structured control flow in the source program. Constructs from the Roc AST like `When`, `If` and `LetRec` can all be converted straightforwardly to Wasm constructs.
 
-However the Mono IR converts this to jumps and join points, which are more of a Control Flow Graph than a tree. That doesn't map so directly to the Wasm structures. This is such a common issue for compiler back-ends that the WebAssembly compiler toolkit `binaryen` has an algorithm to solve it, called the "[Relooper][relooper]". We're not using `binaryen` right now. It's a C++ library, though it does have a (very thin and somewhat hard-to-use) [Rust wrapper][binaryen-rs]. We should probably investigate this area sooner rather than later. If relooping turns out to be necessary or difficult, we might need to switch from parity_wasm to binaryen.
+However the Mono IR converts this to jumps and join points, which are more of a Control Flow Graph than a tree. That doesn't map so directly to the Wasm structures. This is such a common issue for compiler back-ends that the WebAssembly compiler toolkit `binaryen` has an [API for control-flow graphs][cfg-api]. We're not using `binaryen` right now. It's a C++ library, though it does have a (very thin and somewhat hard-to-use) [Rust wrapper][binaryen-rs]. We should probably investigate this area sooner rather than later. If relooping turns out to be necessary or difficult, we might need to switch from parity_wasm to binaryen.
 
-> By the way, it's not obvious how to pronounce "binaryen" but apparently it rhymes with "Targaryen", the family name from Game of Thrones
+> By the way, it's not obvious how to pronounce "binaryen" but apparently it rhymes with "Targaryen", the family name from the "Game of Thrones" TV series
 
-[relooper]: https://github.com/WebAssembly/binaryen/wiki/Compiling-to-WebAssembly-with-Binaryen#cfg-api
+[cfg-api]: https://github.com/WebAssembly/binaryen/wiki/Compiling-to-WebAssembly-with-Binaryen#cfg-api
 [binaryen-rs]: https://crates.io/crates/binaryen
+
+Binaryen's control-flow graph API implements the "Relooper" algorithm developed by the Emscripten project and decribed in [this paper](https://github.com/emscripten-core/emscripten/blob/main/docs/paper.pdf).
+
+There is an alternative algorithm that is supposed to be an improvement on Relooper, called ["Stackifier"](https://medium.com/leaningtech/solving-the-structured-control-flow-problem-once-and-for-all-5123117b1ee2).
 
 
 ## Stack machine vs register machine
@@ -96,19 +100,23 @@ The Mono IR contains two functions, `Num.add` and `main`, so we generate two cor
     return)                  ; return the value at the top of the stack
 ```
 
-If we run this code through the `wasm-opt` tool from the [binaryen toolkit](https://github.com/WebAssembly/binaryen#tools), all of the locals get optimised away. But this optimised version is harder to generate directly from the Mono IR.
+If we run this code through the `wasm-opt` tool from the [binaryen toolkit](https://github.com/WebAssembly/binaryen#tools), the unnecessary locals get optimised away. The command line below runs the minimum number of passes to achieve this (`--simplify-locals` must come first).
 
+```
+$ wasm-opt --simplify-locals --reorder-locals --vacuum example.wasm > opt.wasm
+```
+
+The optimised functions have no local variables, and the code shrinks to about 60% of its original size.
 ```
   (func (;0;) (param i64 i64) (result i64)
     local.get 0
     local.get 1
-    i64.add)    ; return can be implicit, like in Rust. Only really needed from inside a branch.
+    i64.add)
   (func (;1;) (result i64)
     i64.const 1
     i64.const 2
-    call 0        ; the result of the first addition is at the top of the stack. No need to set a local and get it again.
-    i64.const 4   ; no need to store the constant to a local and get it again
-    call 0)
+    call 0
+    i64.const 4)
 ```
 
 ## Memory
