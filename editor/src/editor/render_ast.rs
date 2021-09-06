@@ -94,7 +94,6 @@ fn markup_to_wgpu_helper<'a>(
     txt_row_col: &mut (usize, usize),
     mark_node_pool: &'a SlowPool,
 ) -> EdResult<()> {
-
     match markup_node {
         MarkupNode::Nested {
             ast_node_id: _,
@@ -153,7 +152,6 @@ fn markup_to_wgpu_helper<'a>(
             parent_id_opt: _,
             newline_at_end,
         } => {
-
             let full_content = markup_node.get_full_content();
 
             let glyph_text = glyph_brush::OwnedText::new(full_content)

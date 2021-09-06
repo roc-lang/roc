@@ -8,7 +8,11 @@ use snafu::{Backtrace, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub))]
 pub enum UIError {
-    #[snafu(display("LineInsertionFailed: line_nr ({}) needs to be <= nr_of_lines ({}).", line_nr, nr_of_lines))]
+    #[snafu(display(
+        "LineInsertionFailed: line_nr ({}) needs to be <= nr_of_lines ({}).",
+        line_nr,
+        nr_of_lines
+    ))]
     LineInsertionFailed {
         line_nr: usize,
         nr_of_lines: usize,

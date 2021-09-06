@@ -1,12 +1,25 @@
 use roc_module::symbol::{Interns, Symbol};
 
-use crate::{editor::{ed_error::{EdResult, KeyNotFound, FailedToUpdateIdentIdName}, markup::{attribute::Attributes, common_nodes::{new_blank_mn_w_nl, new_equals_mn}, nodes::{MarkupNode, set_parent_for_all}}, slow_pool::{MarkNodeId, SlowPool}, syntax_highlight::HighlightStyle}, lang::{
+use crate::{
+    editor::{
+        ed_error::{EdResult, FailedToUpdateIdentIdName, KeyNotFound},
+        markup::{
+            attribute::Attributes,
+            common_nodes::{new_blank_mn, new_equals_mn},
+            nodes::{set_parent_for_all, MarkupNode},
+        },
+        slow_pool::{MarkNodeId, SlowPool},
+        syntax_highlight::HighlightStyle,
+    },
+    lang::{
         ast::{Def2, Expr2},
         expr::Env,
         parse::ASTNodeId,
         pattern::{get_identifier_string, Pattern2},
         pool::NodeId,
-    }, ui::text::text_pos::TextPos};
+    },
+    ui::text::text_pos::TextPos,
+};
 
 use super::{
     app_update::InputOutcome,
@@ -54,7 +67,7 @@ pub fn start_new_tld_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
     let NodeContext {
         old_caret_pos,
         curr_mark_node_id,
-        curr_mark_node:_,
+        curr_mark_node: _,
         parent_id_opt: _,
         ast_node_id,
     } = get_node_context(ed_model)?;
@@ -62,7 +75,7 @@ pub fn start_new_tld_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
     let val_expr_node = Expr2::Blank;
     let val_expr_id = ed_model.module.env.pool.add(val_expr_node);
 
-    let val_expr_mn = new_blank_mn_w_nl(ASTNodeId::AExprId(val_expr_id), None);
+    let val_expr_mn = new_blank_mn(ASTNodeId::AExprId(val_expr_id), None);
     let val_expr_mn_id = ed_model.mark_node_pool.add(val_expr_mn);
 
     let val_name_string = new_char.to_string();
@@ -169,13 +182,10 @@ pub fn update_tld_val_name(
 
             match update_val_name_res {
                 Err(err_str) => {
-                    FailedToUpdateIdentIdName {
-                        err_str
-                    }.fail()?;
+                    FailedToUpdateIdentIdName { err_str }.fail()?;
                 }
                 _ => (),
             }
-                
 
             EdModel::insert_between_line(
                 old_caret_pos.line,

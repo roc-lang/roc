@@ -77,7 +77,14 @@ pub fn init_model<'a>(
     let mut col_nr = 0;
 
     for mark_node_id in &markup_ids {
-        EdModel::insert_mark_node_between_line(&mut line_nr, &mut col_nr, *mark_node_id, &mut grid_node_map, &mut code_lines, &mark_node_pool)?
+        EdModel::insert_mark_node_between_line(
+            &mut line_nr,
+            &mut col_nr,
+            *mark_node_id,
+            &mut grid_node_map,
+            &mut code_lines,
+            &mark_node_pool,
+        )?
     }
 
     let caret = match caret_pos {
@@ -296,7 +303,7 @@ pub mod test_ed_model {
         )?;
 
         // adjust for header and main function
-        let nr_hello_world_lines = HELLO_WORLD.matches('\n').count() - 1;
+        let nr_hello_world_lines = HELLO_WORLD.matches('\n').count() - 2;
         let caret_w_select = convert_dsl_to_selection(&code_lines)?;
         let adjusted_caret_pos = TextPos {
             line: caret_w_select.caret_pos.line + nr_hello_world_lines,

@@ -67,11 +67,11 @@ pub enum EdError {
     ))]
     EmptyCodeString { backtrace: Backtrace },
 
-    #[snafu(display(
-        "FailedToUpdateIdentIdName: {}",
-        err_str
-    ))]
-    FailedToUpdateIdentIdName { err_str: String, backtrace: Backtrace },
+    #[snafu(display("FailedToUpdateIdentIdName: {}", err_str))]
+    FailedToUpdateIdentIdName {
+        err_str: String,
+        backtrace: Backtrace,
+    },
 
     #[snafu(display("GetContentOnNestedNode: tried to get string content from Nested MarkupNode. Can only get content from Text or Blank nodes."))]
     GetContentOnNestedNode { backtrace: Backtrace },

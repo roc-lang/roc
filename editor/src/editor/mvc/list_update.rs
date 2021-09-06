@@ -57,7 +57,6 @@ pub fn start_new_list(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     };
 
     if is_blank_node {
-
         ed_model
             .mark_node_pool
             .replace_node(curr_mark_node_id, nested_node);

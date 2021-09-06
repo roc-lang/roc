@@ -1,6 +1,6 @@
-use super::ui_error::{OutOfBounds, UIResult};
+use super::ui_error::{OutOfBounds, UIResult, FileOpenFailed};
 use snafu::OptionExt;
-use std::slice::SliceIndex;
+use std::{fs::File, io::BufReader, path::Path, slice::SliceIndex};
 
 pub fn is_newline(char_ref: &char) -> bool {
     let newline_codes = vec!['\u{d}', '\n'];
@@ -32,4 +32,23 @@ pub fn slice_get_mut<T>(
     })?;
 
     Ok(elt_ref)
+}
+
+pub fn reader_from_path(path: &Path) -> UIResult<BufReader<File>> {
+    match File::open(path) {
+        Ok(file) => {
+           return Ok(BufReader::new(file));
+        }
+        Err(e) => FileOpenFailed {
+            path_str: path_to_string(path),
+            err_msg: e.to_string(),
+        }.fail()?,
+    }
+}
+
+pub fn path_to_string(path: &Path) -> String {
+    let mut path_str = String::new();
+    path_str.push_str(&path.to_string_lossy());
+
+    path_str
 }

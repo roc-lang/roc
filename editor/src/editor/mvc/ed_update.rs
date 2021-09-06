@@ -169,10 +169,8 @@ impl<'a> EdModel<'a> {
         grid_node_map: &mut GridNodeMap,
         code_lines: &mut CodeLines,
     ) -> UIResult<()> {
-        grid_node_map
-            .insert_between_line(line_nr, index, new_str.len(), node_id)?;
-        code_lines
-            .insert_between_line(line_nr, index, new_str)
+        grid_node_map.insert_between_line(line_nr, index, new_str.len(), node_id)?;
+        code_lines.insert_between_line(line_nr, index, new_str)
     }
 
     pub fn insert_all_between_line(
@@ -193,17 +191,16 @@ impl<'a> EdModel<'a> {
                 let split_lines = node_full_content.split('\n');
 
                 for line in split_lines {
-
                     self.grid_node_map.insert_between_line(
                         curr_line_nr,
                         col_nr,
                         line.len(),
                         node_id,
                     )?;
-        
+
                     self.code_lines
                         .insert_between_line(curr_line_nr, col_nr, line)?;
-                    
+
                     curr_line_nr += 1;
                     col_nr = 0;
                 }
@@ -216,7 +213,7 @@ impl<'a> EdModel<'a> {
                     node_content.len(),
                     node_id,
                 )?;
-    
+
                 self.code_lines
                     .insert_between_line(line_nr, col_nr, &node_content)?;
 
@@ -239,7 +236,6 @@ impl<'a> EdModel<'a> {
         let node_has_newline = mark_node.has_newline_at_end();
 
         if mark_node.is_nested() {
-
             let children_ids = mark_node.get_children_ids();
 
             for child_id in children_ids {
@@ -254,6 +250,8 @@ impl<'a> EdModel<'a> {
             }
 
             if node_has_newline {
+                EdModel::push_empty_line(code_lines, grid_node_map);
+
                 *line_nr += 1;
                 *col_nr = 0;
             }
@@ -270,12 +268,13 @@ impl<'a> EdModel<'a> {
             )?;
 
             if node_has_newline {
+                EdModel::push_empty_line(code_lines, grid_node_map);
+
                 *line_nr += 1;
                 *col_nr = 0;
             } else {
                 *col_nr += node_content.len();
             }
-            
         }
 
         Ok(())
@@ -286,6 +285,11 @@ impl<'a> EdModel<'a> {
         self.grid_node_map.insert_empty_line(line_nr)
     }
 
+    pub fn push_empty_line(code_lines: &mut CodeLines, grid_node_map: &mut GridNodeMap) {
+        code_lines.push_empty_line();
+        grid_node_map.push_empty_line();
+    }
+
     // updates grid_node_map and code_lines but nothing else.
     pub fn del_at_line(&mut self, line_nr: usize, index: usize) -> UIResult<()> {
         self.grid_node_map.del_at_line(line_nr, index)?;
@@ -293,13 +297,17 @@ impl<'a> EdModel<'a> {
     }
 
     // updates grid_node_map and code_lines but nothing else.
-    pub fn del_range_at_line(&mut self, line_nr: usize,  col_range: std::ops::Range<usize>) -> UIResult<()> {
-        self.grid_node_map.del_range_at_line(line_nr,  col_range.clone())?;
-        self.code_lines.del_range_at_line(line_nr,  col_range)
+    pub fn del_range_at_line(
+        &mut self,
+        line_nr: usize,
+        col_range: std::ops::Range<usize>,
+    ) -> UIResult<()> {
+        self.grid_node_map
+            .del_range_at_line(line_nr, col_range.clone())?;
+        self.code_lines.del_range_at_line(line_nr, col_range)
     }
 
     pub fn del_blank_node(&mut self, txt_pos: TextPos) -> UIResult<()> {
-
         self.del_at_line(txt_pos.line, txt_pos.column)
     }
 
@@ -612,7 +620,7 @@ impl<'a> SelectableLines for EdModel<'a> {
             let end_col = selection.end_pos.column;
 
             if start_line_index == end_line_index {
-                let line_ref = self.code_lines.get_line(start_line_index)?;
+                let line_ref = self.code_lines.get_line_ref(start_line_index)?;
 
                 Ok(Some(line_ref[start_col..end_col].to_string()))
             } else {
@@ -659,7 +667,7 @@ impl<'a> SelectableLines for EdModel<'a> {
     fn last_text_pos(&self) -> UIResult<TextPos> {
         let nr_of_lines = self.code_lines.lines.len();
         let last_line_index = nr_of_lines - 1;
-        let last_line = self.code_lines.get_line(last_line_index)?;
+        let last_line = self.code_lines.get_line_ref(last_line_index)?;
 
         Ok(TextPos {
             line: self.code_lines.lines.len() - 1,
@@ -1291,6 +1299,13 @@ pub mod test_ed_update {
         assert_insert_seq_no_pre(expected_post_lines_vec, &full_input)
     }
 
+    pub fn assert_insert_in_def_nls(
+        expected_post_lines: Vec<String>,
+        new_char: char,
+    ) -> Result<(), String> {
+        assert_insert_seq_in_def(add_nls(expected_post_lines), &new_char.to_string())
+    }
+
     // Create ed_model from pre_lines DSL, do handle_new_char() for every char in new_char_seq, check if modified ed_model has expected
     // string representation of code, caret position and active selection.
     pub fn assert_insert_seq(
@@ -1332,7 +1347,7 @@ pub mod test_ed_update {
     }
 
     fn strip_header(lines: &mut Vec<String>) {
-        let nr_hello_world_lines = HELLO_WORLD.matches('\n').count() - 1;
+        let nr_hello_world_lines = HELLO_WORLD.matches('\n').count() - 2;
         lines.drain(0..nr_hello_world_lines);
     }
 
@@ -1382,39 +1397,35 @@ pub mod test_ed_update {
         assert_insert_no_pre(ovec!["┃"], '-')?;
         assert_insert_no_pre(ovec!["┃"], '_')?;
         // extra space because of Expr2::Blank placholder
-        assert_insert_in_def(ovec!["┃ "], ';')?;
-        assert_insert_in_def(ovec!["┃ "], '-')?;
-        assert_insert_in_def(ovec!["┃ "], '_')?;
+        assert_insert_in_def_nls(ovec!["┃ "], ';')?;
+        assert_insert_in_def_nls(ovec!["┃ "], '-')?;
+        assert_insert_in_def_nls(ovec!["┃ "], '_')?;
 
         Ok(())
     }
 
     // add newlines like the editor's formatting would add them
     fn add_nls(lines: Vec<String>) -> Vec<String> {
-        let first_line_opt = lines.first();
+        let mut new_lines = lines.clone();
 
-        let new_first_line = if let Some(old_first_line) = first_line_opt {
-            merge_strings(vec![old_first_line, "\n"])
-        } else {
-            "\n".to_owned()
-        };
-
-        vec![new_first_line, "\n".to_owned(), "".to_owned()]
+        new_lines.append(&mut vec!["".to_owned(), "".to_owned()]);
+        
+        new_lines
     }
 
     //TODO test_int arch bit limit
     #[test]
     fn test_int() -> Result<(), String> {
-        assert_insert_in_def(ovec!["0┃"], '0')?;
-        assert_insert_in_def(ovec!["1┃"], '1')?;
-        assert_insert_in_def(ovec!["2┃"], '2')?;
-        assert_insert_in_def(ovec!["3┃"], '3')?;
-        assert_insert_in_def(ovec!["4┃"], '4')?;
-        assert_insert_in_def(ovec!["5┃"], '5')?;
-        assert_insert_in_def(ovec!["6┃"], '6')?;
-        assert_insert_in_def(ovec!["7┃"], '7')?;
-        assert_insert_in_def(ovec!["8┃"], '8')?;
-        assert_insert_in_def(ovec!["9┃"], '9')?;
+        assert_insert_in_def_nls(ovec!["0┃"], '0')?;
+        assert_insert_in_def_nls(ovec!["1┃"], '1')?;
+        assert_insert_in_def_nls(ovec!["2┃"], '2')?;
+        assert_insert_in_def_nls(ovec!["3┃"], '3')?;
+        assert_insert_in_def_nls(ovec!["4┃"], '4')?;
+        assert_insert_in_def_nls(ovec!["5┃"], '5')?;
+        assert_insert_in_def_nls(ovec!["6┃"], '6')?;
+        assert_insert_in_def_nls(ovec!["7┃"], '7')?;
+        assert_insert_in_def_nls(ovec!["8┃"], '8')?;
+        assert_insert_in_def_nls(ovec!["9┃"], '9')?;
 
         assert_insert(ovec!["val = 1┃"], add_nls(ovec!["val = 19┃"]), '9')?;
         assert_insert(ovec!["val = 9876┃"], add_nls(ovec!["val = 98769┃"]), '9')?;
@@ -1473,7 +1484,7 @@ pub mod test_ed_update {
 
     #[test]
     fn test_string() -> Result<(), String> {
-        assert_insert_in_def(ovec!["\"┃\""], '"')?;
+        assert_insert_in_def_nls(ovec!["\"┃\""], '"')?;
         assert_insert(ovec!["val = \"┃\""], add_nls(ovec!["val = \"a┃\""]), 'a')?;
         assert_insert(ovec!["val = \"┃\""], add_nls(ovec!["val = \"{┃\""]), '{')?;
         assert_insert(ovec!["val = \"┃\""], add_nls(ovec!["val = \"}┃\""]), '}')?;
@@ -1602,7 +1613,7 @@ pub mod test_ed_update {
 
     #[test]
     fn test_record() -> Result<(), String> {
-        assert_insert_in_def(ovec!["{ ┃ }"], '{')?;
+        assert_insert_in_def_nls(ovec!["{ ┃ }"], '{')?;
         assert_insert_nls(ovec!["val = { ┃ }"], ovec!["val = { a┃ }"], 'a')?;
         assert_insert_nls(
             ovec!["val = { a┃ }"],
@@ -2336,7 +2347,7 @@ pub mod test_ed_update {
 
     #[test]
     fn test_single_elt_list() -> Result<(), String> {
-        assert_insert_in_def(ovec!["[ ┃ ]"], '[')?;
+        assert_insert_in_def_nls(ovec!["[ ┃ ]"], '[')?;
 
         assert_insert_nls(ovec!["val = [ ┃ ]"], ovec!["val = [ 0┃ ]"], '0')?;
         assert_insert_nls(ovec!["val = [ ┃ ]"], ovec!["val = [ 1┃ ]"], '1')?;
@@ -2534,17 +2545,17 @@ pub mod test_ed_update {
 
     #[test]
     fn test_tld_value() -> Result<(), String> {
-        assert_insert(ovec!["┃"], ovec!["a┃ =  "], 'a')?;
-        assert_insert(ovec!["┃"], ovec!["m┃ =  "], 'm')?;
-        assert_insert(ovec!["┃"], ovec!["z┃ =  "], 'z')?;
+        assert_insert_nls(ovec!["┃"], ovec!["a┃ =  "], 'a')?;
+        assert_insert_nls(ovec!["┃"], ovec!["m┃ =  "], 'm')?;
+        assert_insert_nls(ovec!["┃"], ovec!["z┃ =  "], 'z')?;
 
-        assert_insert_seq(ovec!["┃"], ovec!["ab┃ =  "], "ab")?;
-        assert_insert_seq(ovec!["┃"], ovec!["mainVal┃ =  "], "mainVal")?;
-        assert_insert_seq(ovec!["┃"], ovec!["camelCase123┃ =  "], "camelCase123")?;
-        assert_insert_seq(ovec!["┃"], ovec!["c137┃ =  "], "c137")?;
-        assert_insert_seq(ovec!["┃"], ovec!["c137Bb┃ =  "], "c137Bb")?;
-        assert_insert_seq(ovec!["┃"], ovec!["bBbb┃ =  "], "bBbb")?;
-        assert_insert_seq(ovec!["┃"], ovec!["cC0Z┃ =  "], "cC0Z")?;
+        assert_insert_seq_nls(ovec!["┃"], ovec!["ab┃ =  "], "ab")?;
+        assert_insert_seq_nls(ovec!["┃"], ovec!["mainVal┃ =  "], "mainVal")?;
+        assert_insert_seq_nls(ovec!["┃"], ovec!["camelCase123┃ =  "], "camelCase123")?;
+        assert_insert_seq_nls(ovec!["┃"], ovec!["c137┃ =  "], "c137")?;
+        assert_insert_seq_nls(ovec!["┃"], ovec!["c137Bb┃ =  "], "c137Bb")?;
+        assert_insert_seq_nls(ovec!["┃"], ovec!["bBbb┃ =  "], "bBbb")?;
+        assert_insert_seq_nls(ovec!["┃"], ovec!["cC0Z┃ =  "], "cC0Z")?;
 
         Ok(())
     }
