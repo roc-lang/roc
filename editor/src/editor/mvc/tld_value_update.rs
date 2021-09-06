@@ -180,11 +180,8 @@ pub fn update_tld_val_name(
                 .ident_ids
                 .update_key(&old_val_name, content_str_mut);
 
-            match update_val_name_res {
-                Err(err_str) => {
-                    FailedToUpdateIdentIdName { err_str }.fail()?;
-                }
-                _ => (),
+            if let Err(err_str) = update_val_name_res {
+                FailedToUpdateIdentIdName { err_str }.fail()?;
             }
 
             EdModel::insert_between_line(

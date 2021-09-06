@@ -261,11 +261,7 @@ pub fn move_caret_up<T: Lines>(
         let prev_line_len = lines.line_len(old_line_nr - 1)?;
 
         if prev_line_len <= old_col_nr {
-            let new_column = if prev_line_len > 0 {
-                prev_line_len
-            } else {
-                0
-            };
+            let new_column = if prev_line_len > 0 { prev_line_len } else { 0 };
 
             (old_line_nr - 1, new_column)
         } else {
@@ -335,11 +331,7 @@ pub fn move_caret_down<T: Lines>(
 
         if next_line_len <= old_col_nr {
             if !is_last_line {
-                let new_column = if next_line_len > 0 {
-                    next_line_len
-                } else {
-                    0
-                };
+                let new_column = if next_line_len > 0 { next_line_len } else { 0 };
 
                 (old_line_nr + 1, new_column)
             } else {

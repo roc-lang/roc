@@ -9,10 +9,7 @@ use crate::ui::text::{
     selection::{validate_raw_sel, RawSelection, Selection},
     text_pos::TextPos,
 };
-use crate::ui::ui_error::{
-    OutOfBounds,
-    UIResult,
-};
+use crate::ui::ui_error::{OutOfBounds, UIResult};
 use crate::ui::util::is_newline;
 use crate::window::keyboard_input::{no_mods, Modifiers};
 use bumpalo::Bump;
@@ -129,13 +126,9 @@ impl SelectableLines for BigTextArea {
 
     fn get_selected_str(&self) -> UIResult<Option<String>> {
         if let Some(val_sel) = self.caret_w_select.selection_opt {
-            Ok(
-                Some(self.text_buffer.get_selected_str(val_sel)?)
-            )
+            Ok(Some(self.text_buffer.get_selected_str(val_sel)?))
         } else {
-            Ok(
-                None
-            )
+            Ok(None)
         }
     }
 
@@ -172,12 +165,10 @@ impl SelectableLines for BigTextArea {
         let line_nr = self.nr_of_lines() - 1;
         let last_col = self.line_len(line_nr)?;
 
-        Ok(
-            TextPos {
-                line: line_nr,
-                column: last_col,
-            }
-        )
+        Ok(TextPos {
+            line: line_nr,
+            column: last_col,
+        })
     }
 
     fn handle_key_down(
@@ -257,7 +248,7 @@ impl MutSelectableLines for BigTextArea {
 
     fn insert_str(&mut self, new_str: &str) -> UIResult<()> {
         let caret_pos = self.caret_w_select.caret_pos;
-        
+
         self.text_buffer.insert_str(caret_pos, new_str)?;
 
         Ok(())
@@ -293,7 +284,7 @@ impl MutSelectableLines for BigTextArea {
 impl Default for BigTextArea {
     fn default() -> Self {
         let caret_w_select = CaretWSelect::default();
-        let text_buffer = TextBuffer{ lines: Vec::new()};
+        let text_buffer = TextBuffer { lines: Vec::new() };
         let path_str = "".to_owned();
         let arena = Bump::new();
 
@@ -320,7 +311,6 @@ pub fn from_path(path: &Path) -> UIResult<BigTextArea> {
 #[allow(dead_code)]
 // used by tests but will also be used in the future
 pub fn from_str_vec(lines: Vec<String>) -> BigTextArea {
-
     BigTextArea {
         text_buffer: TextBuffer { lines },
         ..Default::default()
@@ -504,11 +494,7 @@ pub mod test_big_sel_text {
             &["abc", "", "┃", "jkl"],
             '\u{8}',
         )?;
-        assert_insert(
-            &["❮abc", "", "def", "ghi", "jkl❯┃"],
-            &["┃"],
-            '\u{8}',
-        )?;
+        assert_insert(&["❮abc", "", "def", "ghi", "jkl❯┃"], &["┃"], '\u{8}')?;
 
         Ok(())
     }
@@ -530,11 +516,7 @@ pub mod test_big_sel_text {
             &["abc", "dz┃", "jkl"],
             'z',
         )?;
-        assert_insert(
-            &["abc", "❮def", "ghi❯┃", "jkl"],
-            &["abc", "z┃", "jkl"],
-            'z',
-        )?;
+        assert_insert(&["abc", "❮def", "ghi❯┃", "jkl"], &["abc", "z┃", "jkl"], 'z')?;
         assert_insert(
             &["abc", "", "❮def", "ghi❯┃", "jkl"],
             &["abc", "", "z┃", "jkl"],
@@ -603,7 +585,10 @@ pub mod test_big_sel_text {
 
         move_fun(&mut big_text, modifiers)?;
 
-        let lines_vec = all_lines_vec(&big_text).iter().map(|l| l.replace("\n", "")).collect();
+        let lines_vec = all_lines_vec(&big_text)
+            .iter()
+            .map(|l| l.replace("\n", ""))
+            .collect();
         let post_lines_res = convert_selection_to_dsl(big_text.caret_w_select, lines_vec);
 
         match post_lines_res {
@@ -627,18 +612,8 @@ pub mod test_big_sel_text {
         assert_move(&["abc┃"], &["abc┃"], &no_mods(), move_caret_right)?;
         assert_move(&["┃ abc"], &[" ┃abc"], &no_mods(), move_caret_right)?;
         assert_move(&["abc┃ "], &["abc ┃"], &no_mods(), move_caret_right)?;
-        assert_move(
-            &["abc┃", "d"],
-            &["abc", "┃d"],
-            &no_mods(),
-            move_caret_right,
-        )?;
-        assert_move(
-            &["abc┃", ""],
-            &["abc", "┃"],
-            &no_mods(),
-            move_caret_right,
-        )?;
+        assert_move(&["abc┃", "d"], &["abc", "┃d"], &no_mods(), move_caret_right)?;
+        assert_move(&["abc┃", ""], &["abc", "┃"], &no_mods(), move_caret_right)?;
         assert_move(
             &["abc", "┃def"],
             &["abc", "d┃ef"],
@@ -697,18 +672,8 @@ pub mod test_big_sel_text {
         assert_move(&["abc┃"], &["ab┃c"], &no_mods(), move_caret_left)?;
         assert_move(&[" ┃abc"], &["┃ abc"], &no_mods(), move_caret_left)?;
         assert_move(&["abc ┃"], &["abc┃ "], &no_mods(), move_caret_left)?;
-        assert_move(
-            &["abc", "┃d"],
-            &["abc┃", "d"],
-            &no_mods(),
-            move_caret_left,
-        )?;
-        assert_move(
-            &["abc", "┃"],
-            &["abc┃", ""],
-            &no_mods(),
-            move_caret_left,
-        )?;
+        assert_move(&["abc", "┃d"], &["abc┃", "d"], &no_mods(), move_caret_left)?;
+        assert_move(&["abc", "┃"], &["abc┃", ""], &no_mods(), move_caret_left)?;
         assert_move(
             &["abc", "d┃ef"],
             &["abc", "┃def"],
@@ -825,24 +790,9 @@ pub mod test_big_sel_text {
             &no_mods(),
             move_caret_up,
         )?;
-        assert_move(
-            &["abc", "de┃"],
-            &["ab┃c", "de"],
-            &no_mods(),
-            move_caret_up,
-        )?;
-        assert_move(
-            &["abc", "d┃e"],
-            &["a┃bc", "de"],
-            &no_mods(),
-            move_caret_up,
-        )?;
-        assert_move(
-            &["abc", "┃de"],
-            &["┃abc", "de"],
-            &no_mods(),
-            move_caret_up,
-        )?;
+        assert_move(&["abc", "de┃"], &["ab┃c", "de"], &no_mods(), move_caret_up)?;
+        assert_move(&["abc", "d┃e"], &["a┃bc", "de"], &no_mods(), move_caret_up)?;
+        assert_move(&["abc", "┃de"], &["┃abc", "de"], &no_mods(), move_caret_up)?;
         assert_move(
             &["ab", "cdef", "ghijkl", "mnopqrst┃"],
             &["ab", "cdef", "ghijkl┃", "mnopqrst"],
@@ -2106,12 +2056,7 @@ pub mod test_big_sel_text {
             &no_mods(),
             move_caret_right,
         )?;
-        assert_move(
-            &["abc┃❮", "❯"],
-            &["abc", "┃"],
-            &no_mods(),
-            move_caret_right,
-        )?;
+        assert_move(&["abc┃❮", "❯"], &["abc", "┃"], &no_mods(), move_caret_right)?;
         assert_move(
             &["abc", "❮d❯┃ef"],
             &["abc", "d┃ef"],

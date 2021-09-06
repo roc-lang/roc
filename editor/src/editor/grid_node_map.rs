@@ -361,9 +361,8 @@ impl GridNodeMap {
 
                 let ast_node_id = mark_node_pool.get(root_mark_node_id).get_ast_node_id();
 
-                match ast_node_id {
-                    ASTNodeId::ADefId(_) => return Ok(root_mark_node_id),
-                    _ => (),
+                if let ASTNodeId::ADefId(_) = ast_node_id {
+                    return Ok(root_mark_node_id);
                 }
             }
         }

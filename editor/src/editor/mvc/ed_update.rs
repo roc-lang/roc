@@ -1155,29 +1155,20 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 
                                                     ed_model.markup_ids.insert(prev_def_mn_id_indx + 1,blank_mn_id); // + 1 because first mark_node is header
 
-                                                    if ed_model.code_lines.line_is_only_newline(caret_pos.line - 1)? {
-
-                                                        ed_model.insert_all_between_line(
-                                                            caret_pos.line,
-                                                            0,
-                                                            &[blank_mn_id],
-                                                        )?;
-                                                    } else {
+                                                    if !ed_model.code_lines.line_is_only_newline(caret_pos.line - 1)? {
 
                                                         ed_model.simple_move_caret_down(caret_pos, 1);
 
-                                                        ed_model.insert_all_between_line(
-                                                            caret_pos.line,
-                                                            0,
-                                                            &[blank_mn_id],
-                                                        )?;
                                                     }
 
-
+                                                    ed_model.insert_all_between_line(
+                                                        caret_pos.line,
+                                                        0,
+                                                        &[blank_mn_id],
+                                                    )?;
                                                 }
 
                                             }
-
                                             handle_new_char(received_char, ed_model)?
                                         }
                                         _ => {
@@ -1409,7 +1400,7 @@ pub mod test_ed_update {
         let mut new_lines = lines.clone();
 
         new_lines.append(&mut vec!["".to_owned(), "".to_owned()]);
-        
+
         new_lines
     }
 

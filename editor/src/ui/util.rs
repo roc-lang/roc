@@ -1,4 +1,4 @@
-use super::ui_error::{OutOfBounds, UIResult, FileOpenFailed};
+use super::ui_error::{FileOpenFailed, OutOfBounds, UIResult};
 use snafu::OptionExt;
 use std::{fs::File, io::BufReader, path::Path, slice::SliceIndex};
 
@@ -36,13 +36,12 @@ pub fn slice_get_mut<T>(
 
 pub fn reader_from_path(path: &Path) -> UIResult<BufReader<File>> {
     match File::open(path) {
-        Ok(file) => {
-           return Ok(BufReader::new(file));
-        }
+        Ok(file) => Ok(BufReader::new(file)),
         Err(e) => FileOpenFailed {
             path_str: path_to_string(path),
             err_msg: e.to_string(),
-        }.fail()?,
+        }
+        .fail()?,
     }
 }
 
