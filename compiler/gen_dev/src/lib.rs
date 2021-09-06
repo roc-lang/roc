@@ -8,7 +8,9 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{ModuleName, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
-use roc_mono::ir::{BranchInfo, CallType, Expr, JoinPointId, Literal, Proc, Stmt};
+use roc_mono::ir::{
+    BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, Proc, Stmt,
+};
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 use target_lexicon::Triple;
 
@@ -150,7 +152,7 @@ where
         match expr {
             Expr::Literal(lit) => {
                 if self.env().lazy_literals {
-                    self.literal_map().insert(*sym, lit.clone());
+                    self.literal_map().insert(*sym, *lit);
                 } else {
                     self.load_literal(sym, lit)?;
                 }
@@ -601,8 +603,10 @@ where
                         self.set_last_seen(*structure, stmt);
                     }
                     Expr::Array { elems, .. } => {
-                        for sym in *elems {
-                            self.set_last_seen(*sym, stmt);
+                        for elem in *elems {
+                            if let ListLiteralElement::Symbol(sym) = elem {
+                                self.set_last_seen(*sym, stmt);
+                            }
                         }
                     }
                     Expr::Reuse {
