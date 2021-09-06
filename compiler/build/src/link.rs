@@ -262,7 +262,7 @@ pub fn rebuild_host(target: &Triple, host_input_path: &Path) {
                     &emit_bin,
                     zig_host_src.to_str().unwrap(),
                     zig_str_path.to_str().unwrap(),
-                    "i386-linux-gnu",
+                    "i386-linux-musl",
                 )
             }
             _ => panic!("Unsupported architecture {:?}", target.architecture),
