@@ -622,7 +622,7 @@ where
                     Expr::Array { elems, .. } => {
                         for elem in *elems {
                             if let ListLiteralElement::Symbol(sym) = elem {
-                              self.set_last_seen(*sym, stmt, &owning_symbol);
+                                self.set_last_seen(*sym, stmt, &owning_symbol);
                             }
                         }
                     }
@@ -710,7 +710,7 @@ where
         } = call;
 
         for sym in *arguments {
-            self.set_last_seen(*sym, stmt, &owning_symbol);
+            self.set_last_seen(*sym, stmt, owning_symbol);
         }
 
         match call_type {
