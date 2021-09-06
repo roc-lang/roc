@@ -6,9 +6,9 @@ use roc_can::builtins::builtin_defs_map;
 use roc_can::def::Def;
 use roc_collections::all::{MutMap, MutSet};
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
+use roc_gen_wasm::from_wasm32_memory::FromWasm32Memory;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::OptLevel;
-use roc_std::{RocDec, RocList, RocOrder, RocStr};
 use roc_types::subs::VarStore;
 use target_lexicon::Triple;
 
@@ -366,29 +366,6 @@ pub fn helper_wasm<'a>(
 
     use std::process::Command;
 
-    // Command::new("/opt/wasi-sdk/bin/clang")
-
-    /*
-    Command::new("zig")
-        .current_dir(dir_path)
-        .args(&[
-            "cc",
-            "/home/folkertdev/roc/wasm/libmain.a",
-            test_a_path.to_str().unwrap(),
-            "-target",
-            "wasm32-wasi",
-            "-o",
-            test_wasm_path.to_str().unwrap(),
-            "--sysroot=/opt/wasi-sdk/share/wasi-sysroot/",
-            "-Xlinker", "--export-dynamic",
-            // "-Xlinker", "--allow-undefined"
-            // "--global-cache-dir",
-            // zig_global_cache_path.to_str().unwrap(),
-        ])
-        .status()
-        .unwrap();
-        */
-
     Command::new("/home/folkertdev/Downloads/zig-linux-x86_64-0.9.0-dev.848+d5ef5da59/zig")
         .current_dir(dir_path)
         .args(&[
@@ -404,24 +381,6 @@ pub fn helper_wasm<'a>(
         ])
         .status()
         .unwrap();
-
-    /*
-    Command::new("/home/folkertdev/Downloads/zig-linux-x86_64-0.9.0-dev.848+d5ef5da59/zig")
-        .current_dir(dir_path)
-        .args(&[
-            "build-lib",
-            "/home/folkertdev/roc/wasm/libmain.a",
-            test_a_path.to_str().unwrap(),
-            "-target",
-            "wasm32-wasi",
-            "-dynamic",
-            "-lc",
-            // "--global-cache-dir",
-            // zig_global_cache_path.to_str().unwrap(),
-        ])
-        .status()
-        .unwrap();
-        */
 
     // now, do wasmer stuff
 
@@ -500,7 +459,7 @@ fn fake_wasm_main_function(_: u32, _: u32) -> u32 {
 #[allow(dead_code)]
 pub fn assert_wasm_evals_to_help<T>(src: &str, ignore_problems: bool) -> Result<T, String>
 where
-    T: FromWasmMemory,
+    T: FromWasm32Memory,
 {
     let arena = bumpalo::Bump::new();
     let context = inkwell::context::Context::create();
@@ -534,7 +493,7 @@ where
                 _ => panic!(),
             };
 
-            let output = <T as crate::helpers::eval::FromWasmMemory>::decode(
+            let output = <T as crate::helpers::eval::FromWasm32Memory>::decode(
                 memory,
                 // skip the RocCallResult tag id
                 address as u32 + 8,
@@ -642,233 +601,4 @@ macro_rules! assert_non_opt_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {{
         $crate::assert_llvm_evals_to!($src, $expected, $ty, $transform);
     }};
-}
-
-pub trait FromWasmMemory: Sized {
-    const SIZE_OF_WASM: usize;
-    const ALIGN_OF_WASM: usize;
-    const ACTUAL_WIDTH: usize = if (Self::SIZE_OF_WASM % Self::ALIGN_OF_WASM) == 0 {
-        Self::SIZE_OF_WASM
-    } else {
-        Self::SIZE_OF_WASM + (Self::ALIGN_OF_WASM - (Self::SIZE_OF_WASM % Self::ALIGN_OF_WASM))
-    };
-
-    fn decode(memory: &wasmer::Memory, offset: u32) -> Self;
-}
-
-macro_rules! from_wasm_memory_primitive_decode {
-    ($type_name:ident) => {
-        const SIZE_OF_WASM: usize = core::mem::size_of::<$type_name>();
-        const ALIGN_OF_WASM: usize = core::mem::align_of::<$type_name>();
-
-        fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
-            use core::mem::MaybeUninit;
-
-            let mut output: MaybeUninit<Self> = MaybeUninit::uninit();
-            let width = std::mem::size_of::<Self>();
-
-            let ptr = output.as_mut_ptr();
-            let raw_ptr = ptr as *mut u8;
-            let slice = unsafe { std::slice::from_raw_parts_mut(raw_ptr, width) };
-
-            let ptr: wasmer::WasmPtr<u8, wasmer::Array> = wasmer::WasmPtr::new(offset as u32);
-            let foobar = (ptr.deref(memory, 0, width as u32)).unwrap();
-            let wasm_slice = unsafe { std::mem::transmute(foobar) };
-
-            slice.copy_from_slice(wasm_slice);
-
-            unsafe { output.assume_init() }
-        }
-    };
-}
-
-macro_rules! from_wasm_memory_primitive {
-    ($($type_name:ident ,)+) => {
-        $(
-            impl FromWasmMemory for $type_name {
-                from_wasm_memory_primitive_decode!($type_name);
-            }
-        )*
-    }
-}
-
-from_wasm_memory_primitive!(
-    u8, i8, u16, i16, u32, i32, u64, i64, u128, i128, f32, f64, bool, RocDec, RocOrder,
-);
-
-impl FromWasmMemory for () {
-    const SIZE_OF_WASM: usize = 0;
-    const ALIGN_OF_WASM: usize = 0;
-
-    fn decode(_: &wasmer::Memory, _: u32) -> Self {}
-}
-
-impl FromWasmMemory for RocStr {
-    const SIZE_OF_WASM: usize = 8;
-    const ALIGN_OF_WASM: usize = 4;
-
-    fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
-        let bytes = <u64 as FromWasmMemory>::decode(memory, offset);
-
-        let length = (bytes >> 32) as u32;
-        let elements = bytes as u32;
-
-        if length == 0 {
-            RocStr::default()
-        } else if (length as i32) < 0 {
-            // this is a small string
-            let last_byte = bytes.to_ne_bytes()[7];
-            let actual_length = (last_byte ^ 0b1000_0000) as usize;
-
-            let slice = &bytes.to_ne_bytes()[..actual_length as usize];
-            RocStr::from_slice(slice)
-        } else {
-            // this is a big string
-            let ptr: wasmer::WasmPtr<u8, wasmer::Array> = wasmer::WasmPtr::new(elements);
-            let foobar = (ptr.deref(memory, 0, length)).unwrap();
-            let wasm_slice = unsafe { std::mem::transmute(foobar) };
-
-            RocStr::from_slice(wasm_slice)
-        }
-    }
-}
-
-impl<T: FromWasmMemory + Clone> FromWasmMemory for RocList<T> {
-    const SIZE_OF_WASM: usize = 8;
-    const ALIGN_OF_WASM: usize = 4;
-
-    fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
-        let bytes = <u64 as FromWasmMemory>::decode(memory, offset);
-
-        let length = (bytes >> 32) as u32;
-        let elements = bytes as u32;
-
-        let mut items = Vec::with_capacity(length as usize);
-
-        for i in 0..length {
-            let item = <T as FromWasmMemory>::decode(
-                memory,
-                elements + i * <T as FromWasmMemory>::SIZE_OF_WASM as u32,
-            );
-            items.push(item);
-        }
-
-        RocList::from_slice(&items)
-    }
-}
-
-impl<T: FromWasmMemory + Clone> FromWasmMemory for &'_ [T] {
-    const SIZE_OF_WASM: usize = 8;
-    const ALIGN_OF_WASM: usize = 4;
-
-    fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
-        let bytes = <u64 as FromWasmMemory>::decode(memory, offset);
-
-        let length = (bytes >> 32) as u32;
-        let elements = bytes as u32;
-
-        let ptr: wasmer::WasmPtr<u8, wasmer::Array> = wasmer::WasmPtr::new(elements);
-        let width = <T as FromWasmMemory>::SIZE_OF_WASM as u32 * length;
-        let foobar = (ptr.deref(memory, 0, width)).unwrap();
-        let wasm_slice =
-            unsafe { std::slice::from_raw_parts(foobar as *const _ as *const _, length as usize) };
-
-        wasm_slice
-    }
-}
-
-impl<T: FromWasmMemory> FromWasmMemory for &'_ T {
-    const SIZE_OF_WASM: usize = 4;
-    const ALIGN_OF_WASM: usize = 4;
-
-    fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
-        let elements = <u32 as FromWasmMemory>::decode(memory, offset);
-
-        let actual = <T as FromWasmMemory>::decode(memory, elements);
-
-        let b = Box::new(actual);
-
-        std::boxed::Box::<T>::leak(b)
-    }
-}
-
-impl<T: FromWasmMemory + Clone, const N: usize> FromWasmMemory for [T; N] {
-    const SIZE_OF_WASM: usize = N * T::SIZE_OF_WASM;
-    const ALIGN_OF_WASM: usize = T::ALIGN_OF_WASM;
-
-    fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
-        let ptr: wasmer::WasmPtr<u8, wasmer::Array> = wasmer::WasmPtr::new(offset);
-        let width = <T as FromWasmMemory>::SIZE_OF_WASM as u32 * N as u32;
-        let foobar = (ptr.deref(memory, 0, width)).unwrap();
-        let wasm_slice: &[T; N] = unsafe { &*(foobar as *const _ as *const [T; N]) };
-
-        wasm_slice.clone()
-    }
-}
-
-impl FromWasmMemory for usize {
-    const SIZE_OF_WASM: usize = 4;
-    const ALIGN_OF_WASM: usize = 4;
-
-    fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
-        <u32 as FromWasmMemory>::decode(memory, offset) as usize
-    }
-}
-
-impl<T: FromWasmMemory, U: FromWasmMemory> FromWasmMemory for (T, U) {
-    const SIZE_OF_WASM: usize = T::SIZE_OF_WASM + U::SIZE_OF_WASM;
-    const ALIGN_OF_WASM: usize = max2(T::SIZE_OF_WASM, U::SIZE_OF_WASM);
-
-    fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
-        assert!(
-            T::ALIGN_OF_WASM >= U::ALIGN_OF_WASM,
-            "this function does not handle alignment"
-        );
-
-        let t = <T as FromWasmMemory>::decode(memory, offset);
-
-        let u = <U as FromWasmMemory>::decode(memory, offset + T::ACTUAL_WIDTH as u32);
-
-        (t, u)
-    }
-}
-
-const fn max2(a: usize, b: usize) -> usize {
-    if a > b {
-        a
-    } else {
-        b
-    }
-}
-
-const fn max3(a: usize, b: usize, c: usize) -> usize {
-    max2(max2(a, b), c)
-}
-
-impl<T: FromWasmMemory, U: FromWasmMemory, V: FromWasmMemory> FromWasmMemory for (T, U, V) {
-    const SIZE_OF_WASM: usize = T::SIZE_OF_WASM + U::SIZE_OF_WASM + V::SIZE_OF_WASM;
-    const ALIGN_OF_WASM: usize = max3(T::SIZE_OF_WASM, U::SIZE_OF_WASM, V::SIZE_OF_WASM);
-
-    fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
-        assert!(
-            T::ALIGN_OF_WASM >= U::ALIGN_OF_WASM,
-            "this function does not handle alignment"
-        );
-
-        assert!(
-            U::ALIGN_OF_WASM >= V::ALIGN_OF_WASM,
-            "this function does not handle alignment"
-        );
-
-        let t = <T as FromWasmMemory>::decode(memory, offset);
-
-        let u = <U as FromWasmMemory>::decode(memory, offset + T::ACTUAL_WIDTH as u32);
-
-        let v = <V as FromWasmMemory>::decode(
-            memory,
-            offset + T::ACTUAL_WIDTH as u32 + U::ACTUAL_WIDTH as u32,
-        );
-
-        (t, u, v)
-    }
 }

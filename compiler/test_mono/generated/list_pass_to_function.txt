@@ -14,9 +14,6 @@ procedure Test.2 (Test.3):
     ret Test.5;
 
 procedure Test.0 ():
-    let Test.12 = 1i64;
-    let Test.13 = 2i64;
-    let Test.14 = 3i64;
-    let Test.1 = Array [Test.12, Test.13, Test.14];
+    let Test.1 = Array [1i64, 2i64, 3i64];
     let Test.4 = CallByName Test.2 Test.1;
     ret Test.4;

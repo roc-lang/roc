@@ -2571,6 +2571,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "parity-wasm"
+version = "0.42.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be5e13c266502aadf83426d87d81a0f5d1ef45b8027f5a471c360abfe4bfae92"
+
+[[package]]
 name = "parking_lot"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3643,6 +3649,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_gen_wasm"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "indoc 0.3.6",
+ "libc",
+ "parity-wasm",
+ "pretty_assertions 0.5.1",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_load",
+ "roc_module",
+ "roc_mono",
+ "roc_std",
+ "roc_types",
+ "target-lexicon",
+ "tempfile",
+ "wasmer",
+ "wasmer-wasi",
+]
+
+[[package]]
 name = "roc_ident"
 version = "0.1.0"
 
@@ -4348,6 +4377,7 @@ dependencies = [
  "roc_collections",
  "roc_constrain",
  "roc_gen_llvm",
+ "roc_gen_wasm",
  "roc_load",
  "roc_module",
  "roc_mono",
