@@ -98,14 +98,14 @@ where
             Stmt::Let(sym, expr, layout, following) => {
                 self.build_expr(sym, expr, layout)?;
                 self.set_layout_map(*sym, layout)?;
-                self.free_symbols(stmt);
+                self.free_symbols(stmt)?;
                 self.build_stmt(following, ret_layout)?;
                 Ok(())
             }
             Stmt::Ret(sym) => {
                 self.load_literal_symbols(&[*sym])?;
                 self.return_symbol(sym, ret_layout)?;
-                self.free_symbols(stmt);
+                self.free_symbols(stmt)?;
                 Ok(())
             }
             Stmt::Switch {
@@ -123,7 +123,7 @@ where
                     default_branch,
                     ret_layout,
                 )?;
-                self.free_symbols(stmt);
+                self.free_symbols(stmt)?;
                 Ok(())
             }
             x => Err(format!("the statement, {:?}, is not yet implemented", x)),
@@ -509,21 +509,30 @@ where
     fn return_symbol(&mut self, sym: &Symbol, layout: &Layout<'a>) -> Result<(), String>;
 
     /// free_symbols will free all symbols for the given statement.
-    fn free_symbols(&mut self, stmt: &Stmt<'a>) {
+    fn free_symbols(&mut self, stmt: &Stmt<'a>) -> Result<(), String> {
         if let Some(syms) = self.free_map().remove(&(stmt as *const Stmt<'a>)) {
             for sym in syms {
-                //println!("Freeing symbol: {:?}", sym);
-                self.free_symbol(&sym);
+                // println!("Freeing symbol: {:?}", sym);
+                self.free_symbol(&sym)?;
             }
         }
+        Ok(())
     }
 
     /// free_symbol frees any registers or stack space used to hold a symbol.
-    fn free_symbol(&mut self, sym: &Symbol);
+    fn free_symbol(&mut self, sym: &Symbol) -> Result<(), String>;
 
     /// set_last_seen sets the statement a symbol was last seen in.
-    fn set_last_seen(&mut self, sym: Symbol, stmt: &Stmt<'a>) {
+    fn set_last_seen(
+        &mut self,
+        sym: Symbol,
+        stmt: &Stmt<'a>,
+        owning_symbol: &MutMap<Symbol, Symbol>,
+    ) {
         self.last_seen_map().insert(sym, stmt);
+        if let Some(parent) = owning_symbol.get(&sym) {
+            self.last_seen_map().insert(*parent, stmt);
+        }
     }
 
     /// last_seen_map gets the map from symbol to when it is last seen in the function.
@@ -573,36 +582,44 @@ where
     /// scan_ast runs through the ast and fill the last seen map.
     /// This must iterate through the ast in the same way that build_stmt does. i.e. then before else.
     fn scan_ast(&mut self, stmt: &Stmt<'a>) {
+        // This keeps track of symbols that depend on other symbols.
+        // The main case of this is data in structures and tagged unions.
+        // This data must extend the lifetime of the original structure or tagged union.
+        // For arrays the loading is always done through low levels and does not depend on the underlying array's lifetime.
+        let mut owning_symbol: MutMap<Symbol, Symbol> = MutMap::default();
         match stmt {
             Stmt::Let(sym, expr, _, following) => {
-                self.set_last_seen(*sym, stmt);
+                self.set_last_seen(*sym, stmt, &owning_symbol);
                 match expr {
                     Expr::Literal(_) => {}
 
-                    Expr::Call(call) => self.scan_ast_call(call, stmt),
+                    Expr::Call(call) => self.scan_ast_call(call, stmt, &owning_symbol),
 
                     Expr::Tag { arguments, .. } => {
                         for sym in *arguments {
-                            self.set_last_seen(*sym, stmt);
+                            self.set_last_seen(*sym, stmt, &owning_symbol);
                         }
                     }
                     Expr::Struct(syms) => {
                         for sym in *syms {
-                            self.set_last_seen(*sym, stmt);
+                            self.set_last_seen(*sym, stmt, &owning_symbol);
                         }
                     }
                     Expr::StructAtIndex { structure, .. } => {
-                        self.set_last_seen(*structure, stmt);
+                        self.set_last_seen(*structure, stmt, &owning_symbol);
+                        owning_symbol.insert(*sym, *structure);
                     }
                     Expr::GetTagId { structure, .. } => {
-                        self.set_last_seen(*structure, stmt);
+                        self.set_last_seen(*structure, stmt, &owning_symbol);
+                        owning_symbol.insert(*sym, *structure);
                     }
                     Expr::UnionAtIndex { structure, .. } => {
-                        self.set_last_seen(*structure, stmt);
+                        self.set_last_seen(*structure, stmt, &owning_symbol);
+                        owning_symbol.insert(*sym, *structure);
                     }
                     Expr::Array { elems, .. } => {
                         for sym in *elems {
-                            self.set_last_seen(*sym, stmt);
+                            self.set_last_seen(*sym, stmt, &owning_symbol);
                         }
                     }
                     Expr::Reuse {
@@ -611,22 +628,22 @@ where
                         tag_name,
                         ..
                     } => {
-                        self.set_last_seen(*symbol, stmt);
+                        self.set_last_seen(*symbol, stmt, &owning_symbol);
                         match tag_name {
                             TagName::Closure(sym) => {
-                                self.set_last_seen(*sym, stmt);
+                                self.set_last_seen(*sym, stmt, &owning_symbol);
                             }
                             TagName::Private(sym) => {
-                                self.set_last_seen(*sym, stmt);
+                                self.set_last_seen(*sym, stmt, &owning_symbol);
                             }
                             TagName::Global(_) => {}
                         }
                         for sym in *arguments {
-                            self.set_last_seen(*sym, stmt);
+                            self.set_last_seen(*sym, stmt, &owning_symbol);
                         }
                     }
                     Expr::Reset(sym) => {
-                        self.set_last_seen(*sym, stmt);
+                        self.set_last_seen(*sym, stmt, &owning_symbol);
                     }
                     Expr::EmptyArray => {}
                     Expr::RuntimeErrorFunction(_) => {}
@@ -640,19 +657,19 @@ where
                 default_branch,
                 ..
             } => {
-                self.set_last_seen(*cond_symbol, stmt);
+                self.set_last_seen(*cond_symbol, stmt, &owning_symbol);
                 for (_, _, branch) in *branches {
                     self.scan_ast(branch);
                 }
                 self.scan_ast(default_branch.1);
             }
             Stmt::Ret(sym) => {
-                self.set_last_seen(*sym, stmt);
+                self.set_last_seen(*sym, stmt, &owning_symbol);
             }
             Stmt::Refcounting(modify, following) => {
                 let sym = modify.get_symbol();
 
-                self.set_last_seen(sym, stmt);
+                self.set_last_seen(sym, stmt, &owning_symbol);
                 self.scan_ast(following);
             }
             Stmt::Join {
@@ -662,29 +679,34 @@ where
                 ..
             } => {
                 for param in *parameters {
-                    self.set_last_seen(param.symbol, stmt);
+                    self.set_last_seen(param.symbol, stmt, &owning_symbol);
                 }
                 self.scan_ast(continuation);
                 self.scan_ast(remainder);
             }
             Stmt::Jump(JoinPointId(sym), symbols) => {
-                self.set_last_seen(*sym, stmt);
+                self.set_last_seen(*sym, stmt, &owning_symbol);
                 for sym in *symbols {
-                    self.set_last_seen(*sym, stmt);
+                    self.set_last_seen(*sym, stmt, &owning_symbol);
                 }
             }
             Stmt::RuntimeError(_) => {}
         }
     }
 
-    fn scan_ast_call(&mut self, call: &roc_mono::ir::Call, stmt: &roc_mono::ir::Stmt<'a>) {
+    fn scan_ast_call(
+        &mut self,
+        call: &roc_mono::ir::Call,
+        stmt: &roc_mono::ir::Stmt<'a>,
+        owning_symbol: &MutMap<Symbol, Symbol>,
+    ) {
         let roc_mono::ir::Call {
             call_type,
             arguments,
         } = call;
 
         for sym in *arguments {
-            self.set_last_seen(*sym, stmt);
+            self.set_last_seen(*sym, stmt, &owning_symbol);
         }
 
         match call_type {

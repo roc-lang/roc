@@ -175,13 +175,26 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-#[allow(dead_code)]
 pub enum SymbolStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
     GeneralReg(GeneralReg),
     FloatReg(FloatReg),
-    Base(i32),
-    BaseAndGeneralReg(GeneralReg, i32),
-    BaseAndFloatReg(FloatReg, i32),
+    Base {
+        offset: i32,
+        size: u32,
+        owned: bool,
+    },
+    BaseAndGeneralReg {
+        reg: GeneralReg,
+        offset: i32,
+        size: u32,
+        owned: bool,
+    },
+    BaseAndFloatReg {
+        reg: FloatReg,
+        offset: i32,
+        size: u32,
+        owned: bool,
+    },
 }
 
 pub trait RegTrait: Copy + Eq + std::hash::Hash + std::fmt::Debug + 'static {}
@@ -220,6 +233,7 @@ pub struct Backend64Bit<
     general_used_callee_saved_regs: MutSet<GeneralReg>,
     float_used_callee_saved_regs: MutSet<FloatReg>,
 
+    free_stack_chunks: Vec<'a, (i32, u32)>,
     stack_size: u32,
     // The amount of stack space needed to pass args for function calling.
     fn_call_stack_size: u32,
@@ -251,6 +265,7 @@ impl<
             float_free_regs: bumpalo::vec![in env.arena],
             float_used_regs: bumpalo::vec![in env.arena],
             float_used_callee_saved_regs: MutSet::default(),
+            free_stack_chunks: bumpalo::vec![in env.arena],
             stack_size: 0,
             fn_call_stack_size: 0,
         })
@@ -262,6 +277,7 @@ impl<
 
     fn reset(&mut self) {
         self.stack_size = 0;
+        self.free_stack_chunks.clear();
         self.fn_call_stack_size = 0;
         self.last_seen_map.clear();
         self.layout_map.clear();
@@ -355,15 +371,15 @@ impl<
         // Update used and free regs.
         for (sym, storage) in &self.symbol_storage_map {
             match storage {
-                SymbolStorage::GeneralReg(reg) | SymbolStorage::BaseAndGeneralReg(reg, _) => {
+                SymbolStorage::GeneralReg(reg) | SymbolStorage::BaseAndGeneralReg { reg, .. } => {
                     self.general_free_regs.retain(|r| *r != *reg);
                     self.general_used_regs.push((*reg, *sym));
                 }
-                SymbolStorage::FloatReg(reg) | SymbolStorage::BaseAndFloatReg(reg, _) => {
+                SymbolStorage::FloatReg(reg) | SymbolStorage::BaseAndFloatReg { reg, .. } => {
                     self.float_free_regs.retain(|r| *r != *reg);
                     self.float_used_regs.push((*reg, *sym));
                 }
-                SymbolStorage::Base(_) => {}
+                SymbolStorage::Base { .. } => {}
             }
         }
         Ok(())
@@ -625,9 +641,15 @@ impl<
         if let Layout::Struct(field_layouts) = layout {
             let struct_size = layout.stack_size(PTR_SIZE);
             if struct_size > 0 {
-                let offset = self.increase_stack_size(struct_size)?;
-                self.symbol_storage_map
-                    .insert(*sym, SymbolStorage::Base(offset));
+                let offset = self.claim_stack_size(struct_size)?;
+                self.symbol_storage_map.insert(
+                    *sym,
+                    SymbolStorage::Base {
+                        offset,
+                        size: struct_size,
+                        owned: true,
+                    },
+                );
 
                 let mut current_offset = offset;
                 for (field, field_layout) in fields.iter().zip(field_layouts.iter()) {
@@ -636,15 +658,28 @@ impl<
                     current_offset += field_size as i32;
                 }
             } else {
-                self.symbol_storage_map.insert(*sym, SymbolStorage::Base(0));
+                self.symbol_storage_map.insert(
+                    *sym,
+                    SymbolStorage::Base {
+                        offset: 0,
+                        size: 0,
+                        owned: false,
+                    },
+                );
             }
             Ok(())
         } else {
             // This is a single element struct. Just copy the single field to the stack.
             let struct_size = layout.stack_size(PTR_SIZE);
-            let offset = self.increase_stack_size(struct_size)?;
-            self.symbol_storage_map
-                .insert(*sym, SymbolStorage::Base(offset));
+            let offset = self.claim_stack_size(struct_size)?;
+            self.symbol_storage_map.insert(
+                *sym,
+                SymbolStorage::Base {
+                    offset,
+                    size: struct_size,
+                    owned: true,
+                },
+            );
             self.copy_symbol_to_stack_offset(offset, &fields[0], layout)?;
             Ok(())
         }
@@ -657,14 +692,20 @@ impl<
         index: u64,
         field_layouts: &'a [Layout<'a>],
     ) -> Result<(), String> {
-        if let Some(SymbolStorage::Base(struct_offset)) = self.symbol_storage_map.get(structure) {
-            let mut data_offset = *struct_offset;
+        if let Some(SymbolStorage::Base { offset, .. }) = self.symbol_storage_map.get(structure) {
+            let mut data_offset = *offset;
             for i in 0..index {
                 let field_size = field_layouts[i as usize].stack_size(PTR_SIZE);
                 data_offset += field_size as i32;
             }
-            self.symbol_storage_map
-                .insert(*sym, SymbolStorage::Base(data_offset));
+            self.symbol_storage_map.insert(
+                *sym,
+                SymbolStorage::Base {
+                    offset: data_offset,
+                    size: field_layouts[index as usize].stack_size(PTR_SIZE),
+                    owned: false,
+                },
+            );
             Ok(())
         } else {
             Err(format!("unknown struct: {:?}", structure))
@@ -689,8 +730,82 @@ impl<
         }
     }
 
-    fn free_symbol(&mut self, sym: &Symbol) {
-        self.symbol_storage_map.remove(sym);
+    fn free_symbol(&mut self, sym: &Symbol) -> Result<(), String> {
+        match self.symbol_storage_map.remove(sym) {
+            Some(
+                SymbolStorage::Base {
+                    offset,
+                    size,
+                    owned: true,
+                }
+                | SymbolStorage::BaseAndGeneralReg {
+                    offset,
+                    size,
+                    owned: true,
+                    ..
+                }
+                | SymbolStorage::BaseAndFloatReg {
+                    offset,
+                    size,
+                    owned: true,
+                    ..
+                },
+            ) => {
+                let loc = (offset, size);
+                // Note: this position current points to the offset following the specified location.
+                // If loc was inserted at this position, it would shift the data at this position over by 1.
+                let pos = self
+                    .free_stack_chunks
+                    .binary_search(&loc)
+                    .unwrap_or_else(|e| e);
+
+                // Check for overlap with previous and next free chunk.
+                let merge_with_prev = if pos > 0 {
+                    if let Some((prev_offset, prev_size)) = self.free_stack_chunks.get(pos - 1) {
+                        let prev_end = *prev_offset + *prev_size as i32;
+                        if prev_end > offset {
+                            return Err("Double free? A previously freed stack location overlaps with the currently freed stack location.".to_string());
+                        }
+                        prev_end == offset
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                let merge_with_next = if let Some((next_offset, _)) =
+                    self.free_stack_chunks.get(pos)
+                {
+                    let current_end = offset + size as i32;
+                    if current_end > *next_offset {
+                        return Err("Double free? A previously freed stack location overlaps with the currently freed stack location.".to_string());
+                    }
+                    current_end == *next_offset
+                } else {
+                    false
+                };
+
+                match (merge_with_prev, merge_with_next) {
+                    (true, true) => {
+                        let (prev_offset, prev_size) = self.free_stack_chunks[pos - 1];
+                        let (_, next_size) = self.free_stack_chunks[pos];
+                        self.free_stack_chunks[pos - 1] =
+                            (prev_offset, prev_size + size + next_size);
+                        self.free_stack_chunks.remove(pos);
+                    }
+                    (true, false) => {
+                        let (prev_offset, prev_size) = self.free_stack_chunks[pos - 1];
+                        self.free_stack_chunks[pos - 1] = (prev_offset, prev_size + size);
+                    }
+                    (false, true) => {
+                        let (_, next_size) = self.free_stack_chunks[pos];
+                        self.free_stack_chunks[pos] = (offset, next_size + size);
+                    }
+                    (false, false) => self.free_stack_chunks.insert(pos, loc),
+                }
+            }
+            Some(_) | None => {}
+        }
         for i in 0..self.general_used_regs.len() {
             let (reg, saved_sym) = self.general_used_regs[i];
             if saved_sym == *sym {
@@ -707,6 +822,7 @@ impl<
                 break;
             }
         }
+        Ok(())
     }
 
     fn return_symbol(&mut self, sym: &Symbol, layout: &Layout<'a>) -> Result<(), String> {
@@ -724,7 +840,7 @@ impl<
                 ASM::mov_freg64_freg64(&mut self.buf, CC::FLOAT_RETURN_REGS[0], *reg);
                 Ok(())
             }
-            Some(SymbolStorage::Base(offset)) => match layout {
+            Some(SymbolStorage::Base { offset, size, .. }) => match layout {
                 Layout::Builtin(Builtin::Int64) => {
                     ASM::mov_reg64_base32(&mut self.buf, CC::GENERAL_RETURN_REGS[0], *offset);
                     Ok(())
@@ -734,28 +850,15 @@ impl<
                     Ok(())
                 }
                 Layout::Struct(field_layouts) => {
-                    let struct_size = layout.stack_size(PTR_SIZE);
-                    if struct_size > 0 {
-                        let struct_offset = if let Some(SymbolStorage::Base(offset)) =
-                            self.symbol_storage_map.get(sym)
-                        {
-                            Ok(*offset)
-                        } else {
-                            Err(format!("unknown struct: {:?}", sym))
-                        }?;
+                    let (offset, size) = (*offset, *size);
+                    if size > 0 {
                         let ret_reg = if self.symbol_storage_map.contains_key(&Symbol::RET_POINTER)
                         {
                             Some(self.load_to_general_reg(&Symbol::RET_POINTER)?)
                         } else {
                             None
                         };
-                        CC::return_struct(
-                            &mut self.buf,
-                            struct_offset,
-                            struct_size,
-                            field_layouts,
-                            ret_reg,
-                        )
+                        CC::return_struct(&mut self.buf, offset, size, field_layouts, ret_reg)
                     } else {
                         // Nothing to do for empty struct
                         Ok(())
@@ -854,19 +957,42 @@ impl<
                     .insert(*sym, SymbolStorage::GeneralReg(reg));
                 Ok(reg)
             }
-            Some(SymbolStorage::Base(offset)) => {
+            Some(SymbolStorage::Base {
+                offset,
+                size,
+                owned,
+            }) => {
                 let reg = self.claim_general_reg(sym)?;
-                self.symbol_storage_map
-                    .insert(*sym, SymbolStorage::BaseAndGeneralReg(reg, offset));
+                self.symbol_storage_map.insert(
+                    *sym,
+                    SymbolStorage::BaseAndGeneralReg {
+                        reg,
+                        offset,
+                        size,
+                        owned,
+                    },
+                );
                 ASM::mov_reg64_base32(&mut self.buf, reg, offset as i32);
                 Ok(reg)
             }
-            Some(SymbolStorage::BaseAndGeneralReg(reg, offset)) => {
-                self.symbol_storage_map
-                    .insert(*sym, SymbolStorage::BaseAndGeneralReg(reg, offset));
+            Some(SymbolStorage::BaseAndGeneralReg {
+                reg,
+                offset,
+                size,
+                owned,
+            }) => {
+                self.symbol_storage_map.insert(
+                    *sym,
+                    SymbolStorage::BaseAndGeneralReg {
+                        reg,
+                        offset,
+                        size,
+                        owned,
+                    },
+                );
                 Ok(reg)
             }
-            Some(SymbolStorage::FloatReg(_)) | Some(SymbolStorage::BaseAndFloatReg(_, _)) => {
+            Some(SymbolStorage::FloatReg(_)) | Some(SymbolStorage::BaseAndFloatReg { .. }) => {
                 Err("Cannot load floating point symbol into GeneralReg".to_string())
             }
             None => Err(format!("Unknown symbol: {}", sym)),
@@ -881,19 +1007,42 @@ impl<
                     .insert(*sym, SymbolStorage::FloatReg(reg));
                 Ok(reg)
             }
-            Some(SymbolStorage::Base(offset)) => {
+            Some(SymbolStorage::Base {
+                offset,
+                size,
+                owned,
+            }) => {
                 let reg = self.claim_float_reg(sym)?;
-                self.symbol_storage_map
-                    .insert(*sym, SymbolStorage::BaseAndFloatReg(reg, offset));
+                self.symbol_storage_map.insert(
+                    *sym,
+                    SymbolStorage::BaseAndFloatReg {
+                        reg,
+                        offset,
+                        size,
+                        owned,
+                    },
+                );
                 ASM::mov_freg64_base32(&mut self.buf, reg, offset as i32);
                 Ok(reg)
             }
-            Some(SymbolStorage::BaseAndFloatReg(reg, offset)) => {
-                self.symbol_storage_map
-                    .insert(*sym, SymbolStorage::BaseAndFloatReg(reg, offset));
+            Some(SymbolStorage::BaseAndFloatReg {
+                reg,
+                offset,
+                size,
+                owned,
+            }) => {
+                self.symbol_storage_map.insert(
+                    *sym,
+                    SymbolStorage::BaseAndFloatReg {
+                        reg,
+                        offset,
+                        size,
+                        owned,
+                    },
+                );
                 Ok(reg)
             }
-            Some(SymbolStorage::GeneralReg(_)) | Some(SymbolStorage::BaseAndGeneralReg(_, _)) => {
+            Some(SymbolStorage::GeneralReg(_)) | Some(SymbolStorage::BaseAndGeneralReg { .. }) => {
                 Err("Cannot load integer symbol into FloatReg".to_string())
             }
             None => Err(format!("Unknown symbol: {}", sym)),
@@ -904,45 +1053,107 @@ impl<
         let val = self.symbol_storage_map.remove(sym);
         match val {
             Some(SymbolStorage::GeneralReg(reg)) => {
-                let offset = self.increase_stack_size(8)?;
+                let offset = self.claim_stack_size(8)?;
                 // For base addresssing, use the negative offset - 8.
                 ASM::mov_base32_reg64(&mut self.buf, offset, reg);
-                self.symbol_storage_map
-                    .insert(*sym, SymbolStorage::Base(offset));
+                self.symbol_storage_map.insert(
+                    *sym,
+                    SymbolStorage::Base {
+                        offset,
+                        size: 8,
+                        owned: true,
+                    },
+                );
                 Ok(())
             }
             Some(SymbolStorage::FloatReg(reg)) => {
-                let offset = self.increase_stack_size(8)?;
+                let offset = self.claim_stack_size(8)?;
                 // For base addresssing, use the negative offset.
                 ASM::mov_base32_freg64(&mut self.buf, offset, reg);
-                self.symbol_storage_map
-                    .insert(*sym, SymbolStorage::Base(offset));
+                self.symbol_storage_map.insert(
+                    *sym,
+                    SymbolStorage::Base {
+                        offset,
+                        size: 8,
+                        owned: true,
+                    },
+                );
                 Ok(())
             }
-            Some(SymbolStorage::Base(offset)) => {
-                self.symbol_storage_map
-                    .insert(*sym, SymbolStorage::Base(offset));
+            Some(SymbolStorage::Base {
+                offset,
+                size,
+                owned,
+            }) => {
+                self.symbol_storage_map.insert(
+                    *sym,
+                    SymbolStorage::Base {
+                        offset,
+                        size,
+                        owned,
+                    },
+                );
                 Ok(())
             }
-            Some(SymbolStorage::BaseAndGeneralReg(_, offset)) => {
-                self.symbol_storage_map
-                    .insert(*sym, SymbolStorage::Base(offset));
+            Some(SymbolStorage::BaseAndGeneralReg {
+                offset,
+                size,
+                owned,
+                ..
+            }) => {
+                self.symbol_storage_map.insert(
+                    *sym,
+                    SymbolStorage::Base {
+                        offset,
+                        size,
+                        owned,
+                    },
+                );
                 Ok(())
             }
-            Some(SymbolStorage::BaseAndFloatReg(_, offset)) => {
-                self.symbol_storage_map
-                    .insert(*sym, SymbolStorage::Base(offset));
+            Some(SymbolStorage::BaseAndFloatReg {
+                offset,
+                size,
+                owned,
+                ..
+            }) => {
+                self.symbol_storage_map.insert(
+                    *sym,
+                    SymbolStorage::Base {
+                        offset,
+                        size,
+                        owned,
+                    },
+                );
                 Ok(())
             }
             None => Err(format!("Unknown symbol: {}", sym)),
         }
     }
 
-    /// increase_stack_size increase the current stack size `amount` bytes.
+    /// claim_stack_size claims `amount` bytes from the stack.
+    /// This may be free space in the stack or result in increasing the stack size.
     /// It returns base pointer relative offset of the new data.
-    fn increase_stack_size(&mut self, amount: u32) -> Result<i32, String> {
+    fn claim_stack_size(&mut self, amount: u32) -> Result<i32, String> {
         debug_assert!(amount > 0);
-        if let Some(new_size) = self.stack_size.checked_add(amount) {
+        if let Some(fitting_chunk) = self
+            .free_stack_chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, size))| *size >= amount)
+            .min_by_key(|(_, (_, size))| size)
+        {
+            let (pos, (offset, size)) = fitting_chunk;
+            let (offset, size) = (*offset, *size);
+            if size == amount {
+                self.free_stack_chunks.remove(pos);
+                Ok(offset)
+            } else {
+                let (prev_offset, prev_size) = self.free_stack_chunks[pos];
+                self.free_stack_chunks[pos] = (prev_offset + amount as i32, prev_size - amount);
+                Ok(prev_offset)
+            }
+        } else if let Some(new_size) = self.stack_size.checked_add(amount) {
             // Since stack size is u32, but the max offset is i32, if we pass i32 max, we have overflowed.
             if new_size > i32::MAX as u32 {
                 Err("Ran out of stack space".to_string())
@@ -975,7 +1186,17 @@ impl<
             }
             Layout::Struct(_) if layout.safe_to_memcpy() => {
                 let tmp_reg = self.get_tmp_general_reg()?;
-                if let Some(SymbolStorage::Base(from_offset)) = self.symbol_storage_map.get(sym) {
+                if let Some(SymbolStorage::Base {
+                    offset: from_offset,
+                    size,
+                    ..
+                }) = self.symbol_storage_map.get(sym)
+                {
+                    debug_assert_eq!(
+                        *size,
+                        layout.stack_size(PTR_SIZE),
+                        "expected struct to have same size as data being stored in it"
+                    );
                     for i in 0..layout.stack_size(PTR_SIZE) as i32 {
                         ASM::mov_reg64_base32(&mut self.buf, tmp_reg, from_offset + i);
                         ASM::mov_base32_reg64(&mut self.buf, to_offset + i, tmp_reg);
