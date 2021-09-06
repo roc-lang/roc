@@ -1,6 +1,39 @@
 # Development backend for WebAssembly
 
-This document offers a summary of how WebAssembly differs from other targets and how those differences matter for Roc.
+## Plan
+
+- Initial bringup
+  - Get a wasm backend working for some of the number tests.
+  - Use a separate `gen_wasm` directory for now, to avoid trying to do bringup and integration at the same time.
+- Integration
+  - Move wasm files to `gen_dev/src/wasm`
+  - Share tests between wasm and x64, with some way of saying which tests work on which backends, and dispatching to different eval helpers based on that.
+  - Get `build_module` in object_builder.rs to dispatch to the wasm generator (adding some Wasm options to the `Triple` struct)
+  - Get `build_module` to write to a file, or maybe return `Vec<u8>`, instead of returning an Object structure
+- Code sharing
+  - Try to ensure that both Wasm and x64 use the same `Backend` trait so that we can share code.
+  - We need to work towards this after we've progressed a bit more with Wasm and gained more understanding and experience of the differences.
+  - We will have to think about how to deal with the `Backend` code that doesn't apply to Wasm. Perhaps we will end up with more traits like `RegisterBackend` / `StackBackend` or `NativeBackend` / `WasmBackend`, and perhaps even some traits to do with backends that support jumps and those that don't.
+
+## Structured control flow
+
+🚨 **This is an area that could be tricky** 🚨
+
+One of the security features of WebAssembly is that it does not allow unrestricted "jumps" to anywhere you like. It does not have an instruction for that. All of the [control instructions][control-inst] can only implement "structured" control flow, and have names like `if`, `loop`, `block` that you'd normally associate with high-level languages. There are branch (`br`) instructions that can jump to labelled blocks within the same function, but the blocks have to be nested in sensible ways.
+
+[control-inst]: https://webassembly.github.io/spec/core/syntax/instructions.html#control-instructions
+
+Implications:
+
+Roc, like most modern languages, is already enforcing structured control flow in the source program. Constructs from the Roc AST like `When`, `If` and `LetRec` can all be converted straightforwardly to Wasm constructs.
+
+However the Mono IR converts this to jumps and join points, which are more of a Control Flow Graph than a tree. That doesn't map so directly to the Wasm structures. This is such a common issue for compiler back-ends that the WebAssembly compiler toolkit `binaryen` has an algorithm to solve it, called the "[Relooper][relooper]". We're not using `binaryen` right now. It's a C++ library, though it does have a (very thin and somewhat hard-to-use) [Rust wrapper][binaryen-rs]. We should probably investigate this area sooner rather than later. If relooping turns out to be necessary or difficult, we might need to switch from parity_wasm to binaryen.
+
+> By the way, it's not obvious how to pronounce "binaryen" but apparently it rhymes with "Targaryen", the family name from Game of Thrones
+
+[relooper]: https://github.com/WebAssembly/binaryen/wiki/Compiling-to-WebAssembly-with-Binaryen#cfg-api
+[binaryen-rs]: https://crates.io/crates/binaryen
+
 
 ## Stack machine vs register machine
 
@@ -110,21 +143,6 @@ The only other thing we need is a stack pointer. On CPU targets, there's often h
 
 The system I've outlined above is based on my experience of compiling C to WebAssembly via the Emscripten toolchain (which is built on top of clang). It's also in line with what the WebAssembly project describes [here](https://github.com/WebAssembly/design/blob/main/Rationale.md#locals).
 
-## Structured control flow
-
-One of the security features of WebAssembly is that it does not allow unrestricted "jumps" to anywhere you like. It does not have an instruction for that. All of the [control instructions][control-inst] can only implement "structured" control flow, and have names like `if`, `loop`, `block` that you'd normally associate with high-level languages. There are branch (`br`) instructions that can jump to labelled blocks within the same function, but the blocks have to be nested in sensible ways.
-
-[control-inst]: https://webassembly.github.io/spec/core/syntax/instructions.html#control-instructions
-
-Implications:
-
-Roc, like most modern languages, is already enforcing structured control flow in the source program. Constructs from the Roc AST like `When`, `If` and `LetRec` all have corresponding Wasm constructs.
-
-However the Mono IR converts this to jumps and join points, which are more of a Control Flow Graph than a tree. That doesn't map so directly to the Wasm structures. This is such a common issue for compiler back-ends that the WebAssembly compiler toolkit `binaryen` has an algorithm to solve it, called the "[Relooper][relooper]". We're not using `binaryen` right now. It's a C++ library, though it does have a (very thin and somewhat hard-to-use) [Rust wrapper][binaryen-rs].
-
-[relooper]: https://github.com/WebAssembly/binaryen/wiki/Compiling-to-WebAssembly-with-Binaryen#cfg-api
-[binaryen-rs]: https://crates.io/crates/binaryen
-
 ## Modules vs Instances
 
 What's the difference between a Module and an Instance in WebAssembly?
@@ -135,8 +153,10 @@ The Module is like the ELF file, and the Instance is like the executable image.
 
 The Module is a _specification_ for how to create an Instance of the program. The Module says how much memory the program needs, but the Instance actually _contains_ that memory. In order to run the Wasm program, the VM needs to create an instance, allocate some memory for it, and copy the data section into that memory. If you run many copies of the same Wasm program, you will have one Module but many Instances. Each instance will have its own separate area of memory, and its own execution state.
 
-## Modules and object files
+## Modules, object files, and linking
 
-TODO
+A WebAssembly module is equivalent to an executable file. It doesn't normally need relocations since at the WebAssembly layer, there is no Address Space Layout Randomisation. If it has relocations then it's an object file.
 
-https://webassembly.github.io/spec/core/binary/modules.html
+The [official spec](https://webassembly.github.io/spec/core/binary/modules.html#sections) lists the sections that are part of the final module. It doesn't mention any sections for relocations or symbol names, but it has room for "custom sections" that in practice seem to be used for that.
+
+The WebAssembly `tool-conventions` repo has a document on [linking](https://github.com/WebAssembly/tool-conventions/blob/main/Linking.md), and the `parity_wasm` crate supports "name" and "relocation" [sections](https://docs.rs/parity-wasm/0.42.2/parity_wasm/elements/enum.Section.html).
