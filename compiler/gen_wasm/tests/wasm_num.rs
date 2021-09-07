@@ -49,6 +49,73 @@ mod dev_num {
         );
     }
 
+    #[test]
+    fn if_then_else() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                cond : Bool
+                cond = True
+
+                if cond then
+                    0
+                else
+                    1
+                 "#
+            ),
+            0,
+            i64
+        );
+    }
+
+    #[test]
+    fn rgb_red() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Red is
+                    Red -> 111
+                    Green -> 222
+                    Blue -> 333
+                 "#
+            ),
+            111,
+            i64
+        );
+    }
+
+    #[test]
+    fn rgb_green() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Green is
+                    Red -> 111
+                    Green -> 222
+                    Blue -> 333
+                 "#
+            ),
+            222,
+            i64
+        );
+    }
+
+    #[test]
+    fn rgb_blue() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Blue is
+                    Red -> 111
+                    Green -> 222
+                    Blue -> 333
+                 "#
+            ),
+            333,
+            i64
+        );
+    }
+
     // #[test]
     // fn gen_add_f64() {
     //     assert_evals_to!(

@@ -147,6 +147,7 @@ where
         Err(e) => Err(format!("{:?}", e)),
         Ok(result) => {
             let integer = match result[0] {
+                wasmer::Value::I32(a) => a as i64,
                 wasmer::Value::I64(a) => a,
                 wasmer::Value::F64(a) => a.to_bits() as i64,
                 _ => panic!(),
