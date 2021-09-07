@@ -3,7 +3,7 @@ use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::ExpectedTextNode;
 use crate::editor::ed_error::{NestedNodeMissingChild, NestedNodeRequired};
 use crate::editor::markup::common_nodes::new_blank_mn;
-use crate::editor::markup::common_nodes::new_blank_mn_w_nl;
+use crate::editor::markup::common_nodes::new_blank_mn_w_nls;
 use crate::editor::markup::common_nodes::new_colon_mn;
 use crate::editor::markup::common_nodes::new_comma_mn;
 use crate::editor::markup::common_nodes::new_equals_mn;
@@ -36,7 +36,7 @@ pub enum MarkupNode {
         ast_node_id: ASTNodeId,
         children_ids: Vec<MarkNodeId>,
         parent_id_opt: Option<MarkNodeId>,
-        newline_at_end: bool,
+        newlines_at_end: usize,
     },
     Text {
         content: String,
@@ -44,14 +44,14 @@ pub enum MarkupNode {
         syn_high_style: HighlightStyle,
         attributes: Attributes,
         parent_id_opt: Option<MarkNodeId>,
-        newline_at_end: bool,
+        newlines_at_end: usize,
     },
     Blank {
         ast_node_id: ASTNodeId,
         attributes: Attributes,
         syn_high_style: HighlightStyle, // TODO remove HighlightStyle, this is always HighlightStyle::Blank
         parent_id_opt: Option<MarkNodeId>,
-        newline_at_end: bool,
+        newlines_at_end: usize,
     },
 }
 
@@ -179,7 +179,7 @@ impl MarkupNode {
     pub fn get_full_content(&self) -> String {
         let mut full_content = self.get_content();
 
-        if self.has_newline_at_end() {
+        for _ in 0..self.get_newlines_at_end() {
             full_content.push('\n')
         }
 
@@ -239,19 +239,31 @@ impl MarkupNode {
         matches!(self, MarkupNode::Nested { .. })
     }
 
-    pub fn has_newline_at_end(&self) -> bool {
+    pub fn get_newlines_at_end(&self) -> usize {
         match self {
-            MarkupNode::Nested { newline_at_end, .. } => *newline_at_end,
-            MarkupNode::Text { newline_at_end, .. } => *newline_at_end,
-            MarkupNode::Blank { newline_at_end, .. } => *newline_at_end,
+            MarkupNode::Nested {
+                newlines_at_end, ..
+            } => *newlines_at_end,
+            MarkupNode::Text {
+                newlines_at_end, ..
+            } => *newlines_at_end,
+            MarkupNode::Blank {
+                newlines_at_end, ..
+            } => *newlines_at_end,
         }
     }
 
     pub fn add_newline_at_end(&mut self) {
         match self {
-            MarkupNode::Nested { newline_at_end, .. } => *newline_at_end = true,
-            MarkupNode::Text { newline_at_end, .. } => *newline_at_end = true,
-            MarkupNode::Blank { newline_at_end, .. } => *newline_at_end = true,
+            MarkupNode::Nested {
+                newlines_at_end, ..
+            } => *newlines_at_end += 1,
+            MarkupNode::Text {
+                newlines_at_end, ..
+            } => *newlines_at_end += 1,
+            MarkupNode::Blank {
+                newlines_at_end, ..
+            } => *newlines_at_end += 1,
         }
     }
 }
@@ -282,7 +294,7 @@ fn new_markup_node(
         syn_high_style: highlight_style,
         attributes: Attributes::new(),
         parent_id_opt: None,
-        newline_at_end: false,
+        newlines_at_end: 0,
     };
 
     mark_node_pool.add(node)
@@ -312,9 +324,6 @@ pub fn def2_to_markup<'a, 'b>(
                 interns,
             )?;
 
-            let expr_mn = mark_node_pool.get_mut(expr_mn_id);
-            expr_mn.add_newline_at_end();
-
             let tld_mn = tld_mark_node(
                 *identifier_id,
                 expr_mn_id,
@@ -326,7 +335,7 @@ pub fn def2_to_markup<'a, 'b>(
 
             mark_node_pool.add(tld_mn)
         }
-        Def2::Blank => mark_node_pool.add(new_blank_mn_w_nl(ast_node_id, None)),
+        Def2::Blank => mark_node_pool.add(new_blank_mn_w_nls(ast_node_id, None, 2)),
     };
 
     Ok(mark_node_id)
@@ -402,7 +411,7 @@ pub fn expr2_to_markup<'a, 'b>(
                 ast_node_id,
                 children_ids,
                 parent_id_opt: None,
-                newline_at_end: false,
+                newlines_at_end: 0,
             };
 
             mark_node_pool.add(list_node)
@@ -417,7 +426,7 @@ pub fn expr2_to_markup<'a, 'b>(
                 ast_node_id,
                 children_ids,
                 parent_id_opt: None,
-                newline_at_end: false,
+                newlines_at_end: 0,
             };
 
             mark_node_pool.add(record_node)
@@ -467,7 +476,7 @@ pub fn expr2_to_markup<'a, 'b>(
                 ast_node_id,
                 children_ids,
                 parent_id_opt: None,
-                newline_at_end: false,
+                newlines_at_end: 0,
             };
 
             mark_node_pool.add(record_node)
@@ -490,7 +499,7 @@ pub fn expr2_to_markup<'a, 'b>(
                 syn_high_style: HighlightStyle::Variable,
                 attributes: Attributes::new(),
                 parent_id_opt: None,
-                newline_at_end: false,
+                newlines_at_end: 0,
             };
 
             let val_name_mn_id = mark_node_pool.add(val_name_mn);
@@ -521,7 +530,7 @@ pub fn expr2_to_markup<'a, 'b>(
                         ast_node_id,
                         children_ids: vec![val_name_mn_id, equals_mn_id, body_mn_id],
                         parent_id_opt: None,
-                        newline_at_end: true,
+                        newlines_at_end: 1,
                     };
 
                     mark_node_pool.add(full_let_node)
@@ -553,7 +562,7 @@ pub fn set_parent_for_all(markup_node_id: MarkNodeId, mark_node_pool: &mut SlowP
         ast_node_id: _,
         children_ids,
         parent_id_opt: _,
-        newline_at_end: _,
+        newlines_at_end: _,
     } = node
     {
         // need to clone because of borrowing issues
@@ -599,7 +608,7 @@ fn header_mn(content: String, expr_id: ExprId, mark_node_pool: &mut SlowPool) ->
         syn_high_style: HighlightStyle::PackageRelated,
         attributes: Attributes::new(),
         parent_id_opt: None,
-        newline_at_end: false,
+        newlines_at_end: 0,
     };
 
     mark_node_pool.add(mark_node)
@@ -617,7 +626,7 @@ fn header_val_mn(
         syn_high_style: highlight_style,
         attributes: Attributes::new(),
         parent_id_opt: None,
-        newline_at_end: false,
+        newlines_at_end: 0,
     };
 
     mark_node_pool.add(mark_node)
@@ -640,7 +649,7 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
         ast_node_id,
         children_ids: vec![app_node_id, app_name_node_id],
         parent_id_opt: None,
-        newline_at_end: true,
+        newlines_at_end: 1,
     };
 
     let packages_node_id = header_mn("    packages ".to_owned(), expr_id, mark_node_pool);
@@ -673,7 +682,7 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
             pack_right_acc_node_id,
         ],
         parent_id_opt: None,
-        newline_at_end: true,
+        newlines_at_end: 1,
     };
 
     let imports_node_id = header_mn("    imports ".to_owned(), expr_id, mark_node_pool);
@@ -717,7 +726,7 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
         ast_node_id,
         children_ids: full_import_children,
         parent_id_opt: None,
-        newline_at_end: true,
+        newlines_at_end: 1,
     };
 
     let provides_node_id = header_mn("    provides ".to_owned(), expr_id, mark_node_pool);
@@ -750,7 +759,7 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
             provides_end_node_id,
         ],
         parent_id_opt: None,
-        newline_at_end: true,
+        newlines_at_end: 1,
     };
 
     let full_app_node_id = mark_node_pool.add(full_app_node);
@@ -767,7 +776,7 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
             full_provides_node_id,
         ],
         parent_id_opt: None,
-        newline_at_end: true,
+        newlines_at_end: 1,
     };
 
     let header_mn_id = mark_node_pool.add(header_mark_node);
@@ -801,12 +810,18 @@ pub fn ast_to_mark_nodes<'a, 'b>(
 
 impl fmt::Display for MarkupNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} ({})", self.node_type_as_string(), self.get_content())
+        write!(
+            f,
+            "{} ({}, {})",
+            self.node_type_as_string(),
+            self.get_content(),
+            self.get_newlines_at_end()
+        )
     }
 }
 
 pub fn tree_as_string(root_node_id: MarkNodeId, mark_node_pool: &SlowPool) -> String {
-    let mut full_string = "\n\n(mark_node_tree)\n".to_owned();
+    let mut full_string = "\n(mark_node_tree)\n".to_owned();
 
     let node = mark_node_pool.get(root_node_id);
 

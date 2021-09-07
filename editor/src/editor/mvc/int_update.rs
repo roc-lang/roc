@@ -25,7 +25,7 @@ pub fn start_new_int(ed_model: &mut EdModel, digit_char: &char) -> EdResult<Inpu
     } = get_node_context(ed_model)?;
 
     let is_blank_node = curr_mark_node.is_blank();
-    let curr_mark_node_has_nl = curr_mark_node.has_newline_at_end();
+    let curr_mark_node_nls = curr_mark_node.get_newlines_at_end();
 
     let int_var = ed_model.module.env.var_store.fresh();
 
@@ -50,7 +50,7 @@ pub fn start_new_int(ed_model: &mut EdModel, digit_char: &char) -> EdResult<Inpu
         syn_high_style: HighlightStyle::Number,
         attributes: Attributes::new(),
         parent_id_opt,
-        newline_at_end: curr_mark_node_has_nl,
+        newlines_at_end: curr_mark_node_nls,
     };
 
     if is_blank_node {

@@ -5,7 +5,7 @@ use crate::{
         ed_error::{EdResult, FailedToUpdateIdentIdName, KeyNotFound},
         markup::{
             attribute::Attributes,
-            common_nodes::{new_blank_mn, new_equals_mn},
+            common_nodes::{new_blank_mn_w_nls, new_equals_mn},
             nodes::{set_parent_for_all, MarkupNode},
         },
         slow_pool::{MarkNodeId, SlowPool},
@@ -46,7 +46,7 @@ pub fn tld_mark_node<'a>(
         syn_high_style: HighlightStyle::Variable,
         attributes: Attributes::new(),
         parent_id_opt: None,
-        newline_at_end: false,
+        newlines_at_end: 0,
     };
 
     let val_name_mn_id = mark_node_pool.add(val_name_mn);
@@ -57,7 +57,7 @@ pub fn tld_mark_node<'a>(
         ast_node_id,
         children_ids: vec![val_name_mn_id, equals_mn_id, expr_mark_node_id],
         parent_id_opt: None,
-        newline_at_end: true,
+        newlines_at_end: 2,
     };
 
     Ok(full_let_node)
@@ -75,7 +75,7 @@ pub fn start_new_tld_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
     let val_expr_node = Expr2::Blank;
     let val_expr_id = ed_model.module.env.pool.add(val_expr_node);
 
-    let val_expr_mn = new_blank_mn(ASTNodeId::AExprId(val_expr_id), None);
+    let val_expr_mn = new_blank_mn_w_nls(ASTNodeId::AExprId(val_expr_id), None, 0);
     let val_expr_mn_id = ed_model.mark_node_pool.add(val_expr_mn);
 
     let val_name_string = new_char.to_string();
@@ -134,7 +134,8 @@ pub fn start_new_tld_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
     set_parent_for_all(curr_mark_node_id, &mut ed_model.mark_node_pool);
 
     // remove data corresponding to old Blank node
-    ed_model.del_blank_node(old_caret_pos)?;
+    ed_model.del_line(old_caret_pos.line + 1)?;
+    ed_model.del_line(old_caret_pos.line)?;
 
     let char_len = 1;
     ed_model.simple_move_carets_right(char_len);

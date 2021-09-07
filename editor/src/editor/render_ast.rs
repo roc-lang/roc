@@ -99,7 +99,7 @@ fn markup_to_wgpu_helper<'a>(
             ast_node_id: _,
             children_ids,
             parent_id_opt: _,
-            newline_at_end,
+            newlines_at_end,
         } => {
             for child_id in children_ids.iter() {
                 let child = mark_node_pool.get(*child_id);
@@ -113,7 +113,7 @@ fn markup_to_wgpu_helper<'a>(
                 )?;
             }
 
-            if *newline_at_end {
+            for _ in 0..*newlines_at_end {
                 wgpu_texts.push(newline(code_style.font_size));
 
                 txt_row_col.0 += 1;
@@ -126,7 +126,7 @@ fn markup_to_wgpu_helper<'a>(
             syn_high_style,
             attributes: _,
             parent_id_opt: _,
-            newline_at_end,
+            newlines_at_end,
         } => {
             let highlight_color = map_get(&code_style.ed_theme.syntax_high_map, syn_high_style)?;
 
@@ -138,7 +138,7 @@ fn markup_to_wgpu_helper<'a>(
 
             txt_row_col.1 += content.len();
 
-            if *newline_at_end {
+            for _ in 0..*newlines_at_end {
                 txt_row_col.0 += 1;
                 txt_row_col.1 = 0;
             }
@@ -150,7 +150,7 @@ fn markup_to_wgpu_helper<'a>(
             attributes: _,
             syn_high_style,
             parent_id_opt: _,
-            newline_at_end,
+            newlines_at_end,
         } => {
             let full_content = markup_node.get_full_content();
 
@@ -180,9 +180,7 @@ fn markup_to_wgpu_helper<'a>(
             txt_row_col.1 += BLANK_PLACEHOLDER.len();
             wgpu_texts.push(glyph_text);
 
-            if *newline_at_end {
-                wgpu_texts.push(newline(code_style.font_size));
-
+            for _ in 0..*newlines_at_end {
                 txt_row_col.0 += 1;
                 txt_row_col.1 = 0;
             }

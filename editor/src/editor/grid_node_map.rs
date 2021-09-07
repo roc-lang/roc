@@ -12,6 +12,7 @@ use crate::ui::text::text_pos::TextPos;
 use crate::ui::ui_error::{LineInsertionFailed, OutOfBounds, UIResult};
 use crate::ui::util::{slice_get, slice_get_mut};
 use snafu::OptionExt;
+use std::cmp::Ordering;
 use std::fmt;
 
 use super::markup::nodes::get_root_mark_node_id;
@@ -70,6 +71,46 @@ impl GridNodeMap {
 
     pub fn push_empty_line(&mut self) {
         self.lines.push(vec![]);
+    }
+
+    pub fn break_line(&mut self, line_nr: usize, col_nr: usize) -> UIResult<()> {
+        // clippy prefers this over if-else
+        match line_nr.cmp(&self.lines.len()) {
+            Ordering::Less => {
+                self.insert_empty_line(line_nr + 1)?;
+
+                let line_ref = self.lines.get_mut(line_nr).unwrap(); // safe because we checked line_nr
+
+                if col_nr < line_ref.len() {
+                    let next_line_str: Vec<MarkNodeId> = line_ref.drain(col_nr..).collect();
+
+                    let next_line_ref = self.lines.get_mut(line_nr + 1).unwrap(); // safe because we just added the line
+
+                    *next_line_ref = next_line_str;
+                }
+
+                Ok(())
+            }
+            Ordering::Equal => self.insert_empty_line(line_nr + 1),
+            Ordering::Greater => OutOfBounds {
+                index: line_nr,
+                collection_name: "grid_node_map.lines".to_owned(),
+                len: self.lines.len(),
+            }
+            .fail(),
+        }
+    }
+
+    pub fn clear_line(&mut self, line_nr: usize) -> UIResult<()> {
+        let line_ref = slice_get_mut(line_nr, &mut self.lines)?;
+
+        *line_ref = vec![];
+
+        Ok(())
+    }
+
+    pub fn del_line(&mut self, line_nr: usize) {
+        self.lines.remove(line_nr);
     }
 
     pub fn del_at_line(&mut self, line_nr: usize, column: usize) -> UIResult<()> {

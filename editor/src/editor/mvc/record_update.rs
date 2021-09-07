@@ -30,7 +30,7 @@ pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     } = get_node_context(ed_model)?;
 
     let is_blank_node = curr_mark_node.is_blank();
-    let curr_mark_node_has_nl = curr_mark_node.has_newline_at_end();
+    let curr_mark_node_nls = curr_mark_node.get_newlines_at_end();
 
     let ast_pool = &mut ed_model.module.env.pool;
     let expr2_node = Expr2::EmptyRecord;
@@ -51,7 +51,7 @@ pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
         ast_node_id,
         children_ids: vec![left_bracket_node_id, right_bracket_node_id],
         parent_id_opt,
-        newline_at_end: curr_mark_node_has_nl,
+        newlines_at_end: curr_mark_node_nls,
     };
 
     if is_blank_node {
@@ -59,7 +59,7 @@ pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
             .mark_node_pool
             .replace_node(curr_mark_node_id, nested_node);
 
-        ed_model.del_blank_node(old_caret_pos)?;
+        ed_model.del_blank_expr_node(old_caret_pos)?;
 
         ed_model.simple_move_carets_right(nodes::LEFT_ACCOLADE.len());
 
@@ -125,7 +125,7 @@ pub fn update_empty_record(
                 syn_high_style: HighlightStyle::RecordField,
                 attributes: Attributes::new(),
                 parent_id_opt,
-                newline_at_end: false,
+                newlines_at_end: 0,
             };
 
             let record_field_node_id = ed_model.add_mark_node(record_field_node);
@@ -234,7 +234,7 @@ pub fn update_record_colon(
                                             syn_high_style: HighlightStyle::Operator,
                                             attributes: Attributes::new(),
                                             parent_id_opt: Some(parent_id),
-                                            newline_at_end: false,
+                                            newlines_at_end: 0,
                                         };
 
                                         let record_colon_node_id =

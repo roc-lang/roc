@@ -4,6 +4,7 @@ use crate::ui::text::text_pos::TextPos;
 use crate::ui::ui_error::{LineInsertionFailed, OutOfBounds, UIResult};
 use crate::ui::util::slice_get;
 use crate::ui::util::slice_get_mut;
+use std::cmp::Ordering;
 use std::fmt;
 
 #[derive(Debug)]
@@ -61,6 +62,52 @@ impl CodeLines {
 
     pub fn push_empty_line(&mut self) {
         self.lines.push(String::new())
+    }
+
+    pub fn break_line(&mut self, line_nr: usize, col_nr: usize) -> UIResult<()> {
+        // clippy prefers this over if-else
+        match line_nr.cmp(&self.lines.len()) {
+            Ordering::Less => {
+                self.insert_empty_line(line_nr + 1)?;
+
+                let line_ref = self.lines.get_mut(line_nr).unwrap(); // safe because we checked line_nr
+
+                if col_nr < line_ref.len() {
+                    let next_line_str: String = line_ref.drain(col_nr..).collect();
+
+                    let next_line_ref = self.lines.get_mut(line_nr + 1).unwrap(); // safe because we just added the line
+
+                    *next_line_ref = next_line_str;
+                }
+
+                Ok(())
+            }
+            Ordering::Equal => self.insert_empty_line(line_nr + 1),
+            Ordering::Greater => OutOfBounds {
+                index: line_nr,
+                collection_name: "code_lines.lines".to_owned(),
+                len: self.lines.len(),
+            }
+            .fail(),
+        }
+    }
+
+    pub fn clear_line(&mut self, line_nr: usize) -> UIResult<()> {
+        let line_ref = slice_get_mut(line_nr, &mut self.lines)?;
+
+        *line_ref = String::new();
+
+        Ok(())
+    }
+
+    pub fn del_line(&mut self, line_nr: usize) -> UIResult<()> {
+        let line_len = self.line_len(line_nr)?;
+
+        self.lines.remove(line_nr);
+
+        self.nr_of_chars -= line_len;
+
+        Ok(())
     }
 
     pub fn del_at_line(&mut self, line_nr: usize, index: usize) -> UIResult<()> {

@@ -6,7 +6,7 @@ use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::MissingSelection;
 use crate::editor::grid_node_map::GridNodeMap;
 use crate::editor::markup::attribute::Attributes;
-use crate::editor::markup::common_nodes::new_blank_mn_w_nl;
+use crate::editor::markup::common_nodes::new_blank_mn_w_nls;
 use crate::editor::markup::nodes;
 use crate::editor::markup::nodes::MarkupNode;
 use crate::editor::markup::nodes::EQUALS;
@@ -153,7 +153,7 @@ impl<'a> EdModel<'a> {
             all_code_string.push_str(&node_content_str);
         }
 
-        if node.has_newline_at_end() {
+        for _ in 0..node.get_newlines_at_end() {
             all_code_string.push('\n');
         }
 
@@ -233,7 +233,7 @@ impl<'a> EdModel<'a> {
         mark_node_pool: &SlowPool,
     ) -> UIResult<()> {
         let mark_node = mark_node_pool.get(mark_node_id);
-        let node_has_newline = mark_node.has_newline_at_end();
+        let node_newlines = mark_node.get_newlines_at_end();
 
         if mark_node.is_nested() {
             let children_ids = mark_node.get_children_ids();
@@ -249,11 +249,19 @@ impl<'a> EdModel<'a> {
                 )?;
             }
 
-            if node_has_newline {
-                EdModel::push_empty_line(code_lines, grid_node_map);
+            // TODO avoid duplication with below
+            if node_newlines > 0 {
+                EdModel::break_line(*line_nr, *col_nr, code_lines, grid_node_map)?;
 
                 *line_nr += 1;
                 *col_nr = 0;
+
+                for _ in 1..node_newlines {
+                    EdModel::insert_empty_line(*line_nr, code_lines, grid_node_map)?;
+
+                    *line_nr += 1;
+                    *col_nr = 0;
+                }
             }
         } else {
             let node_content = mark_node.get_content();
@@ -267,11 +275,18 @@ impl<'a> EdModel<'a> {
                 code_lines,
             )?;
 
-            if node_has_newline {
-                EdModel::push_empty_line(code_lines, grid_node_map);
+            if node_newlines > 0 {
+                EdModel::break_line(*line_nr, *col_nr, code_lines, grid_node_map)?;
 
                 *line_nr += 1;
                 *col_nr = 0;
+
+                for _ in 1..node_newlines {
+                    EdModel::insert_empty_line(*line_nr, code_lines, grid_node_map)?;
+
+                    *line_nr += 1;
+                    *col_nr = 0;
+                }
             } else {
                 *col_nr += node_content.len();
             }
@@ -280,9 +295,24 @@ impl<'a> EdModel<'a> {
         Ok(())
     }
 
-    pub fn insert_empty_line(&mut self, line_nr: usize) -> UIResult<()> {
-        self.code_lines.insert_empty_line(line_nr)?;
-        self.grid_node_map.insert_empty_line(line_nr)
+    // break line at col_nr and move everything after col_nr to the next line
+    pub fn break_line(
+        line_nr: usize,
+        col_nr: usize,
+        code_lines: &mut CodeLines,
+        grid_node_map: &mut GridNodeMap,
+    ) -> UIResult<()> {
+        code_lines.break_line(line_nr, col_nr)?;
+        grid_node_map.break_line(line_nr, col_nr)
+    }
+
+    pub fn insert_empty_line(
+        line_nr: usize,
+        code_lines: &mut CodeLines,
+        grid_node_map: &mut GridNodeMap,
+    ) -> UIResult<()> {
+        code_lines.insert_empty_line(line_nr)?;
+        grid_node_map.insert_empty_line(line_nr)
     }
 
     pub fn push_empty_line(code_lines: &mut CodeLines, grid_node_map: &mut GridNodeMap) {
@@ -290,7 +320,16 @@ impl<'a> EdModel<'a> {
         grid_node_map.push_empty_line();
     }
 
-    // updates grid_node_map and code_lines but nothing else.
+    pub fn clear_line(&mut self, line_nr: usize) -> UIResult<()> {
+        self.grid_node_map.clear_line(line_nr)?;
+        self.code_lines.clear_line(line_nr)
+    }
+
+    pub fn del_line(&mut self, line_nr: usize) -> UIResult<()> {
+        self.grid_node_map.del_line(line_nr);
+        self.code_lines.del_line(line_nr)
+    }
+
     pub fn del_at_line(&mut self, line_nr: usize, index: usize) -> UIResult<()> {
         self.grid_node_map.del_at_line(line_nr, index)?;
         self.code_lines.del_at_line(line_nr, index)
@@ -307,7 +346,7 @@ impl<'a> EdModel<'a> {
         self.code_lines.del_range_at_line(line_nr, col_range)
     }
 
-    pub fn del_blank_node(&mut self, txt_pos: TextPos) -> UIResult<()> {
+    pub fn del_blank_expr_node(&mut self, txt_pos: TextPos) -> UIResult<()> {
         self.del_at_line(txt_pos.line, txt_pos.column)
     }
 
@@ -498,14 +537,14 @@ impl<'a> EdModel<'a> {
     fn replace_selected_expr_with_blank(&mut self) -> EdResult<()> {
         let expr_mark_node_id_opt = if let Some(sel_block) = &self.selected_block_opt {
             let expr2_level_mark_node = self.mark_node_pool.get(sel_block.mark_node_id);
-            let newline_at_end = expr2_level_mark_node.has_newline_at_end();
+            let newlines_at_end = expr2_level_mark_node.get_newlines_at_end();
 
             let blank_replacement = MarkupNode::Blank {
                 ast_node_id: sel_block.ast_node_id,
                 attributes: Attributes::new(),
                 syn_high_style: HighlightStyle::Blank,
                 parent_id_opt: expr2_level_mark_node.get_parent_id_opt(),
-                newline_at_end,
+                newlines_at_end,
             };
 
             self.mark_node_pool
@@ -1091,8 +1130,8 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                         ) {
 
                                             // one blank line between top level definitions
-                                            ed_model.insert_empty_line(caret_line_nr + 1)?;
-                                            ed_model.insert_empty_line(caret_line_nr + 1)?;
+                                            EdModel::insert_empty_line(caret_line_nr + 1, &mut ed_model.code_lines, &mut ed_model.grid_node_map)?;
+                                            EdModel::insert_empty_line(caret_line_nr + 1, &mut ed_model.code_lines, &mut ed_model.grid_node_map)?;
 
                                             // create Blank node at new line
                                             let new_line_blank = Def2::Blank;
@@ -1103,7 +1142,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                             ed_model.module.ast.def_ids.insert(prev_def_mn_id_indx, new_line_blank_id);
 
                                             let blank_mn_id = ed_model
-                                                .add_mark_node(new_blank_mn_w_nl(ASTNodeId::ADefId(new_line_blank_id), None));
+                                                .add_mark_node(new_blank_mn_w_nls(ASTNodeId::ADefId(new_line_blank_id), None, 2));
 
                                             ed_model.markup_ids.insert(prev_def_mn_id_indx + 1,blank_mn_id); // + 1 because first markup node is header
 
@@ -1151,7 +1190,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                     ed_model.module.ast.def_ids.insert(prev_def_mn_id_indx, new_blank_id);
 
                                                     let blank_mn_id = ed_model
-                                                        .add_mark_node(new_blank_mn_w_nl(ASTNodeId::ADefId(new_blank_id), None));
+                                                        .add_mark_node(new_blank_mn_w_nls(ASTNodeId::ADefId(new_blank_id), None, 2));
 
                                                     ed_model.markup_ids.insert(prev_def_mn_id_indx + 1,blank_mn_id); // + 1 because first mark_node is header
 

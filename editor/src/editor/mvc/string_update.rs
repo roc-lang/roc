@@ -137,7 +137,7 @@ pub fn start_new_string(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
 
     if curr_mark_node.is_blank() {
         let new_expr2_node = Expr2::SmallStr(arraystring::ArrayString::new());
-        let curr_mark_node_has_nl = curr_mark_node.has_newline_at_end();
+        let curr_mark_node_nls = curr_mark_node.get_newlines_at_end();
 
         ed_model
             .module
@@ -151,7 +151,7 @@ pub fn start_new_string(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
             syn_high_style: HighlightStyle::String,
             attributes: Attributes::new(),
             parent_id_opt,
-            newline_at_end: curr_mark_node_has_nl,
+            newlines_at_end: curr_mark_node_nls,
         };
 
         ed_model
@@ -159,7 +159,7 @@ pub fn start_new_string(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
             .replace_node(curr_mark_node_id, new_string_node);
 
         // remove data corresponding to Blank node
-        ed_model.del_blank_node(old_caret_pos)?;
+        ed_model.del_blank_expr_node(old_caret_pos)?;
 
         // update GridNodeMap and CodeLines
         EdModel::insert_between_line(
