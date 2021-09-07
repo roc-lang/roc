@@ -265,12 +265,12 @@ impl<'a> WasmBackend<'a> {
         &mut self,
         lowlevel: &LowLevel,
         args: &'a [Symbol],
-        layout: &Layout<'a>,
+        return_layout: &Layout<'a>,
     ) -> Result<(), String> {
         for arg in args {
             self.load_from_symbol(arg)?;
         }
-        let wasm_layout = WasmLayout::new(layout)?;
+        let wasm_layout = WasmLayout::new(return_layout)?;
         self.build_instructions_lowlevel(lowlevel, wasm_layout.value_type)?;
         Ok(())
     }
@@ -278,7 +278,7 @@ impl<'a> WasmBackend<'a> {
     fn build_instructions_lowlevel(
         &mut self,
         lowlevel: &LowLevel,
-        value_type: ValueType,
+        return_value_type: ValueType,
     ) -> Result<(), String> {
         // TODO:  Find a way to organise all the lowlevel ops and layouts! There's lots!
         //
@@ -287,7 +287,7 @@ impl<'a> WasmBackend<'a> {
         // so simple arrays of instructions won't work. But there are common patterns.
         let instructions: &[Instruction] = match lowlevel {
             // Wasm type might not be enough, may need to sign-extend i8 etc. Maybe in load_from_symbol?
-            LowLevel::NumAdd => match value_type {
+            LowLevel::NumAdd => match return_value_type {
                 ValueType::I32 => &[I32Add],
                 ValueType::I64 => &[I64Add],
                 ValueType::F32 => &[F32Add],
