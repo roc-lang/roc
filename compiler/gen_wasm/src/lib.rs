@@ -1,3 +1,4 @@
+pub mod from_wasm32_memory;
 mod backend;
 
 use bumpalo::Bump;

@@ -85,16 +85,16 @@ pub fn helper_wasm<'a>(
 
     let exposed_to_host = exposed_to_host.keys().copied().collect::<MutSet<_>>();
 
-    let env = gen_wasm::Env {
+    let env = roc_gen_wasm::Env {
         arena,
         interns,
         exposed_to_host,
     };
 
-    let module_bytes = gen_wasm::build_module(&env, procedures).unwrap();
+    let module_bytes = roc_gen_wasm::build_module(&env, procedures).unwrap();
 
     // for debugging (e.g. with wasm2wat)
-    if true {
+    if false {
         use std::io::Write;
         let mut file =
             std::fs::File::create("/home/brian/Documents/roc/compiler/gen_wasm/debug.wasm").unwrap();
