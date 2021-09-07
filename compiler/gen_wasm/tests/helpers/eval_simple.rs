@@ -96,24 +96,27 @@ pub fn helper_wasm<'a>(
     // for debugging (e.g. with wasm2wat)
     if false {
         use std::io::Write;
-        let mut file =
-            std::fs::File::create("/home/brian/Documents/roc/compiler/gen_wasm/debug.wasm").unwrap();
-        file.write_all(&module_bytes).unwrap();
+        let path = "/home/brian/Documents/roc/compiler/gen_wasm/debug.wasm";
+
+        match std::fs::File::create(path) {
+            Err(e) => eprintln!("Problem creating wasm debug file: {:?}", e),
+            Ok(mut file) => {
+                file.write_all(&module_bytes).unwrap();
+            }
+        }
     }
 
     // now, do wasmer stuff
 
     use wasmer::{Instance, Module, Store};
-    
+
     let store = Store::default();
     // let module = Module::from_file(&store, &test_wasm_path).unwrap();
     let module = Module::from_binary(&store, &module_bytes).unwrap();
 
     // First, we create the `WasiEnv`
     use wasmer_wasi::WasiState;
-    let mut wasi_env = WasiState::new("hello")
-        .finalize()
-        .unwrap();
+    let mut wasi_env = WasiState::new("hello").finalize().unwrap();
 
     // Then, we get the import object related to our WASI
     // and attach it to the Wasm instance.
@@ -126,7 +129,8 @@ pub fn helper_wasm<'a>(
 
 #[allow(dead_code)]
 pub fn assert_wasm_evals_to_help<T>(src: &str, ignore_problems: bool) -> Result<T, String>
-where T: Copy
+where
+    T: Copy,
 {
     let arena = bumpalo::Bump::new();
 
@@ -144,6 +148,7 @@ where T: Copy
         Ok(result) => {
             let integer = match result[0] {
                 wasmer::Value::I64(a) => a,
+                wasmer::Value::F64(a) => a.to_bits() as i64,
                 _ => panic!(),
             };
 
@@ -160,7 +165,8 @@ where T: Copy
 #[macro_export]
 macro_rules! assert_wasm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
-        match $crate::helpers::eval_simple::assert_wasm_evals_to_help::<$ty>($src, $ignore_problems) {
+        match $crate::helpers::eval_simple::assert_wasm_evals_to_help::<$ty>($src, $ignore_problems)
+        {
             Err(msg) => println!("{:?}", msg),
             Ok(actual) => {
                 #[allow(clippy::bool_assert_comparison)]
@@ -170,7 +176,13 @@ macro_rules! assert_wasm_evals_to {
     };
 
     ($src:expr, $expected:expr, $ty:ty) => {
-        $crate::assert_wasm_evals_to!($src, $expected, $ty, $crate::helpers::eval_simple::identity, false);
+        $crate::assert_wasm_evals_to!(
+            $src,
+            $expected,
+            $ty,
+            $crate::helpers::eval_simple::identity,
+            false
+        );
     };
 
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {

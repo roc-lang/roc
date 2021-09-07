@@ -1,7 +1,7 @@
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
 use roc_std::{RocDec, RocList, RocOrder, RocStr};
-use crate::from_wasm32_memory::FromWasmMemory
+use crate::from_wasm32_memory::FromWasm32Memory;
 
 fn promote_expr_to_module(src: &str) -> String {
     let mut buffer = String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
@@ -98,7 +98,8 @@ pub fn helper_wasm<'a>(
     if true {
         use std::io::Write;
         let mut file =
-            std::fs::File::create("/home/brian/Documents/roc/compiler/gen_wasm/debug.wasm").unwrap();
+            std::fs::File::create("/home/brian/Documents/roc/compiler/gen_wasm/debug.wasm")
+                .unwrap();
         file.write_all(&module_bytes).unwrap();
     }
 
@@ -180,7 +181,7 @@ fn fake_wasm_main_function(_: u32, _: u32) -> u32 {
 #[allow(dead_code)]
 pub fn assert_wasm_evals_to_help<T>(src: &str, ignore_problems: bool) -> Result<T, String>
 where
-    T: FromWasmMemory,
+    T: FromWasm32Memory,
 {
     let arena = bumpalo::Bump::new();
 
@@ -231,7 +232,13 @@ macro_rules! assert_wasm_evals_to {
     };
 
     ($src:expr, $expected:expr, $ty:ty) => {
-        $crate::assert_wasm_evals_to!($src, $expected, $ty, $crate::helpers::eval_full::identity, false);
+        $crate::assert_wasm_evals_to!(
+            $src,
+            $expected,
+            $ty,
+            $crate::helpers::eval_full::identity,
+            false
+        );
     };
 
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {

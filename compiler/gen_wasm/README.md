@@ -34,7 +34,7 @@ However the Mono IR converts this to jumps and join points, which are more of a 
 [cfg-api]: https://github.com/WebAssembly/binaryen/wiki/Compiling-to-WebAssembly-with-Binaryen#cfg-api
 [binaryen-rs]: https://crates.io/crates/binaryen
 
-Binaryen's control-flow graph API implements the "Relooper" algorithm developed by the Emscripten project and decribed in [this paper](https://github.com/emscripten-core/emscripten/blob/main/docs/paper.pdf).
+Binaryen's control-flow graph API implements the "Relooper" algorithm developed by the Emscripten project and described in [this paper](https://github.com/emscripten-core/emscripten/blob/main/docs/paper.pdf).
 
 There is an alternative algorithm that is supposed to be an improvement on Relooper, called ["Stackifier"](https://medium.com/leaningtech/solving-the-structured-control-flow-problem-once-and-for-all-5123117b1ee2).
 
