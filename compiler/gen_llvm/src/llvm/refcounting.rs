@@ -158,11 +158,13 @@ impl<'ctx> PointerToRefcount<'ctx> {
     }
 
     pub fn decrement<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) {
+        let alignment = layout
+            .allocation_alignment_bytes(env.ptr_bytes)
+            .max(env.ptr_bytes);
+
         let context = env.context;
         let block = env.builder.get_insert_block().expect("to be in a function");
         let di_location = env.builder.get_current_debug_location().unwrap();
-
-        let alignment = layout.alignment_bytes(env.ptr_bytes).max(env.ptr_bytes);
 
         let fn_name = &format!("decrement_refcounted_ptr_{}", alignment);
 
@@ -1115,11 +1117,11 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
 
     debug_assert!(arg_val.is_pointer_value());
     let current_tag_id = get_tag_id(env, fn_val, &union_layout, arg_val);
-    let value_ptr = tag_pointer_clear_tag_id(env, arg_val.into_pointer_value());
-
-    // to increment/decrement the cons-cell itself
-    let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
-    let call_mode = mode_to_call_mode(fn_val, mode);
+    let value_ptr = if union_layout.stores_tag_id_in_pointer(env.ptr_bytes) {
+        tag_pointer_clear_tag_id(env, arg_val.into_pointer_value())
+    } else {
+        arg_val.into_pointer_value()
+    };
 
     let should_recurse_block = env.context.append_basic_block(parent, "should_recurse");
 
@@ -1141,6 +1143,10 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
     }
 
     env.builder.position_at_end(should_recurse_block);
+
+    // to increment/decrement the cons-cell itself
+    let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
+    let call_mode = mode_to_call_mode(fn_val, mode);
 
     let layout = Layout::Union(union_layout);
 

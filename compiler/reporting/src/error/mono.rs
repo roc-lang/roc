@@ -1,4 +1,4 @@
-use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder};
+use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder, Severity};
 use std::path::PathBuf;
 use ven_pretty::DocAllocator;
 
@@ -33,6 +33,7 @@ pub fn mono_problem<'b>(
                     filename,
                     title: "UNSAFE PATTERN".to_string(),
                     doc,
+                    severity: Severity::RuntimeError,
                 }
             }
             BadDestruct => {
@@ -56,6 +57,7 @@ pub fn mono_problem<'b>(
                     filename,
                     title: "UNSAFE PATTERN".to_string(),
                     doc,
+                    severity: Severity::RuntimeError,
                 }
             }
             BadCase => {
@@ -79,6 +81,7 @@ pub fn mono_problem<'b>(
                     filename,
                     title: "UNSAFE PATTERN".to_string(),
                     doc,
+                    severity: Severity::RuntimeError,
                 }
             }
         },
@@ -104,6 +107,7 @@ pub fn mono_problem<'b>(
                 filename,
                 title: "REDUNDANT PATTERN".to_string(),
                 doc,
+                severity: Severity::Warning,
             }
         }
     }

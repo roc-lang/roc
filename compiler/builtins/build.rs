@@ -28,50 +28,70 @@ fn main() {
     let build_script_dir_path = fs::canonicalize(Path::new(".")).unwrap();
     let bitcode_path = build_script_dir_path.join("bitcode");
 
-    let src_obj_path = bitcode_path.join("builtins-64bit.o");
+    let src_obj_path = bitcode_path.join("builtins-host.o");
     let src_obj = src_obj_path.to_str().expect("Invalid src object path");
 
-    let dest_ir_path = bitcode_path.join("builtins-32bit.ll");
-    let dest_ir_32bit = dest_ir_path.to_str().expect("Invalid dest ir path");
+    let dest_ir_path = bitcode_path.join("builtins-wasm32.ll");
+    let dest_ir_wasm32 = dest_ir_path.to_str().expect("Invalid dest ir path");
 
-    let dest_ir_path = bitcode_path.join("builtins-64bit.ll");
-    let dest_ir_64bit = dest_ir_path.to_str().expect("Invalid dest ir path");
+    let dest_ir_path = bitcode_path.join("builtins-i386.ll");
+    let dest_ir_i386 = dest_ir_path.to_str().expect("Invalid dest ir path");
+
+    let dest_ir_path = bitcode_path.join("builtins-host.ll");
+    let dest_ir_host = dest_ir_path.to_str().expect("Invalid dest ir path");
 
     println!("Compiling zig object to: {}", src_obj);
     run_command(&bitcode_path, "zig", &["build", "object", "-Drelease=true"]);
 
-    println!("Compiling 64-bit ir to: {}", dest_ir_64bit);
+    println!("Compiling host ir to: {}", dest_ir_host);
     run_command(&bitcode_path, "zig", &["build", "ir", "-Drelease=true"]);
 
-    println!("Compiling 32-bit ir to: {}", dest_ir_32bit);
+    println!("Compiling 32-bit i386 ir to: {}", dest_ir_i386);
     run_command(
         &bitcode_path,
         "zig",
-        &["build", "ir-32bit", "-Drelease=true"],
+        &["build", "ir-i386", "-Drelease=true"],
+    );
+
+    println!("Compiling 32-bit wasm32 ir to: {}", dest_ir_wasm32);
+    run_command(
+        &bitcode_path,
+        "zig",
+        &["build", "ir-wasm32", "-Drelease=true"],
     );
 
     println!("Moving zig object to: {}", dest_obj);
 
     run_command(&bitcode_path, "mv", &[src_obj, dest_obj]);
 
-    let dest_bc_path = bitcode_path.join("builtins-32bit.bc");
+    let dest_bc_path = bitcode_path.join("builtins-i386.bc");
     let dest_bc_32bit = dest_bc_path.to_str().expect("Invalid dest bc path");
     println!("Compiling 32-bit bitcode to: {}", dest_bc_32bit);
 
     run_command(
         &build_script_dir_path,
         "llvm-as",
-        &[dest_ir_32bit, "-o", dest_bc_32bit],
+        &[dest_ir_i386, "-o", dest_bc_32bit],
     );
 
-    let dest_bc_path = bitcode_path.join("builtins-64bit.bc");
+    let dest_bc_path = bitcode_path.join("builtins-wasm32.bc");
+    let dest_bc_32bit = dest_bc_path.to_str().expect("Invalid dest bc path");
+    println!("Compiling 32-bit bitcode to: {}", dest_bc_32bit);
+
+    run_command(
+        &build_script_dir_path,
+        "llvm-as",
+        &[dest_ir_wasm32, "-o", dest_bc_32bit],
+    );
+
+    let dest_bc_path = bitcode_path.join("builtins-host.bc");
     let dest_bc_64bit = dest_bc_path.to_str().expect("Invalid dest bc path");
     println!("Compiling 64-bit bitcode to: {}", dest_bc_64bit);
 
     run_command(
         &build_script_dir_path,
         "llvm-as",
-        &[dest_ir_64bit, "-o", dest_bc_64bit],
+        &[dest_ir_host, "-o", dest_bc_64bit],
     );
 
     get_zig_files(bitcode_path.as_path(), &|path| {

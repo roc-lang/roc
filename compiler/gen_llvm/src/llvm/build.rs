@@ -51,8 +51,12 @@ use roc_builtins::bitcode;
 use roc_collections::all::{ImMap, MutMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_mono::ir::{BranchInfo, CallType, EntryPoint, JoinPointId, ModifyRc, OptLevel, ProcLayout};
+use roc_mono::ir::{
+    BranchInfo, CallType, EntryPoint, JoinPointId, ListLiteralElement, ModifyRc, OptLevel,
+    ProcLayout,
+};
 use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, UnionLayout};
+use target_lexicon::{Architecture, OperatingSystem, Triple};
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
 /// output in debug builds, but we don't want it to print to stdout in release builds!
@@ -384,16 +388,34 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
 }
 
 pub fn module_from_builtins<'ctx>(
+    target: &target_lexicon::Triple,
     ctx: &'ctx Context,
     module_name: &str,
-    ptr_bytes: u32,
 ) -> Module<'ctx> {
-    // In the build script for the builtins module,
-    // we compile the builtins into LLVM bitcode
-    let bitcode_bytes: &[u8] = match ptr_bytes {
-        8 => include_bytes!("../../../builtins/bitcode/builtins-64bit.bc"),
-        4 => include_bytes!("../../../builtins/bitcode/builtins-32bit.bc"),
-        _ => unreachable!(),
+    // In the build script for the builtins module, we compile the builtins into LLVM bitcode
+
+    let bitcode_bytes: &[u8] = if target == &target_lexicon::Triple::host() {
+        include_bytes!("../../../builtins/bitcode/builtins-host.bc")
+    } else {
+        match target {
+            Triple {
+                architecture: Architecture::Wasm32,
+                ..
+            } => {
+                include_bytes!("../../../builtins/bitcode/builtins-wasm32.bc")
+            }
+            Triple {
+                architecture: Architecture::X86_32(_),
+                operating_system: OperatingSystem::Linux,
+                ..
+            } => {
+                include_bytes!("../../../builtins/bitcode/builtins-i386.bc")
+            }
+            _ => panic!(
+                "The zig builtins are not currently built for this target: {:?}",
+                target
+            ),
+        }
     };
 
     let memory_buffer = MemoryBuffer::create_from_memory_range(bitcode_bytes, module_name);
@@ -2138,57 +2160,141 @@ fn list_literal<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
     elem_layout: &Layout<'a>,
-    elems: &&[Symbol],
+    elems: &[ListLiteralElement],
 ) -> BasicValueEnum<'ctx> {
     let ctx = env.context;
     let builder = env.builder;
 
-    let len_u64 = elems.len() as u64;
+    let element_type = basic_type_from_layout(env, elem_layout);
 
-    let ptr = {
-        let len_type = env.ptr_int();
-        let len = len_type.const_int(len_u64, false);
+    let list_length = elems.len();
+    let list_length_intval = env.ptr_int().const_int(list_length as _, false);
 
-        allocate_list(env, elem_layout, len)
-    };
+    if element_type.is_int_type() {
+        let element_type = element_type.into_int_type();
+        let element_width = elem_layout.stack_size(env.ptr_bytes);
+        let size = list_length * element_width as usize;
+        let alignment = elem_layout
+            .alignment_bytes(env.ptr_bytes)
+            .max(env.ptr_bytes);
 
-    // Copy the elements from the list literal into the array
-    for (index, symbol) in elems.iter().enumerate() {
-        let val = load_symbol(scope, symbol);
-        let index_val = ctx.i64_type().const_int(index as u64, false);
-        let elem_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
+        let mut is_all_constant = true;
+        let zero_elements = (env.ptr_bytes as f64 / element_width as f64).ceil() as usize;
 
-        builder.build_store(elem_ptr, val);
+        // runtime-evaluated elements
+        let mut runtime_evaluated_elements = Vec::with_capacity_in(list_length, env.arena);
+
+        // set up a global that contains all the literal elements of the array
+        // any variables or expressions are represented as `undef`
+        let global = {
+            let mut global_elements = Vec::with_capacity_in(list_length, env.arena);
+
+            // insert NULL bytes for the refcount
+            // these elements are (dropped again if the list contains non-constants)
+            for _ in 0..zero_elements {
+                global_elements.push(element_type.const_zero());
+            }
+
+            // Copy the elements from the list literal into the array
+            for (index, element) in elems.iter().enumerate() {
+                match element {
+                    ListLiteralElement::Literal(literal) => {
+                        let val = build_exp_literal(env, elem_layout, literal);
+                        global_elements.push(val.into_int_value());
+                    }
+                    ListLiteralElement::Symbol(symbol) => {
+                        let val = load_symbol(scope, symbol);
+                        let intval = val.into_int_value();
+
+                        if intval.is_const() {
+                            global_elements.push(intval);
+                        } else {
+                            is_all_constant = false;
+
+                            runtime_evaluated_elements.push((index, val));
+
+                            global_elements.push(element_type.get_undef());
+                        }
+                    }
+                };
+            }
+
+            let const_elements = if is_all_constant {
+                global_elements.into_bump_slice()
+            } else {
+                &global_elements[zero_elements..]
+            };
+
+            // use None for the address space (e.g. Const does not work)
+            let typ = element_type.array_type(const_elements.len() as u32);
+            let global = env.module.add_global(typ, None, "roc__list_literal");
+
+            global.set_constant(true);
+            global.set_alignment(alignment);
+            global.set_unnamed_addr(true);
+            global.set_linkage(inkwell::module::Linkage::Private);
+
+            global.set_initializer(&element_type.const_array(const_elements));
+            global.as_pointer_value()
+        };
+
+        if is_all_constant {
+            // all elements are constants, so we can use the memory in the constants section directly
+            // here we make a pointer to the first actual element (skipping the 0 bytes that
+            // represent the refcount)
+            let zero = env.ptr_int().const_zero();
+            let offset = env.ptr_int().const_int(zero_elements as _, false);
+
+            let ptr = unsafe {
+                env.builder
+                    .build_in_bounds_gep(global, &[zero, offset], "first_element_pointer")
+            };
+
+            super::build_list::store_list(env, ptr, list_length_intval)
+        } else {
+            // some of our elements are non-constant, so we must allocate space on the heap
+            let ptr = allocate_list(env, elem_layout, list_length_intval);
+
+            // then, copy the relevant segment from the constant section into the heap
+            env.builder
+                .build_memcpy(
+                    ptr,
+                    alignment,
+                    global,
+                    alignment,
+                    env.ptr_int().const_int(size as _, false),
+                )
+                .unwrap();
+
+            // then replace the `undef`s with the values that we evaluate at runtime
+            for (index, val) in runtime_evaluated_elements {
+                let index_val = ctx.i64_type().const_int(index as u64, false);
+                let elem_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
+
+                builder.build_store(elem_ptr, val);
+            }
+
+            super::build_list::store_list(env, ptr, list_length_intval)
+        }
+    } else {
+        let ptr = allocate_list(env, elem_layout, list_length_intval);
+
+        // Copy the elements from the list literal into the array
+        for (index, element) in elems.iter().enumerate() {
+            let val = match element {
+                ListLiteralElement::Literal(literal) => {
+                    build_exp_literal(env, elem_layout, literal)
+                }
+                ListLiteralElement::Symbol(symbol) => load_symbol(scope, symbol),
+            };
+            let index_val = ctx.i64_type().const_int(index as u64, false);
+            let elem_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
+
+            builder.build_store(elem_ptr, val);
+        }
+
+        super::build_list::store_list(env, ptr, list_length_intval)
     }
-
-    let u8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
-    let generic_ptr = builder.build_bitcast(ptr, u8_ptr_type, "to_generic_ptr");
-
-    let struct_type = super::convert::zig_list_type(env);
-    let len = BasicValueEnum::IntValue(env.ptr_int().const_int(len_u64, false));
-    let mut struct_val;
-
-    // Store the pointer
-    struct_val = builder
-        .build_insert_value(
-            struct_type.get_undef(),
-            generic_ptr,
-            Builtin::WRAPPER_PTR,
-            "insert_ptr_list_literal",
-        )
-        .unwrap();
-
-    // Store the length
-    struct_val = builder
-        .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
-        .unwrap();
-
-    // Bitcast to an array of raw bytes
-    builder.build_bitcast(
-        struct_val.into_struct_value(),
-        super::convert::zig_list_type(env),
-        "cast_collection",
-    )
 }
 
 fn decrement_with_size_check<'a, 'ctx, 'env>(
@@ -3664,14 +3770,26 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
         *param = builder.build_load(param.into_pointer_value(), "load_param");
     }
 
-    let call_result = set_jump_and_catch_long_jump(
-        env,
-        function_value,
-        evaluator,
-        evaluator.get_call_conventions(),
-        closure_data,
-        result_type,
-    );
+    let call_result = if env.is_gen_test {
+        set_jump_and_catch_long_jump(
+            env,
+            function_value,
+            evaluator,
+            evaluator.get_call_conventions(),
+            closure_data,
+            result_type,
+        )
+    } else {
+        let call = env
+            .builder
+            .build_call(evaluator, closure_data, "call_function");
+
+        call.set_call_convention(evaluator.get_call_conventions());
+
+        let call_result = call.try_as_basic_value().left().unwrap();
+
+        make_good_roc_result(env, call_result)
+    };
 
     builder.build_store(output, call_result);
 

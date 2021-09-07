@@ -42,10 +42,18 @@ pub fn gen_from_mono_module(
     use std::time::SystemTime;
 
     use roc_reporting::report::{
-        can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
+        can_problem, mono_problem, type_problem, Report, RocDocAllocator, Severity::*,
+        DEFAULT_PALETTE,
     };
 
     let code_gen_start = SystemTime::now();
+    let palette = DEFAULT_PALETTE;
+
+    // This will often over-allocate total memory, but it means we definitely
+    // never need to re-allocate either the warnings or the errors vec!
+    let total_problems = loaded.total_problems();
+    let mut warnings = Vec::with_capacity(total_problems);
+    let mut errors = Vec::with_capacity(total_problems);
 
     for (home, (module_path, src)) in loaded.sources {
         let mut src_lines: Vec<&str> = Vec::new();
@@ -56,7 +64,6 @@ pub fn gen_from_mono_module(
         } else {
             src_lines.extend(src.split('\n'));
         }
-        let palette = DEFAULT_PALETTE;
 
         // Report parsing and canonicalization problems
         let alloc = RocDocAllocator::new(&src_lines, home, &loaded.interns);
@@ -64,38 +71,83 @@ pub fn gen_from_mono_module(
         let problems = loaded.can_problems.remove(&home).unwrap_or_default();
         for problem in problems.into_iter() {
             let report = can_problem(&alloc, module_path.clone(), problem);
+            let severity = report.severity;
             let mut buf = String::new();
 
             report.render_color_terminal(&mut buf, &alloc, &palette);
 
-            println!("\n{}\n", buf);
+            match severity {
+                Warning => {
+                    warnings.push(buf);
+                }
+                RuntimeError => {
+                    errors.push(buf);
+                }
+            }
         }
 
         let problems = loaded.type_problems.remove(&home).unwrap_or_default();
         for problem in problems {
             let report = type_problem(&alloc, module_path.clone(), problem);
+            let severity = report.severity;
             let mut buf = String::new();
 
             report.render_color_terminal(&mut buf, &alloc, &palette);
 
-            println!("\n{}\n", buf);
+            match severity {
+                Warning => {
+                    warnings.push(buf);
+                }
+                RuntimeError => {
+                    errors.push(buf);
+                }
+            }
         }
 
         let problems = loaded.mono_problems.remove(&home).unwrap_or_default();
         for problem in problems {
             let report = mono_problem(&alloc, module_path.clone(), problem);
+            let severity = report.severity;
             let mut buf = String::new();
 
             report.render_color_terminal(&mut buf, &alloc, &palette);
 
-            println!("\n{}\n", buf);
+            match severity {
+                Warning => {
+                    warnings.push(buf);
+                }
+                RuntimeError => {
+                    errors.push(buf);
+                }
+            }
         }
+    }
+
+    // Only print warnings if there are no errors
+    if errors.is_empty() {
+        for warning in warnings {
+            println!("\n{}\n", warning);
+        }
+    } else {
+        for error in errors {
+            println!("\n{}\n", error);
+        }
+    }
+
+    // If we printed any problems, print a horizontal rule at the end,
+    // and then clear any ANSI escape codes (e.g. colors) we've used.
+    //
+    // The horizontal rule is nice when running the program right after
+    // compiling it, as it lets you clearly see where the compiler
+    // errors/warnings end and the program output begins.
+    if total_problems > 0 {
+        println!("{}\u{001B}[0m\n", Report::horizontal_rule(&palette));
     }
 
     // Generate the binary
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
     let context = Context::create();
-    let module = arena.alloc(module_from_builtins(&context, "app", ptr_bytes));
+    let module = arena.alloc(module_from_builtins(target, &context, "app"));
 
     // strip Zig debug stuff
     // module.strip_debug_info();
@@ -222,7 +274,7 @@ pub fn gen_from_mono_module(
 
         use target_lexicon::Architecture;
         match target.architecture {
-            Architecture::X86_64 | Architecture::Aarch64(_) => {
+            Architecture::X86_64 | Architecture::X86_32(_) | Architecture::Aarch64(_) => {
                 // assemble the .ll into a .bc
                 let _ = Command::new("llvm-as")
                     .args(&[
@@ -272,7 +324,7 @@ pub fn gen_from_mono_module(
         // Emit the .o file
         use target_lexicon::Architecture;
         match target.architecture {
-            Architecture::X86_64 | Architecture::Aarch64(_) => {
+            Architecture::X86_64 | Architecture::X86_32(_) | Architecture::Aarch64(_) => {
                 let reloc = RelocMode::Default;
                 let model = CodeModel::Default;
                 let target_machine =

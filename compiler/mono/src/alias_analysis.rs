@@ -9,7 +9,7 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use std::convert::TryFrom;
 
-use crate::ir::{Call, CallType, Expr, Literal, ModifyRc, Proc, Stmt};
+use crate::ir::{Call, CallType, Expr, ListLiteralElement, Literal, ModifyRc, Proc, Stmt};
 use crate::layout::{Builtin, Layout, ListLayout, UnionLayout};
 
 // just using one module for now
@@ -1118,8 +1118,12 @@ fn expr_spec<'a>(
 
             let mut bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
 
-            for symbol in elems.iter() {
-                let value_id = env.symbols[symbol];
+            for element in elems.iter() {
+                let value_id = if let ListLiteralElement::Symbol(symbol) = element {
+                    env.symbols[symbol]
+                } else {
+                    builder.add_make_tuple(block, &[]).unwrap()
+                };
 
                 bag = builder.add_bag_insert(block, bag, value_id)?;
             }
