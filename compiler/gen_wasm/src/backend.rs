@@ -34,6 +34,10 @@ impl WasmLayout {
                 value_type: ValueType::I64,
                 stack_memory: 0,
             }),
+            Layout::Builtin(Builtin::Float64) => Ok(Self {
+                value_type: ValueType::F64,
+                stack_memory: 0,
+            }),
             x => Err(format!("layout, {:?}, not implemented yet", x)),
         }
     }

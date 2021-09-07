@@ -148,6 +148,7 @@ where
         Ok(result) => {
             let integer = match result[0] {
                 wasmer::Value::I64(a) => a,
+                wasmer::Value::F64(a) => a.to_bits() as i64,
                 _ => panic!(),
             };
 
