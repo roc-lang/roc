@@ -100,7 +100,7 @@ pub fn helper_wasm<'a>(
 
         match std::fs::File::create(path) {
             Err(e) => eprintln!("Problem creating wasm debug file: {:?}", e),
-            Ok(file) => {
+            Ok(mut file) => {
                 file.write_all(&module_bytes).unwrap();
             }
         }
