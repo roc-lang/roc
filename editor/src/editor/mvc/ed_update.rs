@@ -132,6 +132,15 @@ impl<'a> EdModel<'a> {
         }
     }
 
+    // disregards EdModel.code_lines because the caller knows the resulting caret position will be valid.
+    // allows us to prevent multiple updates to EdModel.code_lines
+    pub fn simple_move_carets_up(&mut self, repeat: usize) {
+        for caret_tup in self.caret_w_select_vec.iter_mut() {
+            caret_tup.0.caret_pos.line -= repeat;
+            caret_tup.1 = None;
+        }
+    }
+
     pub fn add_mark_node(&mut self, node: MarkupNode) -> MarkNodeId {
         self.mark_node_pool.add(node)
     }
@@ -1362,6 +1371,8 @@ pub mod test_ed_update {
                 ed_model.simple_move_carets_right(1);
             } else if input_char == '🡰' {
                 ed_model.simple_move_carets_left(1);
+            } else if input_char == '🡱' {
+                ed_model.simple_move_carets_up(1);
             } else {
                 //dbg!(input_char);
                 ed_res_to_res(handle_new_char(&input_char, &mut ed_model))?;
@@ -2591,7 +2602,7 @@ pub mod test_ed_update {
     }
 
     #[test]
-    fn test_ignore_let_value() -> Result<(), String> {
+    fn test_ignore_tld_value() -> Result<(), String> {
         assert_insert_seq_ignore_nls(ovec!["a ┃= 0"], IGNORE_CHARS)?;
         assert_insert_seq_ignore_nls(ovec!["a =┃ 0"], IGNORE_CHARS)?;
 
@@ -2600,6 +2611,15 @@ pub mod test_ed_update {
 
         assert_insert_seq_ignore_nls(ovec!["camelCase123 ┃= 0"], IGNORE_CHARS)?;
         assert_insert_seq_ignore_nls(ovec!["camelCase123 =┃ 0"], IGNORE_CHARS)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_enter() -> Result<(), String> {
+        assert_insert_seq(ovec!["┃"], ovec!["ab = 5", "", "cd = \"good┃\"", "", ""], "ab🡲🡲🡲5\rcd🡲🡲🡲\"good")?;
+
+        assert_insert_seq(ovec!["┃"], ovec!["ab = 1", "", "cD = 2┃", "", "eF = 3", "", ""], "ab🡲🡲🡲1\reF🡲🡲🡲3🡰🡰🡰🡰🡰🡰🡱🡱🡲🡲🡲🡲🡲🡲\rcD🡲🡲🡲2")?;
 
         Ok(())
     }
