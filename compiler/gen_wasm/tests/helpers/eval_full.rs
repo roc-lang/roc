@@ -94,7 +94,7 @@ pub fn helper_wasm<'a>(
     let module_bytes = gen_wasm::build_module(&env, procedures).unwrap();
 
     // for debugging (e.g. with wasm2wat)
-    if false {
+    if true {
         use std::io::Write;
         let mut file =
             std::fs::File::create("/home/brian/Documents/roc/compiler/gen_wasm/debug.wasm").unwrap();
@@ -188,11 +188,11 @@ where
 
     let is_gen_test = true;
     let instance =
-        crate::helpers::eval::helper_wasm(&arena, src, stdlib, is_gen_test, ignore_problems);
+        crate::helpers::eval_full::helper_wasm(&arena, src, stdlib, is_gen_test, ignore_problems);
 
     let memory = instance.exports.get_memory("memory").unwrap();
 
-    crate::helpers::eval::MEMORY.with(|f| {
+    crate::helpers::eval_full::MEMORY.with(|f| {
         *f.borrow_mut() = Some(unsafe { std::mem::transmute(memory) });
     });
 
@@ -206,7 +206,7 @@ where
                 _ => panic!(),
             };
 
-            let output = <T as crate::helpers::eval::FromWasmMemory>::decode(
+            let output = <T as crate::helpers::eval_full::FromWasmMemory>::decode(
                 memory,
                 // skip the RocCallResult tag id
                 address as u32 + 8,
@@ -220,7 +220,7 @@ where
 #[macro_export]
 macro_rules! assert_wasm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
-        match $crate::helpers::eval::assert_wasm_evals_to_help::<$ty>($src, $ignore_problems) {
+        match $crate::helpers::eval_full::assert_wasm_evals_to_help::<$ty>($src, $ignore_problems) {
             Err(msg) => println!("{:?}", msg),
             Ok(actual) => {
                 #[allow(clippy::bool_assert_comparison)]
@@ -230,7 +230,7 @@ macro_rules! assert_wasm_evals_to {
     };
 
     ($src:expr, $expected:expr, $ty:ty) => {
-        $crate::assert_wasm_evals_to!($src, $expected, $ty, $crate::helpers::eval::identity, false);
+        $crate::assert_wasm_evals_to!($src, $expected, $ty, $crate::helpers::eval_full::identity, false);
     };
 
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
@@ -241,7 +241,7 @@ macro_rules! assert_wasm_evals_to {
 #[macro_export]
 macro_rules! assert_evals_to {
     ($src:expr, $expected:expr, $ty:ty) => {{
-        assert_evals_to!($src, $expected, $ty, $crate::helpers::eval::identity);
+        assert_evals_to!($src, $expected, $ty, $crate::helpers::eval_full::identity);
     }};
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
         // Same as above, except with an additional transformation argument.

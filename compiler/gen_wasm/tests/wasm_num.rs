@@ -25,16 +25,16 @@ mod dev_num {
         assert_evals_to!("0x1000_0000_0000_0000", 0x1000_0000_0000_0000, i64);
     }
 
-    #[test]
-    fn f64_values() {
-        assert_evals_to!("0.0", 0.0, f64);
-        assert_evals_to!("-0.0", 0.0, f64);
-        assert_evals_to!("1.0", 1.0, f64);
-        assert_evals_to!("-1.0", -1.0, f64);
-        assert_evals_to!("3.1415926535897932", 3.141_592_653_589_793, f64);
-        assert_evals_to!(&format!("{:0.1}", f64::MIN), f64::MIN, f64);
-        assert_evals_to!(&format!("{:0.1}", f64::MAX), f64::MAX, f64);
-    }
+    // #[test]
+    // fn f64_values() {
+    //     assert_evals_to!("0.0", 0.0, f64);
+    //     assert_evals_to!("-0.0", 0.0, f64);
+    //     assert_evals_to!("1.0", 1.0, f64);
+    //     assert_evals_to!("-1.0", -1.0, f64);
+    //     assert_evals_to!("3.1415926535897932", 3.141_592_653_589_793, f64);
+    //     assert_evals_to!(&format!("{:0.1}", f64::MIN), f64::MIN, f64);
+    //     assert_evals_to!(&format!("{:0.1}", f64::MAX), f64::MAX, f64);
+    // }
 
     #[test]
     fn gen_add_i64() {
@@ -49,44 +49,44 @@ mod dev_num {
         );
     }
 
-    #[test]
-    fn gen_add_f64() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    1.1 + 2.4 + 3
-                "#
-            ),
-            6.5,
-            f64
-        );
-    }
+    // #[test]
+    // fn gen_add_f64() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 1.1 + 2.4 + 3
+    //             "#
+    //         ),
+    //         6.5,
+    //         f64
+    //     );
+    // }
 
-    #[test]
-    fn gen_sub_i64() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    1 - 2 - 3
-                "#
-            ),
-            -4,
-            i64
-        );
-    }
+    // #[test]
+    // fn gen_sub_i64() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 1 - 2 - 3
+    //             "#
+    //         ),
+    //         -4,
+    //         i64
+    //     );
+    // }
 
-    #[test]
-    fn gen_mul_i64() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    2 * 4 * 6
-                "#
-            ),
-            48,
-            i64
-        );
-    }
+    // #[test]
+    // fn gen_mul_i64() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 2 * 4 * 6
+    //             "#
+    //         ),
+    //         48,
+    //         i64
+    //     );
+    // }
 
     #[test]
     fn i64_force_stack() {
@@ -136,165 +136,165 @@ mod dev_num {
         );
     }
 
-    #[test]
-    fn i64_abs() {
-        assert_evals_to!("Num.abs -6", 6, i64);
-        assert_evals_to!("Num.abs 7", 7, i64);
-        assert_evals_to!("Num.abs 0", 0, i64);
-        assert_evals_to!("Num.abs -0", 0, i64);
-        assert_evals_to!("Num.abs -1", 1, i64);
-        assert_evals_to!("Num.abs 1", 1, i64);
-        assert_evals_to!("Num.abs 9_000_000_000_000", 9_000_000_000_000, i64);
-        assert_evals_to!("Num.abs -9_000_000_000_000", 9_000_000_000_000, i64);
-    }
+    // #[test]
+    // fn i64_abs() {
+    //     assert_evals_to!("Num.abs -6", 6, i64);
+    //     assert_evals_to!("Num.abs 7", 7, i64);
+    //     assert_evals_to!("Num.abs 0", 0, i64);
+    //     assert_evals_to!("Num.abs -0", 0, i64);
+    //     assert_evals_to!("Num.abs -1", 1, i64);
+    //     assert_evals_to!("Num.abs 1", 1, i64);
+    //     assert_evals_to!("Num.abs 9_000_000_000_000", 9_000_000_000_000, i64);
+    //     assert_evals_to!("Num.abs -9_000_000_000_000", 9_000_000_000_000, i64);
+    // }
 
-    #[test]
-    fn gen_int_eq() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    4 == 4
-                "#
-            ),
-            true,
-            bool
-        );
+    // #[test]
+    // fn gen_int_eq() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 4 == 4
+    //             "#
+    //         ),
+    //         true,
+    //         bool
+    //     );
 
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    3 == 4
-                "#
-            ),
-            false,
-            bool
-        );
-    }
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 3 == 4
+    //             "#
+    //         ),
+    //         false,
+    //         bool
+    //     );
+    // }
 
-    #[test]
-    fn gen_basic_fn() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    always42 : Num.Num (Num.Integer Num.Signed64) -> Num.Num (Num.Integer Num.Signed64)
-                    always42 = \_ -> 42
+    // #[test]
+    // fn gen_basic_fn() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 always42 : Num.Num (Num.Integer Num.Signed64) -> Num.Num (Num.Integer Num.Signed64)
+    //                 always42 = \_ -> 42
 
-                    always42 5
-                "#
-            ),
-            42,
-            i64
-        );
-    }
+    //                 always42 5
+    //             "#
+    //         ),
+    //         42,
+    //         i64
+    //     );
+    // }
 
-    #[test]
-    fn gen_wrap_add_nums() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    add2 = \num1, num2 -> num1 + num2
+    // #[test]
+    // fn gen_wrap_add_nums() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 add2 = \num1, num2 -> num1 + num2
 
-                    add2 4 5
-                "#
-            ),
-            9,
-            i64
-        );
-    }
+    //                 add2 4 5
+    //             "#
+    //         ),
+    //         9,
+    //         i64
+    //     );
+    // }
 
-    #[test]
-    fn gen_wrap_add_nums_force_stack() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    add9 = \num1, num2, num3, num4, num5, num6, num7, num8, num9 -> num1 + num2 + num3 + num4 + num5 + num6 + num7 + num8 + num9
+    // #[test]
+    // fn gen_wrap_add_nums_force_stack() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 add9 = \num1, num2, num3, num4, num5, num6, num7, num8, num9 -> num1 + num2 + num3 + num4 + num5 + num6 + num7 + num8 + num9
 
-                    add9 1 2 3 4 5 6 7 8 9
-                "#
-            ),
-            45,
-            i64
-        );
-    }
+    //                 add9 1 2 3 4 5 6 7 8 9
+    //             "#
+    //         ),
+    //         45,
+    //         i64
+    //     );
+    // }
 
-    #[test]
-    fn pow_int() {
-        assert_evals_to!("Num.powInt 2 3", 8, i64);
-    }
+    // #[test]
+    // fn pow_int() {
+    //     assert_evals_to!("Num.powInt 2 3", 8, i64);
+    // }
 
-    #[test]
-    fn acos() {
-        assert_evals_to!("Num.acos 0.5", 1.0471975511965979, f64);
-    }
+    // #[test]
+    // fn acos() {
+    //     assert_evals_to!("Num.acos 0.5", 1.0471975511965979, f64);
+    // }
 
-    #[test]
-    fn asin() {
-        assert_evals_to!("Num.asin 0.5", 0.5235987755982989, f64);
-    }
+    // #[test]
+    // fn asin() {
+    //     assert_evals_to!("Num.asin 0.5", 0.5235987755982989, f64);
+    // }
 
-    #[test]
-    fn atan() {
-        assert_evals_to!("Num.atan 10", 1.4711276743037347, f64);
-    }
+    // #[test]
+    // fn atan() {
+    //     assert_evals_to!("Num.atan 10", 1.4711276743037347, f64);
+    // }
 
-    #[test]
-    fn gen_if_fn() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    limitedNegate = \num ->
-                        x =
-                            if num == 1 then
-                                -1
-                            else if num == -1 then
-                                1
-                            else
-                                num
-                        x
+    // #[test]
+    // fn gen_if_fn() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 limitedNegate = \num ->
+    //                     x =
+    //                         if num == 1 then
+    //                             -1
+    //                         else if num == -1 then
+    //                             1
+    //                         else
+    //                             num
+    //                     x
 
-                    limitedNegate 1
-                "#
-            ),
-            -1,
-            i64
-        );
-    }
+    //                 limitedNegate 1
+    //             "#
+    //         ),
+    //         -1,
+    //         i64
+    //     );
+    // }
 
-    #[test]
-    fn gen_fib_fn() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    fib = \n ->
-                        if n == 0 then
-                            0
-                        else if n == 1 then
-                            1
-                        else
-                            (fib (n - 1)) + (fib (n - 2))
+    // #[test]
+    // fn gen_fib_fn() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 fib = \n ->
+    //                     if n == 0 then
+    //                         0
+    //                     else if n == 1 then
+    //                         1
+    //                     else
+    //                         (fib (n - 1)) + (fib (n - 2))
 
-                    fib 10
-                "#
-            ),
-            55,
-            i64
-        );
-    }
+    //                 fib 10
+    //             "#
+    //         ),
+    //         55,
+    //         i64
+    //     );
+    // }
 
-    #[test]
-    fn f64_abs() {
-        assert_evals_to!("Num.abs -4.7", 4.7, f64);
-        assert_evals_to!("Num.abs 5.8", 5.8, f64);
-    }
+    // #[test]
+    // fn f64_abs() {
+    //     assert_evals_to!("Num.abs -4.7", 4.7, f64);
+    //     assert_evals_to!("Num.abs 5.8", 5.8, f64);
+    // }
 
-    #[test]
-    fn f64_round() {
-        assert_evals_to!("Num.round 3.6", 4, i64);
-        assert_evals_to!("Num.round 3.4", 3, i64);
-        assert_evals_to!("Num.round 2.5", 3, i64);
-        assert_evals_to!("Num.round -2.3", -2, i64);
-        assert_evals_to!("Num.round -2.5", -3, i64);
-    }
+    // #[test]
+    // fn f64_round() {
+    //     assert_evals_to!("Num.round 3.6", 4, i64);
+    //     assert_evals_to!("Num.round 3.4", 3, i64);
+    //     assert_evals_to!("Num.round 2.5", 3, i64);
+    //     assert_evals_to!("Num.round -2.3", -2, i64);
+    //     assert_evals_to!("Num.round -2.5", -3, i64);
+    // }
 
     // #[test]
     // fn f64_sqrt() {
