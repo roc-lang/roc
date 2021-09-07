@@ -7,7 +7,7 @@ use roc_types::pretty_print::Parens;
 use roc_types::types::{Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt};
 use std::path::PathBuf;
 
-use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder};
+use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder, Severity};
 use ven_pretty::DocAllocator;
 
 const ADD_ANNOTATIONS: &str = r#"Can more type annotations be added? Type annotations always help me give more specific messages, and I think they could help a lot in this case"#;
@@ -18,6 +18,15 @@ pub fn type_problem<'b>(
     problem: solve::TypeError,
 ) -> Report<'b> {
     use solve::TypeError::*;
+
+    fn report(title: String, doc: RocDocBuilder<'_>, filename: PathBuf) -> Report<'_> {
+        Report {
+            title,
+            filename,
+            doc,
+            severity: Severity::RuntimeError,
+        }
+    }
 
     match problem {
         BadExpr(region, category, found, expected) => {
@@ -39,11 +48,7 @@ pub fn type_problem<'b>(
                     .append(alloc.symbol_unqualified(symbol))])
                 .append(alloc.reflow("."));
 
-            Report {
-                title,
-                filename,
-                doc,
-            }
+            report(title, doc, filename)
         }
         BadType(type_problem) => {
             use roc_types::types::Problem::*;
@@ -84,20 +89,12 @@ pub fn type_problem<'b>(
                         "TOO FEW TYPE ARGUMENTS".to_string()
                     };
 
-                    Report {
-                        title,
-                        filename,
-                        doc,
-                    }
+                    report(title, doc, filename)
                 }
                 CyclicAlias(symbol, region, others) => {
                     let (doc, title) = cyclic_alias(alloc, symbol, region, others);
 
-                    Report {
-                        title,
-                        filename,
-                        doc,
-                    }
+                    report(title, doc, filename)
                 }
 
                 other => panic!("unhandled bad type: {:?}", other),
@@ -186,6 +183,7 @@ fn report_mismatch<'b>(
         title: "TYPE MISMATCH".to_string(),
         filename,
         doc: alloc.stack(lines),
+        severity: Severity::RuntimeError,
     }
 }
 
@@ -223,6 +221,7 @@ fn report_bad_type<'b>(
         title: "TYPE MISMATCH".to_string(),
         filename,
         doc: alloc.stack(lines),
+        severity: Severity::RuntimeError,
     }
 }
 
@@ -265,6 +264,7 @@ fn to_expr_report<'b>(
                     alloc.region(expr_region),
                     comparison,
                 ]),
+                severity: Severity::RuntimeError,
             }
         }
         Expected::FromAnnotation(name, _arity, annotation_source, expected_type) => {
@@ -351,6 +351,7 @@ fn to_expr_report<'b>(
                     },
                     comparison,
                 ]),
+                severity: Severity::RuntimeError,
             }
         }
         Expected::ForReason(reason, expected_type, region) => match reason {
@@ -682,6 +683,7 @@ fn to_expr_report<'b>(
                                 filename,
                                 title: "TYPE MISMATCH".to_string(),
                                 doc,
+                                severity: Severity::RuntimeError,
                             }
                         }
                     }
@@ -730,6 +732,7 @@ fn to_expr_report<'b>(
                         filename,
                         title: "TOO MANY ARGS".to_string(),
                         doc: alloc.stack(lines),
+                        severity: Severity::RuntimeError,
                     }
                 }
                 n => {
@@ -764,6 +767,7 @@ fn to_expr_report<'b>(
                             filename,
                             title: "TOO MANY ARGS".to_string(),
                             doc: alloc.stack(lines),
+                            severity: Severity::RuntimeError,
                         }
                     } else {
                         let lines = vec![
@@ -790,6 +794,7 @@ fn to_expr_report<'b>(
                             filename,
                             title: "TOO FEW ARGS".to_string(),
                             doc: alloc.stack(lines),
+                            severity: Severity::RuntimeError,
                         }
                     }
                 }
@@ -1060,6 +1065,7 @@ fn to_pattern_report<'b>(
                 filename,
                 title: "TYPE MISMATCH".to_string(),
                 doc,
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -1102,6 +1108,7 @@ fn to_pattern_report<'b>(
                     filename,
                     title: "TYPE MISMATCH".to_string(),
                     doc,
+                    severity: Severity::RuntimeError,
                 }
             }
             PReason::WhenMatch { index } => {
@@ -1136,6 +1143,7 @@ fn to_pattern_report<'b>(
                         filename,
                         title: "TYPE MISMATCH".to_string(),
                         doc,
+                        severity: Severity::RuntimeError,
                     }
                 } else {
                     let doc = alloc.stack(vec![
@@ -1165,6 +1173,7 @@ fn to_pattern_report<'b>(
                         filename,
                         title: "TYPE MISMATCH".to_string(),
                         doc,
+                        severity: Severity::RuntimeError,
                     }
                 }
             }
@@ -1252,6 +1261,7 @@ fn to_circular_report<'b>(
                 ]),
             ])
         },
+        severity: Severity::RuntimeError,
     }
 }
 

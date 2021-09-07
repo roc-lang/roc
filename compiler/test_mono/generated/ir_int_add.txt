@@ -7,9 +7,7 @@ procedure Num.24 (#Attr.2, #Attr.3):
     ret Test.5;
 
 procedure Test.0 ():
-    let Test.11 = 1i64;
-    let Test.12 = 2i64;
-    let Test.1 = Array [Test.11, Test.12];
+    let Test.1 = Array [1i64, 2i64];
     let Test.9 = 5i64;
     let Test.10 = 4i64;
     let Test.7 = CallByName Num.24 Test.9 Test.10;
