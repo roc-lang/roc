@@ -132,7 +132,7 @@ pub fn gen_and_eval<'a>(
         let builder = context.create_builder();
         let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
         let module = arena.alloc(roc_gen_llvm::llvm::build::module_from_builtins(
-            &context, "", ptr_bytes,
+            &target, &context, "",
         ));
 
         // mark our zig-defined builtins as internal

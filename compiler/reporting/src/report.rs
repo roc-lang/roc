@@ -57,11 +57,24 @@ pub fn cycle<'b>(
         .annotate(Annotation::TypeBlock)
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Severity {
+    /// This will cause a runtime error if some code get srun
+    /// (e.g. type mismatch, naming error)
+    RuntimeError,
+
+    /// This will never cause the code to misbehave,
+    /// but should be cleaned up
+    /// (e.g. unused def, unused import)
+    Warning,
+}
+
 /// A textual report.
 pub struct Report<'b> {
     pub title: String,
     pub filename: PathBuf,
     pub doc: RocDocBuilder<'b>,
+    pub severity: Severity,
 }
 
 impl<'b> Report<'b> {
@@ -105,6 +118,10 @@ impl<'b> Report<'b> {
                 self.doc,
             ])
         }
+    }
+
+    pub fn horizontal_rule(palette: &'b Palette) -> String {
+        format!("{}{}", palette.header, "─".repeat(80))
     }
 }
 
