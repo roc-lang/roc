@@ -3739,13 +3739,12 @@ pub fn with_hole<'a>(
             debug_assert_eq!(field_layouts.len(), symbols.len());
             debug_assert_eq!(fields.len(), symbols.len());
 
-            if symbols.len() == 1 {
-                // TODO we can probably special-case this more, skippiing the generation of
-                // UpdateExisting
-                let mut stmt = hole.clone();
+            let expr = Expr::Struct(symbols);
+            let mut stmt = Stmt::Let(assigned, expr, record_layout, hole);
 
-                let what_to_do = &fields[0];
+            let it = field_layouts.iter().zip(symbols.iter()).zip(fields);
 
+            for ((field_layout, symbol), what_to_do) in it {
                 match what_to_do {
                     UpdateExisting(field) => {
                         stmt = assign_to_symbol(
@@ -3754,50 +3753,21 @@ pub fn with_hole<'a>(
                             layout_cache,
                             field.var,
                             *field.loc_expr.clone(),
-                            assigned,
+                            *symbol,
                             stmt,
                         );
                     }
-                    CopyExisting(_) => {
-                        unreachable!(
-                            r"when a record has just one field and is updated, it must update that one field"
-                        );
+                    CopyExisting(index) => {
+                        let access_expr = Expr::StructAtIndex {
+                            structure,
+                            index,
+                            field_layouts,
+                        };
+                        stmt = Stmt::Let(*symbol, access_expr, *field_layout, arena.alloc(stmt));
                     }
                 }
-
-                stmt
-            } else {
-                let expr = Expr::Struct(symbols);
-                let mut stmt = Stmt::Let(assigned, expr, record_layout, hole);
-
-                let it = field_layouts.iter().zip(symbols.iter()).zip(fields);
-
-                for ((field_layout, symbol), what_to_do) in it {
-                    match what_to_do {
-                        UpdateExisting(field) => {
-                            stmt = assign_to_symbol(
-                                env,
-                                procs,
-                                layout_cache,
-                                field.var,
-                                *field.loc_expr.clone(),
-                                *symbol,
-                                stmt,
-                            );
-                        }
-                        CopyExisting(index) => {
-                            let access_expr = Expr::StructAtIndex {
-                                structure,
-                                index,
-                                field_layouts,
-                            };
-                            stmt =
-                                Stmt::Let(*symbol, access_expr, *field_layout, arena.alloc(stmt));
-                        }
-                    }
-                }
-                stmt
             }
+            stmt
         }
 
         Closure {
