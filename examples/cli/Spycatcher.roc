@@ -659,7 +659,7 @@ step = \model ->
     mixes : List Mix
     mixes = List.join (List.join allMixes)
 
-    simNum = Str.fromInt (List.len model.sims)
+    simNum = Str.fromInt (1 + List.len model.sims)
 
     totalSims = Str.fromInt maxSims
 
