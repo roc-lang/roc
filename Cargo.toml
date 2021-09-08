@@ -20,6 +20,7 @@ members = [
     "compiler/load",
     "compiler/gen_llvm",
     "compiler/gen_dev",
+    "compiler/gen_wasm",
     "compiler/build",
     "compiler/arena_pool",
     "compiler/test_gen",

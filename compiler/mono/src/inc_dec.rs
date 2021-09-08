@@ -95,11 +95,11 @@ pub fn occurring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
 
         Call(call) => occurring_variables_call(call, result),
 
-        Tag { arguments, .. }
-        | Struct(arguments)
-        | Array {
+        Array {
             elems: arguments, ..
-        } => {
+        } => result.extend(arguments.iter().filter_map(|e| e.to_symbol())),
+
+        Tag { arguments, .. } | Struct(arguments) => {
             result.extend(arguments.iter().copied());
         }
         Reuse {
@@ -733,14 +733,21 @@ impl<'a> Context<'a> {
         live_vars.remove(&z);
 
         let new_b = match v {
-            Reuse { arguments: ys, .. }
-            | Tag { arguments: ys, .. }
-            | Struct(ys)
-            | Array { elems: ys, .. } => self.add_inc_before_consume_all(
-                ys,
-                self.arena.alloc(Stmt::Let(z, v, l, b)),
-                b_live_vars,
-            ),
+            Reuse { arguments: ys, .. } | Tag { arguments: ys, .. } | Struct(ys) => self
+                .add_inc_before_consume_all(
+                    ys,
+                    self.arena.alloc(Stmt::Let(z, v, l, b)),
+                    b_live_vars,
+                ),
+
+            Array { elems, .. } => {
+                let ys = Vec::from_iter_in(elems.iter().filter_map(|e| e.to_symbol()), self.arena);
+                self.add_inc_before_consume_all(
+                    &ys,
+                    self.arena.alloc(Stmt::Let(z, v, l, b)),
+                    b_live_vars,
+                )
+            }
 
             Call(crate::ir::Call {
                 call_type,

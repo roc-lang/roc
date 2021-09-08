@@ -11,12 +11,8 @@ procedure Num.24 (#Attr.2, #Attr.3):
     ret Test.6;
 
 procedure Test.0 ():
-    let Test.10 = 1i64;
-    let Test.11 = 2i64;
-    let Test.12 = 3i64;
-    let Test.1 = Array [Test.10, Test.11, Test.12];
-    let Test.9 = 1f64;
-    let Test.2 = Array [Test.9];
+    let Test.1 = Array [1i64, 2i64, 3i64];
+    let Test.2 = Array [1f64];
     let Test.4 = CallByName List.7 Test.1;
     dec Test.1;
     let Test.5 = CallByName List.7 Test.2;

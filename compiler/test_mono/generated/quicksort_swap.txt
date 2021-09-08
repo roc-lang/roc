@@ -56,8 +56,6 @@ procedure Test.1 (Test.2):
         jump Test.26;
 
 procedure Test.0 ():
-    let Test.39 = 1i64;
-    let Test.40 = 2i64;
-    let Test.7 = Array [Test.39, Test.40];
+    let Test.7 = Array [1i64, 2i64];
     let Test.6 = CallByName Test.1 Test.7;
     ret Test.6;
