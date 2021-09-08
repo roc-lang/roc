@@ -200,7 +200,14 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                         general_i += 1;
                     } else {
                         base_offset += 8;
-                        symbol_map.insert(*sym, SymbolStorage::Base(base_offset));
+                        symbol_map.insert(
+                            *sym,
+                            SymbolStorage::Base {
+                                offset: base_offset,
+                                size: 8,
+                                owned: true,
+                            },
+                        );
                     }
                 }
                 Layout::Builtin(Builtin::Float64) => {
@@ -212,7 +219,14 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                         float_i += 1;
                     } else {
                         base_offset += 8;
-                        symbol_map.insert(*sym, SymbolStorage::Base(base_offset));
+                        symbol_map.insert(
+                            *sym,
+                            SymbolStorage::Base {
+                                offset: base_offset,
+                                size: 8,
+                                owned: true,
+                            },
+                        );
                     }
                 }
                 x => {
@@ -260,13 +274,13 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                             .ok_or("function argument does not reference any symbol")?
                         {
                             SymbolStorage::GeneralReg(reg)
-                            | SymbolStorage::BaseAndGeneralReg(reg, _) => {
+                            | SymbolStorage::BaseAndGeneralReg { reg, .. } => {
                                 X86_64Assembler::mov_reg64_reg64(buf, dst, *reg);
                             }
-                            SymbolStorage::Base(offset) => {
+                            SymbolStorage::Base { offset, .. } => {
                                 X86_64Assembler::mov_reg64_base32(buf, dst, *offset);
                             }
-                            SymbolStorage::FloatReg(_) | SymbolStorage::BaseAndFloatReg(_, _) => {
+                            SymbolStorage::FloatReg(_) | SymbolStorage::BaseAndFloatReg { .. } => {
                                 return Err(
                                     "Cannot load floating point symbol into GeneralReg".to_string()
                                 )
@@ -280,10 +294,10 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                             .ok_or("function argument does not reference any symbol")?
                         {
                             SymbolStorage::GeneralReg(reg)
-                            | SymbolStorage::BaseAndGeneralReg(reg, _) => {
+                            | SymbolStorage::BaseAndGeneralReg { reg, .. } => {
                                 X86_64Assembler::mov_stack32_reg64(buf, stack_offset, *reg);
                             }
-                            SymbolStorage::Base(offset) => {
+                            SymbolStorage::Base { offset, .. } => {
                                 // Use RAX as a tmp reg because it will be free before function calls.
                                 X86_64Assembler::mov_reg64_base32(
                                     buf,
@@ -296,7 +310,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                                     X86_64GeneralReg::RAX,
                                 );
                             }
-                            SymbolStorage::FloatReg(_) | SymbolStorage::BaseAndFloatReg(_, _) => {
+                            SymbolStorage::FloatReg(_) | SymbolStorage::BaseAndFloatReg { .. } => {
                                 return Err(
                                     "Cannot load floating point symbol into GeneralReg".to_string()
                                 )
@@ -314,14 +328,14 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                             .ok_or("function argument does not reference any symbol")?
                         {
                             SymbolStorage::FloatReg(reg)
-                            | SymbolStorage::BaseAndFloatReg(reg, _) => {
+                            | SymbolStorage::BaseAndFloatReg { reg, .. } => {
                                 X86_64Assembler::mov_freg64_freg64(buf, dst, *reg);
                             }
-                            SymbolStorage::Base(offset) => {
+                            SymbolStorage::Base { offset, .. } => {
                                 X86_64Assembler::mov_freg64_base32(buf, dst, *offset);
                             }
                             SymbolStorage::GeneralReg(_)
-                            | SymbolStorage::BaseAndGeneralReg(_, _) => {
+                            | SymbolStorage::BaseAndGeneralReg { .. } => {
                                 return Err("Cannot load general symbol into FloatReg".to_string())
                             }
                         }
@@ -333,10 +347,10 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                             .ok_or("function argument does not reference any symbol")?
                         {
                             SymbolStorage::FloatReg(reg)
-                            | SymbolStorage::BaseAndFloatReg(reg, _) => {
+                            | SymbolStorage::BaseAndFloatReg { reg, .. } => {
                                 X86_64Assembler::mov_stack32_freg64(buf, stack_offset, *reg);
                             }
-                            SymbolStorage::Base(offset) => {
+                            SymbolStorage::Base { offset, .. } => {
                                 // Use XMM0 as a tmp reg because it will be free before function calls.
                                 X86_64Assembler::mov_freg64_base32(
                                     buf,
@@ -350,7 +364,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                                 );
                             }
                             SymbolStorage::GeneralReg(_)
-                            | SymbolStorage::BaseAndGeneralReg(_, _) => {
+                            | SymbolStorage::BaseAndGeneralReg { .. } => {
                                 return Err("Cannot load general symbol into FloatReg".to_string())
                             }
                         }
@@ -541,7 +555,14 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                         ));
                     }
                 };
-                symbol_map.insert(*sym, SymbolStorage::Base(base_offset));
+                symbol_map.insert(
+                    *sym,
+                    SymbolStorage::Base {
+                        offset: base_offset,
+                        size: 8,
+                        owned: true,
+                    },
+                );
             }
         }
         Ok(())
@@ -580,13 +601,13 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                             .ok_or("function argument does not reference any symbol")?
                         {
                             SymbolStorage::GeneralReg(reg)
-                            | SymbolStorage::BaseAndGeneralReg(reg, _) => {
+                            | SymbolStorage::BaseAndGeneralReg { reg, .. } => {
                                 X86_64Assembler::mov_reg64_reg64(buf, dst, *reg);
                             }
-                            SymbolStorage::Base(offset) => {
+                            SymbolStorage::Base { offset, .. } => {
                                 X86_64Assembler::mov_reg64_base32(buf, dst, *offset);
                             }
-                            SymbolStorage::FloatReg(_) | SymbolStorage::BaseAndFloatReg(_, _) => {
+                            SymbolStorage::FloatReg(_) | SymbolStorage::BaseAndFloatReg { .. } => {
                                 return Err(
                                     "Cannot load floating point symbol into GeneralReg".to_string()
                                 )
@@ -600,10 +621,10 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                             .ok_or("function argument does not reference any symbol")?
                         {
                             SymbolStorage::GeneralReg(reg)
-                            | SymbolStorage::BaseAndGeneralReg(reg, _) => {
+                            | SymbolStorage::BaseAndGeneralReg { reg, .. } => {
                                 X86_64Assembler::mov_stack32_reg64(buf, stack_offset, *reg);
                             }
-                            SymbolStorage::Base(offset) => {
+                            SymbolStorage::Base { offset, .. } => {
                                 // Use RAX as a tmp reg because it will be free before function calls.
                                 X86_64Assembler::mov_reg64_base32(
                                     buf,
@@ -616,7 +637,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                                     X86_64GeneralReg::RAX,
                                 );
                             }
-                            SymbolStorage::FloatReg(_) | SymbolStorage::BaseAndFloatReg(_, _) => {
+                            SymbolStorage::FloatReg(_) | SymbolStorage::BaseAndFloatReg { .. } => {
                                 return Err(
                                     "Cannot load floating point symbol into GeneralReg".to_string()
                                 )
@@ -634,14 +655,14 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                             .ok_or("function argument does not reference any symbol")?
                         {
                             SymbolStorage::FloatReg(reg)
-                            | SymbolStorage::BaseAndFloatReg(reg, _) => {
+                            | SymbolStorage::BaseAndFloatReg { reg, .. } => {
                                 X86_64Assembler::mov_freg64_freg64(buf, dst, *reg);
                             }
-                            SymbolStorage::Base(offset) => {
+                            SymbolStorage::Base { offset, .. } => {
                                 X86_64Assembler::mov_freg64_base32(buf, dst, *offset);
                             }
                             SymbolStorage::GeneralReg(_)
-                            | SymbolStorage::BaseAndGeneralReg(_, _) => {
+                            | SymbolStorage::BaseAndGeneralReg { .. } => {
                                 return Err("Cannot load general symbol into FloatReg".to_string())
                             }
                         }
@@ -653,10 +674,10 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                             .ok_or("function argument does not reference any symbol")?
                         {
                             SymbolStorage::FloatReg(reg)
-                            | SymbolStorage::BaseAndFloatReg(reg, _) => {
+                            | SymbolStorage::BaseAndFloatReg { reg, .. } => {
                                 X86_64Assembler::mov_stack32_freg64(buf, stack_offset, *reg);
                             }
-                            SymbolStorage::Base(offset) => {
+                            SymbolStorage::Base { offset, .. } => {
                                 // Use XMM0 as a tmp reg because it will be free before function calls.
                                 X86_64Assembler::mov_freg64_base32(
                                     buf,
@@ -670,7 +691,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                                 );
                             }
                             SymbolStorage::GeneralReg(_)
-                            | SymbolStorage::BaseAndGeneralReg(_, _) => {
+                            | SymbolStorage::BaseAndGeneralReg { .. } => {
                                 return Err("Cannot load general symbol into FloatReg".to_string())
                             }
                         }

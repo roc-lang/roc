@@ -1829,13 +1829,13 @@ dependencies = [
 name = "inkwell"
 version = "0.1.0"
 dependencies = [
- "inkwell 0.1.0 (git+https://github.com/rtfeldman/inkwell?tag=llvm12-0.release5)",
+ "inkwell 0.1.0 (git+https://github.com/rtfeldman/inkwell?tag=llvm12-0.release8)",
 ]
 
 [[package]]
 name = "inkwell"
 version = "0.1.0"
-source = "git+https://github.com/rtfeldman/inkwell?tag=llvm12-0.release5#b5aa51313d4cfa4e1b52ad630cb786140671478b"
+source = "git+https://github.com/rtfeldman/inkwell?tag=llvm12-0.release8#14b78d96d2dbc95694e181be66e4cd53df3fc02f"
 dependencies = [
  "either",
  "inkwell_internals",
@@ -1849,7 +1849,7 @@ dependencies = [
 [[package]]
 name = "inkwell_internals"
 version = "0.3.0"
-source = "git+https://github.com/rtfeldman/inkwell?tag=llvm12-0.release5#b5aa51313d4cfa4e1b52ad630cb786140671478b"
+source = "git+https://github.com/rtfeldman/inkwell?tag=llvm12-0.release8#14b78d96d2dbc95694e181be66e4cd53df3fc02f"
 dependencies = [
  "proc-macro2 1.0.27",
  "quote 1.0.9",
@@ -2034,9 +2034,9 @@ checksum = "7fb9b38af92608140b86b693604b9ffcc5824240a484d1ecd4795bacb2fe88f3"
 
 [[package]]
 name = "llvm-sys"
-version = "120.0.0"
+version = "120.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b883556196140c6b6e7a18b19236b9a699c8611aad2e48a0a6403cf1123945a"
+checksum = "b4a810627ac62b396f5fd2214ba9bbd8748d4d6efdc4d2c1c1303ea7a75763ce"
 dependencies = [
  "cc",
  "lazy_static",
@@ -2569,6 +2569,12 @@ dependencies = [
  "quote 1.0.9",
  "syn 1.0.72",
 ]
+
+[[package]]
+name = "parity-wasm"
+version = "0.42.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be5e13c266502aadf83426d87d81a0f5d1ef45b8027f5a471c360abfe4bfae92"
 
 [[package]]
 name = "parking_lot"
@@ -3643,6 +3649,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_gen_wasm"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "indoc 0.3.6",
+ "libc",
+ "parity-wasm",
+ "pretty_assertions 0.5.1",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_load",
+ "roc_module",
+ "roc_mono",
+ "roc_std",
+ "roc_types",
+ "target-lexicon",
+ "tempfile",
+ "wasmer",
+ "wasmer-wasi",
+]
+
+[[package]]
 name = "roc_ident"
 version = "0.1.0"
 
@@ -4348,6 +4377,7 @@ dependencies = [
  "roc_collections",
  "roc_constrain",
  "roc_gen_llvm",
+ "roc_gen_wasm",
  "roc_load",
  "roc_module",
  "roc_mono",

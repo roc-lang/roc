@@ -147,7 +147,7 @@ pub fn gen_from_mono_module(
     // Generate the binary
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
     let context = Context::create();
-    let module = arena.alloc(module_from_builtins(&context, "app", ptr_bytes));
+    let module = arena.alloc(module_from_builtins(target, &context, "app"));
 
     // strip Zig debug stuff
     // module.strip_debug_info();
@@ -274,7 +274,7 @@ pub fn gen_from_mono_module(
 
         use target_lexicon::Architecture;
         match target.architecture {
-            Architecture::X86_64 | Architecture::Aarch64(_) => {
+            Architecture::X86_64 | Architecture::X86_32(_) | Architecture::Aarch64(_) => {
                 // assemble the .ll into a .bc
                 let _ = Command::new("llvm-as")
                     .args(&[
@@ -324,7 +324,7 @@ pub fn gen_from_mono_module(
         // Emit the .o file
         use target_lexicon::Architecture;
         match target.architecture {
-            Architecture::X86_64 | Architecture::Aarch64(_) => {
+            Architecture::X86_64 | Architecture::X86_32(_) | Architecture::Aarch64(_) => {
                 let reloc = RelocMode::Default;
                 let model = CodeModel::Default;
                 let target_machine =
