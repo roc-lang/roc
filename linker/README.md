@@ -24,8 +24,18 @@ This linker is run in 2 phases: preprocessing and surigical linking.
 
 ### Surgical Linker
 
-1. Copy over preprocessed platform as base
-1. Append text and data of application, noting offset
-   - This could potentially have extra complication around section locations and updating the header
+1. Build off of preprocessed platform
+1. Append text and data of application, dealing with app relocations
 1. Surgically update all call locations in the platform
 1. Surgically update call information in the application (also dealing with other relocations for builtins)
+
+## TODO for merging with compiler flow
+
+1. Add new compiler flag to hide this all behind.
+1. Get compiler to generate dummy shared libraries with Roc exported symbols defined.
+1. Modify host linking to generate dynamic executable that links against the dummy lib.
+1. Call the preprocessor on the dynamic executable host.
+1. Call the surgical linker on the emitted roc object file and the preprocessed host.
+1. Enjoy!
+1. Extract preprocessing generation to run earlier, maybe in parallel with the main compiler until we have full precompiled hosts.
+1. Maybe add a roc command to generate the dummy lib to be used by platform authors.
