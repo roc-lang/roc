@@ -182,62 +182,64 @@ randHand =
 
 runSimulation : Nat, Sim -> Task Sim *
 runSimulation = \iterations, originalSim ->
-    sim =
-        # Drop any chains of length maxChainLength or higher
-        dropLongChains originalSim
+    Task.succeed originalSim
 
-    entities =
-        sim.entities
+    # sim =
+    #     # Drop any chains of length maxChainLength or higher
+    #     dropLongChains originalSim
 
-    # Pick random entities
-    index1 <- await (Rand.natBetween 0 (List.len entities - 1))
-    index2 <- await (Rand.natBetween 0 (List.len entities - 1))
+    # entities =
+    #     sim.entities
 
-    # Pick random hands
-    hand1 <- await randHand
-    hand2 <- await randHand
+    # # Pick random entities
+    # index1 <- await (Rand.natBetween 0 (List.len entities - 1))
+    # index2 <- await (Rand.natBetween 0 (List.len entities - 1))
 
-    newEntities =
-        when T (List.get entities index1) (List.get entities index2) is
-            T (Ok entity1) (Ok entity2) ->
-                when T entity1 entity2 is
-                    T (EJan jan) (EKristy kristy) ->
-                        janKristy entities jan (@EntityId index1) hand1 kristy (@EntityId index2) hand2
+    # # Pick random hands
+    # hand1 <- await randHand
+    # hand2 <- await randHand
 
-                    T (EKristy kristy) (EJan jan) ->
-                        janKristy entities jan (@EntityId index2) hand2 kristy (@EntityId index1) hand1
+    # newEntities =
+    #     when T (List.get entities index1) (List.get entities index2) is
+    #         T (Ok entity1) (Ok entity2) ->
+    #             when T entity1 entity2 is
+    #                 T (EJan jan) (EKristy kristy) ->
+    #                     janKristy entities jan (@EntityId index1) hand1 kristy (@EntityId index2) hand2
 
-                    T (ERichard richard) (EKristy kristy) ->
-                        richardKristy entities richard (@EntityId index1) kristy (@EntityId index2) hand2
+    #                 T (EKristy kristy) (EJan jan) ->
+    #                     janKristy entities jan (@EntityId index2) hand2 kristy (@EntityId index1) hand1
 
-                    T (EKristy kristy) (ERichard richard) ->
-                        richardKristy entities richard (@EntityId index2) kristy (@EntityId index1) hand1
+    #                 T (ERichard richard) (EKristy kristy) ->
+    #                     richardKristy entities richard (@EntityId index1) kristy (@EntityId index2) hand2
 
-                    T (EJan _) (ERichard _) | T (ERichard _) (EJan _) ->
-                        # Jan and Richard can't bind
-                        entities
+    #                 T (EKristy kristy) (ERichard richard) ->
+    #                     richardKristy entities richard (@EntityId index2) kristy (@EntityId index1) hand1
 
-                    T (EJan _) (EJan _) | T (ERichard _) (ERichard _) | T (EKristy _) (EKristy _) ->
-                        # Same can't bind with same
-                        entities
+    #                 T (EJan _) (ERichard _) | T (ERichard _) (EJan _) ->
+    #                     # Jan and Richard can't bind
+    #                     entities
 
-                    _ ->
-                        # TODO the compiler should report this as redundant!
-                        entities
+    #                 T (EJan _) (EJan _) | T (ERichard _) (ERichard _) | T (EKristy _) (EKristy _) ->
+    #                     # Same can't bind with same
+    #                     entities
 
-            T (Err OutOfBounds) (Ok _) | T (Ok _) (Err OutOfBounds) ->
-                # The entity wasn't in the dict, presumably because it was in
-                # a chain that got removed.
-                entities
+    #                 _ ->
+    #                     # TODO the compiler should report this as redundant!
+    #                     entities
 
-            _ ->
-                # TODO the compiler should report this as redundant!
-                entities
+    #         T (Err OutOfBounds) (Ok _) | T (Ok _) (Err OutOfBounds) ->
+    #             # The entity wasn't in the dict, presumably because it was in
+    #             # a chain that got removed.
+    #             entities
 
-    if iterations > 0 then
-        runSimulation (iterations - 1) { sim & entities: newEntities }
-    else
-        Task.succeed { sim & entities: newEntities }
+    #         _ ->
+    #             # TODO the compiler should report this as redundant!
+    #             entities
+
+    # if iterations > 0 then
+    #     runSimulation (iterations - 1) { sim & entities: newEntities }
+    # else
+    #     Task.succeed { sim & entities: newEntities }
 
 
 janKristy : List Entity, Jan, EntityId, [ Left, Right ], Kristy, EntityId, [ Left, Right ] -> List Entity
