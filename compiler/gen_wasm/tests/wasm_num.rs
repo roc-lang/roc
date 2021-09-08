@@ -116,6 +116,36 @@ mod dev_num {
         );
     }
 
+    #[test]
+    fn join_point() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x = if True then 111 else 222
+
+                x + 123
+                 "#
+            ),
+            234,
+            i64
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn factorial() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                fac = \n ->
+                    if n
+                 "#
+            ),
+            234,
+            i64
+        );
+    }
+
     // #[test]
     // fn gen_add_f64() {
     //     assert_evals_to!(
