@@ -314,15 +314,15 @@ removeChain = \entries, @RichardId (@EntityId richardId) ->
 removeChainHelp : List Entity, EntityId, [ Left, Right ], EntityId, Entity -> List Entity
 removeChainHelp = \originalList, @EntityId chainStart, hand, @EntityId entityId, entity ->
     # Remove this entity from the chain
-    entries = List.set originalList entityId None
+    entities = List.set originalList entityId None
 
     when T hand entity is
         T Left (EJan { leftHand: None }) ->
             # Her left hand is empty; we're done!
-            entries
+            entities
 
         T Left (EJan { leftHand: Kristy (@KristyId (@EntityId kristyId)) }) ->
-            when List.get entries kristyId is
+            when List.get entities kristyId is
                 Ok (EKristy kristy) ->
                     # Verify the symmetry - that Kristy's
                     # left hand is indeed bound to this Jan's
@@ -330,32 +330,32 @@ removeChainHelp = \originalList, @EntityId chainStart, hand, @EntityId entityId,
                         if kristyId == chainStart then
                             # We've encountered a cycle!
                             # This chain is a loop; we're done.
-                            entries
+                            entities
                         else
                             # Recurse on this Jan's left hand
-                            removeChainHelp entries
+                            removeChainHelp entities
                                 (@EntityId chainStart)
                                 Left
                                 (@EntityId kristyId)
                                 (EKristy kristy)
                     else
                         #Debug.todo "Asymmetrical hand joins!" ()
-                        entries
+                        entities
 
                 Ok _ ->
                     #Debug.todo "Type mismatch: non-EKristy behind a KristyId!" ()
-                    entries
+                    entities
 
                 Err OutOfBounds ->
                     #Debug.todo "No entry found for KristyId!" ()
-                    entries
+                    entities
 
         T Right (EJan { rightHand: None }) ->
             # Her right hand is empty; end of the chain!
-            entries
+            entities
 
         T Right (EJan { rightHand: Kristy (@KristyId (@EntityId kristyId)) }) ->
-            when List.get entries kristyId is
+            when List.get entities kristyId is
                 Ok (EKristy kristy) ->
                     # Verify the symmetry - that Kristy's
                     # right hand is indeed bound to this Jan's
@@ -363,32 +363,32 @@ removeChainHelp = \originalList, @EntityId chainStart, hand, @EntityId entityId,
                         if kristyId == chainStart then
                             # We've encountered a cycle!
                             # This chain is a loop; we're done.
-                            entries
+                            entities
                         else
                             # Recurse on this Jan's left hand
-                            removeChainHelp entries
+                            removeChainHelp entities
                                 (@EntityId chainStart)
                                 Left
                                 (@EntityId kristyId)
                                 (EKristy kristy)
                     else
                         # Debug.todo "Asymmetrical hand joins!" ()
-                        entries
+                        entities
 
                 Ok _ ->
                     #Debug.todo "Type mismatch: non-EKristy behind a KristyId!" ()
-                    entries
+                    entities
 
                 Err OutOfBounds ->
                     #Debug.todo "No entry found for KristyId!" ()
-                    entries
+                    entities
 
         T Left (EKristy { leftHand: None }) ->
             # Her left hand is empty; end of the chain!
-            entries
+            entities
 
         T Left (EKristy { leftHand: Jan (@JanId (@EntityId janId)) }) ->
-            when List.get entries janId is
+            when List.get entities janId is
                 Ok (EJan jan) ->
                     # Verify the symmetry - that Jan's
                     # left hand is indeed bound to Kristy's
@@ -396,36 +396,36 @@ removeChainHelp = \originalList, @EntityId chainStart, hand, @EntityId entityId,
                         if janId == chainStart then
                             # We've encountered a cycle!
                             # This chain is a loop; we're done.
-                            entries
+                            entities
                         else
                             # Recurse on Jan's right hand
-                            removeChainHelp entries
+                            removeChainHelp entities
                                 (@EntityId chainStart)
                                 Right
                                 (@EntityId janId)
                                 (EJan jan)
                     else
                         #Debug.todo "Asymmetrical hand joins!" ()
-                        entries
+                        entities
 
                 Ok _ ->
                     #Debug.todo "Type mismatch: non-EJan behind a JanId!" ()
-                    entries
+                    entities
 
                 Err OutOfBounds ->
                     #Debug.todo "No entry found for JanId!" ()
-                    entries
+                    entities
 
         T Right (EKristy { rightHand: None }) ->
             # Her right hand is empty; end of the chain!
-            entries
+            entities
 
         T Right (EKristy { rightHand: Richard _ }) ->
             #Debug.todo "Found a Richard in the chain - this should be impossible!" ()
-            entries
+            entities
 
         T Right (EKristy { rightHand: Jan (@JanId (@EntityId janId)) }) ->
-            when List.get entries janId is
+            when List.get entities janId is
                 Ok (EJan jan) ->
                     # Verify the symmetry - that Jan's
                     # left hand is indeed bound to this Kristy's
@@ -433,29 +433,29 @@ removeChainHelp = \originalList, @EntityId chainStart, hand, @EntityId entityId,
                         if janId == chainStart then
                             # We've encountered a cycle!
                             # This chain is a loop; we're done.
-                            entries
+                            entities
                         else
                             # Recurse on this Jan's right hand
-                            removeChainHelp entries
+                            removeChainHelp entities
                                 (@EntityId chainStart)
                                 Right
                                 (@EntityId janId)
                                 (EJan jan)
                     else
                         #Debug.todo "Asymmetrical hand joins!" ()
-                        entries
+                        entities
 
                 Ok _ ->
                     #Debug.todo "Type mismatch: non-EJan behind a JanId!" ()
-                    entries
+                    entities
 
                 Err OutOfBounds ->
                     #Debug.todo "No entry found for JanId!" ()
-                    entries
+                    entities
 
         T _ (ERichard _) ->
             # Debug.todo "Found a Richard in the chain - this should be impossible!" ()
-            entries
+            entities
 
         _ ->
             # TODO the compiler should report this as redundant!
