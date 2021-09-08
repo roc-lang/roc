@@ -25,6 +25,9 @@ pub fn build_module<'a>(
     let mut backend = WasmBackend::new();
     let mut layout_ids = LayoutIds::default();
 
+    let mut procedures: std::vec::Vec<_> = procedures.into_iter().collect();
+    procedures.sort_by(|a, b| b.0 .0.cmp(&a.0 .0));
+
     for ((sym, layout), proc) in procedures {
         let function_index = backend.build_proc(proc, sym)?;
         if env.exposed_to_host.contains(&sym) {

@@ -23,7 +23,7 @@ struct LabelId(u32);
 #[derive(Debug)]
 struct SymbolStorage(LocalId, WasmLayout);
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 struct WasmLayout {
     value_type: ValueType,
     stack_memory: u32,
@@ -185,12 +185,12 @@ impl<'a> WasmBackend<'a> {
         Ok(())
     }
 
-    fn start_loop(&mut self) {
+    /// start a loop that leaves a value on the stack
+    fn start_loop_with_return(&mut self, value_type: ValueType) {
         self.block_depth += 1;
 
         // self.instructions.push(Loop(BlockType::NoResult));
-        self.instructions
-            .push(Loop(BlockType::Value(ValueType::I64)));
+        self.instructions.push(Loop(BlockType::Value(value_type)));
     }
 
     fn end_loop(&mut self) {
@@ -307,19 +307,21 @@ impl<'a> WasmBackend<'a> {
                 for parameter in parameters.iter() {
                     let wasm_layout = WasmLayout::new(&parameter.layout)?;
                     let local_id = self.insert_local(wasm_layout, parameter.symbol);
+
                     local_ids.push(local_id);
                 }
 
                 self.start_block();
 
                 self.joinpoint_label_map
-                    .insert(*id, (self.block_depth, local_ids.clone()));
+                    .insert(*id, (self.block_depth, local_ids));
 
                 self.build_stmt(remainder, ret_layout)?;
 
                 self.end_block();
 
-                self.start_loop();
+                let return_wasm_layout = WasmLayout::new(ret_layout)?;
+                self.start_loop_with_return(return_wasm_layout.value_type);
 
                 self.build_stmt(body, ret_layout)?;
 
@@ -358,7 +360,7 @@ impl<'a> WasmBackend<'a> {
         layout: &Layout<'a>,
     ) -> Result<(), String> {
         match expr {
-            Expr::Literal(lit) => self.load_literal(lit),
+            Expr::Literal(lit) => self.load_literal(lit, layout),
 
             Expr::Call(roc_mono::ir::Call {
                 call_type,
@@ -386,7 +388,7 @@ impl<'a> WasmBackend<'a> {
         }
     }
 
-    fn load_literal(&mut self, lit: &Literal<'a>) -> Result<(), String> {
+    fn load_literal(&mut self, lit: &Literal<'a>, layout: &Layout<'a>) -> Result<(), String> {
         match lit {
             Literal::Bool(x) => {
                 self.instructions.push(I32Const(*x as i32));
@@ -397,7 +399,15 @@ impl<'a> WasmBackend<'a> {
                 Ok(())
             }
             Literal::Int(x) => {
-                self.instructions.push(I64Const(*x as i64));
+                match layout {
+                    Layout::Builtin(Builtin::Int32) => {
+                        self.instructions.push(I32Const(*x as i32));
+                    }
+                    Layout::Builtin(Builtin::Int64) => {
+                        self.instructions.push(I64Const(*x as i64));
+                    }
+                    x => panic!("loading literal, {:?}, is not yet implemented", x),
+                }
                 Ok(())
             }
             Literal::Float(x) => {
@@ -441,6 +451,22 @@ impl<'a> WasmBackend<'a> {
                 ValueType::F32 => &[F32Add],
                 ValueType::F64 => &[F64Add],
             },
+            LowLevel::NumSub => match return_value_type {
+                ValueType::I32 => &[I32Sub],
+                ValueType::I64 => &[I64Sub],
+                ValueType::F32 => &[F32Sub],
+                ValueType::F64 => &[F64Sub],
+            },
+            LowLevel::NumMul => match return_value_type {
+                ValueType::I32 => &[I32Mul],
+                ValueType::I64 => &[I64Mul],
+                ValueType::F32 => &[F32Mul],
+                ValueType::F64 => &[F64Mul],
+            },
+            LowLevel::NumGt => {
+                // needs layout of the argument to be implemented fully
+                &[I32GtS]
+            }
             _ => {
                 return Err(format!("unsupported low-level op {:?}", lowlevel));
             }

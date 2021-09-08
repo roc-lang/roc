@@ -132,17 +132,25 @@ mod dev_num {
     }
 
     #[test]
-    #[ignore]
     fn factorial() {
         assert_evals_to!(
             indoc!(
                 r#"
-                fac = \n ->
-                    if n
+                app "test" provides [ main ] to "./platform"
+
+                fac : I32, I32 -> I32
+                fac = \n, accum ->
+                    if n > 1 then
+                        fac (n - 1) (n * accum)
+                    else
+                        accum
+
+                main : I32
+                main = fac 8 1
                  "#
             ),
-            234,
-            i64
+            40_320,
+            i32
         );
     }
 
