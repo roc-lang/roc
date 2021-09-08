@@ -27,6 +27,7 @@ editor/benches/resources/500_lines.roc
 
 # file editor creates when none is selected
 UntitledApp.roc
+NewRocProject
 
 # rust cache (sccache folder)
 sccache_dir

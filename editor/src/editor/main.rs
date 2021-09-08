@@ -23,6 +23,7 @@ use crate::ui::text::caret_w_select::CaretPos;
 use crate::ui::util::slice_get;
 use bumpalo::Bump;
 use cgmath::Vector2;
+use fs_extra::dir::{CopyOptions, copy};
 use pipelines::RectResources;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
@@ -30,7 +31,7 @@ use roc_load;
 use roc_load::file::LoadedModule;
 use roc_module::symbol::IdentIds;
 use roc_types::subs::VarStore;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::Write;
 use std::{error::Error, io, path::Path};
 use wgpu::{CommandEncoder, RenderPass, TextureView};
@@ -410,35 +411,80 @@ fn read_file(file_path_opt: Option<&Path>) -> (&Path, String) {
 
         (file_path, file_as_str)
     } else {
-        let untitled_path = Path::new("UntitledApp.roc");
+        init_new_roc_project()
+    }
+}
 
-        let code_str = if !untitled_path.exists() {
-            let mut untitled_file = File::create(untitled_path).unwrap_or_else(|_| {
-                panic!("I wanted to create {:?}, but it failed.", untitled_path)
-            });
+// returns path and content of app file
+fn init_new_roc_project() -> (&'static Path, String) {
 
-            write!(untitled_file, "{}", HELLO_WORLD).unwrap_or_else(|_| {
-                panic!(
-                    r#"I wanted to write:
+    let orig_platform_path = Path::new("./examples/hello-world/platform");
 
-{:?}
+    let project_dir_path = Path::new("./NewRocProject");
 
-to file {:?}, but it failed."#,
-                    HELLO_WORLD, untitled_file
-                )
-            });
+    let roc_file_path = Path::new("./NewRocProject/UntitledApp.roc");
 
-            HELLO_WORLD.to_string()
-        } else {
-            std::fs::read_to_string(untitled_path).unwrap_or_else(|_| {
-                panic!(
-                    "I detected an existing {:?}, but I failed to read from it.",
-                    untitled_path
-                )
-            })
-        };
+    let project_platform_path = Path::new("./NewRocProject/platform");
 
-        (untitled_path, code_str)
+    if !project_dir_path.exists(){
+        fs::create_dir(project_dir_path).expect("Failed to create dir for roc project.");
+    }
+
+    copy_roc_platform_if_not_exists(orig_platform_path, project_platform_path, project_dir_path);
+
+    let code_str = create_roc_file_if_not_exists(project_dir_path, roc_file_path);
+    
+    (roc_file_path, code_str)
+
+}
+
+// returns contents of file
+fn create_roc_file_if_not_exists(project_dir_path: &Path, roc_file_path: &Path) -> String {
+    if !roc_file_path.exists() {
+        let mut roc_file = File::create(roc_file_path).unwrap_or_else(|err| {
+            panic!("No roc file path was passed to the editor, so I wanted to create a new roc project with the file {:?}, but it failed: {}", roc_file_path, err)
+        });
+
+        write!(roc_file, "{}", HELLO_WORLD).unwrap_or_else(|err| {
+            panic!(
+                r#"No roc file path was passed to the editor, so I created a new roc project with the file {:?}
+                I wanted to write roc hello world to that file, but it failed: {:?}"#,
+                roc_file_path,
+                err
+            )
+        });
+
+        HELLO_WORLD.to_string()
+    } else {
+        let code_str = std::fs::read_to_string(roc_file_path).unwrap_or_else(|err| {
+            panic!(
+                "I detected an existing {:?} inside {:?}, but I failed to read from it: {}",
+                roc_file_path,
+                project_dir_path,
+                err
+            )
+        });
+
+        code_str
+    }
+}
+
+fn copy_roc_platform_if_not_exists(orig_platform_path: &Path, project_platform_path: &Path, project_dir_path: &Path) {
+    if !orig_platform_path.exists() && !project_platform_path.exists() {
+        panic!(
+            r#"No roc file path was passed to the editor, I wanted to create a new roc project but I could not find the platform at {:?}.
+            Are you at the root of the roc repository?"#,
+            orig_platform_path
+        );
+    } else {
+        copy(orig_platform_path, project_dir_path, &CopyOptions::new()).unwrap_or_else(|err|{
+            panic!(r#"No roc file path was passed to the editor, so I wanted to create a new roc project and roc projects require a platform,
+            I tried to copy the platform at {:?} to {:?} but it failed: {}"#,
+            orig_platform_path,
+            project_platform_path,
+            err
+        )
+        });
     }
 }
 

@@ -1,5 +1,5 @@
-use super::ui_error::{FileOpenFailed, OutOfBounds, UIResult};
-use snafu::OptionExt;
+use super::ui_error::{FileOpenFailed, FileWriteFailed, OutOfBounds, UIResult};
+use snafu::{OptionExt, ResultExt};
 use std::{fs::File, io::BufReader, path::Path, slice::SliceIndex};
 
 pub fn is_newline(char_ref: &char) -> bool {
@@ -50,4 +50,12 @@ pub fn path_to_string(path: &Path) -> String {
     path_str.push_str(&path.to_string_lossy());
 
     path_str
+}
+
+pub fn write_to_file(path: &Path, content: &str) -> UIResult<()> {
+
+    std::fs::write(path, content).with_context(|| FileWriteFailed {
+        path_str: path_to_string(path)
+    })
+
 }

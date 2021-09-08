@@ -46,6 +46,7 @@ use crate::ui::text::selection::Selection;
 use crate::ui::text::text_pos::TextPos;
 use crate::ui::text::{lines, lines::Lines, lines::SelectableLines};
 use crate::ui::ui_error::UIResult;
+use crate::ui::util::write_to_file;
 use crate::window::keyboard_input::Modifiers;
 use bumpalo::Bump;
 use roc_can::expected::Expected;
@@ -532,6 +533,13 @@ impl<'a> EdModel<'a> {
                     Ok(())
                 }
             }
+            S => {
+                if modifiers.cmd_or_ctrl() {
+                    from_ui_res(self.save_file())
+                } else {
+                    Ok(())
+                }
+            }
             Home => from_ui_res(self.move_caret_home(modifiers)),
             End => from_ui_res(self.move_caret_end(modifiers)),
             F11 => {
@@ -593,6 +601,17 @@ impl<'a> EdModel<'a> {
         }
 
         self.set_sel_none();
+
+        Ok(())
+    }
+
+
+    fn save_file(&mut self) -> UIResult<()> {
+        let all_lines_str = self.code_lines.all_lines_as_string();
+
+        write_to_file(self.file_path, &all_lines_str)?;
+
+        println!("save successfull!");
 
         Ok(())
     }

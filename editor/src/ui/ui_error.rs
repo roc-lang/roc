@@ -1,3 +1,5 @@
+use std::io;
+
 use snafu::{Backtrace, Snafu};
 
 //import errors as follows:
@@ -43,6 +45,13 @@ pub enum UIError {
         err_msg
     ))]
     FileOpenFailed { path_str: String, err_msg: String },
+
+    #[snafu(display(
+        "FileWriteFailed: failed to write to file with path {}, I got this IO error: {}.",
+        path_str,
+        source
+    ))]
+    FileWriteFailed { source: io::Error, path_str: String },
 
     #[snafu(display("TextBufReadFailed: the file {} could be opened but we encountered the following error while trying to read it: {}.", path_str, err_msg))]
     TextBufReadFailed { path_str: String, err_msg: String },

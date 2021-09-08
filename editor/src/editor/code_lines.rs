@@ -190,13 +190,7 @@ impl Lines for CodeLines {
     }
 
     fn all_lines_as_string(&self) -> String {
-        let mut lines = String::new();
-
-        for line in &self.lines {
-            lines.push_str(line);
-        }
-
-        lines
+        self.lines.join("\n")
     }
 
     fn is_last_line(&self, line_nr: usize) -> bool {
