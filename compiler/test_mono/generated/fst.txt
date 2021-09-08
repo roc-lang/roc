@@ -3,14 +3,8 @@ procedure Test.1 (Test.2, Test.3):
     ret Test.2;
 
 procedure Test.0 ():
-    let Test.11 = 1i64;
-    let Test.12 = 2i64;
-    let Test.13 = 3i64;
-    let Test.5 = Array [Test.11, Test.12, Test.13];
-    let Test.8 = 3i64;
-    let Test.9 = 2i64;
-    let Test.10 = 1i64;
-    let Test.6 = Array [Test.8, Test.9, Test.10];
+    let Test.5 = Array [1i64, 2i64, 3i64];
+    let Test.6 = Array [3i64, 2i64, 1i64];
     let Test.4 = CallByName Test.1 Test.5 Test.6;
     dec Test.6;
     dec Test.5;

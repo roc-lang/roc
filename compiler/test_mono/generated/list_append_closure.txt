@@ -8,8 +8,6 @@ procedure Test.1 (Test.2):
     ret Test.5;
 
 procedure Test.0 ():
-    let Test.8 = 1i64;
-    let Test.9 = 2i64;
-    let Test.4 = Array [Test.8, Test.9];
+    let Test.4 = Array [1i64, 2i64];
     let Test.3 = CallByName Test.1 Test.4;
     ret Test.3;
