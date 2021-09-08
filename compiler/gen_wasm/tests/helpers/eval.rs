@@ -1,7 +1,6 @@
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
-use roc_std::{RocDec, RocList, RocOrder, RocStr};
-use crate::from_wasm32_memory::FromWasm32Memory;
+// use roc_std::{RocDec, RocList, RocOrder, RocStr};
 
 fn promote_expr_to_module(src: &str) -> String {
     let mut buffer = String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
@@ -86,26 +85,30 @@ pub fn helper_wasm<'a>(
 
     let exposed_to_host = exposed_to_host.keys().copied().collect::<MutSet<_>>();
 
-    let env = gen_wasm::Env {
+    let env = roc_gen_wasm::Env {
         arena,
         interns,
         exposed_to_host,
     };
 
-    let module_bytes = gen_wasm::build_module(&env, procedures).unwrap();
+    let module_bytes = roc_gen_wasm::build_module(&env, procedures).unwrap();
 
     // for debugging (e.g. with wasm2wat)
-    if true {
+    if false {
         use std::io::Write;
-        let mut file =
-            std::fs::File::create("/home/brian/Documents/roc/compiler/gen_wasm/debug.wasm")
-                .unwrap();
-        file.write_all(&module_bytes).unwrap();
+        let path = "/home/brian/Documents/roc/compiler/gen_wasm/debug.wasm";
+
+        match std::fs::File::create(path) {
+            Err(e) => eprintln!("Problem creating wasm debug file: {:?}", e),
+            Ok(mut file) => {
+                file.write_all(&module_bytes).unwrap();
+            }
+        }
     }
 
     // now, do wasmer stuff
 
-    use wasmer::{Function, Instance, Module, Store};
+    use wasmer::{Instance, Module, Store};
 
     let store = Store::default();
     // let module = Module::from_file(&store, &test_wasm_path).unwrap();
@@ -113,75 +116,21 @@ pub fn helper_wasm<'a>(
 
     // First, we create the `WasiEnv`
     use wasmer_wasi::WasiState;
-    let mut wasi_env = WasiState::new("hello")
-        // .args(&["world"])
-        // .env("KEY", "Value")
-        .finalize()
-        .unwrap();
+    let mut wasi_env = WasiState::new("hello").finalize().unwrap();
 
     // Then, we get the import object related to our WASI
     // and attach it to the Wasm instance.
-    let mut import_object = wasi_env
+    let import_object = wasi_env
         .import_object(&module)
         .unwrap_or_else(|_| wasmer::imports!());
-
-    {
-        let mut exts = wasmer::Exports::new();
-
-        let main_function = Function::new_native(&store, fake_wasm_main_function);
-        let ext = wasmer::Extern::Function(main_function);
-        exts.insert("main", ext);
-
-        let main_function = Function::new_native(&store, wasm_roc_panic);
-        let ext = wasmer::Extern::Function(main_function);
-        exts.insert("roc_panic", ext);
-
-        import_object.register("env", exts);
-    }
 
     Instance::new(&module, &import_object).unwrap()
 }
 
 #[allow(dead_code)]
-fn wasm_roc_panic(address: u32, tag_id: u32) {
-    match tag_id {
-        0 => {
-            let mut string = "";
-
-            MEMORY.with(|f| {
-                let memory = f.borrow().unwrap();
-
-                let ptr: wasmer::WasmPtr<u8, wasmer::Array> = wasmer::WasmPtr::new(address);
-                let width = 100;
-                let c_ptr = (ptr.deref(memory, 0, width)).unwrap();
-
-                use libc::c_char;
-                use std::ffi::CStr;
-                let slice = unsafe { CStr::from_ptr(c_ptr as *const _ as *const c_char) };
-                string = slice.to_str().unwrap();
-            });
-
-            panic!("Roc failed with message: {:?}", string)
-        }
-        _ => todo!(),
-    }
-}
-
-use std::cell::RefCell;
-
-thread_local! {
-    pub static MEMORY: RefCell<Option<&'static wasmer::Memory>> = RefCell::new(None);
-}
-
-#[allow(dead_code)]
-fn fake_wasm_main_function(_: u32, _: u32) -> u32 {
-    panic!("wasm entered the main function; this should never happen!")
-}
-
-#[allow(dead_code)]
 pub fn assert_wasm_evals_to_help<T>(src: &str, ignore_problems: bool) -> Result<T, String>
 where
-    T: FromWasm32Memory,
+    T: Copy,
 {
     let arena = bumpalo::Bump::new();
 
@@ -190,31 +139,25 @@ where
 
     let is_gen_test = true;
     let instance =
-        crate::helpers::eval_full::helper_wasm(&arena, src, stdlib, is_gen_test, ignore_problems);
+        crate::helpers::eval::helper_wasm(&arena, src, stdlib, is_gen_test, ignore_problems);
 
-    let memory = instance.exports.get_memory("memory").unwrap();
+    let main_function = instance.exports.get_function("#UserApp_main_1").unwrap();
 
-    crate::helpers::eval_full::MEMORY.with(|f| {
-        *f.borrow_mut() = Some(unsafe { std::mem::transmute(memory) });
-    });
-
-    let test_wrapper = instance.exports.get_function("test_wrapper").unwrap();
-
-    match test_wrapper.call(&[]) {
+    match main_function.call(&[]) {
         Err(e) => Err(format!("{:?}", e)),
         Ok(result) => {
-            let address = match result[0] {
-                wasmer::Value::I32(a) => a,
+            let integer = match result[0] {
+                wasmer::Value::I64(a) => a,
+                wasmer::Value::F64(a) => a.to_bits() as i64,
                 _ => panic!(),
             };
 
-            let output = <T as FromWasmMemory>::decode(
-                memory,
-                // skip the RocCallResult tag id
-                address as u32 + 8,
-            );
+            let output_ptr: &T;
+            unsafe {
+                output_ptr = std::mem::transmute::<&i64, &T>(&integer);
+            }
 
-            Ok(output)
+            Ok(*output_ptr)
         }
     }
 }
@@ -222,7 +165,8 @@ where
 #[macro_export]
 macro_rules! assert_wasm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
-        match $crate::helpers::eval_full::assert_wasm_evals_to_help::<$ty>($src, $ignore_problems) {
+        match $crate::helpers::eval::assert_wasm_evals_to_help::<$ty>($src, $ignore_problems)
+        {
             Err(msg) => println!("{:?}", msg),
             Ok(actual) => {
                 #[allow(clippy::bool_assert_comparison)]
@@ -236,7 +180,7 @@ macro_rules! assert_wasm_evals_to {
             $src,
             $expected,
             $ty,
-            $crate::helpers::eval_full::identity,
+            $crate::helpers::eval::identity,
             false
         );
     };
@@ -249,7 +193,7 @@ macro_rules! assert_wasm_evals_to {
 #[macro_export]
 macro_rules! assert_evals_to {
     ($src:expr, $expected:expr, $ty:ty) => {{
-        assert_evals_to!($src, $expected, $ty, $crate::helpers::eval_full::identity);
+        assert_evals_to!($src, $expected, $ty, $crate::helpers::eval::identity);
     }};
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
         // Same as above, except with an additional transformation argument.
