@@ -645,7 +645,7 @@ chainLengthHelp = \entities, @EntityId chainStart, hand, @EntityId entityId, ent
 
         _ ->
             # TODO the compiler should report this as redundant!
-            entities
+            0
 
 step : Model -> Task Model *
 step = \model ->
