@@ -20,10 +20,10 @@ use crate::graphics::{
 use crate::lang::expr::Env;
 use crate::lang::pool::Pool;
 use crate::ui::text::caret_w_select::CaretPos;
-use crate::ui::util::slice_get;
+use crate::ui::util::path_to_string;
 use bumpalo::Bump;
 use cgmath::Vector2;
-use fs_extra::dir::{CopyOptions, copy};
+use fs_extra::dir::{CopyOptions, DirEntryAttr, DirEntryValue, copy, ls};
 use pipelines::RectResources;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
@@ -31,6 +31,7 @@ use roc_load;
 use roc_load::file::LoadedModule;
 use roc_module::symbol::IdentIds;
 use roc_types::subs::VarStore;
+use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::Write;
 use std::{error::Error, io, path::Path};
@@ -52,26 +53,14 @@ use winit::{
 
 /// The editor is actually launched from the CLI if you pass it zero arguments,
 /// or if you provide it 1 or more files or directories to open on launch.
-pub fn launch(filepaths: &[&Path]) -> io::Result<()> {
-    //TODO support using multiple filepaths
-    let first_path_opt = if !filepaths.is_empty() {
-        match slice_get(0, filepaths) {
-            Ok(path_ref_ref) => Some(*path_ref_ref),
-            Err(e) => {
-                eprintln!("{}", e);
-                None
-            }
-        }
-    } else {
-        None
-    };
+pub fn launch(project_dir_path_opt: Option<&Path>) -> io::Result<()> {
 
-    run_event_loop(first_path_opt).expect("Error running event loop");
+    run_event_loop(project_dir_path_opt).expect("Error running event loop");
 
     Ok(())
 }
 
-fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
+fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     env_logger::init();
 
     // Open window and create a surface
@@ -138,9 +127,12 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     let env_arena = Bump::new();
     let code_arena = Bump::new();
 
-    let (file_path, code_str) = read_file(file_path_opt);
+    let (file_path_str, code_str) = read_main_roc_file(project_dir_path_opt);
+    println!("Loading file {}...", file_path_str);
 
-    let loaded_module = load_module(file_path);
+    let file_path = Path::new(&file_path_str);
+
+    let loaded_module = load_module(&file_path);
 
     let mut var_store = VarStore::default();
     let dep_idents = IdentIds::exposed_builtins(8);
@@ -404,27 +396,69 @@ fn begin_render_pass<'a>(
     })
 }
 
-fn read_file(file_path_opt: Option<&Path>) -> (&Path, String) {
-    if let Some(file_path) = file_path_opt {
-        let file_as_str = std::fs::read_to_string(file_path)
-            .unwrap_or_else(|_| panic!("Failed to read from provided file path: {:?}", file_path));
+type PathStr = String;
 
-        (file_path, file_as_str)
+fn read_main_roc_file(project_dir_path_opt: Option<&Path>) -> (PathStr, String) {
+    if let Some(project_dir_path) = project_dir_path_opt {
+
+        let mut ls_config = HashSet::new();
+        ls_config.insert(DirEntryAttr::FullName);
+
+        let dir_items = ls(project_dir_path, &ls_config)
+            .unwrap_or_else(|err| panic!("Failed to list items in project directory: {:?}", err))
+            .items;
+
+        let file_names_2d: Vec<Vec<&String>> =
+            dir_items
+                .iter()
+                .map(|info_hash_map| info_hash_map.values().map(
+                    |dir_entry_value|
+                    if let DirEntryValue::String(file_name) = dir_entry_value {
+                        Some(file_name)
+                    } else {
+                        None
+                    }
+                )
+                .filter_map(|x| x) // remove None
+                .collect())
+                .collect();
+
+        let roc_file_names: Vec<&String> =
+            file_names_2d
+            .into_iter()
+            .flatten()
+            .filter(|file_name| file_name.contains(".roc"))
+            .collect();
+
+        let project_dir_path_str = path_to_string(project_dir_path);
+
+        if let Some(&roc_file_name) = roc_file_names.first() {
+            let full_roc_file_path_str = vec![project_dir_path_str.clone(), "/".to_owned(), roc_file_name.clone()].join("");
+            let file_as_str = std::fs::read_to_string(&Path::new(&full_roc_file_path_str))
+                .unwrap_or_else(|err| panic!("In the provided project {:?}, I found the roc file {}, but I failed to read it: {}", &project_dir_path_str, &full_roc_file_path_str, err));
+
+            (full_roc_file_path_str, file_as_str)
+        } else {
+            init_new_roc_project(&project_dir_path_str)
+        }
+
     } else {
-        init_new_roc_project()
+        init_new_roc_project("new-roc-project")
     }
 }
 
 // returns path and content of app file
-fn init_new_roc_project() -> (&'static Path, String) {
+fn init_new_roc_project(project_dir_path_str: &str) -> (PathStr, String) {
 
     let orig_platform_path = Path::new("./examples/hello-world/platform");
 
-    let project_dir_path = Path::new("./NewRocProject");
+    let project_dir_path = Path::new(project_dir_path_str);
 
-    let roc_file_path = Path::new("./NewRocProject/UntitledApp.roc");
+    let roc_file_path_str = vec![project_dir_path_str, "/UntitledApp.roc"].join("");
+    let roc_file_path = Path::new("./new-roc-project/UntitledApp.roc");
 
-    let project_platform_path = Path::new("./NewRocProject/platform");
+    let project_platform_path_str = vec![project_dir_path_str, "/platform"].join("");
+    let project_platform_path = Path::new(&project_platform_path_str);
 
     if !project_dir_path.exists(){
         fs::create_dir(project_dir_path).expect("Failed to create dir for roc project.");
@@ -434,7 +468,7 @@ fn init_new_roc_project() -> (&'static Path, String) {
 
     let code_str = create_roc_file_if_not_exists(project_dir_path, roc_file_path);
     
-    (roc_file_path, code_str)
+    (roc_file_path_str, code_str)
 
 }
 
@@ -476,7 +510,7 @@ fn copy_roc_platform_if_not_exists(orig_platform_path: &Path, project_platform_p
             Are you at the root of the roc repository?"#,
             orig_platform_path
         );
-    } else {
+    } else if !project_platform_path.exists() {
         copy(orig_platform_path, project_dir_path, &CopyOptions::new()).unwrap_or_else(|err|{
             panic!(r#"No roc file path was passed to the editor, so I wanted to create a new roc project and roc projects require a platform,
             I tried to copy the platform at {:?} to {:?} but it failed: {}"#,

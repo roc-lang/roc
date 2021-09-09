@@ -88,7 +88,7 @@ impl AppHeader {
     // TODO don't use mock struct and actually parse string
     pub fn parse_from_string(_header_str: &str, ast_node_id: ExprId) -> Self {
         AppHeader {
-            app_name: "\"untitled_app\"".to_owned(),
+            app_name: "\"untitled-app\"".to_owned(),
             packages_base: "\"platform\"".to_owned(),
             imports: vec![],
             provides: vec!["main".to_owned()],

@@ -551,8 +551,10 @@ impl<'a> EdModel<'a> {
         }
     }
 
-    fn replace_selected_expr_with_blank(&mut self) -> EdResult<()> {
-        let expr_mark_node_id_opt = if let Some(sel_block) = &self.selected_block_opt {
+    // Replaces selected expression with blank.
+    // If no expression is selected, this function will select one to guide the user to using backspace in a projectional editing way
+    fn backspace(&mut self) -> EdResult<()> {
+        if let Some(sel_block) = &self.selected_block_opt {
             let expr2_level_mark_node = self.mark_node_pool.get(sel_block.mark_node_id);
             let newlines_at_end = expr2_level_mark_node.get_newlines_at_end();
 
@@ -581,13 +583,8 @@ impl<'a> EdModel<'a> {
                 }
             }
 
-            Some(sel_block.mark_node_id)
-        } else {
-            None
-        };
+            let expr_mark_node_id = sel_block.mark_node_id;
 
-        // have to split the previous `if` up to prevent borrowing issues
-        if let Some(expr_mark_node_id) = expr_mark_node_id_opt {
             let caret_pos = self.get_caret();
 
             EdModel::insert_between_line(
@@ -598,9 +595,11 @@ impl<'a> EdModel<'a> {
                 &mut self.grid_node_map,
                 &mut self.code_lines,
             )?;
-        }
 
-        self.set_sel_none();
+            self.set_sel_none();
+        } else {
+            self.select_expr()?;
+        };
 
         Ok(())
     }
@@ -1120,7 +1119,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                 // On Linux, '\u{8}' is backspace,
                 // on macOS '\u{7f}'.
 
-                ed_model.replace_selected_expr_with_blank()?;
+                ed_model.backspace()?;
 
                 InputOutcome::Accepted
             }
