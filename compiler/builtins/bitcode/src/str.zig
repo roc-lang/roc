@@ -313,6 +313,7 @@ pub const RocStr = extern struct {
     }
 
     pub fn asU8ptr(self: RocStr) [*]u8 {
+
         // Since this conditional would be prone to branch misprediction,
         // make sure it will compile to a cmov.
         // return if (self.isSmallStr() or self.isEmpty()) (&@bitCast([@sizeOf(RocStr)]u8, self)) else (@ptrCast([*]u8, self.str_bytes));
@@ -429,18 +430,14 @@ fn strFromIntHelp(comptime T: type, int: T) RocStr {
 
 // Str.fromFloat
 pub fn strFromFloatC(float: f64) callconv(.C) RocStr {
-    // NOTE the compiled zig for float formatting seems to use LLVM11-specific features
-    // hopefully we can use zig instead of snprintf in the future when we upgrade
-    const c = @cImport({
-        // See https://github.com/ziglang/zig/issues/515
-        @cDefine("_NO_CRT_STDIO_INLINE", "1");
-        @cInclude("stdio.h");
-    });
+    return @call(.{ .modifier = always_inline }, strFromFloatHelp, .{ f64, float });
+}
+
+fn strFromFloatHelp(comptime T: type, float: T) RocStr {
     var buf: [100]u8 = undefined;
+    const result = std.fmt.bufPrint(&buf, "{d}", .{float}) catch unreachable;
 
-    const result = c.snprintf(&buf, 100, "%f", float);
-
-    return RocStr.init(&buf, @intCast(usize, result));
+    return RocStr.init(&buf, result.len);
 }
 
 // Str.split
@@ -1153,8 +1150,8 @@ fn strToBytes(arg: RocStr) RocList {
 }
 
 const FromUtf8Result = extern struct {
-    byte_index: usize,
     string: RocStr,
+    byte_index: usize,
     is_ok: bool,
     problem_code: Utf8ByteProblem,
 };

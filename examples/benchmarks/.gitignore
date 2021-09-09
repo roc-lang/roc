@@ -1,6 +1,8 @@
 app
 *.o
 *.dSYM
+*.ll
+*.bc
 libhost.a
 roc_app.ll
 roc_app.bc

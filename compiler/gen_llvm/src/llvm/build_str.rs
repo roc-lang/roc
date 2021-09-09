@@ -1,5 +1,5 @@
 use crate::llvm::bitcode::{call_bitcode_fn, call_void_bitcode_fn};
-use crate::llvm::build::{complex_bitcast, Env, Scope};
+use crate::llvm::build::{complex_bitcast, struct_from_fields, Env, Scope};
 use crate::llvm::build_list::{allocate_list, call_bitcode_fn_returns_list, store_list};
 use inkwell::builder::Builder;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
@@ -21,12 +21,12 @@ pub fn str_split<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let str_i128 = str_symbol_to_i128(env, scope, str_symbol);
-    let delim_i128 = str_symbol_to_i128(env, scope, delimiter_symbol);
+    let str_c_abi = str_symbol_to_c_abi(env, scope, str_symbol);
+    let delim_c_abi = str_symbol_to_c_abi(env, scope, delimiter_symbol);
 
     let segment_count = call_bitcode_fn(
         env,
-        &[str_i128.into(), delim_i128.into()],
+        &[str_c_abi.into(), delim_c_abi.into()],
         bitcode::STR_COUNT_SEGMENTS,
     )
     .into_int_value();
@@ -46,26 +46,34 @@ pub fn str_split<'a, 'ctx, 'env>(
 
     call_void_bitcode_fn(
         env,
-        &[ret_list_ptr_zig_rocstr, str_i128.into(), delim_i128.into()],
+        &[
+            ret_list_ptr_zig_rocstr,
+            str_c_abi.into(),
+            delim_c_abi.into(),
+        ],
         bitcode::STR_STR_SPLIT_IN_PLACE,
     );
 
     store_list(env, ret_list_ptr, segment_count)
 }
 
-fn str_symbol_to_i128<'a, 'ctx, 'env>(
+fn str_symbol_to_c_abi<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
     symbol: Symbol,
 ) -> IntValue<'ctx> {
     let string = load_symbol(scope, &symbol);
 
-    let i128_type = env.context.i128_type().into();
+    let target_type = match env.ptr_bytes {
+        8 => env.context.i128_type().into(),
+        4 => env.context.i64_type().into(),
+        _ => unreachable!(),
+    };
 
-    complex_bitcast(env.builder, string, i128_type, "str_to_i128").into_int_value()
+    complex_bitcast(env.builder, string, target_type, "str_to_c_abi").into_int_value()
 }
 
-pub fn str_to_i128<'a, 'ctx, 'env>(
+pub fn str_to_c_abi<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     value: BasicValueEnum<'ctx>,
 ) -> IntValue<'ctx> {
@@ -73,17 +81,19 @@ pub fn str_to_i128<'a, 'ctx, 'env>(
 
     env.builder.build_store(cell, value);
 
-    let i128_ptr = env
+    let target_type = match env.ptr_bytes {
+        8 => env.context.i128_type(),
+        4 => env.context.i64_type(),
+        _ => unreachable!(),
+    };
+
+    let target_type_ptr = env
         .builder
-        .build_bitcast(
-            cell,
-            env.context.i128_type().ptr_type(AddressSpace::Generic),
-            "cast",
-        )
+        .build_bitcast(cell, target_type.ptr_type(AddressSpace::Generic), "cast")
         .into_pointer_value();
 
     env.builder
-        .build_load(i128_ptr, "load_as_i128")
+        .build_load(target_type_ptr, "load_as_c_abi")
         .into_int_value()
 }
 
@@ -113,12 +123,12 @@ pub fn str_concat<'a, 'ctx, 'env>(
     str2_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
     // swap the arguments; second argument comes before the second in the output string
-    let str1_i128 = str_symbol_to_i128(env, scope, str1_symbol);
-    let str2_i128 = str_symbol_to_i128(env, scope, str2_symbol);
+    let str1_c_abi = str_symbol_to_c_abi(env, scope, str1_symbol);
+    let str2_c_abi = str_symbol_to_c_abi(env, scope, str2_symbol);
 
     call_bitcode_fn(
         env,
-        &[str1_i128.into(), str2_i128.into()],
+        &[str1_c_abi.into(), str2_c_abi.into()],
         bitcode::STR_CONCAT,
     )
 }
@@ -132,8 +142,8 @@ pub fn str_join_with<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     // dirty hack; pretend a `list` is a `str` that works because
     // they have the same stack layout `{ u8*, usize }`
-    let list_i128 = str_symbol_to_i128(env, scope, list_symbol);
-    let str_i128 = str_symbol_to_i128(env, scope, str_symbol);
+    let list_i128 = str_symbol_to_c_abi(env, scope, list_symbol);
+    let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
 
     call_bitcode_fn(
         env,
@@ -147,7 +157,7 @@ pub fn str_number_of_bytes<'a, 'ctx, 'env>(
     scope: &Scope<'a, 'ctx>,
     str_symbol: Symbol,
 ) -> IntValue<'ctx> {
-    let str_i128 = str_symbol_to_i128(env, scope, str_symbol);
+    let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
 
     // the builtin will always return an u64
     let length =
@@ -165,8 +175,8 @@ pub fn str_starts_with<'a, 'ctx, 'env>(
     str_symbol: Symbol,
     prefix_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
-    let str_i128 = str_symbol_to_i128(env, scope, str_symbol);
-    let prefix_i128 = str_symbol_to_i128(env, scope, prefix_symbol);
+    let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
+    let prefix_i128 = str_symbol_to_c_abi(env, scope, prefix_symbol);
 
     call_bitcode_fn(
         env,
@@ -182,7 +192,7 @@ pub fn str_starts_with_code_point<'a, 'ctx, 'env>(
     str_symbol: Symbol,
     prefix_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
-    let str_i128 = str_symbol_to_i128(env, scope, str_symbol);
+    let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
     let prefix = load_symbol(scope, &prefix_symbol);
 
     call_bitcode_fn(
@@ -199,8 +209,8 @@ pub fn str_ends_with<'a, 'ctx, 'env>(
     str_symbol: Symbol,
     prefix_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
-    let str_i128 = str_symbol_to_i128(env, scope, str_symbol);
-    let prefix_i128 = str_symbol_to_i128(env, scope, prefix_symbol);
+    let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
+    let prefix_i128 = str_symbol_to_c_abi(env, scope, prefix_symbol);
 
     call_bitcode_fn(
         env,
@@ -215,7 +225,7 @@ pub fn str_count_graphemes<'a, 'ctx, 'env>(
     scope: &Scope<'a, 'ctx>,
     str_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
-    let str_i128 = str_symbol_to_i128(env, scope, str_symbol);
+    let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
 
     call_bitcode_fn(
         env,
@@ -243,11 +253,78 @@ pub fn str_to_utf8<'a, 'ctx, 'env>(
     let string = complex_bitcast(
         env.builder,
         original_wrapper.into(),
-        env.context.i128_type().into(),
+        env.str_list_c_abi().into(),
         "to_utf8",
     );
 
     call_bitcode_fn_returns_list(env, &[string], bitcode::STR_TO_UTF8)
+}
+
+fn decode_from_utf8_result<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    pointer: PointerValue<'ctx>,
+) -> StructValue<'ctx> {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let fields = match env.ptr_bytes {
+        8 => [
+            env.ptr_int().into(),
+            super::convert::zig_str_type(env).into(),
+            env.context.bool_type().into(),
+            ctx.i8_type().into(),
+        ],
+        4 => [
+            super::convert::zig_str_type(env).into(),
+            env.ptr_int().into(),
+            env.context.bool_type().into(),
+            ctx.i8_type().into(),
+        ],
+        _ => unreachable!(),
+    };
+
+    let record_type = env.context.struct_type(&fields, false);
+
+    match env.ptr_bytes {
+        8 => {
+            let zig_struct = builder
+                .build_load(pointer, "load_utf8_validate_bytes_result")
+                .into_struct_value();
+
+            let string = builder
+                .build_extract_value(zig_struct, 0, "string")
+                .unwrap();
+
+            let byte_index = builder
+                .build_extract_value(zig_struct, 1, "byte_index")
+                .unwrap();
+
+            let is_ok = builder.build_extract_value(zig_struct, 2, "is_ok").unwrap();
+
+            let problem_code = builder
+                .build_extract_value(zig_struct, 3, "problem_code")
+                .unwrap();
+
+            let values = [byte_index, string, is_ok, problem_code];
+
+            struct_from_fields(env, record_type, values.iter().copied().enumerate())
+        }
+        4 => {
+            let result_ptr_cast = env
+                .builder
+                .build_bitcast(
+                    pointer,
+                    record_type.ptr_type(AddressSpace::Generic),
+                    "to_unnamed",
+                )
+                .into_pointer_value();
+
+            builder
+                .build_load(result_ptr_cast, "load_utf8_validate_bytes_result")
+                .into_struct_value()
+        }
+        _ => unreachable!(),
+    }
 }
 
 /// Str.fromUtf8 : List U8, { count : Nat, start : Nat } -> { a : Bool, b : Str, c : Nat, d : I8 }
@@ -258,7 +335,6 @@ pub fn str_from_utf8_range<'a, 'ctx, 'env>(
     count_and_start: StructValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
-    let ctx = env.context;
 
     let result_type = env.module.get_struct_type("str.FromUtf8Result").unwrap();
     let result_ptr = builder.build_alloca(result_type, "alloca_utf8_validate_bytes_result");
@@ -269,14 +345,13 @@ pub fn str_from_utf8_range<'a, 'ctx, 'env>(
             complex_bitcast(
                 env.builder,
                 list_wrapper.into(),
-                env.context.i128_type().into(),
+                env.str_list_c_abi().into(),
                 "to_i128",
             ),
-            // TODO: This won't work for 32 bit targets!
             complex_bitcast(
                 env.builder,
                 count_and_start.into(),
-                env.context.i128_type().into(),
+                env.str_list_c_abi().into(),
                 "to_i128",
             ),
             result_ptr.into(),
@@ -284,26 +359,7 @@ pub fn str_from_utf8_range<'a, 'ctx, 'env>(
         bitcode::STR_FROM_UTF8_RANGE,
     );
 
-    let record_type = env.context.struct_type(
-        &[
-            env.ptr_int().into(),
-            super::convert::zig_str_type(env).into(),
-            env.context.bool_type().into(),
-            ctx.i8_type().into(),
-        ],
-        false,
-    );
-
-    let result_ptr_cast = env
-        .builder
-        .build_bitcast(
-            result_ptr,
-            record_type.ptr_type(AddressSpace::Generic),
-            "to_unnamed",
-        )
-        .into_pointer_value();
-
-    builder.build_load(result_ptr_cast, "load_utf8_validate_bytes_result")
+    decode_from_utf8_result(env, result_ptr).into()
 }
 
 /// Str.fromUtf8 : List U8 -> { a : Bool, b : Str, c : Nat, d : I8 }
@@ -313,7 +369,6 @@ pub fn str_from_utf8<'a, 'ctx, 'env>(
     original_wrapper: StructValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
-    let ctx = env.context;
 
     let result_type = env.module.get_struct_type("str.FromUtf8Result").unwrap();
     let result_ptr = builder.build_alloca(result_type, "alloca_utf8_validate_bytes_result");
@@ -324,7 +379,7 @@ pub fn str_from_utf8<'a, 'ctx, 'env>(
             complex_bitcast(
                 env.builder,
                 original_wrapper.into(),
-                env.context.i128_type().into(),
+                env.str_list_c_abi().into(),
                 "to_i128",
             ),
             result_ptr.into(),
@@ -332,26 +387,7 @@ pub fn str_from_utf8<'a, 'ctx, 'env>(
         bitcode::STR_FROM_UTF8,
     );
 
-    let record_type = env.context.struct_type(
-        &[
-            env.ptr_int().into(),
-            super::convert::zig_str_type(env).into(),
-            env.context.bool_type().into(),
-            ctx.i8_type().into(),
-        ],
-        false,
-    );
-
-    let result_ptr_cast = env
-        .builder
-        .build_bitcast(
-            result_ptr,
-            record_type.ptr_type(AddressSpace::Generic),
-            "to_unnamed",
-        )
-        .into_pointer_value();
-
-    builder.build_load(result_ptr_cast, "load_utf8_validate_bytes_result")
+    decode_from_utf8_result(env, result_ptr).into()
 }
 
 /// Str.fromInt : Int -> Str
@@ -371,8 +407,8 @@ pub fn str_equal<'a, 'ctx, 'env>(
     value1: BasicValueEnum<'ctx>,
     value2: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    let str1_i128 = str_to_i128(env, value1);
-    let str2_i128 = str_to_i128(env, value2);
+    let str1_i128 = str_to_c_abi(env, value1);
+    let str2_i128 = str_to_c_abi(env, value2);
 
     call_bitcode_fn(
         env,

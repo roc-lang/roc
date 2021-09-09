@@ -109,6 +109,7 @@ comptime {
 const utils = @import("utils.zig");
 comptime {
     exportUtilsFn(utils.test_panic, "test_panic");
+    exportUtilsFn(utils.decrefC, "decref");
 
     @export(utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .Weak });
 }

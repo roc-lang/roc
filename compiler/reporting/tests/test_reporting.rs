@@ -16,9 +16,9 @@ mod test_reporting {
     use roc_mono::ir::{Procs, Stmt};
     use roc_mono::layout::LayoutCache;
     use roc_reporting::report::{
-        can_problem, mono_problem, parse_problem, type_problem, Report, BLUE_CODE, BOLD_CODE,
-        CYAN_CODE, DEFAULT_PALETTE, GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE, UNDERLINE_CODE,
-        WHITE_CODE, YELLOW_CODE,
+        can_problem, mono_problem, parse_problem, type_problem, Report, Severity, BLUE_CODE,
+        BOLD_CODE, CYAN_CODE, DEFAULT_PALETTE, GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE,
+        UNDERLINE_CODE, WHITE_CODE, YELLOW_CODE,
     };
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
     use roc_solve::solve;
@@ -38,6 +38,7 @@ mod test_reporting {
             title: "".to_string(),
             doc,
             filename: filename_from_string(r"\code\proj\Main.roc"),
+            severity: Severity::RuntimeError,
         }
     }
 
@@ -92,14 +93,15 @@ mod test_reporting {
             let mut ident_ids = interns.all_ident_ids.remove(&home).unwrap();
 
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
-            let mut layout_cache = LayoutCache::default();
+            let ptr_bytes = 8;
+            let mut layout_cache = LayoutCache::new(ptr_bytes);
             let mut mono_env = roc_mono::ir::Env {
                 arena: &arena,
                 subs: &mut subs,
                 problems: &mut mono_problems,
                 home,
                 ident_ids: &mut ident_ids,
-                ptr_bytes: 8,
+                ptr_bytes,
                 update_mode_counter: 0,
                 // call_specialization_counter=0 is reserved
                 call_specialization_counter: 1,
@@ -300,7 +302,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── NOT EXPOSED ─────────────────────────────────────────────────────────────────
 
                 The List module does not expose a foobar value:
 
@@ -324,7 +326,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
 
                 `y` is not used anywhere in your code.
 
@@ -353,7 +355,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── DUPLICATE NAME ──────────────────────────────────────────────────────────────
 
                 The `i` name is first defined here:
 
@@ -390,7 +392,7 @@ mod test_reporting {
             // Booly is called a "variable"
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── DUPLICATE NAME ──────────────────────────────────────────────────────────────
 
                 The `Booly` name is first defined here:
 
@@ -405,7 +407,7 @@ mod test_reporting {
                 Since these variables have the same name, it's easy to use the wrong
                 one on accident. Give one of them a new name.
 
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
 
                 `Booly` is not used anywhere in your code.
 
@@ -513,7 +515,7 @@ mod test_reporting {
     }
 
     #[test]
-    fn unused_undefined_argument() {
+    fn unrecognized_name() {
         report_problem_as(
             indoc!(
                 r#"
@@ -532,7 +534,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
 
                 I cannot find a `bar` value
 
@@ -581,57 +583,79 @@ mod test_reporting {
         )
     }
 
-    // #[test]
-    // fn report_unused_argument() {
-    //     report_problem_as(
-    //         indoc!(r#"
-    //             y = 9
-    //
-    //             box = \class, htmlChildren ->
-    //                 div [ class ] []
-    //
-    //             div = 4
-    //
-    //             box "wizard" []
-    //         "#),
-    //         indoc!(
-    //             r#"
-    //             box doesn't use htmlChildren.
-    //
-    //             3│ box = \class, htmlChildren ->
-    //
-    //             If you don't need htmlChildren, then you can just remove it. However, if you really do need htmlChildren as an argument of box, prefix it with an underscore, like this: "_htmlChildren". Adding an underscore at the start of a variable name is a way of saying that the variable is not used."#
-    //         ),
-    //     );
-    // }
+    #[test]
+    fn unused_arg_and_unused_def() {
+        report_problem_as(
+            indoc!(
+                r#"
+                 y = 9
+    
+                 box = \class, htmlChildren ->
+                     div [ class ] []
+    
+                 div = \_, _ -> 4
+    
+                 box "wizard" []
+             "#
+            ),
+            indoc!(
+                r#"
+                 ── UNUSED ARGUMENT ─────────────────────────────────────────────────────────────
+
+                 `box` doesn't use `htmlChildren`.
+    
+                 3│  box = \class, htmlChildren ->
+                                   ^^^^^^^^^^^^
+
+                 If you don't need `htmlChildren`, then you can just remove it. However,
+                 if you really do need `htmlChildren` as an argument of `box`, prefix it
+                 with an underscore, like this: "_`htmlChildren`". Adding an underscore
+                 at the start of a variable name is a way of saying that the variable
+                 is not used.
+
+                 ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                 `y` is not used anywhere in your code.
+
+                 1│  y = 9
+                     ^
+
+                 If you didn't intend on using `y` then remove it so future readers of
+                 your code don't wonder why it is there.
+                "#
+            ),
+        );
+    }
 
     // #[test]
     // fn report_unused_import() {
     //     report_problem_as(
-    //         indoc!(r#"
-    //             interface Report
-    //                 exposes [
-    //                     plainText,
-    //                     emText
-    //                 ]
-    //                 imports [
-    //                     Symbol.{ Interns }
-    //                 ]
-    //
-    //             plainText = \str -> PlainText str
-    //
-    //             emText = \str -> EmText str
-    //         "#),
     //         indoc!(
     //             r#"
-    //             Nothing from Symbol is used in this module.
-    //
-    //             6│ imports [
-    //             7│     Symbol.{ Interns }
-    //                     ^^^^^^
-    //             8│ ]
-    //
-    //             Since Symbol isn't used, you don't need to import it."#
+    //              interface Report
+    //                  exposes [
+    //                      plainText,
+    //                      emText
+    //                  ]
+    //                  imports [
+    //                      Symbol.{ Interns }
+    //                  ]
+
+    //              plainText = \str -> PlainText str
+
+    //              emText = \str -> EmText str
+    //          "#
+    //         ),
+    //         indoc!(
+    //             r#"
+    //              Nothing from Symbol is used in this module.
+
+    //              6│ imports [
+    //              7│     Symbol.{ Interns }
+    //                      ^^^^^^
+    //              8│ ]
+
+    //              Since Symbol isn't used, you don't need to import it."#
     //         ),
     //     );
     // }
@@ -708,7 +732,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                <cyan>── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────<reset>
+                <cyan>── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────<reset>
 
                 I cannot find a `theAdmin` value
 
@@ -726,51 +750,51 @@ mod test_reporting {
         );
     }
 
-    //    #[test]
-    //    fn shadowing_type_alias() {
-    //        report_problem_as(
-    //            indoc!(
-    //                r#"
-    //                foo : I64 as I64
-    //                foo = 42
-    //
-    //                foo
-    //                "#
-    //            ),
-    //            indoc!(
-    //                r#"
-    //                You cannot mix (!=) and (==) without parentheses
-    //
-    //                3│     if selectedId != thisId == adminsId then
-    //                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    //
-    //                "#
-    //            ),
-    //        )
-    //    }
+    // #[test]
+    // fn shadowing_type_alias() {
+    //     report_problem_as(
+    //         indoc!(
+    //             r#"
+    //                 foo : I64 as I64
+    //                 foo = 42
 
-    //    #[test]
-    //    fn invalid_as_type_alias() {
-    //        report_problem_as(
-    //            indoc!(
-    //                r#"
-    //                foo : I64 as a
-    //                foo = 42
-    //
-    //                foo
-    //                "#
-    //            ),
-    //            indoc!(
-    //                r#"
-    //                You cannot mix (!=) and (==) without parentheses
-    //
-    //                3│     if selectedId != thisId == adminsId then
-    //                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    //
-    //                "#
-    //            ),
-    //        )
-    //    }
+    //                 foo
+    //                 "#
+    //         ),
+    //         indoc!(
+    //             r#"
+    //                 You cannot mix (!=) and (==) without parentheses
+
+    //                 3│     if selectedId != thisId == adminsId then
+    //                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    //                 "#
+    //         ),
+    //     )
+    // }
+
+    // #[test]
+    // fn invalid_as_type_alias() {
+    //     report_problem_as(
+    //         indoc!(
+    //             r#"
+    //                 foo : I64 as a
+    //                 foo = 42
+
+    //                 foo
+    //                 "#
+    //         ),
+    //         indoc!(
+    //             r#"
+    //                 You cannot mix (!=) and (==) without parentheses
+
+    //                 3│     if selectedId != thisId == adminsId then
+    //                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    //                 "#
+    //         ),
+    //     )
+    // }
 
     #[test]
     fn if_condition_not_bool() {
@@ -1460,7 +1484,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
 
                 I cannot find a `foo` value
 
@@ -1916,7 +1940,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
 
                 I cannot find a `ok` value
 
@@ -1951,7 +1975,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
 
                 `ok` is not used anywhere in your code.
 
@@ -1997,7 +2021,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── CIRCULAR DEFINITION ─────────────────────────────────────────────────────────
 
                 The `f` value is defined directly in terms of itself, causing an
                 infinite loop.
@@ -2021,7 +2045,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── CIRCULAR DEFINITION ─────────────────────────────────────────────────────────
 
                 The `foo` definition is causing a very tricky infinite loop:
 
@@ -2788,7 +2812,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── DUPLICATE FIELD NAME ────────────────────────────────────────────────────────
 
                 This record defines the `.x` field twice!
 
@@ -2816,7 +2840,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── DUPLICATE FIELD NAME ────────────────────────────────────────────────────────
 
                 This record defines the `.x` field twice!
 
@@ -2848,7 +2872,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── DUPLICATE FIELD NAME ────────────────────────────────────────────────────────
 
                 This record defines the `.x` field twice!
 
@@ -2887,7 +2911,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── DUPLICATE FIELD NAME ────────────────────────────────────────────────────────
 
                 This record defines the `.x` field twice!
 
@@ -2924,7 +2948,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── DUPLICATE FIELD NAME ────────────────────────────────────────────────────────
 
                 This record type defines the `.foo` field twice!
 
@@ -2956,7 +2980,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── DUPLICATE TAG NAME ──────────────────────────────────────────────────────────
 
                 This tag union type defines the `Foo` tag twice!
 
@@ -2989,7 +3013,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── NAMING PROBLEM ──────────────────────────────────────────────────────────────
 
                 This annotation does not match the definition immediately following
                 it:
@@ -3040,7 +3064,7 @@ mod test_reporting {
 
                 Only type variables like `a` or `value` can occur in this position.
 
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
 
                 `MyAlias` is not used anywhere in your code.
 
@@ -3176,17 +3200,17 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── UNUSED TYPE ALIAS PARAMETER ─────────────────────────────────────────────────
 
-                The `a` type variable is not used in the `Foo` alias definition:
+                The `a` type parameter is not used in the `Foo` alias definition:
 
                 1│  Foo a : [ Foo ]
                         ^
 
-                Roc does not allow unused type parameters!
+                Roc does not allow unused type alias parameters!
 
                 Tip: If you want an unused type parameter (a so-called "phantom
-                type"), read the guide section on phantom data.
+                type"), read the guide section on phantom values.
                 "#
             ),
         )
@@ -3603,7 +3627,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── MODULE NOT IMPORTED ─────────────────────────────────────────────────────────
 
                 The `Foo` module is not imported:
 
@@ -4034,7 +4058,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-            ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+            ── UNUSED ARGUMENT ─────────────────────────────────────────────────────────────
 
             `f` doesn't use `foo`.
 
@@ -5445,7 +5469,7 @@ mod test_reporting {
             r#""abc\u(110000)def""#,
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── INVALID UNICODE ─────────────────────────────────────────────────────────────
 
                 This unicode code point is invalid:
 
@@ -5569,7 +5593,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── NOT EXPOSED ─────────────────────────────────────────────────────────────────
 
                 The Num module does not expose a if value:
 
@@ -5709,7 +5733,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── NAMING PROBLEM ──────────────────────────────────────────────────────────────
 
                 I am trying to parse an identifier here:
 
@@ -5766,7 +5790,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
 
                 I cannot find a `bar` value
 

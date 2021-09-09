@@ -27,6 +27,10 @@ pub fn link(
 ) -> io::Result<(Child, PathBuf)> {
     match target {
         Triple {
+            architecture: Architecture::Wasm32,
+            ..
+        } => link_wasm32(target, output_path, input_paths, link_type),
+        Triple {
             operating_system: OperatingSystem::Linux,
             ..
         } => link_linux(target, output_path, input_paths, link_type),
@@ -56,12 +60,13 @@ fn find_zig_str_path() -> PathBuf {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn build_zig_host(
+pub fn build_zig_host_native(
     env_path: &str,
     env_home: &str,
     emit_bin: &str,
     zig_host_src: &str,
     zig_str_path: &str,
+    target: &str,
 ) -> Output {
     Command::new("zig")
         .env_clear()
@@ -80,18 +85,22 @@ pub fn build_zig_host(
             // include libc
             "--library",
             "c",
+            // cross-compile?
+            "-target",
+            target,
         ])
         .output()
         .unwrap()
 }
 
 #[cfg(target_os = "macos")]
-pub fn build_zig_host(
+pub fn build_zig_host_native(
     env_path: &str,
     env_home: &str,
     emit_bin: &str,
     zig_host_src: &str,
     zig_str_path: &str,
+    _target: &str,
 ) -> Output {
     use serde_json::Value;
 
@@ -158,21 +167,62 @@ pub fn build_zig_host(
         .unwrap()
 }
 
-pub fn rebuild_host(host_input_path: &Path) {
+pub fn build_zig_host_wasm32(
+    env_path: &str,
+    env_home: &str,
+    emit_bin: &str,
+    zig_host_src: &str,
+    zig_str_path: &str,
+) -> Output {
+    // NOTE currently just to get compiler warnings if the host code is invalid.
+    // the produced artifact is not used
+    //
+    // NOTE we're emitting LLVM IR here (again, it is not actually used)
+    //
+    // we'd like to compile with `-target wasm32-wasi` but that is blocked on
+    //
+    // https://github.com/ziglang/zig/issues/9414
+    Command::new("zig")
+        .env_clear()
+        .env("PATH", env_path)
+        .env("HOME", env_home)
+        .args(&[
+            "build-obj",
+            zig_host_src,
+            emit_bin,
+            "--pkg-begin",
+            "str",
+            zig_str_path,
+            "--pkg-end",
+            // include the zig runtime
+            // "-fcompiler-rt",
+            // include libc
+            "--library",
+            "c",
+            "-target",
+            "i386-linux-musl",
+            // "wasm32-wasi",
+            // "-femit-llvm-ir=/home/folkertdev/roc/roc/examples/benchmarks/platform/host.ll",
+        ])
+        .output()
+        .unwrap()
+}
+
+pub fn rebuild_host(target: &Triple, host_input_path: &Path) {
     let c_host_src = host_input_path.with_file_name("host.c");
     let c_host_dest = host_input_path.with_file_name("c_host.o");
     let zig_host_src = host_input_path.with_file_name("host.zig");
     let rust_host_src = host_input_path.with_file_name("host.rs");
     let rust_host_dest = host_input_path.with_file_name("rust_host.o");
     let cargo_host_src = host_input_path.with_file_name("Cargo.toml");
-    let host_dest = host_input_path.with_file_name("host.o");
+    let host_dest_native = host_input_path.with_file_name("host.o");
+    let host_dest_wasm = host_input_path.with_file_name("host.bc");
 
     let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
     let env_home = env::var("HOME").unwrap_or_else(|_| "".to_string());
 
     if zig_host_src.exists() {
         // Compile host.zig
-        let emit_bin = format!("-femit-bin={}", host_dest.to_str().unwrap());
 
         let zig_str_path = find_zig_str_path();
 
@@ -182,17 +232,43 @@ pub fn rebuild_host(host_input_path: &Path) {
             &zig_str_path
         );
 
-        validate_output(
-            "host.zig",
-            "zig",
-            build_zig_host(
-                &env_path,
-                &env_home,
-                &emit_bin,
-                zig_host_src.to_str().unwrap(),
-                zig_str_path.to_str().unwrap(),
-            ),
-        );
+        let output = match target.architecture {
+            Architecture::Wasm32 => {
+                let emit_bin = format!("-femit-llvm-ir={}", host_dest_wasm.to_str().unwrap());
+                build_zig_host_wasm32(
+                    &env_path,
+                    &env_home,
+                    &emit_bin,
+                    zig_host_src.to_str().unwrap(),
+                    zig_str_path.to_str().unwrap(),
+                )
+            }
+            Architecture::X86_64 => {
+                let emit_bin = format!("-femit-bin={}", host_dest_native.to_str().unwrap());
+                build_zig_host_native(
+                    &env_path,
+                    &env_home,
+                    &emit_bin,
+                    zig_host_src.to_str().unwrap(),
+                    zig_str_path.to_str().unwrap(),
+                    "native",
+                )
+            }
+            Architecture::X86_32(_) => {
+                let emit_bin = format!("-femit-bin={}", host_dest_native.to_str().unwrap());
+                build_zig_host_native(
+                    &env_path,
+                    &env_home,
+                    &emit_bin,
+                    zig_host_src.to_str().unwrap(),
+                    zig_str_path.to_str().unwrap(),
+                    "i386-linux-musl",
+                )
+            }
+            _ => panic!("Unsupported architecture {:?}", target.architecture),
+        };
+
+        validate_output("host.zig", "zig", output)
     } else {
         // Compile host.c
         let output = Command::new("clang")
@@ -233,7 +309,7 @@ pub fn rebuild_host(host_input_path: &Path) {
                 c_host_dest.to_str().unwrap(),
                 "-lhost",
                 "-o",
-                host_dest.to_str().unwrap(),
+                host_dest_native.to_str().unwrap(),
             ])
             .output()
             .unwrap();
@@ -260,7 +336,7 @@ pub fn rebuild_host(host_input_path: &Path) {
                 c_host_dest.to_str().unwrap(),
                 rust_host_dest.to_str().unwrap(),
                 "-o",
-                host_dest.to_str().unwrap(),
+                host_dest_native.to_str().unwrap(),
             ])
             .output()
             .unwrap();
@@ -283,7 +359,7 @@ pub fn rebuild_host(host_input_path: &Path) {
         // Clean up c_host.o
         let output = Command::new("mv")
             .env_clear()
-            .args(&[c_host_dest, host_dest])
+            .args(&[c_host_dest, host_dest_native])
             .output()
             .unwrap();
 
@@ -321,6 +397,32 @@ fn link_linux(
     link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
     let architecture = format!("{}-linux-gnu", target.architecture);
+
+    //    Command::new("cp")
+    //        .args(&[input_paths[0], "/home/folkertdev/roc/wasm/host.o"])
+    //        .output()
+    //        .unwrap();
+    //
+    //    Command::new("cp")
+    //        .args(&[input_paths[1], "/home/folkertdev/roc/wasm/app.o"])
+    //        .output()
+    //        .unwrap();
+
+    if let Architecture::X86_32(_) = target.architecture {
+        return Ok((
+            Command::new("zig")
+                .args(&["build-exe"])
+                .args(input_paths)
+                .args(&[
+                    "-target",
+                    "i386-linux-musl",
+                    "-lc",
+                    &format!("-femit-bin={}", output_path.to_str().unwrap()),
+                ])
+                .spawn()?,
+            output_path,
+        ));
+    }
 
     let libcrt_path = library_path(["/usr", "lib", &architecture])
         .or_else(|| library_path(["/usr", "lib"]))
@@ -494,6 +596,39 @@ fn link_macos(
             .spawn()?,
         output_path,
     ))
+}
+
+fn link_wasm32(
+    _target: &Triple,
+    output_path: PathBuf,
+    input_paths: &[&str],
+    _link_type: LinkType,
+) -> io::Result<(Child, PathBuf)> {
+    let zig_str_path = find_zig_str_path();
+
+    let child = Command::new("zig9")
+        // .env_clear()
+        // .env("PATH", &env_path)
+        .args(&["build-exe"])
+        .args(input_paths)
+        .args([
+            &format!("-femit-bin={}", output_path.to_str().unwrap()),
+            // include libc
+            "-lc",
+            "-target",
+            "wasm32-wasi-musl",
+            "--pkg-begin",
+            "str",
+            zig_str_path.to_str().unwrap(),
+            "--pkg-end",
+            "--strip",
+            // "-O", "ReleaseSmall",
+            // useful for debugging
+            // "-femit-llvm-ir=/home/folkertdev/roc/roc/examples/benchmarks/platform/host.ll",
+        ])
+        .spawn()?;
+
+    Ok((child, output_path))
 }
 
 #[cfg(feature = "llvm")]
