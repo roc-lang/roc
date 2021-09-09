@@ -327,7 +327,7 @@ mod cli_run {
 
                     // TODO fix QuicksortApp and then remove this!
                     match benchmark.filename {
-                        "QuicksortApp.roc" | "TestBase64.roc" => {
+                        "QuicksortApp.roc"  => {
                             eprintln!("WARNING: skipping testing benchmark {} because the test is broken right now!", benchmark.filename);
                             return;
                         }
@@ -607,6 +607,14 @@ mod cli_run {
 fn run_with_wasmer(wasm_path: &std::path::Path, stdin: &[&str]) -> String {
     use std::io::Write;
     use wasmer::{Instance, Module, Store};
+
+    //    std::process::Command::new("cp")
+    //        .args(&[
+    //            wasm_path.to_str().unwrap(),
+    //            "/home/folkertdev/roc/wasm/nqueens.wasm",
+    //        ])
+    //        .output()
+    //        .unwrap();
 
     let store = Store::default();
     let module = Module::from_file(&store, &wasm_path).unwrap();
