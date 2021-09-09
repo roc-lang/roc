@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub const NOTHING_OPENED: &str =
     "Execute `cargo run edit` from the root folder of the repo to try the editor.";
 

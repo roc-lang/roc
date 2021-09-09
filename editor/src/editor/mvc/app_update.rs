@@ -51,6 +51,7 @@ pub fn pass_keydown_to_focused(
 pub enum InputOutcome {
     Accepted,
     Ignored,
+    SilentIgnored,
 }
 
 pub fn handle_new_char(received_char: &char, app_model: &mut AppModel) -> EdResult<InputOutcome> {

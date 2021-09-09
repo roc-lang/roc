@@ -21,14 +21,16 @@ use winit::dpi::PhysicalSize;
 #[derive(Debug)]
 pub struct RenderedWgpu {
     pub text_sections: Vec<glyph_brush::OwnedSection>,
-    pub rects: Vec<Rect>,
+    pub rects_behind: Vec<Rect>, // displayed behind text
+    pub rects_top: Vec<Rect>,    // displayed on top of text
 }
 
 impl RenderedWgpu {
     pub fn new() -> Self {
         Self {
             text_sections: Vec::new(),
-            rects: Vec::new(),
+            rects_behind: Vec::new(),
+            rects_top: Vec::new(),
         }
     }
 
@@ -36,17 +38,22 @@ impl RenderedWgpu {
         self.text_sections.push(new_text_section);
     }
 
-    pub fn add_rect(&mut self, new_rect: Rect) {
-        self.rects.push(new_rect);
+    pub fn add_rect_behind(&mut self, new_rect: Rect) {
+        self.rects_behind.push(new_rect);
     }
 
-    pub fn add_rects(&mut self, new_rects: Vec<Rect>) {
-        self.rects.extend(new_rects);
+    pub fn add_rects_behind(&mut self, new_rects: Vec<Rect>) {
+        self.rects_behind.extend(new_rects);
+    }
+
+    pub fn add_rect_top(&mut self, new_rect: Rect) {
+        self.rects_top.push(new_rect);
     }
 
     pub fn extend(&mut self, rendered_wgpu: RenderedWgpu) {
         self.text_sections.extend(rendered_wgpu.text_sections);
-        self.rects.extend(rendered_wgpu.rects);
+        self.rects_behind.extend(rendered_wgpu.rects_behind);
+        self.rects_top.extend(rendered_wgpu.rects_top);
     }
 }
 
@@ -142,7 +149,7 @@ pub fn build_selection_graphics(
             let width =
                 ((end_pos.column as f32) * char_width) - ((start_pos.column as f32) * char_width);
 
-            all_rendered.add_rect(make_selection_rect(
+            all_rendered.add_rect_behind(make_selection_rect(
                 sel_rect_x,
                 sel_rect_y,
                 width,
@@ -161,12 +168,12 @@ pub fn build_selection_graphics(
                 let (tip_rect, tip_text) =
                     tooltip.render_tooltip(&glyph_dim_rect, &config.ed_theme.ui_theme);
 
-                all_rendered.add_rect(tip_rect);
+                all_rendered.add_rect_top(tip_rect);
                 all_rendered.add_text(tip_text);
             }
         }
 
-        all_rendered.add_rect(make_caret_rect(
+        all_rendered.add_rect_top(make_caret_rect(
             top_left_x,
             top_left_y,
             &glyph_dim_rect,

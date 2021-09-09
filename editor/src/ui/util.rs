@@ -53,9 +53,7 @@ pub fn path_to_string(path: &Path) -> String {
 }
 
 pub fn write_to_file(path: &Path, content: &str) -> UIResult<()> {
-
     std::fs::write(path, content).with_context(|| FileWriteFailed {
-        path_str: path_to_string(path)
+        path_str: path_to_string(path),
     })
-
 }

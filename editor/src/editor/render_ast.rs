@@ -52,7 +52,7 @@ pub fn build_code_graphics<'a>(
         layout,
     );
 
-    rendered_wgpu.add_rects(all_rects);
+    rendered_wgpu.add_rects_behind(all_rects); // currently only rects for Blank
     rendered_wgpu.add_text(section);
 
     Ok(rendered_wgpu)

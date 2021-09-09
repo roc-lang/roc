@@ -1,5 +1,8 @@
 #![allow(dead_code)]
 
+use std::process::Command;
+use std::process::Stdio;
+
 use crate::editor::code_lines::CodeLines;
 use crate::editor::ed_error::from_ui_res;
 use crate::editor::ed_error::EdResult;
@@ -46,6 +49,7 @@ use crate::ui::text::selection::Selection;
 use crate::ui::text::text_pos::TextPos;
 use crate::ui::text::{lines, lines::Lines, lines::SelectableLines};
 use crate::ui::ui_error::UIResult;
+use crate::ui::util::path_to_string;
 use crate::ui::util::write_to_file;
 use crate::window::keyboard_input::Modifiers;
 use bumpalo::Bump;
@@ -375,10 +379,14 @@ impl<'a> EdModel<'a> {
         self.set_caret(expr_start_pos);
 
         let type_str = match ast_node_id {
-            ASTNodeId::ADefId(_) => PoolStr::new(
-                "TODO display type of Expr2 contained in Def2 if there is one",
-                self.module.env.pool,
-            ),
+            ASTNodeId::ADefId(def_id) => {
+                if let Some(expr_id) = self.extract_expr_from_def(def_id) {
+                    self.expr2_to_type(expr_id)
+                } else {
+                    PoolStr::new(" * ", self.module.env.pool)
+                }
+            }
+
             ASTNodeId::AExprId(expr_id) => self.expr2_to_type(expr_id),
         };
 
@@ -431,6 +439,18 @@ impl<'a> EdModel<'a> {
         }
 
         Ok(())
+    }
+
+    fn extract_expr_from_def(&self, def_id: DefId) -> Option<ExprId> {
+        let def = self.module.env.pool.get(def_id);
+
+        match def {
+            Def2::ValueDef {
+                identifier_id: _,
+                expr_id,
+            } => Some(*expr_id),
+            Def2::Blank => None,
+        }
     }
 
     fn expr2_to_type(&mut self, expr2_id: ExprId) -> PoolStr {
@@ -540,6 +560,13 @@ impl<'a> EdModel<'a> {
                     Ok(())
                 }
             }
+            R => {
+                if modifiers.cmd_or_ctrl() {
+                    from_ui_res(self.run_file())
+                } else {
+                    Ok(())
+                }
+            }
             Home => from_ui_res(self.move_caret_home(modifiers)),
             End => from_ui_res(self.move_caret_end(modifiers)),
             F11 => {
@@ -604,13 +631,28 @@ impl<'a> EdModel<'a> {
         Ok(())
     }
 
-
     fn save_file(&mut self) -> UIResult<()> {
         let all_lines_str = self.code_lines.all_lines_as_string();
 
         write_to_file(self.file_path, &all_lines_str)?;
 
         println!("save successfull!");
+
+        Ok(())
+    }
+
+    fn run_file(&mut self) -> UIResult<()> {
+        println!("Executing file...");
+
+        let roc_file_str = path_to_string(self.file_path);
+
+        Command::new("cargo")
+            .arg("run")
+            .arg(roc_file_str)
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .output()
+            .expect("Failed to run file");
 
         Ok(())
     }
@@ -1106,13 +1148,17 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
     let input_outcome = match received_char {
             '\u{1}' // Ctrl + A
             | '\u{3}' // Ctrl + C
+            | '\u{12}' // Ctrl + R
             | '\u{16}' // Ctrl + V
             | '\u{18}' // Ctrl + X
-            | '\u{e000}'..='\u{f8ff}' // http://www.unicode.org/faq/private_use.html
+            => {
+                // these shortcuts are handled in ed_handle_key_down
+                InputOutcome::SilentIgnored
+            }
+            '\u{e000}'..='\u{f8ff}' // http://www.unicode.org/faq/private_use.html
             | '\u{f0000}'..='\u{ffffd}' // ^
             | '\u{100000}'..='\u{10fffd}' // ^
             => {
-                // chars that can be ignored
                 InputOutcome::Ignored
             }
             '\u{8}' | '\u{7f}' => {

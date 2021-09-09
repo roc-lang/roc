@@ -23,7 +23,8 @@ use crate::ui::text::caret_w_select::CaretPos;
 use crate::ui::util::path_to_string;
 use bumpalo::Bump;
 use cgmath::Vector2;
-use fs_extra::dir::{CopyOptions, DirEntryAttr, DirEntryValue, copy, ls};
+use fs_extra::dir::{copy, ls, CopyOptions, DirEntryAttr, DirEntryValue};
+use fs_extra::remove_items;
 use pipelines::RectResources;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
@@ -35,7 +36,7 @@ use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::Write;
 use std::{error::Error, io, path::Path};
-use wgpu::{CommandEncoder, RenderPass, TextureView};
+use wgpu::{CommandEncoder, LoadOp, RenderPass, TextureView};
 use wgpu_glyph::GlyphBrush;
 use winit::{
     dpi::PhysicalSize,
@@ -54,7 +55,6 @@ use winit::{
 /// The editor is actually launched from the CLI if you pass it zero arguments,
 /// or if you provide it 1 or more files or directories to open on launch.
 pub fn launch(project_dir_path_opt: Option<&Path>) -> io::Result<()> {
-
     run_event_loop(project_dir_path_opt).expect("Error running event loop");
 
     Ok(())
@@ -127,12 +127,23 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
     let env_arena = Bump::new();
     let code_arena = Bump::new();
 
-    let (file_path_str, code_str) = read_main_roc_file(project_dir_path_opt);
+    let (file_path_str, code_str, project_dir_path_str) = read_main_roc_file(project_dir_path_opt);
     println!("Loading file {}...", file_path_str);
 
     let file_path = Path::new(&file_path_str);
 
-    let loaded_module = load_module(&file_path);
+    // temp fix to prevent load_and_typecheck issue
+    del_roc_platform(Path::new(&project_dir_path_str));
+    let loaded_module = load_module(file_path);
+    let project_platform_path_str =
+        vec![project_dir_path_str.clone(), "/platform".to_owned()].join("");
+    let project_platform_path = Path::new(&project_platform_path_str);
+    let orig_platform_path = Path::new("./examples/hello-world/platform");
+    copy_roc_platform_if_not_exists(
+        orig_platform_path,
+        project_platform_path,
+        Path::new(&project_dir_path_str),
+    );
 
     let mut var_store = VarStore::default();
     let dep_idents = IdentIds::exposed_builtins(8);
@@ -293,23 +304,32 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                     }
 
                     if let Some(ref rendered_wgpu) = rendered_wgpu_opt {
+                        let mut all_rects: Vec<Rect> = Vec::new();
+
+                        all_rects.extend(rendered_wgpu.rects_behind.iter());
+                        all_rects.extend(rendered_wgpu.rects_top.iter());
+
+                        draw_all_rects(
+                            &all_rects,
+                            &mut encoder,
+                            &frame.view,
+                            &gpu_device,
+                            &rect_resources,
+                            wgpu::LoadOp::Clear(to_wgpu_color(ed_theme.background)),
+                        );
+
                         for text_section in &rendered_wgpu.text_sections {
                             let borrowed_text = text_section.to_borrowed();
 
                             glyph_brush.queue(borrowed_text);
                         }
-
-                        draw_all_rects(
-                            &rendered_wgpu.rects,
-                            &mut encoder,
-                            &frame.view,
-                            &gpu_device,
-                            &rect_resources,
-                            &ed_theme,
-                        )
                     }
                 } else {
-                    begin_render_pass(&mut encoder, &frame.view, &ed_theme);
+                    begin_render_pass(
+                        &mut encoder,
+                        &frame.view,
+                        wgpu::LoadOp::Clear(to_wgpu_color(ed_theme.background)),
+                    );
 
                     queue_no_file_text(
                         &size,
@@ -359,11 +379,11 @@ fn draw_all_rects(
     texture_view: &TextureView,
     gpu_device: &wgpu::Device,
     rect_resources: &RectResources,
-    ed_theme: &EdTheme,
+    load_op: LoadOp<wgpu::Color>,
 ) {
     let rect_buffers = create_rect_buffers(gpu_device, encoder, all_rects);
 
-    let mut render_pass = begin_render_pass(encoder, texture_view, ed_theme);
+    let mut render_pass = begin_render_pass(encoder, texture_view, load_op);
 
     render_pass.set_pipeline(&rect_resources.pipeline);
     render_pass.set_bind_group(0, &rect_resources.ortho.bind_group, &[]);
@@ -378,16 +398,14 @@ fn draw_all_rects(
 fn begin_render_pass<'a>(
     encoder: &'a mut CommandEncoder,
     texture_view: &'a TextureView,
-    ed_theme: &EdTheme,
+    load_op: LoadOp<wgpu::Color>,
 ) -> RenderPass<'a> {
-    let bg_color = to_wgpu_color(ed_theme.background);
-
     encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         color_attachments: &[wgpu::RenderPassColorAttachment {
             view: texture_view,
             resolve_target: None,
             ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(bg_color),
+                load: load_op,
                 store: true,
             },
         }],
@@ -398,9 +416,8 @@ fn begin_render_pass<'a>(
 
 type PathStr = String;
 
-fn read_main_roc_file(project_dir_path_opt: Option<&Path>) -> (PathStr, String) {
+fn read_main_roc_file(project_dir_path_opt: Option<&Path>) -> (PathStr, String, PathStr) {
     if let Some(project_dir_path) = project_dir_path_opt {
-
         let mut ls_config = HashSet::new();
         ls_config.insert(DirEntryAttr::FullName);
 
@@ -408,68 +425,70 @@ fn read_main_roc_file(project_dir_path_opt: Option<&Path>) -> (PathStr, String) 
             .unwrap_or_else(|err| panic!("Failed to list items in project directory: {:?}", err))
             .items;
 
-        let file_names_2d: Vec<Vec<&String>> =
-            dir_items
-                .iter()
-                .map(|info_hash_map| info_hash_map.values().map(
-                    |dir_entry_value|
-                    if let DirEntryValue::String(file_name) = dir_entry_value {
-                        Some(file_name)
-                    } else {
-                        None
-                    }
-                )
-                .filter_map(|x| x) // remove None
-                .collect())
-                .collect();
+        let file_names = dir_items
+            .iter()
+            .map(|info_hash_map| {
+                info_hash_map
+                    .values()
+                    .map(|dir_entry_value| {
+                        if let DirEntryValue::String(file_name) = dir_entry_value {
+                            Some(file_name)
+                        } else {
+                            None
+                        }
+                    })
+                    .flatten() // remove None
+                    .collect::<Vec<&String>>()
+            })
+            .flatten();
 
-        let roc_file_names: Vec<&String> =
-            file_names_2d
-            .into_iter()
-            .flatten()
+        let roc_file_names: Vec<&String> = file_names
             .filter(|file_name| file_name.contains(".roc"))
             .collect();
 
         let project_dir_path_str = path_to_string(project_dir_path);
 
         if let Some(&roc_file_name) = roc_file_names.first() {
-            let full_roc_file_path_str = vec![project_dir_path_str.clone(), "/".to_owned(), roc_file_name.clone()].join("");
+            let full_roc_file_path_str = vec![
+                project_dir_path_str.clone(),
+                "/".to_owned(),
+                roc_file_name.clone(),
+            ]
+            .join("");
             let file_as_str = std::fs::read_to_string(&Path::new(&full_roc_file_path_str))
                 .unwrap_or_else(|err| panic!("In the provided project {:?}, I found the roc file {}, but I failed to read it: {}", &project_dir_path_str, &full_roc_file_path_str, err));
 
-            (full_roc_file_path_str, file_as_str)
+            (full_roc_file_path_str, file_as_str, project_dir_path_str)
         } else {
             init_new_roc_project(&project_dir_path_str)
         }
-
     } else {
         init_new_roc_project("new-roc-project")
     }
 }
 
 // returns path and content of app file
-fn init_new_roc_project(project_dir_path_str: &str) -> (PathStr, String) {
-
-    let orig_platform_path = Path::new("./examples/hello-world/platform");
+fn init_new_roc_project(project_dir_path_str: &str) -> (PathStr, String, PathStr) {
+    //let orig_platform_path = Path::new("./examples/hello-world/platform");
 
     let project_dir_path = Path::new(project_dir_path_str);
 
     let roc_file_path_str = vec![project_dir_path_str, "/UntitledApp.roc"].join("");
     let roc_file_path = Path::new("./new-roc-project/UntitledApp.roc");
 
-    let project_platform_path_str = vec![project_dir_path_str, "/platform"].join("");
-    let project_platform_path = Path::new(&project_platform_path_str);
+    //let project_platform_path_str = vec![project_dir_path_str, "/platform"].join("");
+    //let project_platform_path = Path::new(&project_platform_path_str);
 
-    if !project_dir_path.exists(){
+    if !project_dir_path.exists() {
         fs::create_dir(project_dir_path).expect("Failed to create dir for roc project.");
     }
 
-    copy_roc_platform_if_not_exists(orig_platform_path, project_platform_path, project_dir_path);
+    // TODO reenable once we solve 'assertion failed: state.dependencies.solved_all()', compiler/load/src/file.rs:1954:17
+    //copy_roc_platform_if_not_exists(orig_platform_path, project_platform_path, project_dir_path);
 
     let code_str = create_roc_file_if_not_exists(project_dir_path, roc_file_path);
-    
-    (roc_file_path_str, code_str)
 
+    (roc_file_path_str, code_str, project_dir_path_str.to_owned())
 }
 
 // returns contents of file
@@ -490,20 +509,20 @@ fn create_roc_file_if_not_exists(project_dir_path: &Path, roc_file_path: &Path) 
 
         HELLO_WORLD.to_string()
     } else {
-        let code_str = std::fs::read_to_string(roc_file_path).unwrap_or_else(|err| {
+        std::fs::read_to_string(roc_file_path).unwrap_or_else(|err| {
             panic!(
                 "I detected an existing {:?} inside {:?}, but I failed to read from it: {}",
-                roc_file_path,
-                project_dir_path,
-                err
+                roc_file_path, project_dir_path, err
             )
-        });
-
-        code_str
+        })
     }
 }
 
-fn copy_roc_platform_if_not_exists(orig_platform_path: &Path, project_platform_path: &Path, project_dir_path: &Path) {
+fn copy_roc_platform_if_not_exists(
+    orig_platform_path: &Path,
+    project_platform_path: &Path,
+    project_dir_path: &Path,
+) {
     if !orig_platform_path.exists() && !project_platform_path.exists() {
         panic!(
             r#"No roc file path was passed to the editor, I wanted to create a new roc project but I could not find the platform at {:?}.
@@ -519,6 +538,15 @@ fn copy_roc_platform_if_not_exists(orig_platform_path: &Path, project_platform_p
             err
         )
         });
+    }
+}
+
+// temporary fix for load_and_typecheck issue, deletes the platform
+fn del_roc_platform(project_dir_path: &Path) {
+    let platform_path = project_dir_path.join("platform");
+
+    if platform_path.exists() {
+        remove_items(&[platform_path]).expect("Failed to delete platform.");
     }
 }
 
