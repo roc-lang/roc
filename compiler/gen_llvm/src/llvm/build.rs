@@ -2189,8 +2189,15 @@ fn list_literal<'a, 'ctx, 'env>(
         let global = {
             let mut global_elements = Vec::with_capacity_in(list_length, env.arena);
 
-            // insert NULL bytes for the refcount
-            // these elements are (dropped again if the list contains non-constants)
+            // Add zero bytes that represent the refcount
+            //
+            // - if all elements are const, then we store the whole list as a constant.
+            //      It then needs a refcount before the first element.
+            // - but if the list is not all constants, then we will just copy the constant values,
+            //      and we do not need that refcount at the start
+            //
+            // In the latter case, we won't store the zeros in the globals
+            // (we slice them off again below)
             for _ in 0..zero_elements {
                 global_elements.push(element_type.const_zero());
             }
