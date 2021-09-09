@@ -340,7 +340,7 @@ fn constrain_let_function() {
             x
             "#
         ),
-        "*, * -> [ Pair * * ]*",
+        "a, b -> [ Pair a b ]*",
     )
 }
 
