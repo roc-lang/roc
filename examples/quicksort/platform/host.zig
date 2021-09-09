@@ -72,7 +72,7 @@ const NUM_NUMS = 100;
 
 const RocList = extern struct { elements: [*]i64, length: usize };
 
-const RocCallResult = extern struct { flag: usize, content: RocList };
+const RocCallResult = extern struct { flag: u64, content: RocList };
 
 const Unit = extern struct {};
 
