@@ -606,26 +606,27 @@ fn link_wasm32(
 ) -> io::Result<(Child, PathBuf)> {
     let zig_str_path = find_zig_str_path();
 
-    let child =
-        Command::new("/home/folkertdev/Downloads/zig-linux-x86_64-0.9.0-dev.848+d5ef5da59/zig")
-            // .env_clear()
-            // .env("PATH", &env_path)
-            .args(&["build-exe"])
-            .args(input_paths)
-            .args([
-                &format!("-femit-bin={}", output_path.to_str().unwrap()),
-                // include libc
-                "-lc",
-                "-target",
-                "wasm32-wasi",
-                "--pkg-begin",
-                "str",
-                zig_str_path.to_str().unwrap(),
-                "--pkg-end",
-                // useful for debugging
-                // "-femit-llvm-ir=/home/folkertdev/roc/roc/examples/benchmarks/platform/host.ll",
-            ])
-            .spawn()?;
+    let child = Command::new("zig9")
+        // .env_clear()
+        // .env("PATH", &env_path)
+        .args(&["build-exe"])
+        .args(input_paths)
+        .args([
+            &format!("-femit-bin={}", output_path.to_str().unwrap()),
+            // include libc
+            "-lc",
+            "-target",
+            "wasm32-wasi-musl",
+            "--pkg-begin",
+            "str",
+            zig_str_path.to_str().unwrap(),
+            "--pkg-end",
+            "--strip",
+            // "-O", "ReleaseSmall",
+            // useful for debugging
+            // "-femit-llvm-ir=/home/folkertdev/roc/roc/examples/benchmarks/platform/host.ll",
+        ])
+        .spawn()?;
 
     Ok((child, output_path))
 }
