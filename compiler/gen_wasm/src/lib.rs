@@ -25,6 +25,16 @@ pub fn build_module<'a>(
     let mut backend = WasmBackend::new();
     let mut layout_ids = LayoutIds::default();
 
+    // Sort procedures by occurence order
+    //
+    // We sort by the "name", but those are interned strings, and the name that is
+    // interned first will have a lower number.
+    //
+    // But, the name that occurs first is always `main` because it is in the (implicit)
+    // file header. Therefore sorting high to low will put other functions before main
+    //
+    // This means that for now other functions in the file have to be ordered "in reverse": if A
+    // uses B, then the name of A must first occur after the first occurence of the name of B
     let mut procedures: std::vec::Vec<_> = procedures.into_iter().collect();
     procedures.sort_by(|a, b| b.0 .0.cmp(&a.0 .0));
 
