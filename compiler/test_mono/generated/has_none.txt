@@ -1,4 +1,4 @@
-procedure Test.3 (Test.4):
+procedure Test.3 (Test.29):
     joinpoint Test.13 Test.4:
         let Test.23 = 1i64;
         let Test.24 = GetTagId Test.4;
@@ -18,7 +18,7 @@ procedure Test.3 (Test.4):
                 let Test.7 = UnionAtIndex (Id 0) (Index 1) Test.4;
                 jump Test.13 Test.7;
     in
-    jump Test.13 Test.4;
+    jump Test.13 Test.29;
 
 procedure Test.0 ():
     let Test.28 = 3i64;
