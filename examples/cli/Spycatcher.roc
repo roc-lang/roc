@@ -98,7 +98,7 @@ initRichard =
 ## 0 to 1000 by 10
 mixRanges : List Nat
 mixRanges =
-    List.range 0 100
+    List.range 0 3
         |> List.map \num -> num * 10
 
 
@@ -677,6 +677,8 @@ step = \model ->
                 (\mix, task ->
                     sims <- await task
 
+                    {} <- await (Stdout.line "Running mix...")
+
                     sim <- await (runSimulation iterationsPerSim (initialSim mix))
 
                     List.append sims { mix, sim }
@@ -694,10 +696,18 @@ step = \model ->
 
     newModel = { model & sims }
 
+    lenSims = List.len sims |> Str.fromInt
+    maxSimsStr = maxSims |> Str.fromInt
+
     # Recurse until we no longer need to run more sims
     if List.len sims < maxSims then
+        # FIXME comment this out and this branch no longer gets taken!
+        {} <- await (Stdout.line "Recursing - List.len sims = \(lenSims), maxSims = \(maxSimsStr)")
+
         step newModel
     else
+        {} <- await (Stdout.line "NOT Recursing - List.len sims = \(lenSims), maxSims = \(maxSimsStr)")
+
         Task.succeed newModel
 
 
