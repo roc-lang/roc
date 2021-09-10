@@ -1,6 +1,8 @@
 use parity_wasm::builder;
 use parity_wasm::builder::{CodeLocation, ModuleBuilder};
-use parity_wasm::elements::{Instruction, Instruction::*, Instructions, Local, ValueType};
+use parity_wasm::elements::{
+    BlockType, Instruction, Instruction::*, Instructions, Local, ValueType,
+};
 
 use roc_collections::all::MutMap;
 use roc_module::low_level::LowLevel;
@@ -30,6 +32,12 @@ struct WasmLayout {
 impl WasmLayout {
     fn new(layout: &Layout) -> Result<Self, String> {
         match layout {
+            Layout::Builtin(Builtin::Int1 | Builtin::Int8 | Builtin::Int16 | Builtin::Int32) => {
+                Ok(Self {
+                    value_type: ValueType::I32,
+                    stack_memory: 0,
+                })
+            }
             Layout::Builtin(Builtin::Int64) => Ok(Self {
                 value_type: ValueType::I64,
                 stack_memory: 0,
@@ -207,6 +215,60 @@ impl<'a> WasmBackend<'a> {
                     ))
                 }
             }
+
+            Stmt::Switch {
+                cond_symbol,
+                cond_layout: _,
+                branches,
+                default_branch,
+                ret_layout: _,
+            } => {
+                // NOTE currently implemented as a series of conditional jumps
+                // We may be able to improve this in the future with `Select`
+                // or `BrTable`
+
+                // create (number_of_branches - 1) new blocks.
+                //
+                // Every branch ends in a `return`,
+                // so the block leaves no values on the stack
+                for _ in 0..branches.len() {
+                    self.instructions.push(Block(BlockType::NoResult));
+                }
+
+                // the LocalId of the symbol that we match on
+                let matched_on = match self.symbol_storage_map.get(cond_symbol) {
+                    Some(SymbolStorage(local_id, _)) => local_id.0,
+                    None => unreachable!("symbol not defined: {:?}", cond_symbol),
+                };
+
+                // then, we jump whenever the value under scrutiny is equal to the value of a branch
+                for (i, (value, _, _)) in branches.iter().enumerate() {
+                    // put the cond_symbol on the top of the stack
+                    self.instructions.push(GetLocal(matched_on));
+
+                    self.instructions.push(I32Const(*value as i32));
+
+                    // compare the 2 topmost values
+                    self.instructions.push(I32Eq);
+
+                    // "break" out of `i` surrounding blocks
+                    self.instructions.push(BrIf(i as u32));
+                }
+
+                // if we never jumped because a value matched, we're in the default case
+                self.build_stmt(default_branch.1, ret_layout)?;
+
+                // now put in the actual body of each branch in order
+                // (the first branch would have broken out of 1 block,
+                // hence we must generate its code first)
+                for (_, _, branch) in branches.iter() {
+                    self.instructions.push(End);
+
+                    self.build_stmt(branch, ret_layout)?;
+                }
+
+                Ok(())
+            }
             x => Err(format!("statement not yet implemented: {:?}", x)),
         }
     }
@@ -248,6 +310,14 @@ impl<'a> WasmBackend<'a> {
 
     fn load_literal(&mut self, lit: &Literal<'a>) -> Result<(), String> {
         match lit {
+            Literal::Bool(x) => {
+                self.instructions.push(I32Const(*x as i32));
+                Ok(())
+            }
+            Literal::Byte(x) => {
+                self.instructions.push(I32Const(*x as i32));
+                Ok(())
+            }
             Literal::Int(x) => {
                 self.instructions.push(I64Const(*x as i64));
                 Ok(())
