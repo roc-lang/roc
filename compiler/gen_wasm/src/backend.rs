@@ -303,18 +303,18 @@ impl<'a> WasmBackend<'a> {
                 remainder,
             } => {
                 // make locals for join pointer parameters
-                let mut local_ids = std::vec::Vec::with_capacity(parameters.len());
+                let mut jp_parameter_local_ids = std::vec::Vec::with_capacity(parameters.len());
                 for parameter in parameters.iter() {
                     let wasm_layout = WasmLayout::new(&parameter.layout)?;
                     let local_id = self.insert_local(wasm_layout, parameter.symbol);
 
-                    local_ids.push(local_id);
+                    jp_parameter_local_ids.push(local_id);
                 }
 
                 self.start_block();
 
                 self.joinpoint_label_map
-                    .insert(*id, (self.block_depth, local_ids));
+                    .insert(*id, (self.block_depth, jp_parameter_local_ids));
 
                 self.build_stmt(remainder, ret_layout)?;
 
