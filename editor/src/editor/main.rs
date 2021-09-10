@@ -24,7 +24,6 @@ use crate::ui::util::path_to_string;
 use bumpalo::Bump;
 use cgmath::Vector2;
 use fs_extra::dir::{copy, ls, CopyOptions, DirEntryAttr, DirEntryValue};
-use fs_extra::remove_items;
 use pipelines::RectResources;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
@@ -127,23 +126,12 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
     let env_arena = Bump::new();
     let code_arena = Bump::new();
 
-    let (file_path_str, code_str, project_dir_path_str) = read_main_roc_file(project_dir_path_opt);
+    let (file_path_str, code_str) = read_main_roc_file(project_dir_path_opt);
     println!("Loading file {}...", file_path_str);
 
     let file_path = Path::new(&file_path_str);
 
-    // temp fix to prevent load_and_typecheck issue
-    del_roc_platform(Path::new(&project_dir_path_str));
     let loaded_module = load_module(file_path);
-    let project_platform_path_str =
-        vec![project_dir_path_str.clone(), "/platform".to_owned()].join("");
-    let project_platform_path = Path::new(&project_platform_path_str);
-    let orig_platform_path = Path::new("./examples/hello-world/platform");
-    copy_roc_platform_if_not_exists(
-        orig_platform_path,
-        project_platform_path,
-        Path::new(&project_dir_path_str),
-    );
 
     let mut var_store = VarStore::default();
     let dep_idents = IdentIds::exposed_builtins(8);
@@ -416,7 +404,7 @@ fn begin_render_pass<'a>(
 
 type PathStr = String;
 
-fn read_main_roc_file(project_dir_path_opt: Option<&Path>) -> (PathStr, String, PathStr) {
+fn read_main_roc_file(project_dir_path_opt: Option<&Path>) -> (PathStr, String) {
     if let Some(project_dir_path) = project_dir_path_opt {
         let mut ls_config = HashSet::new();
         ls_config.insert(DirEntryAttr::FullName);
@@ -458,7 +446,7 @@ fn read_main_roc_file(project_dir_path_opt: Option<&Path>) -> (PathStr, String, 
             let file_as_str = std::fs::read_to_string(&Path::new(&full_roc_file_path_str))
                 .unwrap_or_else(|err| panic!("In the provided project {:?}, I found the roc file {}, but I failed to read it: {}", &project_dir_path_str, &full_roc_file_path_str, err));
 
-            (full_roc_file_path_str, file_as_str, project_dir_path_str)
+            (full_roc_file_path_str, file_as_str)
         } else {
             init_new_roc_project(&project_dir_path_str)
         }
@@ -468,27 +456,26 @@ fn read_main_roc_file(project_dir_path_opt: Option<&Path>) -> (PathStr, String, 
 }
 
 // returns path and content of app file
-fn init_new_roc_project(project_dir_path_str: &str) -> (PathStr, String, PathStr) {
-    //let orig_platform_path = Path::new("./examples/hello-world/platform");
+fn init_new_roc_project(project_dir_path_str: &str) -> (PathStr, String) {
+    let orig_platform_path = Path::new("./examples/hello-world/platform");
 
     let project_dir_path = Path::new(project_dir_path_str);
 
     let roc_file_path_str = vec![project_dir_path_str, "/UntitledApp.roc"].join("");
     let roc_file_path = Path::new("./new-roc-project/UntitledApp.roc");
 
-    //let project_platform_path_str = vec![project_dir_path_str, "/platform"].join("");
-    //let project_platform_path = Path::new(&project_platform_path_str);
+    let project_platform_path_str = vec![project_dir_path_str, "/platform"].join("");
+    let project_platform_path = Path::new(&project_platform_path_str);
 
     if !project_dir_path.exists() {
         fs::create_dir(project_dir_path).expect("Failed to create dir for roc project.");
     }
 
-    // TODO reenable once we solve 'assertion failed: state.dependencies.solved_all()', compiler/load/src/file.rs:1954:17
-    //copy_roc_platform_if_not_exists(orig_platform_path, project_platform_path, project_dir_path);
+    copy_roc_platform_if_not_exists(orig_platform_path, project_platform_path, project_dir_path);
 
     let code_str = create_roc_file_if_not_exists(project_dir_path, roc_file_path);
 
-    (roc_file_path_str, code_str, project_dir_path_str.to_owned())
+    (roc_file_path_str, code_str)
 }
 
 // returns contents of file
@@ -538,15 +525,6 @@ fn copy_roc_platform_if_not_exists(
             err
         )
         });
-    }
-}
-
-// temporary fix for load_and_typecheck issue, deletes the platform
-fn del_roc_platform(project_dir_path: &Path) {
-    let platform_path = project_dir_path.join("platform");
-
-    if platform_path.exists() {
-        remove_items(&[platform_path]).expect("Failed to delete platform.");
     }
 }
 
