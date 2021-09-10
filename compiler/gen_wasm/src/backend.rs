@@ -193,12 +193,6 @@ impl<'a> WasmBackend<'a> {
         self.instructions.push(Loop(BlockType::Value(value_type)));
     }
 
-    fn end_loop(&mut self) {
-        self.block_depth -= 1;
-
-        self.instructions.push(End);
-    }
-
     fn start_block(&mut self) {
         self.block_depth += 1;
 
@@ -320,12 +314,15 @@ impl<'a> WasmBackend<'a> {
 
                 self.end_block();
 
+                // A `return` inside of a `loop` seems to make it so that the `loop` itself
+                // also "returns" (so, leaves on the stack) a value of the return type.
                 let return_wasm_layout = WasmLayout::new(ret_layout)?;
                 self.start_loop_with_return(return_wasm_layout.value_type);
 
                 self.build_stmt(body, ret_layout)?;
 
-                self.end_loop();
+                // ends the loop
+                self.end_block();
 
                 Ok(())
             }
