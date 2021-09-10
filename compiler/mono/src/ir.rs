@@ -3748,13 +3748,15 @@ pub fn with_hole<'a>(
 
                 match what_to_do {
                     UpdateExisting(field) => {
+                        substitute_in_exprs(env.arena, &mut stmt, assigned, symbols[0]);
+
                         stmt = assign_to_symbol(
                             env,
                             procs,
                             layout_cache,
                             field.var,
                             *field.loc_expr.clone(),
-                            assigned,
+                            symbols[0],
                             stmt,
                         );
                     }
