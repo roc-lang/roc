@@ -25,7 +25,7 @@ pub fn build_module<'a>(
     let mut backend = WasmBackend::new();
     let mut layout_ids = LayoutIds::default();
 
-    // Sort procedures by occurence order
+    // Sort procedures by occurrence order
     //
     // We sort by the "name", but those are interned strings, and the name that is
     // interned first will have a lower number.
