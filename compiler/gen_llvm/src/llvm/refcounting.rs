@@ -1201,17 +1201,10 @@ enum DecOrReuse {
     Reuse,
 }
 
-fn must_refcount(tags: &[&[Layout<'_>]]) -> bool {
-    for field_layouts in tags.iter() {
-        // if none of the fields are or contain anything refcounted, just move on
-        if !field_layouts
-            .iter()
-            .any(|x| x.is_refcounted() || x.contains_refcounted())
-        {
-            return false;
-        }
-    }
-    true
+fn fields_need_no_refcounting(field_layouts: &[Layout]) -> bool {
+    !field_layouts
+        .iter()
+        .any(|x| x.is_refcounted() || x.contains_refcounted())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1241,10 +1234,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
 
     for (tag_id, field_layouts) in tags.iter().enumerate() {
         // if none of the fields are or contain anything refcounted, just move on
-        if !field_layouts
-            .iter()
-            .any(|x| x.is_refcounted() || x.contains_refcounted())
-        {
+        if fields_need_no_refcounting(field_layouts) {
             continue;
         }
 
@@ -1344,11 +1334,13 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
 
     cases.reverse();
 
-    if cases.len() == 1 && must_refcount(tags) {
-        // there is only one tag in total; we don't need a switch
-        // this is essential for nullable unwrapped layouts,
-        // because the `else` branch below would try to read its
-        // (nonexistant) tag id
+    if matches!(
+        union_layout,
+        UnionLayout::NullableUnwrapped { .. } | UnionLayout::NonNullableUnwrapped { .. }
+    ) {
+        debug_assert_eq!(cases.len(), 1);
+
+        // in this case, don't switch, because the `else` branch below would try to read the (nonexistant) tag id
         let (_, only_branch) = cases.pop().unwrap();
         env.builder.build_unconditional_branch(only_branch);
     } else {
