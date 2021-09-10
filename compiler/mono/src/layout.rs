@@ -1151,10 +1151,15 @@ impl<'a> Builtin<'a> {
             Float64 => align_of::<f64>() as u32,
             Float32 => align_of::<f32>() as u32,
             Float16 => align_of::<i16>() as u32,
-            Str | EmptyStr => pointer_size,
             Dict(_, _) | EmptyDict => pointer_size,
             Set(_) | EmptySet => pointer_size,
-            List(_) | EmptyList => pointer_size,
+            // we often treat these as i128 (64-bit systems)
+            // or i64 (32-bit systems).
+            //
+            // In webassembly, For that to be safe
+            // they must be aligned to allow such access
+            List(_) | EmptyList => pointer_size.max(8),
+            Str | EmptyStr => pointer_size.max(8),
         }
     }
 
@@ -1240,9 +1245,10 @@ impl<'a> Builtin<'a> {
             Builtin::Str => pointer_size,
             Builtin::Dict(k, v) => k
                 .alignment_bytes(pointer_size)
-                .max(v.alignment_bytes(pointer_size)),
-            Builtin::Set(k) => k.alignment_bytes(pointer_size),
-            Builtin::List(e) => e.alignment_bytes(pointer_size),
+                .max(v.alignment_bytes(pointer_size))
+                .max(pointer_size),
+            Builtin::Set(k) => k.alignment_bytes(pointer_size).max(pointer_size),
+            Builtin::List(e) => e.alignment_bytes(pointer_size).max(pointer_size),
             Builtin::EmptyStr | Builtin::EmptyList | Builtin::EmptyDict | Builtin::EmptySet => {
                 unreachable!("not heap-allocated")
             }

@@ -34,6 +34,8 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN rustup component add rustfmt
     # criterion
     RUN cargo install cargo-criterion
+    # wasm
+    RUN apt -y install libxkbcommon-dev
     # sccache
     RUN apt -y install libssl-dev
     RUN cargo install sccache
