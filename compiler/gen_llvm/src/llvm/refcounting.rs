@@ -220,23 +220,34 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
         debug_info_init!(env, parent);
 
-        let alignment = env.context.i32_type().const_int(alignment as _, false);
-
-        call_void_bitcode_fn(
+        decref_pointer(
             env,
-            &[
-                env.builder.build_bitcast(
-                    parent.get_nth_param(0).unwrap(),
-                    env.ptr_int().ptr_type(AddressSpace::Generic),
-                    "foo",
-                ),
-                alignment.into(),
-            ],
-            roc_builtins::bitcode::UTILS_DECREF,
+            parent.get_nth_param(0).unwrap().into_pointer_value(),
+            alignment,
         );
 
         builder.build_return(None);
     }
+}
+
+pub fn decref_pointer<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    pointer: PointerValue<'ctx>,
+    alignment: u32,
+) {
+    let alignment = env.context.i32_type().const_int(alignment as _, false);
+    call_void_bitcode_fn(
+        env,
+        &[
+            env.builder.build_bitcast(
+                pointer,
+                env.ptr_int().ptr_type(AddressSpace::Generic),
+                "to_isize_ptr",
+            ),
+            alignment.into(),
+        ],
+        roc_builtins::bitcode::UTILS_DECREF,
+    );
 }
 
 fn modify_refcount_struct<'a, 'ctx, 'env>(
