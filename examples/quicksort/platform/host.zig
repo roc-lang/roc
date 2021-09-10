@@ -76,7 +76,7 @@ const RocCallResult = extern struct { flag: u64, content: RocList };
 
 const Unit = extern struct {};
 
-pub fn main() u8 {
+pub export fn main() u8 {
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
 
