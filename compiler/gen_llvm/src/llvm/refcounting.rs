@@ -250,6 +250,27 @@ pub fn decref_pointer<'a, 'ctx, 'env>(
     );
 }
 
+/// Assumes a pointer to the refcount
+pub fn decref_pointer_check_null<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    pointer: PointerValue<'ctx>,
+    alignment: u32,
+) {
+    let alignment = env.context.i32_type().const_int(alignment as _, false);
+    call_void_bitcode_fn(
+        env,
+        &[
+            env.builder.build_bitcast(
+                pointer,
+                env.ptr_int().ptr_type(AddressSpace::Generic),
+                "to_isize_ptr",
+            ),
+            alignment.into(),
+        ],
+        roc_builtins::bitcode::UTILS_DECREF_CHECK_NULL,
+    );
+}
+
 fn modify_refcount_struct<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,

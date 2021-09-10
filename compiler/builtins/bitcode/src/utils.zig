@@ -117,6 +117,15 @@ pub fn decrefC(
     return @call(.{ .modifier = always_inline }, decref_ptr_to_refcount, .{ bytes, alignment });
 }
 
+pub fn decrefCheckNullC(
+    bytes_or_null: ?[*]isize,
+    alignment: u32,
+) callconv(.C) void {
+    if (bytes_or_null) |bytes| {
+        return @call(.{ .modifier = always_inline }, decref_ptr_to_refcount, .{ bytes, alignment });
+    }
+}
+
 pub fn decref(
     bytes_or_null: ?[*]u8,
     data_bytes: usize,
