@@ -371,15 +371,22 @@ fn run_with_wasmer(wasm_path: &std::path::Path, args: &[String]) {
 
     // Then, we get the import object related to our WASI
     // and attach it to the Wasm instance.
-    let import_object = wasi_env
-        .import_object(&module)
-        .unwrap_or_else(|_| wasmer::imports!());
+    let import_object = wasi_env.import_object(&module).unwrap();
 
     let instance = Instance::new(&module, &import_object).unwrap();
 
     let start = instance.exports.get_function("_start").unwrap();
 
-    start.call(&[]).unwrap();
+    use wasmer_wasi::WasiError;
+    match start.call(&[]) {
+        Ok(_) => {}
+        Err(e) => match e.downcast::<WasiError>() {
+            Ok(WasiError::Exit(0)) => {
+                // we run the `_start` function, so exit(0) is expected
+            }
+            other => panic!("Wasmer error: {:?}", other),
+        },
+    }
 }
 
 enum Backend {
