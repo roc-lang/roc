@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::llvm::bitcode::{call_bitcode_fn, call_void_bitcode_fn};
 use crate::llvm::build_dict::{
-    dict_contains, dict_difference, dict_empty, dict_get, dict_insert, dict_intersection,
+    self, dict_contains, dict_difference, dict_empty, dict_get, dict_insert, dict_intersection,
     dict_keys, dict_len, dict_remove, dict_union, dict_values, dict_walk, set_from_list,
 };
 use crate::llvm::build_hash::generic_hash;
@@ -2538,25 +2538,26 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 DecRef(symbol) => {
                     let (value, layout) = load_symbol_and_layout(scope, symbol);
 
-                    let alignment = layout.alignment_bytes(env.ptr_bytes);
-
                     match layout {
-                        Layout::Builtin(Builtin::List(_)) => {
+                        Layout::Builtin(Builtin::List(element_layout)) => {
                             debug_assert!(value.is_struct_value());
+                            let alignment = element_layout.alignment_bytes(env.ptr_bytes);
 
                             build_list::decref(env, value.into_struct_value(), alignment);
                         }
-                        Layout::Builtin(Builtin::Dict(_, _)) | Layout::Builtin(Builtin::Set(_)) => {
+                        Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
                             debug_assert!(value.is_struct_value());
+                            let alignment = key_layout
+                                .alignment_bytes(env.ptr_bytes)
+                                .max(value_layout.alignment_bytes(env.ptr_bytes));
 
-                            let refcount_ptr = PointerToRefcount::from_list_wrapper(
-                                env,
-                                value.into_struct_value(),
-                            );
+                            build_dict::decref(env, value.into_struct_value(), alignment);
+                        }
+                        Layout::Builtin(Builtin::Set(key_layout)) => {
+                            debug_assert!(value.is_struct_value());
+                            let alignment = key_layout.alignment_bytes(env.ptr_bytes);
 
-                            let length = dict_len(env, scope, *symbol).into_int_value();
-
-                            decrement_with_size_check(env, parent, length, *layout, refcount_ptr);
+                            build_dict::decref(env, value.into_struct_value(), alignment);
                         }
 
                         _ if layout.is_refcounted() => {
