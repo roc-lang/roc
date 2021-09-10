@@ -230,7 +230,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
     }
 }
 
-pub fn decref_pointer<'a, 'ctx, 'env>(
+fn decref_pointer<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     pointer: PointerValue<'ctx>,
     alignment: u32,
@@ -262,8 +262,8 @@ pub fn decref_pointer_check_null<'a, 'ctx, 'env>(
         &[
             env.builder.build_bitcast(
                 pointer,
-                env.ptr_int().ptr_type(AddressSpace::Generic),
-                "to_isize_ptr",
+                env.context.i8_type().ptr_type(AddressSpace::Generic),
+                "to_i8_ptr",
             ),
             alignment.into(),
         ],

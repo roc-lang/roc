@@ -8,10 +8,10 @@ use crate::llvm::build_dict::{
 };
 use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
-    allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
-    list_drop, list_get_unsafe, list_join, list_keep_errs, list_keep_if, list_keep_oks, list_len,
-    list_map, list_map2, list_map3, list_map_with_index, list_prepend, list_range, list_repeat,
-    list_reverse, list_set, list_single, list_sort_with, list_swap,
+    self, allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat,
+    list_contains, list_drop, list_get_unsafe, list_join, list_keep_errs, list_keep_if,
+    list_keep_oks, list_len, list_map, list_map2, list_map3, list_map_with_index, list_prepend,
+    list_range, list_repeat, list_reverse, list_set, list_single, list_sort_with, list_swap,
 };
 use crate::llvm::build_str::{
     empty_str, str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int,
@@ -2538,23 +2538,13 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 DecRef(symbol) => {
                     let (value, layout) = load_symbol_and_layout(scope, symbol);
 
+                    let alignment = layout.alignment_bytes(env.ptr_bytes);
+
                     match layout {
                         Layout::Builtin(Builtin::List(_)) => {
                             debug_assert!(value.is_struct_value());
 
-                            // because of how we insert DECREF for lists, we can't guarantee that
-                            // the list is non-empty. When the list is empty, the pointer to the
-                            // elements is NULL, and trying to get to the RC address will
-                            // underflow, causing a segfault. Therefore, in this case we must
-                            // manually check that the list is non-empty
-                            let refcount_ptr = PointerToRefcount::from_list_wrapper(
-                                env,
-                                value.into_struct_value(),
-                            );
-
-                            let length = list_len(env.builder, value.into_struct_value());
-
-                            decrement_with_size_check(env, parent, length, *layout, refcount_ptr);
+                            build_list::decref(env, value.into_struct_value(), alignment);
                         }
                         Layout::Builtin(Builtin::Dict(_, _)) | Layout::Builtin(Builtin::Set(_)) => {
                             debug_assert!(value.is_struct_value());
