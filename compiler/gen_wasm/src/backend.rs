@@ -10,17 +10,11 @@ use roc_module::symbol::Symbol;
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
 
+use crate::*;
+
 // Don't allocate any constant data at address zero or near it. Would be valid, but bug-prone.
 // Follow Emscripten's example by using 1kB (4 bytes would probably do)
 const UNUSED_DATA_SECTION_BYTES: u32 = 1024;
-
-const PTR_SIZE: u32 = 4;
-const PTR_TYPE: ValueType = ValueType::I32;
-
-const ALIGN_1: u32 = 0;
-const ALIGN_2: u32 = 1;
-const ALIGN_4: u32 = 2;
-const ALIGN_8: u32 = 3;
 
 #[derive(Clone, Copy, Debug)]
 struct LocalId(u32);

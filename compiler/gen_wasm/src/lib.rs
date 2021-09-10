@@ -3,7 +3,7 @@ pub mod from_wasm32_memory;
 
 use bumpalo::Bump;
 use parity_wasm::builder;
-use parity_wasm::elements::Internal;
+use parity_wasm::elements::{Internal, ValueType};
 
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::{Interns, Symbol};
@@ -11,6 +11,16 @@ use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::LayoutIds;
 
 use crate::backend::WasmBackend;
+
+const PTR_SIZE: u32 = 4;
+const PTR_TYPE: ValueType = ValueType::I32;
+
+pub const ALIGN_1: u32 = 0;
+pub const ALIGN_2: u32 = 1;
+pub const ALIGN_4: u32 = 2;
+pub const ALIGN_8: u32 = 3;
+
+pub const STACK_POINTER_GLOBAL_ID: u32 = 0;
 
 pub struct Env<'a> {
     pub arena: &'a Bump, // not really using this much, parity_wasm works with std::vec a lot
