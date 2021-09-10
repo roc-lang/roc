@@ -109,18 +109,22 @@ initialModel =
 
 initialSim : Mix -> Sim
 initialSim = \{ jans, richards, kristys } ->
+    janEntities : List Entity
     janEntities =
         List.repeat jans initJan
             |> List.map EJan
 
+    richardEntities : List Entity
     richardEntities =
         List.repeat richards initRichard
             |> List.map ERichard
 
+    kristyEntities : List Entity
     kristyEntities =
         List.repeat kristys initKristy
             |> List.map EKristy
 
+    entities : List Entity
     entities =
         List.join [ janEntities, richardEntities, kristyEntities ]
 
