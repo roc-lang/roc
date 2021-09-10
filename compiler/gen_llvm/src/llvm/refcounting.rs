@@ -102,7 +102,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
             .build_int_compare(IntPredicate::EQ, current, one, "is_one")
     }
 
-    pub fn get_refcount<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>) -> IntValue<'ctx> {
+    fn get_refcount<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>) -> IntValue<'ctx> {
         env.builder
             .build_load(self.value, "get_refcount")
             .into_int_value()
