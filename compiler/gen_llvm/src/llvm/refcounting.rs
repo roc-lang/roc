@@ -1201,6 +1201,19 @@ enum DecOrReuse {
     Reuse,
 }
 
+fn must_refcount(tags: &[&[Layout<'_>]]) -> bool {
+    for field_layouts in tags.iter() {
+        // if none of the fields are or contain anything refcounted, just move on
+        if !field_layouts
+            .iter()
+            .any(|x| x.is_refcounted() || x.contains_refcounted())
+        {
+            return false;
+        }
+    }
+    true
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -1219,21 +1232,6 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
     let mode = Mode::Dec;
     let call_mode = mode_to_call_mode(decrement_fn, mode);
     let builder = env.builder;
-
-    // branches that are not/don't contain anything refcounted
-    // if there is only one branch, we don't need to switch
-    let switch_needed: bool = (|| {
-        for field_layouts in tags.iter() {
-            // if none of the fields are or contain anything refcounted, just move on
-            if !field_layouts
-                .iter()
-                .any(|x| x.is_refcounted() || x.contains_refcounted())
-            {
-                return true;
-            }
-        }
-        false
-    })();
 
     // next, make a jump table for all possible values of the tag_id
     let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
@@ -1346,7 +1344,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
 
     cases.reverse();
 
-    if cases.len() == 1 && !switch_needed {
+    if cases.len() == 1 && must_refcount(tags) {
         // there is only one tag in total; we don't need a switch
         // this is essential for nullable unwrapped layouts,
         // because the `else` branch below would try to read its
