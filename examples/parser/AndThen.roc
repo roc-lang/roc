@@ -1,7 +1,7 @@
 
 app "app"
      packages { base: "platform" }
-     imports [base.Task] 
+     imports [base.Task, Pair] 
      provides [ main ] to base
 
 
@@ -24,6 +24,11 @@ satisfy = \predicate ->
 andThen : Parser a, (a -> Parser b) -> Parser b 
 andThen = \p, q ->
             \input -> p input |> List.map (\(Pair a input2) -> (q a) input2) |> List.join
+
+
+map : Parser a, (a -> b) -> Parser b  
+map = 
+  \p, f -> \input -> p input |> List.map (\pair -> Pair.mapFirst pair f) 
 
 
 ## FIRST AND SECOND 
