@@ -1,11 +1,38 @@
-use parity_wasm::elements::{Instruction, Instruction::*};
+use parity_wasm::builder;
+use parity_wasm::builder::ModuleBuilder;
+use parity_wasm::elements::{Instruction, Instruction::*, Instructions, Internal, ValueType};
 
 use roc_gen_wasm::from_wasm32_memory::FromWasm32Memory;
 use roc_gen_wasm::*;
 use roc_std::{RocDec, RocList, RocOrder, RocStr};
 
 pub trait Wasm32TestResult {
-    fn gen_wrapper(main_function_index: u32) -> Vec<Instruction>;
+    fn insert_test_wrapper(
+        module_builder: &mut ModuleBuilder,
+        wrapper_name: &str,
+        main_function_index: u32,
+    ) {
+        let instructions = Self::build_wrapper_body(main_function_index);
+
+        let signature = builder::signature().with_result(ValueType::I32).build_sig();
+
+        let function_def = builder::function()
+            .with_signature(signature)
+            .body()
+            .with_instructions(Instructions::new(instructions))
+            .build() // body
+            .build(); // function
+
+        let location = module_builder.push_function(function_def);
+        let export = builder::export()
+            .field(wrapper_name)
+            .with_internal(Internal::Function(location.body))
+            .build();
+
+        module_builder.push_export(export);
+    }
+
+    fn build_wrapper_body(main_function_index: u32) -> Vec<Instruction>;
 }
 
 fn build_wrapper_body_prelude(stack_memory_size: usize) -> Vec<Instruction> {
