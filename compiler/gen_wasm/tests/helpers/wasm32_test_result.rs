@@ -8,14 +8,11 @@ pub trait Wasm32TestResult {
     fn gen_wrapper(main_function_index: u32) -> Vec<Instruction>;
 }
 
-const RESULT_POINTER_LOCAL_ID: u32 = 0;
-
 fn gen_wrapper_prelude(stack_memory_size: usize) -> Vec<Instruction> {
     vec![
         GetGlobal(STACK_POINTER_GLOBAL_ID),
-        TeeLocal(RESULT_POINTER_LOCAL_ID),
         I32Const(stack_memory_size as i32),
-        I32Add,
+        I32Sub,
         SetGlobal(STACK_POINTER_GLOBAL_ID),
     ]
 }
@@ -30,12 +27,12 @@ macro_rules! gen_wrapper_primitive {
                 // Call the main function with no arguments. Get primitive back.
                 Call(main_function_index),
                 //
-                // Store the result at the allocated address
-                GetLocal(RESULT_POINTER_LOCAL_ID),
+                // Store the primitive at the allocated address
+                GetGlobal(STACK_POINTER_GLOBAL_ID),
                 $store_instruction($align, 0),
                 //
                 // Return the result pointer
-                GetLocal(RESULT_POINTER_LOCAL_ID),
+                GetGlobal(STACK_POINTER_GLOBAL_ID),
                 End,
             ]);
             instructions
@@ -55,13 +52,13 @@ fn gen_wrapper_stack_memory(main_function_index: u32, size: usize) -> Vec<Instru
     let mut instructions = gen_wrapper_prelude(size);
     instructions.extend([
         //
-        // Call the main function with a result pointer it can write to.
-        // No Wasm return value, it just writes to memory.
-        GetLocal(RESULT_POINTER_LOCAL_ID),
+        // Call the main function with the allocated address to write the result.
+        // No value is returned to the VM stack. This is the same as in compiled C.
+        GetGlobal(STACK_POINTER_GLOBAL_ID),
         Call(main_function_index),
         //
-        // Return the result pointer
-        GetLocal(RESULT_POINTER_LOCAL_ID),
+        // Return the result address
+        GetGlobal(STACK_POINTER_GLOBAL_ID),
         End,
     ]);
     instructions
