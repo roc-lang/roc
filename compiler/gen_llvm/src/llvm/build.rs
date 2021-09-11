@@ -704,7 +704,8 @@ fn promote_to_main_function<'a, 'ctx, 'env>(
     let main_fn_name = "$Test.main";
 
     // Add main to the module.
-    let main_fn = expose_function_to_host_help(env, main_fn_name, roc_main_fn, main_fn_name);
+    let main_fn =
+        expose_function_to_host_help_c_abi(env, main_fn_name, roc_main_fn, &[], main_fn_name);
 
     (main_fn_name, main_fn)
 }
@@ -3088,18 +3089,26 @@ fn expose_function_to_host<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     symbol: Symbol,
     roc_function: FunctionValue<'ctx>,
+    arguments: &[Layout<'a>],
 ) {
     // Assumption: there is only one specialization of a host-exposed function
     let ident_string = symbol.as_str(&env.interns);
     let c_function_name: String = format!("roc__{}_1_exposed", ident_string);
 
-    expose_function_to_host_help(env, ident_string, roc_function, &c_function_name);
+    expose_function_to_host_help_c_abi(
+        env,
+        ident_string,
+        roc_function,
+        arguments,
+        &c_function_name,
+    );
 }
 
-fn expose_function_to_host_help<'a, 'ctx, 'env>(
+fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     ident_string: &str,
     roc_function: FunctionValue<'ctx>,
+    arguments: &[Layout<'a>],
     c_function_name: &str,
 ) -> FunctionValue<'ctx> {
     let context = env.context;
@@ -3112,8 +3121,14 @@ fn expose_function_to_host_help<'a, 'ctx, 'env>(
         false,
     );
 
+    let mut cc_argument_types = Vec::with_capacity_in(arguments.len(), env.arena);
+    for layout in arguments {
+        cc_argument_types.push(to_cc_type(env, layout));
+    }
+
     // STEP 1: turn `f : a,b,c -> d` into `f : a,b,c, &d -> {}`
-    let mut argument_types = roc_function.get_type().get_param_types();
+    // let mut argument_types = roc_function.get_type().get_param_types();
+    let mut argument_types = cc_argument_types;
     let return_type = wrapper_return_type;
     let output_type = return_type.ptr_type(AddressSpace::Generic);
     argument_types.push(output_type.into());
@@ -3146,22 +3161,45 @@ fn expose_function_to_host_help<'a, 'ctx, 'env>(
     let output_arg_index = args.len() - 1;
     let args = &args[..args.len() - 1];
 
+    let mut arguments_for_call = Vec::with_capacity_in(args.len(), env.arena);
+
+    let it = args.iter().zip(roc_function.get_type().get_param_types());
+    for (arg, fastcc_type) in it {
+        let arg_type = arg.get_type();
+        if arg_type == fastcc_type {
+            // the C and Fast calling conventions agree
+            arguments_for_call.push(*arg);
+        } else {
+            let cast = complex_bitcast_check_size(env, *arg, fastcc_type, "to_fastcc_type");
+            arguments_for_call.push(cast);
+        }
+    }
+
+    let arguments_for_call = &arguments_for_call.into_bump_slice();
+
     debug_assert_eq!(args.len(), roc_function.get_params().len());
 
     let call_result = {
         if env.is_gen_test {
             let roc_wrapper_function = make_exception_catcher(env, roc_function);
-            debug_assert_eq!(args.len(), roc_wrapper_function.get_params().len());
+            debug_assert_eq!(
+                arguments_for_call.len(),
+                roc_wrapper_function.get_params().len()
+            );
 
             builder.position_at_end(entry);
 
-            let call_wrapped =
-                builder.build_call(roc_wrapper_function, args, "call_wrapped_function");
+            let call_wrapped = builder.build_call(
+                roc_wrapper_function,
+                arguments_for_call,
+                "call_wrapped_function",
+            );
             call_wrapped.set_call_convention(FAST_CALL_CONV);
 
             call_wrapped.try_as_basic_value().left().unwrap()
         } else {
-            let call_unwrapped = builder.build_call(roc_function, args, "call_unwrapped_function");
+            let call_unwrapped =
+                builder.build_call(roc_function, arguments_for_call, "call_unwrapped_function");
             call_unwrapped.set_call_convention(FAST_CALL_CONV);
 
             let call_unwrapped_result = call_unwrapped.try_as_basic_value().left().unwrap();
@@ -3691,7 +3729,8 @@ fn build_proc_header<'a, 'ctx, 'env>(
     fn_val.set_subprogram(subprogram);
 
     if env.exposed_to_host.contains(&symbol) {
-        expose_function_to_host(env, symbol, fn_val);
+        let arguments = Vec::from_iter_in(proc.args.iter().map(|(layout, _)| *layout), env.arena);
+        expose_function_to_host(env, symbol, fn_val, arguments.into_bump_slice());
     }
 
     fn_val

@@ -59,6 +59,22 @@ fn find_zig_str_path() -> PathBuf {
     panic!("cannot find `str.zig`")
 }
 
+fn find_wasi_libc_path() -> PathBuf {
+    let wasi_libc_path = PathBuf::from("compiler/builtins/bitcode/wasi-libc.a");
+
+    if std::path::Path::exists(&wasi_libc_path) {
+        return wasi_libc_path;
+    }
+
+    // when running the tests, we start in the /cli directory
+    let wasi_libc_path = PathBuf::from("../compiler/builtins/bitcode/wasi-libc.a");
+    if std::path::Path::exists(&wasi_libc_path) {
+        return wasi_libc_path;
+    }
+
+    panic!("cannot find `wasi-libc.a`")
+}
+
 #[cfg(not(target_os = "macos"))]
 pub fn build_zig_host_native(
     env_path: &str,
@@ -605,6 +621,7 @@ fn link_wasm32(
     _link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
     let zig_str_path = find_zig_str_path();
+    let wasi_libc_path = find_wasi_libc_path();
 
     let child = Command::new("zig9")
         // .env_clear()
@@ -612,9 +629,10 @@ fn link_wasm32(
         .args(&["build-exe"])
         .args(input_paths)
         .args([
+            // include wasi libc
+            // using `-lc` is broken in zig 8 (and early 9) in combination with ReleaseSmall
+            wasi_libc_path.to_str().unwrap(),
             &format!("-femit-bin={}", output_path.to_str().unwrap()),
-            // include libc
-            "-lc",
             "-target",
             "wasm32-wasi-musl",
             "--pkg-begin",
@@ -622,7 +640,8 @@ fn link_wasm32(
             zig_str_path.to_str().unwrap(),
             "--pkg-end",
             "--strip",
-            // "-O", "ReleaseSmall",
+            "-O",
+            "ReleaseSmall",
             // useful for debugging
             // "-femit-llvm-ir=/home/folkertdev/roc/roc/examples/benchmarks/platform/host.ll",
         ])
