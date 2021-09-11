@@ -229,7 +229,8 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                 event: event::WindowEvent::ReceivedCharacter(ch),
                 ..
             } => {
-                let input_outcome_res = app_update::handle_new_char(&ch, &mut app_model);
+                let input_outcome_res =
+                    app_update::handle_new_char(&ch, &mut app_model, keyboard_modifiers);
                 if let Err(e) = input_outcome_res {
                     print_err(&e)
                 } else if let Ok(InputOutcome::Ignored) = input_outcome_res {
