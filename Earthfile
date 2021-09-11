@@ -97,7 +97,6 @@ test-all:
     BUILD +test-zig
     BUILD +check-rustfmt
     BUILD +check-clippy
-    BUILD +check-typos
     BUILD +test-rust
     BUILD +verify-no-git-changes
 

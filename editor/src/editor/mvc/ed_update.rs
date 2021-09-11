@@ -636,7 +636,7 @@ impl<'a> EdModel<'a> {
 
         write_to_file(self.file_path, &all_lines_str)?;
 
-        println!("save successfull!");
+        println!("save successful!");
 
         Ok(())
     }
