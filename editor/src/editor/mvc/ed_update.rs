@@ -1146,11 +1146,10 @@ pub fn handle_new_char_diff_mark_nodes_prev_is_expr(
 
 pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     let input_outcome = match received_char {
-            '\u{1}' // Ctrl + A
-            | '\u{3}' // Ctrl + C
-            | '\u{12}' // Ctrl + R
-            | '\u{16}' // Ctrl + V
-            | '\u{18}' // Ctrl + X
+            '\u{1}'..='\u{7}' // Ctrl + A .. Ctrl + G (u{8} is backspace)
+            | '\u{9}'..='\u{C}' // Ctrl + I .. Ctrl + L (u{D} is Carriage return)
+            | '\u{E}'..='\u{19}' // Ctrl + N .. Ctrl + Y
+            | '\u{1a}' // Ctrl + Z
             => {
                 // these shortcuts are handled in ed_handle_key_down
                 InputOutcome::SilentIgnored

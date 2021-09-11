@@ -292,13 +292,8 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                     }
 
                     if let Some(ref rendered_wgpu) = rendered_wgpu_opt {
-                        let mut all_rects: Vec<Rect> = Vec::new();
-
-                        all_rects.extend(rendered_wgpu.rects_behind.iter());
-                        all_rects.extend(rendered_wgpu.rects_top.iter());
-
-                        draw_all_rects(
-                            &all_rects,
+                        draw_rects(
+                            &rendered_wgpu.rects_behind,
                             &mut encoder,
                             &frame.view,
                             &gpu_device,
@@ -306,7 +301,35 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                             wgpu::LoadOp::Clear(to_wgpu_color(ed_theme.background)),
                         );
 
-                        for text_section in &rendered_wgpu.text_sections {
+                        for text_section in &rendered_wgpu.text_sections_behind {
+                            let borrowed_text = text_section.to_borrowed();
+
+                            glyph_brush.queue(borrowed_text);
+                        }
+
+                        // draw first layer of text
+                        glyph_brush
+                            .draw_queued(
+                                &gpu_device,
+                                &mut staging_belt,
+                                &mut encoder,
+                                &frame.view,
+                                size.width,
+                                size.height,
+                            )
+                            .expect("Failed to draw first layer of text.");
+
+                        // draw rects on top of first text layer
+                        draw_rects(
+                            &rendered_wgpu.rects_front,
+                            &mut encoder,
+                            &frame.view,
+                            &gpu_device,
+                            &rect_resources,
+                            wgpu::LoadOp::Load,
+                        );
+
+                        for text_section in &rendered_wgpu.text_sections_front {
                             let borrowed_text = text_section.to_borrowed();
 
                             glyph_brush.queue(borrowed_text);
@@ -328,7 +351,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                     );
                 }
 
-                // draw all text
+                // draw text
                 glyph_brush
                     .draw_queued(
                         &gpu_device,
@@ -338,7 +361,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                         size.width,
                         size.height,
                     )
-                    .expect("Draw queued");
+                    .expect("Failed to draw queued text.");
 
                 staging_belt.finish();
                 cmd_queue.submit(Some(encoder.finish()));
@@ -361,7 +384,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
     Ok(())
 }
 
-fn draw_all_rects(
+fn draw_rects(
     all_rects: &[Rect],
     encoder: &mut CommandEncoder,
     texture_view: &TextureView,
