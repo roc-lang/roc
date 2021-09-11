@@ -3927,7 +3927,7 @@ fn make_specializations<'a>(
     );
 
     let external_specializations_requested = procs.externals_we_need.clone();
-    let procedures = procs.get_specialized_procs_without_rc(mono_env.arena);
+    let procedures = procs.get_specialized_procs_without_rc(&mut mono_env);
 
     let make_specializations_end = SystemTime::now();
     module_timing.make_specializations = make_specializations_end

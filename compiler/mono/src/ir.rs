@@ -272,6 +272,33 @@ impl<'a> Proc<'a> {
             proc.body = b.clone();
         }
     }
+
+    fn make_tail_recursive(&mut self, env: &mut Env<'a, '_>) {
+        let mut args = Vec::with_capacity_in(self.args.len(), env.arena);
+        let mut proc_args = Vec::with_capacity_in(self.args.len(), env.arena);
+
+        for (layout, symbol) in self.args {
+            let new = env.unique_symbol();
+            args.push((*layout, *symbol, new));
+            proc_args.push((*layout, new));
+        }
+
+        use self::SelfRecursive::*;
+        if let SelfRecursive(id) = self.is_self_recursive {
+            let transformed = crate::tail_recursion::make_tail_recursive(
+                env.arena,
+                id,
+                self.name,
+                self.body.clone(),
+                args.into_bump_slice(),
+            );
+
+            if let Some(with_tco) = transformed {
+                self.body = with_tco;
+                self.args = proc_args.into_bump_slice();
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -350,7 +377,7 @@ pub enum InProgressProc<'a> {
 impl<'a> Procs<'a> {
     pub fn get_specialized_procs_without_rc(
         self,
-        arena: &'a Bump,
+        env: &mut Env<'a, '_>,
     ) -> MutMap<(Symbol, ProcLayout<'a>), Proc<'a>> {
         let mut result = MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
 
@@ -376,16 +403,7 @@ impl<'a> Procs<'a> {
                     panic!();
                 }
                 Done(mut proc) => {
-                    use self::SelfRecursive::*;
-                    if let SelfRecursive(id) = proc.is_self_recursive {
-                        proc.body = crate::tail_recursion::make_tail_recursive(
-                            arena,
-                            id,
-                            proc.name,
-                            proc.body.clone(),
-                            proc.args,
-                        );
-                    }
+                    proc.make_tail_recursive(env);
 
                     result.insert(key, proc);
                 }
@@ -393,86 +411,6 @@ impl<'a> Procs<'a> {
         }
 
         result
-    }
-
-    // TODO investigate make this an iterator?
-    pub fn get_specialized_procs(
-        self,
-        arena: &'a Bump,
-    ) -> MutMap<(Symbol, ProcLayout<'a>), Proc<'a>> {
-        let mut result = MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
-
-        for ((s, toplevel), in_prog_proc) in self.specialized.into_iter() {
-            match in_prog_proc {
-                InProgress => unreachable!(
-                    "The procedure {:?} should have be done by now",
-                    (s, toplevel)
-                ),
-                Done(proc) => {
-                    result.insert((s, toplevel), proc);
-                }
-            }
-        }
-
-        for (_, proc) in result.iter_mut() {
-            use self::SelfRecursive::*;
-            if let SelfRecursive(id) = proc.is_self_recursive {
-                proc.body = crate::tail_recursion::make_tail_recursive(
-                    arena,
-                    id,
-                    proc.name,
-                    proc.body.clone(),
-                    proc.args,
-                );
-            }
-        }
-
-        let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
-
-        crate::inc_dec::visit_procs(arena, borrow_params, &mut result);
-
-        result
-    }
-
-    pub fn get_specialized_procs_help(
-        self,
-        arena: &'a Bump,
-    ) -> (
-        MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-        &'a crate::borrow::ParamMap<'a>,
-    ) {
-        let mut result = MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
-
-        for ((s, toplevel), in_prog_proc) in self.specialized.into_iter() {
-            match in_prog_proc {
-                InProgress => unreachable!(
-                    "The procedure {:?} should have be done by now",
-                    (s, toplevel)
-                ),
-                Done(proc) => {
-                    result.insert((s, toplevel), proc);
-                }
-            }
-        }
-
-        for (_, proc) in result.iter_mut() {
-            use self::SelfRecursive::*;
-            if let SelfRecursive(id) = proc.is_self_recursive {
-                proc.body = crate::tail_recursion::make_tail_recursive(
-                    arena,
-                    id,
-                    proc.name,
-                    proc.body.clone(),
-                    proc.args,
-                );
-            }
-        }
-
-        let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
-
-        crate::inc_dec::visit_procs(arena, borrow_params, &mut result);
-
-        (result, borrow_params)
     }
 
     // TODO trim down these arguments!
@@ -3748,13 +3686,15 @@ pub fn with_hole<'a>(
 
                 match what_to_do {
                     UpdateExisting(field) => {
+                        substitute_in_exprs(env.arena, &mut stmt, assigned, symbols[0]);
+
                         stmt = assign_to_symbol(
                             env,
                             procs,
                             layout_cache,
                             field.var,
                             *field.loc_expr.clone(),
-                            assigned,
+                            symbols[0],
                             stmt,
                         );
                     }
