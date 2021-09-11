@@ -723,9 +723,9 @@ step = \model ->
 #         |> String.join ""
 
 
-# view : Model -> Html msg
-# view model =
-#     let
+modelToStr : Model -> Str
+modelToStr = \model ->
+    "I'm the model!"
 #         scored =
 #             model.sims
 #                 |> List.indexedMap (\index ( mix, sim ) -> ( scoreSim sim, mix, index ))
@@ -917,10 +917,16 @@ scoreSim = \sim ->
 
 main : Task {} *
 main =
-    times = Str.fromInt maxSims
+    #times = Str.fromInt maxSims
 
-    {} <- await (Stdout.line "Running simulation \(times) times...")
+    #{} <- await (Stdout.line "Running simulation \(times) times...")
+    {} <- await (Stdout.line "Foo")
 
-    model <- await (step initialModel)
+    #model <- await (step initialModel)
+#    model = initialModel
+
+    #modelStr = modelToStr model
+
+    {} <- await (Stdout.line "Model: ")
 
     Stdout.line "Done!"
