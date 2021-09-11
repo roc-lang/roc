@@ -8,7 +8,7 @@ pub trait Wasm32TestResult {
     fn gen_wrapper(main_function_index: u32) -> Vec<Instruction>;
 }
 
-fn gen_wrapper_prelude(stack_memory_size: usize) -> Vec<Instruction> {
+fn build_wrapper_body_prelude(stack_memory_size: usize) -> Vec<Instruction> {
     vec![
         GetGlobal(STACK_POINTER_GLOBAL_ID),
         I32Const(stack_memory_size as i32),
@@ -17,11 +17,11 @@ fn gen_wrapper_prelude(stack_memory_size: usize) -> Vec<Instruction> {
     ]
 }
 
-macro_rules! gen_wrapper_primitive {
+macro_rules! build_wrapper_body_primitive {
     ($store_instruction: expr, $align: expr) => {
-        fn gen_wrapper(main_function_index: u32) -> Vec<Instruction> {
+        fn build_wrapper_body(main_function_index: u32) -> Vec<Instruction> {
             const MAX_ALIGNED_SIZE: usize = 16;
-            let mut instructions = gen_wrapper_prelude(MAX_ALIGNED_SIZE);
+            let mut instructions = build_wrapper_body_prelude(MAX_ALIGNED_SIZE);
             instructions.extend([
                 //
                 // Call the main function with no arguments. Get primitive back.
@@ -43,13 +43,13 @@ macro_rules! gen_wrapper_primitive {
 macro_rules! wasm_test_result_primitive {
     ($type_name: ident, $store_instruction: expr, $align: expr) => {
         impl Wasm32TestResult for $type_name {
-            gen_wrapper_primitive!($store_instruction, $align);
+            build_wrapper_body_primitive!($store_instruction, $align);
         }
     };
 }
 
-fn gen_wrapper_stack_memory(main_function_index: u32, size: usize) -> Vec<Instruction> {
-    let mut instructions = gen_wrapper_prelude(size);
+fn build_wrapper_body_stack_memory(main_function_index: u32, size: usize) -> Vec<Instruction> {
+    let mut instructions = build_wrapper_body_prelude(size);
     instructions.extend([
         //
         // Call the main function with the allocated address to write the result.
@@ -67,8 +67,8 @@ fn gen_wrapper_stack_memory(main_function_index: u32, size: usize) -> Vec<Instru
 macro_rules! wasm_test_result_stack_memory {
     ($type_name: ident) => {
         impl Wasm32TestResult for $type_name {
-            fn gen_wrapper(main_function_index: u32) -> Vec<Instruction> {
-                gen_wrapper_stack_memory(main_function_index, $type_name::ACTUAL_WIDTH)
+            fn build_wrapper_body(main_function_index: u32) -> Vec<Instruction> {
+                build_wrapper_body_stack_memory(main_function_index, $type_name::ACTUAL_WIDTH)
             }
         }
     };
@@ -95,21 +95,21 @@ wasm_test_result_stack_memory!(RocDec);
 wasm_test_result_stack_memory!(RocStr);
 
 impl<T: Wasm32TestResult> Wasm32TestResult for RocList<T> {
-    fn gen_wrapper(main_function_index: u32) -> Vec<Instruction> {
-        gen_wrapper_stack_memory(main_function_index, 12)
+    fn build_wrapper_body(main_function_index: u32) -> Vec<Instruction> {
+        build_wrapper_body_stack_memory(main_function_index, 12)
     }
 }
 
 impl<T: Wasm32TestResult> Wasm32TestResult for &'_ T {
-    gen_wrapper_primitive!(I32Store, ALIGN_4);
+    build_wrapper_body_primitive!(I32Store, ALIGN_4);
 }
 
 impl<T, const N: usize> Wasm32TestResult for [T; N]
 where
     T: Wasm32TestResult + FromWasm32Memory,
 {
-    fn gen_wrapper(main_function_index: u32) -> Vec<Instruction> {
-        gen_wrapper_stack_memory(main_function_index, N * T::ACTUAL_WIDTH)
+    fn build_wrapper_body(main_function_index: u32) -> Vec<Instruction> {
+        build_wrapper_body_stack_memory(main_function_index, N * T::ACTUAL_WIDTH)
     }
 }
 
@@ -118,8 +118,8 @@ where
     T: Wasm32TestResult + FromWasm32Memory,
     U: Wasm32TestResult + FromWasm32Memory,
 {
-    fn gen_wrapper(main_function_index: u32) -> Vec<Instruction> {
-        gen_wrapper_stack_memory(main_function_index, T::ACTUAL_WIDTH + U::ACTUAL_WIDTH)
+    fn build_wrapper_body(main_function_index: u32) -> Vec<Instruction> {
+        build_wrapper_body_stack_memory(main_function_index, T::ACTUAL_WIDTH + U::ACTUAL_WIDTH)
     }
 }
 
@@ -129,8 +129,8 @@ where
     U: Wasm32TestResult + FromWasm32Memory,
     V: Wasm32TestResult + FromWasm32Memory,
 {
-    fn gen_wrapper(main_function_index: u32) -> Vec<Instruction> {
-        gen_wrapper_stack_memory(
+    fn build_wrapper_body(main_function_index: u32) -> Vec<Instruction> {
+        build_wrapper_body_stack_memory(
             main_function_index,
             T::ACTUAL_WIDTH + U::ACTUAL_WIDTH + V::ACTUAL_WIDTH,
         )
