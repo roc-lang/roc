@@ -2,17 +2,13 @@
 
 app "echo"
     packages { base: "platform" }
-    imports [ base.Task.{ Task, await }, base.Stdout, base.Stdin ]
+    imports [ base.Task.{ Task, await }, base.Stdout ]
     provides [ main ] to base
 
 main : Task {} *
 main =
-    {} <- await (Stdout.line "What's your first name?")
+    {} <- await (Stdout.line "One")
 
-    firstName <- await Stdin.line
+    {} <- await (Stdout.line "Two")
 
-    {} <- await (Stdout.line "What's your last name?")
-
-    lastName <- await Stdin.line
-
-    Stdout.line "Hi, \(firstName) \(lastName)!"
+    Stdout.line "Three"
