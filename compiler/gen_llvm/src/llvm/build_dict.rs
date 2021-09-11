@@ -844,3 +844,17 @@ fn dict_symbol_to_zig_dict<'a, 'ctx, 'env>(
     )
     .into_struct_value()
 }
+
+pub fn decref<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    wrapper_struct: StructValue<'ctx>,
+    alignment: u32,
+) {
+    let pointer = env
+        .builder
+        .build_extract_value(wrapper_struct, Builtin::WRAPPER_PTR, "read_list_ptr")
+        .unwrap()
+        .into_pointer_value();
+
+    crate::llvm::refcounting::decref_pointer_check_null(env, pointer, alignment);
+}
