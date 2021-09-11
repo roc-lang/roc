@@ -84,7 +84,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
         }
     }
 
-    pub fn from_list_wrapper(env: &Env<'_, 'ctx, '_>, list_wrapper: StructValue<'ctx>) -> Self {
+    fn from_list_wrapper(env: &Env<'_, 'ctx, '_>, list_wrapper: StructValue<'ctx>) -> Self {
         let data_ptr = env
             .builder
             .build_extract_value(list_wrapper, Builtin::WRAPPER_PTR, "read_list_ptr")
@@ -1125,7 +1125,6 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
     fn_val: FunctionValue<'ctx>,
 ) {
     let tags = union_layout_tags(env.arena, &union_layout);
-    let is_nullable = union_layout.is_nullable();
     debug_assert!(!tags.is_empty());
 
     let context = &env.context;
@@ -1158,7 +1157,7 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
     let should_recurse_block = env.context.append_basic_block(parent, "should_recurse");
 
     let ctx = env.context;
-    if is_nullable {
+    if union_layout.is_nullable() {
         let is_null = env.builder.build_is_null(value_ptr, "is_null");
 
         let then_block = ctx.append_basic_block(parent, "then");
@@ -1466,7 +1465,6 @@ fn build_reuse_rec_union_help<'a, 'ctx, 'env>(
     dec_function: FunctionValue<'ctx>,
 ) {
     let tags = union_layout_tags(env.arena, &union_layout);
-    let is_nullable = union_layout.is_nullable();
 
     debug_assert!(!tags.is_empty());
 
@@ -1500,7 +1498,7 @@ fn build_reuse_rec_union_help<'a, 'ctx, 'env>(
     let should_recurse_block = env.context.append_basic_block(parent, "should_recurse");
 
     let ctx = env.context;
-    if is_nullable {
+    if union_layout.is_nullable() {
         let is_null = env.builder.build_is_null(value_ptr, "is_null");
 
         let then_block = ctx.append_basic_block(parent, "then");

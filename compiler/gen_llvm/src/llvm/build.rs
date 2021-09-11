@@ -2304,32 +2304,6 @@ fn list_literal<'a, 'ctx, 'env>(
     }
 }
 
-fn decrement_with_size_check<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
-    size: IntValue<'ctx>,
-    layout: Layout<'a>,
-    refcount_ptr: PointerToRefcount<'ctx>,
-) {
-    let not_empty = env.context.append_basic_block(parent, "not_null");
-
-    let done = env.context.append_basic_block(parent, "done");
-
-    let is_empty =
-        env.builder
-            .build_int_compare(IntPredicate::EQ, size, size.get_type().const_zero(), "");
-
-    env.builder
-        .build_conditional_branch(is_empty, done, not_empty);
-
-    env.builder.position_at_end(not_empty);
-
-    refcount_ptr.decrement(env, &layout);
-
-    env.builder.build_unconditional_branch(done);
-    env.builder.position_at_end(done);
-}
-
 pub fn build_exp_stmt<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
