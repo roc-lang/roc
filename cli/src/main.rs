@@ -63,7 +63,7 @@ If you're building the compiler from source you'll want to do `cargo run [FILE]`
                 .map(|mut values| values.next())
             {
                 Some(Some(os_str)) => {
-                    launch_editor(Some(&Path::new(os_str)))?;
+                    launch_editor(Some(Path::new(os_str)))?;
                 }
                 _ => {
                     launch_editor(None)?;

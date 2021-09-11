@@ -2695,11 +2695,12 @@ pub mod test_ed_update {
         Ok(())
     }
 
-    // Create ed_model from pre_lines DSL, do ctrl+shift+up as many times as repeat.
+    // Create ed_model from pre_lines DSL, do handle_new_char for every char in input_seq, do ctrl+shift+up as many times as repeat.
     // check if modified ed_model has expected string representation of code, caret position and active selection.
     pub fn assert_ctrl_shift_up_repeat(
         pre_lines: Vec<String>,
         expected_post_lines: Vec<String>,
+        input_seq: &str,
         repeats: usize,
     ) -> Result<(), String> {
         let mut code_str = pre_lines.join("").replace("┃", "");
@@ -2716,6 +2717,19 @@ pub mod test_ed_update {
             &code_arena,
         )?;
 
+        for input_char in input_seq.chars() {
+            if input_char == '🡲' {
+                ed_model.simple_move_carets_right(1);
+            } else if input_char == '🡰' {
+                ed_model.simple_move_carets_left(1);
+            } else if input_char == '🡱' {
+                ed_model.simple_move_carets_up(1);
+            } else {
+                //dbg!(input_char);
+                ed_res_to_res(handle_new_char(&input_char, &mut ed_model))?;
+            }
+        }
+
         for _ in 0..repeats {
             ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up)?;
         }
@@ -2723,198 +2737,194 @@ pub mod test_ed_update {
         let mut post_lines = ui_res_to_res(ed_model_to_dsl(&ed_model))?;
         strip_header(&mut post_lines); // remove header for clean tests
 
-        assert_eq!(post_lines, expected_post_lines);
+        assert_eq!(post_lines, add_nls(expected_post_lines));
 
         Ok(())
     }
 
-    pub fn assert_ctrl_shift_up(
+    pub fn assert_ctrl_shift_up_no_inp(
         pre_lines: Vec<String>,
         expected_post_lines: Vec<String>,
     ) -> Result<(), String> {
-        assert_ctrl_shift_up_repeat(pre_lines, expected_post_lines, 1)
+        assert_ctrl_shift_up_repeat(pre_lines, expected_post_lines, "", 1)
     }
 
-    pub fn assert_ctrl_shift_up_nls(
-        pre_lines: Vec<String>,
-        expected_post_lines: Vec<String>,
-    ) -> Result<(), String> {
-        assert_ctrl_shift_up_repeat(pre_lines, add_nls(expected_post_lines), 1)
-    }
-
-    pub fn assert_ctrl_shift_up_repeat_nls(
+    pub fn assert_ctrl_shift_up_repeat_no_inp(
         pre_lines: Vec<String>,
         expected_post_lines: Vec<String>,
         repeats: usize,
     ) -> Result<(), String> {
-        assert_ctrl_shift_up_repeat(pre_lines, add_nls(expected_post_lines), repeats)
+        assert_ctrl_shift_up_repeat(pre_lines, expected_post_lines, "", repeats)
     }
 
     #[test]
     fn test_ctrl_shift_up_blank() -> Result<(), String> {
-        // Blank is auto-inserted
-        // TODO allow input to create blank
-        /*assert_ctrl_shift_up_nls( ovec!["val ┃❮ ❯"], ovec!["┃❮ ❯"])?;
-        assert_ctrl_shift_up_repeat( ovec!["┃❮ ❯"], 4)?;*/
+        // Blank is auto-inserted when creating top level def
+        assert_ctrl_shift_up_repeat(ovec!["┃"], ovec!["val = ┃❮ ❯"], "val=🡲🡲🡲", 1)?;
+        assert_ctrl_shift_up_repeat(ovec!["┃"], ovec!["┃❮val =  ❯"], "val=🡲🡲🡲", 4)?;
 
         Ok(())
     }
 
     #[test]
     fn test_ctrl_shift_up_int() -> Result<(), String> {
-        assert_ctrl_shift_up_nls(ovec!["val = 5┃"], ovec!["val = ┃❮5❯"])?;
-        assert_ctrl_shift_up_repeat_nls(ovec!["val = 0┃"], ovec!["┃❮val = 0❯"], 4)?;
-        assert_ctrl_shift_up_nls(ovec!["val = 12345┃"], ovec!["val = ┃❮12345❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = ┃12345"], ovec!["val = ┃❮12345❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = 1┃2345"], ovec!["val = ┃❮12345❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = 12┃345"], ovec!["val = ┃❮12345❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = 123┃45"], ovec!["val = ┃❮12345❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = 1234┃5"], ovec!["val = ┃❮12345❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = 5┃"], ovec!["val = ┃❮5❯"])?;
+        assert_ctrl_shift_up_repeat_no_inp(ovec!["val = 0┃"], ovec!["┃❮val = 0❯"], 4)?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = 12345┃"], ovec!["val = ┃❮12345❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = ┃12345"], ovec!["val = ┃❮12345❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = 1┃2345"], ovec!["val = ┃❮12345❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = 12┃345"], ovec!["val = ┃❮12345❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = 123┃45"], ovec!["val = ┃❮12345❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = 1234┃5"], ovec!["val = ┃❮12345❯"])?;
 
         Ok(())
     }
 
     #[test]
     fn test_ctrl_shift_up_string() -> Result<(), String> {
-        assert_ctrl_shift_up_nls(ovec!["val = \"┃\""], ovec!["val = ┃❮\"\"❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = ┃\"\""], ovec!["val = ┃❮\"\"❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = \"┃0\""], ovec!["val = ┃❮\"0\"❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = \"0┃\""], ovec!["val = ┃❮\"0\"❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = \"abc┃\""], ovec!["val = ┃❮\"abc\"❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = \"ab┃c\""], ovec!["val = ┃❮\"abc\"❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = \"┃abc\""], ovec!["val = ┃❮\"abc\"❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = ┃\"abc\""], ovec!["val = ┃❮\"abc\"❯"])?;
-        assert_ctrl_shift_up_repeat_nls(ovec!["val = \"abc┃\""], ovec!["┃❮val = \"abc\"❯"], 4)?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(ovec!["val = \"┃\""], ovec!["val = ┃❮\"\"❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = ┃\"\""], ovec!["val = ┃❮\"\"❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = \"┃0\""], ovec!["val = ┃❮\"0\"❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = \"0┃\""], ovec!["val = ┃❮\"0\"❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = \"abc┃\""], ovec!["val = ┃❮\"abc\"❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = \"ab┃c\""], ovec!["val = ┃❮\"abc\"❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = \"┃abc\""], ovec!["val = ┃❮\"abc\"❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = ┃\"abc\""], ovec!["val = ┃❮\"abc\"❯"])?;
+        assert_ctrl_shift_up_repeat_no_inp(ovec!["val = \"abc┃\""], ovec!["┃❮val = \"abc\"❯"], 4)?;
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = \"hello, hello.0123456789ZXY{}[]-><-┃\""],
             ovec!["val = ┃❮\"hello, hello.0123456789ZXY{}[]-><-\"❯"],
         )?;
 
-        assert_ctrl_shift_up_nls(ovec!["val = \"\"┃"], ovec!["val = ┃❮\"\"❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = \"abc\"┃"], ovec!["val = ┃❮\"abc\"❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = \"\"┃"], ovec!["val = ┃❮\"\"❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = \"abc\"┃"], ovec!["val = ┃❮\"abc\"❯"])?;
 
         Ok(())
     }
 
     #[test]
     fn test_ctrl_shift_up_record() -> Result<(), String> {
-        assert_ctrl_shift_up_nls(ovec!["val = { ┃ }"], ovec!["val = ┃❮{  }❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = {┃  }"], ovec!["val = ┃❮{  }❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = ┃{  }"], ovec!["val = ┃❮{  }❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = {  ┃}"], ovec!["val = ┃❮{  }❯"])?;
-        assert_ctrl_shift_up_repeat_nls(ovec!["val = { ┃ }"], ovec!["┃❮val = {  }❯"], 4)?;
-        assert_ctrl_shift_up_nls(ovec!["val = {  }┃"], ovec!["val = ┃❮{  }❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = { ┃ }"], ovec!["val = ┃❮{  }❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = {┃  }"], ovec!["val = ┃❮{  }❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = ┃{  }"], ovec!["val = ┃❮{  }❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = {  ┃}"], ovec!["val = ┃❮{  }❯"])?;
+        assert_ctrl_shift_up_repeat_no_inp(ovec!["val = { ┃ }"], ovec!["┃❮val = {  }❯"], 4)?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = {  }┃"], ovec!["val = ┃❮{  }❯"])?;
         // TODO uncomment tests once #1649 is fixed
-        /*assert_ctrl_shift_up_nls(ovec!["val = { pear┃ }"], ovec!["val = ┃❮{ pear }❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = { pea┃r }"], ovec!["val = ┃❮{ pear }❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = { p┃ear }"], ovec!["val = ┃❮{ pear }❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = { ┃pear }"], ovec!["val = ┃❮{ pear }❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = {┃ pear }"], ovec!["val = ┃❮{ pear }❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = ┃{ pear }"], ovec!["val = ┃❮{ pear }❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = { pear ┃}"], ovec!["val = ┃❮{ pear }❯"])?;
+        /*assert_ctrl_shift_up_no_inp(ovec!["val = { pear┃ }"], ovec!["val = ┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = { pea┃r }"], ovec!["val = ┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = { p┃ear }"], ovec!["val = ┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = { ┃pear }"], ovec!["val = ┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = {┃ pear }"], ovec!["val = ┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = ┃{ pear }"], ovec!["val = ┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = { pear ┃}"], ovec!["val = ┃❮{ pear }❯"])?;
         assert_ctrl_shift_up_repeat(ovec!["val = { pear┃ }"], ovec!["val = ┃❮{ pear }❯"], 3)?;
-        assert_ctrl_shift_up_nls(ovec!["val = { pear }┃"], ovec!["val = ┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = { pear }┃"], ovec!["val = ┃❮{ pear }❯"])?;
 
-        assert_ctrl_shift_up_nls(ovec!["val = { camelCase123┃ }"], ovec!["val = ┃❮{ camelCase123 }❯"])?;*/
+        assert_ctrl_shift_up_no_inp(ovec!["val = { camelCase123┃ }"], ovec!["val = ┃❮{ camelCase123 }❯"])?;*/
 
-        assert_ctrl_shift_up_nls(ovec!["val = { a: \"┃\" }"], ovec!["val = { a: ┃❮\"\"❯ }"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = { a: ┃\"\" }"], ovec!["val = { a: ┃❮\"\"❯ }"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = { a: \"\"┃ }"], ovec!["val = ┃❮{ a: \"\" }❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = { a: \"\" ┃}"], ovec!["val = ┃❮{ a: \"\" }❯"])?;
-        assert_ctrl_shift_up_repeat_nls(
+        assert_ctrl_shift_up_no_inp(ovec!["val = { a: \"┃\" }"], ovec!["val = { a: ┃❮\"\"❯ }"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = { a: ┃\"\" }"], ovec!["val = { a: ┃❮\"\"❯ }"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = { a: \"\"┃ }"], ovec!["val = ┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = { a: \"\" ┃}"], ovec!["val = ┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up_repeat_no_inp(
             ovec!["val = { a: \"\" ┃}"],
             ovec!["┃❮val = { a: \"\" }❯"],
             3,
         )?;
-        assert_ctrl_shift_up_nls(ovec!["val = { a: \"\" }┃"], ovec!["val = ┃❮{ a: \"\" }❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = { a:┃ \"\" }"], ovec!["val = ┃❮{ a: \"\" }❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = { a┃: \"\" }"], ovec!["val = ┃❮{ a: \"\" }❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = { ┃a: \"\" }"], ovec!["val = ┃❮{ a: \"\" }❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = {┃ a: \"\" }"], ovec!["val = ┃❮{ a: \"\" }❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = ┃{ a: \"\" }"], ovec!["val = ┃❮{ a: \"\" }❯"])?;
-        assert_ctrl_shift_up_repeat_nls(
+        assert_ctrl_shift_up_no_inp(ovec!["val = { a: \"\" }┃"], ovec!["val = ┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = { a:┃ \"\" }"], ovec!["val = ┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = { a┃: \"\" }"], ovec!["val = ┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = { ┃a: \"\" }"], ovec!["val = ┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = {┃ a: \"\" }"], ovec!["val = ┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = ┃{ a: \"\" }"], ovec!["val = ┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up_repeat_no_inp(
             ovec!["val = { a: \"┃\" }"],
             ovec!["val = ┃❮{ a: \"\" }❯"],
             2,
         )?;
-        assert_ctrl_shift_up_repeat_nls(
+        assert_ctrl_shift_up_repeat_no_inp(
             ovec!["val = { a: \"┃\" }"],
             ovec!["┃❮val = { a: \"\" }❯"],
             4,
         )?;
 
-        assert_ctrl_shift_up_nls(ovec!["val = { a: 1┃0 }"], ovec!["val = { a: ┃❮10❯ }"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = { a: ┃9 }"], ovec!["val = { a: ┃❮9❯ }"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = { a: 98┃89 }"], ovec!["val = { a: ┃❮9889❯ }"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = { a: 44┃ }"], ovec!["val = ┃❮{ a: 44 }❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = { a: 0 ┃}"], ovec!["val = ┃❮{ a: 0 }❯"])?;
-        assert_ctrl_shift_up_repeat_nls(
+        assert_ctrl_shift_up_no_inp(ovec!["val = { a: 1┃0 }"], ovec!["val = { a: ┃❮10❯ }"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = { a: ┃9 }"], ovec!["val = { a: ┃❮9❯ }"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = { a: 98┃89 }"], ovec!["val = { a: ┃❮9889❯ }"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = { a: 44┃ }"], ovec!["val = ┃❮{ a: 44 }❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = { a: 0 ┃}"], ovec!["val = ┃❮{ a: 0 }❯"])?;
+        assert_ctrl_shift_up_repeat_no_inp(
             ovec!["val = { a: 123 ┃}"],
             ovec!["┃❮val = { a: 123 }❯"],
             3,
         )?;
-        assert_ctrl_shift_up_nls(ovec!["val = { a: 96 }┃"], ovec!["val = ┃❮{ a: 96 }❯"])?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(ovec!["val = { a: 96 }┃"], ovec!["val = ┃❮{ a: 96 }❯"])?;
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { a:┃ 985600 }"],
             ovec!["val = ┃❮{ a: 985600 }❯"],
         )?;
-        assert_ctrl_shift_up_nls(ovec!["val = { a┃: 5648 }"], ovec!["val = ┃❮{ a: 5648 }❯"])?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(ovec!["val = { a┃: 5648 }"], ovec!["val = ┃❮{ a: 5648 }❯"])?;
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { ┃a: 1000000 }"],
             ovec!["val = ┃❮{ a: 1000000 }❯"],
         )?;
-        assert_ctrl_shift_up_nls(ovec!["val = {┃ a: 1 }"], ovec!["val = ┃❮{ a: 1 }❯"])?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(ovec!["val = {┃ a: 1 }"], ovec!["val = ┃❮{ a: 1 }❯"])?;
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = ┃{ a: 900600 }"],
             ovec!["val = ┃❮{ a: 900600 }❯"],
         )?;
-        assert_ctrl_shift_up_repeat_nls(
+        assert_ctrl_shift_up_repeat_no_inp(
             ovec!["val = { a: 10┃000 }"],
             ovec!["val = ┃❮{ a: 10000 }❯"],
             2,
         )?;
-        assert_ctrl_shift_up_repeat_nls(ovec!["val = { a: ┃45 }"], ovec!["┃❮val = { a: 45 }❯"], 4)?;
+        assert_ctrl_shift_up_repeat_no_inp(
+            ovec!["val = { a: ┃45 }"],
+            ovec!["┃❮val = { a: 45 }❯"],
+            4,
+        )?;
 
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: \"de┃\" }"],
             ovec!["val = { abc: ┃❮\"de\"❯ }"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: \"d┃e\" }"],
             ovec!["val = { abc: ┃❮\"de\"❯ }"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: \"┃de\" }"],
             ovec!["val = { abc: ┃❮\"de\"❯ }"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: ┃\"de\" }"],
             ovec!["val = { abc: ┃❮\"de\"❯ }"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: \"de\"┃ }"],
             ovec!["val = ┃❮{ abc: \"de\" }❯"],
         )?;
-        assert_ctrl_shift_up_repeat_nls(
+        assert_ctrl_shift_up_repeat_no_inp(
             ovec!["val = { abc: \"d┃e\" }"],
             ovec!["val = ┃❮{ abc: \"de\" }❯"],
             2,
         )?;
-        assert_ctrl_shift_up_repeat_nls(
+        assert_ctrl_shift_up_repeat_no_inp(
             ovec!["val = { abc: \"d┃e\" }"],
             ovec!["┃❮val = { abc: \"de\" }❯"],
             3,
         )?;
 
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { camelCase123: \"hello, hello.012┃3456789ZXY{}[]-><-\" }"],
             ovec!["val = { camelCase123: ┃❮\"hello, hello.0123456789ZXY{}[]-><-\"❯ }"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { camel┃Case123: \"hello, hello.0123456789ZXY{}[]-><-\" }"],
             ovec!["val = ┃❮{ camelCase123: \"hello, hello.0123456789ZXY{}[]-><-\" }❯"],
         )?;
-        assert_ctrl_shift_up_repeat_nls(
+        assert_ctrl_shift_up_repeat_no_inp(
             ovec!["val = { camelCase123: \"hello, hello┃.0123456789ZXY{}[]-><-\" }"],
             ovec!["val = ┃❮{ camelCase123: \"hello, hello.0123456789ZXY{}[]-><-\" }❯"],
             2,
@@ -2925,171 +2935,171 @@ pub mod test_ed_update {
 
     #[test]
     fn test_ctrl_shift_up_nested_record() -> Result<(), String> {
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: { ┃ } }"],
             ovec!["val = { abc: ┃❮{  }❯ }"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: {┃  } }"],
             ovec!["val = { abc: ┃❮{  }❯ }"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: ┃{  } }"],
             ovec!["val = { abc: ┃❮{  }❯ }"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: {  ┃} }"],
             ovec!["val = { abc: ┃❮{  }❯ }"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: {  }┃ }"],
             ovec!["val = ┃❮{ abc: {  } }❯"],
         )?;
 
         // TODO uncomment tests once #1649 is fixed
-        /*assert_ctrl_shift_up_nls(ovec!["val = { abc: { ┃d } }"], ovec!["val = { abc: ┃❮{ d }❯ }"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = { abc: {┃ d } }"], ovec!["val = { abc: ┃❮{ d }❯ }"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = { abc: ┃{ d } }"], ovec!["val = { abc: ┃❮{ d }❯ }"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = { abc: { d ┃} }"], ovec!["val = { abc: ┃❮{ d }❯ }"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = { abc: { d┃e } }"], ovec!["val = { abc: ┃❮{ de }❯ }"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = { abc: { d }┃ }"], ovec!["val = ┃❮{ abc: { d } }❯"])?;
-        assert_ctrl_shift_up_nls(ovec!["val = ┃{ abc: { d } }"], ovec!["val = ┃❮{ abc: { d } }❯"])?;*/
+        /*assert_ctrl_shift_up_no_inp(ovec!["val = { abc: { ┃d } }"], ovec!["val = { abc: ┃❮{ d }❯ }"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = { abc: {┃ d } }"], ovec!["val = { abc: ┃❮{ d }❯ }"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = { abc: ┃{ d } }"], ovec!["val = { abc: ┃❮{ d }❯ }"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = { abc: { d ┃} }"], ovec!["val = { abc: ┃❮{ d }❯ }"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = { abc: { d┃e } }"], ovec!["val = { abc: ┃❮{ de }❯ }"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = { abc: { d }┃ }"], ovec!["val = ┃❮{ abc: { d } }❯"])?;
+        assert_ctrl_shift_up_no_inp(ovec!["val = ┃{ abc: { d } }"], ovec!["val = ┃❮{ abc: { d } }❯"])?;*/
 
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: { de: { ┃ } } }"],
             ovec!["val = { abc: { de: ┃❮{  }❯ } }"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: { de: ┃{  } } }"],
             ovec!["val = { abc: { de: ┃❮{  }❯ } }"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: { de: {  }┃ } }"],
             ovec!["val = { abc: ┃❮{ de: {  } }❯ }"],
         )?;
 
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: { de: \"┃\" } }"],
             ovec!["val = { abc: { de: ┃❮\"\"❯ } }"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: { de: ┃\"\" } }"],
             ovec!["val = { abc: { de: ┃❮\"\"❯ } }"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: { de: \"\"┃ } }"],
             ovec!["val = { abc: ┃❮{ de: \"\" }❯ }"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: { de: \"f g┃\" } }"],
             ovec!["val = { abc: { de: ┃❮\"f g\"❯ } }"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: { de┃: \"f g\" } }"],
             ovec!["val = { abc: ┃❮{ de: \"f g\" }❯ }"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: {┃ de: \"f g\" } }"],
             ovec!["val = { abc: ┃❮{ de: \"f g\" }❯ }"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: { de: \"f g\" ┃} }"],
             ovec!["val = { abc: ┃❮{ de: \"f g\" }❯ }"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: { de: \"f g\" }┃ }"],
             ovec!["val = ┃❮{ abc: { de: \"f g\" } }❯"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = ┃{ abc: { de: \"f g\" } }"],
             ovec!["val = ┃❮{ abc: { de: \"f g\" } }❯"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: { de: \"f g\" } }┃"],
             ovec!["val = ┃❮{ abc: { de: \"f g\" } }❯"],
         )?;
 
-        assert_ctrl_shift_up_repeat_nls(
+        assert_ctrl_shift_up_repeat_no_inp(
             ovec!["val = { abc: { de: \"f g┃\" } }"],
             ovec!["val = { abc: ┃❮{ de: \"f g\" }❯ }"],
             2,
         )?;
-        assert_ctrl_shift_up_repeat_nls(
+        assert_ctrl_shift_up_repeat_no_inp(
             ovec!["val = { abc: { de: ┃\"f g\" } }"],
             ovec!["val = ┃❮{ abc: { de: \"f g\" } }❯"],
             3,
         )?;
-        assert_ctrl_shift_up_repeat_nls(
+        assert_ctrl_shift_up_repeat_no_inp(
             ovec!["val = { abc: { de: ┃\"f g\" } }"],
             ovec!["┃❮val = { abc: { de: \"f g\" } }❯"],
             4,
         )?;
 
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: { de: ┃951 } }"],
             ovec!["val = { abc: { de: ┃❮951❯ } }"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: { de: 11┃0 } }"],
             ovec!["val = { abc: { de: ┃❮110❯ } }"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: { de: 444┃ } }"],
             ovec!["val = { abc: ┃❮{ de: 444 }❯ }"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: { de┃: 99 } }"],
             ovec!["val = { abc: ┃❮{ de: 99 }❯ }"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: {┃ de: 0 } }"],
             ovec!["val = { abc: ┃❮{ de: 0 }❯ }"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: { de: 230 ┃} }"],
             ovec!["val = { abc: ┃❮{ de: 230 }❯ }"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: { de: 7 }┃ }"],
             ovec!["val = ┃❮{ abc: { de: 7 } }❯"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = ┃{ abc: { de: 1 } }"],
             ovec!["val = ┃❮{ abc: { de: 1 } }❯"],
         )?;
-        assert_ctrl_shift_up_nls(
+        assert_ctrl_shift_up_no_inp(
             ovec!["val = { abc: { de: 111111 } }┃"],
             ovec!["val = ┃❮{ abc: { de: 111111 } }❯"],
         )?;
 
-        assert_ctrl_shift_up_repeat_nls(
+        assert_ctrl_shift_up_repeat_no_inp(
             ovec!["val = { abc: { de: 1┃5 } }"],
             ovec!["val = { abc: ┃❮{ de: 15 }❯ }"],
             2,
         )?;
-        assert_ctrl_shift_up_repeat_nls(
+        assert_ctrl_shift_up_repeat_no_inp(
             ovec!["val = { abc: { de: ┃55 } }"],
             ovec!["val = ┃❮{ abc: { de: 55 } }❯"],
             3,
         )?;
-        assert_ctrl_shift_up_repeat_nls(
+        assert_ctrl_shift_up_repeat_no_inp(
             ovec!["val = { abc: { de: ┃400 } }"],
             ovec!["┃❮val = { abc: { de: 400 } }❯"],
             5,
         )?;
 
         // TODO uncomment tests once #1649 is fixed
-        /*assert_ctrl_shift_up_repeat_nls(
+        /*assert_ctrl_shift_up_repeat_no_inp(
             ovec!["val = { g: { oi: { ng: { d: { e: { e: { p: { camelCase┃ } } } } } } } }"],
             ovec!["val = { g: { oi: { ng: { d: ┃❮{ e: { e: { p: { camelCase } } } }❯ } } } }"],
             4,
         )?;
-        assert_ctrl_shift_up_repeat_nls(
+        assert_ctrl_shift_up_repeat_no_inp(
             ovec!["val = { g: { oi: { ng: { d: { e: { e: { p: { camelCase┃ } } } } } } } }"],
             ovec!["val = { g: ┃❮{ oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } }❯ }"],
             7,
         )?;
-        assert_ctrl_shift_up_repeat_nls(
+        assert_ctrl_shift_up_repeat_no_inp(
             ovec!["val = { g: { oi: { ng: { d: { e: { e: { p: { camelCase┃ } } } } } } } }"],
             ovec!["val = ┃❮{ g: { oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } } }❯"],
             9,
@@ -3183,9 +3193,12 @@ pub mod test_ed_update {
         assert_type_tooltip_clean(ovec!["val = { ┃z: {  } }"], "{ z : {} }")?;
         assert_type_tooltip_clean(ovec!["val = { camelCase: ┃0 }"], "Num *")?;
 
-        // TODO allow input to check type tooltip for Blank
-        /*assert_type_tooltips_seq( ovec!["*"], "")?;
-        assert_type_tooltips_seq( ovec!["*", "{ a : * }"], "{a:")?;*/
+        assert_type_tooltips_seq(ovec!["┃"], ovec!["*"], "val=🡲🡲🡲")?;
+        assert_type_tooltips_seq(
+            ovec!["┃"],
+            ovec!["*", "{ a : * }", "{ a : * }"],
+            "val=🡲🡲🡲{a:",
+        )?;
 
         assert_type_tooltips_clean(
             ovec!["val = { camelCase: ┃0 }"],
@@ -3361,16 +3374,6 @@ pub mod test_ed_update {
     }
 
     #[test]
-    fn test_ctrl_shift_up_move_blank() -> Result<(), String> {
-        // Blank is auto-inserted
-        // TODO
-        /*assert_ctrl_shift_single_up_move( ovec![" ┃"], move_right!())?;
-        assert_ctrl_shift_up_move( ovec!["┃ "], 3, move_left!())?;*/
-
-        Ok(())
-    }
-
-    #[test]
     fn test_ctrl_shift_up_move_int() -> Result<(), String> {
         assert_ctrl_shift_single_up_move_nls(ovec!["val = ┃0"], ovec!["val = 0┃"], move_down!())?;
         assert_ctrl_shift_single_up_move_nls(
@@ -3501,15 +3504,6 @@ pub mod test_ed_update {
         expected_post_lines: Vec<String>,
     ) -> Result<(), String> {
         assert_ctrl_shift_single_up_backspace(pre_lines, add_nls(expected_post_lines))
-    }
-
-    #[test]
-    fn test_ctrl_shift_up_backspace_blank() -> Result<(), String> {
-        // Blank is inserted when root is deleted
-        // TODO
-        /*assert_ctrl_shift_single_up_backspace( ovec!["┃ "])?;*/
-
-        Ok(())
     }
 
     #[test]
