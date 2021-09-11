@@ -272,6 +272,33 @@ impl<'a> Proc<'a> {
             proc.body = b.clone();
         }
     }
+
+    fn make_tail_recursive(&mut self, env: &mut Env<'a, '_>) {
+        let mut args = Vec::with_capacity_in(self.args.len(), env.arena);
+        let mut proc_args = Vec::with_capacity_in(self.args.len(), env.arena);
+
+        for (layout, symbol) in self.args {
+            let new = env.unique_symbol();
+            args.push((*layout, *symbol, new));
+            proc_args.push((*layout, new));
+        }
+
+        use self::SelfRecursive::*;
+        if let SelfRecursive(id) = self.is_self_recursive {
+            let transformed = crate::tail_recursion::make_tail_recursive(
+                env.arena,
+                id,
+                self.name,
+                self.body.clone(),
+                args.into_bump_slice(),
+            );
+
+            if let Some(with_tco) = transformed {
+                self.body = with_tco;
+                self.args = proc_args.into_bump_slice();
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -350,7 +377,7 @@ pub enum InProgressProc<'a> {
 impl<'a> Procs<'a> {
     pub fn get_specialized_procs_without_rc(
         self,
-        arena: &'a Bump,
+        env: &mut Env<'a, '_>,
     ) -> MutMap<(Symbol, ProcLayout<'a>), Proc<'a>> {
         let mut result = MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
 
@@ -376,16 +403,7 @@ impl<'a> Procs<'a> {
                     panic!();
                 }
                 Done(mut proc) => {
-                    use self::SelfRecursive::*;
-                    if let SelfRecursive(id) = proc.is_self_recursive {
-                        proc.body = crate::tail_recursion::make_tail_recursive(
-                            arena,
-                            id,
-                            proc.name,
-                            proc.body.clone(),
-                            proc.args,
-                        );
-                    }
+                    proc.make_tail_recursive(env);
 
                     result.insert(key, proc);
                 }
@@ -393,86 +411,6 @@ impl<'a> Procs<'a> {
         }
 
         result
-    }
-
-    // TODO investigate make this an iterator?
-    pub fn get_specialized_procs(
-        self,
-        arena: &'a Bump,
-    ) -> MutMap<(Symbol, ProcLayout<'a>), Proc<'a>> {
-        let mut result = MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
-
-        for ((s, toplevel), in_prog_proc) in self.specialized.into_iter() {
-            match in_prog_proc {
-                InProgress => unreachable!(
-                    "The procedure {:?} should have be done by now",
-                    (s, toplevel)
-                ),
-                Done(proc) => {
-                    result.insert((s, toplevel), proc);
-                }
-            }
-        }
-
-        for (_, proc) in result.iter_mut() {
-            use self::SelfRecursive::*;
-            if let SelfRecursive(id) = proc.is_self_recursive {
-                proc.body = crate::tail_recursion::make_tail_recursive(
-                    arena,
-                    id,
-                    proc.name,
-                    proc.body.clone(),
-                    proc.args,
-                );
-            }
-        }
-
-        let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
-
-        crate::inc_dec::visit_procs(arena, borrow_params, &mut result);
-
-        result
-    }
-
-    pub fn get_specialized_procs_help(
-        self,
-        arena: &'a Bump,
-    ) -> (
-        MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-        &'a crate::borrow::ParamMap<'a>,
-    ) {
-        let mut result = MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
-
-        for ((s, toplevel), in_prog_proc) in self.specialized.into_iter() {
-            match in_prog_proc {
-                InProgress => unreachable!(
-                    "The procedure {:?} should have be done by now",
-                    (s, toplevel)
-                ),
-                Done(proc) => {
-                    result.insert((s, toplevel), proc);
-                }
-            }
-        }
-
-        for (_, proc) in result.iter_mut() {
-            use self::SelfRecursive::*;
-            if let SelfRecursive(id) = proc.is_self_recursive {
-                proc.body = crate::tail_recursion::make_tail_recursive(
-                    arena,
-                    id,
-                    proc.name,
-                    proc.body.clone(),
-                    proc.args,
-                );
-            }
-        }
-
-        let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
-
-        crate::inc_dec::visit_procs(arena, borrow_params, &mut result);
-
-        (result, borrow_params)
     }
 
     // TODO trim down these arguments!
@@ -1020,7 +958,7 @@ impl ModifyRc {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Literal<'a> {
     // Literals
     Int(i128),
@@ -1036,6 +974,21 @@ pub enum Literal<'a> {
     /// Closed tag unions containing between 3 and 256 tags (all of 0 arity)
     /// compile to bytes, e.g. [ Blue, Black, Red, Green, White ]
     Byte(u8),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ListLiteralElement<'a> {
+    Literal(Literal<'a>),
+    Symbol(Symbol),
+}
+
+impl<'a> ListLiteralElement<'a> {
+    pub fn to_symbol(&self) -> Option<Symbol> {
+        match self {
+            Self::Symbol(s) => Some(*s),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1177,7 +1130,7 @@ pub enum Expr<'a> {
 
     Array {
         elem_layout: Layout<'a>,
-        elems: &'a [Symbol],
+        elems: &'a [ListLiteralElement<'a>],
     },
     EmptyArray,
 
@@ -1317,7 +1270,10 @@ impl<'a> Expr<'a> {
                     .append(alloc.text("}"))
             }
             Array { elems, .. } => {
-                let it = elems.iter().map(|s| symbol_to_doc(alloc, *s));
+                let it = elems.iter().map(|e| match e {
+                    ListLiteralElement::Literal(l) => l.to_doc(alloc),
+                    ListLiteralElement::Symbol(s) => symbol_to_doc(alloc, *s),
+                });
 
                 alloc
                     .text("Array [")
@@ -2728,6 +2684,63 @@ macro_rules! match_on_closure_argument {
     }};
 }
 
+fn try_make_literal<'a>(
+    env: &mut Env<'a, '_>,
+    can_expr: &roc_can::expr::Expr,
+) -> Option<Literal<'a>> {
+    use roc_can::expr::Expr::*;
+
+    match can_expr {
+        Int(_, precision, _, int) => {
+            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *precision, false) {
+                IntOrFloat::SignedIntType(_) | IntOrFloat::UnsignedIntType(_) => {
+                    Some(Literal::Int(*int))
+                }
+                _ => unreachable!("unexpected float precision for integer"),
+            }
+        }
+
+        Float(_, precision, float_str, float) => {
+            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *precision, true) {
+                IntOrFloat::BinaryFloatType(_) => Some(Literal::Float(*float)),
+                IntOrFloat::DecimalFloatType => {
+                    let dec = match RocDec::from_str(float_str) {
+                            Some(d) => d,
+                            None => panic!("Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message", float_str),
+                        };
+
+                    Some(Literal::Decimal(dec))
+                }
+                _ => unreachable!("unexpected float precision for integer"),
+            }
+        }
+
+        // TODO investigate lifetime trouble
+        // Str(string) => Some(Literal::Str(env.arena.alloc(string))),
+        Num(var, num_str, num) => {
+            // first figure out what kind of number this is
+            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, false) {
+                IntOrFloat::SignedIntType(_) | IntOrFloat::UnsignedIntType(_) => {
+                    Some(Literal::Int((*num).into()))
+                }
+                IntOrFloat::BinaryFloatType(_) => Some(Literal::Float(*num as f64)),
+                IntOrFloat::DecimalFloatType => {
+                    let dec = match RocDec::from_str(num_str) {
+                        Some(d) => d,
+                        None => panic!(
+                            r"Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message",
+                            num_str
+                        ),
+                    };
+
+                    Some(Literal::Decimal(dec))
+                }
+            }
+        }
+        _ => None,
+    }
+}
+
 pub fn with_hole<'a>(
     env: &mut Env<'a, '_>,
     can_expr: roc_can::expr::Expr,
@@ -3423,8 +3436,20 @@ pub fn with_hole<'a>(
             loc_elems,
         } => {
             let mut arg_symbols = Vec::with_capacity_in(loc_elems.len(), env.arena);
-            for arg_expr in loc_elems.iter() {
-                arg_symbols.push(possible_reuse_symbol(env, procs, &arg_expr.value));
+            let mut elements = Vec::with_capacity_in(loc_elems.len(), env.arena);
+
+            let mut symbol_exprs = Vec::with_capacity_in(loc_elems.len(), env.arena);
+
+            for arg_expr in loc_elems.into_iter() {
+                if let Some(literal) = try_make_literal(env, &arg_expr.value) {
+                    elements.push(ListLiteralElement::Literal(literal));
+                } else {
+                    let symbol = possible_reuse_symbol(env, procs, &arg_expr.value);
+
+                    elements.push(ListLiteralElement::Symbol(symbol));
+                    arg_symbols.push(symbol);
+                    symbol_exprs.push(arg_expr);
+                }
             }
             let arg_symbols = arg_symbols.into_bump_slice();
 
@@ -3434,7 +3459,7 @@ pub fn with_hole<'a>(
 
             let expr = Expr::Array {
                 elem_layout,
-                elems: arg_symbols,
+                elems: elements.into_bump_slice(),
             };
 
             let stmt = Stmt::Let(
@@ -3444,7 +3469,7 @@ pub fn with_hole<'a>(
                 hole,
             );
 
-            let iter = loc_elems
+            let iter = symbol_exprs
                 .into_iter()
                 .rev()
                 .map(|e| (elem_var, e))
@@ -3661,13 +3686,15 @@ pub fn with_hole<'a>(
 
                 match what_to_do {
                     UpdateExisting(field) => {
+                        substitute_in_exprs(env.arena, &mut stmt, assigned, symbols[0]);
+
                         stmt = assign_to_symbol(
                             env,
                             procs,
                             layout_cache,
                             field.var,
                             *field.loc_expr.clone(),
-                            assigned,
+                            symbols[0],
                             stmt,
                         );
                     }
@@ -5485,11 +5512,17 @@ fn substitute_in_expr<'a>(
         } => {
             let mut did_change = false;
             let new_args = Vec::from_iter_in(
-                args.iter().map(|s| match substitute(subs, *s) {
-                    None => *s,
-                    Some(s) => {
-                        did_change = true;
-                        s
+                args.iter().map(|e| {
+                    if let ListLiteralElement::Symbol(s) = e {
+                        match substitute(subs, *s) {
+                            None => ListLiteralElement::Symbol(*s),
+                            Some(s) => {
+                                did_change = true;
+                                ListLiteralElement::Symbol(s)
+                            }
+                        }
+                    } else {
+                        *e
                     }
                 }),
                 arena,

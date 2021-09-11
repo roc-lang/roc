@@ -139,7 +139,9 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
         }
     }
 
-    add_sjlj_roc_panic(env)
+    if env.is_gen_test {
+        add_sjlj_roc_panic(env)
+    }
 }
 
 pub fn add_sjlj_roc_panic(env: &Env<'_, '_, '_>) {

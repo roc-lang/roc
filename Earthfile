@@ -1,4 +1,4 @@
-FROM rust:1.54-slim-buster
+FROM rust:1.54-slim-bullseye
 WORKDIR /earthbuild
 
 prep-debian:
@@ -8,7 +8,7 @@ install-other-libs:
     FROM +prep-debian
     RUN apt -y install wget git
     RUN apt -y install libxcb-shape0-dev libxcb-xfixes0-dev # for editor clipboard
-    RUN apt -y install libc++-dev libc++abi-dev g++ libunwind-dev pkg-config libx11-dev zlib1g-dev
+    RUN apt -y install libunwind-dev pkg-config libx11-dev zlib1g-dev
 
 install-zig-llvm-valgrind-clippy-rustfmt:
     FROM +install-other-libs
@@ -27,20 +27,15 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN ln -s /usr/bin/lld-12 /usr/bin/ld.lld
     ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld -C target-cpu=native"
     # valgrind
-    RUN apt -y install autotools-dev cmake automake libc6-dbg
-    RUN wget https://sourceware.org/pub/valgrind/valgrind-3.16.1.tar.bz2
-    RUN tar -xf valgrind-3.16.1.tar.bz2
-    # need to cd every time, every command starts at WORKDIR
-    RUN cd valgrind-3.16.1 && ./autogen.sh
-    RUN cd valgrind-3.16.1 && ./configure --disable-dependency-tracking
-    RUN cd valgrind-3.16.1 && make -j`nproc`
-    RUN cd valgrind-3.16.1 && make install
+    RUN apt -y install valgrind
     # clippy
     RUN rustup component add clippy
     # rustfmt
     RUN rustup component add rustfmt
     # criterion
     RUN cargo install cargo-criterion
+    # wasm
+    RUN apt -y install libxkbcommon-dev
     # sccache
     RUN apt -y install libssl-dev
     RUN cargo install sccache
@@ -77,8 +72,15 @@ check-typos:
 test-rust:
     FROM +copy-dirs
     ENV RUST_BACKTRACE=1
+    # run one of the benchmarks to make sure the host is compiled
+    # not pre-compiling the host can cause race conditions
+    RUN echo "4" | cargo run --release examples/benchmarks/NQueens.roc
     RUN --mount=type=cache,target=$SCCACHE_DIR \
         cargo test --release && sccache --show-stats
+    # run i386 (32-bit linux) cli tests
+    RUN echo "4" | cargo run --release -- --backend=x86_32 examples/benchmarks/NQueens.roc
+    RUN --mount=type=cache,target=$SCCACHE_DIR \
+        cargo test --release --test cli_run i386 --features="i386-cli-run" && sccache --show-stats
 
 verify-no-git-changes:
     FROM +test-rust

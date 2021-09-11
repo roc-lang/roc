@@ -108,7 +108,7 @@ mod cli_run {
         assert!(out.status.success());
     }
 
-    #[cfg(feature = "wasm-cli-run")]
+    #[cfg(feature = "wasm32-cli-run")]
     fn check_wasm_output_with_stdin(
         file: &Path,
         stdin: &[&str],
@@ -117,7 +117,7 @@ mod cli_run {
         expected_ending: &str,
     ) {
         let mut flags = flags.to_vec();
-        flags.push("--backend=wasm");
+        flags.push("--backend=wasm32");
 
         let compile_out = run_roc(&[&["build", file.to_str().unwrap()], flags.as_slice()].concat());
         if !compile_out.stderr.is_empty() {
@@ -126,19 +126,15 @@ mod cli_run {
 
         assert!(compile_out.status.success(), "bad status {:?}", compile_out);
 
-        let out = run_cmd(
-            "wasmtime",
-            stdin,
-            &[file.with_file_name(executable_filename).to_str().unwrap()],
-        );
+        let path = file.with_file_name(executable_filename);
+        let stdout = crate::run_with_wasmer(&path, stdin);
 
-        if !&out.stdout.ends_with(expected_ending) {
+        if !stdout.ends_with(expected_ending) {
             panic!(
                 "expected output to end with {:?} but instead got {:#?}",
-                expected_ending, out
+                expected_ending, stdout
             );
         }
-        assert!(out.status.success());
     }
 
     /// This macro does two things.
@@ -319,8 +315,8 @@ mod cli_run {
 
             )*
 
-            #[cfg(feature = "wasm-cli-run")]
-            mod wasm {
+            #[cfg(feature = "wasm32-cli-run")]
+            mod wasm32 {
                 use super::*;
             $(
                 #[test]
@@ -331,7 +327,7 @@ mod cli_run {
 
                     // TODO fix QuicksortApp and then remove this!
                     match benchmark.filename {
-                        "QuicksortApp.roc" | "TestBase64.roc" => {
+                        "QuicksortApp.roc"  => {
                             eprintln!("WARNING: skipping testing benchmark {} because the test is broken right now!", benchmark.filename);
                             return;
                         }
@@ -353,6 +349,47 @@ mod cli_run {
                         benchmark.executable_filename,
                         &["--optimize"],
                         benchmark.expected_ending,
+                    );
+                }
+            )*
+            }
+
+            #[cfg(feature = "i386-cli-run")]
+            mod i386 {
+                use super::*;
+            $(
+                #[test]
+                #[cfg_attr(not(debug_assertions), serial(benchmark))]
+                fn $test_name() {
+                    let benchmark = $benchmark;
+                    let file_name = examples_dir("benchmarks").join(benchmark.filename);
+
+                    // TODO fix QuicksortApp and then remove this!
+                    match benchmark.filename {
+                        "QuicksortApp.roc" => {
+                            eprintln!("WARNING: skipping testing benchmark {} because the test is broken right now!", benchmark.filename);
+                            return;
+                        }
+                        _ => {}
+                    }
+
+                    // Check with and without optimizations
+                    check_output_with_stdin(
+                        &file_name,
+                        benchmark.stdin,
+                        benchmark.executable_filename,
+                        &["--backend=x86_32"],
+                        benchmark.expected_ending,
+                        benchmark.use_valgrind,
+                    );
+
+                    check_output_with_stdin(
+                        &file_name,
+                        benchmark.stdin,
+                        benchmark.executable_filename,
+                        &["--backend=x86_32", "--optimize"],
+                        benchmark.expected_ending,
+                        benchmark.use_valgrind,
                     );
                 }
             )*
@@ -563,5 +600,68 @@ mod cli_run {
             "I am Dep2.value2\n",
             true,
         );
+    }
+}
+
+#[cfg(feature = "wasm32-cli-run")]
+fn run_with_wasmer(wasm_path: &std::path::Path, stdin: &[&str]) -> String {
+    use std::io::Write;
+    use wasmer::{Instance, Module, Store};
+
+    //    std::process::Command::new("cp")
+    //        .args(&[
+    //            wasm_path.to_str().unwrap(),
+    //            "/home/folkertdev/roc/wasm/nqueens.wasm",
+    //        ])
+    //        .output()
+    //        .unwrap();
+
+    let store = Store::default();
+    let module = Module::from_file(&store, &wasm_path).unwrap();
+
+    let mut fake_stdin = wasmer_wasi::Pipe::new();
+    let fake_stdout = wasmer_wasi::Pipe::new();
+    let fake_stderr = wasmer_wasi::Pipe::new();
+
+    for line in stdin {
+        write!(fake_stdin, "{}", line).unwrap();
+    }
+
+    // First, we create the `WasiEnv`
+    use wasmer_wasi::WasiState;
+    let mut wasi_env = WasiState::new("hello")
+        .stdin(Box::new(fake_stdin))
+        .stdout(Box::new(fake_stdout))
+        .stderr(Box::new(fake_stderr))
+        .finalize()
+        .unwrap();
+
+    // Then, we get the import object related to our WASI
+    // and attach it to the Wasm instance.
+    let import_object = wasi_env
+        .import_object(&module)
+        .unwrap_or_else(|_| wasmer::imports!());
+
+    let instance = Instance::new(&module, &import_object).unwrap();
+
+    let start = instance.exports.get_function("_start").unwrap();
+
+    match start.call(&[]) {
+        Ok(_) => {
+            let mut state = wasi_env.state.lock().unwrap();
+
+            match state.fs.stdout_mut() {
+                Ok(Some(stdout)) => {
+                    let mut buf = String::new();
+                    stdout.read_to_string(&mut buf).unwrap();
+
+                    return buf;
+                }
+                _ => todo!(),
+            }
+        }
+        Err(e) => {
+            panic!("Something went wrong running a wasm test:\n{:?}", e);
+        }
     }
 }

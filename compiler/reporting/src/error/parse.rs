@@ -2,7 +2,7 @@ use roc_parse::parser::{Col, ParseProblem, Row, SyntaxError};
 use roc_region::all::Region;
 use std::path::PathBuf;
 
-use crate::report::{Report, RocDocAllocator, RocDocBuilder};
+use crate::report::{Report, RocDocAllocator, RocDocBuilder, Severity};
 use ven_pretty::DocAllocator;
 
 pub fn parse_problem<'a>(
@@ -75,6 +75,7 @@ fn to_syntax_report<'a>(
         filename: filename.clone(),
         doc,
         title: "PARSE PROBLEM".to_string(),
+        severity: Severity::RuntimeError,
     };
 
     let region = Region {
@@ -95,6 +96,7 @@ fn to_syntax_report<'a>(
                 filename,
                 doc,
                 title: "PARSE PROBLEM".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
         SyntaxError::ArgumentsBeforeEquals(region) => {
@@ -107,6 +109,7 @@ fn to_syntax_report<'a>(
                 filename,
                 doc,
                 title: "PARSE PROBLEM".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
         Unexpected(mut region) => {
@@ -139,6 +142,7 @@ fn to_syntax_report<'a>(
                 filename,
                 doc,
                 title: "NOT END OF FILE".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
         SyntaxError::Eof(region) => {
@@ -148,6 +152,7 @@ fn to_syntax_report<'a>(
                 filename,
                 doc,
                 title: "PARSE PROBLEM".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
         SyntaxError::OutdentedTooFar => {
@@ -157,6 +162,7 @@ fn to_syntax_report<'a>(
                 filename,
                 doc,
                 title: "PARSE PROBLEM".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
         Type(typ) => to_type_report(alloc, filename, typ, 0, 0),
@@ -235,6 +241,7 @@ fn to_expr_report<'a>(
                 filename,
                 doc,
                 title: "ARGUMENTS BEFORE EQUALS".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -320,6 +327,7 @@ fn to_expr_report<'a>(
                 filename,
                 doc,
                 title: "UNKNOWN OPERATOR".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -345,6 +353,7 @@ fn to_expr_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD IDENTIFIER".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -426,6 +435,7 @@ fn to_expr_report<'a>(
                 filename,
                 doc,
                 title: title.to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -453,6 +463,7 @@ fn to_expr_report<'a>(
                 filename,
                 doc,
                 title: "MISSING FINAL EXPRESSION".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -483,6 +494,7 @@ fn to_expr_report<'a>(
                 filename,
                 doc,
                 title: "SYNTAX PROBLEM".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -505,6 +517,7 @@ fn to_expr_report<'a>(
                 filename,
                 doc,
                 title: "ARGUMENTS BEFORE EQUALS".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -524,6 +537,7 @@ fn to_expr_report<'a>(
                 filename,
                 doc,
                 title: "BAD BACKPASSING ARROW".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -564,6 +578,7 @@ fn to_lambda_report<'a>(
                     filename,
                     doc,
                     title: "WEIRD ARROW".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
             _ => {
@@ -585,6 +600,7 @@ fn to_lambda_report<'a>(
                     filename,
                     doc,
                     title: "MISSING ARROW".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
         },
@@ -609,6 +625,7 @@ fn to_lambda_report<'a>(
                     filename,
                     doc,
                     title: "WEIRD ARROW".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
             _ => {
@@ -630,6 +647,7 @@ fn to_lambda_report<'a>(
                     filename,
                     doc,
                     title: "MISSING ARROW".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
         },
@@ -653,6 +671,7 @@ fn to_lambda_report<'a>(
                     filename,
                     doc,
                     title: "UNFINISHED ARGUMENT LIST".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
             _ => {
@@ -673,6 +692,7 @@ fn to_lambda_report<'a>(
                     filename,
                     doc,
                     title: "MISSING ARROW".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
         },
@@ -762,6 +782,7 @@ fn to_unfinished_lambda_report<'a>(
         filename,
         doc,
         title: "UNFINISHED FUNCTION".to_string(),
+        severity: Severity::RuntimeError,
     }
 }
 
@@ -824,6 +845,7 @@ fn to_str_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD ESCAPE".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
         EString::CodePtOpen(row, col) | EString::CodePtEnd(row, col) => {
@@ -849,6 +871,7 @@ fn to_str_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD CODE POINT".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
         EString::FormatEnd(row, col) => {
@@ -869,6 +892,7 @@ fn to_str_report<'a>(
                 filename,
                 doc,
                 title: "ENDLESS FORMAT".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
         EString::EndlessSingle(row, col) => {
@@ -891,6 +915,7 @@ fn to_str_report<'a>(
                 filename,
                 doc,
                 title: "ENDLESS STRING".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
         EString::EndlessMulti(row, col) => {
@@ -913,6 +938,7 @@ fn to_str_report<'a>(
                 filename,
                 doc,
                 title: "ENDLESS STRING".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
     }
@@ -958,6 +984,7 @@ fn to_expr_in_parens_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED PARENTHESES".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
         EInParens::Open(row, col) | EInParens::IndentOpen(row, col) => {
@@ -982,6 +1009,7 @@ fn to_expr_in_parens_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED PARENTHESES".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
     }
@@ -1031,6 +1059,7 @@ fn to_list_report<'a>(
                         filename,
                         doc,
                         title: "UNFINISHED LIST".to_string(),
+                        severity: Severity::RuntimeError,
                     }
                 }
                 _ => {
@@ -1063,6 +1092,7 @@ fn to_list_report<'a>(
                         filename,
                         doc,
                         title: "UNFINISHED LIST".to_string(),
+                        severity: Severity::RuntimeError,
                     }
                 }
             }
@@ -1090,6 +1120,7 @@ fn to_list_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED LIST".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
     }
@@ -1210,6 +1241,7 @@ fn to_unfinished_if_report<'a>(
         filename,
         doc,
         title: "UNFINISHED IF".to_string(),
+        severity: Severity::RuntimeError,
     }
 }
 
@@ -1243,6 +1275,7 @@ fn to_when_report<'a>(
                     filename,
                     doc,
                     title: "IF GUARD NO CONDITION".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
             _ => to_expr_report(
@@ -1273,6 +1306,7 @@ fn to_when_report<'a>(
                 filename,
                 doc,
                 title: "MISSING ARROW".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -1440,6 +1474,7 @@ fn to_unfinished_when_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED WHEN".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
     }
@@ -1477,6 +1512,7 @@ fn to_unexpected_arrow_report<'a>(
         filename,
         doc,
         title: "UNEXPECTED ARROW".to_string(),
+        severity: Severity::RuntimeError,
     }
 }
 
@@ -1552,6 +1588,7 @@ fn to_pattern_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED PATTERN".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
         EPattern::Record(record, row, col) => {
@@ -1593,6 +1630,7 @@ fn to_precord_report<'a>(
                     filename,
                     doc,
                     title: "UNFINISHED RECORD PATTERN".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
             _ => {
@@ -1609,6 +1647,7 @@ fn to_precord_report<'a>(
                     filename,
                     doc,
                     title: "UNFINISHED RECORD PATTERN".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
         },
@@ -1633,6 +1672,7 @@ fn to_precord_report<'a>(
                         filename,
                         doc,
                         title: "UNFINISHED RECORD PATTERN".to_string(),
+                        severity: Severity::RuntimeError,
                     }
                 }
                 _ => {
@@ -1652,6 +1692,7 @@ fn to_precord_report<'a>(
                         filename,
                         doc,
                         title: "UNFINISHED RECORD PATTERN".to_string(),
+                        severity: Severity::RuntimeError,
                     }
                 }
             }
@@ -1676,6 +1717,7 @@ fn to_precord_report<'a>(
                     filename,
                     doc,
                     title: "UNFINISHED RECORD PATTERN".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
             Next::Other(Some(',')) => todo!(),
@@ -1700,6 +1742,7 @@ fn to_precord_report<'a>(
                     filename,
                     doc,
                     title: "PROBLEM IN RECORD PATTERN".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
         },
@@ -1744,6 +1787,7 @@ fn to_precord_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED RECORD PATTERN".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -1768,6 +1812,7 @@ fn to_precord_report<'a>(
                         filename,
                         doc,
                         title: "NEED MORE INDENTATION".to_string(),
+                        severity: Severity::RuntimeError,
                     }
                 }
                 None => {
@@ -1792,6 +1837,7 @@ fn to_precord_report<'a>(
                         filename,
                         doc,
                         title: "UNFINISHED RECORD PATTERN".to_string(),
+                        severity: Severity::RuntimeError,
                     }
                 }
             }
@@ -1842,6 +1888,7 @@ fn to_pattern_in_parens_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED PARENTHESES".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -1865,6 +1912,7 @@ fn to_pattern_in_parens_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED PARENTHESES".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -1889,6 +1937,7 @@ fn to_pattern_in_parens_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED PARENTHESES".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -1913,6 +1962,7 @@ fn to_pattern_in_parens_report<'a>(
                         filename,
                         doc,
                         title: "NEED MORE INDENTATION".to_string(),
+                        severity: Severity::RuntimeError,
                     }
                 }
                 None => {
@@ -1937,6 +1987,7 @@ fn to_pattern_in_parens_report<'a>(
                         filename,
                         doc,
                         title: "UNFINISHED PARENTHESES".to_string(),
+                        severity: Severity::RuntimeError,
                     }
                 }
             }
@@ -1980,6 +2031,7 @@ fn to_type_report<'a>(
                     filename,
                     doc,
                     title: "DOUBLE COMMA".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
             _ => todo!(),
@@ -2005,6 +2057,7 @@ fn to_type_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED TYPE".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -2022,6 +2075,7 @@ fn to_type_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED TYPE".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -2039,6 +2093,7 @@ fn to_type_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED TYPE".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -2056,6 +2111,7 @@ fn to_type_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED INLINE ALIAS".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -2072,6 +2128,7 @@ fn to_type_report<'a>(
                 filename,
                 doc,
                 title: "BAD TYPE VARIABLE".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -2108,6 +2165,7 @@ fn to_trecord_report<'a>(
                     filename,
                     doc,
                     title: "UNFINISHED RECORD TYPE".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
             _ => {
@@ -2128,6 +2186,7 @@ fn to_trecord_report<'a>(
                     filename,
                     doc,
                     title: "UNFINISHED RECORD TYPE".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
         },
@@ -2152,6 +2211,7 @@ fn to_trecord_report<'a>(
                         filename,
                         doc,
                         title: "UNFINISHED RECORD TYPE".to_string(),
+                        severity: Severity::RuntimeError,
                     }
                 }
                 _ => {
@@ -2171,6 +2231,7 @@ fn to_trecord_report<'a>(
                         filename,
                         doc,
                         title: "UNFINISHED RECORD TYPE".to_string(),
+                        severity: Severity::RuntimeError,
                     }
                 }
             }
@@ -2195,6 +2256,7 @@ fn to_trecord_report<'a>(
                     filename,
                     doc,
                     title: "UNFINISHED RECORD TYPE".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
             Next::Other(Some(',')) => todo!(),
@@ -2219,6 +2281,7 @@ fn to_trecord_report<'a>(
                     filename,
                     doc,
                     title: "PROBLEM IN RECORD TYPE".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
         },
@@ -2251,6 +2314,7 @@ fn to_trecord_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED RECORD TYPE".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -2275,6 +2339,7 @@ fn to_trecord_report<'a>(
                         filename,
                         doc,
                         title: "NEED MORE INDENTATION".to_string(),
+                        severity: Severity::RuntimeError,
                     }
                 }
                 None => {
@@ -2299,6 +2364,7 @@ fn to_trecord_report<'a>(
                         filename,
                         doc,
                         title: "UNFINISHED RECORD TYPE".to_string(),
+                        severity: Severity::RuntimeError,
                     }
                 }
             }
@@ -2345,6 +2411,7 @@ fn to_ttag_union_report<'a>(
                     filename,
                     doc,
                     title: "UNFINISHED TAG UNION TYPE".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
             Next::Other(Some(c)) if c.is_alphabetic() => {
@@ -2366,6 +2433,7 @@ fn to_ttag_union_report<'a>(
                     filename,
                     doc,
                     title: "WEIRD TAG NAME".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
             _ => {
@@ -2386,6 +2454,7 @@ fn to_ttag_union_report<'a>(
                     filename,
                     doc,
                     title: "UNFINISHED TAG UNION TYPE".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
         },
@@ -2411,6 +2480,7 @@ fn to_ttag_union_report<'a>(
                         filename,
                         doc,
                         title: "WEIRD TAG NAME".to_string(),
+                        severity: Severity::RuntimeError,
                     }
                 }
                 Next::Other(Some('@')) => {
@@ -2427,6 +2497,7 @@ fn to_ttag_union_report<'a>(
                         filename,
                         doc,
                         title: "WEIRD TAG NAME".to_string(),
+                        severity: Severity::RuntimeError,
                     }
                 }
                 _ => {
@@ -2446,6 +2517,7 @@ fn to_ttag_union_report<'a>(
                         filename,
                         doc,
                         title: "UNFINISHED TAG UNION TYPE".to_string(),
+                        severity: Severity::RuntimeError,
                     }
                 }
             }
@@ -2472,6 +2544,7 @@ fn to_ttag_union_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED TAG UNION TYPE".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -2496,6 +2569,7 @@ fn to_ttag_union_report<'a>(
                         filename,
                         doc,
                         title: "NEED MORE INDENTATION".to_string(),
+                        severity: Severity::RuntimeError,
                     }
                 }
                 None => {
@@ -2520,6 +2594,7 @@ fn to_ttag_union_report<'a>(
                         filename,
                         doc,
                         title: "UNFINISHED TAG UNION TYPE".to_string(),
+                        severity: Severity::RuntimeError,
                     }
                 }
             }
@@ -2560,6 +2635,7 @@ fn to_tinparens_report<'a>(
                         filename,
                         doc,
                         title: "UNFINISHED PARENTHESES".to_string(),
+                        severity: Severity::RuntimeError,
                     }
                 }
                 Next::Other(Some(c)) if c.is_alphabetic() => {
@@ -2581,6 +2657,7 @@ fn to_tinparens_report<'a>(
                         filename,
                         doc,
                         title: "WEIRD TAG NAME".to_string(),
+                        severity: Severity::RuntimeError,
                     }
                 }
                 _ => {
@@ -2603,6 +2680,7 @@ fn to_tinparens_report<'a>(
                         filename,
                         doc,
                         title: "UNFINISHED PARENTHESES".to_string(),
+                        severity: Severity::RuntimeError,
                     }
                 }
             }
@@ -2630,6 +2708,7 @@ fn to_tinparens_report<'a>(
                         filename,
                         doc,
                         title: "WEIRD TAG NAME".to_string(),
+                        severity: Severity::RuntimeError,
                     }
                 }
                 _ => {
@@ -2649,6 +2728,7 @@ fn to_tinparens_report<'a>(
                         filename,
                         doc,
                         title: "UNFINISHED PARENTHESES".to_string(),
+                        severity: Severity::RuntimeError,
                     }
                 }
             }
@@ -2676,6 +2756,7 @@ fn to_tinparens_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED PARENTHESES".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -2700,6 +2781,7 @@ fn to_tinparens_report<'a>(
                         filename,
                         doc,
                         title: "NEED MORE INDENTATION".to_string(),
+                        severity: Severity::RuntimeError,
                     }
                 }
                 None => {
@@ -2724,6 +2806,7 @@ fn to_tinparens_report<'a>(
                         filename,
                         doc,
                         title: "UNFINISHED PARENTHESES".to_string(),
+                        severity: Severity::RuntimeError,
                     }
                 }
             }
@@ -2756,6 +2839,7 @@ fn to_tapply_report<'a>(
                 filename,
                 doc,
                 title: "DOUBLE DOT".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
         TApply::TrailingDot(row, col) => {
@@ -2777,6 +2861,7 @@ fn to_tapply_report<'a>(
                 filename,
                 doc,
                 title: "TRAILING DOT".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
         TApply::StartIsNumber(row, col) => {
@@ -2798,6 +2883,7 @@ fn to_tapply_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD QUALIFIED NAME".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
         TApply::StartNotUppercase(row, col) => {
@@ -2819,6 +2905,7 @@ fn to_tapply_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD QUALIFIED NAME".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -2836,6 +2923,7 @@ fn to_tapply_report<'a>(
                 filename,
                 doc,
                 title: "END OF FILE".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -2891,6 +2979,7 @@ fn to_header_report<'a>(
                 filename,
                 doc,
                 title: "INCOMPLETE HEADER".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -2916,6 +3005,7 @@ fn to_header_report<'a>(
                 filename,
                 doc,
                 title: "MISSING HEADER".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -2939,6 +3029,7 @@ fn to_header_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD MODULE NAME".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -2962,6 +3053,7 @@ fn to_header_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD APP NAME".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -2983,6 +3075,7 @@ fn to_header_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD MODULE NAME".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -3020,6 +3113,7 @@ fn to_provides_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD PROVIDES".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -3044,6 +3138,7 @@ fn to_provides_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD PROVIDES".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -3082,6 +3177,7 @@ fn to_exposes_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD EXPOSES".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -3106,6 +3202,7 @@ fn to_exposes_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD EXPOSES".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -3144,6 +3241,7 @@ fn to_imports_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD EXPOSES".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -3168,6 +3266,7 @@ fn to_imports_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD IMPORTS".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -3193,6 +3292,7 @@ fn to_imports_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD MODULE NAME".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -3231,6 +3331,7 @@ fn to_requires_report<'a>(
                 filename,
                 doc,
                 title: "MISSING REQUIRES".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -3257,6 +3358,7 @@ fn to_requires_report<'a>(
                 filename,
                 doc,
                 title: "MISSING REQUIRES".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -3285,6 +3387,7 @@ fn to_requires_report<'a>(
                 filename,
                 doc,
                 title: "BAD REQUIRES RIGIDS".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -3321,6 +3424,7 @@ fn to_packages_report<'a>(
                 filename,
                 doc,
                 title: "MISSING PACKAGES".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -3359,6 +3463,7 @@ fn to_effects_report<'a>(
                 filename,
                 doc,
                 title: "MISSING PACKAGES".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
@@ -3391,6 +3496,7 @@ fn to_space_report<'a>(
                 filename,
                 doc,
                 title: "TAB CHARACTER".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 
