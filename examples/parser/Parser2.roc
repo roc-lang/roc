@@ -1,10 +1,8 @@
 interface Parser2 exposes [ 
-    Parser, run, 
-    succeed, fail, any,
+    Parser, run,  runU8,
+    succeed, fail, any, satisfy,
     andThen, first, second,
-    map,mapT2,
-
-    tests, tests2, testAndThen, badStuff
+    map
   ] imports [Pair, Utility]
 
 ## PARSER  
@@ -88,12 +86,6 @@ first =
 
 ## TESTS
 
-anyT = {name : "run \"abcd any => \"a\"", test: runU8 "abcd" any == "a" }
-
-satisfyT = {name : "run \"abcd\" satisfy (\\u -> u == 97)) => \"a\"", test : runU8 "abcd" satisfyA == "a" }
-
-satisfyA = satisfy (\u -> u == 97)
-satisfyB = satisfy (\u -> u == 98)
 
 satisfyWhatCameBefore = \u2 -> satisfy (\u3 -> u3 == u2)
 
@@ -109,12 +101,7 @@ mapT = {name : "Use map to shift output of parser: run \"abcd\" (map any (\\u ->
 mapT2 = runU8 "abcd" (map any (\u -> u + 25))
 
 
-tests = [ anyT, satisfyT,  mapT, andThenT, firstT, secondT]
-tests2 = [ anyT, satisfyT, andThenT, firstT, secondT, mapT]
 
-badStuff = [andThenT, firstT, secondT, mapT, andThenT, firstT, secondT]
-
-testAndThen = [andThenT]
 
 ## FOR STRING OUTPUT 
 
