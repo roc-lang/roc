@@ -985,11 +985,11 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // Dict module
 
-    // Dict.hashTestOnly : Nat, v -> Nat
+    // Dict.hashTestOnly : U64, v -> U64
     add_top_level_function_type!(
         Symbol::DICT_TEST_HASH,
         vec![u64_type(), flex(TVAR2)],
-        Box::new(nat_type())
+        Box::new(u64_type())
     );
 
     // len : Dict * * -> Nat

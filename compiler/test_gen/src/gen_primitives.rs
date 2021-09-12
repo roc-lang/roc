@@ -891,6 +891,7 @@ fn overflow_frees_list() {
             n : I64
             n = 9_223_372_036_854_775_807 + (Num.intCast (List.len myList))
 
+            index : Nat
             index = Num.intCast n
 
             List.get myList index
@@ -1018,7 +1019,7 @@ fn specialize_closure() {
                 y = [1]
 
                 f = \{} -> x
-                g = \{} -> x + List.len y
+                g = \{} -> x + Num.intCast (List.len y)
 
                 [ f, g ]
 
@@ -2292,8 +2293,8 @@ fn build_then_apply_closure() {
                 (\_ -> x) {}
             "#
         ),
-        "long string that is malloced",
-        &'static str
+        RocStr::from_slice(b"long string that is malloced"),
+        RocStr
     );
 }
 
@@ -2398,7 +2399,7 @@ fn call_invalid_layout() {
 }
 
 #[test]
-#[should_panic(expected = "assert failed!")]
+#[should_panic(expected = "An expectation failed!")]
 fn expect_fail() {
     assert_evals_to!(
         indoc!(
@@ -2683,26 +2684,50 @@ fn list_walk_until() {
 }
 
 #[test]
-#[ignore]
-fn int_literal_not_specialized() {
+fn int_literal_not_specialized_with_annotation() {
     // see https://github.com/rtfeldman/roc/issues/1600
     assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [ main ] to "./platform"
 
-
-            satisfy : (U8 -> Bool) -> Str
-            satisfy = \_ -> "foo"
-
-
-            main : I64
             main =
-                p1 = (\u -> u == 97)
+                satisfy : (U8 -> Str) -> Str
+                satisfy = \_ -> "foo"
 
-                satisfyA = satisfy p1
+                myEq : a, a -> Str
+                myEq = \_, _ -> "bar"
 
-                when satisfyA is
+                p1 : Num * -> Str
+                p1 = (\u -> myEq u 64)
+
+                when satisfy p1 is
+                    _ -> 32
+            "#
+        ),
+        32,
+        i64
+    );
+}
+
+#[test]
+fn int_literal_not_specialized_no_annotation() {
+    // see https://github.com/rtfeldman/roc/issues/1600
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            main =
+                satisfy : (U8 -> Str) -> Str
+                satisfy = \_ -> "foo"
+
+                myEq : a, a -> Str
+                myEq = \_, _ -> "bar"
+
+                p1 = (\u -> myEq u 64)
+
+                when satisfy p1 is
                     _ -> 32
             "#
         ),
@@ -2730,6 +2755,24 @@ fn unresolved_tvar_when_capture_is_unused() {
                     when oneOfResult is
                         _ -> 32
 
+            "#
+        ),
+        32,
+        i64
+    );
+}
+
+#[test]
+#[should_panic(expected = "Roc failed with message: ")]
+fn value_not_exposed_hits_panic() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                main : I64
+                main =
+                    Str.toInt 32
             "#
         ),
         32,

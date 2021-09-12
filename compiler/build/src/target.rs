@@ -18,6 +18,15 @@ pub fn target_triple_str(target: &Triple) -> &'static str {
             ..
         } => "x86_64-unknown-linux-gnu",
         Triple {
+            architecture: Architecture::X86_32(target_lexicon::X86_32Architecture::I386),
+            operating_system: OperatingSystem::Linux,
+            ..
+        } => "i386-unknown-linux-gnu",
+        Triple {
+            architecture: Architecture::Wasm32,
+            ..
+        } => "wasm32-unknown-unknown",
+        Triple {
             architecture: Architecture::Aarch64(_),
             operating_system: OperatingSystem::Linux,
             ..
@@ -34,7 +43,7 @@ pub fn target_triple_str(target: &Triple) -> &'static str {
 #[cfg(feature = "llvm")]
 pub fn init_arch(target: &Triple) {
     match target.architecture {
-        Architecture::X86_64 => {
+        Architecture::X86_64 | Architecture::X86_32(_) => {
             Target::initialize_x86(&InitializationConfig::default());
         }
         Architecture::Aarch64(_) if cfg!(feature = "target-aarch64") => {
@@ -62,6 +71,7 @@ pub fn arch_str(target: &Triple) -> &'static str {
     // https://stackoverflow.com/questions/15036909/clang-how-to-list-supported-target-architectures
     match target.architecture {
         Architecture::X86_64 => "x86-64",
+        Architecture::X86_32(_) => "x86",
         Architecture::Aarch64(_) if cfg!(feature = "target-aarch64") => "aarch64",
         Architecture::Arm(_) if cfg!(feature = "target-arm") => "arm",
         Architecture::Wasm32 if cfg!(feature = "target-webassembly") => "wasm32",

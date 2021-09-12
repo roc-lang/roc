@@ -29,23 +29,45 @@ extern fn roc__mainForHost_1_Fx_caller(*const u8, [*]u8, [*]u8) void;
 extern fn roc__mainForHost_1_Fx_size() i64;
 extern fn roc__mainForHost_1_Fx_result_size() i64;
 
-extern fn malloc(size: usize) callconv(.C) ?*c_void;
-extern fn realloc(c_ptr: [*]align(@alignOf(u128)) u8, size: usize) callconv(.C) ?*c_void;
-extern fn free(c_ptr: [*]align(@alignOf(u128)) u8) callconv(.C) void;
+const Align = extern struct { a: usize, b: usize };
+extern fn malloc(size: usize) callconv(.C) ?*align(@alignOf(Align)) c_void;
+extern fn realloc(c_ptr: [*]align(@alignOf(Align)) u8, size: usize) callconv(.C) ?*c_void;
+extern fn free(c_ptr: [*]align(@alignOf(Align)) u8) callconv(.C) void;
+
+const DEBUG: bool = false;
 
 export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
-    return malloc(size);
+    if (DEBUG) {
+        var ptr = malloc(size);
+        const stdout = std.io.getStdOut().writer();
+        stdout.print("alloc:   {d} (alignment {d}, size {d})\n", .{ ptr, alignment, size }) catch unreachable;
+        return ptr;
+    } else {
+        return malloc(size);
+    }
 }
 
 export fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*c_void {
-    return realloc(@alignCast(16, @ptrCast([*]u8, c_ptr)), new_size);
+    if (DEBUG) {
+        const stdout = std.io.getStdOut().writer();
+        stdout.print("realloc: {d} (alignment {d}, old_size {d})\n", .{ c_ptr, alignment, old_size }) catch unreachable;
+    }
+
+    return realloc(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)), new_size);
 }
 
 export fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
-    free(@alignCast(16, @ptrCast([*]u8, c_ptr)));
+    if (DEBUG) {
+        const stdout = std.io.getStdOut().writer();
+        stdout.print("dealloc: {d} (alignment {d})\n", .{ c_ptr, alignment }) catch unreachable;
+    }
+
+    free(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)));
 }
 
 export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
+    _ = tag_id;
+
     const stderr = std.io.getStdErr().writer();
     const msg = @ptrCast([*:0]const u8, c_ptr);
     stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
@@ -54,12 +76,9 @@ export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
 
 const Unit = extern struct {};
 
-pub export fn main() u8 {
-    const stdout = std.io.getStdOut().writer();
-    const stderr = std.io.getStdErr().writer();
-
+pub fn main() u8 {
     const size = @intCast(usize, roc__mainForHost_size());
-    const raw_output = std.heap.c_allocator.alloc(u8, size) catch unreachable;
+    const raw_output = std.heap.c_allocator.allocAdvanced(u8, @alignOf(u64), @intCast(usize, size), .at_least) catch unreachable;
     var output = @ptrCast([*]u8, raw_output);
 
     defer {
@@ -71,17 +90,17 @@ pub export fn main() u8 {
 
     roc__mainForHost_1_exposed(output);
 
-    const elements = @ptrCast([*]u64, @alignCast(8, output));
-
-    var flag = elements[0];
+    const flag = @ptrCast(*u64, @alignCast(@alignOf(u64), output)).*;
 
     if (flag == 0) {
         // all is well
-        const closure_data_pointer = @ptrCast([*]u8, output[8..size]);
+        const closure_data_pointer = @ptrCast([*]u8, output[@sizeOf(u64)..size]);
 
         call_the_closure(closure_data_pointer);
     } else {
-        const msg = @intToPtr([*:0]const u8, elements[1]);
+        const ptr = @ptrCast(*u32, output + @sizeOf(u64));
+        const msg = @intToPtr([*:0]const u8, ptr.*);
+        const stderr = std.io.getStdErr().writer();
         stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
 
         return 0;
@@ -92,6 +111,7 @@ pub export fn main() u8 {
 
     const delta = to_seconds(ts2) - to_seconds(ts1);
 
+    const stderr = std.io.getStdErr().writer();
     stderr.print("runtime: {d:.3}ms\n", .{delta * 1000}) catch unreachable;
 
     return 0;
@@ -103,7 +123,7 @@ fn to_seconds(tms: std.os.timespec) f64 {
 
 fn call_the_closure(closure_data_pointer: [*]u8) void {
     const size = roc__mainForHost_1_Fx_result_size();
-    const raw_output = std.heap.c_allocator.alloc(u8, @intCast(usize, size)) catch unreachable;
+    const raw_output = std.heap.c_allocator.allocAdvanced(u8, @alignOf(u64), @intCast(usize, size), .at_least) catch unreachable;
     var output = @ptrCast([*]u8, raw_output);
 
     defer {
@@ -135,7 +155,7 @@ pub export fn roc_fx_putInt(int: i64) i64 {
     return 0;
 }
 
-pub export fn roc_fx_putLine(rocPath: str.RocStr) i64 {
+export fn roc_fx_putLine(rocPath: str.RocStr) callconv(.C) void {
     const stdout = std.io.getStdOut().writer();
 
     for (rocPath.asSlice()) |char| {
@@ -143,30 +163,52 @@ pub export fn roc_fx_putLine(rocPath: str.RocStr) i64 {
     }
 
     stdout.print("\n", .{}) catch unreachable;
-
-    return 0;
 }
 
 const GetInt = extern struct {
     value: i64,
-    error_code: u8,
+    error_code: bool,
     is_error: bool,
 };
 
-pub export fn roc_fx_getInt() GetInt {
+comptime {
+    if (@sizeOf(usize) == 8) {
+        @export(roc_fx_getInt_64bit, .{ .name = "roc_fx_getInt" });
+    } else {
+        @export(roc_fx_getInt_32bit, .{ .name = "roc_fx_getInt" });
+    }
+}
+
+fn roc_fx_getInt_64bit() callconv(.C) GetInt {
     if (roc_fx_getInt_help()) |value| {
-        const get_int = GetInt{ .is_error = false, .value = value, .error_code = 0 };
+        const get_int = GetInt{ .is_error = false, .value = value, .error_code = false };
         return get_int;
     } else |err| switch (err) {
         error.InvalidCharacter => {
-            return GetInt{ .is_error = true, .value = 0, .error_code = 0 };
+            return GetInt{ .is_error = true, .value = 0, .error_code = false };
         },
         else => {
-            return GetInt{ .is_error = true, .value = 0, .error_code = 1 };
+            return GetInt{ .is_error = true, .value = 0, .error_code = true };
         },
     }
 
     return 0;
+}
+
+fn roc_fx_getInt_32bit(output: *GetInt) callconv(.C) void {
+    if (roc_fx_getInt_help()) |value| {
+        const get_int = GetInt{ .is_error = false, .value = value, .error_code = false };
+        output.* = get_int;
+    } else |err| switch (err) {
+        error.InvalidCharacter => {
+            output.* = GetInt{ .is_error = true, .value = 0, .error_code = false };
+        },
+        else => {
+            output.* = GetInt{ .is_error = true, .value = 0, .error_code = true };
+        },
+    }
+
+    return;
 }
 
 fn roc_fx_getInt_help() !i64 {

@@ -1,4 +1,4 @@
-interface AStar exposes [ findPath, Model, initialModel, cheapestOpen, takeStep, reconstructPath ] imports [Quicksort]
+interface AStar exposes [ findPath, Model, initialModel, cheapestOpen, reconstructPath ] imports [Quicksort]
 
 findPath = \costFn, moveFn, start, end ->
     astar costFn moveFn end (initialModel start)
@@ -111,24 +111,24 @@ astar = \costFn, moveFn, goal, model ->
 
                 astar costFn moveFn goal modelWithCosts
 
-takeStep = \moveFn, _goal, model, current ->
-    modelPopped =
-        { model &
-            openSet: Set.remove model.openSet current,
-            evaluated: Set.insert model.evaluated current,
-        }
-
-    neighbors = moveFn current
-
-    newNeighbors = Set.difference neighbors modelPopped.evaluated
-
-    modelWithNeighbors = { modelPopped & openSet: Set.union modelPopped.openSet newNeighbors }
-
-    # a lot goes wrong here
-    modelWithCosts =
-        Set.walk newNeighbors (\n, m -> updateCost current n m) modelWithNeighbors
-
-    modelWithCosts
+# takeStep = \moveFn, _goal, model, current ->
+#     modelPopped =
+#         { model &
+#             openSet: Set.remove model.openSet current,
+#             evaluated: Set.insert model.evaluated current,
+#         }
+# 
+#     neighbors = moveFn current
+# 
+#     newNeighbors = Set.difference neighbors modelPopped.evaluated
+# 
+#     modelWithNeighbors = { modelPopped & openSet: Set.union modelPopped.openSet newNeighbors }
+# 
+#     # a lot goes wrong here
+#     modelWithCosts =
+#         Set.walk newNeighbors (\n, m -> updateCost current n m) modelWithNeighbors
+# 
+#     modelWithCosts
 
 
 

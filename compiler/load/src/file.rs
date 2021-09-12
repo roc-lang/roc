@@ -721,6 +721,12 @@ pub struct MonomorphizedModule<'a> {
     pub timings: MutMap<ModuleId, ModuleTiming>,
 }
 
+impl<'a> MonomorphizedModule<'a> {
+    pub fn total_problems(&self) -> usize {
+        self.can_problems.len() + self.type_problems.len() + self.mono_problems.len()
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct VariablySizedLayouts<'a> {
     rigids: MutMap<Lowercase, Layout<'a>>,
@@ -832,6 +838,7 @@ struct State<'a> {
     pub exposed_types: SubsByModule,
     pub output_path: Option<&'a str>,
     pub platform_path: PlatformPath<'a>,
+    pub ptr_bytes: u32,
 
     pub headers_parsed: MutSet<ModuleId>,
 
@@ -1467,6 +1474,7 @@ where
 
             let mut state = State {
                 root_id,
+                ptr_bytes,
                 platform_data: None,
                 goal_phase,
                 stdlib,
@@ -1978,7 +1986,10 @@ fn update<'a>(
                 );
 
                 if state.goal_phase > Phase::SolveTypes {
-                    let layout_cache = state.layout_caches.pop().unwrap_or_default();
+                    let layout_cache = state
+                        .layout_caches
+                        .pop()
+                        .unwrap_or_else(|| LayoutCache::new(state.ptr_bytes));
 
                     let typechecked = TypeCheckedModule {
                         module_id,
@@ -3916,7 +3927,7 @@ fn make_specializations<'a>(
     );
 
     let external_specializations_requested = procs.externals_we_need.clone();
-    let procedures = procs.get_specialized_procs_without_rc(mono_env.arena);
+    let procedures = procs.get_specialized_procs_without_rc(&mut mono_env);
 
     let make_specializations_end = SystemTime::now();
     module_timing.make_specializations = make_specializations_end
@@ -4288,7 +4299,7 @@ where
 }
 
 fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
-    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
+    use roc_reporting::report::{Report, RocDocAllocator, Severity, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
 
     let src_lines: Vec<&str> = Vec::new();
@@ -4319,6 +4330,7 @@ fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
                 filename: "UNKNOWN.roc".into(),
                 doc,
                 title: "FILE NOT FOUND".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
         io::ErrorKind::PermissionDenied => {
@@ -4335,7 +4347,8 @@ fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
             Report {
                 filename: "UNKNOWN.roc".into(),
                 doc,
-                title: "PERMISSION DENIED".to_string(),
+                title: "FILE PERMISSION DENIED".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
         _ => {
@@ -4351,6 +4364,7 @@ fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
                 filename: "UNKNOWN.roc".into(),
                 doc,
                 title: "FILE PROBLEM".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
     };
@@ -4396,7 +4410,7 @@ fn to_parse_problem_report<'a>(
 }
 
 fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> String {
-    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
+    use roc_reporting::report::{Report, RocDocAllocator, Severity, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
     use PlatformPath::*;
 
@@ -4421,6 +4435,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
                     filename: "UNKNOWN.roc".into(),
                     doc,
                     title: "NO PLATFORM".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
             RootIsInterface => {
@@ -4436,6 +4451,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
                     filename: "UNKNOWN.roc".into(),
                     doc,
                     title: "NO PLATFORM".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
             RootIsPkgConfig => {
@@ -4451,6 +4467,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
                     filename: "UNKNOWN.roc".into(),
                     doc,
                     title: "NO PLATFORM".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
         }

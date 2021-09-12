@@ -74,10 +74,31 @@ pub fn build_file<'a>(
         builtin_defs_map,
     )?;
 
+    use target_lexicon::Architecture;
+    let emit_wasm = match target.architecture {
+        Architecture::X86_64 => false,
+        Architecture::Aarch64(_) => false,
+        Architecture::Wasm32 => true,
+        Architecture::X86_32(_) => false,
+        _ => panic!(
+            "TODO gracefully handle unsupported architecture: {:?}",
+            target.architecture
+        ),
+    };
+
+    // TODO wasm host extension should be something else ideally
+    // .bc does not seem to work because
+    //
+    // > Non-Emscripten WebAssembly hasn't implemented __builtin_return_address
+    //
+    // and zig does not currently emit `.a` webassembly static libraries
+    let host_extension = if emit_wasm { "zig" } else { "o" };
+    let app_extension = if emit_wasm { "bc" } else { "o" };
+
     let path_to_platform = loaded.platform_path.clone();
     let app_o_file = Builder::new()
         .prefix("roc_app")
-        .suffix(".o")
+        .suffix(&format!(".{}", app_extension))
         .tempfile()
         .map_err(|err| {
             todo!("TODO Gracefully handle tempfile creation error {:?}", err);
@@ -131,7 +152,7 @@ pub fn build_file<'a>(
         arena,
         loaded,
         &roc_file_path,
-        Triple::host(),
+        target,
         app_o_file,
         opt_level,
         emit_debug_info,
@@ -173,12 +194,13 @@ pub fn build_file<'a>(
     let mut host_input_path = PathBuf::from(cwd);
 
     host_input_path.push(&*path_to_platform);
-    host_input_path.push("host.o");
+    host_input_path.push("host");
+    host_input_path.set_extension(host_extension);
 
     // TODO we should no longer need to do this once we have platforms on
     // a package repository, as we can then get precompiled hosts from there.
     let rebuild_host_start = SystemTime::now();
-    rebuild_host(host_input_path.as_path());
+    rebuild_host(target, host_input_path.as_path());
     let rebuild_host_end = rebuild_host_start.elapsed().unwrap();
 
     if emit_debug_info {
