@@ -54,7 +54,7 @@ pub fn build(b: *Builder) void {
 
     // 32-bit wasm
     wasm32_target.cpu_arch = std.Target.Cpu.Arch.wasm32;
-    wasm32_target.os_tag = std.Target.Os.Tag.wasi;
+    wasm32_target.os_tag = std.Target.Os.Tag.freestanding;
     wasm32_target.abi = std.Target.Abi.none;
 
     const obj_name_wasm32 = "builtins-wasm32";

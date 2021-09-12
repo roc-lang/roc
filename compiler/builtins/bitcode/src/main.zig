@@ -1,6 +1,4 @@
-const builtin = @import("builtin");
 const std = @import("std");
-const testing = std.testing;
 
 // Dec Module
 const dec = @import("dec.zig");
@@ -110,6 +108,7 @@ const utils = @import("utils.zig");
 comptime {
     exportUtilsFn(utils.test_panic, "test_panic");
     exportUtilsFn(utils.decrefC, "decref");
+    exportUtilsFn(utils.decrefCheckNullC, "decref_check_null");
 
     @export(utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .Weak });
 }
@@ -140,13 +139,21 @@ fn exportUtilsFn(comptime func: anytype, comptime func_name: []const u8) void {
 
 // Custom panic function, as builtin Zig version errors during LLVM verification
 pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace) noreturn {
-    std.debug.print("{s}: {?}", .{ message, stacktrace });
+    if (std.builtin.is_test) {
+        std.debug.print("{s}: {?}", .{ message, stacktrace });
+    } else {
+        _ = message;
+        _ = stacktrace;
+    }
+
     unreachable;
 }
 
 // Run all tests in imported modules
 // https://github.com/ziglang/zig/blob/master/lib/std/std.zig#L94
 test "" {
+    const testing = std.testing;
+
     testing.refAllDecls(@This());
 }
 
@@ -158,7 +165,7 @@ test "" {
 //
 // Thank you Zig Contributors!
 export fn __muloti4(a: i128, b: i128, overflow: *c_int) callconv(.C) i128 {
-    // @setRuntimeSafety(builtin.is_test);
+    // @setRuntimeSafety(std.builtin.is_test);
 
     const min = @bitCast(i128, @as(u128, 1 << (128 - 1)));
     const max = ~min;

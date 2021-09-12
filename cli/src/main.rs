@@ -6,6 +6,9 @@ use std::fs::{self, FileType};
 use std::io;
 use std::path::{Path, PathBuf};
 
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[cfg(feature = "llvm")]
 use roc_cli::build;
 use std::ffi::{OsStr, OsString};
