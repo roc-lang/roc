@@ -5,7 +5,7 @@ extern crate indoc;
 mod helpers;
 
 #[cfg(all(test, target_os = "linux", any(target_arch = "x86_64"/*, target_arch = "aarch64"*/)))]
-mod dev_records {
+mod wasm_records {
     //    #[test]
     //    fn basic_record() {
     //        assert_evals_to!(
