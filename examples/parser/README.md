@@ -1,50 +1,24 @@
 # JIM README
 
-These are notes on some roc things I am working on.
+## Running Tests
 
-## Files
+See the file `Test.roc` for a small testing library.  To see how to use it, look
+at the comments and also the file `TestRest.roc`.  The latter runs suites
+of tests fo `Test.roc`.
 
-JIM_README.md
+### Dependencies
 
-```
-Loop.roc
-Pair.roc
-ParseApp.roc
-Parser.roc
-Test.roc
-Tester.roc
-Utility.roc
-```
+Test.roc: Console.roc
 
+## Parser project
 
-## Parser.roc
+This is at a very early stage.  See file `Parser.roc`.
 
-This is the main one, an experiment.  It will change a lot.
+### Dependencies
 
-Type: `Parser a : List U8 -> List ([Pair a (List U8)])`
+Pair.roc, Utility.roc
 
+### Tests
 
-Functions:
+`ParserTest.roc`: just run it.
 
-    run, runToString,
-    succeed, any,  satisfy, fail, 
-    map, andThen, first, second
-   
-
-To test: cargo run examples/benchmarks/ParseApp.roc
-
-## Pair
-
-The beginning of a pair library.
-
-Functions:
-
-    first, second, 
-    mapFirst, mapSecond
-
-
-## Loop
-
-Type: `Step state a : [ Loop state, Done a ]`
-
-Functions: `loop : (state -> Step state a), state -> a`
