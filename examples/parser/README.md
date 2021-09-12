@@ -4,6 +4,9 @@
 
 Console.roc
 ListExtra.roc: filter : List a, (a -> Bool) -> List a
+Loop.roc, LoopTest.roc: loop construct and tests for it.
+Pair.roc, PairTest.roc: Pairs
+StrExtra.roc: repeat, concat, join
 
 ## Running Tests
 
