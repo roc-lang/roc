@@ -129,7 +129,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     let time = matches.is_present(FLAG_TIME);
 
     let total_start = SystemTime::now();
-    let exec_parsing_start = SystemTime::now();
+    let exec_parsing_start = total_start;
     let exec_file = fs::File::open(&matches.value_of(EXEC).unwrap())?;
     let exec_mmap = unsafe { Mmap::map(&exec_file)? };
     let exec_data = &*exec_mmap;
@@ -911,7 +911,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     let time = matches.is_present(FLAG_TIME);
 
     let total_start = SystemTime::now();
-    let loading_metadata_start = SystemTime::now();
+    let loading_metadata_start = total_start;
     let input = fs::File::open(&matches.value_of(METADATA).unwrap())?;
     let input = BufReader::new(input);
     let md: metadata::Metadata = match deserialize_from(input) {
