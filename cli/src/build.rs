@@ -43,6 +43,7 @@ pub struct BuiltFile {
 }
 
 #[cfg(feature = "llvm")]
+#[allow(clippy::too_many_arguments)]
 pub fn build_file<'a>(
     arena: &'a Bump,
     target: &Triple,
