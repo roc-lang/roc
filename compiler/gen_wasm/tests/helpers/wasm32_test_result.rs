@@ -50,12 +50,12 @@ macro_rules! build_wrapper_body_primitive {
             const MAX_ALIGNED_SIZE: usize = 16;
             let mut instructions = build_wrapper_body_prelude(MAX_ALIGNED_SIZE);
             instructions.extend([
+                GetGlobal(STACK_POINTER_GLOBAL_ID),
                 //
                 // Call the main function with no arguments. Get primitive back.
                 Call(main_function_index),
                 //
                 // Store the primitive at the allocated address
-                GetGlobal(STACK_POINTER_GLOBAL_ID),
                 $store_instruction($align, 0),
                 //
                 // Return the result pointer

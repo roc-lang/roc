@@ -3,7 +3,7 @@ pub mod from_wasm32_memory;
 
 use bumpalo::Bump;
 use parity_wasm::builder;
-use parity_wasm::elements::{Internal, ValueType};
+use parity_wasm::elements::{Instruction, Internal, ValueType};
 
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::{Interns, Symbol};
@@ -31,7 +31,18 @@ pub struct Env<'a> {
 pub fn build_module<'a>(
     env: &'a Env,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-) -> Result<std::vec::Vec<u8>, String> {
+) -> Result<Vec<u8>, String> {
+    let (builder, _) = build_module_help(env, procedures)?;
+    let module = builder.build();
+    module
+        .to_bytes()
+        .map_err(|e| -> String { format!("Error serialising Wasm module {:?}", e) })
+}
+
+pub fn build_module_help<'a>(
+    env: &'a Env,
+    procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+) -> Result<(builder::ModuleBuilder, u32), String> {
     let mut backend = WasmBackend::new();
     let mut layout_ids = LayoutIds::default();
 
@@ -48,8 +59,9 @@ pub fn build_module<'a>(
     let mut procedures: std::vec::Vec<_> = procedures.into_iter().collect();
     procedures.sort_by(|a, b| b.0 .0.cmp(&a.0 .0));
 
+    let mut function_index: u32 = 0;
     for ((sym, layout), proc) in procedures {
-        let function_index = backend.build_proc(proc, sym)?;
+        function_index = backend.build_proc(proc, sym)?;
         if env.exposed_to_host.contains(&sym) {
             let fn_name = layout_ids
                 .get_toplevel(sym, &layout)
@@ -71,15 +83,18 @@ pub fn build_module<'a>(
         .with_min(MIN_MEMORY_SIZE_KB / PAGE_SIZE_KB)
         .build();
     backend.builder.push_memory(memory);
-
     let memory_export = builder::export()
         .field("memory")
         .with_internal(Internal::Memory(0))
         .build();
     backend.builder.push_export(memory_export);
 
-    let module = backend.builder.build();
-    module
-        .to_bytes()
-        .map_err(|e| -> String { format!("Error serialising Wasm module {:?}", e) })
+    let stack_pointer_global = builder::global()
+        .with_type(PTR_TYPE)
+        .mutable()
+        .init_expr(Instruction::I32Const((MIN_MEMORY_SIZE_KB * 1024) as i32))
+        .build();
+    backend.builder.push_global(stack_pointer_global);
+
+    Ok((backend.builder, function_index))
 }
