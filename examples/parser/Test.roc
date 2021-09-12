@@ -1,4 +1,4 @@
-interface Test exposes [  Test, eval, run, runF, runSuite, runSuites, failures, testList ] imports [ Console]
+interface Test exposes [  Test, run, runSuite, runSuites, runF, runSuiteF, runSuitesF ] imports [ Console]
 
 # This interface provides a simple way to run tests.  A test is a record
 # with two fields:
@@ -17,9 +17,23 @@ interface Test exposes [  Test, eval, run, runF, runSuite, runSuites, failures, 
 #
 #     [t1,t2] |> Test.runF "Test of potrezebie interface"  |> Task.putLine
 #
-# if you want to see failures only.
+# if you want to see failures only.  
+# 
+# There is also the notion of a Suite:
 #
+#     Suite : { name : Str, tests : List Test}  
 #
+# To run a suite do this:
+#
+#     runSuite myTestSuit
+#
+# You can also run lists of suites:
+#
+#     runSuites [suite1, suite2]
+#
+# The functions `runSuiteF` and `runSuitesF` display failures only.
+#
+# See the file `TestTest.roc` for examples or to test this interface.
 
 Test : { name : Str, test: Bool }
 
@@ -42,12 +56,6 @@ run = \tests, title ->
    underline = strRepeat n "-"
    Str.joinWith [title, "\n", underline, "\n", results] "" |> spaceAboveBelow
 
-runF : List Test, Str -> Str
-runF = \tests, title -> 
-   results = tests |> failures |> List.map eval |> Str.joinWith "\n" 
-   n = Str.countGraphemes title
-   underline = strRepeat n "-"
-   Str.joinWith [title, "\n", underline, "\n", results] "" |> spaceAboveBelow
 
 
 failures  : List Test -> List Test
@@ -58,17 +66,30 @@ runSuite =
     \suite -> run suite.tests suite.name
 
 
+
 runSuites : List Suite -> Str
 runSuites = 
    \suites -> List.prepend (List.map suites runSuite) "TESTS\n=====\n" |> Str.joinWith ""    
 
+
+runF : List Test, Str -> Str
+runF = \tests, title -> 
+   results = tests |> failures |> List.map eval |> Str.joinWith "\n" 
+   n = Str.countGraphemes title
+   underline = strRepeat n "-"
+   Str.joinWith [title, "\n", underline, "\n", results] "" |> spaceAboveBelow
+
+runSuiteF : Suite -> Str
+runSuiteF = 
+    \suite -> runF suite.tests suite.name
+
+runSuitesF : List Suite -> Str
+runSuitesF = 
+     \suites -> List.prepend (List.map suites runSuiteF) "TESTS\n=====\n" |> Str.joinWith ""   
+
 t1 = {name: "Addition", test: 1 + 1 == 2 }
 t2 = {name: "Bozo", test: 1 + 1 == 3}
 t3 = {name: "Extract field", test: (\t -> t.test) t1 == True}
-
-
-
-testList = [t1, t2, t3]
 
 
 ## Functions from parser/Utility.roc
