@@ -50,6 +50,7 @@ pub fn build_file<'a>(
     roc_file_path: PathBuf,
     opt_level: OptLevel,
     emit_debug_info: bool,
+    emit_timings: bool,
     link_type: LinkType,
 ) -> Result<BuiltFile, LoadingProblem<'a>> {
     let compilation_start = SystemTime::now();
@@ -177,7 +178,7 @@ pub fn build_file<'a>(
         })
         .len();
 
-    if emit_debug_info {
+    if emit_timings {
         println!(
             "\n\nCompilation finished!\n\nHere's how long each module took to compile:\n\n{}",
             buf
@@ -203,7 +204,7 @@ pub fn build_file<'a>(
     rebuild_host(target, host_input_path.as_path());
     let rebuild_host_end = rebuild_host_start.elapsed().unwrap();
 
-    if emit_debug_info {
+    if emit_timings {
         println!(
             "Finished rebuilding the host in {} ms\n",
             rebuild_host_end.as_millis()
@@ -230,7 +231,7 @@ pub fn build_file<'a>(
 
     let linking_time = link_start.elapsed().unwrap();
 
-    if emit_debug_info {
+    if emit_timings {
         println!("Finished linking in {} ms\n", linking_time.as_millis());
     }
 
