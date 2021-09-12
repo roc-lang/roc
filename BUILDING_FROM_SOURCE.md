@@ -32,6 +32,16 @@ If so, you can fix it like so:
 sudo apt-get install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 ```
 
+### libxkbcommon
+
+This library is needed for web assembly. You can get it on Ubuntu or Debian with:
+
+```
+sudo apt-get install libxkbcommon-dev
+```
+
+macOS may have this already, but if not, you can [get it from Homebrew](https://formulae.brew.sh/formula/libxkbcommon) with `brew install libxkbcommon`
+
 ### Zig
 **version: 0.8.0**
 
