@@ -1,5 +1,10 @@
 # JIM README
 
+## Files
+
+Console.roc
+ListExtra.roc: filter : List a, (a -> Bool) -> List a
+
 ## Running Tests
 
 See the file `Test.roc` for a small testing library.  To see how to use it, look
@@ -12,13 +17,16 @@ Test.roc: Console.roc
 
 ## Parser project
 
-This is at a very early stage.  See file `Parser.roc`.
+This is at a very early stage.  See files `Parser.roc` and `Parser2.roc`.
+The latter is the one I am currently working on while I sort-out some bugs.
+The active test suite is in `ParserTest.roc`.
 
 ### Dependencies
 
-Pair.roc, Utility.roc
+Parser2.roc: Pair.roc, Utility.roc
 
 ### Tests
 
 `ParserTest.roc`: just run it.
 
+ 
