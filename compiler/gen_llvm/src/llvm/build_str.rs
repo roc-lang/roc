@@ -268,15 +268,9 @@ fn decode_from_utf8_result<'a, 'ctx, 'env>(
     let ctx = env.context;
 
     let fields = match env.ptr_bytes {
-        8 => [
+        8 | 4 => [
             env.ptr_int().into(),
             super::convert::zig_str_type(env).into(),
-            env.context.bool_type().into(),
-            ctx.i8_type().into(),
-        ],
-        4 => [
-            super::convert::zig_str_type(env).into(),
-            env.ptr_int().into(),
             env.context.bool_type().into(),
             ctx.i8_type().into(),
         ],
@@ -286,7 +280,7 @@ fn decode_from_utf8_result<'a, 'ctx, 'env>(
     let record_type = env.context.struct_type(&fields, false);
 
     match env.ptr_bytes {
-        8 => {
+        8 | 4 => {
             let zig_struct = builder
                 .build_load(pointer, "load_utf8_validate_bytes_result")
                 .into_struct_value();
@@ -308,20 +302,6 @@ fn decode_from_utf8_result<'a, 'ctx, 'env>(
             let values = [byte_index, string, is_ok, problem_code];
 
             struct_from_fields(env, record_type, values.iter().copied().enumerate())
-        }
-        4 => {
-            let result_ptr_cast = env
-                .builder
-                .build_bitcast(
-                    pointer,
-                    record_type.ptr_type(AddressSpace::Generic),
-                    "to_unnamed",
-                )
-                .into_pointer_value();
-
-            builder
-                .build_load(result_ptr_cast, "load_utf8_validate_bytes_result")
-                .into_struct_value()
         }
         _ => unreachable!(),
     }

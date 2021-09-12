@@ -2531,6 +2531,8 @@ fn pattern_match_unit_tag() {
     );
 }
 
+// see for why this is disabled on wasm32 https://github.com/rtfeldman/roc/issues/1687
+#[cfg(not(feature = "wasm-cli-run"))]
 #[test]
 fn mirror_llvm_alignment_padding() {
     // see https://github.com/rtfeldman/roc/issues/1569
