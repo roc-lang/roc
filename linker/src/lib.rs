@@ -1134,29 +1134,25 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                             );
                         }
                         Some(*target_offset as i64)
-                    } else if let Ok(sym) = app_obj.symbol_by_index(index) {
-                        // TODO: Is there a better way to deal with all this nesting in rust.
-                        // I really want the experimental multiple if let statement.
-                        // Not one of the apps symbols, check if it is from the roc host.
-                        if let Ok(name) = sym.name() {
-                            if let Some(address) = md.roc_symbol_vaddresses.get(name) {
-                                let vaddr = (*address + md.added_byte_count) as i64;
-                                if verbose {
-                                    println!(
-                                        "\t\tRelocation targets symbol in host: {} @ {:+x}",
-                                        name, vaddr
-                                    );
-                                }
-                                Some(vaddr)
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
                     } else {
-                        None
+                        app_obj
+                            .symbol_by_index(index)
+                            .and_then(|sym| sym.name())
+                            .ok()
+                            .and_then(|name| {
+                                md.roc_symbol_vaddresses.get(name).map(|address| {
+                                    let vaddr = (*address + md.added_byte_count) as i64;
+                                    if verbose {
+                                        println!(
+                                            "\t\tRelocation targets symbol in host: {} @ {:+x}",
+                                            name, vaddr
+                                        );
+                                    }
+                                    vaddr
+                                })
+                            })
                     };
+
                     if let Some(target_offset) = target_offset {
                         let virt_base = section_virtual_offset as usize + rel.0 as usize;
                         let base = section_offset as usize + rel.0 as usize;
