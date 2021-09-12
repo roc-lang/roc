@@ -33,9 +33,10 @@ suite1d =  {name: "4. second", tests: [secondT]}
 suite1e=  {name: "5. first", tests: [firstT]}
 suite1f=  {name: "6. map", tests: [mapT]}
 
-suite2 = {name: "2a", tests: [anyT, satisfyT, andThenT]}
-suite3 = {name: "2b", tests: [anyT, satisfyT, andThenT, secondT]}
-suite4 =  {name: "All combinators", tests: [anyT, satisfyT, andThenT, secondT, firstT, mapT] }
+suite3 =  {name: "First three combinators", tests: [anyT, satisfyT, andThenT, ] }
+suite4 = {name: "First four combinators", tests: [anyT, satisfyT, andThenT, secondT]}
+suite5 =  {name: "First five combinators", tests: [anyT, satisfyT, andThenT, secondT, firstT] }
+suite6 =  {name: "All six combinators", tests: [anyT, satisfyT, andThenT, secondT, firstT, mapT] }
 
 
 # NOTE.  All of the functions imported from module Parser2 pass their inidividua respective
@@ -52,8 +53,13 @@ main =
 # Test.runSuite suite1d  ## Try this one (test (d) succeeds)
 # Test.runSuite suite1e
 # Test.runSuite suite1f
-Test.runSuites [suite1a, suite1b, suite1c, suite1d, suite1e, suite1f, suite2, suite3, suite4] ## Try this one (tests (c) and (d) now fail)
-# Test.runSuites [ suite2, suite3, suite4]                                                    ## Try this one (tests (c) and (d) now fail)
+
+# Test.runSuites [suite1a, suite1b, suite1c, suite1d, suite1e, suite1f, suite4 ] ## Try this one (tests (c) and (d) fail)
+
+Test.runSuites [suite3] 
+# Test.runSuites [suite4]
+# Test.runSuites [suite5]
+# Test.runSuites [suite6]
    |> Task.putLine
 
 
