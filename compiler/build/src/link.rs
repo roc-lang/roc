@@ -101,6 +101,9 @@ pub fn build_zig_host_native(
             // include libc
             "--library",
             "c",
+            "-fPIC",
+            "-O",
+            "ReleaseSafe",
             // cross-compile?
             "-target",
             target,
@@ -178,6 +181,9 @@ pub fn build_zig_host_native(
             // include libc
             "--library",
             "c",
+            "-fPIC",
+            "-O",
+            "ReleaseSafe",
         ])
         .output()
         .unwrap()
@@ -219,6 +225,9 @@ pub fn build_zig_host_wasm32(
             "i386-linux-musl",
             // "wasm32-wasi",
             // "-femit-llvm-ir=/home/folkertdev/roc/roc/examples/benchmarks/platform/host.ll",
+            "-fPIC",
+            "-O",
+            "ReleaseSafe",
         ])
         .output()
         .unwrap()
@@ -291,6 +300,8 @@ pub fn rebuild_host(target: &Triple, host_input_path: &Path) {
             .env_clear()
             .env("PATH", &env_path)
             .args(&[
+                "-O2",
+                "-fPIC",
                 "-c",
                 c_host_src.to_str().unwrap(),
                 "-o",
@@ -521,6 +532,7 @@ fn link_linux(
                 "--eh-frame-hdr",
                 "-arch",
                 arch_str(target),
+                "-pie",
                 libcrt_path.join("crti.o").to_str().unwrap(),
                 libcrt_path.join("crtn.o").to_str().unwrap(),
             ])
