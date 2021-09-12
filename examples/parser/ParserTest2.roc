@@ -6,7 +6,7 @@ app "parseapp"
 main : Task.Task {} []
 main =
  
-Parser2.tests |> Test.run "Parser2 test"
+Parser2.testAndThen |> Test.run "Parser2 testAndThen"
 # Parser2.mapT2
 # "hello"
    |> Task.putLine

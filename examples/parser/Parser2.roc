@@ -4,7 +4,7 @@ interface Parser2 exposes [
     andThen, first, second,
     map,mapT2,
 
-    tests, tests2, badStuff
+    tests, tests2, testAndThen, badStuff
   ] imports [Pair, Utility]
 
 ## PARSER  
@@ -114,6 +114,7 @@ tests2 = [ anyT, satisfyT, andThenT, firstT, secondT, mapT]
 
 badStuff = [andThenT, firstT, secondT, mapT, andThenT, firstT, secondT]
 
+testAndThen = [andThenT]
 
 ## FOR STRING OUTPUT 
 
