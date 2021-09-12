@@ -24,39 +24,75 @@ fn main() {
         return;
     }
 
-    let big_sur_path = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib";
-    let use_build_script = Path::new(big_sur_path).exists();
-
     // "." is relative to where "build.rs" is
     let build_script_dir_path = fs::canonicalize(Path::new(".")).unwrap();
     let bitcode_path = build_script_dir_path.join("bitcode");
 
-    let src_obj_path = bitcode_path.join("builtins.o");
+    let src_obj_path = bitcode_path.join("builtins-host.o");
     let src_obj = src_obj_path.to_str().expect("Invalid src object path");
 
-    let dest_ir_path = bitcode_path.join("builtins.ll");
-    let dest_ir = dest_ir_path.to_str().expect("Invalid dest ir path");
+    let dest_ir_path = bitcode_path.join("builtins-wasm32.ll");
+    let dest_ir_wasm32 = dest_ir_path.to_str().expect("Invalid dest ir path");
 
-    if use_build_script {
-        println!("Compiling zig object & ir to: {} and {}", src_obj, dest_ir);
-        run_command_with_no_args(&bitcode_path, "./build.sh");
-    } else {
-        println!("Compiling zig object to: {}", src_obj);
-        run_command(&bitcode_path, "zig", &["build", "object", "-Drelease=true"]);
+    let dest_ir_path = bitcode_path.join("builtins-i386.ll");
+    let dest_ir_i386 = dest_ir_path.to_str().expect("Invalid dest ir path");
 
-        println!("Compiling ir to: {}", dest_ir);
-        run_command(&bitcode_path, "zig", &["build", "ir", "-Drelease=true"]);
-    }
+    let dest_ir_path = bitcode_path.join("builtins-host.ll");
+    let dest_ir_host = dest_ir_path.to_str().expect("Invalid dest ir path");
+
+    println!("Compiling zig object to: {}", src_obj);
+    run_command(&bitcode_path, "zig", &["build", "object", "-Drelease=true"]);
+
+    println!("Compiling host ir to: {}", dest_ir_host);
+    run_command(&bitcode_path, "zig", &["build", "ir", "-Drelease=true"]);
+
+    println!("Compiling 32-bit i386 ir to: {}", dest_ir_i386);
+    run_command(
+        &bitcode_path,
+        "zig",
+        &["build", "ir-i386", "-Drelease=true"],
+    );
+
+    println!("Compiling 32-bit wasm32 ir to: {}", dest_ir_wasm32);
+    run_command(
+        &bitcode_path,
+        "zig",
+        &["build", "ir-wasm32", "-Drelease=true"],
+    );
 
     println!("Moving zig object to: {}", dest_obj);
 
     run_command(&bitcode_path, "mv", &[src_obj, dest_obj]);
 
-    let dest_bc_path = bitcode_path.join("builtins.bc");
-    let dest_bc = dest_bc_path.to_str().expect("Invalid dest bc path");
-    println!("Compiling bitcode to: {}", dest_bc);
+    let dest_bc_path = bitcode_path.join("builtins-i386.bc");
+    let dest_bc_32bit = dest_bc_path.to_str().expect("Invalid dest bc path");
+    println!("Compiling 32-bit bitcode to: {}", dest_bc_32bit);
 
-    run_command(build_script_dir_path, "llvm-as", &[dest_ir, "-o", dest_bc]);
+    run_command(
+        &build_script_dir_path,
+        "llvm-as",
+        &[dest_ir_i386, "-o", dest_bc_32bit],
+    );
+
+    let dest_bc_path = bitcode_path.join("builtins-wasm32.bc");
+    let dest_bc_32bit = dest_bc_path.to_str().expect("Invalid dest bc path");
+    println!("Compiling 32-bit bitcode to: {}", dest_bc_32bit);
+
+    run_command(
+        &build_script_dir_path,
+        "llvm-as",
+        &[dest_ir_wasm32, "-o", dest_bc_32bit],
+    );
+
+    let dest_bc_path = bitcode_path.join("builtins-host.bc");
+    let dest_bc_64bit = dest_bc_path.to_str().expect("Invalid dest bc path");
+    println!("Compiling 64-bit bitcode to: {}", dest_bc_64bit);
+
+    run_command(
+        &build_script_dir_path,
+        "llvm-as",
+        &[dest_ir_host, "-o", dest_bc_64bit],
+    );
 
     get_zig_files(bitcode_path.as_path(), &|path| {
         let path: &Path = path;
@@ -76,25 +112,6 @@ where
     let output_result = Command::new(OsStr::new(&command_str))
         .current_dir(path)
         .args(args)
-        .output();
-    match output_result {
-        Ok(output) => match output.status.success() {
-            true => (),
-            false => {
-                let error_str = match str::from_utf8(&output.stderr) {
-                    Ok(stderr) => stderr.to_string(),
-                    Err(_) => format!("Failed to run \"{}\"", command_str),
-                };
-                panic!("{} failed: {}", command_str, error_str);
-            }
-        },
-        Err(reason) => panic!("{} failed: {}", command_str, reason),
-    }
-}
-
-fn run_command_with_no_args<P: AsRef<Path>>(path: P, command_str: &str) {
-    let output_result = Command::new(OsStr::new(&command_str))
-        .current_dir(path)
         .output();
     match output_result {
         Ok(output) => match output.status.success() {

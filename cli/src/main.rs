@@ -5,7 +5,9 @@ use roc_cli::{
 use std::fs::{self, FileType};
 use std::io;
 use std::path::{Path, PathBuf};
-use target_lexicon::Triple;
+
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[cfg(feature = "llvm")]
 use roc_cli::build;
@@ -25,11 +27,7 @@ fn main() -> io::Result<()> {
                 Some(arg_index) => {
                     let roc_file_arg_index = arg_index + 1; // Not sure why this +1 is necessary, but it is!
 
-                    build(
-                        &Triple::host(),
-                        &matches,
-                        BuildConfig::BuildAndRun { roc_file_arg_index },
-                    )
+                    build(&matches, BuildConfig::BuildAndRun { roc_file_arg_index })
                 }
 
                 None => {
@@ -40,7 +38,6 @@ fn main() -> io::Result<()> {
             }
         }
         Some(CMD_BUILD) => Ok(build(
-            &Triple::host(),
             matches.subcommand_matches(CMD_BUILD).unwrap(),
             BuildConfig::BuildOnly,
         )?),

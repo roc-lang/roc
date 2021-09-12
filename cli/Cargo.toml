@@ -16,6 +16,8 @@ bench = false
 
 [features]
 default = ["target-x86", "llvm", "editor"]
+wasm32-cli-run = []
+i386-cli-run = []
 
 # This is a separate feature because when we generate docs on Netlify,
 # it doesn't have LLVM installed. (Also, it doesn't need to do code gen.)
@@ -65,10 +67,14 @@ im-rc = "14" # im and im-rc should always have the same version!
 bumpalo = { version = "3.2", features = ["collections"] }
 libc = "0.2"
 libloading = "0.6"
+mimalloc = { version = "0.1.26", default-features = false }
 
 inkwell = { path = "../vendor/inkwell", optional = true }
-target-lexicon = "0.10"
+target-lexicon = "0.12.2"
 tempfile = "3.1.0"
+
+wasmer = "2.0.0"
+wasmer-wasi = "2.0.0"
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"

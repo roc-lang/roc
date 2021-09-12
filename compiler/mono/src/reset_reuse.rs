@@ -1,5 +1,5 @@
 use crate::inc_dec::{collect_stmt, occurring_variables_expr, JPLiveVarMap, LiveVarSet};
-use crate::ir::{BranchInfo, Call, Expr, Proc, Stmt};
+use crate::ir::{BranchInfo, Call, Expr, ListLiteralElement, Proc, Stmt};
 use crate::layout::{Layout, UnionLayout};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -564,8 +564,18 @@ fn has_live_var_expr<'a>(expr: &'a Expr<'a>, needle: Symbol) -> bool {
     match expr {
         Expr::Literal(_) => false,
         Expr::Call(call) => has_live_var_call(call, needle),
-        Expr::Array { elems: fields, .. }
-        | Expr::Tag {
+        Expr::Array { elems: fields, .. } => {
+            for element in fields.iter() {
+                if let ListLiteralElement::Symbol(s) = element {
+                    if *s == needle {
+                        return true;
+                    }
+                }
+            }
+
+            false
+        }
+        Expr::Tag {
             arguments: fields, ..
         }
         | Expr::Struct(fields) => fields.iter().any(|s| *s == needle),

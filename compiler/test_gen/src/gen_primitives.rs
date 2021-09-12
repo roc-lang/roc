@@ -891,6 +891,7 @@ fn overflow_frees_list() {
             n : I64
             n = 9_223_372_036_854_775_807 + (Num.intCast (List.len myList))
 
+            index : Nat
             index = Num.intCast n
 
             List.get myList index
@@ -1018,7 +1019,7 @@ fn specialize_closure() {
                 y = [1]
 
                 f = \{} -> x
-                g = \{} -> x + List.len y
+                g = \{} -> x + Num.intCast (List.len y)
 
                 [ f, g ]
 
@@ -2292,8 +2293,8 @@ fn build_then_apply_closure() {
                 (\_ -> x) {}
             "#
         ),
-        "long string that is malloced",
-        &'static str
+        RocStr::from_slice(b"long string that is malloced"),
+        RocStr
     );
 }
 
@@ -2398,7 +2399,7 @@ fn call_invalid_layout() {
 }
 
 #[test]
-#[should_panic(expected = "assert failed!")]
+#[should_panic(expected = "An expectation failed!")]
 fn expect_fail() {
     assert_evals_to!(
         indoc!(

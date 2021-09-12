@@ -44,6 +44,12 @@ pub struct RocList<T> {
     length: usize,
 }
 
+impl<T: Clone> Clone for RocList<T> {
+    fn clone(&self) -> Self {
+        Self::from_slice(self.as_slice())
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum Storage {
     ReadOnly,
@@ -584,6 +590,10 @@ impl RocStr {
 
                 let raw_ptr = Self::get_element_ptr(raw_ptr as *mut u8);
 
+                // write the refcount
+                let refcount_ptr = raw_ptr as *mut isize;
+                *(refcount_ptr.offset(-1)) = isize::MIN;
+
                 {
                     // NOTE: using a memcpy here causes weird issues
                     let target_ptr = raw_ptr as *mut u8;
@@ -610,7 +620,9 @@ impl RocStr {
     }
 
     pub fn as_slice(&self) -> &[u8] {
-        if self.is_small_str() {
+        if self.is_empty() {
+            &[]
+        } else if self.is_small_str() {
             unsafe { core::slice::from_raw_parts(self.get_small_str_ptr(), self.len()) }
         } else {
             unsafe { core::slice::from_raw_parts(self.elements, self.length) }
@@ -714,7 +726,7 @@ impl Clone for RocStr {
 
 impl Drop for RocStr {
     fn drop(&mut self) {
-        if !self.is_small_str() {
+        if !self.is_small_str() && !self.is_empty() {
             let storage_ptr = self.get_storage_ptr_mut();
 
             unsafe {
@@ -832,11 +844,9 @@ impl RocDec {
             }
         };
 
-        let after_point = match parts.next() {
-            Some(answer) if answer.len() <= Self::DECIMAL_PLACES as usize => answer,
-            _ => {
-                return None;
-            }
+        let opt_after_point = match parts.next() {
+            Some(answer) if answer.len() <= Self::DECIMAL_PLACES as usize => Some(answer),
+            _ => None,
         };
 
         // There should have only been one "." in the string!
@@ -845,22 +855,27 @@ impl RocDec {
         }
 
         // Calculate the low digits - the ones after the decimal point.
-        let lo = match after_point.parse::<i128>() {
-            Ok(answer) => {
-                // Translate e.g. the 1 from 0.1 into 10000000000000000000
-                // by "restoring" the elided trailing zeroes to the number!
-                let trailing_zeroes = Self::DECIMAL_PLACES as usize - after_point.len();
-                let lo = answer * 10i128.pow(trailing_zeroes as u32);
+        let lo = match opt_after_point {
+            Some(after_point) => {
+                match after_point.parse::<i128>() {
+                    Ok(answer) => {
+                        // Translate e.g. the 1 from 0.1 into 10000000000000000000
+                        // by "restoring" the elided trailing zeroes to the number!
+                        let trailing_zeroes = Self::DECIMAL_PLACES as usize - after_point.len();
+                        let lo = answer * 10i128.pow(trailing_zeroes as u32);
 
-                if !before_point.starts_with('-') {
-                    lo
-                } else {
-                    -lo
+                        if !before_point.starts_with('-') {
+                            lo
+                        } else {
+                            -lo
+                        }
+                    }
+                    Err(_) => {
+                        return None;
+                    }
                 }
             }
-            Err(_) => {
-                return None;
-            }
+            None => 0,
         };
 
         // Calculate the high digits - the ones before the decimal point.
