@@ -84,25 +84,6 @@ first =
 ###############################################
 
 
-## TESTS
-
-
-satisfyWhatCameBefore = \u2 -> satisfy (\u3 -> u3 == u2)
-
-andThenT = { name: "andThen", test: runU8 "aaxyz" (andThen any satisfyWhatCameBefore) == "a"}
-
-## PANIC
-secondT = {name : "Use 'second' to recognize \"a\" then \"b\" returning \"b\"", test : runU8 "abcd" (second  satisfyA satisfyB) == "b"}
-firstT = {name : "Use 'first' to recognize \"a\" then \"b\" returning \"a\"", test : runU8 "abcd" (first  satisfyA satisfyB) == "a"}
-
-mapT = {name : "Use map to shift output of parser: run \"abcd\" (map any (\\u -> u + 25)) == \"z\"", test : runU8 "abcd" (map any (\u -> u + 25)) == "z"  }
-
-
-mapT2 = runU8 "abcd" (map any (\u -> u + 25))
-
-
-
-
 ## FOR STRING OUTPUT 
 
 runAux : Str, Parser a -> Result a [ListWasEmpty]

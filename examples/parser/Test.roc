@@ -1,4 +1,4 @@
-interface Test exposes [  Test, eval, run, runF, failures, testList ] imports [ Console]
+interface Test exposes [  Test, eval, run, runF, runSuite, runSuites, failures, testList ] imports [ Console]
 
 # This interface provides a simple way to run tests.  A test is a record
 # with two fields:
@@ -22,6 +22,8 @@ interface Test exposes [  Test, eval, run, runF, failures, testList ] imports [ 
 #
 
 Test : { name : Str, test: Bool }
+
+Suite : { name : Str, tests : List Test}
 
 passFail : Bool -> Str 
 passFail = \pass -> if pass then (Console.cyan "Pass :: ") else (Console.magenta "Fail :: ")
@@ -51,9 +53,19 @@ runF = \tests, title ->
 failures  : List Test -> List Test
 failures = \testss -> filterList testss (\t -> t.test == False) 
 
+runSuite : Suite -> Str
+runSuite = 
+    \suite -> run suite.tests suite.name
+
+
+runSuites : List Suite -> Str
+runSuites = 
+   \suites -> List.prepend (List.map suites runSuite) "TESTS\n=====\n" |> Str.joinWith ""    
+
 t1 = {name: "Addition", test: 1 + 1 == 2 }
 t2 = {name: "Bozo", test: 1 + 1 == 3}
 t3 = {name: "Extract field", test: (\t -> t.test) t1 == True}
+
 
 
 testList = [t1, t2, t3]
