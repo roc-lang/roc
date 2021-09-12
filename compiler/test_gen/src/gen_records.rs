@@ -889,3 +889,26 @@ fn blue_and_absent() {
         i64
     );
 }
+
+#[test]
+fn update_the_only_field() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Model : { foo : I64 }
+
+            model : Model
+            model = { foo: 3 }
+
+            foo = 4
+
+            newModel : Model
+            newModel = { model & foo }
+
+            newModel.foo
+                "#
+        ),
+        4,
+        i64
+    );
+}
