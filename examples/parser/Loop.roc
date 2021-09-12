@@ -1,5 +1,5 @@
 interface Loop exposes [  
-      Step, loop ] imports []
+      Step, loop, loopBranch, doneBranch ] imports []
 
 
 # Reference: last part of https://jxxcarlson.medium.com/?p=63cd104a192a
