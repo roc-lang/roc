@@ -1150,8 +1150,8 @@ fn strToBytes(arg: RocStr) RocList {
 }
 
 const FromUtf8Result = extern struct {
-    string: RocStr,
     byte_index: usize,
+    string: RocStr,
     is_ok: bool,
     problem_code: Utf8ByteProblem,
 };

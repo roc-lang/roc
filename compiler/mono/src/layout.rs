@@ -1158,8 +1158,8 @@ impl<'a> Builtin<'a> {
             //
             // In webassembly, For that to be safe
             // they must be aligned to allow such access
-            List(_) | EmptyList => pointer_size.max(8),
-            Str | EmptyStr => pointer_size.max(8),
+            List(_) | EmptyList => pointer_size,
+            Str | EmptyStr => pointer_size,
         }
     }
 

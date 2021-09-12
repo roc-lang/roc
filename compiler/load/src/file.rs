@@ -723,7 +723,21 @@ pub struct MonomorphizedModule<'a> {
 
 impl<'a> MonomorphizedModule<'a> {
     pub fn total_problems(&self) -> usize {
-        self.can_problems.len() + self.type_problems.len() + self.mono_problems.len()
+        let mut total = 0;
+
+        for problems in self.can_problems.values() {
+            total += problems.len();
+        }
+
+        for problems in self.type_problems.values() {
+            total += problems.len();
+        }
+
+        for problems in self.mono_problems.values() {
+            total += problems.len();
+        }
+
+        total
     }
 }
 

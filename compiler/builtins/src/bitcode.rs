@@ -83,3 +83,4 @@ pub const DEC_DIV: &str = "roc_builtins.dec.div";
 
 pub const UTILS_TEST_PANIC: &str = "roc_builtins.utils.test_panic";
 pub const UTILS_DECREF: &str = "roc_builtins.utils.decref";
+pub const UTILS_DECREF_CHECK_NULL: &str = "roc_builtins.utils.decref_check_null";
