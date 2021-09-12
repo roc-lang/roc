@@ -1,4 +1,4 @@
-interface Test exposes [  Test, eval, run, runF, failures, testList ] imports [ ]
+interface Test exposes [  Test, run, runF, runSuite ] imports [ ]
 
 # This interface provides a simple way to run tests.  A test is a record
 # with two fields:
@@ -50,14 +50,6 @@ runF = \tests, title ->
 
 failures  : List Test -> List Test
 failures = \testss -> filterList testss (\t -> t.test == False) 
-
-t1 = {name: "Addition", test: 1 + 1 == 2 }
-t2 = {name: "Bozo", test: 1 + 1 == 3}
-t3 = {name: "Extract field", test: (\t -> t.test) t1 == True}
-
-
-testList = [t1, t2, t3]
-
 
 ## Functions from parser/Utility.roc
 
