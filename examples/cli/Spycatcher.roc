@@ -701,7 +701,6 @@ step = \model ->
 
     # Recurse until we no longer need to run more sims
     if List.len sims < maxSims then
-        # FIXME comment this out and this branch no longer gets taken!
         {} <- await (Stdout.line "Recursing - List.len sims = \(lenSims), maxSims = \(maxSimsStr)")
 
         step newModel
@@ -917,16 +916,14 @@ scoreSim = \sim ->
 
 main : Task {} *
 main =
-    #times = Str.fromInt maxSims
+    times = Str.fromInt maxSims
 
-    #{} <- await (Stdout.line "Running simulation \(times) times...")
-    {} <- await (Stdout.line "Foo")
+    {} <- await (Stdout.line "Running simulation \(times) times...")
 
-    #model <- await (step initialModel)
-#    model = initialModel
+    model <- await (step initialModel)
 
-    #modelStr = modelToStr model
+    modelStr = modelToStr model
 
-    {} <- await (Stdout.line "Model: ")
+    {} <- await (Stdout.line "Final model: \(modelStr)")
 
     Stdout.line "Done!"
