@@ -189,6 +189,7 @@ pub enum Layout<'a> {
     /// this is important for closures that capture zero-sized values
     Struct(&'a [Layout<'a>]),
     Union(UnionLayout<'a>),
+    LambdaSet(LambdaSet<'a>),
     RecursivePointer,
 }
 
@@ -531,7 +532,7 @@ impl<'a> LambdaSet<'a> {
                 _ => {
                     let mut arguments = Vec::with_capacity_in(argument_layouts.len() + 1, arena);
                     arguments.extend(argument_layouts);
-                    arguments.push(self.runtime_representation());
+                    arguments.push(Layout::LambdaSet(*self));
 
                     arguments.into_bump_slice()
                 }
@@ -826,6 +827,7 @@ impl<'a> Layout<'a> {
                     }
                 }
             }
+            LambdaSet(lambda_set) => lambda_set.runtime_representation().safe_to_memcpy(),
             RecursivePointer => {
                 // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
                 false
@@ -890,6 +892,9 @@ impl<'a> Layout<'a> {
                     | NonNullableUnwrapped(_) => pointer_size,
                 }
             }
+            LambdaSet(lambda_set) => lambda_set
+                .runtime_representation()
+                .stack_size_without_alignment(pointer_size),
             RecursivePointer => pointer_size,
         }
     }
@@ -919,6 +924,9 @@ impl<'a> Layout<'a> {
                     | NonNullableUnwrapped(_) => pointer_size,
                 }
             }
+            Layout::LambdaSet(lambda_set) => lambda_set
+                .runtime_representation()
+                .alignment_bytes(pointer_size),
             Layout::Builtin(builtin) => builtin.alignment_bytes(pointer_size),
             Layout::RecursivePointer => pointer_size,
         }
@@ -929,6 +937,9 @@ impl<'a> Layout<'a> {
             Layout::Builtin(builtin) => builtin.allocation_alignment_bytes(pointer_size),
             Layout::Struct(_) => unreachable!("not heap-allocated"),
             Layout::Union(union_layout) => union_layout.allocation_alignment_bytes(pointer_size),
+            Layout::LambdaSet(lambda_set) => lambda_set
+                .runtime_representation()
+                .allocation_alignment_bytes(pointer_size),
             Layout::RecursivePointer => unreachable!("should be looked up to get an actual layout"),
         }
     }
@@ -979,6 +990,7 @@ impl<'a> Layout<'a> {
                     | NonNullableUnwrapped(_) => true,
                 }
             }
+            LambdaSet(lambda_set) => lambda_set.runtime_representation().contains_refcounted(),
             RecursivePointer => true,
         }
     }
@@ -1002,6 +1014,7 @@ impl<'a> Layout<'a> {
                     .append(alloc.text("}"))
             }
             Union(union_layout) => union_layout.to_doc(alloc, parens),
+            LambdaSet(lambda_set) => lambda_set.runtime_representation().to_doc(alloc, parens),
             RecursivePointer => alloc.text("*self"),
         }
     }
@@ -1360,7 +1373,7 @@ fn layout_from_flat_type<'a>(
         Func(_, closure_var, _) => {
             let lambda_set = LambdaSet::from_var(env.arena, env.subs, closure_var, env.ptr_bytes)?;
 
-            Ok(lambda_set.runtime_representation())
+            Ok(Layout::LambdaSet(lambda_set))
         }
         Record(fields, ext_var) => {
             // extract any values from the ext_var

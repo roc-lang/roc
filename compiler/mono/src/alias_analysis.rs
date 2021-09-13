@@ -1191,6 +1191,11 @@ fn layout_spec_help(
     match layout {
         Builtin(builtin) => builtin_spec(builder, builtin, when_recursive),
         Struct(fields) => build_recursive_tuple_type(builder, fields, when_recursive),
+        LambdaSet(lambda_set) => layout_spec_help(
+            builder,
+            &lambda_set.runtime_representation(),
+            when_recursive,
+        ),
         Union(union_layout) => {
             let variant_types = build_variant_types(builder, union_layout)?;
 

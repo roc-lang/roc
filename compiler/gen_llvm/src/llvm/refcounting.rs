@@ -626,6 +626,14 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
                 Some(function)
             }
         },
+        LambdaSet(lambda_set) => modify_refcount_layout_build_function(
+            env,
+            parent,
+            layout_ids,
+            mode,
+            when_recursive,
+            &lambda_set.runtime_representation(),
+        ),
     }
 }
 

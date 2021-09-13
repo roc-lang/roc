@@ -1164,8 +1164,16 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         StructAtIndex {
             index, structure, ..
         } => {
+            let (value, layout) = load_symbol_and_layout(scope, structure);
+
+            let layout = if let Layout::LambdaSet(lambda_set) = layout {
+                lambda_set.runtime_representation()
+            } else {
+                *layout
+            };
+
             // extract field from a record
-            match load_symbol_and_layout(scope, structure) {
+            match (value, layout) {
                 (StructValue(argument), Layout::Struct(fields)) => {
                     debug_assert!(!fields.is_empty());
                     env.builder
@@ -4100,6 +4108,11 @@ fn roc_function_call<'a, 'ctx, 'env>(
 ) -> RocFunctionCall<'ctx> {
     use crate::llvm::bitcode::{build_inc_n_wrapper, build_transform_caller};
 
+    let closure_data_layout = match closure_data_layout {
+        Layout::LambdaSet(lambda_set) => lambda_set.runtime_representation(),
+        _ => panic!("closure argument is not a lambda set!"),
+    };
+
     let closure_data_ptr = env
         .builder
         .build_alloca(closure_data.get_type(), "closure_data_ptr");
@@ -4503,8 +4516,13 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
                     let argument_layouts = &[**element_layout, **element_layout];
 
+                    let closure_data_layout = match closure_layout {
+                        Layout::LambdaSet(lambda_set) => lambda_set.runtime_representation(),
+                        _ => panic!("closure argument is not a lambda set!"),
+                    };
+
                     let compare_wrapper =
-                        build_compare_wrapper(env, function, *closure_layout, element_layout)
+                        build_compare_wrapper(env, function, closure_data_layout, element_layout)
                             .as_global_value()
                             .as_pointer_value();
 
