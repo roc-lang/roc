@@ -31,6 +31,7 @@ pub const FLAG_DEBUG: &str = "debug";
 pub const FLAG_OPTIMIZE: &str = "optimize";
 pub const FLAG_LIB: &str = "lib";
 pub const FLAG_BACKEND: &str = "backend";
+pub const FLAG_TIME: &str = "time";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const BACKEND: &str = "BACKEND";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
@@ -72,6 +73,12 @@ pub fn build_app<'a>() -> App<'a> {
                 Arg::with_name(FLAG_DEBUG)
                     .long(FLAG_DEBUG)
                     .help("Store LLVM debug information in the generated program")
+                    .required(false),
+            )
+            .arg(
+                Arg::with_name(FLAG_TIME)
+                    .long(FLAG_TIME)
+                    .help("Prints detailed compilation time information.")
                     .required(false),
             )
         )
@@ -129,6 +136,12 @@ pub fn build_app<'a>() -> App<'a> {
                 .help("Store LLVM debug information in the generated program")
                 .requires(ROC_FILE)
                 .required(false),
+        )
+        .arg(
+            Arg::with_name(FLAG_TIME)
+                .long(FLAG_TIME)
+                .help("Prints detailed compilation time information.")
+                    .required(false),
         )
         .arg(
             Arg::with_name(FLAG_BACKEND)
@@ -203,6 +216,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
         OptLevel::Normal
     };
     let emit_debug_info = matches.is_present(FLAG_DEBUG);
+    let emit_timings = matches.is_present(FLAG_TIME);
 
     let link_type = if matches.is_present(FLAG_LIB) {
         LinkType::Dylib
@@ -239,6 +253,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
         path,
         opt_level,
         emit_debug_info,
+        emit_timings,
         link_type,
     );
 
