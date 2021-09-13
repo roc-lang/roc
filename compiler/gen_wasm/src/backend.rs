@@ -211,14 +211,12 @@ impl<'a> WasmBackend<'a> {
 
     pub fn build_proc(&mut self, proc: Proc<'a>, sym: Symbol) -> Result<u32, String> {
         let ret_layout = WasmLayout::new(&proc.ret_layout);
-        match ret_layout {
-            WasmLayout::StackMemory { .. } => {
-                return Err(format!(
-                    "Not yet implemented: Returning values to callee stack memory {:?} {:?}",
-                    proc.name, sym
-                ));
-            }
-            _ => (),
+
+        if let WasmLayout::StackMemory { .. } = ret_layout {
+            return Err(format!(
+                "Not yet implemented: Returning values to callee stack memory {:?} {:?}",
+                proc.name, sym
+            ));
         }
 
         self.ret_type = ret_layout.value_type();
