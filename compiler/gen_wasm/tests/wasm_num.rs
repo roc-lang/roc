@@ -37,6 +37,101 @@ mod wasm_num {
     }
 
     #[test]
+    fn i8_add_wrap() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : I8
+                    x = 0x7f + 0x7f
+
+                    x
+                "#
+            ),
+            -2,
+            i8
+        );
+    }
+
+    #[test]
+    fn i16_add_wrap() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : I16
+                    x = 0x7fff + 0x7fff
+
+                    x
+                "#
+            ),
+            -2,
+            i16
+        );
+    }
+
+    #[test]
+    fn i32_add_wrap() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : I32
+                    x = 0x7fffffff + 0x7fffffff
+
+                    x
+                "#
+            ),
+            -2,
+            i32
+        );
+    }
+
+    #[test]
+    fn u8_add_wrap() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : U8
+                    x = 0xff + 0xff
+
+                    x
+                "#
+            ),
+            0xfe,
+            u8
+        );
+    }
+
+    #[test]
+    fn u16_add_wrap() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : U16
+                    x = 0xffff + 0xffff
+
+                    x
+                "#
+            ),
+            0xfffe,
+            u16
+        );
+    }
+    #[test]
+    fn u32_add_wrap() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : U32
+                    x = 0xffffffff + 0xffffffff
+
+                    x
+                "#
+            ),
+            0xfffffffe,
+            u32
+        );
+    }
+
+    #[test]
     fn gen_add_i64() {
         assert_evals_to!(
             indoc!(
@@ -154,44 +249,44 @@ mod wasm_num {
         );
     }
 
-    // #[test]
-    // fn gen_add_f64() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 1.1 + 2.4 + 3
-    //             "#
-    //         ),
-    //         6.5,
-    //         f64
-    //     );
-    // }
+    #[test]
+    fn gen_add_f64() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    1.1 + 2.4 + 3
+                "#
+            ),
+            6.5,
+            f64
+        );
+    }
 
-    // #[test]
-    // fn gen_sub_i64() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 1 - 2 - 3
-    //             "#
-    //         ),
-    //         -4,
-    //         i64
-    //     );
-    // }
+    #[test]
+    fn gen_sub_i64() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    1 - 2 - 3
+                "#
+            ),
+            -4,
+            i64
+        );
+    }
 
-    // #[test]
-    // fn gen_mul_i64() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 2 * 4 * 6
-    //             "#
-    //         ),
-    //         48,
-    //         i64
-    //     );
-    // }
+    #[test]
+    fn gen_mul_i64() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    2 * 4 * 6
+                "#
+            ),
+            48,
+            i64
+        );
+    }
 
     #[test]
     fn i64_force_stack() {
@@ -476,18 +571,18 @@ mod wasm_num {
     //     );
     // }
 
-    // #[test]
-    // fn gen_sub_f64() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 1.5 - 2.4 - 3
-    //             "#
-    //         ),
-    //         -3.9,
-    //         f64
-    //     );
-    // }
+    #[test]
+    fn gen_sub_f64() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    1.5 - 2.4 - 3
+                "#
+            ),
+            -3.9,
+            f64
+        );
+    }
 
     // #[test]
     // fn gen_div_i64() {
@@ -685,31 +780,31 @@ mod wasm_num {
     //     assert_evals_to!("0.0 >= 0.0", true, bool);
     // }
 
-    // #[test]
-    // fn gen_order_of_arithmetic_ops() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 1 + 3 * 7 - 2
-    //             "#
-    //         ),
-    //         20,
-    //         i64
-    //     );
-    // }
+    #[test]
+    fn gen_order_of_arithmetic_ops() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    1 + 3 * 7 - 2
+                "#
+            ),
+            20,
+            i64
+        );
+    }
 
-    // #[test]
-    // fn gen_order_of_arithmetic_ops_complex_float() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 3 - 48 * 2.0
-    //             "#
-    //         ),
-    //         -93.0,
-    //         f64
-    //     );
-    // }
+    #[test]
+    fn gen_order_of_arithmetic_ops_complex_float() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    3 - 48 * 2.0
+                "#
+            ),
+            -93.0,
+            f64
+        );
+    }
 
     // #[test]
     // fn if_guard_bind_variable_false() {

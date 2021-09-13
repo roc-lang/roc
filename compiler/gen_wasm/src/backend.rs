@@ -103,7 +103,6 @@ impl WasmLayout {
 
             // LocalOnly(F32, 2) => Ok(), // convert F16 to F32 (lowlevel function? Wasm-only?)
             // StackMemory(size) => Ok(), // would this be some kind of memcpy in the IR?
-
             HeapMemory => {
                 if PTR_TYPE == I64 {
                     Ok(I64Load(ALIGN_8, offset))
@@ -134,7 +133,6 @@ impl WasmLayout {
 
             // LocalOnly(F32, 2) => Ok(), // convert F32 to F16 (lowlevel function? Wasm-only?)
             // StackMemory(size) => Ok(), // would this be some kind of memcpy in the IR?
-
             HeapMemory => {
                 if PTR_TYPE == I64 {
                     Ok(I64Store(ALIGN_8, offset))
@@ -498,20 +496,27 @@ impl<'a> WasmBackend<'a> {
                 Ok(())
             }
             Literal::Int(x) => {
-                match layout {
-                    Layout::Builtin(Builtin::Int32) => {
-                        self.instructions.push(I32Const(*x as i32));
-                    }
-                    Layout::Builtin(Builtin::Int64) => {
-                        self.instructions.push(I64Const(*x as i64));
-                    }
+                let instruction = match layout {
+                    Layout::Builtin(Builtin::Int64) => I64Const(*x as i64),
+                    Layout::Builtin(
+                        Builtin::Int32
+                        | Builtin::Int16
+                        | Builtin::Int8
+                        | Builtin::Int1
+                        | Builtin::Usize,
+                    ) => I32Const(*x as i32),
                     x => panic!("loading literal, {:?}, is not yet implemented", x),
-                }
+                };
+                self.instructions.push(instruction);
                 Ok(())
             }
             Literal::Float(x) => {
-                let val: f64 = *x;
-                self.instructions.push(F64Const(val.to_bits()));
+                let instruction = match layout {
+                    Layout::Builtin(Builtin::Float64) => F64Const((*x as f64).to_bits()),
+                    Layout::Builtin(Builtin::Float32) => F32Const((*x as f32).to_bits()),
+                    x => panic!("loading literal, {:?}, is not yet implemented", x),
+                };
+                self.instructions.push(instruction);
                 Ok(())
             }
             x => Err(format!("loading literal, {:?}, is not yet implemented", x)),
