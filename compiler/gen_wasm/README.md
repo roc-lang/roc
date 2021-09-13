@@ -5,6 +5,12 @@
 - Initial bringup
   - Get a wasm backend working for some of the number tests.
   - Use a separate `gen_wasm` directory for now, to avoid trying to do bringup and integration at the same time.
+- Improve the fundamentals
+  - [x] Come up with a way to do control flow
+  - [x] Flesh out the details of value representations between local variables and stack memory
+  - [ ] Set up a way to write tests with any return value rather than just i64 and f64
+  - [ ] Figure out relocations for linking object files
+  - [ ] Think about the Wasm module builder library we're using, are we happy with it?
 - Integration
   - Move wasm files to `gen_dev/src/wasm`
   - Share tests between wasm and x64, with some way of saying which tests work on which backends, and dispatching to different eval helpers based on that.
