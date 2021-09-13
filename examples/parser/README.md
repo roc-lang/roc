@@ -6,7 +6,9 @@ Console.roc
 ListExtra.roc: filter : List a, (a -> Bool) -> List a
 Loop.roc, LoopTest.roc: loop construct and tests for it.
 Pair.roc, PairTest.roc: Pairs
-StrExtra.roc: repeat, concat, join
+StrExtra.roc, StrExtraTest.roc: repeat, concat, join
+Test.roc, TestTest.roc: test library
+Utility.roc
 
 ## Running Tests
 
