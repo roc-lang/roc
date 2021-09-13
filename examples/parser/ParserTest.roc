@@ -1,7 +1,7 @@
 app "parseapp"
      packages { base: "platform" }
      imports [base.Task, 
-        Parser2.{runU8, any, satisfy, andThen, second, first, map },
+        Parser2.{runU8, any, satisfy, andThen, second, first, map, oneOf },
         Test]
      provides [ main ] to base
 
@@ -23,6 +23,12 @@ firstT = {name : "(e) Use 'first' to recognize strings beginning with 'a' and wi
 
 mapT = {name : "(f) Use map to shift output of parser: run \"abcd\" (map any (\\u -> u + 25)) == \"z\"", test : runU8 "abcd" (map any (\u -> u + 25)) == "z"  }
 
+oneOfT1 = {name: "(g) test of oneOf combinator: recognize string beginning with 'a' or 'b', for 'abcd'", test: List.len ((oneOf [satisfyA, satisfyB]) [97, 98, 99, 100] ) == 1 }
+oneOfT2 = {name: "(h) test of oneOf combinator: recognize string beginning with 'a' or 'b', for 'bcda'", test: List.len ((oneOf [satisfyA, satisfyB]) [98, 99, 100, 97] ) == 1 }
+oneOfT3 = {name: "(i) test of oneOf combinator: recognize string beginning with 'a' or 'b', for 'cde' (fail)", test: List.len ((oneOf [satisfyA, satisfyB]) [99, 100, 101] ) == 0 }
+
+
+oneOfResult = (oneOf [satisfyA, satisfyB]) [97, 98, 99, 100] 
 
 # Test suites
 
@@ -38,6 +44,7 @@ suite4 = {name: "First four combinators", tests: [anyT, satisfyT, andThenT, seco
 suite5 =  {name: "First five combinators", tests: [anyT, satisfyT, andThenT, secondT, firstT] }
 suite6 =  {name: "All six combinators", tests: [anyT, satisfyT, andThenT, secondT, firstT, mapT] }
 
+suiteAll = {name: "All 7 combinators", tests: [anyT, satisfyT, andThenT, secondT, firstT, mapT, oneOfT1,oneOfT2, oneOfT3 ] }
 
 # NOTE.  All of the functions imported from module Parser2 pass their inidividua respective
 #        test. (Use suit1 with substitutions).  However, these tests do **not** necessarily
@@ -52,14 +59,16 @@ main =
 # Test.runSuite suite1c  ## Try this one (test (c) succeeds)
 # Test.runSuite suite1d  ## Try this one (test (d) succeeds)
 # Test.runSuite suite1e
+
 # Test.runSuite suite1f
 
 # Test.runSuites [suite1a, suite1b, suite1c, suite1d, suite1e, suite1f, suite4 ] ## Try this one (tests (c) and (d) fail)
 
-Test.runSuites [suite3] 
+# Test.runSuites [suite3] 
 # Test.runSuites [suite4]
 # Test.runSuites [suite5]
 # Test.runSuites [suite6]
+Test.runSuites [suiteAll]
    |> Task.putLine
 
 
