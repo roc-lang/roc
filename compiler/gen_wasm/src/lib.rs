@@ -15,6 +15,7 @@ use crate::backend::WasmBackend;
 const PTR_SIZE: u32 = 4;
 const PTR_TYPE: ValueType = ValueType::I32;
 
+// All usages of these alignment constants take u32, so an enum wouldn't add any safety.
 pub const ALIGN_1: u32 = 0;
 pub const ALIGN_2: u32 = 1;
 pub const ALIGN_4: u32 = 2;
@@ -76,6 +77,11 @@ pub fn build_module_help<'a>(
         }
     }
 
+    // Because of the sorting above, we know the last function in the `for` is the main function.
+    // Here we grab its index and return it, so that the test_wrapper is able to call it.
+    // This is a workaround until we implement object files with symbols and relocations.
+    let main_function_index = function_index;
+
     const MIN_MEMORY_SIZE_KB: u32 = 1024;
     const PAGE_SIZE_KB: u32 = 64;
 
@@ -96,5 +102,5 @@ pub fn build_module_help<'a>(
         .build();
     backend.builder.push_global(stack_pointer_global);
 
-    Ok((backend.builder, function_index))
+    Ok((backend.builder, main_function_index))
 }
