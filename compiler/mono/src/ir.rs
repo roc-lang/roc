@@ -20,7 +20,7 @@ use roc_types::subs::{Content, FlatType, Subs, Variable, VariableSubsSlice};
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
-pub const PRETTY_PRINT_IR_SYMBOLS: bool = true;
+pub const PRETTY_PRINT_IR_SYMBOLS: bool = false;
 
 macro_rules! return_on_layout_error {
     ($env:expr, $layout_result:expr) => {
@@ -1843,7 +1843,7 @@ fn generate_runtime_error_function<'a>(
                 args.push((*arg, env.unique_symbol()));
             }
 
-            args.push((lambda_set.runtime_representation(), Symbol::ARG_CLOSURE));
+            args.push((Layout::LambdaSet(lambda_set), Symbol::ARG_CLOSURE));
 
             (args.into_bump_slice(), *ret_layout)
         }
@@ -1935,12 +1935,11 @@ fn specialize_external<'a>(
                     );
 
                     let body = let_empty_struct(unit, env.arena.alloc(body));
+                    let lambda_set_layout = Layout::LambdaSet(lambda_set);
 
                     let proc = Proc {
                         name,
-                        args: env
-                            .arena
-                            .alloc([(lambda_set.runtime_representation(), Symbol::ARG_CLOSURE)]),
+                        args: env.arena.alloc([(lambda_set_layout, Symbol::ARG_CLOSURE)]),
                         body,
                         closure_data_layout: None,
                         ret_layout: *return_layout,
@@ -1951,7 +1950,7 @@ fn specialize_external<'a>(
 
                     let top_level = ProcLayout::new(
                         env.arena,
-                        env.arena.alloc([lambda_set.runtime_representation()]),
+                        env.arena.alloc([lambda_set_layout]),
                         *return_layout,
                     );
 
@@ -1999,7 +1998,7 @@ fn specialize_external<'a>(
             env.subs.rollback_to(snapshot);
 
             let closure_data_layout = match opt_closure_layout {
-                Some(closure_layout) => closure_layout.runtime_representation(),
+                Some(lambda_set) => Layout::LambdaSet(lambda_set),
                 None => Layout::Struct(&[]),
             };
 
@@ -2149,7 +2148,7 @@ fn specialize_external<'a>(
             env.subs.rollback_to(snapshot);
 
             let closure_data_layout = match opt_closure_layout {
-                Some(closure_layout) => Some(closure_layout.runtime_representation()),
+                Some(lambda_set) => Some(Layout::LambdaSet(lambda_set)),
                 None => None,
             };
 
@@ -2260,7 +2259,7 @@ fn build_specialized_proc<'a>(
         Some(lambda_set) if pattern_symbols.last() == Some(&Symbol::ARG_CLOSURE) => {
             // here we define the lifted (now top-level) f function. Its final argument is `Symbol::ARG_CLOSURE`,
             // it stores the closure structure (just an integer in this case)
-            proc_args.push((lambda_set.runtime_representation(), Symbol::ARG_CLOSURE));
+            proc_args.push((Layout::LambdaSet(lambda_set), Symbol::ARG_CLOSURE));
 
             debug_assert_eq!(
                 pattern_layouts_len + 1,
@@ -2297,7 +2296,7 @@ fn build_specialized_proc<'a>(
                 }
                 Ordering::Greater => {
                     if pattern_symbols.is_empty() {
-                        let ret_layout = lambda_set.runtime_representation();
+                        let ret_layout = Layout::LambdaSet(lambda_set);
                         Ok(FunctionPointerBody {
                             closure: None,
                             ret_layout,
@@ -2482,7 +2481,7 @@ where
     let raw = if procs.module_thunks.contains(&proc_name) {
         match raw {
             RawFunctionLayout::Function(_, lambda_set, _) => {
-                RawFunctionLayout::ZeroArgumentThunk(lambda_set.runtime_representation())
+                RawFunctionLayout::ZeroArgumentThunk(Layout::LambdaSet(lambda_set))
             }
             _ => raw,
         }
@@ -2654,6 +2653,7 @@ macro_rules! match_on_closure_argument {
 
         let arg_layouts = top_level.arguments;
         let ret_layout = top_level.result;
+
 
 
         match closure_data_layout {
@@ -4131,6 +4131,8 @@ fn construct_closure_data<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
+    let lambda_set_layout = Layout::LambdaSet(lambda_set);
+
     match lambda_set.layout_for_member(name) {
         ClosureRepresentation::Union {
             tag_id,
@@ -4162,12 +4164,7 @@ fn construct_closure_data<'a>(
                 arguments: symbols,
             };
 
-            Stmt::Let(
-                assigned,
-                expr,
-                lambda_set.runtime_representation(),
-                env.arena.alloc(hole),
-            )
+            Stmt::Let(assigned, expr, lambda_set_layout, env.arena.alloc(hole))
         }
         ClosureRepresentation::AlphabeticOrderStruct(field_layouts) => {
             debug_assert_eq!(field_layouts.len(), symbols.len());
@@ -4198,7 +4195,7 @@ fn construct_closure_data<'a>(
 
             let expr = Expr::Struct(symbols);
 
-            Stmt::Let(assigned, expr, lambda_set.runtime_representation(), hole)
+            Stmt::Let(assigned, expr, lambda_set_layout, hole)
         }
         ClosureRepresentation::Other(Layout::Builtin(Builtin::Int1)) => {
             debug_assert_eq!(symbols.len(), 0);
@@ -4207,7 +4204,7 @@ fn construct_closure_data<'a>(
             let tag_id = name != lambda_set.set[0].0;
             let expr = Expr::Literal(Literal::Bool(tag_id));
 
-            Stmt::Let(assigned, expr, lambda_set.runtime_representation(), hole)
+            Stmt::Let(assigned, expr, lambda_set_layout, hole)
         }
         ClosureRepresentation::Other(Layout::Builtin(Builtin::Int8)) => {
             debug_assert_eq!(symbols.len(), 0);
@@ -4216,7 +4213,7 @@ fn construct_closure_data<'a>(
             let tag_id = lambda_set.set.iter().position(|(s, _)| *s == name).unwrap() as u8;
             let expr = Expr::Literal(Literal::Byte(tag_id));
 
-            Stmt::Let(assigned, expr, lambda_set.runtime_representation(), hole)
+            Stmt::Let(assigned, expr, lambda_set_layout, hole)
         }
         _ => unreachable!(),
     }
@@ -6060,7 +6057,7 @@ fn reuse_function_symbol<'a>(
                         let layout = match raw {
                             RawFunctionLayout::ZeroArgumentThunk(layout) => layout,
                             RawFunctionLayout::Function(_, lambda_set, _) => {
-                                lambda_set.runtime_representation()
+                                Layout::LambdaSet(lambda_set)
                             }
                         };
 
@@ -6158,7 +6155,7 @@ fn reuse_function_symbol<'a>(
                         // TODO suspicious
                         // let layout = Layout::Closure(argument_layouts, lambda_set, ret_layout);
                         // panic!("suspicious");
-                        let layout = lambda_set.runtime_representation();
+                        let layout = Layout::LambdaSet(lambda_set);
                         let top_level = ProcLayout::new(env.arena, &[], layout);
                         procs.insert_passed_by_name(
                             env,
@@ -6348,7 +6345,7 @@ fn call_by_name<'a>(
                         procs,
                         fn_var,
                         proc_name,
-                        env.arena.alloc(lambda_set.runtime_representation()),
+                        env.arena.alloc(Layout::LambdaSet(lambda_set)),
                         layout_cache,
                         assigned,
                         hole,
@@ -6392,7 +6389,7 @@ fn call_by_name<'a>(
                         procs,
                         fn_var,
                         proc_name,
-                        env.arena.alloc(lambda_set.runtime_representation()),
+                        env.arena.alloc(Layout::LambdaSet(lambda_set)),
                         layout_cache,
                         closure_data_symbol,
                         env.arena.alloc(result),
@@ -6522,7 +6519,7 @@ fn call_by_name_help<'a>(
             force_thunk(
                 env,
                 proc_name,
-                lambda_set.runtime_representation(),
+                Layout::LambdaSet(lambda_set),
                 assigned,
                 hole,
             )
@@ -6836,13 +6833,7 @@ fn call_specialized_proc<'a>(
                     arguments: field_symbols,
                 };
 
-                build_call(
-                    env,
-                    call,
-                    assigned,
-                    lambda_set.runtime_representation(),
-                    hole,
-                )
+                build_call(env, call, assigned, Layout::LambdaSet(lambda_set), hole)
             }
             RawFunctionLayout::ZeroArgumentThunk(_) => {
                 unreachable!()
@@ -7909,14 +7900,16 @@ fn match_on_lambda_set<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
+    let lambda_set_layout = Layout::LambdaSet(lambda_set);
+
     match lambda_set.runtime_representation() {
         Layout::Union(union_layout) => {
             let closure_tag_id_symbol = env.unique_symbol();
 
             let result = union_lambda_set_to_switch(
                 env,
-                lambda_set.set,
-                lambda_set.runtime_representation(),
+                lambda_set,
+                lambda_set_layout,
                 closure_tag_id_symbol,
                 union_layout.tag_id_layout(),
                 closure_data_symbol,
@@ -7946,6 +7939,7 @@ fn match_on_lambda_set<'a>(
             union_lambda_set_branch_help(
                 env,
                 function_symbol,
+                lambda_set,
                 closure_data_symbol,
                 Layout::Struct(fields),
                 argument_symbols,
@@ -7962,7 +7956,7 @@ fn match_on_lambda_set<'a>(
                 env,
                 lambda_set.set,
                 closure_tag_id_symbol,
-                Layout::Builtin(Builtin::Int1),
+                lambda_set_layout,
                 closure_data_symbol,
                 argument_symbols,
                 argument_layouts,
@@ -7978,7 +7972,7 @@ fn match_on_lambda_set<'a>(
                 env,
                 lambda_set.set,
                 closure_tag_id_symbol,
-                Layout::Builtin(Builtin::Int8),
+                lambda_set_layout,
                 closure_data_symbol,
                 argument_symbols,
                 argument_layouts,
@@ -7994,7 +7988,7 @@ fn match_on_lambda_set<'a>(
 #[allow(clippy::too_many_arguments)]
 fn union_lambda_set_to_switch<'a>(
     env: &mut Env<'a, '_>,
-    lambda_set: &'a [(Symbol, &'a [Layout<'a>])],
+    lambda_set: LambdaSet<'a>,
     closure_layout: Layout<'a>,
     closure_tag_id_symbol: Symbol,
     closure_tag_id_layout: Layout<'a>,
@@ -8005,7 +7999,7 @@ fn union_lambda_set_to_switch<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    if lambda_set.is_empty() {
+    if lambda_set.set.is_empty() {
         // NOTE this can happen if there is a type error somewhere. Since the lambda set is empty,
         // there is really nothing we can do here. We generate a runtime error here which allows
         // code gen to proceed. We then assume that we hit another (more descriptive) error before
@@ -8017,11 +8011,12 @@ fn union_lambda_set_to_switch<'a>(
 
     let join_point_id = JoinPointId(env.unique_symbol());
 
-    let mut branches = Vec::with_capacity_in(lambda_set.len(), env.arena);
+    let mut branches = Vec::with_capacity_in(lambda_set.set.len(), env.arena);
 
-    for (i, (function_symbol, _)) in lambda_set.iter().enumerate() {
+    for (i, (function_symbol, _)) in lambda_set.set.iter().enumerate() {
         let stmt = union_lambda_set_branch(
             env,
+            lambda_set,
             join_point_id,
             *function_symbol,
             closure_data_symbol,
@@ -8064,6 +8059,7 @@ fn union_lambda_set_to_switch<'a>(
 #[allow(clippy::too_many_arguments)]
 fn union_lambda_set_branch<'a>(
     env: &mut Env<'a, '_>,
+    lambda_set: LambdaSet<'a>,
     join_point_id: JoinPointId,
     function_symbol: Symbol,
     closure_data_symbol: Symbol,
@@ -8079,6 +8075,7 @@ fn union_lambda_set_branch<'a>(
     union_lambda_set_branch_help(
         env,
         function_symbol,
+        lambda_set,
         closure_data_symbol,
         closure_data_layout,
         argument_symbols_slice,
@@ -8093,6 +8090,7 @@ fn union_lambda_set_branch<'a>(
 fn union_lambda_set_branch_help<'a>(
     env: &mut Env<'a, '_>,
     function_symbol: Symbol,
+    lambda_set: LambdaSet<'a>,
     closure_data_symbol: Symbol,
     closure_data_layout: Layout<'a>,
     argument_symbols_slice: &'a [Symbol],
@@ -8110,7 +8108,7 @@ fn union_lambda_set_branch_help<'a>(
             let mut argument_layouts =
                 Vec::with_capacity_in(argument_layouts_slice.len() + 1, env.arena);
             argument_layouts.extend(argument_layouts_slice);
-            argument_layouts.push(closure_data_layout);
+            argument_layouts.push(Layout::LambdaSet(lambda_set));
 
             // extend symbols with the symbol of the closure environment
             let mut argument_symbols =

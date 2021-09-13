@@ -532,7 +532,7 @@ impl<'a> LambdaSet<'a> {
                 _ => {
                     let mut arguments = Vec::with_capacity_in(argument_layouts.len() + 1, arena);
                     arguments.extend(argument_layouts);
-                    arguments.push(self.runtime_representation());
+                    arguments.push(Layout::LambdaSet(*self));
 
                     arguments.into_bump_slice()
                 }
@@ -1373,7 +1373,7 @@ fn layout_from_flat_type<'a>(
         Func(_, closure_var, _) => {
             let lambda_set = LambdaSet::from_var(env.arena, env.subs, closure_var, env.ptr_bytes)?;
 
-            Ok(lambda_set.runtime_representation())
+            Ok(Layout::LambdaSet(lambda_set))
         }
         Record(fields, ext_var) => {
             // extract any values from the ext_var

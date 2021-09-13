@@ -5,8 +5,7 @@ app "effect-example"
 
 main : Effect.Effect {}
 main =
-    Effect.after (Effect.putLine "Enter some input:") \{} ->
-        Effect.after Effect.getLine \lineThisThing ->
-            Effect.after (Effect.putLine "You entered:") \{} ->
-                Effect.after (Effect.putLine lineThisThing) \{} ->
-                    Effect.always {}
+    Effect.after (Effect.getLine) \line ->
+        Effect.after (Effect.putLine "You entered: \(line)") \{} ->
+            Effect.after (Effect.putLine "It is known") \{} ->
+                Effect.always {}
