@@ -2,7 +2,7 @@ interface Parser2 exposes [
     Parser, run,  runU8,
     succeed, fail, any, satisfy,
     andThen, first, second,
-    map, oneOf
+    map, oneOf, oneOfOLD
   ] imports [Pair, Utility]
 
 ## PARSER  
@@ -95,6 +95,13 @@ oneOf = \parserList ->
             )
             []
 
+oneOfOLD : List (Parser a) -> Parser a 
+oneOfOLD = \parserList -> 
+          \input -> when List.first parserList is 
+              Ok p -> 
+                output = p input 
+                if List.len output == 1 then output else (oneOfOLD (List.drop parserList 1)) input 
+              Err _ -> [ ]
 
 ###############################################
 

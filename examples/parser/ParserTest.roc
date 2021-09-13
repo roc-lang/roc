@@ -36,8 +36,11 @@ suite1a =  {name: "1. anyT", tests: [anyT]}
 suite1b =  {name: "2. satisfyT", tests: [satisfyT]}
 suite1c =  {name: "3. andThen", tests: [andThenT]}
 suite1d =  {name: "4. second", tests: [secondT]}
-suite1e=  {name: "5. first", tests: [firstT]}
-suite1f=  {name: "6. map", tests: [mapT]}
+suite1e=   {name: "5. first", tests: [firstT]}
+suite1f =  {name: "6. map", tests: [mapT]}
+suite1g =  {name: "7. oneOfT1", tests: [oneOfT1]}
+suite1h =  {name: "8. oneOfT2", tests: [oneOfT2]}
+suite1i =  {name: "9. oneOfT3", tests: [oneOfT3]}
 
 suite3 =  {name: "First three combinators", tests: [anyT, satisfyT, andThenT, ] }
 suite4 = {name: "First four combinators", tests: [anyT, satisfyT, andThenT, secondT]}
@@ -46,8 +49,8 @@ suite6 =  {name: "All six combinators", tests: [anyT, satisfyT, andThenT, second
 
 suiteAll = {name: "All 7 combinators", tests: [anyT, satisfyT, andThenT, secondT, firstT, mapT, oneOfT1,oneOfT2, oneOfT3 ] }
 
-# NOTE.  All of the functions imported from module Parser2 pass their inidividua respective
-#        test. (Use suit1 with substitutions).  However, these tests do **not** necessarily
+# NOTE.  All of the functions imported from module Parser2 pass their individua; respective
+#        test EXCEPT the test oneOfT2. (Use suit1 with substitutions).  However, these tests (with the one exception) do **not** necessarily
 #        pass when used in combination with others.  Weird!
 
 
@@ -68,7 +71,8 @@ main =
 # Test.runSuites [suite4]
 # Test.runSuites [suite5]
 # Test.runSuites [suite6]
-Test.runSuites [suiteAll]
+# Test.runSuites [suiteAll]
+Test.runSuites [suite1h]
    |> Task.putLine
 
 
