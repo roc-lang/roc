@@ -7,6 +7,7 @@ To build the compiler, you need these installed:
 
 * Python 2.7 (Windows only), `python-is-python3` (Ubuntu)
 * [Zig](https://ziglang.org/), see below for version
+* `libxkbcommon` - macOS seems to have it already; on Ubuntu or Debian you can get it with `apt-get install libxkbcommon-dev`
 * LLVM, see below for version
 
 To run the test suite (via `cargo test`), you additionally need to install:

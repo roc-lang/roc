@@ -31,6 +31,7 @@ pub const FLAG_DEBUG: &str = "debug";
 pub const FLAG_OPTIMIZE: &str = "optimize";
 pub const FLAG_LIB: &str = "lib";
 pub const FLAG_BACKEND: &str = "backend";
+pub const FLAG_TIME: &str = "time";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const BACKEND: &str = "BACKEND";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
@@ -72,6 +73,12 @@ pub fn build_app<'a>() -> App<'a> {
                 Arg::with_name(FLAG_DEBUG)
                     .long(FLAG_DEBUG)
                     .help("Store LLVM debug information in the generated program")
+                    .required(false),
+            )
+            .arg(
+                Arg::with_name(FLAG_TIME)
+                    .long(FLAG_TIME)
+                    .help("Prints detailed compilation time information.")
                     .required(false),
             )
         )
@@ -129,6 +136,12 @@ pub fn build_app<'a>() -> App<'a> {
                 .help("Store LLVM debug information in the generated program")
                 .requires(ROC_FILE)
                 .required(false),
+        )
+        .arg(
+            Arg::with_name(FLAG_TIME)
+                .long(FLAG_TIME)
+                .help("Prints detailed compilation time information.")
+                    .required(false),
         )
         .arg(
             Arg::with_name(FLAG_BACKEND)
@@ -203,6 +216,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
         OptLevel::Normal
     };
     let emit_debug_info = matches.is_present(FLAG_DEBUG);
+    let emit_timings = matches.is_present(FLAG_TIME);
 
     let link_type = if matches.is_present(FLAG_LIB) {
         LinkType::Dylib
@@ -239,6 +253,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
         path,
         opt_level,
         emit_debug_info,
+        emit_timings,
         link_type,
     );
 
@@ -371,15 +386,22 @@ fn run_with_wasmer(wasm_path: &std::path::Path, args: &[String]) {
 
     // Then, we get the import object related to our WASI
     // and attach it to the Wasm instance.
-    let import_object = wasi_env
-        .import_object(&module)
-        .unwrap_or_else(|_| wasmer::imports!());
+    let import_object = wasi_env.import_object(&module).unwrap();
 
     let instance = Instance::new(&module, &import_object).unwrap();
 
     let start = instance.exports.get_function("_start").unwrap();
 
-    start.call(&[]).unwrap();
+    use wasmer_wasi::WasiError;
+    match start.call(&[]) {
+        Ok(_) => {}
+        Err(e) => match e.downcast::<WasiError>() {
+            Ok(WasiError::Exit(0)) => {
+                // we run the `_start` function, so exit(0) is expected
+            }
+            other => panic!("Wasmer error: {:?}", other),
+        },
+    }
 }
 
 enum Backend {

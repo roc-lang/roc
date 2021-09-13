@@ -77,12 +77,14 @@ export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
 const Unit = extern struct {};
 
 pub fn main() u8 {
+    const allocator = std.heap.page_allocator;
+
     const size = @intCast(usize, roc__mainForHost_size());
-    const raw_output = std.heap.c_allocator.allocAdvanced(u8, @alignOf(u64), @intCast(usize, size), .at_least) catch unreachable;
+    const raw_output = allocator.allocAdvanced(u8, @alignOf(u64), @intCast(usize, size), .at_least) catch unreachable;
     var output = @ptrCast([*]u8, raw_output);
 
     defer {
-        std.heap.c_allocator.free(raw_output);
+        allocator.free(raw_output);
     }
 
     var ts1: std.os.timespec = undefined;
@@ -122,12 +124,14 @@ fn to_seconds(tms: std.os.timespec) f64 {
 }
 
 fn call_the_closure(closure_data_pointer: [*]u8) void {
+    const allocator = std.heap.page_allocator;
+
     const size = roc__mainForHost_1_Fx_result_size();
-    const raw_output = std.heap.c_allocator.allocAdvanced(u8, @alignOf(u64), @intCast(usize, size), .at_least) catch unreachable;
+    const raw_output = allocator.allocAdvanced(u8, @alignOf(u64), @intCast(usize, size), .at_least) catch unreachable;
     var output = @ptrCast([*]u8, raw_output);
 
     defer {
-        std.heap.c_allocator.free(raw_output);
+        allocator.free(raw_output);
     }
 
     const flags: u8 = 0;

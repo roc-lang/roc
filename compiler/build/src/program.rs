@@ -286,6 +286,7 @@ pub fn gen_from_mono_module(
                     .unwrap();
 
                 let llc_args = &[
+                    "-relocation-model=pic",
                     "-filetype=obj",
                     app_bc_file.to_str().unwrap(),
                     "-o",
@@ -325,7 +326,7 @@ pub fn gen_from_mono_module(
         use target_lexicon::Architecture;
         match target.architecture {
             Architecture::X86_64 | Architecture::X86_32(_) | Architecture::Aarch64(_) => {
-                let reloc = RelocMode::Default;
+                let reloc = RelocMode::PIC;
                 let model = CodeModel::Default;
                 let target_machine =
                     target::target_machine(target, convert_opt_level(opt_level), reloc, model)

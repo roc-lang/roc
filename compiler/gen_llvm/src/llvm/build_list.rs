@@ -1136,3 +1136,17 @@ pub fn store_list<'a, 'ctx, 'env>(
         "cast_collection",
     )
 }
+
+pub fn decref<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    wrapper_struct: StructValue<'ctx>,
+    alignment: u32,
+) {
+    let (_, pointer) = load_list(
+        env.builder,
+        wrapper_struct,
+        env.context.i8_type().ptr_type(AddressSpace::Generic),
+    );
+
+    crate::llvm::refcounting::decref_pointer_check_null(env, pointer, alignment);
+}
