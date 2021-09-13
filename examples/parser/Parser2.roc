@@ -82,7 +82,7 @@ first =
 
 ## ONE OF
 
-oneOf = \parserList ->
+oneOfNew = \parserList ->
     \input ->
         List.walkUntil parserList
             (\p, accum ->
@@ -95,12 +95,12 @@ oneOf = \parserList ->
             )
             []
 
-oneOfOLD : List (Parser a) -> Parser a 
-oneOfOLD = \parserList -> 
+oneOf : List (Parser a) -> Parser a 
+oneOf = \parserList -> 
           \input -> when List.first parserList is 
               Ok p -> 
                 output = p input 
-                if List.len output == 1 then output else (oneOfOLD (List.drop parserList 1)) input 
+                if List.len output == 1 then output else (oneOf (List.drop parserList 1)) input 
               Err _ -> [ ]
 
 ###############################################
