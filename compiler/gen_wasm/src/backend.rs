@@ -41,36 +41,44 @@ pub enum WasmLayout {
 
 impl WasmLayout {
     fn new(layout: &Layout) -> Self {
+        use roc_mono::layout::Builtin::*;
+        use UnionLayout::*;
         use ValueType::*;
+
         let size = layout.stack_size(PTR_SIZE);
+
         match layout {
-            Layout::Builtin(Builtin::Int128) => Self::StackMemory(size),
-            Layout::Builtin(Builtin::Int64) => Self::LocalOnly(I64, size),
-            Layout::Builtin(Builtin::Int32) => Self::LocalOnly(I32, size),
-            Layout::Builtin(Builtin::Int16) => Self::LocalOnly(I32, size),
-            Layout::Builtin(Builtin::Int8) => Self::LocalOnly(I32, size),
-            Layout::Builtin(Builtin::Int1) => Self::LocalOnly(I32, size),
-            Layout::Builtin(Builtin::Usize) => Self::LocalOnly(I32, size),
-            Layout::Builtin(Builtin::Decimal) => Self::StackMemory(size),
-            Layout::Builtin(Builtin::Float128) => Self::StackMemory(size),
-            Layout::Builtin(Builtin::Float64) => Self::LocalOnly(F64, size),
-            Layout::Builtin(Builtin::Float32) => Self::LocalOnly(F32, size),
-            Layout::Builtin(Builtin::Float16) => Self::LocalOnly(F32, size),
-            Layout::Builtin(Builtin::Str) => Self::StackMemory(size),
-            Layout::Builtin(Builtin::Dict(_, _)) => Self::StackMemory(size),
-            Layout::Builtin(Builtin::Set(_)) => Self::StackMemory(size),
-            Layout::Builtin(Builtin::List(_)) => Self::StackMemory(size),
-            Layout::Builtin(Builtin::EmptyStr) => Self::StackMemory(size),
-            Layout::Builtin(Builtin::EmptyList) => Self::StackMemory(size),
-            Layout::Builtin(Builtin::EmptyDict) => Self::StackMemory(size),
-            Layout::Builtin(Builtin::EmptySet) => Self::StackMemory(size),
-            Layout::Struct(_) => Self::StackMemory(size),
-            Layout::Union(UnionLayout::NonRecursive(_)) => Self::StackMemory(size),
-            Layout::Union(UnionLayout::Recursive(_)) => Self::HeapMemory,
-            Layout::Union(UnionLayout::NonNullableUnwrapped(_)) => Self::HeapMemory,
-            Layout::Union(UnionLayout::NullableWrapped { .. }) => Self::HeapMemory,
-            Layout::Union(UnionLayout::NullableUnwrapped { .. }) => Self::HeapMemory,
-            Layout::RecursivePointer => Self::HeapMemory,
+            Layout::Builtin(Int32 | Int16 | Int8 | Int1 | Usize) => Self::LocalOnly(I32, size),
+
+            Layout::Builtin(Int64) => Self::LocalOnly(I64, size),
+
+            Layout::Builtin(Float32 | Float16) => Self::LocalOnly(F32, size),
+
+            Layout::Builtin(Float64) => Self::LocalOnly(F64, size),
+
+            Layout::Builtin(
+                Int128
+                | Decimal
+                | Float128
+                | Str
+                | Dict(_, _)
+                | Set(_)
+                | List(_)
+                | EmptyStr
+                | EmptyList
+                | EmptyDict
+                | EmptySet,
+            )
+            | Layout::Struct(_)
+            | Layout::Union(NonRecursive(_)) => Self::StackMemory(size),
+
+            Layout::Union(
+                Recursive(_)
+                | NonNullableUnwrapped(_)
+                | NullableWrapped { .. }
+                | NullableUnwrapped { .. },
+            )
+            | Layout::RecursivePointer => Self::HeapMemory,
         }
     }
 
