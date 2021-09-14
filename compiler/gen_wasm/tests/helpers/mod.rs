@@ -2,6 +2,7 @@ extern crate bumpalo;
 
 #[macro_use]
 pub mod eval;
+pub mod wasm32_test_result;
 
 /// Used in the with_larger_debug_stack() function, for tests that otherwise
 /// run out of stack space in debug builds (but don't in --release builds)

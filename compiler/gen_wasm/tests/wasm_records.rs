@@ -5,7 +5,7 @@ extern crate indoc;
 mod helpers;
 
 #[cfg(all(test, target_os = "linux", any(target_arch = "x86_64"/*, target_arch = "aarch64"*/)))]
-mod dev_records {
+mod wasm_records {
     //    #[test]
     //    fn basic_record() {
     //        assert_evals_to!(
@@ -389,18 +389,18 @@ mod dev_records {
     // //     );
     // // }
 
-    // #[test]
-    // fn i64_record1_literal() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                    { a: 3 }
-    //                 "#
-    //         ),
-    //         3,
-    //         i64
-    //     );
-    // }
+    #[test]
+    fn i64_record1_literal() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    { a: 3 }
+                "#
+            ),
+            3,
+            i64
+        );
+    }
 
     // // #[test]
     // // fn i64_record9_literal() {
@@ -428,21 +428,21 @@ mod dev_records {
     // //     );
     // // }
 
-    // #[test]
-    // fn bool_literal() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 x : Bool
-    //                 x = True
+    #[test]
+    fn bool_literal() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : Bool
+                    x = True
 
-    //                 x
-    //                 "#
-    //         ),
-    //         true,
-    //         bool
-    //     );
-    // }
+                    x
+                "#
+            ),
+            true,
+            bool
+        );
+    }
 
     // #[test]
     // fn optional_field_when_use_default() {
