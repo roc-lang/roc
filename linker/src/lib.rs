@@ -39,7 +39,7 @@ const MIN_SECTION_ALIGNMENT: usize = 0x40;
 const PLT_ADDRESS_OFFSET: u64 = 0x10;
 
 fn report_timing(label: &str, duration: Duration) {
-    &println!("\t{:9.3} ms   {}", duration.as_secs_f64() * 1000.0, label,);
+    println!("\t{:9.3} ms   {}", duration.as_secs_f64() * 1000.0, label,);
 }
 
 pub fn build_app<'a>() -> App<'a> {
