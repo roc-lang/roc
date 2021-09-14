@@ -21,6 +21,10 @@ satisfyB = satisfy (\u -> u == 98)
 secondT = {name : "(d) Use 'second' to recognize strings with second character 'b'", test : runU8 "abcd" (second  any satisfyB) == "b"}
 firstT = {name : "(e) Use 'first' to recognize strings beginning with 'a' and with any second character", test : runU8 "abcd" (first  satisfyA any) == "a"}
 
+secondT2 = {name : "(d) Use 'second' to recognize strings  beginning with 'a' followed by 'b' returning 'b'", test : runU8 "abcd" (second  satisfyA satisfyB) == "b"}
+firstT2 = {name : "(e) Use 'first' to recognize strings beginning with 'a' followed by 'b' returning 'a'", test : runU8 "abcd" (first  satisfyA satisfyB) == "a"}
+
+
 mapT = {name : "(f) Use map to shift output of parser: run \"abcd\" (map any (\\u -> u + 25)) == \"z\"", test : runU8 "abcd" (map any (\u -> u + 25)) == "z"  }
 
 oneOfT1 = {name: "(g) test of oneOf combinator: recognize string beginning with 'a' or 'b', for 'abcd'", test: List.len ((oneOf [satisfyA, satisfyB]) [97, 98, 99, 100] ) == 1 }
@@ -42,12 +46,14 @@ suite1g =  {name: "7. oneOfT1", tests: [oneOfT1]}
 suite1h =  {name: "8. oneOfT2", tests: [oneOfT2]}
 suite1i =  {name: "9. oneOfT3", tests: [oneOfT3]}
 
+suiteOneOf = {name: "OneOf", tests: [oneOfT1, oneOfT2, oneOfT3]}
+
 suite3 =  {name: "First three combinators", tests: [anyT, satisfyT, andThenT, ] }
 suite4 = {name: "First four combinators", tests: [anyT, satisfyT, andThenT, secondT]}
 suite5 =  {name: "First five combinators", tests: [anyT, satisfyT, andThenT, secondT, firstT] }
 suite6 =  {name: "All six combinators", tests: [anyT, satisfyT, andThenT, secondT, firstT, mapT] }
 
-suiteAll = {name: "All 7 combinators", tests: [anyT, satisfyT, andThenT, secondT, firstT, mapT, oneOfT1,oneOfT2, oneOfT3 ] }
+suiteAll = {name: "All 7 combinators", tests: [anyT, satisfyT, andThenT, secondT, firstT, secondT2, firstT2, mapT, oneOfT1,oneOfT2, oneOfT3 ] }
 
 # NOTE.  All of the functions imported from module Parser2 pass their individua; respective
 #        test EXCEPT the test oneOfT2. (Use suit1 with substitutions).  However, these tests (with the one exception) do **not** necessarily
@@ -71,7 +77,8 @@ main =
 # Test.runSuites [suite4]
 # Test.runSuites [suite5]
 # Test.runSuites [suite6]
-Test.runSuites [suiteAll]
+# Test.runSuites [suiteAll]
+Test.runSuites [suiteOneOf]
 # Test.runSuites [suite1h]
    |> Task.putLine
 
