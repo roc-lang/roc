@@ -1,5 +1,6 @@
 mod backend;
 pub mod from_wasm32_memory;
+mod layout;
 
 use bumpalo::Bump;
 use parity_wasm::builder;
