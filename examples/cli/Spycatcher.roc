@@ -724,11 +724,13 @@ step = \model ->
 
 modelToStr : Model -> Str
 modelToStr = \model ->
+    scored =
+        #model.sims
+        []
+            # List.mapWithIndex (\index, { mix, sim } -> { score: scoreSim sim, mix, index })
+            |> List.sortWith (\{ score: score1 }, { score: score2 } -> Num.compare score1 score2)
+
     "I'm the model!"
-#         scored =
-#             model.sims
-#                 |> List.indexedMap (\index ( mix, sim ) -> ( scoreSim sim, mix, index ))
-#                 |> List.sortBy (\( score, _, _ ) -> -score)
 #     in
 #     div []
 #         [ h1 [] [ text "Simulations" ]
