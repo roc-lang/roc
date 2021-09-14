@@ -64,6 +64,7 @@ impl WasmLayout {
             Layout::Builtin(Builtin::EmptyList) => Self::StackMemory(size),
             Layout::Builtin(Builtin::EmptyDict) => Self::StackMemory(size),
             Layout::Builtin(Builtin::EmptySet) => Self::StackMemory(size),
+            Layout::LambdaSet(_) => Self::StackMemory(size),
             Layout::Struct(_) => Self::StackMemory(size),
             Layout::Union(UnionLayout::NonRecursive(_)) => Self::StackMemory(size),
             Layout::Union(UnionLayout::Recursive(_)) => Self::HeapMemory,
