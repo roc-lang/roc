@@ -219,7 +219,7 @@ reverse : List elem -> List elem
 ##
 ## When sorting by numeric values, it's more efficient to use [sortAsc] or
 ## [sortDesc] instead.
-sort : List elem, (elem, elem -> [ Lt, Eq, Gt ]) -> List elem
+sortWith : List elem, (elem, elem -> [ Lt, Eq, Gt ]) -> List elem
 
 ## Sorts a list in ascending order (lowest to highest), using a function which
 ## specifies a way to represent each element as a number.
