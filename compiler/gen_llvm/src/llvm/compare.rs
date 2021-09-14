@@ -156,6 +156,8 @@ fn build_eq<'a, 'ctx, 'env>(
             rhs_val.into_struct_value(),
         ),
 
+        Layout::LambdaSet(_) => unreachable!("cannot compare closures"),
+
         Layout::Union(union_layout) => build_tag_eq(
             env,
             layout_ids,
@@ -336,6 +338,7 @@ fn build_neq<'a, 'ctx, 'env>(
         Layout::RecursivePointer => {
             unreachable!("recursion pointers should never be compared directly")
         }
+        Layout::LambdaSet(_) => unreachable!("cannot compare closure"),
     }
 }
 

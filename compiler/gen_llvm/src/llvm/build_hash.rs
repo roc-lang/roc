@@ -59,6 +59,15 @@ fn build_hash_layout<'a, 'ctx, 'env>(
             val.into_struct_value(),
         ),
 
+        Layout::LambdaSet(lambda_set) => build_hash_layout(
+            env,
+            layout_ids,
+            seed,
+            val,
+            &lambda_set.runtime_representation(),
+            when_recursive,
+        ),
+
         Layout::Union(union_layout) => {
             build_hash_tag(env, layout_ids, layout, union_layout, seed, val)
         }
