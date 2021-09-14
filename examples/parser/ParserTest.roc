@@ -71,8 +71,8 @@ main =
 # Test.runSuites [suite4]
 # Test.runSuites [suite5]
 # Test.runSuites [suite6]
-# Test.runSuites [suiteAll]
-Test.runSuites [suite1h]
+Test.runSuites [suiteAll]
+# Test.runSuites [suite1h]
    |> Task.putLine
 
 
