@@ -214,7 +214,8 @@ impl<'a> WasmBackend<'a> {
         // Functions: internal state & IR mappings
         self.stack_memory = 0;
         self.symbol_storage_map.clear();
-        // joinpoint_label_map.clear();
+        self.joinpoint_label_map.clear();
+        assert_eq!(self.block_depth, 0);
     }
 
     pub fn build_proc(&mut self, proc: Proc<'a>, sym: Symbol) -> Result<u32, String> {
