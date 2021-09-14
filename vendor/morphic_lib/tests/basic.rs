@@ -49,6 +49,7 @@ fn test_basic() {
             p.build()?
         };
 
+        println!("{}", program.to_source_string());
         let program_sol = morphic_lib::solve(program)?;
 
         let (_, _, func2_spec) = program_sol.entry_point_solution(EntryPointName(b"main"))?;

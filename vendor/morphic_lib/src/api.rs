@@ -2,6 +2,7 @@ use sha2::{digest::Digest, Sha256};
 use smallvec::SmallVec;
 use std::collections::{btree_map::Entry, BTreeMap};
 
+use crate::analyze;
 use crate::preprocess;
 use crate::render_api_ir;
 use crate::util::blocks::Blocks;
@@ -1552,11 +1553,13 @@ fn populate_specs(
     results.into_mapped(|_, spec| spec.unwrap())
 }
 
-pub fn solve(program: Program) -> Result<Solutions> {
-    preprocess::preprocess(&program).map_err(ErrorKind::PreprocessError)?;
+pub fn solve(api_program: Program) -> Result<Solutions> {
+    let (_nc, tc, program) =
+        preprocess::preprocess(&api_program).map_err(ErrorKind::PreprocessError)?;
+    analyze::analyze(tc, &program);
 
     Ok(Solutions {
-        mods: program
+        mods: api_program
             .mods
             .into_iter()
             .map(|(mod_name, mod_def)| {
@@ -1600,7 +1603,7 @@ pub fn solve(program: Program) -> Result<Solutions> {
                 (mod_name, mod_sols)
             })
             .collect(),
-        entry_points: program.entry_points,
+        entry_points: api_program.entry_points,
     })
 }
 

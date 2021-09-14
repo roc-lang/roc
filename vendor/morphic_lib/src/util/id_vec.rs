@@ -6,6 +6,7 @@ use std::ops::{Index, IndexMut};
 use std::slice;
 use std::vec;
 
+use crate::util::get2_mut::get2_mut;
 use crate::util::id_type::{Count, Id};
 
 #[derive(Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -233,6 +234,10 @@ impl<K: Id, V> IdVec<K, V> {
             items.push(val);
         }
         Some(Self::from_items(items))
+    }
+
+    pub fn get2_mut(&mut self, i: K, j: K) -> Option<(&mut V, &mut V)> {
+        get2_mut(&mut self.items, i.to_index(), j.to_index())
     }
 }
 
