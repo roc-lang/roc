@@ -40,7 +40,7 @@ pub fn report_problems(loaded: &mut MonomorphizedModule) -> usize {
     for (home, (module_path, src)) in loaded.sources.iter() {
         let mut src_lines: Vec<&str> = Vec::new();
 
-        if let Some((_, header_src)) = loaded.header_sources.get(&home) {
+        if let Some((_, header_src)) = loaded.header_sources.get(home) {
             src_lines.extend(header_src.split('\n'));
             src_lines.extend(src.split('\n').skip(1));
         } else {
@@ -50,7 +50,7 @@ pub fn report_problems(loaded: &mut MonomorphizedModule) -> usize {
         // Report parsing and canonicalization problems
         let alloc = RocDocAllocator::new(&src_lines, *home, &loaded.interns);
 
-        let problems = loaded.can_problems.remove(&home).unwrap_or_default();
+        let problems = loaded.can_problems.remove(home).unwrap_or_default();
 
         for problem in problems.into_iter() {
             let report = can_problem(&alloc, module_path.clone(), problem);
@@ -69,7 +69,7 @@ pub fn report_problems(loaded: &mut MonomorphizedModule) -> usize {
             }
         }
 
-        let problems = loaded.type_problems.remove(&home).unwrap_or_default();
+        let problems = loaded.type_problems.remove(home).unwrap_or_default();
 
         for problem in problems {
             let report = type_problem(&alloc, module_path.clone(), problem);
@@ -88,7 +88,7 @@ pub fn report_problems(loaded: &mut MonomorphizedModule) -> usize {
             }
         }
 
-        let problems = loaded.mono_problems.remove(&home).unwrap_or_default();
+        let problems = loaded.mono_problems.remove(home).unwrap_or_default();
 
         for problem in problems {
             let report = mono_problem(&alloc, module_path.clone(), problem);
