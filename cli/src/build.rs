@@ -53,6 +53,7 @@ pub fn build_file<'a>(
     emit_debug_info: bool,
     emit_timings: bool,
     link_type: LinkType,
+    surgically_link: bool,
 ) -> Result<BuiltFile, LoadingProblem<'a>> {
     let compilation_start = SystemTime::now();
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
@@ -97,7 +98,31 @@ pub fn build_file<'a>(
     let host_extension = if emit_wasm { "zig" } else { "o" };
     let app_extension = if emit_wasm { "bc" } else { "o" };
 
+    let cwd = roc_file_path.parent().unwrap();
     let path_to_platform = loaded.platform_path.clone();
+    let mut host_input_path = PathBuf::from(cwd);
+    host_input_path.push(&*path_to_platform);
+    host_input_path.push("host");
+    host_input_path.set_extension(host_extension);
+
+    // TODO this should probably be moved before load_and_monomorphize.
+    // To do this we will need to preprocess files just for their exported symbols.
+    // Also, we should no longer need to do this once we have platforms on
+    // a package repository, as we can then get precompiled hosts from there.
+    let rebuild_thread = spawn_rebuild_thread(
+        opt_level,
+        surgically_link,
+        host_input_path.clone(),
+        target.clone(),
+        loaded
+            .exposed_to_host
+            .keys()
+            .map(|x| x.as_str(&loaded.interns).to_string())
+            .collect(),
+    );
+
+    // TODO try to move as much of this linking as possible to the precompiled
+    // host, to minimize the amount of host-application linking required.
     let app_o_file = Builder::new()
         .prefix("roc_app")
         .suffix(&format!(".{}", app_extension))
@@ -154,7 +179,6 @@ pub fn build_file<'a>(
     program::report_problems(&mut loaded);
     let loaded = loaded;
 
-    let cwd = roc_file_path.parent().unwrap();
     let binary_path = cwd.join(&*loaded.output_path); // TODO should join ".exe" on Windows
     let code_gen_timing = program::gen_from_mono_module(
         arena,
@@ -198,28 +222,15 @@ pub fn build_file<'a>(
         );
     }
 
-    // Step 2: link the precompiled host and compiled app
-    let mut host_input_path = PathBuf::from(cwd);
-
-    host_input_path.push(&*path_to_platform);
-    host_input_path.push("host");
-    host_input_path.set_extension(host_extension);
-
-    // TODO we should no longer need to do this once we have platforms on
-    // a package repository, as we can then get precompiled hosts from there.
-    let rebuild_host_start = SystemTime::now();
-    rebuild_host(target, host_input_path.as_path());
-    let rebuild_host_end = rebuild_host_start.elapsed().unwrap();
-
+    let rebuild_duration = rebuild_thread.join().unwrap();
     if emit_timings {
         println!(
-            "Finished rebuilding the host in {} ms\n",
-            rebuild_host_end.as_millis()
+            "Finished rebuilding and preprocessing the host in {} ms\n",
+            rebuild_duration
         );
     }
 
-    // TODO try to move as much of this linking as possible to the precompiled
-    // host, to minimize the amount of host-application linking required.
+    // Step 2: link the precompiled host and compiled app
     let link_start = SystemTime::now();
     let (mut child, binary_path) =  // TODO use lld
         link(
@@ -258,5 +269,30 @@ pub fn build_file<'a>(
         binary_path,
         outcome,
         total_time,
+    })
+}
+
+fn spawn_rebuild_thread(
+    opt_level: OptLevel,
+    surgically_link: bool,
+    host_input_path: PathBuf,
+    target: Triple,
+    exported_symbols: Vec<String>,
+) -> std::thread::JoinHandle<u128> {
+    let thread_local_target = target.clone();
+    std::thread::spawn(move || {
+        let rebuild_host_start = SystemTime::now();
+        if surgically_link {
+            roc_linker::build_and_preprocess_host(
+                &thread_local_target,
+                host_input_path.as_path(),
+                exported_symbols,
+            )
+            .unwrap();
+        } else {
+            rebuild_host(opt_level, &thread_local_target, host_input_path.as_path());
+        }
+        let rebuild_host_end = rebuild_host_start.elapsed().unwrap();
+        rebuild_host_end.as_millis()
     })
 }

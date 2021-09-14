@@ -8,6 +8,7 @@ use object::{
     Object, ObjectSection, ObjectSymbol, RelocationKind, RelocationTarget, Section, SectionIndex,
     Symbol, SymbolIndex, SymbolSection,
 };
+use roc_build::link::LinkType;
 use roc_collections::all::MutMap;
 use std::cmp::Ordering;
 use std::convert::TryFrom;
@@ -19,6 +20,7 @@ use std::mem;
 use std::os::raw::c_char;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
+use target_lexicon::Triple;
 
 mod metadata;
 
@@ -120,6 +122,26 @@ pub fn build_app<'a>() -> App<'a> {
                         .required(false),
                 ),
         )
+}
+
+pub fn supported(link_type: &LinkType, target: &Triple) -> bool {
+    link_type == &LinkType::Executable
+        && target.architecture == target_lexicon::Architecture::X86_64
+        && target.operating_system == target_lexicon::OperatingSystem::Linux
+        && target.binary_format == target_lexicon::BinaryFormat::Elf
+}
+
+pub fn build_and_preprocess_host(
+    target: &Triple,
+    host_input_path: &Path,
+    exposed_to_host: Vec<String>,
+) -> io::Result<()> {
+    let lib = generate_dynamic_lib(exposed_to_host)?;
+    Ok(())
+}
+
+fn generate_dynamic_lib(exposed_to_host: Vec<String>) -> io::Result<()> {
+    Ok(())
 }
 
 // TODO: Most of this file is a mess of giant functions just to check if things work.

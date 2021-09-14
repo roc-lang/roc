@@ -83,8 +83,10 @@ pub fn build_zig_host_native(
     zig_host_src: &str,
     zig_str_path: &str,
     target: &str,
+    opt_level: OptLevel,
 ) -> Output {
-    Command::new("zig")
+    let mut command = Command::new("zig");
+    command
         .env_clear()
         .env("PATH", env_path)
         .env("HOME", env_home)
@@ -102,14 +104,14 @@ pub fn build_zig_host_native(
             "--library",
             "c",
             "-fPIC",
-            "-O",
-            "ReleaseSafe",
             // cross-compile?
             "-target",
             target,
-        ])
-        .output()
-        .unwrap()
+        ]);
+    if matches!(opt_level, OptLevel::Optimize) {
+        command.args(&["-O", "ReleaseSafe"]);
+    }
+    command.output().unwrap()
 }
 
 #[cfg(target_os = "macos")]
@@ -120,6 +122,7 @@ pub fn build_zig_host_native(
     zig_host_src: &str,
     zig_str_path: &str,
     _target: &str,
+    opt_level: OptLevel,
 ) -> Output {
     use serde_json::Value;
 
@@ -161,7 +164,8 @@ pub fn build_zig_host_native(
     zig_compiler_rt_path.push("special");
     zig_compiler_rt_path.push("compiler_rt.zig");
 
-    Command::new("zig")
+    let mut command = Command::new("zig");
+    command
         .env_clear()
         .env("PATH", &env_path)
         .env("HOME", &env_home)
@@ -182,11 +186,11 @@ pub fn build_zig_host_native(
             "--library",
             "c",
             "-fPIC",
-            "-O",
-            "ReleaseSafe",
-        ])
-        .output()
-        .unwrap()
+        ]);
+    if matches!(opt_level, OptLevel::Optimize) {
+        command.args(&["-O", "ReleaseSafe"]);
+    }
+    command.output().unwrap()
 }
 
 pub fn build_zig_host_wasm32(
@@ -195,6 +199,7 @@ pub fn build_zig_host_wasm32(
     emit_bin: &str,
     zig_host_src: &str,
     zig_str_path: &str,
+    opt_level: OptLevel,
 ) -> Output {
     // NOTE currently just to get compiler warnings if the host code is invalid.
     // the produced artifact is not used
@@ -204,7 +209,8 @@ pub fn build_zig_host_wasm32(
     // we'd like to compile with `-target wasm32-wasi` but that is blocked on
     //
     // https://github.com/ziglang/zig/issues/9414
-    Command::new("zig")
+    let mut command = Command::new("zig");
+    command
         .env_clear()
         .env("PATH", env_path)
         .env("HOME", env_home)
@@ -226,14 +232,14 @@ pub fn build_zig_host_wasm32(
             // "wasm32-wasi",
             // "-femit-llvm-ir=/home/folkertdev/roc/roc/examples/benchmarks/platform/host.ll",
             "-fPIC",
-            "-O",
-            "ReleaseSafe",
-        ])
-        .output()
-        .unwrap()
+        ]);
+    if matches!(opt_level, OptLevel::Optimize) {
+        command.args(&["-O", "ReleaseSafe"]);
+    }
+    command.output().unwrap()
 }
 
-pub fn rebuild_host(target: &Triple, host_input_path: &Path) {
+pub fn rebuild_host(opt_level: OptLevel, target: &Triple, host_input_path: &Path) {
     let c_host_src = host_input_path.with_file_name("host.c");
     let c_host_dest = host_input_path.with_file_name("c_host.o");
     let zig_host_src = host_input_path.with_file_name("host.zig");
@@ -266,6 +272,7 @@ pub fn rebuild_host(target: &Triple, host_input_path: &Path) {
                     &emit_bin,
                     zig_host_src.to_str().unwrap(),
                     zig_str_path.to_str().unwrap(),
+                    opt_level,
                 )
             }
             Architecture::X86_64 => {
@@ -277,6 +284,7 @@ pub fn rebuild_host(target: &Triple, host_input_path: &Path) {
                     zig_host_src.to_str().unwrap(),
                     zig_str_path.to_str().unwrap(),
                     "native",
+                    opt_level,
                 )
             }
             Architecture::X86_32(_) => {
@@ -288,6 +296,7 @@ pub fn rebuild_host(target: &Triple, host_input_path: &Path) {
                     zig_host_src.to_str().unwrap(),
                     zig_str_path.to_str().unwrap(),
                     "i386-linux-musl",
+                    opt_level,
                 )
             }
             _ => panic!("Unsupported architecture {:?}", target.architecture),
@@ -296,19 +305,18 @@ pub fn rebuild_host(target: &Triple, host_input_path: &Path) {
         validate_output("host.zig", "zig", output)
     } else {
         // Compile host.c
-        let output = Command::new("clang")
-            .env_clear()
-            .env("PATH", &env_path)
-            .args(&[
-                "-O2",
-                "-fPIC",
-                "-c",
-                c_host_src.to_str().unwrap(),
-                "-o",
-                c_host_dest.to_str().unwrap(),
-            ])
-            .output()
-            .unwrap();
+        let mut command = Command::new("clang");
+        command.env_clear().env("PATH", &env_path).args(&[
+            "-fPIC",
+            "-c",
+            c_host_src.to_str().unwrap(),
+            "-o",
+            c_host_dest.to_str().unwrap(),
+        ]);
+        if matches!(opt_level, OptLevel::Optimize) {
+            command.arg("-O2");
+        }
+        let output = command.output().unwrap();
 
         validate_output("host.c", "clang", output);
     }
@@ -318,13 +326,14 @@ pub fn rebuild_host(target: &Triple, host_input_path: &Path) {
         let cargo_dir = host_input_path.parent().unwrap();
         let libhost_dir = cargo_dir.join("target").join("release");
 
-        let output = Command::new("cargo")
-            .args(&["build", "--release"])
-            .current_dir(cargo_dir)
-            .output()
-            .unwrap();
+        let mut command = Command::new("cargo");
+        command.arg("build").current_dir(cargo_dir);
+        if matches!(opt_level, OptLevel::Optimize) {
+            command.arg("--release");
+        }
+        let output = command.output().unwrap();
 
-        validate_output("src/lib.rs", "cargo build --release", output);
+        validate_output("src/lib.rs", "cargo build", output);
 
         let output = Command::new("ld")
             .env_clear()
@@ -344,14 +353,16 @@ pub fn rebuild_host(target: &Triple, host_input_path: &Path) {
         validate_output("c_host.o", "ld", output);
     } else if rust_host_src.exists() {
         // Compile and link host.rs, if it exists
-        let output = Command::new("rustc")
-            .args(&[
-                rust_host_src.to_str().unwrap(),
-                "-o",
-                rust_host_dest.to_str().unwrap(),
-            ])
-            .output()
-            .unwrap();
+        let mut command = Command::new("rustc");
+        command.args(&[
+            rust_host_src.to_str().unwrap(),
+            "-o",
+            rust_host_dest.to_str().unwrap(),
+        ]);
+        if matches!(opt_level, OptLevel::Optimize) {
+            command.arg("-O");
+        }
+        let output = command.output().unwrap();
 
         validate_output("host.rs", "rustc", output);
 
