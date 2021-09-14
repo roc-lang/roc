@@ -1943,8 +1943,8 @@ fn list_keep_errs() {
 #[test]
 fn list_map_with_index() {
     assert_evals_to!(
-        "List.mapWithIndex [0,0,0] (\\index, x -> Num.intCast index + x)",
-        RocList::from_slice(&[0, 1, 2]),
+        "List.mapWithIndex [9,5,3] (\\x, index -> Num.intCast index - x)",
+        RocList::from_slice(&[9, 4, 1]),
         RocList<i64>
     );
 }
