@@ -32,54 +32,18 @@ oneOfT2 = {name: "(h) test of oneOf combinator: recognize string beginning with 
 oneOfT3 = {name: "(i) test of oneOf combinator: recognize string beginning with 'a' or 'b', for 'cde' (fail)", test: List.len ((oneOf [satisfyA, satisfyB]) [99, 100, 101] ) == 0 }
 
 
-oneOfResult = (oneOf [satisfyA, satisfyB]) [97, 98, 99, 100] 
-
 # Test suites
 
-suite1a =  {name: "1. anyT", tests: [anyT]}
-suite1b =  {name: "2. satisfyT", tests: [satisfyT]}
-suite1c =  {name: "3. andThen", tests: [andThenT]}
-suite1d =  {name: "4. second", tests: [secondT]}
-suite1e=   {name: "5. first", tests: [firstT]}
-suite1f =  {name: "6. map", tests: [mapT]}
-suite1g =  {name: "7. oneOfT1", tests: [oneOfT1]}
-suite1h =  {name: "8. oneOfT2", tests: [oneOfT2]}
-suite1i =  {name: "9. oneOfT3", tests: [oneOfT3]}
-
 suiteOneOf = {name: "OneOf", tests: [oneOfT1, oneOfT2, oneOfT3]}
-
-suite3 =  {name: "First three combinators", tests: [anyT, satisfyT, andThenT, ] }
-suite4 = {name: "First four combinators", tests: [anyT, satisfyT, andThenT, secondT]}
-suite5 =  {name: "First five combinators", tests: [anyT, satisfyT, andThenT, secondT, firstT] }
-suite6 =  {name: "All six combinators", tests: [anyT, satisfyT, andThenT, secondT, firstT, mapT] }
-
 suiteAll = {name: "All 7 combinators", tests: [anyT, satisfyT, andThenT, secondT, firstT, secondT2, firstT2, mapT, oneOfT1,oneOfT2, oneOfT3 ] }
-
-# NOTE.  All of the functions imported from module Parser2 pass their individua; respective
-#        test EXCEPT the test oneOfT2. (Use suit1 with substitutions).  However, these tests (with the one exception) do **not** necessarily
-#        pass when used in combination with others.  Weird!
 
 
 main : Task.Task {} []
 main =
- 
-# Test.runSuite suite1a
-# Test.runSuite suite1b
-# Test.runSuite suite1c  ## Try this one (test (c) succeeds)
-# Test.runSuite suite1d  ## Try this one (test (d) succeeds)
-# Test.runSuite suite1e
 
-# Test.runSuite suite1f
+Test.runSuites [suiteAll]
+# Test.runSuites [suiteOneOf]
 
-# Test.runSuites [suite1a, suite1b, suite1c, suite1d, suite1e, suite1f, suite4 ] ## Try this one (tests (c) and (d) fail)
-
-# Test.runSuites [suite3] 
-# Test.runSuites [suite4]
-# Test.runSuites [suite5]
-# Test.runSuites [suite6]
-# Test.runSuites [suiteAll]
-Test.runSuites [suiteOneOf]
-# Test.runSuites [suite1h]
    |> Task.putLine
 
 
