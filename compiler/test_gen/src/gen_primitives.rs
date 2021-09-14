@@ -2618,7 +2618,8 @@ fn lambda_set_struct_byte() {
                     r = Red
 
                     p1 = (\u -> r == u)
-                    oneOfResult = List.map [p1, p1] (\p -> p Green)
+                    foobarbaz = (\p -> p Green)
+                    oneOfResult = List.map [p1, p1] foobarbaz
 
                     when oneOfResult is
                         _ -> 32

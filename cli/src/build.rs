@@ -148,6 +148,12 @@ pub fn build_file<'a>(
         }
     }
 
+    // This only needs to be mutable for report_problems. This can't be done
+    // inside a nested scope without causing a borrow error!
+    let mut loaded = loaded;
+    program::report_problems(&mut loaded);
+    let loaded = loaded;
+
     let cwd = roc_file_path.parent().unwrap();
     let binary_path = cwd.join(&*loaded.output_path); // TODO should join ".exe" on Windows
     let code_gen_timing = program::gen_from_mono_module(

@@ -20,33 +20,15 @@ pub struct CodeGenTiming {
 // llvm we're using, consider moving me somewhere else.
 const LLVM_VERSION: &str = "12";
 
-// TODO how should imported modules factor into this? What if those use builtins too?
-// TODO this should probably use more helper functions
-// TODO make this polymorphic in the llvm functions so it can be reused for another backend.
-#[cfg(feature = "llvm")]
-#[allow(clippy::cognitive_complexity)]
-pub fn gen_from_mono_module(
-    arena: &bumpalo::Bump,
-    mut loaded: MonomorphizedModule,
-    roc_file_path: &Path,
-    target: &target_lexicon::Triple,
-    app_o_file: &Path,
-    opt_level: OptLevel,
-    emit_debug_info: bool,
-) -> CodeGenTiming {
-    use crate::target::{self, convert_opt_level};
-    use inkwell::attributes::{Attribute, AttributeLoc};
-    use inkwell::context::Context;
-    use inkwell::module::Linkage;
-    use inkwell::targets::{CodeModel, FileType, RelocMode};
-    use std::time::SystemTime;
-
+// TODO instead of finding exhaustiveness problems in monomorphization, find
+// them after type checking (like Elm does) so we can complete the entire
+// `roc check` process without needing to monomorphize.
+/// Returns the number of problems reported.
+pub fn report_problems(loaded: &mut MonomorphizedModule) -> usize {
     use roc_reporting::report::{
         can_problem, mono_problem, type_problem, Report, RocDocAllocator, Severity::*,
         DEFAULT_PALETTE,
     };
-
-    let code_gen_start = SystemTime::now();
     let palette = DEFAULT_PALETTE;
 
     // This will often over-allocate total memory, but it means we definitely
@@ -55,10 +37,10 @@ pub fn gen_from_mono_module(
     let mut warnings = Vec::with_capacity(total_problems);
     let mut errors = Vec::with_capacity(total_problems);
 
-    for (home, (module_path, src)) in loaded.sources {
+    for (home, (module_path, src)) in loaded.sources.iter() {
         let mut src_lines: Vec<&str> = Vec::new();
 
-        if let Some((_, header_src)) = loaded.header_sources.get(&home) {
+        if let Some((_, header_src)) = loaded.header_sources.get(home) {
             src_lines.extend(header_src.split('\n'));
             src_lines.extend(src.split('\n').skip(1));
         } else {
@@ -66,9 +48,10 @@ pub fn gen_from_mono_module(
         }
 
         // Report parsing and canonicalization problems
-        let alloc = RocDocAllocator::new(&src_lines, home, &loaded.interns);
+        let alloc = RocDocAllocator::new(&src_lines, *home, &loaded.interns);
 
-        let problems = loaded.can_problems.remove(&home).unwrap_or_default();
+        let problems = loaded.can_problems.remove(home).unwrap_or_default();
+
         for problem in problems.into_iter() {
             let report = can_problem(&alloc, module_path.clone(), problem);
             let severity = report.severity;
@@ -86,7 +69,8 @@ pub fn gen_from_mono_module(
             }
         }
 
-        let problems = loaded.type_problems.remove(&home).unwrap_or_default();
+        let problems = loaded.type_problems.remove(home).unwrap_or_default();
+
         for problem in problems {
             let report = type_problem(&alloc, module_path.clone(), problem);
             let severity = report.severity;
@@ -104,7 +88,8 @@ pub fn gen_from_mono_module(
             }
         }
 
-        let problems = loaded.mono_problems.remove(&home).unwrap_or_default();
+        let problems = loaded.mono_problems.remove(home).unwrap_or_default();
+
         for problem in problems {
             let report = mono_problem(&alloc, module_path.clone(), problem);
             let severity = report.severity;
@@ -123,12 +108,18 @@ pub fn gen_from_mono_module(
         }
     }
 
+    let problems_reported;
+
     // Only print warnings if there are no errors
     if errors.is_empty() {
+        problems_reported = warnings.len();
+
         for warning in warnings {
             println!("\n{}\n", warning);
         }
     } else {
+        problems_reported = errors.len();
+
         for error in errors {
             println!("\n{}\n", error);
         }
@@ -140,9 +131,34 @@ pub fn gen_from_mono_module(
     // The horizontal rule is nice when running the program right after
     // compiling it, as it lets you clearly see where the compiler
     // errors/warnings end and the program output begins.
-    if total_problems > 0 {
+    if problems_reported > 0 {
         println!("{}\u{001B}[0m\n", Report::horizontal_rule(&palette));
     }
+
+    problems_reported
+}
+
+// TODO how should imported modules factor into this? What if those use builtins too?
+// TODO this should probably use more helper functions
+// TODO make this polymorphic in the llvm functions so it can be reused for another backend.
+#[cfg(feature = "llvm")]
+pub fn gen_from_mono_module(
+    arena: &bumpalo::Bump,
+    loaded: MonomorphizedModule,
+    roc_file_path: &Path,
+    target: &target_lexicon::Triple,
+    app_o_file: &Path,
+    opt_level: OptLevel,
+    emit_debug_info: bool,
+) -> CodeGenTiming {
+    use crate::target::{self, convert_opt_level};
+    use inkwell::attributes::{Attribute, AttributeLoc};
+    use inkwell::context::Context;
+    use inkwell::module::Linkage;
+    use inkwell::targets::{CodeModel, FileType, RelocMode};
+    use std::time::SystemTime;
+
+    let code_gen_start = SystemTime::now();
 
     // Generate the binary
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;

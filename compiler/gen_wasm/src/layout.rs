@@ -48,6 +48,7 @@ impl WasmLayout {
                 | EmptySet,
             )
             | Layout::Struct(_)
+            | Layout::LambdaSet(_)
             | Layout::Union(NonRecursive(_)) => Self::StackMemory(size),
 
             Layout::Union(

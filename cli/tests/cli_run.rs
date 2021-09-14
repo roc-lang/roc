@@ -242,7 +242,7 @@ mod cli_run {
             filename: "Main.roc",
             executable_filename: "effect-example",
             stdin: &["hi there!"],
-            expected_ending: "hi there!\n",
+            expected_ending: "hi there!\nIt is known\n",
             use_valgrind: true,
         },
         // tea:"tea" => Example {
