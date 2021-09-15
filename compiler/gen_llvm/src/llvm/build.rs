@@ -928,7 +928,10 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
         CallType::LowLevel { op, update_mode } => {
             let bytes = update_mode.to_bytes();
             let update_var = UpdateModeVar(&bytes);
-            let update_mode = func_spec_solutions.update_mode(update_var).ok();
+            let update_mode = func_spec_solutions
+                .update_mode(update_var)
+                .ok()
+                .unwrap_or(UpdateMode::Immutable);
 
             run_low_level(
                 env,
@@ -4604,7 +4607,7 @@ fn run_low_level<'a, 'ctx, 'env>(
     layout: &Layout<'a>,
     op: LowLevel,
     args: &[Symbol],
-    update_mode: Option<UpdateMode>,
+    update_mode: UpdateMode,
     // expect_failed: *const (),
 ) -> BasicValueEnum<'ctx> {
     use LowLevel::*;
@@ -4798,6 +4801,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                     index_1.into_int_value(),
                     index_2.into_int_value(),
                     element_layout,
+                    update_mode,
                 ),
                 _ => unreachable!("Invalid layout {:?} in List.swap", list_layout),
             }
@@ -5125,7 +5129,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                     index.into_int_value(),
                     element,
                     element_layout,
-                    update_mode.unwrap(),
+                    update_mode,
                 ),
                 _ => unreachable!("invalid dict layout"),
             }

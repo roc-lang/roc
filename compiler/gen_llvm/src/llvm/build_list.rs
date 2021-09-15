@@ -17,6 +17,16 @@ use morphic_lib::UpdateMode;
 use roc_builtins::bitcode;
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
+fn pass_update_mode<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    update_mode: UpdateMode,
+) -> BasicValueEnum<'ctx> {
+    match update_mode {
+        UpdateMode::Immutable => env.context.bool_type().const_zero().into(),
+        UpdateMode::InPlace => env.context.bool_type().const_int(1, false).into(),
+    }
+}
+
 fn list_returned_from_zig<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     output: BasicValueEnum<'ctx>,
@@ -267,6 +277,7 @@ pub fn list_swap<'a, 'ctx, 'env>(
     index_1: IntValue<'ctx>,
     index_2: IntValue<'ctx>,
     element_layout: &Layout<'a>,
+    update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
     call_bitcode_fn_returns_list(
         env,
@@ -276,6 +287,7 @@ pub fn list_swap<'a, 'ctx, 'env>(
             layout_width(env, element_layout),
             index_1.into(),
             index_2.into(),
+            pass_update_mode(env, update_mode),
         ],
         bitcode::LIST_SWAP,
     )
