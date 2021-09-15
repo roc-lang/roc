@@ -28,6 +28,7 @@ pub const CMD_EDIT: &str = "edit";
 pub const CMD_DOCS: &str = "docs";
 
 pub const FLAG_DEBUG: &str = "debug";
+pub const FLAG_DEV: &str = "dev";
 pub const FLAG_OPTIMIZE: &str = "optimize";
 pub const FLAG_LIB: &str = "lib";
 pub const FLAG_BACKEND: &str = "backend";
@@ -52,6 +53,12 @@ pub fn build_app<'a>() -> App<'a> {
                 Arg::with_name(FLAG_OPTIMIZE)
                     .long(FLAG_OPTIMIZE)
                     .help("Optimize your compiled Roc program to run faster. (Optimization takes time to complete.)")
+                    .required(false),
+            )
+            .arg(
+                Arg::with_name(FLAG_DEV)
+                    .long(FLAG_DEV)
+                    .help("Make compilation as fast as possible. (Runtime performance may suffer)")
                     .required(false),
             )
             .arg(
@@ -89,6 +96,12 @@ pub fn build_app<'a>() -> App<'a> {
                 Arg::with_name(FLAG_OPTIMIZE)
                     .long(FLAG_OPTIMIZE)
                     .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
+                    .required(false),
+            )
+            .arg(
+                Arg::with_name(FLAG_DEV)
+                    .long(FLAG_DEV)
+                    .help("Make compilation as fast as possible. (Runtime performance may suffer)")
                     .required(false),
             )
             .arg(
@@ -130,6 +143,12 @@ pub fn build_app<'a>() -> App<'a> {
                 .requires(ROC_FILE)
                 .required(false),
         )
+            .arg(
+                Arg::with_name(FLAG_DEV)
+                    .long(FLAG_DEV)
+                    .help("Make compilation as fast as possible. (Runtime performance may suffer)")
+                    .required(false),
+            )
         .arg(
             Arg::with_name(FLAG_DEBUG)
                 .long(FLAG_DEBUG)
