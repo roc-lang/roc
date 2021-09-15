@@ -137,3 +137,20 @@ pub fn roc_fx_putLine(line: RocStr) -> () {
 
     ()
 }
+
+#[no_mangle]
+pub fn roc_fx_httpGetUtf8(url: RocStr) -> (RocStr, u16) {
+    todo!(
+        "TODO implement Http.get in the host for URL {}",
+        url.as_str()
+    );
+    // match ureq::get(unsafe { url.as_str() }).call() {
+    //     Ok(resp) => match resp.into_string() {
+    //         Ok(contents) => RocResult::Ok(RocStr::from_slice(contents.as_bytes())), // TODO make roc::Result!
+    //         // TODO turn this error into an enum!
+    //         Err(err) => RocResult::Err(RocStr::from_slice(format!("{:?}", err).as_bytes())),
+    //     },
+    //     // TODO turn this error into an enum!
+    //     Err(err) => RocResult::Err(RocStr::from_slice(format!("{:?}", err).as_bytes())),
+    // }
+}
