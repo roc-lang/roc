@@ -224,8 +224,8 @@ fn build_entry_point(layout: crate::ir::ProcLayout, func_name: FuncName) -> Resu
 
     // to the modelling language, the arguments appear out of thin air
     let argument_type = build_tuple_type(&mut builder, layout.arguments)?;
-    let argument = builder.add_unknown_with(block, &[], argument_type)?;
-    // let argument = terrible_hack(&mut builder, block, argument_type)?;
+    // let argument = builder.add_unknown_with(block, &[], argument_type)?;
+    let argument = terrible_hack(&mut builder, block, argument_type)?;
 
     let name_bytes = [0; 16];
     let spec_var = CalleeSpecVar(&name_bytes);
@@ -233,7 +233,8 @@ fn build_entry_point(layout: crate::ir::ProcLayout, func_name: FuncName) -> Resu
 
     // to the modelling language, the result disappears into the void
     let unit_type = builder.add_tuple_type(&[])?;
-    let unit_value = builder.add_unknown_with(block, &[result], unit_type)?;
+    // let unit_value = builder.add_unknown_with(block, &[result], unit_type)?;
+    let unit_value = builder.add_make_tuple(block, &[])?;
 
     let root = BlockExpr(block, unit_value);
     let spec = builder.build(unit_type, unit_type, root)?;
