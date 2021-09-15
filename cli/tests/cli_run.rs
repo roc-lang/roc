@@ -224,6 +224,13 @@ mod cli_run {
             expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
+        hello_rust:"fib" => Example {
+            filename: "Fib.roc",
+            executable_filename: "fib",
+            stdin: &[],
+            expected_ending:"55\n",
+            use_valgrind: true,
+        },
         quicksort:"quicksort" => Example {
             filename: "Quicksort.roc",
             executable_filename: "quicksort",

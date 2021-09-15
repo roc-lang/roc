@@ -1,4 +1,4 @@
-app "add"
+app "fib"
     packages { base: "platform" }
     imports []
     provides [ main ] to base
