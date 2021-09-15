@@ -142,7 +142,7 @@ pub fn report_problems(loaded: &mut MonomorphizedModule) -> usize {
 // TODO this should probably use more helper functions
 // TODO make this polymorphic in the llvm functions so it can be reused for another backend.
 #[cfg(feature = "llvm")]
-pub fn gen_from_mono_module(
+pub fn gen_from_mono_module_llvm(
     arena: &bumpalo::Bump,
     loaded: MonomorphizedModule,
     roc_file_path: &Path,

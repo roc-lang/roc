@@ -74,16 +74,7 @@ pub fn build_file<'a>(
     )?;
 
     use target_lexicon::Architecture;
-    let emit_wasm = match target.architecture {
-        Architecture::X86_64 => false,
-        Architecture::Aarch64(_) => false,
-        Architecture::Wasm32 => true,
-        Architecture::X86_32(_) => false,
-        _ => panic!(
-            "TODO gracefully handle unsupported architecture: {:?}",
-            target.architecture
-        ),
-    };
+    let emit_wasm = matches!(target.architecture, Architecture::Wasm32);
 
     // TODO wasm host extension should be something else ideally
     // .bc does not seem to work because
@@ -153,7 +144,7 @@ pub fn build_file<'a>(
 
     let cwd = roc_file_path.parent().unwrap();
     let binary_path = cwd.join(&*loaded.output_path); // TODO should join ".exe" on Windows
-    let code_gen_timing = program::gen_from_mono_module(
+    let code_gen_timing = program::gen_from_mono_module_llvm(
         arena,
         loaded,
         &roc_file_path,
