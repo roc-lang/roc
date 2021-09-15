@@ -427,7 +427,7 @@ fn gen_from_mono_module_dev_assembly(
     target: &target_lexicon::Triple,
     app_o_file: &Path,
 ) -> CodeGenTiming {
-    let lazy_literals = false; // an optimization (should this be on by default?)
+    let lazy_literals = true;
     let generate_allocators = false; // provided by the platform
 
     let env = roc_gen_dev::Env {
