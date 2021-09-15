@@ -2782,3 +2782,24 @@ fn value_not_exposed_hits_panic() {
         i64
     );
 }
+
+#[test]
+fn mix_function_and_closure() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                foo = \x -> x
+
+                bar = \y -> \_ -> y
+
+                main : Str
+                main =
+                    (if 1 == 1 then foo else (bar "nope nope nope")) "hello world"
+            "#
+        ),
+        RocStr::from_slice(b"hello world"),
+        RocStr
+    );
+}
