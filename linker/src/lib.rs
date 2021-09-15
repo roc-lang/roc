@@ -198,6 +198,7 @@ fn generate_dynamic_lib(
 
     let text_section = out_object.section_id(write::StandardSection::Text);
     for sym in exposed_to_host {
+        // TODO properly generate this list.
         for name in &[
             format!("roc__{}_1_exposed", sym),
             format!("roc__{}_1_Fx_caller", sym),

@@ -108,6 +108,7 @@ pub fn build_zig_host_native(
         // include libc
         "--library",
         "c",
+        "--strip",
         // cross-compile?
         "-target",
         target,
@@ -194,6 +195,7 @@ pub fn build_zig_host_native(
         // include libc
         "--library",
         "c",
+        "--strip",
     ]);
     if matches!(opt_level, OptLevel::Optimize) {
         command.args(&["-O", "ReleaseSafe"]);
@@ -244,6 +246,7 @@ pub fn build_zig_host_wasm32(
             // "wasm32-wasi",
             // "-femit-llvm-ir=/home/folkertdev/roc/roc/examples/benchmarks/platform/host.ll",
             "-fPIC",
+            "--strip",
         ]);
     if matches!(opt_level, OptLevel::Optimize) {
         command.args(&["-O", "ReleaseSafe"]);
