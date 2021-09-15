@@ -1,6 +1,7 @@
 use sha2::{digest::Digest, Sha256};
 use smallvec::SmallVec;
 use std::collections::{btree_map::Entry, BTreeMap};
+use std::rc::Rc;
 
 use crate::analyze;
 use crate::preprocess;
@@ -1373,13 +1374,15 @@ pub enum UpdateMode {
 pub const SPEC_HASH_BYTES: usize = 32;
 
 #[repr(transparent)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FuncSpec(pub [u8; SPEC_HASH_BYTES]);
 
 /// The solution table for an individual specialization.
 pub struct FuncSpecSolutions {
-    func_def: FuncDef,
-    callee_specs: IdVec<CalleeSpecVarId, FuncSpec>,
+    // TODO: eliminate the RC here (this will require introducing a lifetime, and is therefore a
+    // breaking API change)
+    func_def: Rc<FuncDef>,
+    solution: analyze::FuncSolution,
 }
 
 impl FuncSpecSolutions {
@@ -1393,7 +1396,7 @@ impl FuncSpecSolutions {
             .callee_spec_vars
             .get_by_val(&var.into())
         {
-            Some(id) => Ok(self.callee_specs[id]),
+            Some(id) => Ok(self.solution.callee_specs[id]),
             None => Err(ErrorKind::CalleeSpecVarNotFound(var.into()).into()),
         }
     }
@@ -1408,7 +1411,7 @@ impl FuncSpecSolutions {
             .update_mode_vars
             .get_by_val(&var.into())
         {
-            Some(_id) => Ok(UpdateMode::Immutable),
+            Some(id) => Ok(self.solution.update_modes[id]),
             None => Err(ErrorKind::UpdateModeVarNotFound(var.into()).into()),
         }
     }
@@ -1417,20 +1420,20 @@ impl FuncSpecSolutions {
 /// Zero or more specializations for a single function, and the solution table for each
 /// specialization.
 pub struct FuncSolutions {
-    spec: FuncSpec,
-    spec_solutions: FuncSpecSolutions,
+    spec_solutions: BTreeMap<FuncSpec, FuncSpecSolutions>,
 }
 
 impl FuncSolutions {
     pub fn specs(&self) -> impl Iterator<Item = &FuncSpec> {
-        std::iter::once(&self.spec)
+        self.spec_solutions.keys()
     }
 
     pub fn spec(&self, spec: &FuncSpec) -> Result<&FuncSpecSolutions> {
-        if &self.spec != spec {
-            return Err(ErrorKind::FuncSpecNotFound(*spec).into());
+        if let Some(solution) = self.spec_solutions.get(spec) {
+            Ok(solution)
+        } else {
+            Err(ErrorKind::FuncSpecNotFound(*spec).into())
         }
-        Ok(&self.spec_solutions)
     }
 }
 
@@ -1502,7 +1505,7 @@ impl ModSolutions {
 /// Specializations and solution tables generated for the entire program.
 pub struct Solutions {
     mods: BTreeMap<ModNameBuf, ModSolutions>,
-    entry_points: BTreeMap<EntryPointNameBuf, (ModNameBuf, FuncNameBuf)>,
+    entry_points: BTreeMap<EntryPointNameBuf, (ModNameBuf, FuncNameBuf, FuncSpec)>,
 }
 
 impl Solutions {
@@ -1522,9 +1525,8 @@ impl Solutions {
         // TODO: The clone here is unnecessary -- avoid it!
         // (might require something like a transmute)
         match self.entry_points.get(&entry_point.into()) {
-            Some((mod_name, func_name)) => {
-                let spec = hash_func_name(mod_name.borrowed(), func_name.borrowed());
-                Ok((mod_name.borrowed(), func_name.borrowed(), spec))
+            Some((mod_name, func_name, spec)) => {
+                Ok((mod_name.borrowed(), func_name.borrowed(), *spec))
             }
             None => Err(ErrorKind::EntryPointNotFound(entry_point.into()).into()),
         }
@@ -1554,9 +1556,10 @@ fn populate_specs(
 }
 
 pub fn solve(api_program: Program) -> Result<Solutions> {
-    let (_nc, tc, program) =
+    let (nc, tc, program) =
         preprocess::preprocess(&api_program).map_err(ErrorKind::PreprocessError)?;
-    analyze::analyze(tc, &program);
+
+    let mut solutions = analyze::analyze(tc, &program);
 
     Ok(Solutions {
         mods: api_program
@@ -1568,16 +1571,27 @@ pub fn solve(api_program: Program) -> Result<Solutions> {
                         .func_defs
                         .into_iter()
                         .map(|(func_name, func_def)| {
-                            let callee_specs = populate_specs(
-                                func_def.builder.expr_builder.callee_spec_vars.count(),
-                                &func_def.builder.expr_builder.vals,
-                            );
+                            // TODO: avoid the clones here
+                            let func_id = nc
+                                .funcs
+                                .get_by_val(&(mod_name.clone(), func_name.clone()))
+                                .unwrap();
+                            let func_def = Rc::new(func_def);
                             let func_sols = FuncSolutions {
-                                spec: hash_func_name(mod_name.borrowed(), func_name.borrowed()),
-                                spec_solutions: FuncSpecSolutions {
-                                    func_def,
-                                    callee_specs,
-                                },
+                                spec_solutions: std::mem::take(
+                                    &mut solutions.funcs.solutions[func_id],
+                                )
+                                .into_iter()
+                                .map(|(spec, solution)| {
+                                    (
+                                        spec,
+                                        FuncSpecSolutions {
+                                            func_def: func_def.clone(),
+                                            solution: solution.unwrap(),
+                                        },
+                                    )
+                                })
+                                .collect(),
                             };
                             (func_name, func_sols)
                         })
@@ -1603,7 +1617,15 @@ pub fn solve(api_program: Program) -> Result<Solutions> {
                 (mod_name, mod_sols)
             })
             .collect(),
-        entry_points: api_program.entry_points,
+        entry_points: api_program
+            .entry_points
+            .into_iter()
+            .map(|(entry_point_name, (mod_name, func_name))| {
+                let entry_point_id = nc.entry_points.get_by_val(&entry_point_name).unwrap();
+                let spec = solutions.entry_points[entry_point_id];
+                (entry_point_name, (mod_name, func_name, spec))
+            })
+            .collect(),
     })
 }
 

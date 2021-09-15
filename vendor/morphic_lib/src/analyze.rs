@@ -1,11 +1,11 @@
 use smallvec::SmallVec;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::convert::TryInto;
 use typed_arena::Arena;
 
 use crate::api;
 use crate::ir;
-use crate::name_cache::FuncId;
+use crate::name_cache::{EntryPointId, FuncId};
 use crate::type_cache::{TypeCache, TypeData, TypeId};
 use crate::util::flat_slices::FlatSlices;
 use crate::util::id_type::Count;
@@ -43,7 +43,7 @@ impl SubSlots {
         } else {
             self.end_indices[index as usize - 1]
         };
-        let end = self.end_indices.get(index as usize).copied().unwrap_or(0);
+        let end = self.end_indices[index as usize];
         (start, end)
     }
 }
@@ -129,6 +129,8 @@ struct ForwardState<'a> {
     value_slots_inductive: IdVec<ir::ValueId, Option<&'a [HeapCellId]>>,
     call_arg_aliases: IdVec<api::CalleeSpecVarId, Option<HashSet<NormPair<u32>>>>,
     call_arg_origins: IdVec<api::CalleeSpecVarId, Option<SmallVec<[Origin; 4]>>>,
+    // TODO: Find a better place to store the data mapping in `calls`
+    calls: IdVec<api::CalleeSpecVarId, Option<FuncId>>,
     update_origins: IdVec<api::UpdateModeVarId, Option<Origin>>,
     arg_slots: Option<&'a [HeapCellId]>,
     heap_cells: IdVec<HeapCellId, ForwardData>,
@@ -394,6 +396,7 @@ impl<'a> ForwardState<'a> {
                         .map(|heap_cell| self.heap_cells[heap_cell].origin.clone())
                         .collect(),
                 );
+                self.calls[callee_spec_var] = Some(*callee);
 
                 ret_slots
             }
@@ -470,8 +473,8 @@ impl<'a> ForwardState<'a> {
 
             ir::OpKind::GetTupleField { field_idx } => {
                 debug_assert_eq!(input_slot_arrs.len(), 1);
-                let field_slots = if let TypeSlots::Tuple { field_slots } =
-                    &sc.slots()[val_node.op.result_type]
+                let input_type = graph.values().node(val_node.inputs[0]).op.result_type;
+                let field_slots = if let TypeSlots::Tuple { field_slots } = &sc.slots()[input_type]
                 {
                     field_slots
                 } else {
@@ -504,13 +507,13 @@ impl<'a> ForwardState<'a> {
 
             ir::OpKind::UnwrapUnion { variant_idx } => {
                 debug_assert_eq!(input_slot_arrs.len(), 1);
-                let variant_slots = if let TypeSlots::Union { variant_slots } =
-                    &sc.slots()[val_node.op.result_type]
-                {
-                    variant_slots
-                } else {
-                    unreachable!()
-                };
+                let input_type = graph.values().node(val_node.inputs[0]).op.result_type;
+                let variant_slots =
+                    if let TypeSlots::Union { variant_slots } = &sc.slots()[input_type] {
+                        variant_slots
+                    } else {
+                        unreachable!()
+                    };
                 let (start, end) = variant_slots.sub_slots(*variant_idx);
                 &input_slot_arrs[0][start as usize..end as usize]
             }
@@ -884,6 +887,7 @@ impl<'a> ForwardState<'a> {
             value_slots_inductive: IdVec::filled_with(graph.values().count(), || None),
             call_arg_aliases: IdVec::filled_with(graph.callee_spec_vars(), || None),
             call_arg_origins: IdVec::filled_with(graph.callee_spec_vars(), || None),
+            calls: IdVec::filled_with(graph.callee_spec_vars(), || None),
             update_origins: IdVec::filled_with(graph.update_mode_vars(), || None),
             arg_slots,
             heap_cells,
@@ -1065,6 +1069,14 @@ impl<'a, 'b> BackwardState<'a, 'b> {
                 let arg_aliases = self.forward_state.call_arg_aliases[callee_spec_var]
                     .as_ref()
                     .unwrap();
+                let arg_fates = arg_slots
+                    .iter()
+                    .map(|&heap_cell| self.fate(version, heap_cell).clone())
+                    .collect();
+                let ret_fates = ret_slots
+                    .iter()
+                    .map(|&heap_cell| self.fate(version, heap_cell).clone())
+                    .collect();
                 // TODO: do we even need to consider analyses arising from non-'None' arg aliases
                 // here?
                 for arg_alias in std::iter::once(None).chain(arg_aliases.iter().cloned().map(Some))
@@ -1075,6 +1087,14 @@ impl<'a, 'b> BackwardState<'a, 'b> {
                             match &slot_analysis.fate {
                                 Fate::DirectTouch => {
                                     *self.fate(version, arg_heap_cell) = Fate::DirectTouch;
+                                    for &other in
+                                        &self.forward_state.heap_cells[arg_heap_cell].aliases
+                                    {
+                                        self.fate(version, other).union_with(&Fate::Other {
+                                            indirect_touch: true,
+                                            ret_slots: Set::new(),
+                                        });
+                                    }
                                 }
                                 Fate::Other {
                                     indirect_touch,
@@ -1097,14 +1117,7 @@ impl<'a, 'b> BackwardState<'a, 'b> {
                         }
                     }
                 }
-                let arg_fates = arg_slots
-                    .iter()
-                    .map(|&heap_cell| self.fate(version, heap_cell).clone())
-                    .collect();
-                let ret_fates = ret_slots
-                    .iter()
-                    .map(|&heap_cell| self.fate(version, heap_cell).clone())
-                    .collect();
+
                 // We don't use 'replace_none' here because this value may be written multiple times
                 // during fixed-point iteration.
                 self.call_fates[callee_spec_var] = Some(CallFates {
@@ -1189,8 +1202,8 @@ impl<'a, 'b> BackwardState<'a, 'b> {
 
             ir::OpKind::GetTupleField { field_idx } => {
                 debug_assert_eq!(input_slot_arrs.len(), 1);
-                let field_slots = if let TypeSlots::Tuple { field_slots } =
-                    &sc.slots()[val_node.op.result_type]
+                let input_type = graph.values().node(val_node.inputs[0]).op.result_type;
+                let field_slots = if let TypeSlots::Tuple { field_slots } = &sc.slots()[input_type]
                 {
                     field_slots
                 } else {
@@ -1228,13 +1241,13 @@ impl<'a, 'b> BackwardState<'a, 'b> {
 
             ir::OpKind::UnwrapUnion { variant_idx } => {
                 debug_assert_eq!(input_slot_arrs.len(), 1);
-                let variant_slots = if let TypeSlots::Union { variant_slots } =
-                    &sc.slots()[val_node.op.result_type]
-                {
-                    variant_slots
-                } else {
-                    unreachable!()
-                };
+                let input_type = graph.values().node(val_node.inputs[0]).op.result_type;
+                let variant_slots =
+                    if let TypeSlots::Union { variant_slots } = &sc.slots()[input_type] {
+                        variant_slots
+                    } else {
+                        unreachable!()
+                    };
                 let (start, end) = variant_slots.sub_slots(*variant_idx);
                 debug_assert_eq!((end - start) as usize, ret_slots.len());
                 for (&input_heap_cell, &ret_heap_cell) in input_slot_arrs[0]
@@ -1564,7 +1577,43 @@ fn analyze_func(
         .collect();
     FuncAnalysis {
         graph_analysis: GraphAnalysis {
-            update_mode_fates: backward.update_fates.into_mapped(|_, fate| fate.unwrap()),
+            updates: IdVec::filled_with_indexed(
+                func_def.graph.update_mode_vars(),
+                |update_mode_var| UpdateAnalysis {
+                    origin: forward.update_origins[update_mode_var]
+                        .as_ref()
+                        .unwrap()
+                        .clone(),
+                    fate: backward.update_fates[update_mode_var]
+                        .as_ref()
+                        .unwrap()
+                        .clone(),
+                },
+            ),
+            calls: IdVec::filled_with_indexed(
+                func_def.graph.callee_spec_vars(),
+                |callee_spec_var| {
+                    let call_fates = backward.call_fates[callee_spec_var].as_ref().unwrap();
+                    CallAnalysis {
+                        callee: forward.calls[callee_spec_var].unwrap(),
+                        arg_aliases: forward.call_arg_aliases[callee_spec_var]
+                            .as_ref()
+                            .unwrap()
+                            .clone(),
+                        arg_slots: forward.call_arg_origins[callee_spec_var]
+                            .as_ref()
+                            .unwrap()
+                            .iter()
+                            .zip(call_fates.arg_fates.iter())
+                            .map(|(origin, fate)| ArgAnalysis {
+                                origin: origin.clone(),
+                                fate: fate.clone(),
+                            })
+                            .collect(),
+                        ret_slots: call_fates.ret_fates.clone(),
+                    }
+                },
+            ),
         },
         arg_slots: arg_slot_analyses,
         ret_slots: ret_slot_analyses,
@@ -1576,8 +1625,30 @@ id_type! {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct UpdateAnalysis {
+    origin: Origin,
+    fate: Fate,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ArgAnalysis {
+    origin: Origin,
+    fate: Fate,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CallAnalysis {
+    // Find a better place to store the callee
+    callee: FuncId,
+    arg_aliases: Set<NormPair<u32>>,
+    arg_slots: SmallVec<[ArgAnalysis; 4]>,
+    ret_slots: SmallVec<[Fate; 4]>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct GraphAnalysis {
-    update_mode_fates: IdVec<api::UpdateModeVarId, Fate>,
+    updates: IdVec<api::UpdateModeVarId, UpdateAnalysis>,
+    calls: IdVec<api::CalleeSpecVarId, CallAnalysis>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1723,7 +1794,174 @@ impl<'a, 'b> SccAnalysisContext<'a, 'b> {
     }
 }
 
-pub(crate) fn analyze(tc: TypeCache, program: &ir::Program) {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct Query {
+    // TODO: improve sparsity of contextual information, prune everything inessential
+    arg_aliases: BTreeSet<NormPair<u32>>,
+    // For the purposes of `arg_slots_touched`, an arg slot being 'FromConst' is the same as being
+    // touched after the call.
+    arg_slots_touched: SmallVec<[bool; 8]>,
+    ret_slots_touched: SmallVec<[bool; 8]>,
+}
+
+impl Query {
+    fn to_spec(&self, func: FuncId) -> api::FuncSpec {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(func.0.to_le_bytes());
+        hasher.update((self.arg_aliases.len() as u64).to_le_bytes());
+        for arg_alias in &self.arg_aliases {
+            hasher.update(arg_alias.fst().to_le_bytes());
+            hasher.update(arg_alias.snd().to_le_bytes());
+        }
+        hasher.update((self.arg_slots_touched.len() as u64).to_le_bytes());
+        for &arg_touched in &self.arg_slots_touched {
+            hasher.update(&[arg_touched as u8]);
+        }
+        hasher.update((self.ret_slots_touched.len() as u64).to_le_bytes());
+        for &ret_touched in &self.ret_slots_touched {
+            hasher.update(&[ret_touched as u8]);
+        }
+        api::FuncSpec(hasher.finalize().into())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FuncSolution {
+    pub(crate) update_modes: IdVec<api::UpdateModeVarId, api::UpdateMode>,
+    pub(crate) callee_specs: IdVec<api::CalleeSpecVarId, api::FuncSpec>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct FuncSolutions {
+    pub(crate) solutions: IdVec<FuncId, HashMap<api::FuncSpec, Option<FuncSolution>>>,
+}
+
+fn resolve_origin<'a>(query: &Query, mut origins: impl Iterator<Item = &'a Origin>) -> bool {
+    origins.any(|origin| match origin {
+        Origin::FromConst => true,
+        Origin::FromArgSlots(arg_slots) => arg_slots
+            .iter()
+            .any(|&arg_slot| query.arg_slots_touched[arg_slot as usize]),
+    })
+}
+
+fn resolve_fate<'a>(query: &Query, mut fates: impl Iterator<Item = &'a Fate>) -> bool {
+    fates.any(|fate| match fate {
+        Fate::DirectTouch => true,
+        Fate::Other {
+            indirect_touch,
+            ret_slots,
+        } => {
+            *indirect_touch
+                || ret_slots
+                    .iter()
+                    .any(|&ret_slot| query.ret_slots_touched[ret_slot as usize])
+        }
+    })
+}
+
+impl FuncSolutions {
+    fn resolve(
+        &mut self,
+        analyses: &IdVec<FuncId, HashMap<Option<NormPair<u32>>, FuncAnalysis>>,
+        func: FuncId,
+        query: &Query,
+    ) -> api::FuncSpec {
+        let spec = query.to_spec(func);
+        if let std::collections::hash_map::Entry::Vacant(vacant) = self.solutions[func].entry(spec)
+        {
+            let func_analyses = &analyses[func];
+            let basic_analysis = &func_analyses[&None].graph_analysis;
+            vacant.insert(None);
+            let query_analyses: SmallVec<[&GraphAnalysis; 8]> = std::iter::once(basic_analysis)
+                .chain(
+                    query
+                        .arg_aliases
+                        .iter()
+                        .map(|&arg_alias| &func_analyses[&Some(arg_alias)].graph_analysis),
+                )
+                .collect();
+            let update_modes =
+                IdVec::filled_with_indexed(basic_analysis.updates.count(), |update_mode_var| {
+                    let touched = resolve_origin(
+                        query,
+                        query_analyses
+                            .iter()
+                            .map(|analysis| &analysis.updates[update_mode_var].origin),
+                    ) || resolve_fate(
+                        query,
+                        query_analyses
+                            .iter()
+                            .map(|analysis| &analysis.updates[update_mode_var].fate),
+                    );
+                    if touched {
+                        api::UpdateMode::Immutable
+                    } else {
+                        api::UpdateMode::InPlace
+                    }
+                });
+            let callee_specs =
+                IdVec::filled_with_indexed(basic_analysis.calls.count(), |callee_spec_var| {
+                    let mut sub_arg_aliases = BTreeSet::new();
+                    for analysis in &query_analyses {
+                        sub_arg_aliases.extend(&analysis.calls[callee_spec_var].arg_aliases);
+                    }
+                    let num_arg_slots = basic_analysis.calls[callee_spec_var].arg_slots.len();
+                    let num_ret_slots = basic_analysis.calls[callee_spec_var].ret_slots.len();
+                    let sub_arg_slots_touched = (0..num_arg_slots)
+                        .map(|arg_slot_i| {
+                            resolve_origin(
+                                query,
+                                query_analyses.iter().map(|analysis| {
+                                    &analysis.calls[callee_spec_var].arg_slots[arg_slot_i].origin
+                                }),
+                            ) || resolve_fate(
+                                query,
+                                query_analyses.iter().map(|analysis| {
+                                    &analysis.calls[callee_spec_var].arg_slots[arg_slot_i].fate
+                                }),
+                            )
+                        })
+                        .collect();
+                    let sub_ret_slots_touched = (0..num_ret_slots)
+                        .map(|ret_slot_i| {
+                            resolve_fate(
+                                query,
+                                query_analyses.iter().map(|analysis| {
+                                    &analysis.calls[callee_spec_var].ret_slots[ret_slot_i]
+                                }),
+                            )
+                        })
+                        .collect();
+                    let sub_query = Query {
+                        arg_aliases: sub_arg_aliases,
+                        arg_slots_touched: sub_arg_slots_touched,
+                        ret_slots_touched: sub_ret_slots_touched,
+                    };
+                    self.resolve(
+                        analyses,
+                        basic_analysis.calls[callee_spec_var].callee,
+                        &sub_query,
+                    )
+                });
+            let solution = FuncSolution {
+                update_modes,
+                callee_specs,
+            };
+            self.solutions[func].insert(spec, Some(solution));
+        }
+        spec
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ProgramSolutions {
+    pub(crate) funcs: FuncSolutions,
+    pub(crate) entry_points: IdVec<EntryPointId, api::FuncSpec>,
+}
+
+pub(crate) fn analyze(tc: TypeCache, program: &ir::Program) -> ProgramSolutions {
     let mut sc = SlotCache::new(tc);
 
     let func_sccs: FlatSlices<FuncSccId, _, _> =
@@ -1761,5 +1999,26 @@ pub(crate) fn analyze(tc: TypeCache, program: &ir::Program) {
         if !ctx.committed[func].contains_key(&None) {
             ctx.analyze(&mut sc, func, None);
         }
+    }
+
+    let mut func_solutions = FuncSolutions {
+        solutions: IdVec::filled_with(program.funcs.count(), HashMap::new),
+    };
+
+    let entry_point_solutions = program.entry_points.map(|_, &func| {
+        func_solutions.resolve(
+            &ctx.committed,
+            func,
+            &Query {
+                arg_aliases: BTreeSet::new(),
+                arg_slots_touched: SmallVec::new(),
+                ret_slots_touched: SmallVec::new(),
+            },
+        )
+    });
+
+    ProgramSolutions {
+        funcs: func_solutions,
+        entry_points: entry_point_solutions,
     }
 }
