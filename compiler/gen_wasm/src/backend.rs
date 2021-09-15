@@ -11,6 +11,7 @@ use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
 use roc_mono::layout::{Builtin, Layout};
 
 use crate::layout::WasmLayout;
+use crate::PTR_TYPE;
 
 // Don't allocate any constant data at address zero or near it. Would be valid, but bug-prone.
 // Follow Emscripten's example by using 1kB (4 bytes would probably do)
@@ -25,6 +26,12 @@ struct LabelId(u32);
 #[derive(Debug)]
 struct SymbolStorage(LocalId, WasmLayout);
 
+enum LocalKind {
+    Parameter,
+    Variable,
+}
+
+// TODO: use Bumpalo Vec once parity_wasm supports general iterators (>=0.43)
 pub struct WasmBackend<'a> {
     // Module: Wasm AST
     pub builder: ModuleBuilder,
@@ -36,11 +43,11 @@ pub struct WasmBackend<'a> {
 
     // Functions: Wasm AST
     instructions: std::vec::Vec<Instruction>,
-    ret_type: ValueType,
     arg_types: std::vec::Vec<ValueType>,
     locals: std::vec::Vec<Local>,
 
     // Functions: internal state & IR mappings
+    next_local_index: u32,
     stack_memory: u32,
     symbol_storage_map: MutMap<Symbol, SymbolStorage>,
     /// how many blocks deep are we (used for jumps)
@@ -61,11 +68,11 @@ impl<'a> WasmBackend<'a> {
 
             // Functions: Wasm AST
             instructions: std::vec::Vec::with_capacity(256),
-            ret_type: ValueType::I32,
             arg_types: std::vec::Vec::with_capacity(8),
             locals: std::vec::Vec::with_capacity(32),
 
             // Functions: internal state & IR mappings
+            next_local_index: 0,
             stack_memory: 0,
             symbol_storage_map: MutMap::default(),
             block_depth: 0,
@@ -80,6 +87,7 @@ impl<'a> WasmBackend<'a> {
         self.locals.clear();
 
         // Functions: internal state & IR mappings
+        self.next_local_index = 0;
         self.stack_memory = 0;
         self.symbol_storage_map.clear();
         self.joinpoint_label_map.clear();
@@ -89,38 +97,30 @@ impl<'a> WasmBackend<'a> {
     pub fn build_proc(&mut self, proc: Proc<'a>, sym: Symbol) -> Result<u32, String> {
         let ret_layout = WasmLayout::new(&proc.ret_layout);
 
-        if let WasmLayout::StackMemory { .. } = ret_layout {
-            return Err(format!(
-                "Not yet implemented: Returning values to callee stack memory {:?} {:?}",
-                proc.name, sym
-            ));
-        }
-
-        self.ret_type = ret_layout.value_type();
-        self.arg_types.reserve(proc.args.len());
+        let sig_builder = if let WasmLayout::StackMemory { .. } = ret_layout {
+            self.arg_types.push(PTR_TYPE);
+            self.next_local_index += 1;
+            builder::signature()
+        } else {
+            builder::signature().with_result(ret_layout.value_type())
+        };
 
         for (layout, symbol) in proc.args {
-            let wasm_layout = WasmLayout::new(layout);
-            self.arg_types.push(wasm_layout.value_type());
-            self.insert_local(wasm_layout, *symbol);
+            self.insert_local(WasmLayout::new(layout), *symbol, LocalKind::Parameter);
         }
+
+        let signature = sig_builder.with_params(self.arg_types.clone()).build_sig();
 
         self.build_stmt(&proc.body, &proc.ret_layout)?;
 
-        let signature = builder::signature()
-            .with_params(self.arg_types.clone()) // requires std::Vec, not Bumpalo
-            .with_result(self.ret_type)
-            .build_sig();
-
         // functions must end with an End instruction/opcode
-        let mut instructions = self.instructions.clone();
-        instructions.push(Instruction::End);
+        self.instructions.push(Instruction::End);
 
         let function_def = builder::function()
             .with_signature(signature)
             .body()
             .with_locals(self.locals.clone())
-            .with_instructions(Instructions::new(instructions))
+            .with_instructions(Instructions::new(self.instructions.clone()))
             .build() // body
             .build(); // function
 
@@ -132,15 +132,24 @@ impl<'a> WasmBackend<'a> {
         Ok(function_index)
     }
 
-    fn insert_local(&mut self, layout: WasmLayout, symbol: Symbol) -> LocalId {
+    fn insert_local(&mut self, layout: WasmLayout, symbol: Symbol, kind: LocalKind) -> LocalId {
         self.stack_memory += layout.stack_memory();
-        let index = self.symbol_storage_map.len();
-        if index >= self.arg_types.len() {
-            self.locals.push(Local::new(1, layout.value_type()));
+
+        match kind {
+            LocalKind::Parameter => {
+                self.arg_types.push(layout.value_type());
+            }
+            LocalKind::Variable => {
+                self.locals.push(Local::new(1, layout.value_type()));
+            }
         }
-        let local_id = LocalId(index as u32);
+
+        let local_id = LocalId(self.next_local_index);
+        self.next_local_index += 1;
+
         let storage = SymbolStorage(local_id, layout);
         self.symbol_storage_map.insert(symbol, storage);
+
         local_id
     }
 
@@ -193,7 +202,7 @@ impl<'a> WasmBackend<'a> {
 
             Stmt::Let(sym, expr, layout, following) => {
                 let wasm_layout = WasmLayout::new(layout);
-                let local_id = self.insert_local(wasm_layout, *sym);
+                let local_id = self.insert_local(wasm_layout, *sym, LocalKind::Variable);
 
                 self.build_expr(sym, expr, layout)?;
                 self.instructions.push(SetLocal(local_id.0));
@@ -275,7 +284,8 @@ impl<'a> WasmBackend<'a> {
                 let mut jp_parameter_local_ids = std::vec::Vec::with_capacity(parameters.len());
                 for parameter in parameters.iter() {
                     let wasm_layout = WasmLayout::new(&parameter.layout);
-                    let local_id = self.insert_local(wasm_layout, parameter.symbol);
+                    let local_id =
+                        self.insert_local(wasm_layout, parameter.symbol, LocalKind::Variable);
 
                     jp_parameter_local_ids.push(local_id);
                 }
