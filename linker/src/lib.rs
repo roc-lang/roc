@@ -20,6 +20,7 @@ use std::io;
 use std::io::{BufReader, BufWriter};
 use std::mem;
 use std::os::raw::c_char;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, SystemTime};
@@ -1525,6 +1526,12 @@ fn surgery_impl(
     let flushing_data_duration = flushing_data_start.elapsed().unwrap();
 
     exec_file.set_len(offset as u64 + 1)?;
+
+    // Make sure the final executable has permision to execute.
+    let mut perms = fs::metadata(out_filename)?.permissions();
+    perms.set_mode(perms.mode() | 0o111);
+    fs::set_permissions(out_filename, perms)?;
+
     let total_duration = total_start.elapsed().unwrap();
 
     if verbose || time {
