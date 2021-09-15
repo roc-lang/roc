@@ -4787,6 +4787,11 @@ fn run_low_level<'a, 'ctx, 'env>(
             // List.swap : List elem, Nat, Nat -> List elem
             debug_assert_eq!(args.len(), 3);
 
+            eprintln!(
+                "LowLevel operation `ListSwap` will be performed: {:?}",
+                update_mode
+            );
+
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
             let original_wrapper = list.into_struct_value();
 
