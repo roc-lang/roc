@@ -68,7 +68,7 @@ export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
 }
 
 // warning! the array is currently stack-allocated so don't make this too big
-const NUM_NUMS = 10;
+const NUM_NUMS = 100000;
 
 const RocList = extern struct { elements: [*]i64, length: usize };
 
@@ -87,20 +87,9 @@ pub export fn main() u8 {
 
     var numbers = raw_numbers[1..];
 
-    //    for (numbers) |_, i| {
-    //        numbers[i] = @mod(@intCast(i64, i), 3);
-    //    }
-
-    numbers[0] = 1;
-    numbers[1] = 3;
-    numbers[2] = 2;
-    numbers[3] = 2;
-    numbers[4] = 11;
-    numbers[5] = -1;
-    numbers[6] = 122;
-    numbers[7] = 34;
-    numbers[8] = 1;
-    numbers[9] = 55;
+    for (numbers) |_, i| {
+        numbers[i] = @mod(@intCast(i64, i), 3);
+    }
 
     const roc_list = RocList{ .elements = numbers, .length = NUM_NUMS };
 
