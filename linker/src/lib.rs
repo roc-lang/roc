@@ -8,8 +8,9 @@ use object::{
     Object, ObjectSection, ObjectSymbol, RelocationKind, RelocationTarget, Section, SectionIndex,
     Symbol, SymbolIndex, SymbolSection,
 };
-use roc_build::link::LinkType;
+use roc_build::link::{rebuild_host, LinkType};
 use roc_collections::all::MutMap;
+use roc_mono::ir::OptLevel;
 use std::cmp::Ordering;
 use std::convert::TryFrom;
 use std::ffi::CStr;
@@ -21,6 +22,7 @@ use std::os::raw::c_char;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 use target_lexicon::Triple;
+use tempfile::{Builder, NamedTempFile};
 
 mod metadata;
 
@@ -132,27 +134,47 @@ pub fn supported(link_type: &LinkType, target: &Triple) -> bool {
 }
 
 pub fn build_and_preprocess_host(
+    opt_level: OptLevel,
     target: &Triple,
     host_input_path: &Path,
     exposed_to_host: Vec<String>,
 ) -> io::Result<()> {
     let lib = generate_dynamic_lib(exposed_to_host)?;
+    rebuild_host(opt_level, target, host_input_path, Some(&lib.path()));
     Ok(())
 }
 
-fn generate_dynamic_lib(exposed_to_host: Vec<String>) -> io::Result<()> {
-    Ok(())
+fn generate_dynamic_lib(exposed_to_host: Vec<String>) -> io::Result<NamedTempFile> {
+    for sym in exposed_to_host {
+        println!("{}", sym);
+    }
+    let dummy_lib_file = Builder::new().prefix("roc_lib").suffix(".so").tempfile()?;
+    Ok(dummy_lib_file)
 }
 
+pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
+    preprocess_impl(
+        &matches.value_of(EXEC).unwrap(),
+        &matches.value_of(METADATA).unwrap(),
+        &matches.value_of(OUT).unwrap(),
+        &matches.value_of(SHARED_LIB).unwrap(),
+        matches.is_present(FLAG_VERBOSE),
+        matches.is_present(FLAG_TIME),
+    )
+}
 // TODO: Most of this file is a mess of giant functions just to check if things work.
 // Clean it all up and refactor nicely.
-pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
-    let verbose = matches.is_present(FLAG_VERBOSE);
-    let time = matches.is_present(FLAG_TIME);
-
+fn preprocess_impl(
+    exec_filename: &str,
+    metadata_filename: &str,
+    out_filename: &str,
+    shared_lib_filename: &str,
+    verbose: bool,
+    time: bool,
+) -> io::Result<i32> {
     let total_start = SystemTime::now();
     let exec_parsing_start = total_start;
-    let exec_file = fs::File::open(&matches.value_of(EXEC).unwrap())?;
+    let exec_file = fs::File::open(exec_filename)?;
     let exec_mmap = unsafe { Mmap::map(&exec_file)? };
     let exec_data = &*exec_mmap;
     let exec_obj = match object::File::parse(exec_data) {
@@ -489,7 +511,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         }
     };
 
-    let shared_lib_name = Path::new(matches.value_of(SHARED_LIB).unwrap())
+    let shared_lib_name = Path::new(shared_lib_filename)
         .file_name()
         .unwrap()
         .to_str()
@@ -623,7 +645,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         .write(true)
         .create(true)
         .truncate(true)
-        .open(&matches.value_of(OUT).unwrap())?;
+        .open(out_filename)?;
     out_file.set_len(md.exec_len)?;
     let mut out_mmap = unsafe { MmapMut::map_mut(&out_file)? };
 
@@ -884,7 +906,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     }
 
     let saving_metadata_start = SystemTime::now();
-    let output = fs::File::create(&matches.value_of(METADATA).unwrap())?;
+    let output = fs::File::create(metadata_filename)?;
     let output = BufWriter::new(output);
     if let Err(err) = serialize_into(output, &md) {
         println!("Failed to serialize metadata: {}", err);
@@ -929,12 +951,25 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
 }
 
 pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
-    let verbose = matches.is_present(FLAG_VERBOSE);
-    let time = matches.is_present(FLAG_TIME);
+    surgery_impl(
+        &matches.value_of(APP).unwrap(),
+        &matches.value_of(METADATA).unwrap(),
+        &matches.value_of(OUT).unwrap(),
+        matches.is_present(FLAG_VERBOSE),
+        matches.is_present(FLAG_TIME),
+    )
+}
 
+fn surgery_impl(
+    app_filename: &str,
+    metadata_filename: &str,
+    out_filename: &str,
+    verbose: bool,
+    time: bool,
+) -> io::Result<i32> {
     let total_start = SystemTime::now();
     let loading_metadata_start = total_start;
-    let input = fs::File::open(&matches.value_of(METADATA).unwrap())?;
+    let input = fs::File::open(metadata_filename)?;
     let input = BufReader::new(input);
     let md: metadata::Metadata = match deserialize_from(input) {
         Ok(data) => data,
@@ -946,7 +981,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     let loading_metadata_duration = loading_metadata_start.elapsed().unwrap();
 
     let app_parsing_start = SystemTime::now();
-    let app_file = fs::File::open(&matches.value_of(APP).unwrap())?;
+    let app_file = fs::File::open(app_filename)?;
     let app_mmap = unsafe { Mmap::map(&app_file)? };
     let app_data = &*app_mmap;
     let app_obj = match object::File::parse(app_data) {
@@ -962,7 +997,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     let exec_file = fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .open(&matches.value_of(OUT).unwrap())?;
+        .open(out_filename)?;
 
     let max_out_len = md.exec_len + app_data.len() as u64 + md.load_align_constraint;
     exec_file.set_len(max_out_len)?;

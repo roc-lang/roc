@@ -3728,8 +3728,10 @@ dependencies = [
  "object 0.26.2",
  "roc_build",
  "roc_collections",
+ "roc_mono",
  "serde",
  "target-lexicon",
+ "tempfile",
 ]
 
 [[package]]

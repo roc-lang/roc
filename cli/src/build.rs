@@ -284,13 +284,19 @@ fn spawn_rebuild_thread(
         let rebuild_host_start = SystemTime::now();
         if surgically_link {
             roc_linker::build_and_preprocess_host(
+                opt_level,
                 &thread_local_target,
                 host_input_path.as_path(),
                 exported_symbols,
             )
             .unwrap();
         } else {
-            rebuild_host(opt_level, &thread_local_target, host_input_path.as_path());
+            rebuild_host(
+                opt_level,
+                &thread_local_target,
+                host_input_path.as_path(),
+                None,
+            );
         }
         let rebuild_host_end = rebuild_host_start.elapsed().unwrap();
         rebuild_host_end.as_millis()
