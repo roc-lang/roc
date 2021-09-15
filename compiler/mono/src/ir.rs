@@ -7900,8 +7900,6 @@ fn match_on_lambda_set<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    let lambda_set_layout = Layout::LambdaSet(lambda_set);
-
     match lambda_set.runtime_representation() {
         Layout::Union(union_layout) => {
             let closure_tag_id_symbol = env.unique_symbol();
@@ -7909,7 +7907,7 @@ fn match_on_lambda_set<'a>(
             let result = union_lambda_set_to_switch(
                 env,
                 lambda_set,
-                lambda_set_layout,
+                Layout::Union(union_layout),
                 closure_tag_id_symbol,
                 union_layout.tag_id_layout(),
                 closure_data_symbol,
@@ -7956,7 +7954,7 @@ fn match_on_lambda_set<'a>(
                 env,
                 lambda_set.set,
                 closure_tag_id_symbol,
-                lambda_set_layout,
+                Layout::Builtin(Builtin::Int1),
                 closure_data_symbol,
                 argument_symbols,
                 argument_layouts,
@@ -7972,7 +7970,7 @@ fn match_on_lambda_set<'a>(
                 env,
                 lambda_set.set,
                 closure_tag_id_symbol,
-                lambda_set_layout,
+                Layout::Builtin(Builtin::Int8),
                 closure_data_symbol,
                 argument_symbols,
                 argument_layouts,
