@@ -4,3 +4,7 @@ zig-cache
 zig-out
 
 *.o
+
+dynhost
+preprocessedhost
+metadata

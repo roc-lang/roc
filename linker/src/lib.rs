@@ -170,17 +170,18 @@ pub fn link_preprocessed_host(
 ) -> io::Result<()> {
     let metadata = host_input_path.with_file_name("metadata");
     let prehost = host_input_path.with_file_name("preprocessedhost");
+    std::fs::copy(prehost, binary_path)?;
     if surgery_impl(
         roc_app_obj.to_str().unwrap(),
         metadata.to_str().unwrap(),
-        prehost.to_str().unwrap(),
+        binary_path.to_str().unwrap(),
         false,
         false,
     )? != 0
     {
         panic!("Failed to surgically link host");
     }
-    std::fs::rename(prehost, binary_path)
+    Ok(())
 }
 
 fn generate_dynamic_lib(
@@ -197,16 +198,24 @@ fn generate_dynamic_lib(
 
     let text_section = out_object.section_id(write::StandardSection::Text);
     for sym in exposed_to_host {
-        out_object.add_symbol(write::Symbol {
-            name: format!("roc__{}_1_exposed", sym).as_bytes().to_vec(),
-            value: 0,
-            size: 0,
-            kind: SymbolKind::Text,
-            scope: SymbolScope::Dynamic,
-            weak: false,
-            section: write::SymbolSection::Section(text_section),
-            flags: SymbolFlags::None,
-        });
+        for name in &[
+            format!("roc__{}_1_exposed", sym),
+            format!("roc__{}_1_Fx_caller", sym),
+            format!("roc__{}_1_Fx_size", sym),
+            format!("roc__{}_1_Fx_result_size", sym),
+            format!("roc__{}_size", sym),
+        ] {
+            out_object.add_symbol(write::Symbol {
+                name: name.as_bytes().to_vec(),
+                value: 0,
+                size: 0,
+                kind: SymbolKind::Text,
+                scope: SymbolScope::Dynamic,
+                weak: false,
+                section: write::SymbolSection::Section(text_section),
+                flags: SymbolFlags::None,
+            });
+        }
     }
     std::fs::write(
         &dummy_obj_file,
@@ -994,16 +1003,22 @@ fn preprocess_impl(
     }
 
     let saving_metadata_start = SystemTime::now();
-    let output = fs::File::create(metadata_filename)?;
-    let output = BufWriter::new(output);
-    if let Err(err) = serialize_into(output, &md) {
-        println!("Failed to serialize metadata: {}", err);
-        return Ok(-1);
-    };
+    // This block ensure that the metadata is fully written and timed before continuing.
+    {
+        let output = fs::File::create(metadata_filename)?;
+        let output = BufWriter::new(output);
+        if let Err(err) = serialize_into(output, &md) {
+            println!("Failed to serialize metadata: {}", err);
+            return Ok(-1);
+        };
+    }
     let saving_metadata_duration = saving_metadata_start.elapsed().unwrap();
 
     let flushing_data_start = SystemTime::now();
     out_mmap.flush()?;
+    // Also drop files to to ensure data is fully written here.
+    drop(out_mmap);
+    drop(out_file);
     let flushing_data_duration = flushing_data_start.elapsed().unwrap();
 
     let total_duration = total_start.elapsed().unwrap();
@@ -1523,9 +1538,11 @@ fn surgery_impl(
 
     let flushing_data_start = SystemTime::now();
     exec_mmap.flush()?;
-    let flushing_data_duration = flushing_data_start.elapsed().unwrap();
-
+    // Also drop files to to ensure data is fully written here.
+    drop(exec_mmap);
     exec_file.set_len(offset as u64 + 1)?;
+    drop(exec_file);
+    let flushing_data_duration = flushing_data_start.elapsed().unwrap();
 
     // Make sure the final executable has permision to execute.
     let mut perms = fs::metadata(out_filename)?.permissions();

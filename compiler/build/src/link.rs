@@ -92,9 +92,9 @@ pub fn build_zig_host_native(
         .env("PATH", env_path)
         .env("HOME", env_home);
     if let Some(shared_lib_path) = shared_lib_path {
-        command.args(&["build-exe", shared_lib_path.to_str().unwrap()]);
+        command.args(&["build-exe", "-fPIE", shared_lib_path.to_str().unwrap()]);
     } else {
-        command.arg("build-obj");
+        command.args(&["build-obj", "-fPIC"]);
     }
     command.args(&[
         zig_host_src,
@@ -108,7 +108,6 @@ pub fn build_zig_host_native(
         // include libc
         "--library",
         "c",
-        "-fPIC",
         // cross-compile?
         "-target",
         target,
@@ -176,9 +175,9 @@ pub fn build_zig_host_native(
         .env("PATH", &env_path)
         .env("HOME", &env_home);
     if let Some(shared_lib_path) = shared_lib_path {
-        command.args(&["build-exe", shared_lib_path.to_str().unwrap()]);
+        command.args(&["build-exe", "-fPIE", shared_lib_path.to_str().unwrap()]);
     } else {
-        command.arg("build-obj");
+        command.args(&["build-obj", "-fPIC"]);
     }
     command.args(&[
         zig_host_src,
@@ -195,7 +194,6 @@ pub fn build_zig_host_native(
         // include libc
         "--library",
         "c",
-        "-fPIC",
     ]);
     if matches!(opt_level, OptLevel::Optimize) {
         command.args(&["-O", "ReleaseSafe"]);
@@ -267,10 +265,11 @@ pub fn build_c_host_native(
         .env("PATH", &env_path)
         .env("HOME", &env_home)
         .args(sources)
-        .args(&["-fPIC", "-o", dest]);
+        .args(&["-o", dest]);
     if let Some(shared_lib_path) = shared_lib_path {
         command.args(&[
             shared_lib_path.to_str().unwrap(),
+            "-fPIE",
             "-lm",
             "-lpthread",
             "-ldl",
@@ -278,7 +277,7 @@ pub fn build_c_host_native(
             "-lutil",
         ]);
     } else {
-        command.arg("-c");
+        command.args(&["-fPIC", "-c"]);
     }
     if matches!(opt_level, OptLevel::Optimize) {
         command.arg("-O2");

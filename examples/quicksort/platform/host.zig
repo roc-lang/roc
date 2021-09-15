@@ -26,6 +26,8 @@ const Align = extern struct { a: usize, b: usize };
 extern fn malloc(size: usize) callconv(.C) ?*align(@alignOf(Align)) c_void;
 extern fn realloc(c_ptr: [*]align(@alignOf(Align)) u8, size: usize) callconv(.C) ?*c_void;
 extern fn free(c_ptr: [*]align(@alignOf(Align)) u8) callconv(.C) void;
+extern fn memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
+extern fn memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void;
 
 const DEBUG: bool = false;
 
@@ -65,6 +67,14 @@ export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
     const msg = @ptrCast([*:0]const u8, c_ptr);
     stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
     std.process.exit(0);
+}
+
+export fn roc_memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void{
+    return memcpy(dst, src, size);
+}
+
+export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void{
+    return memset(dst, value, size);
 }
 
 // warning! the array is currently stack-allocated so don't make this too big
