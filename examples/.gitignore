@@ -7,3 +7,4 @@ roc_app.bc
 dynhost
 preprocessedhost
 metadata
+libapp.so

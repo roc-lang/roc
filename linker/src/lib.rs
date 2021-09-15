@@ -25,7 +25,7 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, SystemTime};
 use target_lexicon::Triple;
-use tempfile::{Builder, NamedTempFile};
+use tempfile::Builder;
 
 mod metadata;
 
@@ -142,8 +142,8 @@ pub fn build_and_preprocess_host(
     host_input_path: &Path,
     exposed_to_host: Vec<String>,
 ) -> io::Result<()> {
-    let dummy_lib = generate_dynamic_lib(target, exposed_to_host)?;
-    let dummy_lib = dummy_lib.path();
+    let dummy_lib = host_input_path.with_file_name("libapp.so");
+    generate_dynamic_lib(target, exposed_to_host, &dummy_lib)?;
     rebuild_host(opt_level, target, host_input_path, Some(&dummy_lib));
     let dynhost = host_input_path.with_file_name("dynhost");
     let metadata = host_input_path.with_file_name("metadata");
@@ -187,10 +187,10 @@ pub fn link_preprocessed_host(
 fn generate_dynamic_lib(
     _target: &Triple,
     exposed_to_host: Vec<String>,
-) -> io::Result<NamedTempFile> {
+    dummy_lib_path: &Path,
+) -> io::Result<()> {
     let dummy_obj_file = Builder::new().prefix("roc_lib").suffix(".o").tempfile()?;
     let dummy_obj_file = dummy_obj_file.path();
-    let dummy_lib_file = Builder::new().prefix("roc_lib").suffix(".so").tempfile()?;
 
     // TODO deal with other architectures here.
     let mut out_object =
@@ -227,9 +227,11 @@ fn generate_dynamic_lib(
     let output = Command::new("ld")
         .args(&[
             "-shared",
+            "-soname",
+            dummy_lib_path.file_name().unwrap().to_str().unwrap(),
             dummy_obj_file.to_str().unwrap(),
             "-o",
-            dummy_lib_file.path().to_str().unwrap(),
+            dummy_lib_path.to_str().unwrap(),
         ])
         .output()
         .unwrap();
@@ -246,7 +248,7 @@ fn generate_dynamic_lib(
             ),
         }
     }
-    Ok(dummy_lib_file)
+    Ok(())
 }
 
 pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {

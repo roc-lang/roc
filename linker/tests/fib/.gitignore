@@ -8,3 +8,4 @@ zig-out
 dynhost
 preprocessedhost
 metadata
+libapp.so
