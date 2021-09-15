@@ -369,6 +369,9 @@ fn preprocess_impl(
         println!("PLT File Offset: {:+x}", plt_offset);
     }
 
+    // TODO: it looks like we may need to support global data host relocations.
+    // Rust host look to be using them by default instead of the plt.
+    // I think this is due to first linking into a static lib and then linking to the c wrapper.
     let plt_relocs = (match exec_obj.dynamic_relocations() {
         Some(relocs) => relocs,
         None => {
