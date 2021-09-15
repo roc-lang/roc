@@ -61,10 +61,7 @@ pub fn build_file<'a>(
     let subs_by_module = MutMap::default();
 
     // Release builds use uniqueness optimizations
-    let stdlib = match opt_level {
-        OptLevel::Normal => arena.alloc(roc_builtins::std::standard_stdlib()),
-        OptLevel::Optimize => arena.alloc(roc_builtins::std::standard_stdlib()),
-    };
+    let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
 
     let loaded = roc_load::file::load_and_monomorphize(
         arena,
