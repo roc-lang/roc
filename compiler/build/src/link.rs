@@ -324,7 +324,14 @@ pub fn rebuild_host(opt_level: OptLevel, target: &Triple, host_input_path: &Path
     if cargo_host_src.exists() {
         // Compile and link Cargo.toml, if it exists
         let cargo_dir = host_input_path.parent().unwrap();
-        let libhost_dir = cargo_dir.join("target").join("release");
+        let libhost_dir =
+            cargo_dir
+                .join("target")
+                .join(if matches!(opt_level, OptLevel::Optimize) {
+                    "release"
+                } else {
+                    "debug"
+                });
 
         let mut command = Command::new("cargo");
         command.arg("build").current_dir(cargo_dir);
