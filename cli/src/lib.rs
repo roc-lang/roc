@@ -408,9 +408,7 @@ enum Backend {
     Host,
     X86_32,
     X86_64,
-    Dev,
     Wasm32,
-    Wasm32Dev,
 }
 
 impl Default for Backend {
@@ -425,9 +423,7 @@ impl Backend {
             Backend::Host => "host",
             Backend::X86_32 => "x86_32",
             Backend::X86_64 => "x86_64",
-            Backend::Dev => "dev",
             Backend::Wasm32 => "wasm32",
-            Backend::Wasm32Dev => "wasm32_dev",
         }
     }
 
@@ -436,9 +432,7 @@ impl Backend {
         Backend::Host.as_str(),
         Backend::X86_32.as_str(),
         Backend::X86_64.as_str(),
-        Backend::Dev.as_str(),
         Backend::Wasm32.as_str(),
-        Backend::Wasm32Dev.as_str(),
     ];
 
     fn to_triple(&self) -> Triple {
@@ -461,8 +455,7 @@ impl Backend {
 
                 triple
             }
-            Backend::Dev => todo!(),
-            Backend::Wasm32 | Backend::Wasm32Dev => {
+            Backend::Wasm32 => {
                 triple.architecture = Architecture::Wasm32;
                 triple.binary_format = BinaryFormat::Wasm;
 
@@ -486,9 +479,7 @@ impl std::str::FromStr for Backend {
             "host" => Ok(Backend::Host),
             "x86_32" => Ok(Backend::X86_32),
             "x86_64" => Ok(Backend::X86_64),
-            "dev" => Ok(Backend::Dev),
             "wasm32" => Ok(Backend::Wasm32),
-            "wasm32_dev" => Ok(Backend::Wasm32Dev),
             _ => Err(()),
         }
     }
