@@ -1,5 +1,5 @@
 interface File
-    exposes [ FileReadErr, FileOpenErr, FileWriteErr, DirReadErr, Path, readUtf8, writeUtf8 ]
+    exposes [ ReadErr, OpenErr, WriteErr, DirReadErr, Path, readUtf8, writeUtf8 ]
     imports [ Task.{ Task }, fx.Effect.{ after } ]
 
 Path : Str
@@ -17,7 +17,7 @@ Path : Str
 ## These errors can happen when opening a file, before attempting to read from
 ## it or write to it. The #FileReadErr and #FileWriteErr tag unions begin with
 ## these tags and then add more specific ones.
-FileOpenErr a :
+OpenErr a :
     [
         FileNotFound Path,
         PermissionDenied Path,
@@ -28,37 +28,26 @@ FileOpenErr a :
     ]a
 
 ## Errors when attempting to read a non-directory file.
-FileReadErr a :
-    [
-        FileReadErr
-            (
-                FileOpenErr
-                    [
-                        FileWasDir Path,
-                        InvalidSeek Path,
-                        IllegalByteSequence Path,
-                        FileBusy Path,
-                    ]
-            )
-    ]a
+ReadErr a :
+    OpenErr
+        [
+            FileWasDir Path,
+            InvalidSeek Path,
+            IllegalByteSequence Path,
+            FileBusy Path,
+        ]a
 
 ## Errors when attempting to write a non-directory file.
-FileWriteErr a :
-    [
-        FileWriteErr
-            (
-                FileOpenErr
-                    [
-                        FileWasDir Path,
-                        ReadOnlyFileSystem Path,
-                    ]
-            )
-    ]a
-
+WriteErr a :
+    OpenErr
+        [
+            FileWasDir Path,
+            ReadOnlyFileSystem Path,
+        ]a
 
 ## Errors when attempting to read a directory.
 DirReadErr a :
-    FileOpenErr
+    OpenErr
         [
             FileWasNotDir Path,
         ]a
@@ -69,32 +58,38 @@ DirReadErr a :
 #    Effect.readBytes path
 
 ## Read a file's bytes and interpret them as UTF-8 encoded text.
-readUtf8 : Path -> Task Str * #(FileReadErr [ BadUtf8 Str.Utf8ByteProblem Nat ]*)
+readUtf8 : Path -> Task Str *
 readUtf8 = \path ->
-    Task.succeed ""
-    # Effect.map (Effect.readAllUtf8 path) \answer ->
-        # errno values - see
-        # https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/errno.h.html
-        # when answer.errno is
-        #     0 ->
-        #         when Str.fromUtf8 answer.bytes is
-        #             Ok str -> Ok str
-        #             Err (BadUtf8 problem index) -> Err (FileReadErr (BadUtf8 problem index))
-        #     1 -> Err (FileReadErr (PermissionDenied path))
-        #     2 -> Err (FileReadErr (FileNotFound path))
-        #     19 -> Err (FileReadErr (FileWasDir path))
-        #     # TODO handle other errno scenarios that could come up
-        #     _ -> Err (FileReadErr (UnknownError answer.errno path))
+    Task.succeed "TODO replace this with the commented-out one below"
 
-writeUtf8 : Path, Str -> Task {} * #(FileWriteErr [ BadThing ]*)
+# readUtf8 : Path -> Task Str [ FileReadErr (ReadErr [ BadUtf8 Str.Utf8ByteProblem Nat ]) ]*
+# readUtf8 = \path ->
+#     Effect.map (Effect.readAllUtf8 path) \answer ->
+#         # errno values - see
+#         # https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/errno.h.html
+#         when answer.errno is
+#             0 ->
+#                 when Str.fromUtf8 answer.bytes is
+#                     Ok str -> Ok str
+#                     Err (BadUtf8 problem index) -> Err (FileReadErr (BadUtf8 problem index))
+#             1 -> Err (FileReadErr (PermissionDenied path))
+#             2 -> Err (FileReadErr (FileNotFound path))
+#             19 -> Err (FileReadErr (FileWasDir path))
+#             # TODO handle other errno scenarios that could come up
+#             _ -> Err (FileReadErr (UnknownError answer.errno path))
+
+# writeUtf8 : Path, Str -> Task {} *
+# writeUtf8 = \path, data ->
+#     Task.succeed {} # TODO replace this with the commented-out one below
+
+writeUtf8 : Path, Str -> Task {} [ FileWriteErr (WriteErr [ BadThing ]) ]
 writeUtf8 = \path, data ->
-    Task.succeed {}
-    # path
-    #     |> Effect.writeAllUtf8 data
-    #     |> Effect.map \res ->
-    #         when res.errno is
-    #             0 -> Ok {}
-    #             _ -> Err (FileWriteErr BadThing)
+    path
+        |> Effect.writeAllUtf8 data
+        |> Effect.map \res ->
+            when res.errno is
+                0 -> Ok {}
+                _ -> Err (FileWriteErr BadThing)
 
 ## Read a file's bytes, one chunk at a time, and use it to build up a state.
 ##
