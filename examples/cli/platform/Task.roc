@@ -1,5 +1,5 @@
 interface Task
-    exposes [ Task, succeed, fail, await, map, onFail, attempt ]
+    exposes [ Task, succeed, fail, await, map, onFail, attempt, sequence ]
     imports [ fx.Effect ]
 
 
@@ -42,3 +42,19 @@ map = \effect, transform ->
         when result is
             Ok a -> Task.succeed (transform a)
             Err err -> Task.fail err
+
+## Run each of the given tasks in sequence, and collect a list of their outputs.
+## If any task fails, the entire task fails.
+sequence : List (Task a err) -> Task (List a) err
+sequence = \tasks ->
+    # TODO create this list with a capacity of (List.len tasks)
+    initialList = []
+
+    step = \task, accumTask ->
+        list <- await accumTask
+        elem <- await task
+
+        List.append list elem
+            |> Task.succeed
+
+    List.walk tasks step (Task.succeed initialList)
