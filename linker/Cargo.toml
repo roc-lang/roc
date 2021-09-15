@@ -26,7 +26,7 @@ bumpalo = { version = "3.6", features = ["collections"] }
 clap = { git = "https://github.com/rtfeldman/clap", branch = "master" }
 iced-x86 = "1.14"
 memmap2 = "0.3"
-object = { version = "0.26", features = ["read"] }
+object = { version = "0.26", features = ["read", "write"] }
 serde = { version = "1.0", features = ["derive"] }
 bincode = "1.3"
 target-lexicon = "0.12.2"

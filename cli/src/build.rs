@@ -232,21 +232,35 @@ pub fn build_file<'a>(
 
     // Step 2: link the precompiled host and compiled app
     let link_start = SystemTime::now();
-    let (mut child, binary_path) =  // TODO use lld
-        link(
-            target,
-            binary_path,
-            &[host_input_path.as_path().to_str().unwrap(), app_o_file.to_str().unwrap()],
-            link_type
-        )
-        .map_err(|_| {
-            todo!("gracefully handle `rustc` failing to spawn.");
+    let outcome = if surgically_link {
+        roc_linker::link_preprocessed_host(target, &host_input_path, &app_o_file, &binary_path)
+            .map_err(|_| {
+                todo!("gracefully handle failing to surgically link");
+            })?;
+        BuildOutcome::NoProblems
+    } else {
+        let (mut child, _) =  // TODO use lld
+            link(
+                target,
+                binary_path.clone(),
+                &[host_input_path.as_path().to_str().unwrap(), app_o_file.to_str().unwrap()],
+                link_type
+            )
+            .map_err(|_| {
+                todo!("gracefully handle `ld` failing to spawn.");
+            })?;
+
+        let exit_status = child.wait().map_err(|_| {
+            todo!("gracefully handle error after `ld` spawned");
         })?;
 
-    let cmd_result = child.wait().map_err(|_| {
-        todo!("gracefully handle error after `rustc` spawned");
-    });
-
+        // TODO change this to report whether there were errors or warnings!
+        if exit_status.success() {
+            BuildOutcome::NoProblems
+        } else {
+            BuildOutcome::Errors
+        }
+    };
     let linking_time = link_start.elapsed().unwrap();
 
     if emit_timings {
@@ -254,16 +268,6 @@ pub fn build_file<'a>(
     }
 
     let total_time = compilation_start.elapsed().unwrap();
-
-    // If the cmd errored out, return the Err.
-    let exit_status = cmd_result?;
-
-    // TODO change this to report whether there were errors or warnings!
-    let outcome = if exit_status.success() {
-        BuildOutcome::NoProblems
-    } else {
-        BuildOutcome::Errors
-    };
 
     Ok(BuiltFile {
         binary_path,

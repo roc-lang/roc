@@ -2,11 +2,12 @@ use bincode::{deserialize_from, serialize_into};
 use clap::{App, AppSettings, Arg, ArgMatches};
 use iced_x86::{Decoder, DecoderOptions, Instruction, OpCodeOperandKind, OpKind};
 use memmap2::{Mmap, MmapMut};
+use object::write;
 use object::{elf, endian};
 use object::{
-    Architecture, BinaryFormat, CompressedFileRange, CompressionFormat, LittleEndian, NativeEndian,
-    Object, ObjectSection, ObjectSymbol, RelocationKind, RelocationTarget, Section, SectionIndex,
-    Symbol, SymbolIndex, SymbolSection,
+    Architecture, BinaryFormat, CompressedFileRange, CompressionFormat, Endianness, LittleEndian,
+    NativeEndian, Object, ObjectSection, ObjectSymbol, RelocationKind, RelocationTarget, Section,
+    SectionIndex, Symbol, SymbolFlags, SymbolIndex, SymbolKind, SymbolScope, SymbolSection,
 };
 use roc_build::link::{rebuild_host, LinkType};
 use roc_collections::all::MutMap;
@@ -20,6 +21,7 @@ use std::io::{BufReader, BufWriter};
 use std::mem;
 use std::os::raw::c_char;
 use std::path::Path;
+use std::process::Command;
 use std::time::{Duration, SystemTime};
 use target_lexicon::Triple;
 use tempfile::{Builder, NamedTempFile};
@@ -139,16 +141,100 @@ pub fn build_and_preprocess_host(
     host_input_path: &Path,
     exposed_to_host: Vec<String>,
 ) -> io::Result<()> {
-    let lib = generate_dynamic_lib(exposed_to_host)?;
-    rebuild_host(opt_level, target, host_input_path, Some(&lib.path()));
+    let dummy_lib = generate_dynamic_lib(target, exposed_to_host)?;
+    let dummy_lib = dummy_lib.path();
+    rebuild_host(opt_level, target, host_input_path, Some(&dummy_lib));
+    let dynhost = host_input_path.with_file_name("dynhost");
+    let metadata = host_input_path.with_file_name("metadata");
+    let prehost = host_input_path.with_file_name("preprocessedhost");
+    if preprocess_impl(
+        dynhost.to_str().unwrap(),
+        metadata.to_str().unwrap(),
+        prehost.to_str().unwrap(),
+        dummy_lib.to_str().unwrap(),
+        false,
+        false,
+    )? != 0
+    {
+        panic!("Failed to preprocess host");
+    }
     Ok(())
 }
 
-fn generate_dynamic_lib(exposed_to_host: Vec<String>) -> io::Result<NamedTempFile> {
-    for sym in exposed_to_host {
-        println!("{}", sym);
+pub fn link_preprocessed_host(
+    _target: &Triple,
+    host_input_path: &Path,
+    roc_app_obj: &Path,
+    binary_path: &Path,
+) -> io::Result<()> {
+    let metadata = host_input_path.with_file_name("metadata");
+    let prehost = host_input_path.with_file_name("preprocessedhost");
+    if surgery_impl(
+        roc_app_obj.to_str().unwrap(),
+        metadata.to_str().unwrap(),
+        prehost.to_str().unwrap(),
+        false,
+        false,
+    )? != 0
+    {
+        panic!("Failed to surgically link host");
     }
+    std::fs::rename(prehost, binary_path)
+}
+
+fn generate_dynamic_lib(
+    _target: &Triple,
+    exposed_to_host: Vec<String>,
+) -> io::Result<NamedTempFile> {
+    let dummy_obj_file = Builder::new().prefix("roc_lib").suffix(".o").tempfile()?;
+    let dummy_obj_file = dummy_obj_file.path();
     let dummy_lib_file = Builder::new().prefix("roc_lib").suffix(".so").tempfile()?;
+
+    // TODO deal with other architectures here.
+    let mut out_object =
+        write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+
+    let text_section = out_object.section_id(write::StandardSection::Text);
+    for sym in exposed_to_host {
+        out_object.add_symbol(write::Symbol {
+            name: format!("roc__{}_1_exposed", sym).as_bytes().to_vec(),
+            value: 0,
+            size: 0,
+            kind: SymbolKind::Text,
+            scope: SymbolScope::Dynamic,
+            weak: false,
+            section: write::SymbolSection::Section(text_section),
+            flags: SymbolFlags::None,
+        });
+    }
+    std::fs::write(
+        &dummy_obj_file,
+        out_object.write().expect("failed to build output object"),
+    )
+    .expect("failed to write object to file");
+
+    let output = Command::new("ld")
+        .args(&[
+            "-shared",
+            dummy_obj_file.to_str().unwrap(),
+            "-o",
+            dummy_lib_file.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    if !output.status.success() {
+        match std::str::from_utf8(&output.stderr) {
+            Ok(stderr) => panic!(
+                "Failed to link dummy shared library - stderr of the `ld` command was:\n{}",
+                stderr
+            ),
+            Err(utf8_err) => panic!(
+                "Failed to link dummy shared library  - stderr of the `ld` command was invalid utf8 ({:?})",
+                utf8_err
+            ),
+        }
+    }
     Ok(dummy_lib_file)
 }
 
@@ -454,6 +540,7 @@ fn preprocess_impl(
                         || inst.is_jmp_far_indirect()
                         || inst.is_jmp_near_indirect())
                         && !indirect_warning_given
+                        && verbose
                     {
                         indirect_warning_given = true;
                         println!();
@@ -538,7 +625,7 @@ fn preprocess_impl(
             ) as usize;
             let c_buf: *const c_char = dynstr_data[dynstr_off..].as_ptr() as *const i8;
             let c_str = unsafe { CStr::from_ptr(c_buf) }.to_str().unwrap();
-            if c_str == shared_lib_name {
+            if Path::new(c_str).file_name().unwrap().to_str().unwrap() == shared_lib_name {
                 shared_lib_index = Some(dyn_lib_index);
                 if verbose {
                     println!(
