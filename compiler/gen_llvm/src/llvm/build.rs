@@ -2609,6 +2609,18 @@ pub fn load_symbol_and_layout<'a, 'ctx, 'b>(
         None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
     }
 }
+
+pub fn load_symbol_and_lambda_set<'a, 'ctx, 'b>(
+    scope: &'b Scope<'a, 'ctx>,
+    symbol: &Symbol,
+) -> (BasicValueEnum<'ctx>, LambdaSet<'a>) {
+    match scope.get(symbol) {
+        Some((Layout::LambdaSet(lambda_set), ptr)) => (*ptr, *lambda_set),
+        Some((other, ptr)) => panic!("Not a lambda set: {:?}, {:?}", other, ptr),
+        None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
+    }
+}
+
 fn access_index_struct_value<'ctx>(
     builder: &Builder<'ctx>,
     from_value: StructValue<'ctx>,
@@ -4102,30 +4114,25 @@ fn roc_function_call<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     transform: FunctionValue<'ctx>,
     closure_data: BasicValueEnum<'ctx>,
-    closure_data_layout: Layout<'a>,
+    lambda_set: LambdaSet<'a>,
     closure_data_is_owned: bool,
     argument_layouts: &[Layout<'a>],
 ) -> RocFunctionCall<'ctx> {
     use crate::llvm::bitcode::{build_inc_n_wrapper, build_transform_caller};
-
-    let closure_data_layout = match closure_data_layout {
-        Layout::LambdaSet(lambda_set) => lambda_set.runtime_representation(),
-        _ => panic!("closure argument is not a lambda set!"),
-    };
 
     let closure_data_ptr = env
         .builder
         .build_alloca(closure_data.get_type(), "closure_data_ptr");
     env.builder.build_store(closure_data_ptr, closure_data);
 
-    let stepper_caller =
-        build_transform_caller(env, transform, closure_data_layout, argument_layouts)
-            .as_global_value()
-            .as_pointer_value();
-
-    let inc_closure_data = build_inc_n_wrapper(env, layout_ids, &closure_data_layout)
+    let stepper_caller = build_transform_caller(env, transform, lambda_set, argument_layouts)
         .as_global_value()
         .as_pointer_value();
+
+    let inc_closure_data =
+        build_inc_n_wrapper(env, layout_ids, &lambda_set.runtime_representation())
+            .as_global_value()
+            .as_pointer_value();
 
     let closure_data_is_owned = env
         .context
@@ -4180,7 +4187,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
             let function = passed_function_at_index!(2);
 
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[3]);
+            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[3]);
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => default,
@@ -4192,7 +4199,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         layout_ids,
                         function,
                         closure,
-                        *closure_layout,
+                        closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
                     );
@@ -4222,7 +4229,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
             let function = passed_function_at_index!(1);
 
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
+            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[2]);
 
             match (list_layout, return_layout) {
                 (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
@@ -4237,7 +4244,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         layout_ids,
                         function,
                         closure,
-                        *closure_layout,
+                        closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
                     );
@@ -4254,7 +4261,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             let (list2, list2_layout) = load_symbol_and_layout(scope, &args[1]);
 
             let function = passed_function_at_index!(2);
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[3]);
+            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[3]);
 
             match (list1_layout, list2_layout, return_layout) {
                 (
@@ -4269,7 +4276,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         layout_ids,
                         function,
                         closure,
-                        *closure_layout,
+                        closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
                     );
@@ -4298,7 +4305,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             let (list3, list3_layout) = load_symbol_and_layout(scope, &args[2]);
 
             let function = passed_function_at_index!(3);
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[4]);
+            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[4]);
 
             match (list1_layout, list2_layout, list3_layout, return_layout) {
                 (
@@ -4315,7 +4322,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         layout_ids,
                         function,
                         closure,
-                        *closure_layout,
+                        closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
                     );
@@ -4347,7 +4354,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
             let function = passed_function_at_index!(1);
 
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
+            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[2]);
 
             match (list_layout, return_layout) {
                 (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
@@ -4362,7 +4369,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         layout_ids,
                         function,
                         closure,
-                        *closure_layout,
+                        closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
                     );
@@ -4380,7 +4387,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
             let function = passed_function_at_index!(1);
 
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
+            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[2]);
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
@@ -4392,7 +4399,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         layout_ids,
                         function,
                         closure,
-                        *closure_layout,
+                        closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
                     );
@@ -4410,7 +4417,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
             let function = passed_function_at_index!(1);
 
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
+            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[2]);
 
             match (list_layout, return_layout) {
                 (_, Layout::Builtin(Builtin::EmptyList))
@@ -4426,7 +4433,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         layout_ids,
                         function,
                         closure,
-                        *closure_layout,
+                        closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
                     );
@@ -4454,7 +4461,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
             let function = passed_function_at_index!(1);
 
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
+            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[2]);
 
             match (list_layout, return_layout) {
                 (_, Layout::Builtin(Builtin::EmptyList))
@@ -4470,7 +4477,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         layout_ids,
                         function,
                         closure,
-                        *closure_layout,
+                        closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
                     );
@@ -4507,7 +4514,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
             let function = passed_function_at_index!(1);
 
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
+            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[2]);
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
@@ -4516,13 +4523,8 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
                     let argument_layouts = &[**element_layout, **element_layout];
 
-                    let closure_data_layout = match closure_layout {
-                        Layout::LambdaSet(lambda_set) => lambda_set.runtime_representation(),
-                        _ => panic!("closure argument is not a lambda set!"),
-                    };
-
                     let compare_wrapper =
-                        build_compare_wrapper(env, function, closure_data_layout, element_layout)
+                        build_compare_wrapper(env, function, closure_layout, element_layout)
                             .as_global_value()
                             .as_pointer_value();
 
@@ -4531,7 +4533,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         layout_ids,
                         function,
                         closure,
-                        *closure_layout,
+                        closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
                     );
@@ -4553,7 +4555,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
             let (default, default_layout) = load_symbol_and_layout(scope, &args[1]);
             let function = passed_function_at_index!(2);
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[3]);
+            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[3]);
 
             match dict_layout {
                 Layout::Builtin(Builtin::EmptyDict) => {
@@ -4568,7 +4570,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         layout_ids,
                         function,
                         closure,
-                        *closure_layout,
+                        closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
                     );
