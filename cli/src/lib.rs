@@ -229,10 +229,14 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     let filename = matches.value_of(ROC_FILE).unwrap();
 
     let original_cwd = std::env::current_dir()?;
-    let opt_level = if matches.is_present(FLAG_OPTIMIZE) {
-        OptLevel::Optimize
-    } else {
-        OptLevel::Normal
+    let opt_level = match (
+        matches.is_present(FLAG_OPTIMIZE),
+        matches.is_present(FLAG_DEV),
+    ) {
+        (true, false) => OptLevel::Optimize,
+        (true, true) => panic!("development cannot be optimized!"),
+        (false, true) => OptLevel::Development,
+        (false, false) => OptLevel::Normal,
     };
     let emit_debug_info = matches.is_present(FLAG_DEBUG);
     let emit_timings = matches.is_present(FLAG_TIME);

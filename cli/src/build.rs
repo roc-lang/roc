@@ -144,15 +144,21 @@ pub fn build_file<'a>(
 
     let cwd = roc_file_path.parent().unwrap();
     let binary_path = cwd.join(&*loaded.output_path); // TODO should join ".exe" on Windows
-    let code_gen_timing = program::gen_from_mono_module_llvm(
-        arena,
-        loaded,
-        &roc_file_path,
-        target,
-        app_o_file,
-        opt_level,
-        emit_debug_info,
-    );
+
+    let code_gen_timing = match opt_level {
+        OptLevel::Normal | OptLevel::Optimize => program::gen_from_mono_module_llvm(
+            arena,
+            loaded,
+            &roc_file_path,
+            target,
+            app_o_file,
+            opt_level,
+            emit_debug_info,
+        ),
+        OptLevel::Development => {
+            program::gen_from_mono_module_dev(arena, loaded, target, app_o_file)
+        }
+    };
 
     buf.push('\n');
     buf.push_str("    ");
