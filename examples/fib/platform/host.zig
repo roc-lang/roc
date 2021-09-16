@@ -67,15 +67,6 @@ export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
     std.process.exit(0);
 }
 
-// warning! the array is currently stack-allocated so don't make this too big
-const NUM_NUMS = 100;
-
-const RocList = extern struct { elements: [*]i64, length: usize };
-
-const RocCallResult = extern struct { flag: u64, content: RocList };
-
-const Unit = extern struct {};
-
 pub export fn main() u8 {
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
@@ -84,7 +75,6 @@ pub export fn main() u8 {
     var ts1: std.os.timespec = undefined;
     std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts1) catch unreachable;
 
-    // actually call roc to populate the callresult
     const result = _mainForHost_1(10);
 
     stdout.print("{d}\n", .{result}) catch unreachable;

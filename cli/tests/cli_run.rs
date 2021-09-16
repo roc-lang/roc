@@ -157,7 +157,6 @@ mod cli_run {
                     let example = $example;
                     let file_name = example_file(dir_name, example.filename);
 
-                    // TODO fix QuicksortApp and then remove this!
                     match example.filename {
                         "Fib.roc" => {
                             // it is broken because the dev and normal backend don't generate the
