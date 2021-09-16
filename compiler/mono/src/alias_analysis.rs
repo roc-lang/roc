@@ -589,9 +589,9 @@ fn call_spec(
                         let index = builder.add_make_tuple(block, &[])?;
 
                         let argument = if closure_env_layout.is_none() {
-                            builder.add_make_tuple(block, &[first, index])?
+                            builder.add_make_tuple(block, &[index, first])?
                         } else {
-                            builder.add_make_tuple(block, &[first, index, closure_env])?
+                            builder.add_make_tuple(block, &[index, first, closure_env])?
                         };
                         builder.add_call(block, spec_var, module, name, argument)?;
                     }
