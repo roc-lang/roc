@@ -28,6 +28,7 @@ pub const CMD_EDIT: &str = "edit";
 pub const CMD_DOCS: &str = "docs";
 
 pub const FLAG_DEBUG: &str = "debug";
+pub const FLAG_DEV: &str = "dev";
 pub const FLAG_OPTIMIZE: &str = "optimize";
 pub const FLAG_LIB: &str = "lib";
 pub const FLAG_BACKEND: &str = "backend";
@@ -53,6 +54,12 @@ pub fn build_app<'a>() -> App<'a> {
                 Arg::with_name(FLAG_OPTIMIZE)
                     .long(FLAG_OPTIMIZE)
                     .help("Optimize your compiled Roc program to run faster. (Optimization takes time to complete.)")
+                    .required(false),
+            )
+            .arg(
+                Arg::with_name(FLAG_DEV)
+                    .long(FLAG_DEV)
+                    .help("Make compilation as fast as possible. (Runtime performance may suffer)")
                     .required(false),
             )
             .arg(
@@ -99,6 +106,12 @@ pub fn build_app<'a>() -> App<'a> {
                     .required(false),
             )
             .arg(
+                Arg::with_name(FLAG_DEV)
+                    .long(FLAG_DEV)
+                    .help("Make compilation as fast as possible. (Runtime performance may suffer)")
+                    .required(false),
+            )
+            .arg(
                 Arg::with_name(FLAG_DEBUG)
                     .long(FLAG_DEBUG)
                     .help("Store LLVM debug information in the generated program")
@@ -137,6 +150,12 @@ pub fn build_app<'a>() -> App<'a> {
                 .requires(ROC_FILE)
                 .required(false),
         )
+            .arg(
+                Arg::with_name(FLAG_DEV)
+                    .long(FLAG_DEV)
+                    .help("Make compilation as fast as possible. (Runtime performance may suffer)")
+                    .required(false),
+            )
         .arg(
             Arg::with_name(FLAG_DEBUG)
                 .long(FLAG_DEBUG)
@@ -223,10 +242,14 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     let filename = matches.value_of(ROC_FILE).unwrap();
 
     let original_cwd = std::env::current_dir()?;
-    let opt_level = if matches.is_present(FLAG_OPTIMIZE) {
-        OptLevel::Optimize
-    } else {
-        OptLevel::Normal
+    let opt_level = match (
+        matches.is_present(FLAG_OPTIMIZE),
+        matches.is_present(FLAG_DEV),
+    ) {
+        (true, false) => OptLevel::Optimize,
+        (true, true) => panic!("development cannot be optimized!"),
+        (false, true) => OptLevel::Development,
+        (false, false) => OptLevel::Normal,
     };
     let emit_debug_info = matches.is_present(FLAG_DEBUG);
     let emit_timings = matches.is_present(FLAG_TIME);
@@ -429,9 +452,7 @@ enum Backend {
     Host,
     X86_32,
     X86_64,
-    Dev,
     Wasm32,
-    Wasm32Dev,
 }
 
 impl Default for Backend {
@@ -446,9 +467,7 @@ impl Backend {
             Backend::Host => "host",
             Backend::X86_32 => "x86_32",
             Backend::X86_64 => "x86_64",
-            Backend::Dev => "dev",
             Backend::Wasm32 => "wasm32",
-            Backend::Wasm32Dev => "wasm32_dev",
         }
     }
 
@@ -457,9 +476,7 @@ impl Backend {
         Backend::Host.as_str(),
         Backend::X86_32.as_str(),
         Backend::X86_64.as_str(),
-        Backend::Dev.as_str(),
         Backend::Wasm32.as_str(),
-        Backend::Wasm32Dev.as_str(),
     ];
 
     fn to_triple(&self) -> Triple {
@@ -482,8 +499,7 @@ impl Backend {
 
                 triple
             }
-            Backend::Dev => todo!(),
-            Backend::Wasm32 | Backend::Wasm32Dev => {
+            Backend::Wasm32 => {
                 triple.architecture = Architecture::Wasm32;
                 triple.binary_format = BinaryFormat::Wasm;
 
@@ -507,9 +523,7 @@ impl std::str::FromStr for Backend {
             "host" => Ok(Backend::Host),
             "x86_32" => Ok(Backend::X86_32),
             "x86_64" => Ok(Backend::X86_64),
-            "dev" => Ok(Backend::Dev),
             "wasm32" => Ok(Backend::Wasm32),
-            "wasm32_dev" => Ok(Backend::Wasm32Dev),
             _ => Err(()),
         }
     }

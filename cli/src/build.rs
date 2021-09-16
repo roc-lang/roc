@@ -62,10 +62,7 @@ pub fn build_file<'a>(
     let subs_by_module = MutMap::default();
 
     // Release builds use uniqueness optimizations
-    let stdlib = match opt_level {
-        OptLevel::Normal => arena.alloc(roc_builtins::std::standard_stdlib()),
-        OptLevel::Optimize => arena.alloc(roc_builtins::std::standard_stdlib()),
-    };
+    let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
 
     let loaded = roc_load::file::load_and_monomorphize(
         arena,
@@ -78,16 +75,7 @@ pub fn build_file<'a>(
     )?;
 
     use target_lexicon::Architecture;
-    let emit_wasm = match target.architecture {
-        Architecture::X86_64 => false,
-        Architecture::Aarch64(_) => false,
-        Architecture::Wasm32 => true,
-        Architecture::X86_32(_) => false,
-        _ => panic!(
-            "TODO gracefully handle unsupported architecture: {:?}",
-            target.architecture
-        ),
-    };
+    let emit_wasm = matches!(target.architecture, Architecture::Wasm32);
 
     // TODO wasm host extension should be something else ideally
     // .bc does not seem to work because
@@ -180,15 +168,21 @@ pub fn build_file<'a>(
     let loaded = loaded;
 
     let binary_path = cwd.join(&*loaded.output_path); // TODO should join ".exe" on Windows
-    let code_gen_timing = program::gen_from_mono_module(
-        arena,
-        loaded,
-        &roc_file_path,
-        target,
-        app_o_file,
-        opt_level,
-        emit_debug_info,
-    );
+
+    let code_gen_timing = match opt_level {
+        OptLevel::Normal | OptLevel::Optimize => program::gen_from_mono_module_llvm(
+            arena,
+            loaded,
+            &roc_file_path,
+            target,
+            app_o_file,
+            opt_level,
+            emit_debug_info,
+        ),
+        OptLevel::Development => {
+            program::gen_from_mono_module_dev(arena, loaded, target, app_o_file)
+        }
+    };
 
     buf.push('\n');
     buf.push_str("    ");
