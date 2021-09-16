@@ -20,7 +20,7 @@ comptime {
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn _mainForHost_1(i64) i64;
+extern fn roc__mainForHost_1_exposed(i64) i64;
 
 const Align = extern struct { a: usize, b: usize };
 extern fn malloc(size: usize) callconv(.C) ?*align(@alignOf(Align)) c_void;
@@ -75,7 +75,7 @@ pub export fn main() u8 {
     var ts1: std.os.timespec = undefined;
     std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts1) catch unreachable;
 
-    const result = _mainForHost_1(10);
+    const result = roc__mainForHost_1_exposed(10);
 
     stdout.print("{d}\n", .{result}) catch unreachable;
 
