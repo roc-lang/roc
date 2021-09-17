@@ -2785,6 +2785,7 @@ fn value_not_exposed_hits_panic() {
 
 #[test]
 fn mix_function_and_closure() {
+    // see https://github.com/rtfeldman/roc/pull/1706
     assert_evals_to!(
         indoc!(
             r#"
@@ -2809,6 +2810,7 @@ fn mix_function_and_closure() {
 
 #[test]
 fn mix_function_and_closure_level_of_indirection() {
+    // see https://github.com/rtfeldman/roc/pull/1706
     assert_evals_to!(
         indoc!(
             r#"
@@ -2832,6 +2834,7 @@ fn mix_function_and_closure_level_of_indirection() {
 
 #[test]
 fn do_pass_bool_byte_closure_layout() {
+    // see https://github.com/rtfeldman/roc/pull/1706
     // the distinction is actually important, dropping that info means some functions just get
     // skipped
     assert_evals_to!(
@@ -2860,8 +2863,8 @@ fn do_pass_bool_byte_closure_layout() {
 
             satisfy : (U8 -> Bool) -> Parser U8
             satisfy = \predicate ->
-                \input -> 
-                    walker = \(Pair u rest), accum -> 
+                \input ->
+                    walker = \(Pair u rest), accum ->
                         if predicate u then
                             Stop [ Pair u rest ]
 
@@ -2875,7 +2878,7 @@ fn do_pass_bool_byte_closure_layout() {
             oneOf : List (Parser a) -> Parser a
             oneOf = \parserList ->
                 \input ->
-                    walker = \p, accum -> 
+                    walker = \p, accum ->
                         output = p input
                         if List.len output == 1 then
                             Stop output
@@ -2895,7 +2898,7 @@ fn do_pass_bool_byte_closure_layout() {
             test4 = if List.len ((oneOf [satisfyA, satisfyB]) [99, 100, 101] ) == 0  then "PASS" else "FAIL"
 
 
-            main : Str 
+            main : Str
             main = [test1, test2, test3, test4] |> Str.joinWith ", "
        "#
         ),
