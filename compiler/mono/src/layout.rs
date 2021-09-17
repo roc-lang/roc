@@ -618,7 +618,9 @@ impl<'a> LambdaSet<'a> {
         use UnionVariant::*;
         match variant {
             Never => Layout::Union(UnionLayout::NonRecursive(&[])),
-            Unit | UnitWithArguments | BoolUnion { .. } | ByteUnion(_) => {
+            BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
+            ByteUnion { .. } => Layout::Builtin(Builtin::Int8),
+            Unit | UnitWithArguments => {
                 // no useful information to store
                 Layout::Struct(&[])
             }
