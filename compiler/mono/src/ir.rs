@@ -695,7 +695,20 @@ impl<'a> Procs<'a> {
                         // the `layout` is a function pointer, while `_ignore_layout` can be a
                         // closure. We only specialize functions, storing this value with a closure
                         // layout will give trouble.
-                        self.specialized.insert((symbol, layout), Done(proc));
+                        let arguments =
+                            Vec::from_iter_in(proc.args.iter().map(|(l, _)| *l), env.arena)
+                                .into_bump_slice();
+
+                        let proper_layout = ProcLayout {
+                            arguments,
+                            result: proc.ret_layout,
+                        };
+
+                        // NOTE: some function are specialized to have a closure, but don't actually
+                        // need any closure argument. Here is where we correct this sort of thing,
+                        // by trusting the layout of the Proc, not of what we specialize for
+                        self.specialized.remove(&(symbol, layout));
+                        self.specialized.insert((symbol, proper_layout), Done(proc));
                     }
                     Err(error) => {
                         panic!("TODO generate a RuntimeError message for {:?}", error);
