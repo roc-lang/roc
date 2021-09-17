@@ -106,7 +106,7 @@ pub fn target_machine(
 #[cfg(feature = "llvm")]
 pub fn convert_opt_level(level: OptLevel) -> OptimizationLevel {
     match level {
-        OptLevel::Normal => OptimizationLevel::None,
+        OptLevel::Development | OptLevel::Normal => OptimizationLevel::None,
         OptLevel::Optimize => OptimizationLevel::Aggressive,
     }
 }

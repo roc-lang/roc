@@ -54,6 +54,7 @@ macro_rules! return_on_layout_error_help {
 
 #[derive(Debug, Clone, Copy)]
 pub enum OptLevel {
+    Development,
     Normal,
     Optimize,
 }

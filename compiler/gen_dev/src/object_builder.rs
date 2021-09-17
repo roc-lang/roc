@@ -191,9 +191,15 @@ fn build_object<'a, B: Backend<'a>>(
     let mut layout_ids = roc_mono::layout::LayoutIds::default();
     let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
     for ((sym, layout), proc) in procedures {
-        let fn_name = layout_ids
+        let base_name = layout_ids
             .get_toplevel(sym, &layout)
             .to_symbol_string(sym, &env.interns);
+
+        let fn_name = if env.exposed_to_host.contains(&sym) {
+            format!("roc_{}_exposed", base_name)
+        } else {
+            base_name
+        };
 
         let section_id = output.add_section(
             output.segment_name(StandardSegment::Text).to_vec(),
