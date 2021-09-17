@@ -6189,9 +6189,14 @@ fn reuse_function_symbol<'a>(
                             layout_cache,
                         );
 
-                        // a function name (non-closure) that is passed along
-                        // it never has closure data, so we use the empty struct
-                        return let_empty_struct(symbol, env.arena.alloc(result));
+                        construct_closure_data(
+                            env,
+                            lambda_set,
+                            original,
+                            &[],
+                            symbol,
+                            env.arena.alloc(result),
+                        )
                     }
                 }
                 RawFunctionLayout::ZeroArgumentThunk(ret_layout) => {
@@ -8113,6 +8118,13 @@ fn union_lambda_set_branch_help<'a>(
 ) -> Stmt<'a> {
     let (argument_layouts, argument_symbols) = match closure_data_layout {
         Layout::Struct(&[]) | Layout::Builtin(Builtin::Int1) | Layout::Builtin(Builtin::Int8) => {
+            (argument_layouts_slice, argument_symbols_slice)
+        }
+        _ if lambda_set.member_does_not_need_closure_argument(function_symbol) => {
+            // sometimes unification causes a function that does not itself capture anything
+            // to still get a lambda set that does store information. We must not pass a closure
+            // argument in this case
+
             (argument_layouts_slice, argument_symbols_slice)
         }
         _ => {
