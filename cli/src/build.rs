@@ -101,7 +101,7 @@ pub fn build_file<'a>(
         opt_level,
         surgically_link,
         host_input_path.clone(),
-        target.clone(),
+        target,
         loaded
             .exposed_to_host
             .keys()
@@ -227,7 +227,7 @@ pub fn build_file<'a>(
     // Step 2: link the precompiled host and compiled app
     let link_start = SystemTime::now();
     let outcome = if surgically_link {
-        roc_linker::link_preprocessed_host(target, &host_input_path, &app_o_file, &binary_path)
+        roc_linker::link_preprocessed_host(target, &host_input_path, app_o_file, &binary_path)
             .map_err(|_| {
                 todo!("gracefully handle failing to surgically link");
             })?;
@@ -274,7 +274,7 @@ fn spawn_rebuild_thread(
     opt_level: OptLevel,
     surgically_link: bool,
     host_input_path: PathBuf,
-    target: Triple,
+    target: &Triple,
     exported_symbols: Vec<String>,
 ) -> std::thread::JoinHandle<u128> {
     let thread_local_target = target.clone();

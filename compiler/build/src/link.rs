@@ -76,6 +76,7 @@ fn find_wasi_libc_path() -> PathBuf {
 }
 
 #[cfg(not(target_os = "macos"))]
+#[allow(clippy::too_many_arguments)]
 pub fn build_zig_host_native(
     env_path: &str,
     env_home: &str,
@@ -120,6 +121,7 @@ pub fn build_zig_host_native(
 }
 
 #[cfg(target_os = "macos")]
+#[allow(clippy::too_many_arguments)]
 pub fn build_zig_host_native(
     env_path: &str,
     env_home: &str,

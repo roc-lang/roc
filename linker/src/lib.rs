@@ -253,10 +253,10 @@ fn generate_dynamic_lib(
 
 pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     preprocess_impl(
-        &matches.value_of(EXEC).unwrap(),
-        &matches.value_of(METADATA).unwrap(),
-        &matches.value_of(OUT).unwrap(),
-        &matches.value_of(SHARED_LIB).unwrap(),
+        matches.value_of(EXEC).unwrap(),
+        matches.value_of(METADATA).unwrap(),
+        matches.value_of(OUT).unwrap(),
+        matches.value_of(SHARED_LIB).unwrap(),
         matches.is_present(FLAG_VERBOSE),
         matches.is_present(FLAG_TIME),
     )
@@ -1061,9 +1061,9 @@ fn preprocess_impl(
 
 pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     surgery_impl(
-        &matches.value_of(APP).unwrap(),
-        &matches.value_of(METADATA).unwrap(),
-        &matches.value_of(OUT).unwrap(),
+        matches.value_of(APP).unwrap(),
+        matches.value_of(METADATA).unwrap(),
+        matches.value_of(OUT).unwrap(),
         matches.is_present(FLAG_VERBOSE),
         matches.is_present(FLAG_TIME),
     )
