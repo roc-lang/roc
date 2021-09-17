@@ -2829,3 +2829,77 @@ fn mix_function_and_closure_level_of_indirection() {
         RocStr
     );
 }
+
+#[test]
+fn do_pass_bool_byte_closure_layout() {
+    // the distinction is actually important, dropping that info means some functions just get
+    // skipped
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            ## PARSER
+
+            Parser a : List U8 -> List [Pair a (List U8)]
+
+
+            ## ANY
+
+            # If succcessful, the any parser consumes one character
+
+            any: Parser U8
+            any = \inp ->
+               when List.first inp is
+                 Ok u -> [Pair u (List.drop inp 1)]
+                 _ -> [ ]
+
+
+
+            ## SATISFY
+
+            satisfy : (U8 -> Bool) -> Parser U8
+            satisfy = \predicate ->
+                \input -> 
+                    walker = \(Pair u rest), accum -> 
+                        if predicate u then
+                            Stop [ Pair u rest ]
+
+                        else
+                            Stop accum
+
+                    List.walkUntil (any input) walker []
+
+
+
+            oneOf : List (Parser a) -> Parser a
+            oneOf = \parserList ->
+                \input ->
+                    walker = \p, accum -> 
+                        output = p input
+                        if List.len output == 1 then
+                            Stop output
+
+                        else
+                            Continue accum
+
+                    List.walkUntil parserList walker []
+
+
+            satisfyA = satisfy (\u -> u == 97) # recognize 97
+            satisfyB = satisfy (\u -> u == 98) # recognize 98
+
+            test1 = if List.len ((oneOf [satisfyA, satisfyB]) [97, 98, 99, 100] ) == 1  then "PASS" else "FAIL"
+            test2 = if List.len ((oneOf [satisfyA, satisfyB]) [98, 99, 100, 97] ) == 1  then "PASS" else "FAIL"
+            test3 = if List.len ((oneOf [satisfyB , satisfyA]) [98, 99, 100, 97] ) == 1  then "PASS" else "FAIL"
+            test4 = if List.len ((oneOf [satisfyA, satisfyB]) [99, 100, 101] ) == 0  then "PASS" else "FAIL"
+
+
+            main : Str 
+            main = [test1, test2, test3, test4] |> Str.joinWith ", "
+       "#
+        ),
+        RocStr::from_slice(b"PASS, PASS, PASS, PASS"),
+        RocStr
+    );
+}
