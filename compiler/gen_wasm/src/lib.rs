@@ -4,7 +4,7 @@ mod layout;
 
 use bumpalo::Bump;
 use parity_wasm::builder;
-use parity_wasm::elements::{Instruction, Internal, ValueType};
+use parity_wasm::elements::{Instruction, Instruction::*, Internal, ValueType};
 
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::{Interns, Symbol};
@@ -23,6 +23,9 @@ pub const ALIGN_4: u32 = 2;
 pub const ALIGN_8: u32 = 3;
 
 pub const STACK_POINTER_GLOBAL_ID: u32 = 0;
+
+#[derive(Clone, Copy, Debug)]
+struct LocalId(u32);
 
 pub struct Env<'a> {
     pub arena: &'a Bump, // not really using this much, parity_wasm works with std::vec a lot
@@ -104,4 +107,48 @@ pub fn build_module_help<'a>(
     backend.builder.push_global(stack_pointer_global);
 
     Ok((backend.builder, main_function_index))
+}
+
+fn encode_alignment(bytes: u32) -> Result<u32, String> {
+    match bytes {
+        1 => Ok(ALIGN_1),
+        2 => Ok(ALIGN_2),
+        4 => Ok(ALIGN_4),
+        8 => Ok(ALIGN_8),
+        _ => Err(format!("{:?}-byte alignment is not supported", bytes)),
+    }
+}
+
+fn copy_memory(
+    instructions: &mut Vec<Instruction>,
+    from_ptr: LocalId,
+    to_ptr: LocalId,
+    size_with_alignment: u32,
+    alignment_bytes: u32,
+) -> Result<(), String> {
+    let alignment_flag = encode_alignment(alignment_bytes)?;
+    let size = size_with_alignment - alignment_bytes;
+    let mut offset = 0;
+    while size - offset >= 8 {
+        instructions.push(GetLocal(to_ptr.0));
+        instructions.push(GetLocal(from_ptr.0));
+        instructions.push(I64Load(alignment_flag, offset));
+        instructions.push(I64Store(alignment_flag, offset));
+        offset += 8;
+    }
+    if size - offset >= 4 {
+        instructions.push(GetLocal(to_ptr.0));
+        instructions.push(GetLocal(from_ptr.0));
+        instructions.push(I32Load(alignment_flag, offset));
+        instructions.push(I32Store(alignment_flag, offset));
+        offset += 4;
+    }
+    while size - offset > 0 {
+        instructions.push(GetLocal(to_ptr.0));
+        instructions.push(GetLocal(from_ptr.0));
+        instructions.push(I32Load8U(alignment_flag, offset));
+        instructions.push(I32Store8(alignment_flag, offset));
+        offset += 1;
+    }
+    Ok(())
 }

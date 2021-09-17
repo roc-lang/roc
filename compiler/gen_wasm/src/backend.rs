@@ -10,15 +10,12 @@ use roc_module::symbol::Symbol;
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
 use roc_mono::layout::{Builtin, Layout};
 
-use crate::layout::WasmLayout;
-use crate::PTR_TYPE;
+use crate::layout::{WasmLayout};
+use crate::{PTR_TYPE, copy_memory, LocalId};
 
 // Don't allocate any constant data at address zero or near it. Would be valid, but bug-prone.
 // Follow Emscripten's example by using 1kB (4 bytes would probably do)
 const UNUSED_DATA_SECTION_BYTES: u32 = 1024;
-
-#[derive(Clone, Copy, Debug)]
-struct LocalId(u32);
 
 #[derive(Clone, Copy, Debug)]
 struct LabelId(u32);
@@ -212,16 +209,30 @@ impl<'a> WasmBackend<'a> {
             }
 
             Stmt::Ret(sym) => {
-                if let Some(SymbolStorage(local_id, _)) = self.symbol_storage_map.get(sym) {
-                    self.instructions.push(GetLocal(local_id.0));
-                    self.instructions.push(Return);
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "Not yet implemented: returning values with layout {:?}",
-                        ret_layout
-                    ))
+                use crate::layout::WasmLayout::*;
+
+                let SymbolStorage(local_id, wasm_layout) =
+                    self.symbol_storage_map.get(sym).unwrap();
+
+                match wasm_layout {
+                    LocalOnly(_, _) | HeapMemory => {
+                        self.instructions.push(GetLocal(local_id.0));
+                        self.instructions.push(Return);
+                    }
+
+                    StackMemory {
+                        size,
+                        alignment_bytes,
+                    } => {
+                        let from = local_id.clone();
+                        let to = LocalId(0);
+                        let copy_size: u32 = *size;
+                        let copy_alignment_bytes: u32 = *alignment_bytes;
+                        copy_memory(&mut self.instructions, from, to, copy_size, copy_alignment_bytes)?;
+                    }
                 }
+
+                Ok(())
             }
 
             Stmt::Switch {
