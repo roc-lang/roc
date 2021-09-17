@@ -6,14 +6,14 @@ use crate::{PTR_SIZE, PTR_TYPE};
 // See README for background information on Wasm locals, memory and function calls
 #[derive(Debug)]
 pub enum WasmLayout {
-    // Most number types can fit in a Wasm local without any stack memory.
-    // Roc i8 is represented as an i32 local. Store the type and the original size.
+    // Primitive number value. Just a Wasm local, without any stack memory.
+    // For example, Roc i8 is represented as Wasm i32. Store the type and the original size.
     LocalOnly(ValueType, u32),
 
-    // A `local` pointing to stack memory
+    // Local pointer to stack memory
     StackMemory { size: u32, alignment_bytes: u32 },
 
-    // A `local` pointing to heap memory
+    // Local pointer to heap memory
     HeapMemory,
 }
 

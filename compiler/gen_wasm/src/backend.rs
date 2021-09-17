@@ -192,9 +192,15 @@ impl<'a> WasmBackend<'a> {
 
     fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) -> Result<(), String> {
         match stmt {
-            // This pattern is a simple optimisation to get rid of one local and two instructions per proc.
-            // If we are just returning the expression result, then don't SetLocal and immediately GetLocal
+            // Simple optimisation: if we are just returning the expression, we don't need a local
             Stmt::Let(let_sym, expr, layout, Stmt::Ret(ret_sym)) if let_sym == ret_sym => {
+                let wasm_layout = WasmLayout::new(layout);
+                if let WasmLayout::StackMemory { .. } = wasm_layout {
+                    // Map this symbol to the first argument (pointer into caller's stack)
+                    // Saves us from having to copy it later
+                    let storage = SymbolStorage(LocalId(0), wasm_layout);
+                    self.symbol_storage_map.insert(*let_sym, storage);                        
+                }
                 self.build_expr(let_sym, expr, layout)?;
                 self.instructions.push(Return);
                 Ok(())
