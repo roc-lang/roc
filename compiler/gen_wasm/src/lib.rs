@@ -25,7 +25,7 @@ pub const ALIGN_8: u32 = 3;
 pub const STACK_POINTER_GLOBAL_ID: u32 = 0;
 
 #[derive(Clone, Copy, Debug)]
-struct LocalId(u32);
+pub struct LocalId(u32);
 
 pub struct Env<'a> {
     pub arena: &'a Bump, // not really using this much, parity_wasm works with std::vec a lot
@@ -151,4 +151,24 @@ fn copy_memory(
         offset += 1;
     }
     Ok(())
+}
+
+pub fn allocate_stack_frame(instructions: &mut Vec<Instruction>, size: i32) {
+    if size == 0 {
+        return;
+    }
+    instructions.push(GetGlobal(STACK_POINTER_GLOBAL_ID));
+    instructions.push(I32Const(size));
+    instructions.push(I32Sub);
+    instructions.push(SetGlobal(STACK_POINTER_GLOBAL_ID));
+}
+
+pub fn free_stack_frame(instructions: &mut Vec<Instruction>, size: i32) {
+    if size == 0 {
+        return;
+    }
+    instructions.push(GetGlobal(STACK_POINTER_GLOBAL_ID));
+    instructions.push(I32Const(size));
+    instructions.push(I32Add);
+    instructions.push(SetGlobal(STACK_POINTER_GLOBAL_ID));
 }

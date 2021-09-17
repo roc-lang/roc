@@ -10,8 +10,8 @@ use roc_module::symbol::Symbol;
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
 use roc_mono::layout::{Builtin, Layout};
 
-use crate::layout::{WasmLayout};
-use crate::{PTR_TYPE, copy_memory, LocalId};
+use crate::layout::WasmLayout;
+use crate::{allocate_stack_frame, copy_memory, free_stack_frame, LocalId, PTR_TYPE};
 
 // Don't allocate any constant data at address zero or near it. Would be valid, but bug-prone.
 // Follow Emscripten's example by using 1kB (4 bytes would probably do)
@@ -110,14 +110,17 @@ impl<'a> WasmBackend<'a> {
 
         self.build_stmt(&proc.body, &proc.ret_layout)?;
 
-        // functions must end with an End instruction/opcode
-        self.instructions.push(Instruction::End);
+        let mut final_instructions = Vec::with_capacity(self.instructions.len() + 10);
+        allocate_stack_frame(&mut final_instructions, self.stack_memory as i32);
+        final_instructions.extend(self.instructions.clone());
+        free_stack_frame(&mut final_instructions, self.stack_memory as i32);
+        final_instructions.push(Instruction::End);
 
         let function_def = builder::function()
             .with_signature(signature)
             .body()
             .with_locals(self.locals.clone())
-            .with_instructions(Instructions::new(self.instructions.clone()))
+            .with_instructions(Instructions::new(final_instructions))
             .build() // body
             .build(); // function
 
@@ -130,13 +133,13 @@ impl<'a> WasmBackend<'a> {
     }
 
     fn insert_local(&mut self, layout: WasmLayout, symbol: Symbol, kind: LocalKind) -> LocalId {
-        self.stack_memory += layout.stack_memory();
-
         match kind {
             LocalKind::Parameter => {
+                // Don't increment stack_memory! Structs are allocated in caller's stack memory and passed as pointers.
                 self.arg_types.push(layout.value_type());
             }
             LocalKind::Variable => {
+                self.stack_memory += layout.stack_memory();
                 self.locals.push(Local::new(1, layout.value_type()));
             }
         }
@@ -228,7 +231,13 @@ impl<'a> WasmBackend<'a> {
                         let to = LocalId(0);
                         let copy_size: u32 = *size;
                         let copy_alignment_bytes: u32 = *alignment_bytes;
-                        copy_memory(&mut self.instructions, from, to, copy_size, copy_alignment_bytes)?;
+                        copy_memory(
+                            &mut self.instructions,
+                            from,
+                            to,
+                            copy_size,
+                            copy_alignment_bytes,
+                        )?;
                     }
                 }
 

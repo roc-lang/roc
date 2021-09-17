@@ -35,20 +35,12 @@ pub trait Wasm32TestResult {
     fn build_wrapper_body(main_function_index: u32) -> Vec<Instruction>;
 }
 
-fn build_wrapper_body_prelude(stack_memory_size: usize) -> Vec<Instruction> {
-    vec![
-        GetGlobal(STACK_POINTER_GLOBAL_ID),
-        I32Const(stack_memory_size as i32),
-        I32Sub,
-        SetGlobal(STACK_POINTER_GLOBAL_ID),
-    ]
-}
-
 macro_rules! build_wrapper_body_primitive {
     ($store_instruction: expr, $align: expr) => {
         fn build_wrapper_body(main_function_index: u32) -> Vec<Instruction> {
-            const MAX_ALIGNED_SIZE: usize = 16;
-            let mut instructions = build_wrapper_body_prelude(MAX_ALIGNED_SIZE);
+            const MAX_ALIGNED_SIZE: i32 = 16;
+            let mut instructions = Vec::with_capacity(9);
+            allocate_stack_frame(&mut instructions, MAX_ALIGNED_SIZE);
             instructions.extend([
                 GetGlobal(STACK_POINTER_GLOBAL_ID),
                 //
@@ -76,7 +68,8 @@ macro_rules! wasm_test_result_primitive {
 }
 
 fn build_wrapper_body_stack_memory(main_function_index: u32, size: usize) -> Vec<Instruction> {
-    let mut instructions = build_wrapper_body_prelude(size);
+    let mut instructions = Vec::with_capacity(8);
+    allocate_stack_frame(&mut instructions, size as i32);
     instructions.extend([
         //
         // Call the main function with the allocated address to write the result.
