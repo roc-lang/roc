@@ -1,6 +1,6 @@
 interface Http
     exposes [ Url, HttpErr, getUtf8 ]
-    imports [ fx.Effect, base.Task.{ Task } ]
+    imports [ fx.Effect, pf.Task.{ Task } ]
 
 Url : Str
 
