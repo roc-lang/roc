@@ -1,13 +1,11 @@
 interface Parser exposes [ 
-    Parser, run,  successful, 
-    succeed, any,  satisfy, fail,
-    map, andThen, oneOf, oneOfResult,
-    first, second,
-    lowerCase, manyAux, many, tests, q1,q2,q3,
-    runToString, testsP
+    Parser, run,  runU8,
+    succeed, fail, any, satisfy,
+    andThen, first, second,
+    map, oneOf, oneOfNew, many, manyAux
   ] imports [Pair, Utility]
 
-
+## PARSER  
 
 Parser a : List U8 -> List [Pair a (List U8)]
 
@@ -16,13 +14,14 @@ run : (List U8), Parser a -> List ([Pair a (List U8)])
 run = 
   \input, parser -> parser input
 
+runU8 : Str, Parser U8 -> Str
+runU8 = \input, parser -> runToString Utility.showU8 input parser 
 
 ## SUCCEED 
 
 # succeed: succeed without consuming input
 succeed : a -> Parser a
 succeed = \v -> (\inp -> [Pair v inp])
-
 
 ## FAIL
 
@@ -31,7 +30,8 @@ succeed = \v -> (\inp -> [Pair v inp])
 fail = \_ -> [ ]
 
 
-## ITEM 
+
+## ANY 
 
 # If succcessful, the any parser consumes one character
 
@@ -42,6 +42,7 @@ any = \inp ->
      _ -> [ ]
 
 
+
 ## SATISFY  
 
 satisfy : (U8 -> Bool) -> Parser U8  
@@ -50,12 +51,12 @@ satisfy = \predicate ->
         Ok (Pair u rest) ->  if predicate u then List.single (Pair u rest) else []
         _ -> [ ]
 
+
 ## MAP
 
 map : Parser a, (a -> b) -> Parser b  
 map = 
   \p, f -> \input -> p input |> List.map (\pair -> Pair.mapFirst pair f) 
-
 
 
 ## AND_THEN, FIRST, SECOND 
@@ -69,27 +70,19 @@ andThen = \p, q ->
 #
 second : Parser a, Parser b -> Parser b
 second = 
-  \p, q ->  Parser.andThen p (\_ -> q)
+  \p, q ->  andThen p (\_ -> q)
 
 # Run p, then q, returning output of p and ignoring that of q
 #
 first : Parser a, Parser b -> Parser a
 first = 
-  \p, q ->  Parser.andThen p (\out -> Parser.map q (\_ -> out))
+  \p, q ->  andThen p (\out -> map q (\_ -> out))
 
 
-## ONE OF  
 
-# for educational purposes
-oneOfOLD : List (Parser a) -> Parser a 
-oneOfOLD = \parserList -> 
-          \input -> when List.first parserList is 
-              Ok p -> 
-                output = p input 
-                if List.len output == 1 then output else (oneOfOLD (List.drop parserList 1)) input 
-              Err _ -> [ ]
-              
-oneOf = \parserList ->
+## ONE OF
+
+oneOfNew = \parserList ->
     \input ->
         List.walkUntil parserList
             (\p, accum ->
@@ -102,9 +95,16 @@ oneOf = \parserList ->
             )
             []
 
+oneOf : List (Parser a) -> Parser a 
+oneOf = \parserList -> 
+          \input -> when List.first parserList is 
+              Ok p -> 
+                output = p input 
+                if List.len output == 1 then output else (oneOf (List.drop parserList 1)) input 
+              Err _ -> [ ]
+
 
 ## MANY
-
 
 many : Parser a -> Parser (List a)
 many = \p -> 
@@ -137,57 +137,8 @@ manyAux = \p, list ->
                 (oneOf [ p1, p2 ])) input
 
 
+###############################################
 
-## SUCCESSFUL (Test for successful parse)
-
-# successful : List ([Pair a (List U8)]) -> Bool
-successful = \results -> List.len results == 1
-
-
-
-## TESTS  
-
-
-runT = \input, parser -> runToString Utility.showU8 input parser 
-
-
-
-satisfyResult = satisfyA [97, 98, 99, 100]
-
-
-t1 = {name : "run \"abcd any => \"a\"", test: runT "abcd" any == "a" }
-t2 = {name : "run \"abcd\" satisfy (\\u -> u == 97)) => \"a\"", test : runT "abcd" satisfyA == "a" }
-t3 = {name : "Use 'second' to recognize \"a\" then \"b\" returning \"b\"", test : runT "abcd" (second  satisfyA satisfyB) == "b"}
-t4 = {name : "Use 'first' to recognize \"a\" then \"b\" returning \"a\"", test : runT "abcd" (first  satisfyA satisfyB) == "a"}
-t5 = {name : "Use map to shift output of parser: run \"abcd\" (map any (\\u -> u + 25)) == \"z\"", test : runT "abcd" (map any (\u -> u + 25)) == "z"  }
-
-t6 = {name: "Use andThen to recognize strings beginning with two repeated letters (succeed on input \"aaxyz\")", 
-      test: runT "aaxyz" (andThen any satisfyWhatCameBefore) == "a"}
-
-satisfyWhatCameBefore = \u2 -> satisfy (\u3 -> u3 == u2)
-
-testAndThen = { name: "andThen", test: runToString Utility.showU8 "aaxyz" (andThen any satisfyWhatCameBefore) == "a"}
-
-t7 = {name: "is successful (positive)", test: List.len satisfyResult == 1}
-t8 = {name: "is successful (negative)", test: List.len ( satisfyA [100, 98, 99, 100] ) != 1}
-t9 = {name: "test of lowerCase parser with u = 97", test: runT "abcd" Parser.lowerCase == "a" } 
-
-testsP = [t1, t2, t3, t4, t5, testAndThen, t7, t8, t9, q1]
-
-q1 = {name: "test of oneOf combinator", test: List.len oneOfResult == 1 }     
-q2 = {name: "Parser.run [97,98,99] (manyAux lowerCase [ ]) => Pair ((Loop [97]) [98,99])", test: Parser.run [97,98,99] (manyAux lowerCase [ ]) == [Pair (Loop [97]) [98,99]]}
-q3 = {name: "many lowerCase", test: Parser.run [97, 99, 100, 0] (many lowerCase) == [Pair [97, 98, 99] [0]] }
-
-
-# Test for oneof
-
-satisfyA = satisfy (\u -> u == 97)
-satisfyB = satisfy (\u -> u == 98)
-oneOfResult = (oneOf [satisfyA, satisfyB]) [97, 98, 99, 100]  
-
-isLowerCaseAlpha : U8 -> Bool
-isLowerCaseAlpha = \u -> u >= 97 && u <= 122
-lowerCase = satisfy isLowerCaseAlpha
 
 ## FOR STRING OUTPUT 
 

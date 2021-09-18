@@ -1,7 +1,7 @@
 app "parseapp"
      packages { base: "platform" }
      imports [base.Task, 
-        Parser2.{runU8, run, any, satisfy, andThen, second, first, map, oneOf, many, manyAux },
+        Parser.{runU8, run, any, satisfy, andThen, second, first, map, oneOf, many, manyAux },
         Test]
      provides [ main ] to base
 
@@ -21,8 +21,8 @@ satisfyB = satisfy (\u -> u == 98)
 secondT = {name : "(d) Use 'second' to recognize strings with second character 'b'", test : runU8 "abcd" (second  any satisfyB) == "b"}
 firstT = {name : "(e) Use 'first' to recognize strings beginning with 'a' and with any second character", test : runU8 "abcd" (first  satisfyA any) == "a"}
 
-secondT2 = {name : "(d) Use 'second' to recognize strings  beginning with 'a' followed by 'b' returning 'b'", test : runU8 "abcd" (second  satisfyA satisfyB) == "b"}
-firstT2 = {name : "(e) Use 'first' to recognize strings beginning with 'a' followed by 'b' returning 'a'", test : runU8 "abcd" (first  satisfyA satisfyB) == "a"}
+secondT2 = {name : "(d2) Use 'second' to recognize strings  beginning with 'a' followed by 'b' returning 'b'", test : runU8 "abcd" (second  satisfyA satisfyB) == "b"}
+firstT2 = {name : "(e2) Use 'first' to recognize strings beginning with 'a' followed by 'b' returning 'a'", test : runU8 "abcd" (first  satisfyA satisfyB) == "a"}
 
 
 mapT = {name : "(f) Use map to shift output of parser: run \"abcd\" (map any (\\u -> u + 25)) == \"z\"", test : runU8 "abcd" (map any (\u -> u + 25)) == "z"  }
@@ -38,6 +38,10 @@ isLowerCaseAlpha : U8 -> Bool
 isLowerCaseAlpha = \u -> u >= 97 && u <= 122
 lowerCase = satisfy isLowerCaseAlpha
 
+## SUCCESSFUL (Test for successful parse)
+
+# successful : List ([Pair a (List U8)]) -> Bool
+successful = \results -> List.len results == 1
 
 
 # Test suites
@@ -51,8 +55,8 @@ suiteMany = {name: "The many combinator", tests: [manyAuxT, manyT]}
 main : Task.Task {} []
 main =
 
-# Test.runSuites [suiteAll]
-Test.runSuites [suiteMany]
+Test.runSuites [suiteAll]
+# Test.runSuites [suiteMany]
    |> Task.putLine
 
 
