@@ -254,8 +254,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
         // For most return layouts we will do nothing.
         // In some cases, we need to put the return address as the first arg.
         match ret_layout {
-            Layout::Builtin(Builtin::Int64) => {}
-            Layout::Builtin(Builtin::Float64) => {}
+            Layout::Builtin(Builtin::Int64 | Builtin::Float64 | Builtin::Str) => {}
             x => {
                 return Err(format!(
                     "receiving return type, {:?}, is not yet implemented",
@@ -581,8 +580,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
         // For most return layouts we will do nothing.
         // In some cases, we need to put the return address as the first arg.
         match ret_layout {
-            Layout::Builtin(Builtin::Int64) => {}
-            Layout::Builtin(Builtin::Float64) => {}
+            Layout::Builtin(Builtin::Int64 | Builtin::Float64) => {}
             x => {
                 return Err(format!(
                     "receiving return type, {:?}, is not yet implemented",

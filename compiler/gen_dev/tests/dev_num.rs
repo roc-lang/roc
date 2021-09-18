@@ -1,11 +1,5 @@
 #[macro_use]
-extern crate pretty_assertions;
-
-#[macro_use]
 extern crate indoc;
-
-extern crate bumpalo;
-extern crate libc;
 
 #[macro_use]
 mod helpers;
