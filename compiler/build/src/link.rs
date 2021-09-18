@@ -1,6 +1,7 @@
 use crate::target::arch_str;
 #[cfg(feature = "llvm")]
 use libloading::{Error, Library};
+use roc_builtins::bitcode;
 #[cfg(feature = "llvm")]
 use roc_mono::ir::OptLevel;
 use std::collections::HashMap;
@@ -93,7 +94,12 @@ pub fn build_zig_host_native(
         .env("PATH", env_path)
         .env("HOME", env_home);
     if let Some(shared_lib_path) = shared_lib_path {
-        command.args(&["build-exe", "-fPIE", shared_lib_path.to_str().unwrap()]);
+        command.args(&[
+            "build-exe",
+            "-fPIE",
+            shared_lib_path.to_str().unwrap(),
+            bitcode::OBJ_PATH,
+        ]);
     } else {
         command.args(&["build-obj", "-fPIC"]);
     }
@@ -109,7 +115,6 @@ pub fn build_zig_host_native(
         // include libc
         "--library",
         "c",
-        "--strip",
         // cross-compile?
         "-target",
         target,
@@ -178,7 +183,12 @@ pub fn build_zig_host_native(
         .env("PATH", &env_path)
         .env("HOME", &env_home);
     if let Some(shared_lib_path) = shared_lib_path {
-        command.args(&["build-exe", "-fPIE", shared_lib_path.to_str().unwrap()]);
+        command.args(&[
+            "build-exe",
+            "-fPIE",
+            shared_lib_path.to_str().unwrap(),
+            bitcode::OBJ_PATH,
+        ]);
     } else {
         command.args(&["build-obj", "-fPIC"]);
     }
@@ -197,7 +207,6 @@ pub fn build_zig_host_native(
         // include libc
         "--library",
         "c",
-        "--strip",
     ]);
     if matches!(opt_level, OptLevel::Optimize) {
         command.args(&["-O", "ReleaseSafe"]);
@@ -274,6 +283,7 @@ pub fn build_c_host_native(
     if let Some(shared_lib_path) = shared_lib_path {
         command.args(&[
             shared_lib_path.to_str().unwrap(),
+            bitcode::OBJ_PATH,
             "-fPIE",
             "-pie",
             "-lm",
