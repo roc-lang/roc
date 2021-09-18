@@ -119,20 +119,23 @@ impl<'a> WasmBackend<'a> {
     fn finalize(&mut self, return_type: Option<ValueType>) -> FunctionDefinition {
         let mut final_instructions = Vec::with_capacity(self.instructions.len() + 10);
 
-        allocate_stack_frame(
-            &mut final_instructions,
-            self.stack_memory,
-            self.stack_frame_pointer,
-        );
+        if self.stack_memory > 0 {
+            allocate_stack_frame(
+                &mut final_instructions,
+                self.stack_memory,
+                self.stack_frame_pointer.unwrap(),
+            );
+        }
 
         final_instructions.extend(self.instructions.drain(0..));
 
-        free_stack_frame(
-            &mut final_instructions,
-            self.stack_memory,
-            self.stack_frame_pointer,
-        );
-
+        if self.stack_memory > 0 {
+            free_stack_frame(
+                &mut final_instructions,
+                self.stack_memory,
+                self.stack_frame_pointer.unwrap(),
+            );
+        }
         final_instructions.push(Instruction::End);
 
         let signature_builder = if let Some(t) = return_type {

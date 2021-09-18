@@ -23,6 +23,7 @@ pub const ALIGN_4: u32 = 2;
 pub const ALIGN_8: u32 = 3;
 
 pub const STACK_POINTER_GLOBAL_ID: u32 = 0;
+pub const STACK_ALIGNMENT_BYTES: i32 = 16;
 
 #[derive(Clone, Copy, Debug)]
 pub struct LocalId(pub u32);
@@ -156,38 +157,27 @@ fn copy_memory(
 pub fn allocate_stack_frame(
     instructions: &mut Vec<Instruction>,
     size: i32,
-    local_frame_pointer: Option<LocalId>,
+    local_frame_pointer: LocalId,
 ) {
-    if size == 0 {
-        return;
-    }
-    instructions.push(GetGlobal(STACK_POINTER_GLOBAL_ID));
-    instructions.push(I32Const(size));
-    instructions.push(I32Sub);
-    if let Some(LocalId(local_index)) = local_frame_pointer {
-        instructions.push(TeeLocal(local_index));
-    }
-    instructions.push(SetGlobal(STACK_POINTER_GLOBAL_ID));
+    let aligned_size = (size + STACK_ALIGNMENT_BYTES - 1) & (-STACK_ALIGNMENT_BYTES);
+    instructions.extend([
+        GetGlobal(STACK_POINTER_GLOBAL_ID),
+        I32Const(aligned_size),
+        I32Sub,
+        TeeLocal(local_frame_pointer.0),
+        SetGlobal(STACK_POINTER_GLOBAL_ID),
+    ]);
 }
 
 pub fn free_stack_frame(
     instructions: &mut Vec<Instruction>,
     size: i32,
-    local_frame_pointer: Option<LocalId>,
+    local_frame_pointer: LocalId,
 ) {
-    if size == 0 {
-        return;
-    }
-    let get_stack_frame = 
-        if let Some(LocalId(local_index)) = local_frame_pointer {
-            GetLocal(local_index)
-        } else {
-            GetGlobal(STACK_POINTER_GLOBAL_ID)
-        };
-
+    let aligned_size = (size + STACK_ALIGNMENT_BYTES - 1) & (-STACK_ALIGNMENT_BYTES);
     instructions.extend([
-        get_stack_frame,
-        I32Const(size),
+        GetLocal(local_frame_pointer.0),
+        I32Const(aligned_size),
         I32Add,
         SetGlobal(STACK_POINTER_GLOBAL_ID),
     ]);

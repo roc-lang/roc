@@ -44,12 +44,12 @@ pub trait Wasm32TestResult {
 macro_rules! build_wrapper_body_primitive {
     ($store_instruction: expr, $align: expr) => {
         fn build_wrapper_body(main_function_index: u32) -> Vec<Instruction> {
-            const MAX_ALIGNED_SIZE: i32 = 16;
+            let size: i32 = 8;
             let mut instructions = Vec::with_capacity(16);
             allocate_stack_frame(
                 &mut instructions,
-                MAX_ALIGNED_SIZE,
-                Some(LocalId(STACK_POINTER_LOCAL_ID)),
+                size,
+                LocalId(STACK_POINTER_LOCAL_ID),
             );
             instructions.extend([
                 // load result address to prepare for the store instruction later
@@ -66,8 +66,8 @@ macro_rules! build_wrapper_body_primitive {
             ]);
             free_stack_frame(
                 &mut instructions,
-                MAX_ALIGNED_SIZE,
-                Some(LocalId(STACK_POINTER_LOCAL_ID)),
+                size,
+                LocalId(STACK_POINTER_LOCAL_ID),
             );
             instructions.push(End);
             instructions
@@ -88,7 +88,7 @@ fn build_wrapper_body_stack_memory(main_function_index: u32, size: usize) -> Vec
     allocate_stack_frame(
         &mut instructions,
         size as i32,
-        Some(LocalId(STACK_POINTER_LOCAL_ID)),
+        LocalId(STACK_POINTER_LOCAL_ID),
     );
     instructions.extend([
         //
@@ -98,12 +98,12 @@ fn build_wrapper_body_stack_memory(main_function_index: u32, size: usize) -> Vec
         Call(main_function_index),
         //
         // Return the result address
-        GetGlobal(STACK_POINTER_GLOBAL_ID),
+        GetLocal(STACK_POINTER_LOCAL_ID),
     ]);
     free_stack_frame(
         &mut instructions,
         size as i32,
-        Some(LocalId(STACK_POINTER_LOCAL_ID)),
+        LocalId(STACK_POINTER_LOCAL_ID),
     );
     instructions.push(End);
     instructions
