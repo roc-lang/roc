@@ -140,10 +140,50 @@ pub fn roc_fx_putLine(line: RocStr) -> () {
 
 #[no_mangle]
 pub fn roc_fx_httpGetUtf8(url: RocStr) -> (RocStr, u16) {
-    todo!(
+    eprintln!(
         "TODO implement Http.get in the host for URL {}",
         url.as_str()
     );
+
+    std::process::exit(1);
+    // match ureq::get(unsafe { url.as_str() }).call() {
+    //     Ok(resp) => match resp.into_string() {
+    //         Ok(contents) => RocResult::Ok(RocStr::from_slice(contents.as_bytes())), // TODO make roc::Result!
+    //         // TODO turn this error into an enum!
+    //         Err(err) => RocResult::Err(RocStr::from_slice(format!("{:?}", err).as_bytes())),
+    //     },
+    //     // TODO turn this error into an enum!
+    //     Err(err) => RocResult::Err(RocStr::from_slice(format!("{:?}", err).as_bytes())),
+    // }
+}
+
+#[no_mangle]
+pub fn roc_fx_writeAllUtf8(path: RocStr, _contents: RocStr) -> (RocStr, u16) {
+    eprintln!(
+        "TODO implement File.writeUtf8 in the host for path {}",
+        path.as_str()
+    );
+
+    std::process::exit(1);
+    // match ureq::get(unsafe { url.as_str() }).call() {
+    //     Ok(resp) => match resp.into_string() {
+    //         Ok(contents) => RocResult::Ok(RocStr::from_slice(contents.as_bytes())), // TODO make roc::Result!
+    //         // TODO turn this error into an enum!
+    //         Err(err) => RocResult::Err(RocStr::from_slice(format!("{:?}", err).as_bytes())),
+    //     },
+    //     // TODO turn this error into an enum!
+    //     Err(err) => RocResult::Err(RocStr::from_slice(format!("{:?}", err).as_bytes())),
+    // }
+}
+
+#[no_mangle]
+pub fn roc_fx_readAllUtf8(path: RocStr) -> (RocStr, u16) {
+    eprintln!(
+        "TODO implement File.readUtf8 in the host for path {}",
+        path.as_str()
+    );
+
+    std::process::exit(1);
     // match ureq::get(unsafe { url.as_str() }).call() {
     //     Ok(resp) => match resp.into_string() {
     //         Ok(contents) => RocResult::Ok(RocStr::from_slice(contents.as_bytes())), // TODO make roc::Result!
