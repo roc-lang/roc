@@ -6972,38 +6972,35 @@ fn from_can_pattern_help<'a>(
         Underscore => Ok(Pattern::Underscore),
         Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
         IntLiteral(var, _, int) => {
-            let precision = {
-                match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, false) {
-                    IntOrFloat::SignedIntType(precision)
-                    | IntOrFloat::UnsignedIntType(precision) => precision,
-                    other => {
-                        panic!(
-                            "Invalid precision for int pattern: {:?} has {:?}",
-                            can_pattern, other
-                        )
-                    }
+            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, false) {
+                IntOrFloat::SignedIntType(precision) | IntOrFloat::UnsignedIntType(precision) => {
+                    Ok(Pattern::IntLiteral(*int as i128, precision))
                 }
-            };
-
-            Ok(Pattern::IntLiteral(*int as i128, precision))
+                other => {
+                    panic!(
+                        "Invalid precision for int pattern: {:?} has {:?}",
+                        can_pattern, other
+                    )
+                }
+            }
         }
         FloatLiteral(var, float_str, float) => {
             // TODO: Can I reuse num_argument_to_int_or_float here if I pass in true?
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, true) {
-                IntOrFloat::SignedIntType(_) => {
-                    panic!("Invalid percision for float literal = {:?}", var)
-                }
-                IntOrFloat::UnsignedIntType(_) => {
-                    panic!("Invalid percision for float literal = {:?}", var)
+                IntOrFloat::SignedIntType(_) | IntOrFloat::UnsignedIntType(_) => {
+                    panic!("Invalid precision for float pattern {:?}", var)
                 }
                 IntOrFloat::BinaryFloatType(precision) => {
                     Ok(Pattern::FloatLiteral(f64::to_bits(*float), precision))
                 }
                 IntOrFloat::DecimalFloatType => {
                     let dec = match RocDec::from_str(float_str) {
-                            Some(d) => d,
-                            None => panic!("Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message", float_str),
-                        };
+                        Some(d) => d,
+                        None => panic!(
+                            r"Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message",
+                            float_str
+                        ),
+                    };
                     Ok(Pattern::DecimalLiteral(dec))
                 }
             }
