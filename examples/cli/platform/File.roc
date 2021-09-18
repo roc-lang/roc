@@ -24,7 +24,7 @@ OpenErr a :
         SymLinkLoop Path,
         TooManyOpenFiles Path,
         IoError Path,
-        UnknownError I64 Path,
+        UnknownError I32 Path,
     ]a
 
 ## Errors when attempting to read a non-directory file.
@@ -57,10 +57,12 @@ DirReadErr a :
 #readBytes = \path ->
 #    Effect.readBytes path
 
+
 ## Read a file's bytes and interpret them as UTF-8 encoded text.
 readUtf8 : Path -> Task Str [ FileReadErr (ReadErr [ BadUtf8 Str.Utf8ByteProblem Nat ]) ]*
 readUtf8 = \path ->
     Effect.map (Effect.readAllUtf8 path) (\answer -> convertErrno path answer)
+
 
 convertErrno : Path, { errno : I32, bytes : List U8 }* -> Result Str [ FileReadErr (ReadErr [ BadUtf8 Str.Utf8ByteProblem Nat ]) ]*
 convertErrno = \path, answer ->
