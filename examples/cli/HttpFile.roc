@@ -15,7 +15,7 @@ main =
 
     when result is
         Ok _ -> Stdout.line "Success!"
-        Err (FileReadErr (FileNotFound path)) -> Stderr.line "Not found: \(path)"
-        Err (FileReadErr _) -> Stderr.line "File read error!"
+        Err (FileReadUtf8Err (FileNotFound path)) -> Stderr.line "Not found: \(path)"
+        Err (FileReadUtf8Err _) -> Stderr.line "File read error!"
         Err (FileWriteErr _) -> Stderr.line "File write error!"
         Err (HttpGetErr _) -> Stderr.line "HTTP GET error!"

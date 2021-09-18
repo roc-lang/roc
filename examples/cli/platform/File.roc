@@ -1,5 +1,5 @@
 interface File
-    exposes [ ReadErr, OpenErr, WriteErr, DirReadErr, Path, readUtf8, writeUtf8 ]
+    exposes [ FileReadErr, FileReadUtf8Err, FileWriteErr, ReadErr, OpenErr, WriteErr, DirReadErr, Path, readUtf8, writeUtf8 ]
     imports [ Task.{ Task }, fx.Effect.{ after } ]
 
 Path : Str
@@ -27,7 +27,6 @@ OpenErr a :
         UnknownError I32 Path,
     ]a
 
-## Errors when attempting to read a non-directory file.
 ReadErr a :
     OpenErr
         [
@@ -37,6 +36,12 @@ ReadErr a :
             FileBusy Path,
         ]a
 
+## Errors when attempting to read a non-directory file.
+FileReadErr a : [ FileReadErr (ReadErr []) ]a
+
+## Errors when attempting to read a non-directory UTF-8 file.
+FileReadUtf8Err a : [ FileReadUtf8Err (ReadErr [ BadUtf8 Str.Utf8ByteProblem Nat ]) ]a
+
 ## Errors when attempting to write a non-directory file.
 WriteErr a :
     OpenErr
@@ -44,6 +49,8 @@ WriteErr a :
             FileWasDir Path,
             ReadOnlyFileSystem Path,
         ]a
+
+FileWriteErr a : [ FileWriteErr (WriteErr []) ]a
 
 ## Errors when attempting to read a directory.
 DirReadErr a :
@@ -59,13 +66,13 @@ DirReadErr a :
 
 
 ## Read a file's bytes and interpret them as UTF-8 encoded text.
-readUtf8 : Path -> Task Str [ FileReadErr (ReadErr [ BadUtf8 Str.Utf8ByteProblem Nat ]) ]*
+readUtf8 : Path -> Task Str (FileReadUtf8Err *)
 readUtf8 = \path ->
-    Effect.map (Effect.readAllUtf8 path) (\answer -> convertErrno path answer)
+    Effect.map (Effect.readAllUtf8 path) (\answer -> convertUtf8Errno path answer)
 
 
-convertErrno : Path, { errno : I32, bytes : List U8 }* -> Result Str [ FileReadErr (ReadErr [ BadUtf8 Str.Utf8ByteProblem Nat ]) ]*
-convertErrno = \path, answer ->
+convertUtf8Errno : Path, { errno : I32, bytes : List U8 }* -> Result Str (FileReadUtf8Err *)
+convertUtf8Errno = \path, answer ->
     # errno values - see
     # https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/errno.h.html
     when answer.errno is
@@ -77,9 +84,9 @@ convertErrno = \path, answer ->
         # 2 -> Err (FileReadErr (FileNotFound path))
         # 19 -> Err (FileReadErr (FileWasDir path))
         # TODO handle other errno scenarios that could come up
-        _ -> Err (FileReadErr (UnknownError answer.errno path))
+        _ -> Err (FileReadUtf8Err (UnknownError answer.errno path))
 
-writeUtf8 : Path, Str -> Task {} [ FileWriteErr (WriteErr []) ]*
+writeUtf8 : Path, Str -> Task {} (FileWriteErr *)
 writeUtf8 = \path, data ->
     path
         |> Effect.writeAllUtf8 data
