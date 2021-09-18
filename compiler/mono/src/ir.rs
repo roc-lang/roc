@@ -695,7 +695,20 @@ impl<'a> Procs<'a> {
                         // the `layout` is a function pointer, while `_ignore_layout` can be a
                         // closure. We only specialize functions, storing this value with a closure
                         // layout will give trouble.
-                        self.specialized.insert((symbol, layout), Done(proc));
+                        let arguments =
+                            Vec::from_iter_in(proc.args.iter().map(|(l, _)| *l), env.arena)
+                                .into_bump_slice();
+
+                        let proper_layout = ProcLayout {
+                            arguments,
+                            result: proc.ret_layout,
+                        };
+
+                        // NOTE: some function are specialized to have a closure, but don't actually
+                        // need any closure argument. Here is where we correct this sort of thing,
+                        // by trusting the layout of the Proc, not of what we specialize for
+                        self.specialized.remove(&(symbol, layout));
+                        self.specialized.insert((symbol, proper_layout), Done(proc));
                     }
                     Err(error) => {
                         panic!("TODO generate a RuntimeError message for {:?}", error);
@@ -6176,9 +6189,14 @@ fn reuse_function_symbol<'a>(
                             layout_cache,
                         );
 
-                        // a function name (non-closure) that is passed along
-                        // it never has closure data, so we use the empty struct
-                        return let_empty_struct(symbol, env.arena.alloc(result));
+                        construct_closure_data(
+                            env,
+                            lambda_set,
+                            original,
+                            &[],
+                            symbol,
+                            env.arena.alloc(result),
+                        )
                     }
                 }
                 RawFunctionLayout::ZeroArgumentThunk(ret_layout) => {
@@ -7901,8 +7919,6 @@ fn match_on_lambda_set<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    let lambda_set_layout = Layout::LambdaSet(lambda_set);
-
     match lambda_set.runtime_representation() {
         Layout::Union(union_layout) => {
             let closure_tag_id_symbol = env.unique_symbol();
@@ -7910,7 +7926,7 @@ fn match_on_lambda_set<'a>(
             let result = union_lambda_set_to_switch(
                 env,
                 lambda_set,
-                lambda_set_layout,
+                Layout::Union(union_layout),
                 closure_tag_id_symbol,
                 union_layout.tag_id_layout(),
                 closure_data_symbol,
@@ -7957,7 +7973,7 @@ fn match_on_lambda_set<'a>(
                 env,
                 lambda_set.set,
                 closure_tag_id_symbol,
-                lambda_set_layout,
+                Layout::Builtin(Builtin::Int1),
                 closure_data_symbol,
                 argument_symbols,
                 argument_layouts,
@@ -7973,7 +7989,7 @@ fn match_on_lambda_set<'a>(
                 env,
                 lambda_set.set,
                 closure_tag_id_symbol,
-                lambda_set_layout,
+                Layout::Builtin(Builtin::Int8),
                 closure_data_symbol,
                 argument_symbols,
                 argument_layouts,
@@ -8102,6 +8118,13 @@ fn union_lambda_set_branch_help<'a>(
 ) -> Stmt<'a> {
     let (argument_layouts, argument_symbols) = match closure_data_layout {
         Layout::Struct(&[]) | Layout::Builtin(Builtin::Int1) | Layout::Builtin(Builtin::Int8) => {
+            (argument_layouts_slice, argument_symbols_slice)
+        }
+        _ if lambda_set.member_does_not_need_closure_argument(function_symbol) => {
+            // sometimes unification causes a function that does not itself capture anything
+            // to still get a lambda set that does store information. We must not pass a closure
+            // argument in this case
+
             (argument_layouts_slice, argument_symbols_slice)
         }
         _ => {
