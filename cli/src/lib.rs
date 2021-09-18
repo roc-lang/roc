@@ -34,6 +34,7 @@ pub const FLAG_LIB: &str = "lib";
 pub const FLAG_BACKEND: &str = "backend";
 pub const FLAG_TIME: &str = "time";
 pub const FLAG_LINK: &str = "roc-linker";
+pub const FLAG_PRECOMPILED: &str = "precompiled-host";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const BACKEND: &str = "BACKEND";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
@@ -93,6 +94,12 @@ pub fn build_app<'a>() -> App<'a> {
                 Arg::with_name(FLAG_LINK)
                     .long(FLAG_LINK)
                     .help("Uses the roc linker instead of the system linker.")
+                    .required(false),
+            )
+            .arg(
+                Arg::with_name(FLAG_PRECOMPILED)
+                    .long(FLAG_PRECOMPILED)
+                    .help("Assumes the host has been precompiled and skips recompiling the host.")
                     .required(false),
             )
         )
@@ -173,6 +180,12 @@ pub fn build_app<'a>() -> App<'a> {
             Arg::with_name(FLAG_LINK)
                 .long(FLAG_LINK)
                 .help("Uses the roc linker instead of the system linker.")
+                .required(false),
+        )
+        .arg(
+            Arg::with_name(FLAG_PRECOMPILED)
+                .long(FLAG_PRECOMPILED)
+                .help("Assumes the host has been precompiled and skips recompiling the host.")
                 .required(false),
         )
         .arg(
@@ -260,6 +273,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
         LinkType::Executable
     };
     let surgically_link = matches.is_present(FLAG_LINK);
+    let precompiled = matches.is_present(FLAG_PRECOMPILED);
     if surgically_link && !roc_linker::supported(&link_type, &target) {
         panic!(
             "Link type, {:?}, with target, {}, not supported by roc linker",
@@ -299,6 +313,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
         emit_timings,
         link_type,
         surgically_link,
+        precompiled,
     );
 
     match res_binary_path {

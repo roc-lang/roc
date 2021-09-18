@@ -54,6 +54,7 @@ pub fn build_file<'a>(
     emit_timings: bool,
     link_type: LinkType,
     surgically_link: bool,
+    precompiled: bool,
 ) -> Result<BuiltFile, LoadingProblem<'a>> {
     let compilation_start = SystemTime::now();
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
@@ -100,6 +101,7 @@ pub fn build_file<'a>(
     let rebuild_thread = spawn_rebuild_thread(
         opt_level,
         surgically_link,
+        precompiled,
         host_input_path.clone(),
         target,
         loaded
@@ -217,7 +219,7 @@ pub fn build_file<'a>(
     }
 
     let rebuild_duration = rebuild_thread.join().unwrap();
-    if emit_timings {
+    if emit_timings && !precompiled {
         println!(
             "Finished rebuilding and preprocessing the host in {} ms\n",
             rebuild_duration
@@ -273,6 +275,7 @@ pub fn build_file<'a>(
 fn spawn_rebuild_thread(
     opt_level: OptLevel,
     surgically_link: bool,
+    precompiled: bool,
     host_input_path: PathBuf,
     target: &Triple,
     exported_symbols: Vec<String>,
@@ -280,21 +283,23 @@ fn spawn_rebuild_thread(
     let thread_local_target = target.clone();
     std::thread::spawn(move || {
         let rebuild_host_start = SystemTime::now();
-        if surgically_link {
-            roc_linker::build_and_preprocess_host(
-                opt_level,
-                &thread_local_target,
-                host_input_path.as_path(),
-                exported_symbols,
-            )
-            .unwrap();
-        } else {
-            rebuild_host(
-                opt_level,
-                &thread_local_target,
-                host_input_path.as_path(),
-                None,
-            );
+        if !precompiled {
+            if surgically_link {
+                roc_linker::build_and_preprocess_host(
+                    opt_level,
+                    &thread_local_target,
+                    host_input_path.as_path(),
+                    exported_symbols,
+                )
+                .unwrap();
+            } else {
+                rebuild_host(
+                    opt_level,
+                    &thread_local_target,
+                    host_input_path.as_path(),
+                    None,
+                );
+            }
         }
         let rebuild_host_end = rebuild_host_start.elapsed().unwrap();
         rebuild_host_end.as_millis()
