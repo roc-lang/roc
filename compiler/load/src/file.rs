@@ -2113,8 +2113,6 @@ fn update<'a>(
                     &mut state.procedures,
                 );
 
-                Proc::insert_refcount_operations(arena, &mut state.procedures);
-
                 // display the mono IR of the module, for debug purposes
                 if roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS {
                     let procs_string = state
@@ -2127,6 +2125,8 @@ fn update<'a>(
 
                     println!("{}", result);
                 }
+
+                Proc::insert_refcount_operations(arena, &mut state.procedures);
 
                 // This is not safe with the new non-recursive RC updates that we do for tag unions
                 //

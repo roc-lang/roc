@@ -638,7 +638,7 @@ pub fn construct_optimization_passes<'a>(
 
     let pmb = PassManagerBuilder::create();
     match opt_level {
-        OptLevel::Normal => {
+        OptLevel::Development | OptLevel::Normal => {
             pmb.set_optimization_level(OptimizationLevel::None);
         }
         OptLevel::Optimize => {
