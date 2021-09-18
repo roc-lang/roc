@@ -2,7 +2,7 @@ interface Parser2 exposes [
     Parser, run,  runU8,
     succeed, fail, any, satisfy,
     andThen, first, second,
-    map, oneOf, oneOfOLD
+    map, oneOf, oneOfNew, many, manyAux
   ] imports [Pair, Utility]
 
 ## PARSER  
@@ -102,6 +102,40 @@ oneOf = \parserList ->
                 output = p input 
                 if List.len output == 1 then output else (oneOf (List.drop parserList 1)) input 
               Err _ -> [ ]
+
+
+## MANY
+
+many : Parser a -> Parser (List a)
+many = \p -> 
+    \input -> (loop (\list -> manyAux p list) [])  input  
+
+Step state a : [ Loop state, Done a ]
+
+loop: ((List a) -> Parser (Step (List a) (List a))), (List a) -> Parser (List a) 
+loop = \nextState, s ->
+  \input -> 
+      ps =  nextState s                 # Parser (Step (List a)(List a))
+      out = ps input 
+      if List.len out == 1 then
+        when List.first out is 
+          Ok (Pair (Done aa) input2) -> [(Pair aa input2)]
+          Ok (Pair (Loop aa) input2) -> (loop nextState aa) input2
+          Err _ -> [(Pair [] input)]
+      else
+         [(Pair [] input)]
+ 
+
+manyAux : Parser a, List a -> Parser (Step (List a) (List a))
+manyAux = \p, list ->
+    \input -> (if input == [] 
+              then 
+                succeed (Done (List.reverse list))
+              else 
+                p1 = andThen p ( \a -> succeed (Loop (List.prepend list a))) # succeed (Done (List.reverse list)) #
+                p2 = succeed (Done (List.reverse list))
+                (oneOf [ p1, p2 ])) input
+
 
 ###############################################
 
