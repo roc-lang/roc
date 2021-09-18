@@ -69,21 +69,17 @@ convertErrno = \path, answer ->
     # errno values - see
     # https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/errno.h.html
     when answer.errno is
-        0 ->
-            when Str.fromUtf8 answer.bytes is
-                Ok str -> Ok str
-                Err (BadUtf8 problem index) -> Err (FileReadErr (BadUtf8 problem index))
-        1 -> Err (FileReadErr (PermissionDenied path))
-        2 -> Err (FileReadErr (FileNotFound path))
-        19 -> Err (FileReadErr (FileWasDir path))
+        # 0 ->
+        #     when Str.fromUtf8 answer.bytes is
+        #         Ok str -> Ok str
+        #         Err (BadUtf8 problem index) -> Err (FileReadErr (BadUtf8 problem index))
+        # 1 -> Err (FileReadErr (PermissionDenied path))
+        # 2 -> Err (FileReadErr (FileNotFound path))
+        # 19 -> Err (FileReadErr (FileWasDir path))
         # TODO handle other errno scenarios that could come up
         _ -> Err (FileReadErr (UnknownError answer.errno path))
 
-# writeUtf8 : Path, Str -> Task {} *
-# writeUtf8 = \path, data ->
-#     Task.succeed {} # TODO replace this with the commented-out one below
-
-writeUtf8 : Path, Str -> Task {} [ FileWriteErr (WriteErr [ BadThing ]) ]
+writeUtf8 : Path, Str -> Task {} [ FileWriteErr (WriteErr []) ]*
 writeUtf8 = \path, data ->
     path
         |> Effect.writeAllUtf8 data
@@ -92,7 +88,8 @@ writeUtf8 = \path, data ->
                 Ok {}
 
             else
-                Err (FileWriteErr BadThing)
+                # TODO handle other errno scenarios that could come up
+                Err (FileWriteErr (UnknownError res.errno path))
 
 ## Read a file's bytes, one chunk at a time, and use it to build up a state.
 ##
