@@ -24,7 +24,7 @@ OpenErr a :
         SymLinkLoop Path,
         TooManyOpenFiles Path,
         IoError Path,
-        UnknownError I32 Path,
+        UnknownError I64 Path,
     ]a
 
 ## Errors when attempting to read a non-directory file.
