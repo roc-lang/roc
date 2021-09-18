@@ -887,6 +887,39 @@ mod test_reporting {
     }
 
     #[test]
+    fn if_2_branch_mismatch_inside_function() {
+        report_problem_as(
+            indoc!(
+                r#"
+                fn = \arg -> if arg then 2 else "foo"
+
+                fn True
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                This `if` has an `else` branch with a different type from its `then` branch:
+
+                1│  if True then 2 else "foo"
+                                        ^^^^^
+
+                The `else` branch is a string of type:
+
+                    Str
+
+                but the `then` branch has the type:
+
+                    Num a
+
+                I need all branches in an `if` to have the same type!
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn if_3_branch_mismatch() {
         report_problem_as(
             indoc!(
