@@ -139,6 +139,18 @@ pub fn roc_fx_putLine(line: RocStr) -> () {
 }
 
 #[no_mangle]
+pub fn roc_fx_errLine(line: RocStr) -> () {
+    let bytes = line.as_slice();
+    let string = unsafe { std::str::from_utf8_unchecked(bytes) };
+    eprintln!("{}", string);
+
+    // don't mess with the refcount!
+    core::mem::forget(line);
+
+    ()
+}
+
+#[no_mangle]
 pub fn roc_fx_httpGetUtf8(url: RocStr) -> (RocStr, u16) {
     eprintln!(
         "TODO implement Http.get in the host for URL {}",

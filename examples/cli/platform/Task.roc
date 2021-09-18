@@ -1,5 +1,5 @@
 interface Task
-    exposes [ Task, succeed, fail, await, map, onFail, attempt, sequence ]
+    exposes [ Task, succeed, fail, await, map, mapErr, onFail, attempt, sequence ]
     imports [ fx.Effect ]
 
 
@@ -42,6 +42,13 @@ map = \effect, transform ->
         when result is
             Ok a -> Task.succeed (transform a)
             Err err -> Task.fail err
+
+mapErr : Task ok a, (a -> b) -> Task ok b
+mapErr = \effect, transform ->
+    Effect.after effect \result ->
+        when result is
+            Ok ok -> Task.succeed ok
+            Err a -> Task.fail (transform a)
 
 ## Run each of the given tasks in sequence, and collect a list of their outputs.
 ## If any task fails, the entire task fails.
