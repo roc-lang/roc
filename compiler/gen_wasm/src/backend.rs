@@ -1,5 +1,5 @@
 use parity_wasm::builder;
-use parity_wasm::builder::{CodeLocation, FunctionDefinition, ModuleBuilder};
+use parity_wasm::builder::{CodeLocation, FunctionDefinition, ModuleBuilder, SignatureBuilder};
 use parity_wasm::elements::{
     BlockType, Instruction, Instruction::*, Instructions, Local, ValueType,
 };
@@ -92,22 +92,11 @@ impl<'a> WasmBackend<'a> {
     }
 
     pub fn build_proc(&mut self, proc: Proc<'a>, sym: Symbol) -> Result<u32, String> {
-        let ret_layout = WasmLayout::new(&proc.ret_layout);
-
-        let ret_type = if let WasmLayout::StackMemory { .. } = ret_layout {
-            self.arg_types.push(PTR_TYPE);
-            None
-        } else {
-            Some(ret_layout.value_type())
-        };
-
-        for (layout, symbol) in proc.args {
-            self.insert_local(WasmLayout::new(layout), *symbol, LocalKind::Parameter);
-        }
+        let signature_builder = self.build_signature(&proc);
 
         self.build_stmt(&proc.body, &proc.ret_layout)?;
 
-        let function_def = self.finalize(ret_type);
+        let function_def = self.finalize_proc(signature_builder);
         let location = self.builder.push_function(function_def);
         let function_index = location.body;
         self.proc_symbol_map.insert(sym, location);
@@ -116,7 +105,24 @@ impl<'a> WasmBackend<'a> {
         Ok(function_index)
     }
 
-    fn finalize(&mut self, return_type: Option<ValueType>) -> FunctionDefinition {
+    fn build_signature(&mut self, proc: &Proc<'a>) -> SignatureBuilder {
+        let ret_layout = WasmLayout::new(&proc.ret_layout);
+
+        let signature_builder = if let WasmLayout::StackMemory { .. } = ret_layout {
+            self.arg_types.push(PTR_TYPE);
+            builder::signature()
+        } else {
+            builder::signature().with_result(ret_layout.value_type())
+        };
+
+        for (layout, symbol) in proc.args {
+            self.insert_local(WasmLayout::new(layout), *symbol, LocalKind::Parameter);
+        }
+
+        signature_builder.with_params(self.arg_types.clone())
+    }
+
+    fn finalize_proc(&mut self, signature_builder: SignatureBuilder) -> FunctionDefinition {
         let mut final_instructions = Vec::with_capacity(self.instructions.len() + 10);
 
         if self.stack_memory > 0 {
@@ -138,18 +144,8 @@ impl<'a> WasmBackend<'a> {
         }
         final_instructions.push(Instruction::End);
 
-        let signature_builder = if let Some(t) = return_type {
-            builder::signature().with_result(t)
-        } else {
-            builder::signature()
-        };
-
-        let signature = signature_builder
-            .with_params(self.arg_types.clone())
-            .build_sig();
-
         let function_def = builder::function()
-            .with_signature(signature)
+            .with_signature(signature_builder.build_sig())
             .body()
             .with_locals(self.locals.clone())
             .with_instructions(Instructions::new(final_instructions))
