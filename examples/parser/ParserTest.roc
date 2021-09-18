@@ -31,12 +31,13 @@ oneOfT1 = {name: "(g) test of oneOf combinator: recognize string beginning with 
 oneOfT2 = {name: "(h) test of oneOf combinator: recognize string beginning with 'a' or 'b', for 'bcda'", test: List.len ((oneOf [satisfyA, satisfyB]) [98, 99, 100, 97] ) == 1 }
 oneOfT3 = {name: "(i) test of oneOf combinator: recognize string beginning with 'a' or 'b', for 'cde' (fail)", test: List.len ((oneOf [satisfyA, satisfyB]) [99, 100, 101] ) == 0 }
 
+manyAuxT = {name: "run [97,98,99] (manyAux lowerCase [ ]) => Pair ((Loop [97]) [98,99])", test: run [97,98,99] (manyAux lowerCase [ ]) == [Pair (Loop [97]) [98,99]]}
+manyT = {name: "many lowerCase", test: run [97, 99, 100, 0] (many lowerCase) == [Pair [97, 98, 99] [0]] }
+
 isLowerCaseAlpha : U8 -> Bool
 isLowerCaseAlpha = \u -> u >= 97 && u <= 122
 lowerCase = satisfy isLowerCaseAlpha
 
-manyAuxT = {name: "run [97,98,99] (manyAux lowerCase [ ]) => Pair ((Loop [97]) [98,99])", test: run [97,98,99] (manyAux lowerCase [ ]) == [Pair (Loop [97]) [98,99]]}
-manyT = {name: "many lowerCase", test: run [97, 99, 100, 0] (many lowerCase) == [Pair [97, 98, 99] [0]] }
 
 
 # Test suites
@@ -44,14 +45,14 @@ manyT = {name: "many lowerCase", test: run [97, 99, 100, 0] (many lowerCase) == 
 
 suiteAll = {name: "All 7 combinators", tests: [anyT, satisfyT, andThenT, secondT, firstT, secondT2, firstT2, mapT, oneOfT1,oneOfT2, oneOfT3 ] }
 
-# suiteMany = {name "The many combinator", tests: [manyAuxT, manyT]}
+suiteMany = {name: "The many combinator", tests: [manyAuxT, manyT]}
 
 
 main : Task.Task {} []
 main =
 
-Test.runSuites [suiteAll]
-# Test.runSuites [suiteMany]
+# Test.runSuites [suiteAll]
+Test.runSuites [suiteMany]
    |> Task.putLine
 
 
