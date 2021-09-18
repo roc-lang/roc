@@ -154,8 +154,9 @@ mod test_reporting {
                 }
 
                 for problem in type_problems {
-                    let report = type_problem(&alloc, filename.clone(), problem.clone());
-                    reports.push(report);
+                    if let Some(report) = type_problem(&alloc, filename.clone(), problem.clone()) {
+                        reports.push(report);
+                    }
                 }
 
                 for problem in mono_problems {
