@@ -12,7 +12,7 @@ jobs:
   prep-dependency-container:
     name: benchmark roc programs
     runs-on: [self-hosted, i7-6700K]
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       FORCE_COLOR: 1
     steps:
