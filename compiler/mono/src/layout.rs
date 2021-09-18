@@ -1427,9 +1427,22 @@ fn layout_from_flat_type<'a>(
             }
         }
         TagUnion(tags, ext_var) => {
-            debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
+            if ext_var_is_empty_tag_union(subs, ext_var) {
+                Ok(layout_from_tag_union(arena, tags, subs, env.ptr_bytes))
+            } else {
+                let (slices, new_ext) = roc_types::types::gather_tags_slices(subs, tags, ext_var);
+                debug_assert!(ext_var_is_empty_tag_union(subs, new_ext));
 
-            Ok(layout_from_tag_union(arena, tags, subs, env.ptr_bytes))
+                let tags_vec =
+                    Vec::from_iter_in(slices.iter().map(|(name, slice)| (name, *slice)), arena);
+
+                Ok(layout_from_tag_union_help(
+                    arena,
+                    tags_vec,
+                    subs,
+                    env.ptr_bytes,
+                ))
+            }
         }
         FunctionOrTagUnion(tag_name, _, ext_var) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
@@ -2246,13 +2259,22 @@ fn layout_from_tag_union<'a>(
     subs: &Subs,
     ptr_bytes: u32,
 ) -> Layout<'a> {
-    use UnionVariant::*;
-
     if tags.is_newtype_wrapper(subs) {
         return layout_from_newtype(arena, tags, subs, ptr_bytes);
     }
 
     let tags_vec = cheap_sort_tags(arena, tags, subs);
+
+    layout_from_tag_union_help(arena, tags_vec, subs, ptr_bytes)
+}
+
+fn layout_from_tag_union_help<'a>(
+    arena: &'a Bump,
+    tags_vec: Vec<'_, (&TagName, VariableSubsSlice)>,
+    subs: &Subs,
+    ptr_bytes: u32,
+) -> Layout<'a> {
+    use UnionVariant::*;
 
     match tags_vec.get(0) {
         Some((tag_name, arguments)) if *tag_name == &TagName::Private(Symbol::NUM_AT_NUM) => {

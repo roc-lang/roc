@@ -233,7 +233,11 @@ fn unify_structure(
         }
         RigidVar(name) => {
             // Type mismatch! Rigid can only unify with flex.
-            mismatch!("trying to unify {:?} with rigid var {:?}", &flat_type, name)
+            mismatch!(
+                "trying to unify {:?} with rigid var {:?}",
+                roc_types::subs::SubsFmtFlatType(flat_type, subs),
+                name
+            )
         }
         RecursionVar { structure, .. } => match flat_type {
             FlatType::TagUnion(_, _) => {
