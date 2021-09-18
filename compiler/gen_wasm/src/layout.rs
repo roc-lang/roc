@@ -1,7 +1,7 @@
-use parity_wasm::elements::ValueType;
+use parity_wasm::elements::{Instruction, Instruction::*, ValueType};
 use roc_mono::layout::{Layout, UnionLayout};
 
-use crate::{PTR_SIZE, PTR_TYPE};
+use crate::{copy_memory, LocalId, ALIGN_1, ALIGN_2, ALIGN_4, ALIGN_8, PTR_SIZE, PTR_TYPE};
 
 // See README for background information on Wasm locals, memory and function calls
 #[derive(Debug)]
@@ -72,6 +72,7 @@ impl WasmLayout {
         }
     }
 
+    #[allow(dead_code)]
     pub fn stack_memory(&self) -> u32 {
         match self {
             Self::StackMemory { size, .. } => *size,
@@ -79,7 +80,6 @@ impl WasmLayout {
         }
     }
 
-    /*
     #[allow(dead_code)]
     fn load(&self, offset: u32) -> Result<Instruction, String> {
         use crate::layout::WasmLayout::*;
@@ -93,8 +93,10 @@ impl WasmLayout {
             LocalOnly(F64, 8) => Ok(F64Load(ALIGN_8, offset)),
             LocalOnly(F32, 4) => Ok(F32Load(ALIGN_4, offset)),
 
+            // TODO: Come back to this when we need to access fields of structs
             // LocalOnly(F32, 2) => Ok(), // convert F16 to F32 (lowlevel function? Wasm-only?)
             // StackMemory(size) => Ok(), // would this be some kind of memcpy in the IR?
+
             HeapMemory => {
                 if PTR_TYPE == I64 {
                     Ok(I64Load(ALIGN_8, offset))
@@ -109,10 +111,6 @@ impl WasmLayout {
             )),
         }
     }
-    */
-    /*
-    TODO: this is probably in the wrong place, need specific locals for the  StackMemory case.
-            Come back to it later.
 
     #[allow(dead_code)]
     pub fn store(&self, offset: u32, instructions: &mut Vec<Instruction>) -> Result<(), String> {
@@ -132,9 +130,13 @@ impl WasmLayout {
                 size,
                 alignment_bytes,
             } => {
-                let from_ptr = LocalId(0);
-                let to_ptr = LocalId(0);
-                copy_memory(instructions, from_ptr, to_ptr: size, alignment_bytes)
+                // TODO
+                // Need extra arguments for this case that we don't need for primitives.
+                // Maybe it should be somewhere we have more relevant context?
+                // Come back to it when we need to insert things into structs.
+                let from_ptr = LocalId(0); // TODO
+                let to_ptr = LocalId(0); // TODO
+                copy_memory(instructions, from_ptr, to_ptr, *size, *alignment_bytes)?;
             }
 
             HeapMemory => {
@@ -154,5 +156,4 @@ impl WasmLayout {
         }
         result
     }
-    */
 }

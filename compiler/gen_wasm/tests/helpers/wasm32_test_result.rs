@@ -1,10 +1,14 @@
 use parity_wasm::builder;
 use parity_wasm::builder::ModuleBuilder;
-use parity_wasm::elements::{Instruction, Instruction::*, Instructions, Internal, ValueType};
+use parity_wasm::elements::{
+    Instruction, Instruction::*, Instructions, Internal, Local, ValueType,
+};
 
 use roc_gen_wasm::from_wasm32_memory::FromWasm32Memory;
 use roc_gen_wasm::*;
 use roc_std::{RocDec, RocList, RocOrder, RocStr};
+
+const STACK_POINTER_LOCAL_ID: u32 = 0;
 
 pub trait Wasm32TestResult {
     fn insert_test_wrapper(
@@ -16,9 +20,11 @@ pub trait Wasm32TestResult {
 
         let signature = builder::signature().with_result(ValueType::I32).build_sig();
 
+        let stack_frame_pointer = Local::new(1, ValueType::I32);
         let function_def = builder::function()
             .with_signature(signature)
             .body()
+            .with_locals(vec![stack_frame_pointer])
             .with_instructions(Instructions::new(instructions))
             .build() // body
             .build(); // function
@@ -39,10 +45,15 @@ macro_rules! build_wrapper_body_primitive {
     ($store_instruction: expr, $align: expr) => {
         fn build_wrapper_body(main_function_index: u32) -> Vec<Instruction> {
             const MAX_ALIGNED_SIZE: i32 = 16;
-            let mut instructions = Vec::with_capacity(9);
-            allocate_stack_frame(&mut instructions, MAX_ALIGNED_SIZE);
+            let mut instructions = Vec::with_capacity(16);
+            allocate_stack_frame(
+                &mut instructions,
+                MAX_ALIGNED_SIZE,
+                Some(LocalId(STACK_POINTER_LOCAL_ID)),
+            );
             instructions.extend([
-                GetGlobal(STACK_POINTER_GLOBAL_ID),
+                // load result address to prepare for the store instruction later
+                GetLocal(STACK_POINTER_LOCAL_ID),
                 //
                 // Call the main function with no arguments. Get primitive back.
                 Call(main_function_index),
@@ -51,9 +62,14 @@ macro_rules! build_wrapper_body_primitive {
                 $store_instruction($align, 0),
                 //
                 // Return the result pointer
-                GetGlobal(STACK_POINTER_GLOBAL_ID),
-                End,
+                GetLocal(STACK_POINTER_LOCAL_ID),
             ]);
+            free_stack_frame(
+                &mut instructions,
+                MAX_ALIGNED_SIZE,
+                Some(LocalId(STACK_POINTER_LOCAL_ID)),
+            );
+            instructions.push(End);
             instructions
         }
     };
@@ -68,19 +84,28 @@ macro_rules! wasm_test_result_primitive {
 }
 
 fn build_wrapper_body_stack_memory(main_function_index: u32, size: usize) -> Vec<Instruction> {
-    let mut instructions = Vec::with_capacity(8);
-    allocate_stack_frame(&mut instructions, size as i32);
+    let mut instructions = Vec::with_capacity(16);
+    allocate_stack_frame(
+        &mut instructions,
+        size as i32,
+        Some(LocalId(STACK_POINTER_LOCAL_ID)),
+    );
     instructions.extend([
         //
         // Call the main function with the allocated address to write the result.
         // No value is returned to the VM stack. This is the same as in compiled C.
-        GetGlobal(STACK_POINTER_GLOBAL_ID),
+        GetLocal(STACK_POINTER_LOCAL_ID),
         Call(main_function_index),
         //
         // Return the result address
         GetGlobal(STACK_POINTER_GLOBAL_ID),
-        End,
     ]);
+    free_stack_frame(
+        &mut instructions,
+        size as i32,
+        Some(LocalId(STACK_POINTER_LOCAL_ID)),
+    );
+    instructions.push(End);
     instructions
 }
 

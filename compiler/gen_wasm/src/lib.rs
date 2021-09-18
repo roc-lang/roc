@@ -25,7 +25,7 @@ pub const ALIGN_8: u32 = 3;
 pub const STACK_POINTER_GLOBAL_ID: u32 = 0;
 
 #[derive(Clone, Copy, Debug)]
-pub struct LocalId(u32);
+pub struct LocalId(pub u32);
 
 pub struct Env<'a> {
     pub arena: &'a Bump, // not really using this much, parity_wasm works with std::vec a lot
@@ -153,22 +153,42 @@ fn copy_memory(
     Ok(())
 }
 
-pub fn allocate_stack_frame(instructions: &mut Vec<Instruction>, size: i32) {
+pub fn allocate_stack_frame(
+    instructions: &mut Vec<Instruction>,
+    size: i32,
+    local_frame_pointer: Option<LocalId>,
+) {
     if size == 0 {
         return;
     }
     instructions.push(GetGlobal(STACK_POINTER_GLOBAL_ID));
     instructions.push(I32Const(size));
     instructions.push(I32Sub);
+    if let Some(LocalId(local_index)) = local_frame_pointer {
+        instructions.push(TeeLocal(local_index));
+    }
     instructions.push(SetGlobal(STACK_POINTER_GLOBAL_ID));
 }
 
-pub fn free_stack_frame(instructions: &mut Vec<Instruction>, size: i32) {
+pub fn free_stack_frame(
+    instructions: &mut Vec<Instruction>,
+    size: i32,
+    local_frame_pointer: Option<LocalId>,
+) {
     if size == 0 {
         return;
     }
-    instructions.push(GetGlobal(STACK_POINTER_GLOBAL_ID));
-    instructions.push(I32Const(size));
-    instructions.push(I32Add);
-    instructions.push(SetGlobal(STACK_POINTER_GLOBAL_ID));
+    let get_stack_frame = 
+        if let Some(LocalId(local_index)) = local_frame_pointer {
+            GetLocal(local_index)
+        } else {
+            GetGlobal(STACK_POINTER_GLOBAL_ID)
+        };
+
+    instructions.extend([
+        get_stack_frame,
+        I32Const(size),
+        I32Add,
+        SetGlobal(STACK_POINTER_GLOBAL_ID),
+    ]);
 }

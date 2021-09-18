@@ -1,5 +1,5 @@
 use parity_wasm::builder;
-use parity_wasm::builder::{CodeLocation, ModuleBuilder};
+use parity_wasm::builder::{CodeLocation, FunctionDefinition, ModuleBuilder};
 use parity_wasm::elements::{
     BlockType, Instruction, Instruction::*, Instructions, Local, ValueType,
 };
@@ -44,8 +44,8 @@ pub struct WasmBackend<'a> {
     locals: std::vec::Vec<Local>,
 
     // Functions: internal state & IR mappings
-    next_local_index: u32,
-    stack_memory: u32,
+    stack_memory: i32,
+    stack_frame_pointer: Option<LocalId>,
     symbol_storage_map: MutMap<Symbol, SymbolStorage>,
     /// how many blocks deep are we (used for jumps)
     block_depth: u32,
@@ -69,8 +69,8 @@ impl<'a> WasmBackend<'a> {
             locals: std::vec::Vec::with_capacity(32),
 
             // Functions: internal state & IR mappings
-            next_local_index: 0,
             stack_memory: 0,
+            stack_frame_pointer: None,
             symbol_storage_map: MutMap::default(),
             block_depth: 0,
             joinpoint_label_map: MutMap::default(),
@@ -84,8 +84,8 @@ impl<'a> WasmBackend<'a> {
         self.locals.clear();
 
         // Functions: internal state & IR mappings
-        self.next_local_index = 0;
         self.stack_memory = 0;
+        self.stack_frame_pointer = None;
         self.symbol_storage_map.clear();
         self.joinpoint_label_map.clear();
         assert_eq!(self.block_depth, 0);
@@ -94,27 +94,56 @@ impl<'a> WasmBackend<'a> {
     pub fn build_proc(&mut self, proc: Proc<'a>, sym: Symbol) -> Result<u32, String> {
         let ret_layout = WasmLayout::new(&proc.ret_layout);
 
-        let sig_builder = if let WasmLayout::StackMemory { .. } = ret_layout {
+        let ret_type = if let WasmLayout::StackMemory { .. } = ret_layout {
             self.arg_types.push(PTR_TYPE);
-            self.next_local_index += 1;
-            builder::signature()
+            None
         } else {
-            builder::signature().with_result(ret_layout.value_type())
+            Some(ret_layout.value_type())
         };
 
         for (layout, symbol) in proc.args {
             self.insert_local(WasmLayout::new(layout), *symbol, LocalKind::Parameter);
         }
 
-        let signature = sig_builder.with_params(self.arg_types.clone()).build_sig();
-
         self.build_stmt(&proc.body, &proc.ret_layout)?;
 
+        let function_def = self.finalize(ret_type);
+        let location = self.builder.push_function(function_def);
+        let function_index = location.body;
+        self.proc_symbol_map.insert(sym, location);
+        self.reset();
+
+        Ok(function_index)
+    }
+
+    fn finalize(&mut self, return_type: Option<ValueType>) -> FunctionDefinition {
         let mut final_instructions = Vec::with_capacity(self.instructions.len() + 10);
-        allocate_stack_frame(&mut final_instructions, self.stack_memory as i32);
-        final_instructions.extend(self.instructions.clone());
-        free_stack_frame(&mut final_instructions, self.stack_memory as i32);
+
+        allocate_stack_frame(
+            &mut final_instructions,
+            self.stack_memory,
+            self.stack_frame_pointer,
+        );
+
+        final_instructions.extend(self.instructions.drain(0..));
+
+        free_stack_frame(
+            &mut final_instructions,
+            self.stack_memory,
+            self.stack_frame_pointer,
+        );
+
         final_instructions.push(Instruction::End);
+
+        let signature_builder = if let Some(t) = return_type {
+            builder::signature().with_result(t)
+        } else {
+            builder::signature()
+        };
+
+        let signature = signature_builder
+            .with_params(self.arg_types.clone())
+            .build_sig();
 
         let function_def = builder::function()
             .with_signature(signature)
@@ -124,33 +153,67 @@ impl<'a> WasmBackend<'a> {
             .build() // body
             .build(); // function
 
-        let location = self.builder.push_function(function_def);
-        let function_index = location.body;
-        self.proc_symbol_map.insert(sym, location);
-        self.reset();
-
-        Ok(function_index)
+        function_def
     }
 
-    fn insert_local(&mut self, layout: WasmLayout, symbol: Symbol, kind: LocalKind) -> LocalId {
+    fn insert_local(
+        &mut self,
+        wasm_layout: WasmLayout,
+        symbol: Symbol,
+        kind: LocalKind,
+    ) -> LocalId {
+        let local_index = (self.arg_types.len() + self.locals.len()) as u32;
+        let local_id = LocalId(local_index);
+
         match kind {
             LocalKind::Parameter => {
-                // Don't increment stack_memory! Structs are allocated in caller's stack memory and passed as pointers.
-                self.arg_types.push(layout.value_type());
+                // Already stack-allocated by the caller if needed.
+                self.arg_types.push(wasm_layout.value_type());
             }
             LocalKind::Variable => {
-                self.stack_memory += layout.stack_memory();
-                self.locals.push(Local::new(1, layout.value_type()));
+                self.locals.push(Local::new(1, wasm_layout.value_type()));
+
+                if let WasmLayout::StackMemory {
+                    size,
+                    alignment_bytes,
+                } = wasm_layout
+                {
+                    let align = alignment_bytes as i32;
+                    let mut offset = self.stack_memory;
+                    offset += align - 1;
+                    offset &= -align;
+                    self.stack_memory = offset + (size - alignment_bytes) as i32;
+
+                    let frame_pointer = self.get_or_create_frame_pointer();
+
+                    // initialise the local with the appropriate address
+                    self.instructions.extend([
+                        GetLocal(frame_pointer.0),
+                        I32Const(offset),
+                        I32Add,
+                        SetLocal(local_index),
+                    ]);
+                }
             }
         }
 
-        let local_id = LocalId(self.next_local_index);
-        self.next_local_index += 1;
-
-        let storage = SymbolStorage(local_id, layout);
+        let storage = SymbolStorage(local_id, wasm_layout);
         self.symbol_storage_map.insert(symbol, storage);
 
         local_id
+    }
+
+    fn get_or_create_frame_pointer(&mut self) -> LocalId {
+        match self.stack_frame_pointer {
+            Some(local_id) => local_id,
+            None => {
+                let local_index = (self.arg_types.len() + self.locals.len()) as u32;
+                let local_id = LocalId(local_index);
+                self.stack_frame_pointer = Some(local_id);
+                self.locals.push(Local::new(1, ValueType::I32));
+                local_id
+            }
+        }
     }
 
     fn get_symbol_storage(&self, sym: &Symbol) -> Result<&SymbolStorage, String> {
@@ -199,7 +262,7 @@ impl<'a> WasmBackend<'a> {
                     // Map this symbol to the first argument (pointer into caller's stack)
                     // Saves us from having to copy it later
                     let storage = SymbolStorage(LocalId(0), wasm_layout);
-                    self.symbol_storage_map.insert(*let_sym, storage);                        
+                    self.symbol_storage_map.insert(*let_sym, storage);
                 }
                 self.build_expr(let_sym, expr, layout)?;
                 self.instructions.push(Return);
