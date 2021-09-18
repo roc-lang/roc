@@ -175,6 +175,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
 
     #[inline(always)]
     fn load_args<'a>(
+        buf: &mut Vec<'a, u8>,
         symbol_map: &mut MutMap<Symbol, SymbolStorage<X86_64GeneralReg, X86_64FloatReg>>,
         args: &'a [(Layout<'a>, Symbol)],
         ret_layout: &Layout<'a>,
@@ -226,6 +227,29 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                                 size: 8,
                                 owned: true,
                             },
+                        );
+                    }
+                }
+                Layout::Builtin(Builtin::Str) => {
+                    if general_i + 1 < Self::GENERAL_PARAM_REGS.len() {
+                        // Load the value to the param reg.
+                        let dst1 = Self::GENERAL_PARAM_REGS[general_i];
+                        let dst2 = Self::GENERAL_PARAM_REGS[general_i + 1];
+                        base_offset += 16;
+                        X86_64Assembler::mov_reg64_base32(buf, dst1, base_offset - 8);
+                        X86_64Assembler::mov_reg64_base32(buf, dst2, base_offset);
+                        symbol_map.insert(
+                            *sym,
+                            SymbolStorage::Base {
+                                offset: base_offset,
+                                size: 16,
+                                owned: true,
+                            },
+                        );
+                        general_i += 2;
+                    } else {
+                        return Err(
+                            "loading strings args on the stack is not yet implemented".to_string()
                         );
                     }
                 }
@@ -370,6 +394,32 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                         stack_offset += 8;
                     }
                 }
+                Layout::Builtin(Builtin::Str) => {
+                    if general_i + 1 < Self::GENERAL_PARAM_REGS.len() {
+                        // Load the value to the param reg.
+                        let dst1 = Self::GENERAL_PARAM_REGS[general_i];
+                        let dst2 = Self::GENERAL_PARAM_REGS[general_i + 1];
+                        match symbol_map
+                            .get(&args[i])
+                            .ok_or("function argument does not reference any symbol")?
+                        {
+                            SymbolStorage::Base { offset, .. } => {
+                                X86_64Assembler::mov_reg64_base32(buf, dst1, *offset);
+                                X86_64Assembler::mov_reg64_base32(buf, dst2, *offset + 8);
+                            }
+                            _ => {
+                                return Err("Strings only support being loaded from base offsets"
+                                    .to_string());
+                            }
+                        }
+                        general_i += 2;
+                    } else {
+                        return Err(
+                            "calling functions with strings on the stack is not yet implemented"
+                                .to_string(),
+                        );
+                    }
+                }
                 x => {
                     return Err(format!(
                         "calling with arg type, {:?}, is not yet implemented",
@@ -512,6 +562,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
 
     #[inline(always)]
     fn load_args<'a>(
+        buf: &mut Vec<'a, u8>,
         symbol_map: &mut MutMap<Symbol, SymbolStorage<X86_64GeneralReg, X86_64FloatReg>>,
         args: &'a [(Layout<'a>, Symbol)],
         ret_layout: &Layout<'a>,
@@ -531,9 +582,33 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                     Layout::Builtin(Builtin::Int64) => {
                         symbol_map
                             .insert(*sym, SymbolStorage::GeneralReg(Self::GENERAL_PARAM_REGS[i]));
+                        i += 1;
                     }
                     Layout::Builtin(Builtin::Float64) => {
                         symbol_map.insert(*sym, SymbolStorage::FloatReg(Self::FLOAT_PARAM_REGS[i]));
+                        i += 1;
+                    }
+                    Layout::Builtin(Builtin::Str) => {
+                        if i + 1 < Self::GENERAL_PARAM_REGS.len() {
+                            // Load the value to the param reg.
+                            let dst1 = Self::GENERAL_PARAM_REGS[i];
+                            let dst2 = Self::GENERAL_PARAM_REGS[i + 1];
+                            base_offset += 16;
+                            X86_64Assembler::mov_reg64_base32(buf, dst1, base_offset - 8);
+                            X86_64Assembler::mov_reg64_base32(buf, dst2, base_offset);
+                            symbol_map.insert(
+                                *sym,
+                                SymbolStorage::Base {
+                                    offset: base_offset,
+                                    size: 16,
+                                    owned: true,
+                                },
+                            );
+                            i += 2;
+                        } else {
+                            return Err("loading strings args on the stack is not yet implemented"
+                                .to_string());
+                        }
                     }
                     x => {
                         return Err(format!(
@@ -542,7 +617,6 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                         ));
                     }
                 }
-                i += 1;
             } else {
                 base_offset += match layout {
                     Layout::Builtin(Builtin::Int64) => 8,
@@ -591,7 +665,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
         for (i, layout) in arg_layouts.iter().enumerate() {
             match layout {
                 Layout::Builtin(Builtin::Int64) => {
-                    if i < Self::GENERAL_PARAM_REGS.len() {
+                    if reg_i < Self::GENERAL_PARAM_REGS.len() {
                         // Load the value to the param reg.
                         let dst = Self::GENERAL_PARAM_REGS[reg_i];
                         match symbol_map
@@ -645,7 +719,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                     }
                 }
                 Layout::Builtin(Builtin::Float64) => {
-                    if i < Self::FLOAT_PARAM_REGS.len() {
+                    if reg_i < Self::FLOAT_PARAM_REGS.len() {
                         // Load the value to the param reg.
                         let dst = Self::FLOAT_PARAM_REGS[reg_i];
                         match symbol_map
@@ -694,6 +768,32 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                             }
                         }
                         stack_offset += 8;
+                    }
+                }
+                Layout::Builtin(Builtin::Str) => {
+                    if reg_i + 1 < Self::GENERAL_PARAM_REGS.len() {
+                        // Load the value to the param reg.
+                        let dst1 = Self::GENERAL_PARAM_REGS[reg_i];
+                        let dst2 = Self::GENERAL_PARAM_REGS[reg_i + 1];
+                        match symbol_map
+                            .get(&args[i])
+                            .ok_or("function argument does not reference any symbol")?
+                        {
+                            SymbolStorage::Base { offset, .. } => {
+                                X86_64Assembler::mov_reg64_base32(buf, dst1, *offset);
+                                X86_64Assembler::mov_reg64_base32(buf, dst2, *offset + 8);
+                            }
+                            _ => {
+                                return Err("Strings only support being loaded from base offsets"
+                                    .to_string());
+                            }
+                        }
+                        reg_i += 2;
+                    } else {
+                        return Err(
+                            "calling functions with strings on the stack is not yet implemented"
+                                .to_string(),
+                        );
                     }
                 }
                 x => {

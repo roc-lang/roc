@@ -49,6 +49,7 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait> {
 
     // load_args updates the symbol map to know where every arg is stored.
     fn load_args<'a>(
+        buf: &mut Vec<'a, u8>,
         symbol_map: &mut MutMap<Symbol, SymbolStorage<GeneralReg, FloatReg>>,
         args: &'a [(Layout<'a>, Symbol)],
         // ret_layout is needed because if it is a complex type, we pass a pointer as the first arg.
@@ -367,7 +368,12 @@ impl<
         args: &'a [(Layout<'a>, Symbol)],
         ret_layout: &Layout<'a>,
     ) -> Result<(), String> {
-        CC::load_args(&mut self.symbol_storage_map, args, ret_layout)?;
+        CC::load_args(
+            &mut self.buf,
+            &mut self.symbol_storage_map,
+            args,
+            ret_layout,
+        )?;
         // Update used and free regs.
         for (sym, storage) in &self.symbol_storage_map {
             match storage {
