@@ -48,6 +48,7 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait> {
 
     // load_args updates the symbol map to know where every arg is stored.
     fn load_args<'a>(
+        buf: &mut Vec<'a, u8>,
         symbol_map: &mut MutMap<Symbol, SymbolStorage<GeneralReg, FloatReg>>,
         args: &'a [(Layout<'a>, Symbol)],
         // ret_layout is needed because if it is a complex type, we pass a pointer as the first arg.
@@ -422,7 +423,12 @@ impl<
         args: &'a [(Layout<'a>, Symbol)],
         ret_layout: &Layout<'a>,
     ) -> Result<(), String> {
-        CC::load_args(&mut self.symbol_storage_map, args, ret_layout)?;
+        CC::load_args(
+            &mut self.buf,
+            &mut self.symbol_storage_map,
+            args,
+            ret_layout,
+        )?;
         // Update used and free regs.
         for (sym, storage) in &self.symbol_storage_map {
             match storage {
@@ -1063,7 +1069,7 @@ impl<
                 Layout::Builtin(Builtin::Str) => {
                     if self.symbol_storage_map.contains_key(&Symbol::RET_POINTER) {
                         // This will happen on windows, return via pointer here.
-                        Err("Returning strings via pointer not yet implemented".to_string())
+                        return Err("Returning strings via pointer not yet implemented".to_string());
                     } else {
                         ASM::mov_reg64_base32(&mut self.buf, CC::GENERAL_RETURN_REGS[0], *offset);
                         ASM::mov_reg64_base32(
@@ -1071,7 +1077,6 @@ impl<
                             CC::GENERAL_RETURN_REGS[1],
                             *offset + 8,
                         );
-                        Ok(())
                     }
                 }
                 Layout::Struct(field_layouts) => {

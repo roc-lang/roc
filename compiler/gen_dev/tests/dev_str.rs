@@ -1,12 +1,12 @@
-// use roc_std::{RocList, RocStr};
-#[macro_use]
-extern crate indoc;
+// #[macro_use]
+// extern crate indoc;
 
 #[macro_use]
 mod helpers;
 
 #[cfg(all(test, any(target_os = "linux", target_os = "macos"), any(target_arch = "x86_64"/*, target_arch = "aarch64"*/)))]
 mod dev_str {
+    // use roc_std::{RocList, RocStr};
     // #[test]
     // fn str_split_bigger_delimiter_small_str() {
     //     assert_evals_to!(
@@ -261,7 +261,7 @@ mod dev_str {
     //     // Verifies that we zero out unused bytes in the string.
     //     // This is important so that string equality tests don't randomly
     //     // fail due to unused memory being there!
-    //     assert_llvm_evals_to!(
+    //     assert_evals_to!(
     //         "\"J\"",
     //         [
     //             0x4a,
@@ -285,57 +285,57 @@ mod dev_str {
     //     );
     // }
 
-    // #[test]
-    // fn small_str_concat_empty_first_arg() {
-    //     assert_llvm_evals_to!(
-    //         r#"Str.concat "" "JJJJJJJJJJJJJJJ""#,
-    //         [
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0b1000_1111
-    //         ],
-    //         [u8; 16]
-    //     );
-    // }
+    #[test]
+    fn small_str_concat_empty_first_arg() {
+        assert_evals_to!(
+            r#"Str.concat "" "JJJJJJJJJJJJJJJ""#,
+            [
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0b1000_1111
+            ],
+            [u8; 16]
+        );
+    }
 
-    // #[test]
-    // fn small_str_concat_empty_second_arg() {
-    //     assert_llvm_evals_to!(
-    //         r#"Str.concat "JJJJJJJJJJJJJJJ" """#,
-    //         [
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0b1000_1111
-    //         ],
-    //         [u8; 16]
-    //     );
-    // }
+    #[test]
+    fn small_str_concat_empty_second_arg() {
+        assert_evals_to!(
+            r#"Str.concat "JJJJJJJJJJJJJJJ" """#,
+            [
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0b1000_1111
+            ],
+            [u8; 16]
+        );
+    }
 
     // #[test]
     // fn small_str_concat_small_to_big() {
@@ -346,31 +346,31 @@ mod dev_str {
     //     );
     // }
 
-    // #[test]
-    // fn small_str_concat_small_to_small_staying_small() {
-    //     assert_llvm_evals_to!(
-    //         r#"Str.concat "J" "JJJJJJJJJJJJJJ""#,
-    //         [
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0x4a,
-    //             0b1000_1111
-    //         ],
-    //         [u8; 16]
-    //     );
-    // }
+    #[test]
+    fn small_str_concat_small_to_small_staying_small() {
+        assert_evals_to!(
+            r#"Str.concat "J" "JJJJJJJJJJJJJJ""#,
+            [
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0b1000_1111
+            ],
+            [u8; 16]
+        );
+    }
 
     // #[test]
     // fn small_str_concat_small_to_small_overflow_to_big() {
