@@ -6,12 +6,13 @@ platform examples/cli
     provides [ mainForHost ]
     effects fx.Effect
         {
-            readAllUtf8 : Str -> Effect { errno : I32, bytes : List U8 }, # TODO this should be I32, not I64
+            readAllUtf8 : Str -> Effect { errno : I32, bytes : List U8 },
             writeAllUtf8 : Str, Str -> Effect { errno: I32 },
             putLine : Str -> Effect {},
             httpGetUtf8 : Str -> Effect { status : U16, body : Str },
             getLine : Effect Str
         }
+
 
 mainForHost : Task {} [] as Fx
 mainForHost = main

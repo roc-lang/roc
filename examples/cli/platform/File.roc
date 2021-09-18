@@ -88,9 +88,11 @@ writeUtf8 = \path, data ->
     path
         |> Effect.writeAllUtf8 data
         |> Effect.map \res ->
-            when res.errno is
-                0 -> Ok {}
-                _ -> Err (FileWriteErr BadThing)
+            if res.errno == 0 then
+                Ok {}
+
+            else
+                Err (FileWriteErr BadThing)
 
 ## Read a file's bytes, one chunk at a time, and use it to build up a state.
 ##

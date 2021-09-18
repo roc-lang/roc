@@ -4,12 +4,20 @@ app "http-example"
     provides [ main ] to pf
 
 
-main : Task {} *
-main =
-    username <- await (File.readUtf8 "userData.txt")
-    userData <- await (Http.getUtf8 "http://localhost:8000/\(username)")
-    result <- Task.attempt (File.writeUtf8 "userData.txt" userData)
+# main : Task {} [ FileReadErr (File.ReadErr [ BadUtf8 Str.Utf8ByteProblem Nat ]), HttpGetErr (Http.HttpErr [ BadUtf8 ]) ]
 
-    when result is
-        Ok _ -> Stdout.line "Success!"
-        Err _ -> Stdout.line "Error!"
+main : Task {} []
+main =
+    (
+        username <- await (File.readUtf8 "userData.txt")
+        userData <- await (Http.getUtf8 "http://localhost:8000/\(username)")
+        result <- Task.attempt (File.writeUtf8 "userData.txt" userData)
+
+        when result is
+            Ok _ -> Stdout.line "Success!"
+            Err _ -> Stdout.line "Error!"
+    )
+        |> Task.onFail (\_ ->
+            Stdout.line "Error!"
+        )
+
