@@ -76,7 +76,7 @@ export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
 
 const Unit = extern struct {};
 
-pub fn main() u8 {
+pub export fn main() callconv(.C) u8 {
     const allocator = std.heap.page_allocator;
 
     const size = @intCast(usize, roc__mainForHost_size());
