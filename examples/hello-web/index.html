@@ -1,0 +1,12 @@
+<html>
+  <body>
+    <div id="output"></div>
+    <script src="platform/host.js"></script>
+    <script>
+      roc_web_platform_run(
+        "./hello-world.wasm",
+        document.getElementById("output")
+      );
+    </script>
+  </body>
+</html>
