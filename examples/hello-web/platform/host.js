@@ -1,6 +1,4 @@
-const test_decoder = true;
-
-async function roc_web_platform_run(wasm_filename, dom_node) {
+async function roc_web_platform_run(wasm_filename, callback) {
   const decoder = new TextDecoder();
   let memory_bytes;
   let exit_code;
@@ -8,7 +6,7 @@ async function roc_web_platform_run(wasm_filename, dom_node) {
   function js_display_roc_string(str_bytes, str_len) {
     const utf8_bytes = memory_bytes.subarray(str_bytes, str_bytes + str_len);
     const js_string = decoder.decode(utf8_bytes);
-    dom_node.textContent = js_string;
+    callback(js_string);
   }
 
   const importObj = {
@@ -25,10 +23,17 @@ async function roc_web_platform_run(wasm_filename, dom_node) {
     },
   };
 
-  const wasm = await WebAssembly.instantiateStreaming(
-    fetch(wasm_filename),
-    importObj
-  );
+  let wasm;
+
+  const response = await fetch(wasm_filename);
+
+  if (WebAssembly.instantiateStreaming) {
+    // streaming API has better performance if available
+    wasm = await WebAssembly.instantiateStreaming(response, importObj);
+  } else {
+    const module_bytes = await response.arrayBuffer();
+    wasm = await WebAssembly.instantiate(module_bytes, importObj);
+  }
 
   memory_bytes = new Uint8Array(wasm.instance.exports.memory.buffer);
 
@@ -40,4 +45,10 @@ async function roc_web_platform_run(wasm_filename, dom_node) {
       console.error(e);
     }
   }
+}
+
+if (typeof module !== 'undefined') {
+  module.exports = {
+    roc_web_platform_run,
+  };
 }

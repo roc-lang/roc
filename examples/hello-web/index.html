@@ -3,10 +3,10 @@
     <div id="output"></div>
     <script src="platform/host.js"></script>
     <script>
-      roc_web_platform_run(
-        "./hello-world.wasm",
-        document.getElementById("output")
-      );
+      const elem = document.getElementById("output");
+      roc_web_platform_run("./hello-world.wasm", (string_from_roc) => {
+        elem.textContent = string_from_roc;
+      });
     </script>
   </body>
 </html>
