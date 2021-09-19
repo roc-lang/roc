@@ -1192,7 +1192,7 @@ fn not_found<'b>(
         alloc.reflow(" missing up-top"),
     ]);
 
-    let default_yes = alloc.reflow("these names seem close though:");
+    let default_yes = alloc.reflow("Did you mean one of these?");
 
     let to_details = |no_suggestion_details, yes_suggestion_details| {
         if suggestions.is_empty() {
@@ -1240,7 +1240,7 @@ fn module_not_found<'b>(
     ]);
 
     let default_yes = alloc
-        .reflow("Is there an import missing? Perhaps there is a typo, these names seem close:");
+        .reflow("Is there an import missing? Perhaps there is a typo. Did you mean one of these?");
 
     let to_details = |no_suggestion_details, yes_suggestion_details| {
         if suggestions.is_empty() {
