@@ -16,28 +16,32 @@ pub fn type_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
     filename: PathBuf,
     problem: solve::TypeError,
-) -> Report<'b> {
+) -> Option<Report<'b>> {
     use solve::TypeError::*;
 
-    fn report(title: String, doc: RocDocBuilder<'_>, filename: PathBuf) -> Report<'_> {
-        Report {
+    fn report(title: String, doc: RocDocBuilder<'_>, filename: PathBuf) -> Option<Report<'_>> {
+        Some(Report {
             title,
             filename,
             doc,
             severity: Severity::RuntimeError,
-        }
+        })
     }
 
     match problem {
-        BadExpr(region, category, found, expected) => {
-            to_expr_report(alloc, filename, region, category, found, expected)
-        }
-        BadPattern(region, category, found, expected) => {
-            to_pattern_report(alloc, filename, region, category, found, expected)
-        }
-        CircularType(region, symbol, overall_type) => {
-            to_circular_report(alloc, filename, region, symbol, overall_type)
-        }
+        BadExpr(region, category, found, expected) => Some(to_expr_report(
+            alloc, filename, region, category, found, expected,
+        )),
+        BadPattern(region, category, found, expected) => Some(to_pattern_report(
+            alloc, filename, region, category, found, expected,
+        )),
+        CircularType(region, symbol, overall_type) => Some(to_circular_report(
+            alloc,
+            filename,
+            region,
+            symbol,
+            overall_type,
+        )),
         UnexposedLookup(symbol) => {
             let title = "UNRECOGNIZED NAME".to_string();
             let doc = alloc
@@ -96,6 +100,8 @@ pub fn type_problem<'b>(
 
                     report(title, doc, filename)
                 }
+
+                SolvedTypeError => None, // Don't re-report cascading errors - see https://github.com/rtfeldman/roc/pull/1711
 
                 other => panic!("unhandled bad type: {:?}", other),
             }
