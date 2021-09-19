@@ -4,7 +4,7 @@ use core::alloc::Layout;
 use core::ffi::c_void;
 use core::mem::MaybeUninit;
 use libc;
-use roc_std::{RocCallResult, RocStr};
+use roc_std::RocStr;
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
@@ -93,15 +93,9 @@ unsafe fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
         buffer as *mut u8,
     );
 
-    let output = &*(buffer as *mut RocCallResult<()>);
+    std::alloc::dealloc(buffer, layout);
 
-    match output.into() {
-        Ok(_) => {
-            std::alloc::dealloc(buffer, layout);
-            0
-        }
-        Err(e) => panic!("failed with {}", e),
-    }
+    0
 }
 
 #[no_mangle]

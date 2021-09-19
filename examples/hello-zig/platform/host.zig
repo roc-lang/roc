@@ -56,8 +56,6 @@ const Allocator = mem.Allocator;
 
 extern fn roc__mainForHost_1_exposed(*RocStr) void;
 
-const RocCallResult = extern struct { flag: u64, content: RocStr };
-
 const Unit = extern struct {};
 
 pub fn main() u8 {
