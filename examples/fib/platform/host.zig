@@ -20,6 +20,8 @@ comptime {
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
+// NOTE the LLVM backend expects this signature
+// extern fn roc__mainForHost_1_exposed(i64, *i64) void;
 extern fn roc__mainForHost_1_exposed(i64) i64;
 
 const Align = extern struct { a: usize, b: usize };
