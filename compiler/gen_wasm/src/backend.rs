@@ -459,41 +459,35 @@ impl<'a> WasmBackend<'a> {
     }
 
     fn load_literal(&mut self, lit: &Literal<'a>, layout: &Layout<'a>) -> Result<(), String> {
-        match lit {
-            Literal::Bool(x) => {
-                self.instructions.push(I32Const(*x as i32));
-                Ok(())
+        let instruction = match lit {
+            Literal::Bool(x) => I32Const(*x as i32),
+            Literal::Byte(x) => I32Const(*x as i32),
+            Literal::Int(x) => match layout {
+                Layout::Builtin(Builtin::Int64) => I64Const(*x as i64),
+                Layout::Builtin(
+                    Builtin::Int32
+                    | Builtin::Int16
+                    | Builtin::Int8
+                    | Builtin::Int1
+                    | Builtin::Usize,
+                ) => I32Const(*x as i32),
+                x => {
+                    return Err(format!("loading literal, {:?}, is not yet implemented", x));
+                }
+            },
+            Literal::Float(x) => match layout {
+                Layout::Builtin(Builtin::Float64) => F64Const((*x as f64).to_bits()),
+                Layout::Builtin(Builtin::Float32) => F32Const((*x as f32).to_bits()),
+                x => {
+                    return Err(format!("loading literal, {:?}, is not yet implemented", x));
+                }
+            },
+            x => {
+                return Err(format!("loading literal, {:?}, is not yet implemented", x));
             }
-            Literal::Byte(x) => {
-                self.instructions.push(I32Const(*x as i32));
-                Ok(())
-            }
-            Literal::Int(x) => {
-                let instruction = match layout {
-                    Layout::Builtin(Builtin::Int64) => I64Const(*x as i64),
-                    Layout::Builtin(
-                        Builtin::Int32
-                        | Builtin::Int16
-                        | Builtin::Int8
-                        | Builtin::Int1
-                        | Builtin::Usize,
-                    ) => I32Const(*x as i32),
-                    x => panic!("loading literal, {:?}, is not yet implemented", x),
-                };
-                self.instructions.push(instruction);
-                Ok(())
-            }
-            Literal::Float(x) => {
-                let instruction = match layout {
-                    Layout::Builtin(Builtin::Float64) => F64Const((*x as f64).to_bits()),
-                    Layout::Builtin(Builtin::Float32) => F32Const((*x as f32).to_bits()),
-                    x => panic!("loading literal, {:?}, is not yet implemented", x),
-                };
-                self.instructions.push(instruction);
-                Ok(())
-            }
-            x => Err(format!("loading literal, {:?}, is not yet implemented", x)),
-        }
+        };
+        self.instructions.push(instruction);
+        Ok(())
     }
 
     fn build_call_low_level(
