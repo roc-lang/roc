@@ -1,7 +1,7 @@
 const utils = @import("utils.zig");
 const RocList = @import("list.zig").RocList;
 const std = @import("std");
-const mem = std.mem;
+// const mem = std.mem;
 const always_inline = std.builtin.CallOptions.Modifier.always_inline;
 const unicode = std.unicode;
 const testing = std.testing;

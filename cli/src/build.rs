@@ -196,8 +196,6 @@ pub fn build_file<'a>(
     report_timing(buf, "Generate LLVM IR", code_gen_timing.code_gen);
     report_timing(buf, "Emit .o file", code_gen_timing.emit_o_file);
 
-    let compilation_end = compilation_start.elapsed().unwrap();
-
     let size = std::fs::metadata(&app_o_file)
         .unwrap_or_else(|err| {
             panic!(
@@ -206,6 +204,8 @@ pub fn build_file<'a>(
             );
         })
         .len();
+
+    let compilation_end = compilation_start.elapsed().unwrap();
 
     if emit_timings {
         println!(
@@ -221,7 +221,7 @@ pub fn build_file<'a>(
     }
 
     let rebuild_duration = rebuild_thread.join().unwrap();
-    if emit_timings && !precompiled {
+    if emit_timings {
         println!(
             "Finished rebuilding and preprocessing the host in {} ms\n",
             rebuild_duration

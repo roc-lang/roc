@@ -45,7 +45,8 @@ resolver = "2"
 
 # Optimizations based on https://deterministic.space/high-performance-rust.html
 [profile.release]
-lto = "thin"
+panic = "abort"
+lto = "fat"
 codegen-units = 1
 
 # debug = true # enable when profiling

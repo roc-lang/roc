@@ -98,7 +98,8 @@ pub fn build_zig_host_native(
             "build-exe",
             "-fPIE",
             shared_lib_path.to_str().unwrap(),
-            bitcode::OBJ_PATH,
+            // bitcode::OBJ_PATH,
+            "--strip",
         ]);
     } else {
         command.args(&["build-obj", "-fPIC"]);
@@ -111,10 +112,10 @@ pub fn build_zig_host_native(
         zig_str_path,
         "--pkg-end",
         // include the zig runtime
-        "-fcompiler-rt",
+        // "-fcompiler-rt",
         // include libc
-        "--library",
-        "c",
+        // "--library",
+        // "c",
         // cross-compile?
         "-target",
         target,
@@ -187,7 +188,8 @@ pub fn build_zig_host_native(
             "build-exe",
             "-fPIE",
             shared_lib_path.to_str().unwrap(),
-            bitcode::OBJ_PATH,
+            // bitcode::OBJ_PATH,
+            "--strip",
         ]);
     } else {
         command.args(&["build-obj", "-fPIC"]);
