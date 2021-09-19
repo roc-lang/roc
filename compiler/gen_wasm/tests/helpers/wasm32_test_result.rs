@@ -46,11 +46,7 @@ macro_rules! build_wrapper_body_primitive {
         fn build_wrapper_body(main_function_index: u32) -> Vec<Instruction> {
             let size: i32 = 8;
             let mut instructions = Vec::with_capacity(16);
-            allocate_stack_frame(
-                &mut instructions,
-                size,
-                LocalId(STACK_POINTER_LOCAL_ID),
-            );
+            allocate_stack_frame(&mut instructions, size, LocalId(STACK_POINTER_LOCAL_ID));
             instructions.extend([
                 // load result address to prepare for the store instruction later
                 GetLocal(STACK_POINTER_LOCAL_ID),
@@ -64,11 +60,7 @@ macro_rules! build_wrapper_body_primitive {
                 // Return the result pointer
                 GetLocal(STACK_POINTER_LOCAL_ID),
             ]);
-            free_stack_frame(
-                &mut instructions,
-                size,
-                LocalId(STACK_POINTER_LOCAL_ID),
-            );
+            free_stack_frame(&mut instructions, size, LocalId(STACK_POINTER_LOCAL_ID));
             instructions.push(End);
             instructions
         }
@@ -178,6 +170,109 @@ where
         build_wrapper_body_stack_memory(
             main_function_index,
             T::ACTUAL_WIDTH + U::ACTUAL_WIDTH + V::ACTUAL_WIDTH,
+        )
+    }
+}
+
+impl<T, U, V, W> Wasm32TestResult for (T, U, V, W)
+where
+    T: Wasm32TestResult + FromWasm32Memory,
+    U: Wasm32TestResult + FromWasm32Memory,
+    V: Wasm32TestResult + FromWasm32Memory,
+    W: Wasm32TestResult + FromWasm32Memory,
+{
+    fn build_wrapper_body(main_function_index: u32) -> Vec<Instruction> {
+        build_wrapper_body_stack_memory(
+            main_function_index,
+            T::ACTUAL_WIDTH + U::ACTUAL_WIDTH + V::ACTUAL_WIDTH + W::ACTUAL_WIDTH,
+        )
+    }
+}
+
+impl<T, U, V, W, X> Wasm32TestResult for (T, U, V, W, X)
+where
+    T: Wasm32TestResult + FromWasm32Memory,
+    U: Wasm32TestResult + FromWasm32Memory,
+    V: Wasm32TestResult + FromWasm32Memory,
+    W: Wasm32TestResult + FromWasm32Memory,
+    X: Wasm32TestResult + FromWasm32Memory,
+{
+    fn build_wrapper_body(main_function_index: u32) -> Vec<Instruction> {
+        build_wrapper_body_stack_memory(
+            main_function_index,
+            T::ACTUAL_WIDTH + U::ACTUAL_WIDTH + V::ACTUAL_WIDTH + W::ACTUAL_WIDTH + X::ACTUAL_WIDTH,
+        )
+    }
+}
+
+impl<T, U, V, W, X, Y> Wasm32TestResult for (T, U, V, W, X, Y)
+where
+    T: Wasm32TestResult + FromWasm32Memory,
+    U: Wasm32TestResult + FromWasm32Memory,
+    V: Wasm32TestResult + FromWasm32Memory,
+    W: Wasm32TestResult + FromWasm32Memory,
+    X: Wasm32TestResult + FromWasm32Memory,
+    Y: Wasm32TestResult + FromWasm32Memory,
+{
+    fn build_wrapper_body(main_function_index: u32) -> Vec<Instruction> {
+        build_wrapper_body_stack_memory(
+            main_function_index,
+            T::ACTUAL_WIDTH
+                + U::ACTUAL_WIDTH
+                + V::ACTUAL_WIDTH
+                + W::ACTUAL_WIDTH
+                + X::ACTUAL_WIDTH
+                + Y::ACTUAL_WIDTH,
+        )
+    }
+}
+
+impl<T, U, V, W, X, Y, Z> Wasm32TestResult for (T, U, V, W, X, Y, Z)
+where
+    T: Wasm32TestResult + FromWasm32Memory,
+    U: Wasm32TestResult + FromWasm32Memory,
+    V: Wasm32TestResult + FromWasm32Memory,
+    W: Wasm32TestResult + FromWasm32Memory,
+    X: Wasm32TestResult + FromWasm32Memory,
+    Y: Wasm32TestResult + FromWasm32Memory,
+    Z: Wasm32TestResult + FromWasm32Memory,
+{
+    fn build_wrapper_body(main_function_index: u32) -> Vec<Instruction> {
+        build_wrapper_body_stack_memory(
+            main_function_index,
+            T::ACTUAL_WIDTH
+                + U::ACTUAL_WIDTH
+                + V::ACTUAL_WIDTH
+                + W::ACTUAL_WIDTH
+                + X::ACTUAL_WIDTH
+                + Y::ACTUAL_WIDTH
+                + Z::ACTUAL_WIDTH,
+        )
+    }
+}
+
+impl<T, U, V, W, X, Y, Z, A> Wasm32TestResult for (T, U, V, W, X, Y, Z, A)
+where
+    T: Wasm32TestResult + FromWasm32Memory,
+    U: Wasm32TestResult + FromWasm32Memory,
+    V: Wasm32TestResult + FromWasm32Memory,
+    W: Wasm32TestResult + FromWasm32Memory,
+    X: Wasm32TestResult + FromWasm32Memory,
+    Y: Wasm32TestResult + FromWasm32Memory,
+    Z: Wasm32TestResult + FromWasm32Memory,
+    A: Wasm32TestResult + FromWasm32Memory,
+{
+    fn build_wrapper_body(main_function_index: u32) -> Vec<Instruction> {
+        build_wrapper_body_stack_memory(
+            main_function_index,
+            T::ACTUAL_WIDTH
+                + U::ACTUAL_WIDTH
+                + V::ACTUAL_WIDTH
+                + W::ACTUAL_WIDTH
+                + X::ACTUAL_WIDTH
+                + Y::ACTUAL_WIDTH
+                + Z::ACTUAL_WIDTH
+                + A::ACTUAL_WIDTH,
         )
     }
 }
