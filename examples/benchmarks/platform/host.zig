@@ -29,10 +29,10 @@ extern fn roc__mainForHost_1_Fx_caller(*const u8, [*]u8, [*]u8) void;
 extern fn roc__mainForHost_1_Fx_size() i64;
 extern fn roc__mainForHost_1_Fx_result_size() i64;
 
-const Align = extern struct { a: usize, b: usize };
-extern fn malloc(size: usize) callconv(.C) ?*align(@alignOf(Align)) c_void;
-extern fn realloc(c_ptr: [*]align(@alignOf(Align)) u8, size: usize) callconv(.C) ?*c_void;
-extern fn free(c_ptr: [*]align(@alignOf(Align)) u8) callconv(.C) void;
+const Align = 2 * @alignOf(usize);
+extern fn malloc(size: usize) callconv(.C) ?*align(Align) c_void;
+extern fn realloc(c_ptr: [*]align(Align) u8, size: usize) callconv(.C) ?*c_void;
+extern fn free(c_ptr: [*]align(Align) u8) callconv(.C) void;
 
 const DEBUG: bool = false;
 
@@ -53,7 +53,7 @@ export fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignmen
         stdout.print("realloc: {d} (alignment {d}, old_size {d})\n", .{ c_ptr, alignment, old_size }) catch unreachable;
     }
 
-    return realloc(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)), new_size);
+    return realloc(@alignCast(Align, @ptrCast([*]u8, c_ptr)), new_size);
 }
 
 export fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
@@ -62,7 +62,7 @@ export fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
         stdout.print("dealloc: {d} (alignment {d})\n", .{ c_ptr, alignment }) catch unreachable;
     }
 
-    free(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)));
+    free(@alignCast(Align, @ptrCast([*]u8, c_ptr)));
 }
 
 export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
@@ -76,7 +76,7 @@ export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
 
 const Unit = extern struct {};
 
-pub fn main() u8 {
+pub export fn main() callconv(.C) u8 {
     const allocator = std.heap.page_allocator;
 
     const size = @intCast(usize, roc__mainForHost_size());
