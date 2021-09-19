@@ -51,23 +51,19 @@ size_t roc_str_len(struct RocStr str) {
     }
 }
 
-struct RocCallResult {
-    size_t flag;
-    struct RocStr content;
-};
 
-extern void roc__mainForHost_1_exposed(struct RocCallResult *re);
+extern void roc__mainForHost_1_exposed(struct RocStr *re);
 
 int main() {
     // Make space for the Roc call result
-    struct RocCallResult call_result;
+    struct RocStr call_result;
 
     // Call Roc to populate call_result
     roc__mainForHost_1_exposed(&call_result);
 
     // Determine str_len and the str_bytes pointer,
     // taking into account the small string optimization.
-    struct RocStr str = call_result.content;
+    struct RocStr str = call_result;
     size_t str_len = roc_str_len(str);
     char* str_bytes;
 

@@ -70,23 +70,11 @@ pub fn rust_main() -> isize {
 
         roc_main(buffer);
 
-        let output = buffer as *mut RocCallResult<()>;
+        let result = call_the_closure(buffer);
 
-        match (&*output).into() {
-            Ok(()) => {
-                let closure_data_ptr = buffer.offset(8);
-                let result = call_the_closure(closure_data_ptr as *const u8);
+        std::alloc::dealloc(buffer, layout);
 
-                std::alloc::dealloc(buffer, layout);
-
-                result
-            }
-            Err(msg) => {
-                std::alloc::dealloc(buffer, layout);
-
-                panic!("Roc failed with message: {}", msg);
-            }
-        }
+        result
     };
 
     // Exit code
