@@ -93,12 +93,14 @@ for j in tqdm.trange(N):
     random.shuffle(enumerated_programs)
     for i, program in enumerated_programs:
         start = time.time()
-        result_code = subprocess.call(
-            program, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if result_code != 0:
-            print('The program failed to execute')
-            exit()
+        out = subprocess.run(program, capture_output=True)
         times[i, j] = (time.time() - start)*1000
+        if out.returncode != 0:
+            print(f'{program_names[i]} failed to execute')
+            exit()
+        if out.stdout.decode("utf-8") != new_str + '\n':
+            print(f'{program_names[i]} gave wrong output of {out.stdout}')
+            exit()
 
 for i, name in enumerate(program_names):
     print(f'{name}:')
