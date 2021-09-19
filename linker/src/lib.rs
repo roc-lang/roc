@@ -169,8 +169,6 @@ pub fn link_preprocessed_host(
     binary_path: &Path,
 ) -> io::Result<()> {
     let metadata = host_input_path.with_file_name("metadata");
-    let prehost = host_input_path.with_file_name("preprocessedhost");
-    std::fs::copy(prehost, binary_path)?;
     if surgery_impl(
         roc_app_obj.to_str().unwrap(),
         metadata.to_str().unwrap(),

@@ -88,8 +88,10 @@ pub fn build_file<'a>(
     let app_extension = if emit_wasm { "bc" } else { "o" };
 
     let cwd = roc_file_path.parent().unwrap();
-    let path_to_platform = loaded.platform_path.clone();
+    let binary_path = cwd.join(&*loaded.output_path); // TODO should join ".exe" on Windows
+
     let mut host_input_path = PathBuf::from(cwd);
+    let path_to_platform = loaded.platform_path.clone();
     host_input_path.push(&*path_to_platform);
     host_input_path.push("host");
     host_input_path.set_extension(host_extension);
@@ -103,6 +105,7 @@ pub fn build_file<'a>(
         surgically_link,
         precompiled,
         host_input_path.clone(),
+        binary_path.clone(),
         target,
         loaded
             .exposed_to_host
@@ -168,8 +171,6 @@ pub fn build_file<'a>(
     let mut loaded = loaded;
     program::report_problems(&mut loaded);
     let loaded = loaded;
-
-    let binary_path = cwd.join(&*loaded.output_path); // TODO should join ".exe" on Windows
 
     let code_gen_timing = match opt_level {
         OptLevel::Normal | OptLevel::Optimize => program::gen_from_mono_module_llvm(
@@ -277,6 +278,7 @@ fn spawn_rebuild_thread(
     surgically_link: bool,
     precompiled: bool,
     host_input_path: PathBuf,
+    binary_path: PathBuf,
     target: &Triple,
     exported_symbols: Vec<String>,
 ) -> std::thread::JoinHandle<u128> {
@@ -300,6 +302,11 @@ fn spawn_rebuild_thread(
                     None,
                 );
             }
+        }
+        if surgically_link {
+            // Copy preprocessed host to executable location.
+            let prehost = host_input_path.with_file_name("preprocessedhost");
+            std::fs::copy(prehost, binary_path.as_path()).unwrap();
         }
         let rebuild_host_end = rebuild_host_start.elapsed().unwrap();
         rebuild_host_end.as_millis()
