@@ -3,4 +3,4 @@ app "hello-world"
     imports []
     provides [ main ] to base
 
-main = "Hello, World!"
+main = "Hello, World!\n"
