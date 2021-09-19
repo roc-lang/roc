@@ -157,16 +157,6 @@ mod cli_run {
                     let example = $example;
                     let file_name = example_file(dir_name, example.filename);
 
-                    match example.filename {
-                        "Fib.roc" => {
-                            // it is broken because the dev and normal backend don't generate the
-                            // same name for main. The dev version is expected here.
-                            eprintln!("WARNING: skipping testing example {} because the test is broken right now!", example.filename);
-                            return;
-                        }
-                        _ => {}
-                    }
-
                     // Check with and without optimizations
                     check_output_with_stdin(
                         &file_name,
