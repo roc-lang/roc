@@ -34,8 +34,8 @@ const Align = 2 * @alignOf(usize);
 extern fn malloc(size: usize) callconv(.C) ?*align(Align) c_void;
 extern fn realloc(c_ptr: [*]align(Align) u8, size: usize) callconv(.C) ?*c_void;
 extern fn free(c_ptr: [*]align(Align) u8) callconv(.C) void;
-extern fn memcpy(dst: [*]align(Align) u8, src: [*]align(Align) u8, size: usize) callconv(.C) void;
-extern fn memset(dst: [*]align(Align) u8, value: i32, size: usize) callconv(.C) void;
+extern fn memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
+extern fn memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void;
 
 const DEBUG: bool = false;
 
@@ -77,12 +77,12 @@ export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
     std.process.exit(0);
 }
 
-export fn roc_memcpy(dst: *c_void, src: *c_void, size: usize) callconv(.C) void{
-    return memcpy(@alignCast(Align, @ptrCast([*]u8, dst)), @alignCast(Align, @ptrCast([*]u8, src)), size);
+export fn roc_memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void{
+    return memcpy(dst, src, size);
 }
 
-export fn roc_memset(dst: *c_void, value: i32, size: usize) callconv(.C) void{
-    return memset(@alignCast(Align, @ptrCast([*]u8, dst)), value, size);
+export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void{
+    return memset(dst, value, size);
 }
 
 const Unit = extern struct {};
