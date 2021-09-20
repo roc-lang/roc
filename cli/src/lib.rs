@@ -26,6 +26,7 @@ pub const CMD_BUILD: &str = "build";
 pub const CMD_REPL: &str = "repl";
 pub const CMD_EDIT: &str = "edit";
 pub const CMD_DOCS: &str = "docs";
+pub const CMD_CHECK: &str = "check";
 
 pub const FLAG_DEBUG: &str = "debug";
 pub const FLAG_DEV: &str = "dev";
@@ -138,6 +139,20 @@ pub fn build_app<'a>() -> App<'a> {
         .subcommand(App::new(CMD_REPL)
             .about("Launch the interactive Read Eval Print Loop (REPL)")
         )
+        .subcommand(App::new(CMD_CHECK)
+            .about("Build a binary from the given .roc file, but don't run it")
+            .arg(
+                Arg::with_name(FLAG_TIME)
+                    .long(FLAG_TIME)
+                    .help("Prints detailed compilation time information.")
+                    .required(false),
+            )
+            .arg(
+                Arg::with_name(ROC_FILE)
+                    .help("The .roc file of an app to run")
+                    .required(true),
+            )
+            )
         .subcommand(
             App::new(CMD_DOCS)
                 .about("Generate documentation for Roc modules")
