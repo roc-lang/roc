@@ -43,6 +43,7 @@ pub struct BuiltFile {
 }
 
 #[cfg(feature = "llvm")]
+#[allow(clippy::too_many_arguments)]
 pub fn build_file<'a>(
     arena: &'a Bump,
     target: &Triple,
@@ -50,6 +51,7 @@ pub fn build_file<'a>(
     roc_file_path: PathBuf,
     opt_level: OptLevel,
     emit_debug_info: bool,
+    emit_timings: bool,
     link_type: LinkType,
 ) -> Result<BuiltFile, LoadingProblem<'a>> {
     let compilation_start = SystemTime::now();
@@ -59,10 +61,7 @@ pub fn build_file<'a>(
     let subs_by_module = MutMap::default();
 
     // Release builds use uniqueness optimizations
-    let stdlib = match opt_level {
-        OptLevel::Normal => arena.alloc(roc_builtins::std::standard_stdlib()),
-        OptLevel::Optimize => arena.alloc(roc_builtins::std::standard_stdlib()),
-    };
+    let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
 
     let loaded = roc_load::file::load_and_monomorphize(
         arena,
@@ -75,16 +74,7 @@ pub fn build_file<'a>(
     )?;
 
     use target_lexicon::Architecture;
-    let emit_wasm = match target.architecture {
-        Architecture::X86_64 => false,
-        Architecture::Aarch64(_) => false,
-        Architecture::Wasm32 => true,
-        Architecture::X86_32(_) => false,
-        _ => panic!(
-            "TODO gracefully handle unsupported architecture: {:?}",
-            target.architecture
-        ),
-    };
+    let emit_wasm = matches!(target.architecture, Architecture::Wasm32);
 
     // TODO wasm host extension should be something else ideally
     // .bc does not seem to work because
@@ -146,17 +136,29 @@ pub fn build_file<'a>(
         }
     }
 
+    // This only needs to be mutable for report_problems. This can't be done
+    // inside a nested scope without causing a borrow error!
+    let mut loaded = loaded;
+    program::report_problems(&mut loaded);
+    let loaded = loaded;
+
     let cwd = roc_file_path.parent().unwrap();
     let binary_path = cwd.join(&*loaded.output_path); // TODO should join ".exe" on Windows
-    let code_gen_timing = program::gen_from_mono_module(
-        arena,
-        loaded,
-        &roc_file_path,
-        target,
-        app_o_file,
-        opt_level,
-        emit_debug_info,
-    );
+
+    let code_gen_timing = match opt_level {
+        OptLevel::Normal | OptLevel::Optimize => program::gen_from_mono_module_llvm(
+            arena,
+            loaded,
+            &roc_file_path,
+            target,
+            app_o_file,
+            opt_level,
+            emit_debug_info,
+        ),
+        OptLevel::Development => {
+            program::gen_from_mono_module_dev(arena, loaded, target, app_o_file)
+        }
+    };
 
     buf.push('\n');
     buf.push_str("    ");
@@ -177,7 +179,7 @@ pub fn build_file<'a>(
         })
         .len();
 
-    if emit_debug_info {
+    if emit_timings {
         println!(
             "\n\nCompilation finished!\n\nHere's how long each module took to compile:\n\n{}",
             buf
@@ -203,7 +205,7 @@ pub fn build_file<'a>(
     rebuild_host(target, host_input_path.as_path());
     let rebuild_host_end = rebuild_host_start.elapsed().unwrap();
 
-    if emit_debug_info {
+    if emit_timings {
         println!(
             "Finished rebuilding the host in {} ms\n",
             rebuild_host_end.as_millis()
@@ -230,7 +232,7 @@ pub fn build_file<'a>(
 
     let linking_time = link_start.elapsed().unwrap();
 
-    if emit_debug_info {
+    if emit_timings {
         println!("Finished linking in {} ms\n", linking_time.as_millis());
     }
 
@@ -251,4 +253,89 @@ pub fn build_file<'a>(
         outcome,
         total_time,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn check_file(
+    arena: &Bump,
+    src_dir: PathBuf,
+    roc_file_path: PathBuf,
+    emit_timings: bool,
+) -> Result<usize, LoadingProblem> {
+    let compilation_start = SystemTime::now();
+
+    // only used for generating errors. We don't do code generation, so hardcoding should be fine
+    // we need monomorphization for when exhaustiveness checking
+    let ptr_bytes = 8;
+
+    // Step 1: compile the app and generate the .o file
+    let subs_by_module = MutMap::default();
+
+    // Release builds use uniqueness optimizations
+    let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
+
+    let mut loaded = roc_load::file::load_and_monomorphize(
+        arena,
+        roc_file_path,
+        stdlib,
+        src_dir.as_path(),
+        subs_by_module,
+        ptr_bytes,
+        builtin_defs_map,
+    )?;
+
+    let buf = &mut String::with_capacity(1024);
+
+    let mut it = loaded.timings.iter().peekable();
+    while let Some((module_id, module_timing)) = it.next() {
+        let module_name = loaded.interns.module_name(*module_id);
+
+        buf.push_str("    ");
+
+        if module_name.is_empty() {
+            // the App module
+            buf.push_str("Application Module");
+        } else {
+            buf.push_str(module_name);
+        }
+
+        buf.push('\n');
+
+        report_timing(buf, "Read .roc file from disk", module_timing.read_roc_file);
+        report_timing(buf, "Parse header", module_timing.parse_header);
+        report_timing(buf, "Parse body", module_timing.parse_body);
+        report_timing(buf, "Canonicalize", module_timing.canonicalize);
+        report_timing(buf, "Constrain", module_timing.constrain);
+        report_timing(buf, "Solve", module_timing.solve);
+        report_timing(
+            buf,
+            "Find Specializations",
+            module_timing.find_specializations,
+        );
+        report_timing(
+            buf,
+            "Make Specializations",
+            module_timing.make_specializations,
+        );
+        report_timing(buf, "Other", module_timing.other());
+        buf.push('\n');
+        report_timing(buf, "Total", module_timing.total());
+
+        if it.peek().is_some() {
+            buf.push('\n');
+        }
+    }
+
+    let compilation_end = compilation_start.elapsed().unwrap();
+
+    if emit_timings {
+        println!(
+            "\n\nCompilation finished!\n\nHere's how long each module took to compile:\n\n{}",
+            buf
+        );
+
+        println!("Finished checking in {} ms\n", compilation_end.as_millis(),);
+    }
+
+    Ok(program::report_problems(&mut loaded))
 }

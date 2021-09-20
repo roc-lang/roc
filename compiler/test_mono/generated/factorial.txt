@@ -6,7 +6,7 @@ procedure Num.26 (#Attr.2, #Attr.3):
     let Test.12 = lowlevel NumMul #Attr.2 #Attr.3;
     ret Test.12;
 
-procedure Test.1 (Test.2, Test.3):
+procedure Test.1 (Test.17, Test.18):
     joinpoint Test.7 Test.2 Test.3:
         let Test.15 = 0i64;
         let Test.16 = lowlevel Eq Test.15 Test.2;
@@ -18,7 +18,7 @@ procedure Test.1 (Test.2, Test.3):
             let Test.11 = CallByName Num.26 Test.2 Test.3;
             jump Test.7 Test.10 Test.11;
     in
-    jump Test.7 Test.2 Test.3;
+    jump Test.7 Test.17 Test.18;
 
 procedure Test.0 ():
     let Test.5 = 10i64;

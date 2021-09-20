@@ -94,9 +94,11 @@ pub fn helper<'a>(
     let main_fn_layout = loaded.entry_point.layout;
 
     let mut layout_ids = roc_mono::layout::LayoutIds::default();
-    let main_fn_name = layout_ids
+    let main_fn_name_base = layout_ids
         .get_toplevel(main_fn_symbol, &main_fn_layout)
         .to_symbol_string(main_fn_symbol, &interns);
+
+    let main_fn_name = format!("roc_{}_exposed", main_fn_name_base);
 
     let mut lines = Vec::new();
     // errors whose reporting we delay (so we can see that code gen generates runtime errors)
@@ -143,12 +145,13 @@ pub fn helper<'a>(
         }
 
         for problem in type_problems {
-            let report = type_problem(&alloc, module_path.clone(), problem);
-            let mut buf = String::new();
+            if let Some(report) = type_problem(&alloc, module_path.clone(), problem) {
+                let mut buf = String::new();
 
-            report.render_color_terminal(&mut buf, &alloc, &palette);
+                report.render_color_terminal(&mut buf, &alloc, &palette);
 
-            lines.push(buf);
+                lines.push(buf);
+            }
         }
 
         for problem in mono_problems {

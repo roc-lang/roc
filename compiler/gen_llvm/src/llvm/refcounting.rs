@@ -84,7 +84,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
         }
     }
 
-    pub fn from_list_wrapper(env: &Env<'_, 'ctx, '_>, list_wrapper: StructValue<'ctx>) -> Self {
+    fn from_list_wrapper(env: &Env<'_, 'ctx, '_>, list_wrapper: StructValue<'ctx>) -> Self {
         let data_ptr = env
             .builder
             .build_extract_value(list_wrapper, Builtin::WRAPPER_PTR, "read_list_ptr")
@@ -102,7 +102,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
             .build_int_compare(IntPredicate::EQ, current, one, "is_one")
     }
 
-    pub fn get_refcount<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>) -> IntValue<'ctx> {
+    fn get_refcount<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>) -> IntValue<'ctx> {
         env.builder
             .build_load(self.value, "get_refcount")
             .into_int_value()
@@ -220,23 +220,55 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
         debug_info_init!(env, parent);
 
-        let alignment = env.context.i32_type().const_int(alignment as _, false);
-
-        call_void_bitcode_fn(
+        decref_pointer(
             env,
-            &[
-                env.builder.build_bitcast(
-                    parent.get_nth_param(0).unwrap(),
-                    env.ptr_int().ptr_type(AddressSpace::Generic),
-                    "foo",
-                ),
-                alignment.into(),
-            ],
-            roc_builtins::bitcode::UTILS_DECREF,
+            parent.get_nth_param(0).unwrap().into_pointer_value(),
+            alignment,
         );
 
         builder.build_return(None);
     }
+}
+
+fn decref_pointer<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    pointer: PointerValue<'ctx>,
+    alignment: u32,
+) {
+    let alignment = env.context.i32_type().const_int(alignment as _, false);
+    call_void_bitcode_fn(
+        env,
+        &[
+            env.builder.build_bitcast(
+                pointer,
+                env.ptr_int().ptr_type(AddressSpace::Generic),
+                "to_isize_ptr",
+            ),
+            alignment.into(),
+        ],
+        roc_builtins::bitcode::UTILS_DECREF,
+    );
+}
+
+/// Assumes a pointer to the refcount
+pub fn decref_pointer_check_null<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    pointer: PointerValue<'ctx>,
+    alignment: u32,
+) {
+    let alignment = env.context.i32_type().const_int(alignment as _, false);
+    call_void_bitcode_fn(
+        env,
+        &[
+            env.builder.build_bitcast(
+                pointer,
+                env.context.i8_type().ptr_type(AddressSpace::Generic),
+                "to_i8_ptr",
+            ),
+            alignment.into(),
+        ],
+        roc_builtins::bitcode::UTILS_DECREF_CHECK_NULL,
+    );
 }
 
 fn modify_refcount_struct<'a, 'ctx, 'env>(
@@ -594,6 +626,14 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
                 Some(function)
             }
         },
+        LambdaSet(lambda_set) => modify_refcount_layout_build_function(
+            env,
+            parent,
+            layout_ids,
+            mode,
+            when_recursive,
+            &lambda_set.runtime_representation(),
+        ),
     }
 }
 
@@ -1093,7 +1133,6 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
     fn_val: FunctionValue<'ctx>,
 ) {
     let tags = union_layout_tags(env.arena, &union_layout);
-    let is_nullable = union_layout.is_nullable();
     debug_assert!(!tags.is_empty());
 
     let context = &env.context;
@@ -1126,7 +1165,7 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
     let should_recurse_block = env.context.append_basic_block(parent, "should_recurse");
 
     let ctx = env.context;
-    if is_nullable {
+    if union_layout.is_nullable() {
         let is_null = env.builder.build_is_null(value_ptr, "is_null");
 
         let then_block = ctx.append_basic_block(parent, "then");
@@ -1201,6 +1240,12 @@ enum DecOrReuse {
     Reuse,
 }
 
+fn fields_need_no_refcounting(field_layouts: &[Layout]) -> bool {
+    !field_layouts
+        .iter()
+        .any(|x| x.is_refcounted() || x.contains_refcounted())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -1220,21 +1265,6 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
     let call_mode = mode_to_call_mode(decrement_fn, mode);
     let builder = env.builder;
 
-    // branches that are not/don't contain anything refcounted
-    // if there is only one branch, we don't need to switch
-    let switch_needed: bool = (|| {
-        for field_layouts in tags.iter() {
-            // if none of the fields are or contain anything refcounted, just move on
-            if !field_layouts
-                .iter()
-                .any(|x| x.is_refcounted() || x.contains_refcounted())
-            {
-                return true;
-            }
-        }
-        false
-    })();
-
     // next, make a jump table for all possible values of the tag_id
     let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
 
@@ -1243,10 +1273,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
 
     for (tag_id, field_layouts) in tags.iter().enumerate() {
         // if none of the fields are or contain anything refcounted, just move on
-        if !field_layouts
-            .iter()
-            .any(|x| x.is_refcounted() || x.contains_refcounted())
-        {
+        if fields_need_no_refcounting(field_layouts) {
             continue;
         }
 
@@ -1346,11 +1373,13 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
 
     cases.reverse();
 
-    if cases.len() == 1 && !switch_needed {
-        // there is only one tag in total; we don't need a switch
-        // this is essential for nullable unwrapped layouts,
-        // because the `else` branch below would try to read its
-        // (nonexistant) tag id
+    if matches!(
+        union_layout,
+        UnionLayout::NullableUnwrapped { .. } | UnionLayout::NonNullableUnwrapped { .. }
+    ) {
+        debug_assert_eq!(cases.len(), 1);
+
+        // in this case, don't switch, because the `else` branch below would try to read the (nonexistant) tag id
         let (_, only_branch) = cases.pop().unwrap();
         env.builder.build_unconditional_branch(only_branch);
     } else {
@@ -1444,7 +1473,6 @@ fn build_reuse_rec_union_help<'a, 'ctx, 'env>(
     dec_function: FunctionValue<'ctx>,
 ) {
     let tags = union_layout_tags(env.arena, &union_layout);
-    let is_nullable = union_layout.is_nullable();
 
     debug_assert!(!tags.is_empty());
 
@@ -1478,7 +1506,7 @@ fn build_reuse_rec_union_help<'a, 'ctx, 'env>(
     let should_recurse_block = env.context.append_basic_block(parent, "should_recurse");
 
     let ctx = env.context;
-    if is_nullable {
+    if union_layout.is_nullable() {
         let is_null = env.builder.build_is_null(value_ptr, "is_null");
 
         let then_block = ctx.append_basic_block(parent, "then");
@@ -1699,69 +1727,4 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
 
     // this function returns void
     builder.build_return(None);
-}
-
-pub fn refcount_is_one_comparison<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    refcount: IntValue<'ctx>,
-) -> IntValue<'ctx> {
-    env.builder.build_int_compare(
-        IntPredicate::EQ,
-        refcount,
-        refcount_1(env.context, env.ptr_bytes),
-        "refcount_one_check",
-    )
-}
-
-pub fn list_get_refcount_ptr<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout: &Layout<'a>,
-    list_wrapper: StructValue<'ctx>,
-) -> PointerValue<'ctx> {
-    // fetch the pointer to the array data, as an integer
-    let ptr_as_int = env
-        .builder
-        .build_extract_value(list_wrapper, Builtin::WRAPPER_PTR, "read_list_ptr")
-        .unwrap()
-        .into_int_value();
-
-    get_refcount_ptr_help(env, layout, ptr_as_int)
-}
-
-pub fn refcount_offset<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) -> u64 {
-    let value_bytes = layout.stack_size(env.ptr_bytes) as u64;
-
-    match layout {
-        Layout::Builtin(Builtin::List(_)) => env.ptr_bytes as u64,
-        Layout::Builtin(Builtin::Str) => env.ptr_bytes as u64,
-        Layout::RecursivePointer | Layout::Union(_) => env.ptr_bytes as u64,
-        _ => (env.ptr_bytes as u64).max(value_bytes),
-    }
-}
-
-fn get_refcount_ptr_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout: &Layout<'a>,
-    ptr_as_int: IntValue<'ctx>,
-) -> PointerValue<'ctx> {
-    let builder = env.builder;
-    let ctx = env.context;
-
-    let offset = refcount_offset(env, layout);
-
-    // pointer to usize
-    let refcount_type = ptr_int(ctx, env.ptr_bytes);
-
-    // subtract offset, to access the refcount
-    let refcount_ptr = builder.build_int_sub(
-        ptr_as_int,
-        refcount_type.const_int(offset, false),
-        "make_refcount_ptr",
-    );
-
-    builder.build_int_to_ptr(
-        refcount_ptr,
-        refcount_type.ptr_type(AddressSpace::Generic),
-        "get_refcount_ptr",
-    )
 }

@@ -1,5 +1,5 @@
 use crate::llvm::bitcode::{call_bitcode_fn, call_void_bitcode_fn};
-use crate::llvm::build::{complex_bitcast, struct_from_fields, Env, Scope};
+use crate::llvm::build::{complex_bitcast, Env, Scope};
 use crate::llvm::build_list::{allocate_list, call_bitcode_fn_returns_list, store_list};
 use inkwell::builder::Builder;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
@@ -268,15 +268,9 @@ fn decode_from_utf8_result<'a, 'ctx, 'env>(
     let ctx = env.context;
 
     let fields = match env.ptr_bytes {
-        8 => [
+        8 | 4 => [
             env.ptr_int().into(),
             super::convert::zig_str_type(env).into(),
-            env.context.bool_type().into(),
-            ctx.i8_type().into(),
-        ],
-        4 => [
-            super::convert::zig_str_type(env).into(),
-            env.ptr_int().into(),
             env.context.bool_type().into(),
             ctx.i8_type().into(),
         ],
@@ -286,30 +280,7 @@ fn decode_from_utf8_result<'a, 'ctx, 'env>(
     let record_type = env.context.struct_type(&fields, false);
 
     match env.ptr_bytes {
-        8 => {
-            let zig_struct = builder
-                .build_load(pointer, "load_utf8_validate_bytes_result")
-                .into_struct_value();
-
-            let string = builder
-                .build_extract_value(zig_struct, 0, "string")
-                .unwrap();
-
-            let byte_index = builder
-                .build_extract_value(zig_struct, 1, "byte_index")
-                .unwrap();
-
-            let is_ok = builder.build_extract_value(zig_struct, 2, "is_ok").unwrap();
-
-            let problem_code = builder
-                .build_extract_value(zig_struct, 3, "problem_code")
-                .unwrap();
-
-            let values = [byte_index, string, is_ok, problem_code];
-
-            struct_from_fields(env, record_type, values.iter().copied().enumerate())
-        }
-        4 => {
+        8 | 4 => {
             let result_ptr_cast = env
                 .builder
                 .build_bitcast(

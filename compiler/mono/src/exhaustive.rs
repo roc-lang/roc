@@ -65,8 +65,8 @@ fn simplify(pattern: &crate::ir::Pattern) -> Pattern {
     use crate::ir::Pattern::*;
 
     match pattern {
-        IntLiteral(v) => Literal(Literal::Int(*v)),
-        FloatLiteral(v) => Literal(Literal::Float(*v)),
+        IntLiteral(v, _) => Literal(Literal::Int(*v)),
+        FloatLiteral(v, _) => Literal(Literal::Float(*v)),
         DecimalLiteral(v) => Literal(Literal::Decimal(*v)),
         StrLiteral(v) => Literal(Literal::Str(v.clone())),
 

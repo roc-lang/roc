@@ -33,6 +33,7 @@ members = [
     "cli/cli_utils",
     "roc_std",
     "docs",
+    "linker",
 ]
 exclude = [ "ci/bench-runner" ]
 # Needed to be able to run `cargo run -p roc_cli --no-default-features` -
