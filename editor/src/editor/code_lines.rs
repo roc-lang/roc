@@ -153,12 +153,6 @@ impl CodeLines {
             column: self.line_len(last_line_nr).unwrap(), // safe because we just calculated last_line
         }
     }
-
-    pub fn line_is_only_newline(&self, line_nr: usize) -> UIResult<bool> {
-        let line_len = self.line_len(line_nr)?;
-
-        Ok(line_len == 0)
-    }
 }
 
 impl Default for CodeLines {

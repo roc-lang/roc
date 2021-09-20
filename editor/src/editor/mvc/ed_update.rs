@@ -9,7 +9,6 @@ use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::MissingSelection;
 use crate::editor::grid_node_map::GridNodeMap;
 use crate::editor::markup::attribute::Attributes;
-use crate::editor::markup::common_nodes::new_blank_mn_w_nls;
 use crate::editor::markup::nodes;
 use crate::editor::markup::nodes::MarkupNode;
 use crate::editor::markup::nodes::EQUALS;
@@ -31,7 +30,6 @@ use crate::editor::mvc::tld_value_update::{start_new_tld_value, update_tld_val_n
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::syntax_highlight::HighlightStyle;
-use crate::editor::util::index_of;
 use crate::lang::ast::Def2;
 use crate::lang::ast::DefId;
 use crate::lang::ast::{Expr2, ExprId};
@@ -65,6 +63,8 @@ use snafu::OptionExt;
 use winit::event::VirtualKeyCode;
 use VirtualKeyCode::*;
 
+use super::break_line::break_line;
+use super::break_line::insert_new_blank;
 use super::let_update::start_new_let_value;
 
 impl<'a> EdModel<'a> {
@@ -262,21 +262,6 @@ impl<'a> EdModel<'a> {
                     mark_node_pool,
                 )?;
             }
-
-            // TODO avoid duplication with below
-            if node_newlines > 0 {
-                EdModel::break_line(*line_nr, *col_nr, code_lines, grid_node_map)?;
-
-                *line_nr += 1;
-                *col_nr = 0;
-
-                for _ in 1..node_newlines {
-                    EdModel::insert_empty_line(*line_nr, code_lines, grid_node_map)?;
-
-                    *line_nr += 1;
-                    *col_nr = 0;
-                }
-            }
         } else {
             let node_content = mark_node.get_content();
 
@@ -289,27 +274,29 @@ impl<'a> EdModel<'a> {
                 code_lines,
             )?;
 
-            if node_newlines > 0 {
-                EdModel::break_line(*line_nr, *col_nr, code_lines, grid_node_map)?;
+            if node_newlines == 0 {
+                *col_nr += node_content.len();
+            }
+        }
+
+        if node_newlines > 0 {
+            EdModel::break_line(*line_nr, *col_nr, code_lines, grid_node_map)?;
+
+            *line_nr += 1;
+            *col_nr = 0;
+
+            for _ in 1..node_newlines {
+                EdModel::insert_empty_line(*line_nr, code_lines, grid_node_map)?;
 
                 *line_nr += 1;
                 *col_nr = 0;
-
-                for _ in 1..node_newlines {
-                    EdModel::insert_empty_line(*line_nr, code_lines, grid_node_map)?;
-
-                    *line_nr += 1;
-                    *col_nr = 0;
-                }
-            } else {
-                *col_nr += node_content.len();
             }
         }
 
         Ok(())
     }
 
-    // break line at col_nr and move everything after col_nr to the next line
+    // break(split) line at col_nr and move everything after col_nr to the next line
     pub fn break_line(
         line_nr: usize,
         col_nr: usize,
@@ -546,27 +533,9 @@ impl<'a> EdModel<'a> {
             Right => from_ui_res(self.move_caret_right(modifiers)),
             Down => from_ui_res(self.move_caret_down(modifiers)),
 
-            A => {
-                if modifiers.cmd_or_ctrl() {
-                    from_ui_res(self.select_all())
-                } else {
-                    Ok(())
-                }
-            }
-            S => {
-                if modifiers.cmd_or_ctrl() {
-                    from_ui_res(self.save_file())
-                } else {
-                    Ok(())
-                }
-            }
-            R => {
-                if modifiers.cmd_or_ctrl() {
-                    from_ui_res(self.run_file())
-                } else {
-                    Ok(())
-                }
-            }
+            A => if_modifiers(modifiers, self.select_all()),
+            S => if_modifiers(modifiers, self.save_file()),
+            R => if_modifiers(modifiers, self.run_file()),
             Home => from_ui_res(self.move_caret_home(modifiers)),
             End => from_ui_res(self.move_caret_end(modifiers)),
             F11 => {
@@ -816,6 +785,14 @@ pub fn get_node_context<'a>(ed_model: &'a EdModel) -> EdResult<NodeContext<'a>> 
         parent_id_opt,
         ast_node_id,
     })
+}
+
+fn if_modifiers(modifiers: &Modifiers, shortcut_result: UIResult<()>) -> EdResult<()> {
+    if modifiers.cmd_or_ctrl() {
+        from_ui_res(shortcut_result)
+    } else {
+        Ok(())
+    }
 }
 
 // current(=caret is here) MarkupNode corresponds to a Def2 in the AST
@@ -1178,51 +1155,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 
                     } else { //no MarkupNode at the current position
                             if *received_char == '\r' {
-                                // TODO move to separate function
-                                let carets = ed_model.get_carets();
-
-                                for caret_pos in carets.iter() {
-
-                                    let caret_line_nr = caret_pos.line;
-
-                                    // don't allow adding new lines on empty line
-                                    if caret_pos.column > 0 && ed_model.grid_node_map.node_exists_at_pos (
-                                            TextPos {
-                                                line: caret_line_nr,
-                                                column: caret_pos.column - 1
-                                            }
-                                        ) {
-
-                                            // one blank line between top level definitions
-                                            EdModel::insert_empty_line(caret_line_nr + 1, &mut ed_model.code_lines, &mut ed_model.grid_node_map)?;
-                                            EdModel::insert_empty_line(caret_line_nr + 1, &mut ed_model.code_lines, &mut ed_model.grid_node_map)?;
-
-                                            // create Blank node at new line
-                                            let new_line_blank = Def2::Blank;
-                                            let new_line_blank_id = ed_model.module.env.pool.add(new_line_blank);
-
-                                            let prev_def_mn_id = ed_model.grid_node_map.get_def_mark_node_id_before_line(caret_pos.line + 1, &ed_model.mark_node_pool)?;
-                                            let prev_def_mn_id_indx = index_of(prev_def_mn_id, &ed_model.markup_ids)?;
-                                            ed_model.module.ast.def_ids.insert(prev_def_mn_id_indx, new_line_blank_id);
-
-                                            let blank_mn_id = ed_model
-                                                .add_mark_node(new_blank_mn_w_nls(ASTNodeId::ADefId(new_line_blank_id), None, 2));
-
-                                            ed_model.markup_ids.insert(prev_def_mn_id_indx + 1,blank_mn_id); // + 1 because first markup node is header
-
-                                            ed_model.insert_all_between_line(
-                                                caret_pos.line + 2, // one blank line between top level definitions
-                                                0,
-                                                &[blank_mn_id],
-                                            )?;
-                                        }
-                                }
-
-                                ed_model.simple_move_carets_down(2); // one blank line between top level definitions
-
-                                InputOutcome::Accepted
-
-
+                                break_line(ed_model)?
                             } else {
                                 let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
                                 if let Some(prev_mark_node_id) = prev_mark_node_id_opt {
@@ -1244,33 +1177,8 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                             for caret_pos in ed_model.get_carets() {
 
                                                 if caret_pos.line > 0 {
-                                                    // TODO avoid code replication with '\r'
-                                                    // insert blank first, this simplifies flow
-                                                    let new_blank = Def2::Blank;
-                                                    let new_blank_id = ed_model.module.env.pool.add(new_blank);
-
-                                                    let prev_def_mn_id = ed_model.grid_node_map.get_def_mark_node_id_before_line(caret_pos.line, &ed_model.mark_node_pool)?;
-                                                    let prev_def_mn_id_indx = index_of(prev_def_mn_id, &ed_model.markup_ids)?;
-                                                    ed_model.module.ast.def_ids.insert(prev_def_mn_id_indx, new_blank_id);
-
-                                                    let blank_mn_id = ed_model
-                                                        .add_mark_node(new_blank_mn_w_nls(ASTNodeId::ADefId(new_blank_id), None, 2));
-
-                                                    ed_model.markup_ids.insert(prev_def_mn_id_indx + 1,blank_mn_id); // + 1 because first mark_node is header
-
-                                                    if !ed_model.code_lines.line_is_only_newline(caret_pos.line - 1)? {
-
-                                                        ed_model.simple_move_caret_down(caret_pos, 1);
-
-                                                    }
-
-                                                    ed_model.insert_all_between_line(
-                                                        caret_pos.line,
-                                                        0,
-                                                        &[blank_mn_id],
-                                                    )?;
+                                                    insert_new_blank(ed_model, &caret_pos, caret_pos.line)?;
                                                 }
-
                                             }
                                             handle_new_char(received_char, ed_model)?
                                         }
