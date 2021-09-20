@@ -2,7 +2,7 @@
 #![no_std]
 use core::convert::From;
 use core::ffi::c_void;
-use core::{fmt, mem, ptr, slice};
+use core::{fmt, mem, ptr, slice, str};
 
 // A list of C functions that are being imported
 extern "C" {
@@ -615,11 +615,20 @@ impl RocStr {
         }
     }
 
-    pub fn from_slice(slice: &[u8]) -> Self {
+    pub unsafe fn from_utf8_unchecked(slice: &[u8]) -> Self {
         Self::from_slice_with_capacity_str(slice, slice.len())
     }
 
-    pub fn as_slice(&self) -> &[u8] {
+    pub fn from_utf8(slice: &[u8]) -> Result<Self, str::Utf8Error> {
+        str::from_utf8(slice).map(|_| Self::from_slice_with_capacity_str(slice, slice.len()))
+    }
+
+    /// DEPRECATED - use from_utf8 or from_utf8_unchecked instead!
+    pub fn from_slice(slice: &[u8]) -> Self {
+        unsafe { Self::from_utf8_unchecked(slice) }
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
         if self.is_empty() {
             &[]
         } else if self.is_small_str() {
@@ -627,6 +636,11 @@ impl RocStr {
         } else {
             unsafe { core::slice::from_raw_parts(self.elements, self.length) }
         }
+    }
+
+    /// DEPRECATED - use as_bytes instead!
+    pub fn as_slice(&self) -> &[u8] {
+        self.as_bytes()
     }
 
     pub fn as_str(&self) -> &str {
