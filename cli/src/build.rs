@@ -143,7 +143,11 @@ pub fn build_file<'a>(
     let loaded = loaded;
 
     let cwd = roc_file_path.parent().unwrap();
-    let binary_path = cwd.join(&*loaded.output_path); // TODO should join ".exe" on Windows
+    let mut binary_path = cwd.join(&*loaded.output_path); // TODO should join ".exe" on Windows
+
+    if emit_wasm {
+        binary_path.set_extension("wasm");
+    }
 
     let code_gen_timing = match opt_level {
         OptLevel::Normal | OptLevel::Optimize => program::gen_from_mono_module_llvm(
