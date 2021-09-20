@@ -1502,23 +1502,8 @@ fn decl_to_let(pool: &mut Pool, var_store: &mut VarStore, decl: Declaration, ret
         Declaration::Declare(def) => match def {
             Def::AnnotationOnly { .. } => todo!(),
             Def::Value(value_def) => {
-                // TODO remove me
-                match &value_def {
-                    ValueDef::NoAnnotation {
-                        pattern_id,
-                        expr_id,
-                        expr_var,
-                    } => {
-                        dbg!(pool.get(*pattern_id));
-                        dbg!(pool.get(*expr_id));
-                        dbg!(expr_var);
-                    }
-                    _ => panic!("REMOVE THIS BLOCK"),
-                }
-
                 let def_id = pool.add(value_def);
 
-                dbg!(&ret);
                 let body_id = pool.add(ret);
 
                 Expr2::LetValue {
