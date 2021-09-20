@@ -1,10 +1,15 @@
+use roc_cli::build::check_file;
 use roc_cli::{
-    build_app, docs, repl, BuildConfig, CMD_BUILD, CMD_DOCS, CMD_EDIT, CMD_REPL, CMD_RUN,
-    DIRECTORY_OR_FILES, ROC_FILE,
+    build_app, docs, repl, BuildConfig, CMD_BUILD, CMD_CHECK, CMD_DOCS, CMD_EDIT, CMD_REPL,
+    CMD_RUN, DIRECTORY_OR_FILES, FLAG_TIME, ROC_FILE,
 };
+use roc_load::file::LoadingProblem;
 use std::fs::{self, FileType};
 use std::io;
 use std::path::{Path, PathBuf};
+
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[cfg(feature = "llvm")]
 use roc_cli::build;
@@ -48,6 +53,31 @@ If you're building the compiler from source you'll want to do `cargo run [FILE]`
             );
 
             Ok(1)
+        }
+        Some(CMD_CHECK) => {
+            let arena = bumpalo::Bump::new();
+
+            let matches = matches.subcommand_matches(CMD_CHECK).unwrap();
+            let emit_timings = matches.is_present(FLAG_TIME);
+            let filename = matches.value_of(ROC_FILE).unwrap();
+            let roc_file_path = PathBuf::from(filename);
+            let src_dir = roc_file_path.parent().unwrap().to_owned();
+
+            match check_file(&arena, src_dir, roc_file_path, emit_timings) {
+                Ok(number_of_errors) => {
+                    let exit_code = if number_of_errors != 0 { 1 } else { 0 };
+                    Ok(exit_code)
+                }
+
+                Err(LoadingProblem::FormattedReport(report)) => {
+                    print!("{}", report);
+
+                    Ok(1)
+                }
+                Err(other) => {
+                    panic!("build_file failed with error:\n{:?}", other);
+                }
+            }
         }
         Some(CMD_REPL) => {
             repl::main()?;

@@ -2017,3 +2017,17 @@ fn lists_with_incompatible_type_param_in_if() {
         RocStr
     );
 }
+
+#[test]
+fn map_with_index_multi_record() {
+    // see https://github.com/rtfeldman/roc/issues/1700
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.mapWithIndex [ { x: {}, y: {} } ] \_, _ -> {}
+            "#
+        ),
+        RocList::from_slice(&[((), ())]),
+        RocList<((), ())>
+    );
+}

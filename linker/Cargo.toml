@@ -1,0 +1,29 @@
+[package]
+name = "roc_linker"
+version = "0.1.0"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+repository = "https://github.com/rtfeldman/roc"
+edition = "2018"
+description = "A surgical linker for Roc"
+
+[lib]
+name = "roc_linker"
+path = "src/lib.rs"
+
+[[bin]]
+name = "link"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+roc_collections = { path = "../compiler/collections" }
+bumpalo = { version = "3.6", features = ["collections"] }
+# TODO switch to clap 3.0.0 once it's out. Tried adding clap = "~3.0.0-beta.1" and cargo wouldn't accept it
+clap = { git = "https://github.com/rtfeldman/clap", branch = "master" }
+iced-x86 = "1.14"
+memmap2 = "0.3"
+object = { version = "0.26", features = ["read"] }
+serde = { version = "1.0", features = ["derive"] }
+bincode = "1.3"
