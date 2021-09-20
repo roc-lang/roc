@@ -101,7 +101,7 @@ pub fn type_problem<'b>(
                     report(title, doc, filename)
                 }
 
-                SolvedTypeError => None,
+                SolvedTypeError => None, // Don't re-report cascading errors - see https://github.com/rtfeldman/roc/pull/1711
 
                 other => panic!("unhandled bad type: {:?}", other),
             }
