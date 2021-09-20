@@ -56,7 +56,7 @@ fn find_zig_str_path() -> PathBuf {
         return zig_str_path;
     }
 
-    panic!("cannot find `str.zig`")
+    panic!("cannot find `str.zig`. Launch me from either the root of the roc repo or one level down(roc/examples, roc/cli...)")
 }
 
 fn find_wasi_libc_path() -> PathBuf {
