@@ -43,13 +43,7 @@ export fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
     free(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)));
 }
 
-export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
-    _ = tag_id;
-    const stderr = std.io.getStdErr().writer();
-    const msg = @ptrCast([*:0]const u8, c_ptr);
-    stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
-    std.process.exit(0);
-}
+// NOTE roc_panic is provided in the JS file, so it can throw an exception
 
 const mem = std.mem;
 const Allocator = mem.Allocator;
