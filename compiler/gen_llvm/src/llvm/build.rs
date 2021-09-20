@@ -3256,7 +3256,9 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
     let cc_return = to_cc_return(env, &return_layout);
 
     let c_function_type = match cc_return {
-        CCReturn::Void => env.context.void_type().fn_type(&argument_types, false),
+        CCReturn::Void if !env.is_gen_test => {
+            env.context.void_type().fn_type(&argument_types, false)
+        }
         CCReturn::Return if !env.is_gen_test => return_type.fn_type(&argument_types, false),
         _ => {
             let output_type = return_type.ptr_type(AddressSpace::Generic);
@@ -3291,8 +3293,17 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
     let mut args = args_vector.as_slice();
     let args_length = args.len();
 
-    if let CCReturn::ByPointer = cc_return {
-        args = &args[..args.len() - 1];
+    match cc_return {
+        CCReturn::Return if !env.is_gen_test => {
+            debug_assert_eq!(args.len(), roc_function.get_params().len());
+        }
+        CCReturn::Void if !env.is_gen_test => {
+            debug_assert_eq!(args.len(), roc_function.get_params().len());
+        }
+        _ => {
+            args = &args[..args.len() - 1];
+            debug_assert_eq!(args.len(), roc_function.get_params().len());
+        }
     }
 
     let mut arguments_for_call = Vec::with_capacity_in(args.len(), env.arena);
@@ -3310,8 +3321,6 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
     }
 
     let arguments_for_call = &arguments_for_call.into_bump_slice();
-
-    debug_assert_eq!(args.len(), roc_function.get_params().len());
 
     let call_result = {
         if env.is_gen_test {
@@ -3344,7 +3353,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
     };
 
     match cc_return {
-        CCReturn::Void => {
+        CCReturn::Void if !env.is_gen_test => {
             // TODO return empty struct here?
             builder.build_return(None);
         }
