@@ -1,4 +1,4 @@
-app "hello-world"
+app "hello-web"
     packages { base: "platform" }
     imports []
     provides [ main ] to base

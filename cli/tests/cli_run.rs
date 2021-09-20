@@ -157,10 +157,9 @@ mod cli_run {
                     let example = $example;
                     let file_name = example_file(dir_name, example.filename);
 
-                    match example.filename {
-                        "Fib.roc" => {
-                            // it is broken because the dev and normal backend don't generate the
-                            // same name for main. The dev version is expected here.
+                    match example.executable_filename {
+                        "hello-web" => {
+                            // this is a web webassembly example, but we don't test with JS at the moment
                             eprintln!("WARNING: skipping testing example {} because the test is broken right now!", example.filename);
                             return;
                         }
@@ -230,6 +229,13 @@ mod cli_run {
         hello_rust:"hello-rust" => Example {
             filename: "Hello.roc",
             executable_filename: "hello-world",
+            stdin: &[],
+            expected_ending:"Hello, World!\n",
+            use_valgrind: true,
+        },
+        hello_world:"hello-web" => Example {
+            filename: "Hello.roc",
+            executable_filename: "hello-web",
             stdin: &[],
             expected_ending:"Hello, World!\n",
             use_valgrind: true,
