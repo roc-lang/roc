@@ -90,13 +90,13 @@ writeUtf8 : Path, Str -> Task {} (FileWriteErr *)
 writeUtf8 = \path, data ->
     path
         |> Effect.writeAllUtf8 data
-        |> Effect.map \res ->
-            if res.errno == 0 then
+        |> Effect.map \errno ->
+            if errno == 0 then
                 Ok {}
 
             else
                 # TODO handle other errno scenarios that could come up
-                Err (FileWriteErr (UnknownError res.errno path))
+                Err (FileWriteErr (UnknownError errno path))
 
 ## Read a file's bytes, one chunk at a time, and use it to build up a state.
 ##
