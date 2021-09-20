@@ -551,6 +551,7 @@ impl IdentIds {
         }
     }
 
+    // necessary when the name of a value is changed in the editor
     pub fn update_key(
         &mut self,
         old_ident_name: &str,

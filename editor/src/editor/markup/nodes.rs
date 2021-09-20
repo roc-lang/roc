@@ -689,31 +689,12 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
 
     let imports_left_square_node_id = mark_node_pool.add(new_left_square_mn(expr_id, None));
 
-    let nr_of_imports = app_header.imports.len();
-
-    let mut import_child_ids: Vec<MarkNodeId> = app_header
-        .imports
-        .iter()
-        .enumerate()
-        .map(|(indx, import)| {
-            let import_val_mn_id = header_val_mn(
-                import.to_owned(),
-                expr_id,
-                HighlightStyle::Import,
-                mark_node_pool,
-            );
-
-            if indx != nr_of_imports - 1 {
-                vec![
-                    import_val_mn_id,
-                    mark_node_pool.add(new_comma_mn(expr_id, None)),
-                ]
-            } else {
-                vec![import_val_mn_id]
-            }
-        })
-        .flatten()
-        .collect();
+    let mut import_child_ids: Vec<MarkNodeId> = add_header_mn_list(
+        &app_header.imports,
+        expr_id,
+        HighlightStyle::Import,
+        mark_node_pool,
+    );
 
     let imports_right_square_node_id = mark_node_pool.add(new_right_square_mn(expr_id, None));
 
@@ -733,13 +714,8 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
 
     let provides_left_square_node_id = mark_node_pool.add(new_left_square_mn(expr_id, None));
 
-    let provides_val_node_id = header_val_mn(
-        // TODO iter over provides like with imports
-        app_header
-            .provides
-            .first()
-            .unwrap_or(&String::new())
-            .to_owned(),
+    let mut provides_val_node_ids: Vec<MarkNodeId> = add_header_mn_list(
+        &app_header.provides,
         expr_id,
         HighlightStyle::Provides,
         mark_node_pool,
@@ -749,15 +725,15 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
 
     let provides_end_node_id = header_mn(" to base".to_owned(), expr_id, mark_node_pool);
 
+    let mut full_provides_children = vec![provides_node_id, provides_left_square_node_id];
+
+    full_provides_children.append(&mut provides_val_node_ids);
+    full_provides_children.push(provides_right_square_node_id);
+    full_provides_children.push(provides_end_node_id);
+
     let full_provides_node = MarkupNode::Nested {
         ast_node_id,
-        children_ids: vec![
-            provides_node_id,
-            provides_left_square_node_id,
-            provides_val_node_id,
-            provides_right_square_node_id,
-            provides_end_node_id,
-        ],
+        children_ids: full_provides_children,
         parent_id_opt: None,
         newlines_at_end: 1,
     };
@@ -784,6 +760,36 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
     set_parent_for_all(header_mn_id, mark_node_pool);
 
     header_mn_id
+}
+
+// Used for provides and imports
+fn add_header_mn_list(
+    str_vec: &[String],
+    expr_id: ExprId,
+    highlight_style: HighlightStyle,
+    mark_node_pool: &mut SlowPool,
+) -> Vec<MarkNodeId> {
+    let nr_of_elts = str_vec.len();
+
+    str_vec
+        .iter()
+        .enumerate()
+        .map(|(indx, provide_str)| {
+            let provide_str = header_val_mn(
+                provide_str.to_owned(),
+                expr_id,
+                highlight_style,
+                mark_node_pool,
+            );
+
+            if indx != nr_of_elts - 1 {
+                vec![provide_str, mark_node_pool.add(new_comma_mn(expr_id, None))]
+            } else {
+                vec![provide_str]
+            }
+        })
+        .flatten()
+        .collect()
 }
 
 pub fn ast_to_mark_nodes<'a, 'b>(
