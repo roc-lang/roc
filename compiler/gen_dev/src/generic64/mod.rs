@@ -573,12 +573,6 @@ impl<
         remainder: &'a Stmt<'a>,
         ret_layout: &Layout<'a>,
     ) -> Result<(), String> {
-        for param in parameters {
-            if param.borrow {
-                return Err("Join: borrowed parameters not yet supported".to_string());
-            }
-        }
-
         // Create jump to remaining.
         let jmp_location = self.buf.len();
         let start_offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678);
