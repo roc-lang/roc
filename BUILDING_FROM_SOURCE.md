@@ -74,6 +74,8 @@ There are also alternative installation options at http://releases.llvm.org/down
 
 ## Using Nix
 
+:exclamation: **Our Nix setup is currently broken, you'll have to install manually for now** :exclamation:
+
 ### Install
 
 Using [nix](https://nixos.org/download.html) is a quick way to get an environment bootstrapped with a single command.

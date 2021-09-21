@@ -4,7 +4,7 @@ use core::alloc::Layout;
 use core::ffi::c_void;
 use core::mem::MaybeUninit;
 use libc;
-use roc_std::{RocCallResult, RocResult, RocStr};
+use roc_std::RocStr;
 use std::ffi::CStr;
 use std::fs;
 use std::os::raw::c_char;
@@ -71,23 +71,11 @@ pub fn rust_main() -> isize {
 
         roc_main(buffer);
 
-        let output = buffer as *mut RocCallResult<()>;
+        let result = call_the_closure(buffer);
 
-        match (&*output).into() {
-            Ok(()) => {
-                let closure_data_ptr = buffer.offset(8);
-                let result = call_the_closure(closure_data_ptr as *const u8);
+        std::alloc::dealloc(buffer, layout);
 
-                std::alloc::dealloc(buffer, layout);
-
-                result
-            }
-            Err(msg) => {
-                std::alloc::dealloc(buffer, layout);
-
-                panic!("Roc failed with message: {}", msg);
-            }
-        }
+        result
     };
 
     // Exit code
@@ -106,15 +94,9 @@ unsafe fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
         buffer as *mut u8,
     );
 
-    let output = &*(buffer as *mut RocCallResult<()>);
+    std::alloc::dealloc(buffer, layout);
 
-    match output.into() {
-        Ok(_) => {
-            std::alloc::dealloc(buffer, layout);
-            0
-        }
-        Err(e) => panic!("failed with {}", e),
-    }
+    0
 }
 
 #[no_mangle]
@@ -153,7 +135,7 @@ pub fn roc_fx_errLine(line: RocStr) -> () {
 
 #[no_mangle]
 pub fn roc_fx_httpGetUtf8(url: RocStr) -> (RocStr, u16) {
-    match ureq::get(unsafe { url.as_str() }).call() {
+    match ureq::get(url.as_str()).call() {
         Ok(resp) => match resp.into_string() {
             Ok(contents) => match RocStr::from_utf8(contents.as_bytes()) {
                 Ok(roc_str) => (roc_str, 0),

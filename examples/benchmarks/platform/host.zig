@@ -92,21 +92,9 @@ pub export fn main() callconv(.C) u8 {
 
     roc__mainForHost_1_exposed(output);
 
-    const flag = @ptrCast(*u64, @alignCast(@alignOf(u64), output)).*;
+    const closure_data_pointer = @ptrCast([*]u8, output);
 
-    if (flag == 0) {
-        // all is well
-        const closure_data_pointer = @ptrCast([*]u8, output[@sizeOf(u64)..size]);
-
-        call_the_closure(closure_data_pointer);
-    } else {
-        const ptr = @ptrCast(*u32, output + @sizeOf(u64));
-        const msg = @intToPtr([*:0]const u8, ptr.*);
-        const stderr = std.io.getStdErr().writer();
-        stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
-
-        return 0;
-    }
+    call_the_closure(closure_data_pointer);
 
     var ts2: std.os.timespec = undefined;
     std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts2) catch unreachable;
