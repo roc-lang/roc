@@ -48,6 +48,7 @@ pub enum Relocation {
     },
     JmpToReturn {
         inst_loc: u64,
+        inst_size: u64,
         offset: u64,
     },
 }

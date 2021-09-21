@@ -340,20 +340,48 @@ impl<
         let setup_offset = out.len();
 
         // Deal with jumps to the return address.
-        let ret_offset = self.buf.len();
         let old_relocs = std::mem::replace(&mut self.relocs, bumpalo::vec![in self.env.arena]);
+
+        // Check if their is an unnessary jump to return right at the end of the function.
+        let mut end_jmp_size = 0;
+        for reloc in old_relocs
+            .iter()
+            .filter(|reloc| matches!(reloc, Relocation::JmpToReturn { .. }))
+        {
+            if let Relocation::JmpToReturn {
+                inst_loc,
+                inst_size,
+                ..
+            } = reloc
+            {
+                if *inst_loc as usize + *inst_size as usize == self.buf.len() {
+                    end_jmp_size = *inst_size as usize;
+                    break;
+                }
+            }
+        }
+
+        // Update jumps to returns.
+        let ret_offset = self.buf.len() - end_jmp_size;
         let mut tmp = bumpalo::vec![in self.env.arena];
         for reloc in old_relocs
             .iter()
             .filter(|reloc| matches!(reloc, Relocation::JmpToReturn { .. }))
         {
-            if let Relocation::JmpToReturn { inst_loc, offset } = reloc {
-                self.update_jmp_imm32_offset(&mut tmp, *inst_loc, *offset, ret_offset as u64);
+            if let Relocation::JmpToReturn {
+                inst_loc,
+                inst_size,
+                offset,
+            } = reloc
+            {
+                if *inst_loc as usize + *inst_size as usize != self.buf.len() {
+                    self.update_jmp_imm32_offset(&mut tmp, *inst_loc, *offset, ret_offset as u64);
+                }
             }
         }
 
         // Add function body.
-        out.extend(&self.buf);
+        out.extend(&self.buf[..self.buf.len() - end_jmp_size]);
 
         // Cleanup stack.
         CC::cleanup_stack(
@@ -606,8 +634,13 @@ impl<
                     offset: offset + sub_func_offset,
                     name,
                 },
-                Relocation::JmpToReturn { inst_loc, offset } => Relocation::JmpToReturn {
+                Relocation::JmpToReturn {
+                    inst_loc,
+                    inst_size,
+                    offset,
+                } => Relocation::JmpToReturn {
                     inst_loc: inst_loc + sub_func_offset,
+                    inst_size,
                     offset: offset + sub_func_offset,
                 },
             }));
@@ -1017,8 +1050,11 @@ impl<
         }
         let inst_loc = self.buf.len() as u64;
         let offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678) as u64;
-        self.relocs
-            .push(Relocation::JmpToReturn { inst_loc, offset });
+        self.relocs.push(Relocation::JmpToReturn {
+            inst_loc,
+            inst_size: self.buf.len() as u64 - inst_loc,
+            offset,
+        });
         Ok(())
     }
 }
@@ -1384,6 +1420,7 @@ impl<
         Ok(())
     }
 
+    // Updates a jump instruction to a new offset and returns the number of bytes written.
     fn update_jmp_imm32_offset(
         &mut self,
         tmp: &mut Vec<'a, u8>,
