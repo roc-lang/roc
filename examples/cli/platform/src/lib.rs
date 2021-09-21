@@ -29,6 +29,7 @@ extern "C" {
 
 #[no_mangle]
 pub unsafe fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
+    println!("Alloc {}", size);
     libc::malloc(size)
 }
 
@@ -39,16 +40,19 @@ pub unsafe fn roc_realloc(
     _old_size: usize,
     _alignment: u32,
 ) -> *mut c_void {
+    println!("Realloc");
     libc::realloc(c_ptr, new_size)
 }
 
 #[no_mangle]
 pub unsafe fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
+    println!("delaoc");
     libc::free(c_ptr)
 }
 
 #[no_mangle]
 pub unsafe fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
+    println!("panic");
     match tag_id {
         0 => {
             let slice = CStr::from_ptr(c_ptr as *const c_char);
@@ -63,13 +67,17 @@ pub unsafe fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
 #[no_mangle]
 pub fn rust_main() -> isize {
     let size = unsafe { roc_main_size() } as usize;
-    let layout = Layout::array::<u8>(size).unwrap();
+    let layout = dbg!(Layout::array::<u8>(size).unwrap());
 
     unsafe {
         // TODO allocate on the stack if it's under a certain size
         let buffer = std::alloc::alloc(layout);
 
+        println!("Alloc'd; calling ro_main");
+
         roc_main(buffer);
+
+        println!("main done!");
 
         let output = buffer as *mut RocCallResult<()>;
 
