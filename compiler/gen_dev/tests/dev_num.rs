@@ -282,6 +282,24 @@ mod dev_num {
     }
 
     #[test]
+    fn gen_fast_fib_fn() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    fib = \n, a, b ->
+                        if n == 0 then
+                            a
+                        else
+                            fib (n - 1) b (a + b)
+                    fib 10 0 1
+                "#
+            ),
+            55,
+            i64
+        );
+    }
+
+    #[test]
     fn f64_abs() {
         assert_evals_to!("Num.abs -4.7", 4.7, f64);
         assert_evals_to!("Num.abs 5.8", 5.8, f64);
@@ -580,18 +598,18 @@ mod dev_num {
     //     assert_evals_to!("0.0 >= 0.0", true, bool);
     // }
 
-    // #[test]
-    // fn gen_order_of_arithmetic_ops() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 1 + 3 * 7 - 2
-    //             "#
-    //         ),
-    //         20,
-    //         i64
-    //     );
-    // }
+    #[test]
+    fn gen_order_of_arithmetic_ops() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    1 + 3 * 7 - 2
+                "#
+            ),
+            20,
+            i64
+        );
+    }
 
     // #[test]
     // fn gen_order_of_arithmetic_ops_complex_float() {
@@ -642,23 +660,23 @@ mod dev_num {
     //     );
     // }
 
-    // #[test]
-    // fn tail_call_elimination() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 sum = \n, accum ->
-    //                     when n is
-    //                         0 -> accum
-    //                         _ -> sum (n - 1) (n + accum)
+    #[test]
+    fn tail_call_elimination() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    sum = \n, accum ->
+                        when n is
+                            0 -> accum
+                            _ -> sum (n - 1) (n + accum)
 
-    //                 sum 1_000_000 0
-    //             "#
-    //         ),
-    //         500000500000,
-    //         i64
-    //     );
-    // }
+                    sum 1_000_000 0
+                "#
+            ),
+            500000500000,
+            i64
+        );
+    }
 
     // #[test]
     // fn int_negate() {
