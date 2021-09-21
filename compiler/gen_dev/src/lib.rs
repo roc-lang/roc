@@ -157,8 +157,7 @@ where
                 let layout_map = self.layout_map();
                 for arg in *args {
                     if let Some(layout) = layout_map.get(arg) {
-                        // This is safe because every value in the map is always set with a valid layout and cannot be null.
-                        arg_layouts.push(unsafe { *(*layout) });
+                        arg_layouts.push(*layout);
                     } else {
                         return Err(format!("the argument, {:?}, has no know layout", arg));
                     }
@@ -321,8 +320,7 @@ where
                         let layout_map = self.layout_map();
                         for arg in *arguments {
                             if let Some(layout) = layout_map.get(arg) {
-                                // This is safe because every value in the map is always set with a valid layout and cannot be null.
-                                arg_layouts.push(unsafe { *(*layout) });
+                                arg_layouts.push(*layout);
                             } else {
                                 return Err(format!("the argument, {:?}, has no know layout", arg));
                             }
@@ -600,12 +598,10 @@ where
 
     /// set_layout_map sets the layout for a specific symbol.
     fn set_layout_map(&mut self, sym: Symbol, layout: &Layout<'a>) -> Result<(), String> {
-        if let Some(x) = self.layout_map().insert(sym, layout) {
+        if let Some(old_layout) = self.layout_map().insert(sym, *layout) {
             // Layout map already contains the symbol. We should never need to overwrite.
             // If the layout is not the same, that is a bug.
-            // There is always an old layout value and this dereference is safe.
-            let old_layout = unsafe { *x };
-            if old_layout != *layout {
+            if &old_layout != layout {
                 Err(format!(
                     "Overwriting layout for symbol, {:?}. This should never happen. got {:?}, want {:?}",
                     sym, layout, old_layout
@@ -619,7 +615,7 @@ where
     }
 
     /// layout_map gets the map from symbol to layout.
-    fn layout_map(&mut self) -> &mut MutMap<Symbol, *const Layout<'a>>;
+    fn layout_map(&mut self) -> &mut MutMap<Symbol, Layout<'a>>;
 
     fn create_free_map(&mut self) {
         let mut free_map = MutMap::default();

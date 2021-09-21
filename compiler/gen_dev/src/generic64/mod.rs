@@ -214,7 +214,7 @@ pub struct Backend64Bit<
     is_self_recursive: Option<SelfRecursive>,
 
     last_seen_map: MutMap<Symbol, *const Stmt<'a>>,
-    layout_map: MutMap<Symbol, *const Layout<'a>>,
+    layout_map: MutMap<Symbol, Layout<'a>>,
     free_map: MutMap<*const Stmt<'a>, Vec<'a, Symbol>>,
 
     symbol_storage_map: MutMap<Symbol, SymbolStorage<GeneralReg, FloatReg>>,
@@ -313,7 +313,7 @@ impl<
         &mut self.last_seen_map
     }
 
-    fn layout_map(&mut self) -> &mut MutMap<Symbol, *const Layout<'a>> {
+    fn layout_map(&mut self) -> &mut MutMap<Symbol, Layout<'a>> {
         &mut self.layout_map
     }
 
@@ -659,7 +659,7 @@ impl<
         arg_layouts: &[Layout<'a>],
         ret_layout: &Layout<'a>,
     ) -> Result<(), String> {
-        // Treat this like a function call, but with a jump install of a call instruction at the end.
+        // Treat this like a function call, but with a jump instead of a call instruction at the end.
 
         self.push_used_caller_saved_regs_to_stack()?;
 
