@@ -1430,3 +1430,31 @@ impl<
         }
     }
 }
+
+#[macro_export]
+macro_rules! single_register_integers {
+    () => {
+        Builtin::Int1
+            | Builtin::Int8
+            | Builtin::Int16
+            | Builtin::Int32
+            | Builtin::Int64
+            | Builtin::Usize
+    };
+}
+
+#[macro_export]
+macro_rules! single_register_floats {
+    () => {
+        // Float16 is explicitly ignored because it is not supported by must hardware and may require special exceptions.
+        // Builtin::Float16 |
+        Builtin::Float32 | Builtin::Float64
+    };
+}
+
+#[macro_export]
+macro_rules! single_register_builtins {
+    () => {
+        single_register_integers!() | single_register_floats!()
+    };
+}
