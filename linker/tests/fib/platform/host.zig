@@ -43,9 +43,7 @@ export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn roc__mainForHost_1_exposed(i64, *RocCallResult) void;
-
-const RocCallResult = extern struct { flag: usize, content: u64 };
+extern fn roc__mainForHost_1_exposed(i64, *i64) void;
 
 const Unit = extern struct {};
 
@@ -55,7 +53,7 @@ pub export fn main() u8 {
     const iterations: usize = 50; // number of times to repeatedly find that Fibonacci number
 
     // make space for the result
-    var callresult = RocCallResult{ .flag = 0, .content = 0 };
+    var callresult = 0;
     var remaining_iterations = iterations;
 
     while (remaining_iterations > 0) {
@@ -66,7 +64,10 @@ pub export fn main() u8 {
     }
 
     // stdout the final result
-    stdout.print("After calling the Roc app {d} times, the Fibonacci number at index {d} is {d}\n", .{iterations, fib_number_to_find, callresult.content}) catch unreachable;
+    stdout.print(
+        "After calling the Roc app {d} times, the Fibonacci number at index {d} is {d}\n",
+        .{ iterations, fib_number_to_find, callresult },
+    ) catch unreachable;
 
     return 0;
 }
