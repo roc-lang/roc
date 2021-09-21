@@ -4863,7 +4863,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                         Usize | Int128 | Int64 | Int32 | Int16 | Int8 => {
                             build_int_unary_op(env, arg.into_int_value(), arg_builtin, op)
                         }
-                        Float128 | Float64 | Float32 | Float16 => {
+                        Float128 | Float64 | Float32 => {
                             build_float_unary_op(env, arg.into_float_value(), op)
                         }
                         _ => {
@@ -4959,7 +4959,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                                 "lt_or_gt",
                             )
                         }
-                        Float128 | Float64 | Float32 | Float16 => {
+                        Float128 | Float64 | Float32 => {
                             let are_equal = env.builder.build_float_compare(
                                 FloatPredicate::OEQ,
                                 lhs_arg.into_float_value(),
@@ -5405,8 +5405,7 @@ fn to_cc_type_builtin<'a, 'ctx, 'env>(
         | Builtin::Decimal
         | Builtin::Float128
         | Builtin::Float64
-        | Builtin::Float32
-        | Builtin::Float16 => basic_type_from_builtin(env, builtin),
+        | Builtin::Float32 => basic_type_from_builtin(env, builtin),
         Builtin::Str | Builtin::EmptyStr | Builtin::List(_) | Builtin::EmptyList => {
             env.str_list_c_abi().into()
         }
@@ -5769,7 +5768,7 @@ pub fn build_num_binop<'a, 'ctx, 'env>(
                     rhs_layout,
                     op,
                 ),
-                Float128 | Float64 | Float32 | Float16 => build_float_binop(
+                Float128 | Float64 | Float32 => build_float_binop(
                     env,
                     parent,
                     lhs_arg.into_float_value(),
