@@ -3098,13 +3098,19 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
 ) -> FunctionValue<'ctx> {
     let context = env.context;
 
-    let wrapper_return_type = context.struct_type(
-        &[
-            context.i64_type().into(),
-            roc_function.get_type().get_return_type().unwrap(),
-        ],
-        false,
-    );
+    let wrapper_return_type = if env.is_gen_test {
+        context
+            .struct_type(
+                &[
+                    context.i64_type().into(),
+                    roc_function.get_type().get_return_type().unwrap(),
+                ],
+                false,
+            )
+            .into()
+    } else {
+        roc_function.get_type().get_return_type().unwrap()
+    };
 
     let mut cc_argument_types = Vec::with_capacity_in(arguments.len(), env.arena);
     for layout in arguments {
@@ -3189,7 +3195,8 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
 
             let call_unwrapped_result = call_unwrapped.try_as_basic_value().left().unwrap();
 
-            make_good_roc_result(env, call_unwrapped_result)
+            // make_good_roc_result(env, call_unwrapped_result)
+            call_unwrapped_result
         }
     };
 
