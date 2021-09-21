@@ -2,7 +2,7 @@ use cgmath::{Matrix4, Ortho};
 use wgpu::util::DeviceExt;
 use wgpu::{
     BindGroup, BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntry, Buffer,
-    ShaderStage,
+    ShaderStages,
 };
 
 // orthographic projection is used to transform pixel coords to the coordinate system used by wgpu
@@ -45,7 +45,7 @@ pub fn update_ortho_buffer(
     let new_ortho_buffer = gpu_device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Ortho uniform buffer"),
         contents: bytemuck::cast_slice(&[new_uniforms]),
-        usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_SRC,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_SRC,
     });
 
     // get a command encoder for the current frame
@@ -83,14 +83,14 @@ pub fn init_ortho(
     let ortho_buffer = gpu_device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Ortho uniform buffer"),
         contents: bytemuck::cast_slice(&[uniforms]),
-        usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
 
     // bind groups consist of extra resources that are provided to the shaders
     let ortho_bind_group_layout = gpu_device.create_bind_group_layout(&BindGroupLayoutDescriptor {
         entries: &[BindGroupLayoutEntry {
             binding: 0,
-            visibility: ShaderStage::VERTEX,
+            visibility: ShaderStages::VERTEX,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,

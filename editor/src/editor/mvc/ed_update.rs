@@ -4,7 +4,6 @@ use std::process::Command;
 use std::process::Stdio;
 
 use crate::editor::code_lines::CodeLines;
-use crate::editor::ed_error::from_ui_res;
 use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::MissingSelection;
 use crate::editor::grid_node_map::GridNodeMap;
@@ -522,29 +521,44 @@ impl<'a> EdModel<'a> {
         virtual_keycode: VirtualKeyCode,
     ) -> EdResult<()> {
         match virtual_keycode {
-            Left => from_ui_res(self.move_caret_left(modifiers)),
+            Left => self.move_caret_left(modifiers)?,
             Up => {
                 if modifiers.cmd_or_ctrl() && modifiers.shift {
-                    self.select_expr()
+                    self.select_expr()?
                 } else {
-                    from_ui_res(self.move_caret_up(modifiers))
+                    self.move_caret_up(modifiers)?
                 }
             }
-            Right => from_ui_res(self.move_caret_right(modifiers)),
-            Down => from_ui_res(self.move_caret_down(modifiers)),
+            Right => self.move_caret_right(modifiers)?,
+            Down => self.move_caret_down(modifiers)?,
 
-            A => if_modifiers(modifiers, self.select_all()),
-            S => if_modifiers(modifiers, self.save_file()),
-            R => if_modifiers(modifiers, self.run_file()),
-            Home => from_ui_res(self.move_caret_home(modifiers)),
-            End => from_ui_res(self.move_caret_end(modifiers)),
+            A => {
+                if modifiers.cmd_or_ctrl() {
+                    self.select_all()?
+                }
+            }
+            S => {
+                if modifiers.cmd_or_ctrl() {
+                    self.save_file()?
+                }
+            }
+            R => {
+                if modifiers.cmd_or_ctrl() {
+                    self.run_file()?
+                }
+            }
+
+            Home => self.move_caret_home(modifiers)?,
+            End => self.move_caret_end(modifiers)?,
+
             F11 => {
                 self.show_debug_view = !self.show_debug_view;
                 self.dirty = true;
-                Ok(())
             }
-            _ => Ok(()),
+            _ => (),
         }
+
+        Ok(())
     }
 
     // Replaces selected expression with blank.
@@ -785,14 +799,6 @@ pub fn get_node_context<'a>(ed_model: &'a EdModel) -> EdResult<NodeContext<'a>> 
         parent_id_opt,
         ast_node_id,
     })
-}
-
-fn if_modifiers(modifiers: &Modifiers, shortcut_result: UIResult<()>) -> EdResult<()> {
-    if modifiers.cmd_or_ctrl() {
-        from_ui_res(shortcut_result)
-    } else {
-        Ok(())
-    }
 }
 
 // current(=caret is here) MarkupNode corresponds to a Def2 in the AST
