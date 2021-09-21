@@ -70,12 +70,12 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
         .build(&event_loop)
         .unwrap();
 
-    let instance = wgpu::Instance::new(wgpu::Backends::all());
+    let instance = wgpu::Instance::new(wgpu::Backends::GL);
 
     let surface = unsafe { instance.create_surface(&window) };
 
     // Initialize GPU
-    let (gpu_device, cmd_queue) = futures::executor::block_on(async {
+    let ((gpu_device, cmd_queue), render_format) = futures::executor::block_on(async {
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
@@ -84,7 +84,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
             .await
             .expect("Request adapter");
 
-        adapter
+        let tup = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: None,
@@ -94,7 +94,9 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                 None,
             )
             .await
-            .expect("Request device")
+            .expect("Request device");
+
+        (tup, surface.get_preferred_format(&adapter).unwrap())
     });
 
     // Create staging belt and a local pool
@@ -103,7 +105,6 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
     let local_spawner = local_pool.spawner();
 
     // Prepare swap chain
-    let render_format = wgpu::TextureFormat::Bgra8Unorm;
     let mut size = window.inner_size();
 
     let surface_config = wgpu::SurfaceConfiguration {
