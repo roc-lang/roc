@@ -48,6 +48,8 @@ pub fn path_to_roc_binary() -> PathBuf {
 pub fn run_roc(args: &[&str]) -> Out {
     let mut cmd = Command::new(path_to_roc_binary());
 
+    cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
+    
     for arg in args {
         cmd.arg(arg);
     }

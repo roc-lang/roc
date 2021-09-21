@@ -16,8 +16,6 @@ fn exec_bench_w_input<T: Measurement>(
     let compile_out = run_roc(&[&["build", file.to_str().unwrap()], flags].concat());
     println!("Done building {}.", executable_filename);
 
-    println!("{}", compile_out.stderr);
-
     assert!(
         compile_out.status.success(),
         "build ended with bad status {:?}",
