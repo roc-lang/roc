@@ -233,7 +233,7 @@ mod cli_run {
             expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
-        hello_world:"hello-web" => Example {
+        hello_web:"hello-web" => Example {
             filename: "Hello.roc",
             executable_filename: "hello-web",
             stdin: &[],
