@@ -12,11 +12,11 @@ fn exec_bench_w_input<T: Measurement>(
 ) {
     let flags: &[&str] = &["--optimize"];
 
+    println!("building {}.", executable_filename);
     let compile_out = run_roc(&[&["build", file.to_str().unwrap()], flags].concat());
+    println!("Done building {}.", executable_filename);
 
-    if !compile_out.stderr.is_empty() {
-        panic!("{}", compile_out.stderr);
-    }
+    println!("{}", compile_out.stderr);
 
     assert!(
         compile_out.status.success(),
@@ -24,9 +24,11 @@ fn exec_bench_w_input<T: Measurement>(
         compile_out
     );
 
+    /*println!("starting check_cmd_output {}...", executable_filename);
     check_cmd_output(file, stdin_str, executable_filename, expected_ending);
-
+    println!("starting benching {}...", executable_filename);
     bench_cmd(file, stdin_str, executable_filename, bench_group_opt);
+    println!("Done for {}.", executable_filename);*/
 }
 
 fn check_cmd_output(

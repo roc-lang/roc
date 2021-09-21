@@ -284,6 +284,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     });
 
     let src_dir = path.parent().unwrap().canonicalize().unwrap();
+    dbg!("pre build_file");
     let res_binary_path = build_file(
         &arena,
         &target,
@@ -294,6 +295,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
         emit_timings,
         link_type,
     );
+    dbg!("post build_file");
 
     match res_binary_path {
         Ok(BuiltFile {

@@ -57,7 +57,7 @@ const PKG_CONFIG_FILE_NAME: &str = "Package-Config";
 /// The . in between module names like Foo.Bar.Baz
 const MODULE_SEPARATOR: char = '.';
 
-const SHOW_MESSAGE_LOG: bool = false;
+const SHOW_MESSAGE_LOG: bool = true;
 
 const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 
