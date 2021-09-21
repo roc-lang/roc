@@ -556,7 +556,7 @@ impl<
         let start_offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678);
 
         // This section can essentially be seen as a sub function within the main function.
-        // Thus we build using a new backend with some minor extra syncronization.
+        // Thus we build using a new backend with some minor extra synchronization.
         let mut sub_backend = Self::new(self.env)?;
         sub_backend.reset(
             self.proc_name.as_ref().unwrap().clone(),
