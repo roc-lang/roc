@@ -4,7 +4,7 @@ use core::alloc::Layout;
 use core::ffi::c_void;
 use core::mem::MaybeUninit;
 use libc;
-use roc_std::RocStr;
+use roc_std::{RocList, RocStr};
 use std::ffi::CStr;
 use std::fs;
 use std::os::raw::c_char;
@@ -100,7 +100,7 @@ unsafe fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
 }
 
 #[no_mangle]
-pub fn roc_fx_getLine() -> RocStr {
+extern "C" fn roc_fx_getLine() -> RocStr {
     use std::io::{self, BufRead};
 
     let stdin = io::stdin();
@@ -122,7 +122,7 @@ pub fn roc_fx_putLine(line: RocStr) -> () {
 }
 
 #[no_mangle]
-pub fn roc_fx_errLine(line: RocStr) -> () {
+extern "C" fn roc_fx_errLine(line: RocStr) -> () {
     let bytes = line.as_slice();
     let string = unsafe { std::str::from_utf8_unchecked(bytes) };
     eprintln!("{}", string);
@@ -134,28 +134,29 @@ pub fn roc_fx_errLine(line: RocStr) -> () {
 }
 
 #[no_mangle]
-pub fn roc_fx_httpGetUtf8(url: RocStr) -> (RocStr, u16) {
-    match ureq::get(url.as_str()).call() {
-        Ok(resp) => match resp.into_string() {
-            Ok(contents) => match RocStr::from_utf8(contents.as_bytes()) {
-                Ok(roc_str) => (roc_str, 0),
-                Err(_) => {
-                    // TODO FIXME don't always return "unknown" error
-                    (RocStr::default(), u16::MAX)
-                }
-            },
-            // TODO turn this error into an integer
-            Err(err) => (
-                RocStr::from_slice(format!("{:?}", err).as_bytes()),
-                u16::MAX,
-            ),
-        },
-        // TODO turn this error into an integer
-        Err(err) => (
-            RocStr::from_slice(format!("{:?}", err).as_bytes()),
-            u16::MAX,
-        ),
-    }
+extern "C" fn roc_fx_httpGetUtf8(url: RocStr) -> Pair<RocStr, u16> {
+    Pair(url, 200)
+    //    match ureq::get(url.as_str()).call() {
+    //        Ok(resp) => match resp.into_string() {
+    //            Ok(contents) => match RocStr::from_utf8(contents.as_bytes()) {
+    //                Ok(roc_str) => (roc_str, 0),
+    //                Err(_) => {
+    //                    // TODO FIXME don't always return "unknown" error
+    //                    (RocStr::default(), u16::MAX)
+    //                }
+    //            },
+    //            // TODO turn this error into an integer
+    //            Err(err) => (
+    //                RocStr::from_slice(format!("{:?}", err).as_bytes()),
+    //                u16::MAX,
+    //            ),
+    //        },
+    //        // TODO turn this error into an integer
+    //        Err(err) => (
+    //            RocStr::from_slice(format!("{:?}", err).as_bytes()),
+    //            u16::MAX,
+    //        ),
+    //    }
 }
 
 #[no_mangle]
@@ -170,23 +171,31 @@ pub fn roc_fx_writeAllUtf8(path: RocStr, contents: RocStr) -> i32 {
     }
 }
 
+#[repr(C)]
+struct Pair<T, U>(T, U);
+
 #[no_mangle]
-pub fn roc_fx_readAllUtf8(path: RocStr) -> (RocStr, i32) {
-    // TODO use libc to do the operation with minimal overhead and get errno
-    match fs::read(path.as_str()) {
-        Ok(bytes) => {
-            match RocStr::from_utf8(&bytes) {
-                Ok(roc_str) => (roc_str, 0),
-                Err(_) => {
-                    // errno must always be a positive value,
-                    // so this negative number indicates a utf-8 problem
-                    (RocStr::default(), -1)
-                }
-            }
-        }
-        Err(_) => {
-            // TODO FIXME don't always return "unknown" error
-            (RocStr::default(), i32::MIN)
-        }
-    }
+extern "C" fn roc_fx_readAllUtf8(path: RocStr) -> Pair<RocList<u8>, i32> {
+    std::mem::forget(path);
+    return Pair(RocList::from_slice(b"hello there"), 0);
+
+    //        // TODO use libc to do the operation with minimal overhead and get errno
+    //        dbg!(path);
+    //        panic!();
+    //        match fs::read(path.as_str()) {
+    //            Ok(bytes) => {
+    //                match RocStr::from_utf8(&bytes) {
+    //                    Ok(roc_str) => (roc_str, 0),
+    //                    Err(_) => {
+    //                        // errno must always be a positive value,
+    //                        // so this negative number indicates a utf-8 problem
+    //                        (RocStr::default(), -1)
+    //                    }
+    //                }
+    //            }
+    //            Err(_) => {
+    //                // TODO FIXME don't always return "unknown" error
+    //                (RocStr::default(), i32::MIN)
+    //            }
+    //        }
 }

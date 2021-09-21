@@ -836,6 +836,7 @@ impl<'a, T: Sized + Copy> From<&'a RocCallResult<T>> for Result<T, &'a str> {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+#[repr(C)]
 pub struct RocDec(pub i128);
 
 impl RocDec {

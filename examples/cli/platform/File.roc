@@ -76,13 +76,14 @@ convertUtf8Errno = \path, answer ->
     # errno values - see
     # https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/errno.h.html
     when answer.errno is
-        # 0 ->
-        #     when Str.fromUtf8 answer.bytes is
-        #         Ok str -> Ok str
-        #         Err (BadUtf8 problem index) -> Err (FileReadErr (BadUtf8 problem index))
-        # 1 -> Err (FileReadErr (PermissionDenied path))
-        # 2 -> Err (FileReadErr (FileNotFound path))
-        # 19 -> Err (FileReadErr (FileWasDir path))
+        0 ->
+            when Str.fromUtf8 answer.bytes is
+                Ok str -> Ok str
+                Err (BadUtf8 problem index) -> Err (FileReadUtf8Err (BadUtf8 problem index))
+
+        1 -> Err (FileReadUtf8Err (PermissionDenied path))
+        2 -> Err (FileReadUtf8Err (FileNotFound path))
+        19 -> Err (FileReadUtf8Err (FileWasDir path))
         # TODO handle other errno scenarios that could come up
         _ -> Err (FileReadUtf8Err (UnknownError answer.errno path))
 
