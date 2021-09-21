@@ -65,15 +65,18 @@ export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void{
 const Unit = extern struct {};
 
 pub export fn main() u8 {
+    const allocator = std.heap.page_allocator;
+
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
 
-    const size = @intCast(usize, roc__mainForHost_size());
-    const raw_output = std.heap.c_allocator.alloc(u8, size) catch unreachable;
+    // NOTE the return size can be zero, which will segfault. Always allocate at least 8 bytes
+    const size = std.math.max(8, @intCast(usize, roc__mainForHost_size()));
+    const raw_output = allocator.allocAdvanced(u8, @alignOf(u64), @intCast(usize, size), .at_least) catch unreachable;
     var output = @ptrCast([*]u8, raw_output);
 
     defer {
-        std.heap.c_allocator.free(raw_output);
+        allocator.free(raw_output);
     }
 
     var ts1: std.os.timespec = undefined;
@@ -81,21 +84,7 @@ pub export fn main() u8 {
 
     roc__mainForHost_1_exposed(output);
 
-    const elements = @ptrCast([*]u64, @alignCast(8, output));
-
-    var flag = elements[0];
-
-    if (flag == 0) {
-        // all is well
-        const closure_data_pointer = @ptrCast([*]u8, output[8..size]);
-
-        call_the_closure(closure_data_pointer);
-    } else {
-        const msg = @intToPtr([*:0]const u8, elements[1]);
-        stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
-
-        return 0;
-    }
+    call_the_closure(output);
 
     var ts2: std.os.timespec = undefined;
     std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts2) catch unreachable;
@@ -112,27 +101,20 @@ fn to_seconds(tms: std.os.timespec) f64 {
 }
 
 fn call_the_closure(closure_data_pointer: [*]u8) void {
+    const allocator = std.heap.page_allocator;
+
     const size = roc__mainForHost_1_Fx_result_size();
-    const raw_output = std.heap.c_allocator.alloc(u8, @intCast(usize, size)) catch unreachable;
+    const raw_output = allocator.allocAdvanced(u8, @alignOf(u64), @intCast(usize, size), .at_least) catch unreachable;
     var output = @ptrCast([*]u8, raw_output);
 
     defer {
-        std.heap.c_allocator.free(raw_output);
+        allocator.free(raw_output);
     }
 
     const flags: u8 = 0;
-
     roc__mainForHost_1_Fx_caller(&flags, closure_data_pointer, output);
 
-    const elements = @ptrCast([*]u64, @alignCast(8, output));
-
-    var flag = elements[0];
-
-    if (flag == 0) {
-        return;
-    } else {
-        unreachable;
-    }
+    return;
 }
 
 pub export fn roc_fx_getLine() str.RocStr {

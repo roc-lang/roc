@@ -64,9 +64,7 @@ export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void{
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn roc__mainForHost_1_exposed(*RocCallResult) void;
-
-const RocCallResult = extern struct { flag: u64, content: RocStr };
+extern fn roc__mainForHost_1_exposed(*RocStr) void;
 
 const Unit = extern struct {};
 
@@ -75,7 +73,7 @@ pub fn main() u8 {
     const stderr = std.io.getStdErr().writer();
 
     // make space for the result
-    var callresult = RocCallResult{ .flag = 0, .content = RocStr.empty() };
+    var callresult = RocStr.empty();
 
     // start time
     var ts1: std.os.timespec = undefined;
@@ -85,9 +83,9 @@ pub fn main() u8 {
     roc__mainForHost_1_exposed(&callresult);
 
     // stdout the result
-    stdout.print("{s}\n", .{callresult.content.asSlice()}) catch unreachable;
+    stdout.print("{s}\n", .{callresult.asSlice()}) catch unreachable;
 
-    callresult.content.deinit();
+    callresult.deinit();
 
     // end time
     var ts2: std.os.timespec = undefined;
