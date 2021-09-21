@@ -191,7 +191,14 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
         }
         for (layout, sym) in args.iter() {
             match layout {
-                Layout::Builtin(Builtin::Int64) => {
+                Layout::Builtin(
+                    Builtin::Int1
+                    | Builtin::Int8
+                    | Builtin::Int16
+                    | Builtin::Int32
+                    | Builtin::Int64
+                    | Builtin::Usize,
+                ) => {
                     if general_i < Self::GENERAL_PARAM_REGS.len() {
                         symbol_map.insert(
                             *sym,
@@ -210,7 +217,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                         );
                     }
                 }
-                Layout::Builtin(Builtin::Float64) => {
+                Layout::Builtin(Builtin::Float32 | Builtin::Float64) => {
                     if float_i < Self::FLOAT_PARAM_REGS.len() {
                         symbol_map.insert(
                             *sym,
@@ -229,6 +236,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                         );
                     }
                 }
+                Layout::Struct(&[]) => {}
                 x => {
                     return Err(format!(
                         "Loading args with layout {:?} not yet implementd",
@@ -254,8 +262,16 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
         // For most return layouts we will do nothing.
         // In some cases, we need to put the return address as the first arg.
         match ret_layout {
-            Layout::Builtin(Builtin::Int64) => {}
-            Layout::Builtin(Builtin::Float64) => {}
+            Layout::Builtin(
+                Builtin::Int1
+                | Builtin::Int8
+                | Builtin::Int16
+                | Builtin::Int32
+                | Builtin::Int64
+                | Builtin::Usize
+                | Builtin::Float32
+                | Builtin::Float64,
+            ) => {}
             x => {
                 return Err(format!(
                     "receiving return type, {:?}, is not yet implemented",
@@ -265,7 +281,14 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
         }
         for (i, layout) in arg_layouts.iter().enumerate() {
             match layout {
-                Layout::Builtin(Builtin::Int64) => {
+                Layout::Builtin(
+                    Builtin::Int1
+                    | Builtin::Int8
+                    | Builtin::Int16
+                    | Builtin::Int32
+                    | Builtin::Int64
+                    | Builtin::Usize,
+                ) => {
                     if general_i < Self::GENERAL_PARAM_REGS.len() {
                         // Load the value to the param reg.
                         let dst = Self::GENERAL_PARAM_REGS[general_i];
@@ -319,7 +342,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                         stack_offset += 8;
                     }
                 }
-                Layout::Builtin(Builtin::Float64) => {
+                Layout::Builtin(Builtin::Float32 | Builtin::Float64) => {
                     if float_i < Self::FLOAT_PARAM_REGS.len() {
                         // Load the value to the param reg.
                         let dst = Self::FLOAT_PARAM_REGS[float_i];
@@ -371,6 +394,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                         stack_offset += 8;
                     }
                 }
+                Layout::Struct(&[]) => {}
                 x => {
                     return Err(format!(
                         "calling with arg type, {:?}, is not yet implemented",
@@ -529,13 +553,21 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
         for (layout, sym) in args.iter() {
             if i < Self::GENERAL_PARAM_REGS.len() {
                 match layout {
-                    Layout::Builtin(Builtin::Int64) => {
+                    Layout::Builtin(
+                        Builtin::Int1
+                        | Builtin::Int8
+                        | Builtin::Int16
+                        | Builtin::Int32
+                        | Builtin::Int64
+                        | Builtin::Usize,
+                    ) => {
                         symbol_map
                             .insert(*sym, SymbolStorage::GeneralReg(Self::GENERAL_PARAM_REGS[i]));
                     }
-                    Layout::Builtin(Builtin::Float64) => {
+                    Layout::Builtin(Builtin::Float32 | Builtin::Float64) => {
                         symbol_map.insert(*sym, SymbolStorage::FloatReg(Self::FLOAT_PARAM_REGS[i]));
                     }
+                    Layout::Struct(&[]) => {}
                     x => {
                         return Err(format!(
                             "Loading args with layout {:?} not yet implementd",
@@ -546,8 +578,16 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                 i += 1;
             } else {
                 base_offset += match layout {
-                    Layout::Builtin(Builtin::Int64) => 8,
-                    Layout::Builtin(Builtin::Float64) => 8,
+                    Layout::Builtin(
+                        Builtin::Int1
+                        | Builtin::Int8
+                        | Builtin::Int16
+                        | Builtin::Int32
+                        | Builtin::Int64
+                        | Builtin::Usize
+                        | Builtin::Float32
+                        | Builtin::Float64,
+                    ) => 8,
                     x => {
                         return Err(format!(
                             "Loading args with layout {:?} not yet implemented",
@@ -581,8 +621,16 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
         // For most return layouts we will do nothing.
         // In some cases, we need to put the return address as the first arg.
         match ret_layout {
-            Layout::Builtin(Builtin::Int64) => {}
-            Layout::Builtin(Builtin::Float64) => {}
+            Layout::Builtin(
+                Builtin::Int1
+                | Builtin::Int8
+                | Builtin::Int16
+                | Builtin::Int32
+                | Builtin::Int64
+                | Builtin::Usize
+                | Builtin::Float32
+                | Builtin::Float64,
+            ) => {}
             x => {
                 return Err(format!(
                     "receiving return type, {:?}, is not yet implemented",
@@ -592,7 +640,14 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
         }
         for (i, layout) in arg_layouts.iter().enumerate() {
             match layout {
-                Layout::Builtin(Builtin::Int64) => {
+                Layout::Builtin(
+                    Builtin::Int1
+                    | Builtin::Int8
+                    | Builtin::Int16
+                    | Builtin::Int32
+                    | Builtin::Int64
+                    | Builtin::Usize,
+                ) => {
                     if i < Self::GENERAL_PARAM_REGS.len() {
                         // Load the value to the param reg.
                         let dst = Self::GENERAL_PARAM_REGS[reg_i];
@@ -646,7 +701,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                         stack_offset += 8;
                     }
                 }
-                Layout::Builtin(Builtin::Float64) => {
+                Layout::Builtin(Builtin::Float32 | Builtin::Float64) => {
                     if i < Self::FLOAT_PARAM_REGS.len() {
                         // Load the value to the param reg.
                         let dst = Self::FLOAT_PARAM_REGS[reg_i];
@@ -698,6 +753,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                         stack_offset += 8;
                     }
                 }
+                Layout::Struct(&[]) => {}
                 x => {
                     return Err(format!(
                         "calling with arg type, {:?}, is not yet implemented",

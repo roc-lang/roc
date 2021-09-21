@@ -624,41 +624,41 @@ mod dev_num {
     //     );
     // }
 
-    // #[test]
-    // fn if_guard_bind_variable_false() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //             wrapper = \{} ->
-    //                 when 10 is
-    //                     x if x == 5 -> 0
-    //                     _ -> 42
+    #[test]
+    fn if_guard_bind_variable_false() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                wrapper = \{} ->
+                    when 10 is
+                        x if x == 5 -> 0
+                        _ -> 42
 
-    //             wrapper {}
-    //             "#
-    //         ),
-    //         42,
-    //         i64
-    //     );
-    // }
+                wrapper {}
+                "#
+            ),
+            42,
+            i64
+        );
+    }
 
-    // #[test]
-    // fn if_guard_bind_variable_true() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //             wrapper = \{} ->
-    //                 when 10 is
-    //                     x if x == 10 -> 42
-    //                     _ -> 0
+    #[test]
+    fn if_guard_bind_variable_true() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                wrapper = \{} ->
+                    when 10 is
+                        x if x == 10 -> 42
+                        _ -> 0
 
-    //             wrapper {}
-    //             "#
-    //         ),
-    //         42,
-    //         i64
-    //     );
-    // }
+                wrapper {}
+                "#
+            ),
+            42,
+            i64
+        );
+    }
 
     #[test]
     fn tail_call_elimination() {
