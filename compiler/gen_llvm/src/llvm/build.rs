@@ -5480,7 +5480,7 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
     let cc_type = match cc_return {
         CCReturn::Void => env.context.void_type().fn_type(&cc_argument_types, false),
         CCReturn::ByPointer => {
-            cc_argument_types.push(return_type.ptr_type(AddressSpace::Generic).into());
+            cc_argument_types.insert(0, return_type.ptr_type(AddressSpace::Generic).into());
             env.context.void_type().fn_type(&cc_argument_types, false)
         }
         CCReturn::Return => return_type.fn_type(&cc_argument_types, false),
@@ -5508,17 +5508,24 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
         let fastcc_parameters = fastcc_function.get_params();
         let mut cc_arguments = Vec::with_capacity_in(fastcc_parameters.len() + 1, env.arena);
 
-        for (param, cc_type) in fastcc_parameters.into_iter().zip(cc_argument_types.iter()) {
+        let skip = if let CCReturn::ByPointer = cc_return {
+            cc_arguments.push(return_pointer.into());
+
+            1
+        } else {
+            0
+        };
+
+        for (param, cc_type) in fastcc_parameters
+            .into_iter()
+            .zip(cc_argument_types.iter().skip(skip))
+        {
             if param.get_type() == *cc_type {
                 cc_arguments.push(param);
             } else {
                 let as_cc_type = complex_bitcast(env.builder, param, *cc_type, "to_cc_type");
                 cc_arguments.push(as_cc_type);
             }
-        }
-
-        if let CCReturn::ByPointer = cc_return {
-            cc_arguments.push(return_pointer.into());
         }
 
         let call = env.builder.build_call(cc_function, &cc_arguments, "tmp");
