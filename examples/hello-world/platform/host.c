@@ -51,7 +51,6 @@ size_t roc_str_len(struct RocStr str) {
     }
 }
 
-
 extern struct RocStr roc__mainForHost_1_exposed();
 
 int main() {

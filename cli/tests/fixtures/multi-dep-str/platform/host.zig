@@ -24,6 +24,7 @@ const Allocator = mem.Allocator;
 
 extern fn roc__mainForHost_1_exposed() RocStr;
 
+
 extern fn malloc(size: usize) callconv(.C) ?*c_void;
 extern fn realloc(c_ptr: [*]align(@alignOf(u128)) u8, size: usize) callconv(.C) ?*c_void;
 extern fn free(c_ptr: [*]align(@alignOf(u128)) u8) callconv(.C) void;
