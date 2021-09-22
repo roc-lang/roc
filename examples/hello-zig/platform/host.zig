@@ -54,7 +54,7 @@ export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn roc__mainForHost_1_exposed(*RocStr) void;
+extern fn roc__mainForHost_1_exposed() RocStr;
 
 const Unit = extern struct {};
 
@@ -62,15 +62,12 @@ pub fn main() u8 {
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
 
-    // make space for the result
-    var callresult = RocStr.empty();
-
     // start time
     var ts1: std.os.timespec = undefined;
     std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts1) catch unreachable;
 
     // actually call roc to populate the callresult
-    roc__mainForHost_1_exposed(&callresult);
+    var callresult = roc__mainForHost_1_exposed();
 
     // stdout the result
     stdout.print("{s}\n", .{callresult.asSlice()}) catch unreachable;
