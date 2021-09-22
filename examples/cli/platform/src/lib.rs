@@ -135,7 +135,9 @@ extern "C" fn roc_fx_errLine(line: RocStr) -> () {
 
 #[no_mangle]
 extern "C" fn roc_fx_httpGetUtf8(url: RocStr) -> Pair<RocStr, u16> {
-    match ureq::get(url.as_str()).call() {
+    let call = ureq::get(url.as_str()).call();
+    std::mem::forget(url);
+    match call {
         Ok(resp) => match resp.into_string() {
             Ok(contents) => match RocStr::from_utf8(contents.as_bytes()) {
                 Ok(roc_str) => Pair(roc_str, 0),
