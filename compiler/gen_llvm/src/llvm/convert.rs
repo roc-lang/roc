@@ -97,7 +97,6 @@ pub fn basic_type_from_builtin<'a, 'ctx, 'env>(
         Float128 => context.f128_type().as_basic_type_enum(),
         Float64 => context.f64_type().as_basic_type_enum(),
         Float32 => context.f32_type().as_basic_type_enum(),
-        Float16 => context.f16_type().as_basic_type_enum(),
         Dict(_, _) | EmptyDict => zig_dict_type(env).into(),
         Set(_) | EmptySet => zig_dict_type(env).into(),
         List(_) | EmptyList => zig_list_type(env).into(),
