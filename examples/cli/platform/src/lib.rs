@@ -6,8 +6,8 @@ use core::mem::MaybeUninit;
 use libc;
 use roc_std::RocStr;
 use std::ffi::CStr;
+use std::fs;
 use std::os::raw::c_char;
-use std::{fs, io};
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed"]
@@ -134,36 +134,41 @@ extern "C" fn roc_fx_errLine(line: RocStr) -> () {
 }
 
 #[no_mangle]
-extern "C" fn roc_fx_httpGetUtf8(url: RocStr) -> Pair<RocStr, u16> {
+extern "C" fn roc_fx_httpGetUtf8(url: RocStr) -> Pair<RocStr, i32> {
     let call = ureq::get(url.as_str()).call();
-    std::mem::forget(url);
+
+    std::mem::forget(url); // don't mess with the refcount!
+
     match call {
-        Ok(resp) => match resp.into_string() {
-            Ok(contents) => match RocStr::from_utf8(contents.as_bytes()) {
-                Ok(roc_str) => Pair(roc_str, 0),
-                Err(_) => {
-                    // TODO FIXME don't always return "unknown" error
-                    Pair(RocStr::default(), u16::MAX)
-                }
-            },
-            // TODO turn this error into an integer
-            Err(err) => Pair(
-                RocStr::from_slice(format!("{:?}", err).as_bytes()),
-                u16::MAX,
-            ),
-        },
-        // TODO turn this error into an integer
-        Err(err) => Pair(
-            RocStr::from_slice(format!("{:?}", err).as_bytes()),
-            u16::MAX,
-        ),
+        Ok(resp) => {
+            let status = resp.status() as i32;
+
+            match resp.into_string() {
+                Ok(contents) => match RocStr::from_utf8(contents.as_bytes()) {
+                    Ok(roc_str) => Pair(roc_str, status),
+                    Err(_) => Pair(RocStr::default(), -1), // -1 means "bad utf8"
+                },
+                Err(err) => Pair(RocStr::from_slice(format!("{:?}", err).as_bytes()), status),
+            }
+        }
+        Err(err) => {
+            use ureq::ErrorKind::*;
+
+            let status = match err.kind() {
+                ConnectionFailed => -2,
+                InvalidUrl => -3,
+                _ => -4, // TODO cover the others
+            };
+
+            Pair(RocStr::from_slice(format!("{:?}", err).as_bytes()), status)
+        }
     }
 }
 
 #[no_mangle]
 pub fn roc_fx_writeAllUtf8(path: RocStr, contents: RocStr) -> i32 {
     // TODO use libc to do the operation with minimal overhead and get errno
-    let errno = match fs::write(path.as_str(), dbg!(contents.as_bytes())) {
+    let errno = match fs::write(path.as_str(), contents.as_bytes()) {
         Ok(()) => 0,
         Err(_) => {
             // TODO FIXME don't always return "unknown" error
@@ -194,7 +199,7 @@ extern "C" fn roc_fx_readAllUtf8(path: RocStr) -> Pair<RocStr, i32> {
             }
         }
         Err(err) => {
-            use io::ErrorKind::*;
+            use std::io::ErrorKind::*;
 
             let errno = match err.kind() {
                 PermissionDenied => 1,

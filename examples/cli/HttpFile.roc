@@ -8,7 +8,7 @@ main : Task {} []
 main =
     task =
         username <- await (File.readUtf8 "username.txt")
-        userData <- await (Http.getUtf8 "http://localhost:8000/\(username)")
+        userData <- await (Http.getUtf8 "http://localhost:8080/\(username)")
         File.writeUtf8 "userData.txt" userData
 
     Task.attempt task \result ->
@@ -20,6 +20,9 @@ main =
             Err (HttpGetUtf8Err (BadUtf8 url)) -> Stderr.line "\(url) did not send UTF-8"
             Err (HttpGetUtf8Err (Status 404 url)) -> Stderr.line "Not found: \(url)!"
             Err (HttpGetUtf8Err (Status 500 url)) -> Stderr.line "Internal server error: \(url)"
+            Err (HttpGetUtf8Err (ConnRefused url)) -> Stderr.line "Connection refused to \(url)"
+            Err (HttpGetUtf8Err (InvalidUrl url)) -> Stderr.line "Invalid URL: \(url)"
+            Err (HttpGetUtf8Err (Unknown msg url)) -> Stderr.line "Error connecting to \(url): \(msg)"
             Err (HttpGetUtf8Err (Status status url)) ->
                 statusStr = Str.fromInt status
 
