@@ -469,7 +469,8 @@ impl<'a> LambdaSet<'a> {
     pub fn layout_for_member(&self, function_symbol: Symbol) -> ClosureRepresentation<'a> {
         debug_assert!(
             self.set.iter().any(|(s, _)| *s == function_symbol),
-            "function symbol not in set"
+            "function symbol {:?} not in set",
+            function_symbol
         );
 
         match self.representation {
@@ -509,10 +510,11 @@ impl<'a> LambdaSet<'a> {
             Layout::Struct(_) => {
                 // get the fields from the set, where they are sorted in alphabetic order
                 // (and not yet sorted by their alignment)
-                let (_, fields) = self
+                let fields = self
                     .set
                     .iter()
                     .find(|(s, _)| *s == function_symbol)
+                    .map(|(_, f)| f)
                     .unwrap();
 
                 ClosureRepresentation::AlphabeticOrderStruct(fields)
@@ -2241,7 +2243,8 @@ fn layout_from_newtype<'a>(
             Err(LayoutProblem::Erroneous) => {
                 // An erroneous type var will code gen to a runtime
                 // error, so we don't need to store any data for it.
-                todo!()
+                // todo!()
+                Layout::Struct(&[])
             }
         }
     }

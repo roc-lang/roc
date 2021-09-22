@@ -1,9 +1,9 @@
 platform examples/webserver
-    requires {}{ handlers : List Handler }
+    requires {}{ runHandlers : List Handler }
     exposes []
     packages {}
-    imports [ Task.{ Task }, Route ]
-    provides [ routeHandlers ]
+    imports [ Task.{ Task }, Route, Response.{ Response } ]
+    provides [ mainForHost ]
     effects fx.Effect
         {
             readAllUtf8 : Str -> Effect { str: Str, errno: I32 },
@@ -13,6 +13,5 @@ platform examples/webserver
             httpGetUtf8 : Str -> Effect { status : U16, body : Str }
         }
 
-
-routeHandlers : List Route.Handler
-routeHandlers = handlers
+mainForHost : Str -> (Task Response [] as Fx)
+mainForHost = \url -> runHandlers url

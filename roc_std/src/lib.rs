@@ -615,6 +615,11 @@ impl RocStr {
         }
     }
 
+    /// Turn a slice of utf8 bytes into a RocStr
+    ///
+    /// # Safety
+    ///
+    /// Assumes that the bytes are valid utf8
     pub unsafe fn from_utf8_unchecked(slice: &[u8]) -> Self {
         Self::from_slice_with_capacity_str(slice, slice.len())
     }
