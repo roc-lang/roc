@@ -19,7 +19,7 @@ Path : Str
 ## these tags and then add more specific ones.
 OpenErr a :
     [
-        FileNotFound Path,
+        NotFound Path,
         PermissionDenied Path,
         SymLinkLoop Path,
         TooManyOpenFiles Path,
@@ -79,7 +79,7 @@ convertUtf8Errno = \path, answer ->
         -1 -> Err (FileReadUtf8Err BadUtf8)
         0 -> Ok answer.str
         1 -> Err (FileReadUtf8Err (PermissionDenied path))
-        2 -> Err (FileReadUtf8Err (FileNotFound path))
+        2 -> Err (FileReadUtf8Err (NotFound path))
         19 -> Err (FileReadUtf8Err (FileWasDir path))
         # TODO handle other errno scenarios that could come up
         _ -> Err (FileReadUtf8Err (UnknownError answer.errno path))

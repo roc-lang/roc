@@ -4,10 +4,10 @@ use core::alloc::Layout;
 use core::ffi::c_void;
 use core::mem::MaybeUninit;
 use libc;
-use roc_std::{RocList, RocStr};
+use roc_std::RocStr;
 use std::ffi::CStr;
-use std::fs;
 use std::os::raw::c_char;
+use std::{fs, io};
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed"]
@@ -135,28 +135,27 @@ extern "C" fn roc_fx_errLine(line: RocStr) -> () {
 
 #[no_mangle]
 extern "C" fn roc_fx_httpGetUtf8(url: RocStr) -> Pair<RocStr, u16> {
-    Pair(url, 200)
-    //    match ureq::get(url.as_str()).call() {
-    //        Ok(resp) => match resp.into_string() {
-    //            Ok(contents) => match RocStr::from_utf8(contents.as_bytes()) {
-    //                Ok(roc_str) => (roc_str, 0),
-    //                Err(_) => {
-    //                    // TODO FIXME don't always return "unknown" error
-    //                    (RocStr::default(), u16::MAX)
-    //                }
-    //            },
-    //            // TODO turn this error into an integer
-    //            Err(err) => (
-    //                RocStr::from_slice(format!("{:?}", err).as_bytes()),
-    //                u16::MAX,
-    //            ),
-    //        },
-    //        // TODO turn this error into an integer
-    //        Err(err) => (
-    //            RocStr::from_slice(format!("{:?}", err).as_bytes()),
-    //            u16::MAX,
-    //        ),
-    //    }
+    match ureq::get(url.as_str()).call() {
+        Ok(resp) => match resp.into_string() {
+            Ok(contents) => match RocStr::from_utf8(contents.as_bytes()) {
+                Ok(roc_str) => Pair(roc_str, 0),
+                Err(_) => {
+                    // TODO FIXME don't always return "unknown" error
+                    Pair(RocStr::default(), u16::MAX)
+                }
+            },
+            // TODO turn this error into an integer
+            Err(err) => Pair(
+                RocStr::from_slice(format!("{:?}", err).as_bytes()),
+                u16::MAX,
+            ),
+        },
+        // TODO turn this error into an integer
+        Err(err) => Pair(
+            RocStr::from_slice(format!("{:?}", err).as_bytes()),
+            u16::MAX,
+        ),
+    }
 }
 
 #[no_mangle]
@@ -188,9 +187,17 @@ extern "C" fn roc_fx_readAllUtf8(path: RocStr) -> Pair<RocStr, i32> {
                 }
             }
         }
-        Err(_) => {
-            // TODO FIXME don't always return "unknown" error
-            Pair(RocStr::default(), i32::MIN)
+        Err(err) => {
+            use io::ErrorKind::*;
+
+            let errno = match err.kind() {
+                PermissionDenied => 1,
+                NotFound => 2,
+                // TODO others
+                _ => i32::MIN, //Unknown
+            };
+
+            Pair(RocStr::default(), errno)
         }
     };
 

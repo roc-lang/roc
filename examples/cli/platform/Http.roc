@@ -4,29 +4,20 @@ interface Http
 
 Url : Str
 
-HttpErr a :
-    [
-        NotFound,
-        BadGateway,
-        # etc...
-        Unknown
-    ]a
+HttpErr a : [ Status U16 Url ]a
 
-HttpGetErr a : [ HttpGetErr (HttpErr [ BadUtf8 ]) ]a
+HttpGetUtf8Err a : [ HttpGetErr (HttpErr [ BadUtf8 Url ]) ]a
 
 
-getUtf8 : Url -> Task Str (HttpGetErr *)
+getUtf8 : Url -> Task Str (HttpGetUtf8Err *)
 getUtf8 = \url ->
-    (Effect.httpGetUtf8 url)
-        |> Effect.map (\r ->(helper r) |> Result.mapErr HttpGetErr)
+    Effect.map (Effect.httpGetUtf8 url) \resp ->
+          (helper url resp |> Result.mapErr HttpGetUtf8Err)
 
 
-helper : { status : Int *, body : Str } -> Result Str (HttpErr [ BadUtf8 ]*)
+helper : Url, { status : Int *, body : Str } -> Result Str (HttpErr [ BadUtf8 Url ]*)
 helper = \{ status, body } ->
-        when status is
-            200 -> Ok body
-            204 -> Ok body
-            404 -> Err (NotFound)
-            502 -> Err (BadGateway)
-            # etc...
-            _ -> Err (Unknown)
+    when status is
+        200 -> Ok body
+        204 -> Ok body
+        _ -> Err (Status status url)
