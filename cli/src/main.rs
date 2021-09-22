@@ -70,7 +70,7 @@ If you're building the compiler from source you'll want to do `cargo run [FILE]`
                 }
 
                 Err(LoadingProblem::FormattedReport(report)) => {
-                    print!("{}", report);
+                    println!("{}", report);
 
                     Ok(1)
                 }

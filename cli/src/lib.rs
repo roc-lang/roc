@@ -368,7 +368,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
             }
         }
         Err(LoadingProblem::FormattedReport(report)) => {
-            print!("{}", report);
+            println!("{}", report);
 
             Ok(1)
         }
