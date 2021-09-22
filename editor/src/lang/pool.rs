@@ -26,29 +26,7 @@ pub const NODE_BYTES: usize = 32;
 // on typical systems where the compiler will be run.
 //
 // Nice things about this system include:
-// * Allocating a new page is as simple as asking the OS for a memory page.
-// * Since each node is 32B, each node's memory address will be a multiple of 16.
-// * Thanks to the free lists and our consistent chunk sizes, we should
-//   end up with very little fragmentation.
-// * Finding a slot for a given node should be very fast: see if the relevant
-//   free list has any openings; if not, try the next size up.
-//
-// Less nice things include:
-// * This system makes it very hard to ever give a page back to the OS.
-//   We could try doing the Mesh Allocator strategy: whenever we allocate
-//   something, assign it to a random slot in the page, and then periodically
-//   try to merge two pages into one (by locking and remapping them in the OS)
-//   and then returning the redundant physical page back to the OS. This should
-//   work in theory, but is pretty complicated, and we'd need to schedule it.
-//   Keep in mind that we can't use the Mesh Allocator itself because it returns
-//   usize pointers, which would be too big for us to have 16B nodes.
-//   On the plus side, we could be okay with higher memory usage early on,
-//   and then later use the Mesh strategy to reduce long-running memory usage.
-//
-// With this system, we can allocate up to 4B nodes. If we wanted to keep
-// a generational index in there, like https://crates.io/crates/sharded-slab
-// does, we could use some of the 32 bits for that. For example, if we wanted
-// to have a 5-bit generational index (supporting up to 32 generations), then
+// * Allocating a new pagShallowCloneal index (supporting up to 32 generations), then
 // we would have 27 bits remaining, meaning we could only support at most
 // 134M nodes. Since the editor has a separate Pool for each module, is that
 // enough for any single module we'll encounter in practice? Probably, and

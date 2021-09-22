@@ -3388,6 +3388,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_ast"
+version = "0.1.0"
+dependencies = [
+ "arraystring",
+ "bumpalo",
+ "libc",
+ "page_size",
+ "roc_can",
+ "roc_collections",
+ "roc_module",
+ "roc_parse",
+ "roc_problem",
+ "roc_region",
+ "roc_types",
+ "snafu",
+ "ven_graph",
+]
+
+[[package]]
 name = "roc_build"
 version = "0.1.0"
 dependencies = [
