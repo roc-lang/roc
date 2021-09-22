@@ -681,7 +681,6 @@ pub enum Builtin<'a> {
     Float128,
     Float64,
     Float32,
-    Float16,
     Str,
     Dict(&'a Layout<'a>, &'a Layout<'a>),
     Set(&'a Layout<'a>),
@@ -1119,7 +1118,6 @@ impl<'a> Builtin<'a> {
     const F128_SIZE: u32 = 16;
     const F64_SIZE: u32 = std::mem::size_of::<f64>() as u32;
     const F32_SIZE: u32 = std::mem::size_of::<f32>() as u32;
-    const F16_SIZE: u32 = 2;
 
     /// Number of machine words in an empty one of these
     pub const STR_WORDS: u32 = 2;
@@ -1149,7 +1147,6 @@ impl<'a> Builtin<'a> {
             Float128 => Builtin::F128_SIZE,
             Float64 => Builtin::F64_SIZE,
             Float32 => Builtin::F32_SIZE,
-            Float16 => Builtin::F16_SIZE,
             Str | EmptyStr => Builtin::STR_WORDS * pointer_size,
             Dict(_, _) | EmptyDict => Builtin::DICT_WORDS * pointer_size,
             Set(_) | EmptySet => Builtin::SET_WORDS * pointer_size,
@@ -1176,7 +1173,6 @@ impl<'a> Builtin<'a> {
             Float128 => align_of::<i128>() as u32,
             Float64 => align_of::<f64>() as u32,
             Float32 => align_of::<f32>() as u32,
-            Float16 => align_of::<i16>() as u32,
             Dict(_, _) | EmptyDict => pointer_size,
             Set(_) | EmptySet => pointer_size,
             // we often treat these as i128 (64-bit systems)
@@ -1194,7 +1190,7 @@ impl<'a> Builtin<'a> {
 
         match self {
             Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Usize | Decimal | Float128 | Float64
-            | Float32 | Float16 | EmptyStr | EmptyDict | EmptyList | EmptySet => true,
+            | Float32 | EmptyStr | EmptyDict | EmptyList | EmptySet => true,
             Str | Dict(_, _) | Set(_) | List(_) => false,
         }
     }
@@ -1205,7 +1201,7 @@ impl<'a> Builtin<'a> {
 
         match self {
             Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Usize | Decimal | Float128 | Float64
-            | Float32 | Float16 | EmptyStr | EmptyDict | EmptyList | EmptySet => false,
+            | Float32 | EmptyStr | EmptyDict | EmptyList | EmptySet => false,
             List(_) => true,
 
             Str | Dict(_, _) | Set(_) => true,
@@ -1232,7 +1228,6 @@ impl<'a> Builtin<'a> {
             Float128 => alloc.text("Float128"),
             Float64 => alloc.text("Float64"),
             Float32 => alloc.text("Float32"),
-            Float16 => alloc.text("Float16"),
 
             EmptyStr => alloc.text("EmptyStr"),
             EmptyList => alloc.text("EmptyList"),
@@ -1266,8 +1261,7 @@ impl<'a> Builtin<'a> {
             | Builtin::Decimal
             | Builtin::Float128
             | Builtin::Float64
-            | Builtin::Float32
-            | Builtin::Float16 => unreachable!("not heap-allocated"),
+            | Builtin::Float32 => unreachable!("not heap-allocated"),
             Builtin::Str => pointer_size,
             Builtin::Dict(k, v) => k
                 .alignment_bytes(pointer_size)

@@ -8,7 +8,7 @@ use std::ffi::CStr;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed"]
-    fn roc_main(output: *mut RocStr) -> ();
+    fn roc_main() -> RocStr;
 }
 
 #[no_mangle]
@@ -46,12 +46,8 @@ pub unsafe fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
 
 #[no_mangle]
 pub fn rust_main() -> isize {
-    let mut raw_output: MaybeUninit<RocStr> = MaybeUninit::uninit();
-
     unsafe {
-        roc_main(raw_output.as_mut_ptr());
-
-        let roc_str = raw_output.assume_init();
+        let roc_str = roc_main();
 
         let len = roc_str.len();
         let str_bytes = roc_str.get_bytes() as *const libc::c_void;
