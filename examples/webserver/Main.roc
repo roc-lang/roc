@@ -10,7 +10,7 @@ app "webserver"
 
 
 handlers: List Route.Handler
-handlers = []
+handlers = [ get0 "users" listUsers ]
 
 #         # get0 "users" listUsers,
 #         # get1 "users" str "" getUser,
