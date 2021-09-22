@@ -900,20 +900,20 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
-
+                
                 This `if` has an `else` branch with a different type from its `then` branch:
-
-                1│  if True then 2 else "foo"
-                                        ^^^^^
-
+                
+                1│  fn = \arg -> if arg then 2 else "foo"
+                                                    ^^^^^
+                
                 The `else` branch is a string of type:
-
+                
                     Str
-
+                
                 but the `then` branch has the type:
-
+                
                     Num a
-
+                
                 I need all branches in an `if` to have the same type!
                 "#
             ),
@@ -1888,7 +1888,7 @@ mod test_reporting {
             indoc!(
                 r#"
                 f : Bool -> msg
-                f = \_ -> Foo
+                f = \_ -> "foo"
 
                 f
                 "#
@@ -1896,24 +1896,24 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
-
+                
                 Something is off with the body of the `f` definition:
-
+                
                 1│  f : Bool -> msg
-                2│  f = \_ -> Foo
-                              ^^^
-
-                This `Foo` global tag has the type:
-
-                    [ Foo ]a
-
+                2│  f = \_ -> "foo"
+                              ^^^^^
+                
+                The body is a string of type:
+                
+                    Str
+                
                 But the type annotation on `f` says it should be:
-
+                
                     msg
-
+                
                 Tip: The type annotation uses the type variable `msg` to say that this
                 definition can produce any type of value. But in the body I see that
-                it will only produce a tag value of a single specific type. Maybe
+                it will only produce a `Str` value of a single specific type. Maybe
                 change the type annotation to be more specific? Maybe change the code
                 to be more general?
                 "#
