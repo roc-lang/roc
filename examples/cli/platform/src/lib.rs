@@ -161,13 +161,17 @@ extern "C" fn roc_fx_httpGetUtf8(url: RocStr) -> Pair<RocStr, u16> {
 #[no_mangle]
 pub fn roc_fx_writeAllUtf8(path: RocStr, contents: RocStr) -> i32 {
     // TODO use libc to do the operation with minimal overhead and get errno
-    match fs::write(path.as_str(), contents.as_bytes()) {
+    let errno = match fs::write(path.as_str(), dbg!(contents.as_bytes())) {
         Ok(()) => 0,
         Err(_) => {
             // TODO FIXME don't always return "unknown" error
             i32::MIN
         }
-    }
+    };
+
+    std::mem::forget(path); // The app may still reference this
+
+    errno
 }
 
 #[repr(C)]

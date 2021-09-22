@@ -17,6 +17,10 @@ main =
             Err (FileReadUtf8Err (NotFound path)) -> Stderr.line "Not found: \(path)"
             Err (FileReadUtf8Err _) -> Stderr.line "File read error!"
             Err (FileWriteErr _) -> Stderr.line "File write error!"
-            Err (HttpGetErr (Status 404 url)) -> Stderr.line "Not found: \(url)!"
-            Err (HttpGetErr (Status 500 _)) -> Stderr.line "HTTP GET error!"
-            Err (HttpGetErr (Status _ _)) -> Stderr.line "HTTP GET error!"
+            Err (HttpGetUtf8Err (BadUtf8 url)) -> Stderr.line "\(url) did not send UTF-8"
+            Err (HttpGetUtf8Err (Status 404 url)) -> Stderr.line "Not found: \(url)!"
+            Err (HttpGetUtf8Err (Status 500 url)) -> Stderr.line "Internal server error: \(url)"
+            Err (HttpGetUtf8Err (Status status url)) ->
+                statusStr = Str.fromInt status
+
+                Stderr.line "GET \(url) returned error \(statusStr)!"
