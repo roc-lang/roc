@@ -82,6 +82,7 @@ pub fn canonicalize_annotation(
     let mut introduced_variables = IntroducedVariables::default();
     let mut references = MutSet::default();
     let mut aliases = SendMap::default();
+
     let typ = can_annotation_help(
         env,
         annotation,
@@ -249,28 +250,7 @@ fn can_annotation_help(
                         actual: Box::new(actual),
                     }
                 }
-                None => {
-                    let mut args = Vec::new();
-
-                    references.insert(symbol);
-
-                    for arg in *type_arguments {
-                        let arg_ann = can_annotation_help(
-                            env,
-                            &arg.value,
-                            region,
-                            scope,
-                            var_store,
-                            introduced_variables,
-                            local_aliases,
-                            references,
-                        );
-
-                        args.push(arg_ann);
-                    }
-
-                    Type::Apply(symbol, args)
-                }
+                None => Type::Apply(symbol, args),
             }
         }
         BoundVariable(v) => {
