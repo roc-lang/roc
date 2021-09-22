@@ -132,7 +132,6 @@ fn hash_builtin<'a, 'ctx, 'env>(
         | Builtin::Float64
         | Builtin::Float32
         | Builtin::Float128
-        | Builtin::Float16
         | Builtin::Decimal
         | Builtin::Usize => {
             let hash_bytes = store_and_use_as_u8_ptr(env, val, layout);

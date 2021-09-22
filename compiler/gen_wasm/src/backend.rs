@@ -55,7 +55,6 @@ impl WasmLayout {
             Layout::Builtin(Builtin::Float128) => Self::StackMemory(size),
             Layout::Builtin(Builtin::Float64) => Self::LocalOnly(F64, size),
             Layout::Builtin(Builtin::Float32) => Self::LocalOnly(F32, size),
-            Layout::Builtin(Builtin::Float16) => Self::LocalOnly(F32, size),
             Layout::Builtin(Builtin::Str) => Self::StackMemory(size),
             Layout::Builtin(Builtin::Dict(_, _)) => Self::StackMemory(size),
             Layout::Builtin(Builtin::Set(_)) => Self::StackMemory(size),
