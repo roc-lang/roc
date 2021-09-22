@@ -6,7 +6,7 @@ platform examples/cli
     provides [ mainForHost ]
     effects fx.Effect
         {
-            readAllUtf8 : Str -> Effect { bytes: List U8, errno: I32 },
+            readAllUtf8 : Str -> Effect { str: Str, errno: I32 },
             writeAllUtf8 : Str, Str -> Effect I32,
             putLine : Str -> Effect {},
             errLine : Str -> Effect {},

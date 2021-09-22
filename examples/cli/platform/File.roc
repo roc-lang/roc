@@ -40,7 +40,7 @@ ReadErr a :
 FileReadErr a : [ FileReadErr (ReadErr []) ]a
 
 ## Errors when attempting to read a non-directory UTF-8 file.
-FileReadUtf8Err a : [ FileReadUtf8Err (ReadErr [ BadUtf8 Str.Utf8ByteProblem Nat ]) ]a
+FileReadUtf8Err a : [ FileReadUtf8Err (ReadErr [ BadUtf8 ]) ]a
 
 ## Errors when attempting to write a non-directory file.
 WriteErr a :
@@ -71,16 +71,13 @@ readUtf8 = \path ->
     Effect.map (Effect.readAllUtf8 path) (\answer -> convertUtf8Errno path answer)
 
 
-convertUtf8Errno : Path, { errno : I32, bytes : List U8 }* -> Result Str (FileReadUtf8Err *)
+convertUtf8Errno : Path, { errno : I32, str : Str }* -> Result Str (FileReadUtf8Err *)
 convertUtf8Errno = \path, answer ->
     # errno values - see
     # https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/errno.h.html
     when answer.errno is
-        0 ->
-            when Str.fromUtf8 answer.bytes is
-                Ok str -> Ok str
-                Err (BadUtf8 problem index) -> Err (FileReadUtf8Err (BadUtf8 problem index))
-
+        -1 -> Err (FileReadUtf8Err BadUtf8)
+        0 -> Ok answer.str
         1 -> Err (FileReadUtf8Err (PermissionDenied path))
         2 -> Err (FileReadUtf8Err (FileNotFound path))
         19 -> Err (FileReadUtf8Err (FileWasDir path))

@@ -175,27 +175,26 @@ pub fn roc_fx_writeAllUtf8(path: RocStr, contents: RocStr) -> i32 {
 struct Pair<T, U>(T, U);
 
 #[no_mangle]
-extern "C" fn roc_fx_readAllUtf8(path: RocStr) -> Pair<RocList<u8>, i32> {
-    std::mem::forget(path);
-    return Pair(RocList::from_slice(b"hello there"), 0);
+extern "C" fn roc_fx_readAllUtf8(path: RocStr) -> Pair<RocStr, i32> {
+    // TODO use libc to do the operation with minimal overhead and get errno
+    let answer = match fs::read(path.as_str()) {
+        Ok(bytes) => {
+            match RocStr::from_utf8(&bytes) {
+                Ok(roc_str) => Pair(roc_str, 0),
+                Err(_) => {
+                    // errno must always be a positive value,
+                    // so this negative number indicates a utf-8 problem
+                    Pair(RocStr::default(), -1)
+                }
+            }
+        }
+        Err(_) => {
+            // TODO FIXME don't always return "unknown" error
+            Pair(RocStr::default(), i32::MIN)
+        }
+    };
 
-    //        // TODO use libc to do the operation with minimal overhead and get errno
-    //        dbg!(path);
-    //        panic!();
-    //        match fs::read(path.as_str()) {
-    //            Ok(bytes) => {
-    //                match RocStr::from_utf8(&bytes) {
-    //                    Ok(roc_str) => (roc_str, 0),
-    //                    Err(_) => {
-    //                        // errno must always be a positive value,
-    //                        // so this negative number indicates a utf-8 problem
-    //                        (RocStr::default(), -1)
-    //                    }
-    //                }
-    //            }
-    //            Err(_) => {
-    //                // TODO FIXME don't always return "unknown" error
-    //                (RocStr::default(), i32::MIN)
-    //            }
-    //        }
+    std::mem::forget(path); // The app may still reference this
+
+    answer
 }
