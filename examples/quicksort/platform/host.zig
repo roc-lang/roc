@@ -20,7 +20,7 @@ comptime {
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn roc__mainForHost_1_exposed(RocList, *RocList) void;
+extern fn roc__mainForHost_1_exposed(RocList) RocList;
 
 const Align = extern struct { a: usize, b: usize };
 extern fn malloc(size: usize) callconv(.C) ?*align(@alignOf(Align)) c_void;
@@ -91,15 +91,12 @@ pub export fn main() u8 {
 
     const roc_list = RocList{ .elements = numbers, .length = NUM_NUMS };
 
-    // make space for the result
-    var callresult: RocList = undefined;
-
     // start time
     var ts1: std.os.timespec = undefined;
     std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts1) catch unreachable;
 
     // actually call roc to populate the callresult
-    roc__mainForHost_1_exposed(roc_list, &callresult);
+    var callresult = roc__mainForHost_1_exposed(roc_list);
 
     // stdout the result
     const length = std.math.min(20, callresult.length);
