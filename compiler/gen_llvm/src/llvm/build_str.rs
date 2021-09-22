@@ -1,5 +1,5 @@
 use crate::llvm::bitcode::{call_bitcode_fn, call_void_bitcode_fn};
-use crate::llvm::build::{complex_bitcast, Env, Scope};
+use crate::llvm::build::{complex_bitcast, load_symbol_and_layout, Env, Scope};
 use crate::llvm::build_list::{allocate_list, call_bitcode_fn_returns_list, store_list};
 use inkwell::builder::Builder;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
@@ -240,9 +240,22 @@ pub fn str_from_int<'a, 'ctx, 'env>(
     scope: &Scope<'a, 'ctx>,
     int_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
-    let int = load_symbol(scope, &int_symbol);
+    let (int, _layout) = load_symbol_and_layout(scope, &int_symbol);
 
-    call_bitcode_fn(env, &[int], bitcode::STR_FROM_INT)
+    debug_assert!(int.is_int_value());
+    let int = int.into_int_value();
+
+    let to = env.context.i128_type();
+    let int = env.builder.build_int_cast(int, to, "inc_cast");
+
+    // we don't have signed/unsigned information any more
+    let signed = true;
+
+    if signed {
+        call_bitcode_fn(env, &[int.into()], bitcode::STR_FROM_I128)
+    } else {
+        call_bitcode_fn(env, &[int.into()], bitcode::STR_FROM_U128)
+    }
 }
 
 /// Str.toUtf8 : Str -> List U8

@@ -408,12 +408,15 @@ pub fn strNumberOfBytes(string: RocStr) callconv(.C) usize {
 }
 
 // Str.fromInt
-pub fn strFromIntC(int: i64) callconv(.C) RocStr {
-    // prepare for having multiple integer types in the future
-    return @call(.{ .modifier = always_inline }, strFromIntHelp, .{ i64, int });
+pub fn strFromI128(int: i128) callconv(.C) RocStr {
+    return strFromIntHelp(i128, int);
 }
 
-fn strFromIntHelp(comptime T: type, int: T) RocStr {
+pub fn strFromU128(int: u128) callconv(.C) RocStr {
+    return strFromIntHelp(u128, int);
+}
+
+inline fn strFromIntHelp(comptime T: type, int: T) RocStr {
     // determine maximum size for this T
     const size = comptime blk: {
         // the string representation of the minimum i128 value uses at most 40 characters

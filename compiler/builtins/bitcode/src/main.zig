@@ -95,7 +95,8 @@ comptime {
     exportStrFn(str.strConcatC, "concat");
     exportStrFn(str.strJoinWithC, "joinWith");
     exportStrFn(str.strNumberOfBytes, "number_of_bytes");
-    exportStrFn(str.strFromIntC, "from_int");
+    exportStrFn(str.strFromI128, "from_i128");
+    exportStrFn(str.strFromU128, "from_u128");
     exportStrFn(str.strFromFloatC, "from_float");
     exportStrFn(str.strEqual, "equal");
     exportStrFn(str.strToUtf8C, "to_utf8");

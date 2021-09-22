@@ -21,7 +21,6 @@ main =
             Err (HttpGetUtf8Err (Status 404 url)) -> Stderr.line "Not found: \(url)!"
             Err (HttpGetUtf8Err (Status 500 url)) -> Stderr.line "Internal server error: \(url)"
             Err (HttpGetUtf8Err (Status status url)) ->
-                # must convert status to I64
-                statusStr = Str.fromInt (Num.intCast status)
+                statusStr = Str.fromInt status
 
                 Stderr.line "GET \(url) returned error \(statusStr)!"

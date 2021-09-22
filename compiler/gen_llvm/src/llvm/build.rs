@@ -4822,7 +4822,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             str_ends_with(env, scope, args[0], args[1])
         }
         StrFromInt => {
-            // Str.fromInt : Int -> Str
+            // Str.fromInt : Int * -> Str
             debug_assert_eq!(args.len(), 1);
 
             str_from_int(env, scope, args[0])
