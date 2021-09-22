@@ -5,8 +5,8 @@ interface Response
 Status : U16
 Response : [ @Response Status Str ]
 
-ok : Str -> Response
-ok = \str -> @Response 200 str
+# ok : Str -> Response
+# ok = \str -> @Response 200 str
 
-status : Status, Str -> Response
-status = \status, str -> @Response status str
+# status : Status, Str -> Response
+# status = \status, str -> @Response status str

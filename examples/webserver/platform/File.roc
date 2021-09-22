@@ -19,7 +19,7 @@ Path : Str
 ## these tags and then add more specific ones.
 OpenErr a :
     [
-        FileNotFound Path,
+        NotFound Path,
         PermissionDenied Path,
         SymLinkLoop Path,
         TooManyOpenFiles Path,
@@ -40,7 +40,7 @@ ReadErr a :
 FileReadErr a : [ FileReadErr (ReadErr []) ]a
 
 ## Errors when attempting to read a non-directory UTF-8 file.
-FileReadUtf8Err a : [ FileReadUtf8Err (ReadErr [ BadUtf8 Str.Utf8ByteProblem Nat ]) ]a
+FileReadUtf8Err a : [ FileReadUtf8Err (ReadErr [ BadUtf8 ]) ]a
 
 ## Errors when attempting to write a non-directory file.
 WriteErr a :
@@ -71,18 +71,16 @@ readUtf8 = \path ->
     Effect.map (Effect.readAllUtf8 path) (\answer -> convertUtf8Errno path answer)
 
 
-convertUtf8Errno : Path, { errno : I32, bytes : List U8 }* -> Result Str (FileReadUtf8Err *)
+convertUtf8Errno : Path, { errno : I32, str : Str }* -> Result Str (FileReadUtf8Err *)
 convertUtf8Errno = \path, answer ->
     # errno values - see
     # https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/errno.h.html
     when answer.errno is
-        # 0 ->
-        #     when Str.fromUtf8 answer.bytes is
-        #         Ok str -> Ok str
-        #         Err (BadUtf8 problem index) -> Err (FileReadErr (BadUtf8 problem index))
-        # 1 -> Err (FileReadErr (PermissionDenied path))
-        # 2 -> Err (FileReadErr (FileNotFound path))
-        # 19 -> Err (FileReadErr (FileWasDir path))
+        -1 -> Err (FileReadUtf8Err BadUtf8)
+        0 -> Ok answer.str
+        1 -> Err (FileReadUtf8Err (PermissionDenied path))
+        2 -> Err (FileReadUtf8Err (NotFound path))
+        19 -> Err (FileReadUtf8Err (FileWasDir path))
         # TODO handle other errno scenarios that could come up
         _ -> Err (FileReadUtf8Err (UnknownError answer.errno path))
 
@@ -90,13 +88,13 @@ writeUtf8 : Path, Str -> Task {} (FileWriteErr *)
 writeUtf8 = \path, data ->
     path
         |> Effect.writeAllUtf8 data
-        |> Effect.map \res ->
-            if res.errno == 0 then
+        |> Effect.map \errno ->
+            if errno == 0 then
                 Ok {}
 
             else
                 # TODO handle other errno scenarios that could come up
-                Err (FileWriteErr (UnknownError res.errno path))
+                Err (FileWriteErr (UnknownError errno path))
 
 ## Read a file's bytes, one chunk at a time, and use it to build up a state.
 ##

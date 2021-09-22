@@ -6,12 +6,11 @@ platform examples/webserver
     provides [ routeHandlers ]
     effects fx.Effect
         {
-            readAllUtf8 : Str -> Effect { errno : I32, bytes : List U8 },
-            writeAllUtf8 : Str, Str -> Effect { errno: I32 },
+            readAllUtf8 : Str -> Effect { str: Str, errno: I32 },
+            writeAllUtf8 : Str, Str -> Effect I32,
             putLine : Str -> Effect {},
             errLine : Str -> Effect {},
-            httpGetUtf8 : Str -> Effect { status : U16, body : Str },
-            getLine : Effect Str
+            httpGetUtf8 : Str -> Effect { status : U16, body : Str }
         }
 
 
