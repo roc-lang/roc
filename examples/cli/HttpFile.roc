@@ -20,8 +20,8 @@ main =
             Err (HttpGetUtf8Err (BadUtf8 url)) -> Stderr.line "\(url) did not send UTF-8"
             Err (HttpGetUtf8Err (Status 404 url)) -> Stderr.line "Not found: \(url)!"
             Err (HttpGetUtf8Err (Status 500 url)) -> Stderr.line "Internal server error: \(url)"
-            Err (HttpGetUtf8Err (Status _ url)) ->
-                # statusStr = Str.fromInt status
+            Err (HttpGetUtf8Err (Status status url)) ->
+                # must convert status to I64
+                statusStr = Str.fromInt (Num.intCast status)
 
-                # Stderr.line "GET \(url) returned error \(statusStr)!"
-                Stderr.line "GET \(url) returned an error"
+                Stderr.line "GET \(url) returned error \(statusStr)!"
