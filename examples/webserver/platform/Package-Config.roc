@@ -2,7 +2,7 @@ platform examples/webserver
     requires {}{ handlers : List Handler }
     exposes []
     packages {}
-    imports [ Task.{ Task }, Route.{ Handler } ]
+    imports [ Task.{ Task }, Route ]
     provides [ routeHandlers ]
     effects fx.Effect
         {
@@ -14,5 +14,5 @@ platform examples/webserver
         }
 
 
-routeHandlers : List Handler
-outeHandlers = handlers
+routeHandlers : List Route.Handler
+routeHandlers = handlers

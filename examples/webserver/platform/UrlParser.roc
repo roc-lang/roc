@@ -11,5 +11,5 @@ str : UrlParser Url
 str = @UrlParser ""
 
 parse : Url, UrlParser a -> Result a [ DidNotMatch ]*
-parse = \url, @UrlParser parser ->
+parse = \_url, @UrlParser parser ->
     Ok parser # TODO make this an actual parser!

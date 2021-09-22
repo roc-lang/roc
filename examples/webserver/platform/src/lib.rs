@@ -4,26 +4,26 @@ use core::alloc::Layout;
 use core::ffi::c_void;
 use core::mem::MaybeUninit;
 use libc;
-use roc_std::{RocCallResult, RocStr};
+use roc_std::{RocList, RocStr};
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
 extern "C" {
-    #[link_name = "roc__mainForHost_1_exposed"]
-    fn roc_main(output: *mut u8) -> ();
+    #[link_name = "roc__routeHandlers_1_exposed"]
+    fn roc_main() -> RocList<u8>;
 
-    #[link_name = "roc__mainForHost_size"]
+    #[link_name = "roc__routeHandlers_size"]
     fn roc_main_size() -> i64;
 
-    #[link_name = "roc__mainForHost_1_Fx_caller"]
-    fn call_Fx(flags: *const u8, closure_data: *const u8, output: *mut u8) -> ();
+    // #[link_name = "roc__mainForHost_1_Fx_caller"]
+    // fn call_Fx(flags: *const u8, closure_data: *const u8, output: *mut u8) -> ();
 
-    #[allow(dead_code)]
-    #[link_name = "roc__mainForHost_1_Fx_size"]
-    fn size_Fx() -> i64;
+    // #[allow(dead_code)]
+    // #[link_name = "roc__mainForHost_1_Fx_size"]
+    // fn size_Fx() -> i64;
 
-    #[link_name = "roc__mainForHost_1_Fx_result_size"]
-    fn size_Fx_result() -> i64;
+    // #[link_name = "roc__mainForHost_1_Fx_result_size"]
+    // fn size_Fx_result() -> i64;
 }
 
 #[no_mangle]
@@ -66,55 +66,36 @@ pub fn rust_main() -> isize {
 
     unsafe {
         // TODO allocate on the stack if it's under a certain size
-        let buffer = std::alloc::alloc(layout);
 
-        roc_main(buffer);
+        let handlers = roc_main();
+        dbg!(handlers);
 
-        let output = buffer as *mut RocCallResult<()>;
+        // let result = call_the_closure(output);
+        // let output = buffer as *mut u8;
 
-        match (&*output).into() {
-            Ok(()) => {
-                let closure_data_ptr = buffer.offset(8);
-                let result = call_the_closure(closure_data_ptr as *const u8);
-
-                std::alloc::dealloc(buffer, layout);
-
-                result
-            }
-            Err(msg) => {
-                std::alloc::dealloc(buffer, layout);
-
-                panic!("Roc failed with message: {}", msg);
-            }
-        }
+        // let buffer = std::alloc::alloc(layout);
+        // std::alloc::dealloc(buffer, layout);
     };
 
     // Exit code
     0
 }
 
-unsafe fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
-    let size = size_Fx_result() as usize;
-    let layout = Layout::array::<u8>(size).unwrap();
-    let buffer = std::alloc::alloc(layout) as *mut u8;
-
-    call_Fx(
-        // This flags pointer will never get dereferenced
-        MaybeUninit::uninit().as_ptr(),
-        closure_data_ptr as *const u8,
-        buffer as *mut u8,
-    );
-
-    let output = &*(buffer as *mut RocCallResult<()>);
-
-    match output.into() {
-        Ok(_) => {
-            std::alloc::dealloc(buffer, layout);
-            0
-        }
-        Err(e) => panic!("failed with {}", e),
-    }
-}
+// unsafe fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
+//     let size = size_Fx_result() as usize;
+//     let layout = Layout::array::<u8>(size).unwrap();
+//     let buffer = std::alloc::alloc(layout) as *mut u8;
+//
+//     call_Fx(
+//         // This flags pointer will never get dereferenced
+//         MaybeUninit::uninit().as_ptr(),
+//         closure_data_ptr as *const u8,
+//         buffer as *mut u8,
+//     );
+//
+//     std::alloc::dealloc(buffer, layout);
+//     0
+// }
 
 #[no_mangle]
 pub fn roc_fx_getLine() -> RocStr {
