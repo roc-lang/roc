@@ -157,15 +157,6 @@ mod cli_run {
                     let example = $example;
                     let file_name = example_file(dir_name, example.filename);
 
-                    match example.executable_filename {
-                        "hello-web" => {
-                            // this is a web webassembly example, but we don't test with JS at the moment
-                            eprintln!("WARNING: skipping testing example {} because the test is broken right now!", example.filename);
-                            return;
-                        }
-                        _ => {}
-                    }
-
                     // Check with and without optimizations
                     check_output_with_stdin(
                         &file_name,

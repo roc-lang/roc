@@ -758,69 +758,6 @@ pub enum RocResult<Ok, Err> {
     Ok(Ok),
 }
 
-#[allow(non_camel_case_types)]
-type c_char = u8;
-
-#[repr(u64)]
-pub enum RocCallResult<T> {
-    Success(T),
-    Failure(*mut c_char),
-}
-
-impl<T: Sized> From<RocCallResult<T>> for Result<T, &'static str> {
-    fn from(call_result: RocCallResult<T>) -> Self {
-        use RocCallResult::*;
-
-        match call_result {
-            Success(value) => Ok(value),
-            Failure(failure) => Err({
-                let msg = unsafe {
-                    let mut null_byte_index = 0;
-                    loop {
-                        if *failure.offset(null_byte_index) == 0 {
-                            break;
-                        }
-                        null_byte_index += 1;
-                    }
-
-                    let bytes = core::slice::from_raw_parts(failure, null_byte_index as usize);
-
-                    core::str::from_utf8_unchecked(bytes)
-                };
-
-                msg
-            }),
-        }
-    }
-}
-
-impl<'a, T: Sized + Copy> From<&'a RocCallResult<T>> for Result<T, &'a str> {
-    fn from(call_result: &'a RocCallResult<T>) -> Self {
-        use RocCallResult::*;
-
-        match call_result {
-            Success(value) => Ok(*value),
-            Failure(failure) => Err({
-                let msg = unsafe {
-                    let mut null_byte_index = 0;
-                    loop {
-                        if *failure.offset(null_byte_index) == 0 {
-                            break;
-                        }
-                        null_byte_index += 1;
-                    }
-
-                    let bytes = core::slice::from_raw_parts(*failure, null_byte_index as usize);
-
-                    core::str::from_utf8_unchecked(bytes)
-                };
-
-                msg
-            }),
-        }
-    }
-}
-
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct RocDec(pub i128);
 
