@@ -1,5 +1,4 @@
 use crate::lang::parse::ASTNodeId;
-use crate::ui::ui_error::UIResult;
 use crate::{editor::slow_pool::MarkNodeId, ui::text::text_pos::TextPos};
 use colored::*;
 use snafu::{Backtrace, ErrorCompat, NoneError, ResultExt, Snafu};
@@ -290,12 +289,5 @@ impl From<UIError> for EdError {
         // hack to handle EdError derive
         let dummy_res: Result<(), NoneError> = Err(NoneError {});
         dummy_res.context(UIErrorBacktrace { msg }).unwrap_err()
-    }
-}
-
-pub fn from_ui_res<T>(ui_res: UIResult<T>) -> EdResult<T> {
-    match ui_res {
-        Ok(t) => Ok(t),
-        Err(ui_err) => Err(EdError::from(ui_err)),
     }
 }
