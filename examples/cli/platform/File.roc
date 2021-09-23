@@ -1,5 +1,5 @@
 interface File
-    exposes [ FileReadBytesErr, FileReadUtf8Err, FileWriteErr, ReadErr, OpenErr, WriteErr, DirReadErr, Path, readUtf8, writeUtf8 ]
+    exposes [ FileReadBytesErr, FileReadErr, FileWriteErr, ReadErr, OpenErr, WriteErr, DirReadErr, Path, read, write ]
     imports [ Task.{ Task }, fx.Effect.{ after } ]
 
 Path : Str
@@ -40,7 +40,7 @@ ReadErr a :
 FileReadBytesErr a : [ FileReadBytesErr (ReadErr []) ]a
 
 ## Errors when attempting to read a non-directory UTF-8 file.
-FileReadUtf8Err a : [ FileReadUtf8Err (ReadErr [ BadUtf8 ]) ]a
+FileReadErr a : [ FileReadErr (ReadErr [ Bad ]) ]a
 
 ## Errors when attempting to write a non-directory file.
 WriteErr a :
@@ -66,28 +66,28 @@ DirReadErr a :
 
 
 ## Read a file's bytes and interpret them as UTF-8 encoded text.
-readUtf8 : Path -> Task Str (FileReadUtf8Err *)
-readUtf8 = \path ->
-    Effect.map (Effect.readAllUtf8 path) (\answer -> convertUtf8Errno path answer)
+read : Path -> Task Str (FileReadErr *)
+read = \path ->
+    Effect.map (Effect.readAll path) (\answer -> convertErrno path answer)
 
 
-convertUtf8Errno : Path, { errno : I32, str : Str }* -> Result Str (FileReadUtf8Err *)
-convertUtf8Errno = \path, answer ->
+convertErrno : Path, { errno : I32, str : Str }* -> Result Str (FileReadErr *)
+convertErrno = \path, answer ->
     # errno values - see
     # https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/errno.h.html
     when answer.errno is
-        -1 -> Err (FileReadUtf8Err BadUtf8)
+        -1 -> Err (FileReadErr Bad)
         0 -> Ok answer.str
-        1 -> Err (FileReadUtf8Err (PermissionDenied path))
-        2 -> Err (FileReadUtf8Err (NotFound path))
-        19 -> Err (FileReadUtf8Err (FileWasDir path))
+        1 -> Err (FileReadErr (PermissionDenied path))
+        2 -> Err (FileReadErr (NotFound path))
+        19 -> Err (FileReadErr (FileWasDir path))
         # TODO handle other errno scenarios that could come up
-        _ -> Err (FileReadUtf8Err (UnknownError answer.errno path))
+        _ -> Err (FileReadErr (UnknownError answer.errno path))
 
-writeUtf8 : Path, Str -> Task {} (FileWriteErr *)
-writeUtf8 = \path, data ->
+write : Path, Str -> Task {} (FileWriteErr *)
+write = \path, data ->
     path
-        |> Effect.writeAllUtf8 data
+        |> Effect.writeAll data
         |> Effect.map \errno ->
             if errno == 0 then
                 Ok {}

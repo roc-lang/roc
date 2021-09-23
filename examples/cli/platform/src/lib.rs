@@ -134,7 +134,7 @@ extern "C" fn roc_fx_errLine(line: RocStr) -> () {
 }
 
 #[no_mangle]
-extern "C" fn roc_fx_httpGetUtf8(url: RocStr) -> Pair<RocStr, u16> {
+extern "C" fn roc_fx_httpGet(url: RocStr) -> Pair<RocStr, u16> {
     let call = ureq::get(url.as_str()).call();
     std::mem::forget(url);
     match call {
@@ -162,7 +162,7 @@ extern "C" fn roc_fx_httpGetUtf8(url: RocStr) -> Pair<RocStr, u16> {
 }
 
 #[no_mangle]
-pub fn roc_fx_writeAllUtf8(path: RocStr, contents: RocStr) -> i32 {
+pub fn roc_fx_writeAll(path: RocStr, contents: RocStr) -> i32 {
     // TODO use libc to do the operation with minimal overhead and get errno
     let errno = match fs::write(path.as_str(), contents.as_bytes()) {
         Ok(()) => 0,
@@ -181,7 +181,7 @@ pub fn roc_fx_writeAllUtf8(path: RocStr, contents: RocStr) -> i32 {
 struct Pair<T, U>(T, U);
 
 #[no_mangle]
-extern "C" fn roc_fx_readAllUtf8(path: RocStr) -> Pair<RocStr, i32> {
+extern "C" fn roc_fx_readAll(path: RocStr) -> Pair<RocStr, i32> {
     // TODO use libc to do the operation with minimal overhead and get errno
     let answer = match fs::read(path.as_str()) {
         Ok(bytes) => {

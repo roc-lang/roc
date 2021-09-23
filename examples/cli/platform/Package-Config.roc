@@ -6,11 +6,11 @@ platform examples/cli
     provides [ mainForHost ]
     effects fx.Effect
         {
-            readAllUtf8 : Str -> Effect { str: Str, errno: I32 },
-            writeAllUtf8 : Str, Str -> Effect I32,
+            readAll : Str -> Effect { str: Str, errno: I32 },
+            writeAll : Str, Str -> Effect I32,
             putLine : Str -> Effect {},
             errLine : Str -> Effect {},
-            httpGetUtf8 : Str -> Effect { status : U16, body : Str },
+            httpGet : Str -> Effect { status : U16, body : Str },
             getLine : Effect Str
         }
 

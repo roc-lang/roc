@@ -1,22 +1,22 @@
 interface Http
-    exposes [ Url, HttpErr, HttpGetUtf8Err, getUtf8 ]
+    exposes [ Url, HttpErr, HttpGetErr, get ]
     imports [ fx.Effect, pf.Task.{ Task } ]
 
 Url : Str
 
 HttpErr a : [ Status U16 Url ]a
 
-HttpGetUtf8Err a : [ HttpGetUtf8Err (HttpErr [ BadUtf8 Url ]) ]a
+HttpGetErr a : [ HttpGetErr (HttpErr [ Bad Url ]) ]a
 
 
-getUtf8 : Url -> Task Str (HttpGetUtf8Err *)
-getUtf8 = \url ->
-    Effect.map (Effect.httpGetUtf8 url) \resp ->
+get : Url -> Task Str (HttpGetErr *)
+get = \url ->
+    Effect.map (Effect.httpGet url) \resp ->
         helper url resp
-            |> Result.mapErr HttpGetUtf8Err
+            |> Result.mapErr HttpGetErr
 
 
-helper : Url, { status : U16, body : Str } -> Result Str (HttpErr [ BadUtf8 Url ]*)
+helper : Url, { status : U16, body : Str } -> Result Str (HttpErr [ Bad Url ]*)
 helper = \url, { status, body } ->
     when status is
         200 -> Ok body
