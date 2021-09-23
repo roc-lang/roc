@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasherDefault;
 
+use crate::editor::ed_error::{EdResult, UnexpectedASTNode};
 use crate::lang::pattern::{Pattern2, PatternId};
 use crate::lang::pool::Pool;
 use crate::lang::pool::{NodeId, PoolStr, PoolVec, ShallowClone};
@@ -222,6 +223,17 @@ pub enum Expr2 {
     RuntimeError(/* TODO make a version of RuntimeError that fits in 15B */),
 }
 
+// A top level definition, not inside a function. For example: `main = "Hello, world!"`
+#[derive(Debug)]
+pub enum Def2 {
+    // ValueDef example: `main = "Hello, world!"`. identifier -> `main`, expr -> "Hello, world!"
+    ValueDef {
+        identifier_id: NodeId<Pattern2>,
+        expr_id: NodeId<Expr2>,
+    },
+    Blank,
+}
+
 #[derive(Debug)]
 pub enum ValueDef {
     WithAnnotation {
@@ -263,6 +275,48 @@ impl ShallowClone for ValueDef {
                 expr_id: *expr_id,
                 expr_var: *expr_var,
             },
+        }
+    }
+}
+
+impl ValueDef {
+    pub fn get_expr_id(&self) -> ExprId {
+        match self {
+            ValueDef::WithAnnotation { expr_id, .. } => *expr_id,
+            ValueDef::NoAnnotation { expr_id, .. } => *expr_id,
+        }
+    }
+
+    pub fn get_pattern_id(&self) -> NodeId<Pattern2> {
+        match self {
+            ValueDef::WithAnnotation { pattern_id, .. } => *pattern_id,
+            ValueDef::NoAnnotation { pattern_id, .. } => *pattern_id,
+        }
+    }
+}
+
+pub fn value_def_to_string(val_def: &ValueDef, pool: &Pool) -> String {
+    match val_def {
+        ValueDef::WithAnnotation {
+            pattern_id,
+            expr_id,
+            type_id,
+            rigids,
+            expr_var,
+        } => {
+            format!("WithAnnotation {{ pattern_id: {:?}, expr_id: {:?}, type_id: {:?}, rigids: {:?}, expr_var: {:?}}}", pool.get(*pattern_id), expr2_to_string(*expr_id, pool), pool.get(*type_id), rigids, expr_var)
+        }
+        ValueDef::NoAnnotation {
+            pattern_id,
+            expr_id,
+            expr_var,
+        } => {
+            format!(
+                "NoAnnotation {{ pattern_id: {:?}, expr_id: {:?}, expr_var: {:?}}}",
+                pool.get(*pattern_id),
+                expr2_to_string(*expr_id, pool),
+                expr_var
+            )
         }
     }
 }
@@ -402,7 +456,11 @@ pub struct WhenBranch {
 // TODO make the inner types private?
 pub type ExprId = NodeId<Expr2>;
 
+pub type DefId = NodeId<Def2>;
+
 use RecordField::*;
+
+use super::parse::ASTNodeId;
 impl RecordField {
     pub fn get_record_field_var(&self) -> &Variable {
         match self {
@@ -434,6 +492,13 @@ impl RecordField {
             LabelOnly(_, _, _) => None,
             LabeledValue(_, _, field_val_id) => Some(*field_val_id),
         }
+    }
+}
+
+pub fn ast_node_to_string(node_id: ASTNodeId, pool: &Pool) -> String {
+    match node_id {
+        ASTNodeId::ADefId(def_id) => def2_to_string(def_id, pool),
+        ASTNodeId::AExprId(expr_id) => expr2_to_string(expr_id, pool),
     }
 }
 
@@ -550,14 +615,116 @@ fn expr2_to_string_helper(
         Expr2::SmallInt { text, .. } => {
             out_string.push_str(&format!("SmallInt({})", text.as_str(pool)));
         }
+        Expr2::LetValue {
+            def_id, body_id, ..
+        } => {
+            out_string.push_str(&format!(
+                "LetValue(def_id: >>{:?}), body_id: >>{:?})",
+                value_def_to_string(pool.get(*def_id), pool),
+                pool.get(*body_id)
+            ));
+        }
         other => todo!("Implement for {:?}", other),
     }
 
     out_string.push('\n');
 }
 
+pub fn def2_to_string(node_id: DefId, pool: &Pool) -> String {
+    let mut full_string = String::new();
+    let def2 = pool.get(node_id);
+
+    match def2 {
+        Def2::ValueDef {
+            identifier_id,
+            expr_id,
+        } => {
+            full_string.push_str(&format!(
+                "Def2::ValueDef(identifier_id: >>{:?}), expr_id: >>{:?})",
+                pool.get(*identifier_id),
+                expr2_to_string(*expr_id, pool)
+            ));
+        }
+        Def2::Blank => {
+            full_string.push_str("Def2::Blank");
+        }
+    }
+
+    full_string
+}
+
 fn var_to_string(some_var: &Variable, indent_level: usize) -> String {
     format!("{}Var({:?})\n", get_spacing(indent_level + 1), some_var)
+}
+
+// get string from SmallStr or Str
+pub fn get_string_from_expr2(node_id: ExprId, pool: &Pool) -> EdResult<String> {
+    match pool.get(node_id) {
+        Expr2::SmallStr(arr_string) => Ok(arr_string.as_str().to_string()),
+        Expr2::Str(pool_str) => Ok(pool_str.as_str(pool).to_owned()),
+        other => UnexpectedASTNode {
+            required_node_type: "SmallStr or Str",
+            encountered_node_type: format!("{:?}", other),
+        }
+        .fail()?,
+    }
+}
+
+pub fn update_str_expr(
+    node_id: ExprId,
+    new_char: char,
+    insert_index: usize,
+    pool: &mut Pool,
+) -> EdResult<()> {
+    let str_expr = pool.get_mut(node_id);
+
+    enum Either {
+        MyString(String),
+        MyPoolStr(PoolStr),
+        Done,
+    }
+
+    let insert_either = match str_expr {
+        Expr2::SmallStr(arr_string) => {
+            let insert_res = arr_string.try_insert(insert_index as u8, new_char);
+
+            match insert_res {
+                Ok(_) => Either::Done,
+                _ => {
+                    let mut new_string = arr_string.as_str().to_string();
+                    new_string.insert(insert_index, new_char);
+
+                    Either::MyString(new_string)
+                }
+            }
+        }
+        Expr2::Str(old_pool_str) => Either::MyPoolStr(*old_pool_str),
+        other => UnexpectedASTNode {
+            required_node_type: "SmallStr or Str",
+            encountered_node_type: format!("{:?}", other),
+        }
+        .fail()?,
+    };
+
+    match insert_either {
+        Either::MyString(new_string) => {
+            let new_pool_str = PoolStr::new(&new_string, pool);
+
+            pool.set(node_id, Expr2::Str(new_pool_str))
+        }
+        Either::MyPoolStr(old_pool_str) => {
+            let mut new_string = old_pool_str.as_str(pool).to_owned();
+
+            new_string.insert(insert_index, new_char);
+
+            let new_pool_str = PoolStr::new(&new_string, pool);
+
+            pool.set(node_id, Expr2::Str(new_pool_str))
+        }
+        Either::Done => (),
+    }
+
+    Ok(())
 }
 
 #[test]

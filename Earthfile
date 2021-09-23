@@ -65,7 +65,7 @@ check-rustfmt:
     RUN cargo fmt --all -- --check
 
 check-typos:
-    RUN cargo install --version 1.0.11 typos-cli
+    RUN cargo install typos-cli --version 1.0.11 # version set to prevent confusion if the version is updated automatically
     COPY --dir .github ci cli compiler docs editor examples linker nightly_benches packages roc_std www *.md LEGAL_DETAILS shell.nix ./
     RUN typos
 
@@ -97,7 +97,6 @@ test-all:
     BUILD +test-zig
     BUILD +check-rustfmt
     BUILD +check-clippy
-    BUILD +check-typos
     BUILD +test-rust
     BUILD +verify-no-git-changes
 

@@ -1,6 +1,8 @@
 use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::{MissingParent, UnexpectedASTNode};
-use crate::editor::markup::attribute::Attributes;
+use crate::editor::markup::common_nodes::{
+    new_blank_mn, new_comma_mn, new_left_square_mn, new_right_square_mn,
+};
 use crate::editor::markup::nodes;
 use crate::editor::markup::nodes::MarkupNode;
 use crate::editor::mvc::app_update::InputOutcome;
@@ -8,9 +10,9 @@ use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::mvc::ed_update::get_node_context;
 use crate::editor::mvc::ed_update::NodeContext;
 use crate::editor::slow_pool::MarkNodeId;
-use crate::editor::syntax_highlight::HighlightStyle;
-use crate::lang::ast::Expr2;
-use crate::lang::ast::{expr2_to_string, ExprId};
+use crate::lang::ast::ExprId;
+use crate::lang::ast::{ast_node_to_string, Expr2};
+use crate::lang::parse::ASTNodeId;
 use crate::lang::pool::PoolVec;
 use crate::ui::text::text_pos::TextPos;
 
@@ -24,63 +26,62 @@ pub fn start_new_list(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     } = get_node_context(ed_model)?;
 
     let is_blank_node = curr_mark_node.is_blank();
+    let curr_mark_node_nls = curr_mark_node.get_newlines_at_end();
 
     let expr2_node = Expr2::List {
         elem_var: ed_model.module.env.var_store.fresh(),
         elems: PoolVec::empty(ed_model.module.env.pool),
     };
 
-    let mark_node_pool = &mut ed_model.markup_node_pool;
+    ed_model
+        .module
+        .env
+        .pool
+        .set(ast_node_id.to_expr_id()?, expr2_node);
 
-    ed_model.module.env.pool.set(ast_node_id, expr2_node);
+    let left_bracket_node_id = ed_model.add_mark_node(new_left_square_mn(
+        ast_node_id.to_expr_id()?,
+        Some(curr_mark_node_id),
+    ));
 
-    let left_bracket_node = MarkupNode::Text {
-        content: nodes::LEFT_SQUARE_BR.to_owned(),
-        ast_node_id,
-        syn_high_style: HighlightStyle::Bracket,
-        attributes: Attributes::new(),
-        parent_id_opt: Some(curr_mark_node_id), // current node will be replaced with nested one
-    };
-
-    let left_bracket_node_id = mark_node_pool.add(left_bracket_node);
-
-    let right_bracket_node = MarkupNode::Text {
-        content: nodes::RIGHT_SQUARE_BR.to_owned(),
-        ast_node_id,
-        syn_high_style: HighlightStyle::Bracket,
-        attributes: Attributes::new(),
-        parent_id_opt: Some(curr_mark_node_id), // current node will be replaced with nested one
-    };
-
-    let right_bracket_node_id = mark_node_pool.add(right_bracket_node);
+    let right_bracket_node_id = ed_model.add_mark_node(new_right_square_mn(
+        ast_node_id.to_expr_id()?,
+        Some(curr_mark_node_id),
+    ));
 
     let nested_node = MarkupNode::Nested {
         ast_node_id,
         children_ids: vec![left_bracket_node_id, right_bracket_node_id],
         parent_id_opt,
+        newlines_at_end: curr_mark_node_nls,
     };
 
     if is_blank_node {
-        mark_node_pool.replace_node(curr_mark_node_id, nested_node);
+        ed_model
+            .mark_node_pool
+            .replace_node(curr_mark_node_id, nested_node);
 
-        // remove data corresponding to Blank node
-        ed_model.del_at_line(old_caret_pos.line, old_caret_pos.column)?;
+        ed_model.del_blank_expr_node(old_caret_pos)?;
 
         ed_model.simple_move_carets_right(nodes::LEFT_SQUARE_BR.len());
 
         // update GridNodeMap and CodeLines
-        ed_model.insert_between_line(
+        EdModel::insert_between_line(
             old_caret_pos.line,
             old_caret_pos.column,
             nodes::LEFT_SQUARE_BR,
             left_bracket_node_id,
+            &mut ed_model.grid_node_map,
+            &mut ed_model.code_lines,
         )?;
 
-        ed_model.insert_between_line(
+        EdModel::insert_between_line(
             old_caret_pos.line,
             old_caret_pos.column + nodes::LEFT_SQUARE_BR.len(),
             nodes::RIGHT_SQUARE_BR,
             right_bracket_node_id,
+            &mut ed_model.grid_node_map,
+            &mut ed_model.code_lines,
         )?;
 
         Ok(InputOutcome::Accepted)
@@ -105,10 +106,10 @@ pub fn add_blank_child(
 
     let trip_result: EdResult<(ExprId, ExprId, MarkNodeId)> = if let Some(parent_id) = parent_id_opt
     {
-        let parent = ed_model.markup_node_pool.get(parent_id);
+        let parent = ed_model.mark_node_pool.get(parent_id);
 
         let list_ast_node_id = parent.get_ast_node_id();
-        let list_ast_node = ed_model.module.env.pool.get(list_ast_node_id);
+        let list_ast_node = ed_model.module.env.pool.get(list_ast_node_id.to_expr_id()?);
 
         match list_ast_node {
             Expr2::List {
@@ -118,11 +119,11 @@ pub fn add_blank_child(
                 let blank_elt = Expr2::Blank;
                 let blank_elt_id = ed_model.module.env.pool.add(blank_elt);
 
-                Ok((blank_elt_id, list_ast_node_id, parent_id))
+                Ok((blank_elt_id, list_ast_node_id.to_expr_id()?, parent_id))
             }
             _ => UnexpectedASTNode {
                 required_node_type: "List".to_string(),
-                encountered_node_type: expr2_to_string(ast_node_id, ed_model.module.env.pool),
+                encountered_node_type: ast_node_to_string(ast_node_id, ed_model.module.env.pool),
             }
             .fail(),
         }
@@ -159,7 +160,7 @@ pub fn add_blank_child(
         }
         _ => UnexpectedASTNode {
             required_node_type: "List".to_string(),
-            encountered_node_type: expr2_to_string(ast_node_id, ed_model.module.env.pool),
+            encountered_node_type: ast_node_to_string(ast_node_id, ed_model.module.env.pool),
         }
         .fail(),
     }?;
@@ -173,7 +174,7 @@ pub fn add_blank_child(
         ed_model,
     )?;
 
-    let parent = ed_model.markup_node_pool.get_mut(parent_id);
+    let parent = ed_model.mark_node_pool.get_mut(parent_id);
 
     for (indx, child) in new_mark_children.iter().enumerate() {
         parent.add_child_at_index(new_child_index + indx, *child)?;
@@ -191,35 +192,26 @@ pub fn update_mark_children(
     parent_id_opt: Option<MarkNodeId>,
     ed_model: &mut EdModel,
 ) -> EdResult<Vec<MarkNodeId>> {
-    let blank_mark_node = MarkupNode::Blank {
-        ast_node_id: blank_elt_id,
-        syn_high_style: HighlightStyle::Blank,
-        attributes: Attributes::new(),
+    let blank_mark_node_id = ed_model.add_mark_node(new_blank_mn(
+        ASTNodeId::AExprId(blank_elt_id),
         parent_id_opt,
-    };
-
-    let blank_mark_node_id = ed_model.markup_node_pool.add(blank_mark_node);
+    ));
 
     let mut children: Vec<MarkNodeId> = vec![];
 
     if new_child_index > 1 {
-        let comma_mark_node = MarkupNode::Text {
-            content: nodes::COMMA.to_owned(),
-            ast_node_id: list_ast_node_id,
-            syn_high_style: HighlightStyle::Blank,
-            attributes: Attributes::new(),
-            parent_id_opt,
-        };
-
-        let comma_mark_node_id = ed_model.markup_node_pool.add(comma_mark_node);
+        let comma_mark_node_id =
+            ed_model.add_mark_node(new_comma_mn(list_ast_node_id, parent_id_opt));
 
         ed_model.simple_move_carets_right(nodes::COMMA.len());
 
-        ed_model.insert_between_line(
+        EdModel::insert_between_line(
             old_caret_pos.line,
             old_caret_pos.column,
             nodes::COMMA,
             comma_mark_node_id,
+            &mut ed_model.grid_node_map,
+            &mut ed_model.code_lines,
         )?;
 
         children.push(comma_mark_node_id);
@@ -234,11 +226,13 @@ pub fn update_mark_children(
     };
 
     // update GridNodeMap and CodeLines
-    ed_model.insert_between_line(
+    EdModel::insert_between_line(
         old_caret_pos.line,
         old_caret_pos.column + comma_shift,
         nodes::BLANK_PLACEHOLDER,
         blank_mark_node_id,
+        &mut ed_model.grid_node_map,
+        &mut ed_model.code_lines,
     )?;
 
     Ok(children)
