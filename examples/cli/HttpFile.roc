@@ -19,7 +19,7 @@ main =
             Err (FileReadErr (NotFound path)) -> Stderr.line "Not found: \(path)"
             Err (FileReadErr _) -> Stderr.line "File read error!"
             Err (FileWriteErr _) -> Stderr.line "File write error!"
-            Err (HttpGetErr (Bad url)) -> Stderr.line "\(url) did not send UTF-8"
+            Err (HttpGetErr (BadUtf8 url)) -> Stderr.line "\(url) did not send UTF-8"
             Err (HttpGetErr (Status 404 url)) -> Stderr.line "Not found: \(url)!"
             Err (HttpGetErr (Status 500 url)) -> Stderr.line "Internal server error: \(url)"
             Err (HttpGetErr (Status status url)) ->

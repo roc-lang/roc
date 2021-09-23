@@ -6,7 +6,7 @@ Url : Str
 
 HttpErr a : [ Status U16 Url ]a
 
-HttpGetErr a : [ HttpGetErr (HttpErr [ Bad Url ]) ]a
+HttpGetErr a : [ HttpGetErr (HttpErr [ BadUtf8 Url ]) ]a
 
 
 get : Url -> Task Str (HttpGetErr *)
@@ -16,7 +16,7 @@ get = \url ->
             |> Result.mapErr HttpGetErr
 
 
-helper : Url, { status : U16, body : Str } -> Result Str (HttpErr [ Bad Url ]*)
+helper : Url, { status : U16, body : Str } -> Result Str (HttpErr [ BadUtf8 Url ]*)
 helper = \url, { status, body } ->
     when status is
         200 -> Ok body
