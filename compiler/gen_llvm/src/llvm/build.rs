@@ -3959,23 +3959,17 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
 
     builder.position_at_end(entry);
 
-    let mut parameters = function_value.get_params();
-    let output = parameters.pop().unwrap().into_pointer_value();
+    let mut evaluator_arguments = function_value.get_params();
 
-    let closure_data = if let Some(closure_data_ptr) = parameters.pop() {
-        let closure_data =
-            builder.build_load(closure_data_ptr.into_pointer_value(), "load_closure_data");
+    // the final parameter is the output pointer, pop it
+    let output = evaluator_arguments.pop().unwrap().into_pointer_value();
 
-        env.arena.alloc([closure_data]) as &[_]
-    } else {
-        &[]
-    };
-
-    let mut parameters = parameters;
-
-    for param in parameters.iter_mut() {
-        debug_assert!(param.is_pointer_value());
-        *param = builder.build_load(param.into_pointer_value(), "load_param");
+    // NOTE this may be incorrect in the long run
+    // here we load any argument that is a pointer
+    for param in evaluator_arguments.iter_mut() {
+        if param.is_pointer_value() {
+            *param = builder.build_load(param.into_pointer_value(), "load_param");
+        }
     }
 
     let call_result = if env.is_gen_test {
@@ -3984,13 +3978,13 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
             function_value,
             evaluator,
             evaluator.get_call_conventions(),
-            closure_data,
+            &evaluator_arguments,
             result_type,
         )
     } else {
         let call = env
             .builder
-            .build_call(evaluator, closure_data, "call_function");
+            .build_call(evaluator, &evaluator_arguments, "call_function");
 
         call.set_call_convention(evaluator.get_call_conventions());
 
