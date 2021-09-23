@@ -16,6 +16,7 @@ use crate::layout::{Builtin, Layout, ListLayout, UnionLayout};
 pub const MOD_APP: ModName = ModName(b"UserApp");
 
 pub const STATIC_STR_NAME: ConstName = ConstName(&Symbol::STR_ALIAS_ANALYSIS_STATIC.to_ne_bytes());
+pub const STATIC_LIST_NAME: ConstName = ConstName(b"THIS IS A STATIC LIST");
 
 const ENTRY_POINT_NAME: &[u8] = b"mainForHost";
 
@@ -127,6 +128,22 @@ where
             cbuilder.build(str_type_id, root)?
         };
         m.add_const(STATIC_STR_NAME, static_str_def)?;
+
+        // a const that models all static lists
+        let static_list_def = {
+            let mut cbuilder = ConstDefBuilder::new();
+            let block = cbuilder.add_block();
+            let cell = cbuilder.add_new_heap_cell(block)?;
+
+            let unit_type = cbuilder.add_tuple_type(&[])?;
+            let bag = cbuilder.add_empty_bag(block, unit_type)?;
+            let value_id = cbuilder.add_make_tuple(block, &[cell, bag])?;
+            let root = BlockExpr(block, value_id);
+            let list_type_id = static_list_type(&mut cbuilder)?;
+
+            cbuilder.build(list_type_id, root)?
+        };
+        m.add_const(STATIC_LIST_NAME, static_list_def)?;
 
         // the entry point wrapper
         let roc_main_bytes = func_name_bytes_help(
@@ -1117,9 +1134,11 @@ fn expr_spec<'a>(
             let list = new_list(builder, block, type_id)?;
 
             let mut bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
+            let mut all_constants = true;
 
             for element in elems.iter() {
                 let value_id = if let ListLiteralElement::Symbol(symbol) = element {
+                    all_constants = false;
                     env.symbols[symbol]
                 } else {
                     builder.add_make_tuple(block, &[]).unwrap()
@@ -1128,9 +1147,13 @@ fn expr_spec<'a>(
                 bag = builder.add_bag_insert(block, bag, value_id)?;
             }
 
-            let cell = builder.add_new_heap_cell(block)?;
+            if all_constants {
+                new_static_list(builder, block)
+            } else {
+                let cell = builder.add_new_heap_cell(block)?;
 
-            builder.add_make_tuple(block, &[cell, bag])
+                builder.add_make_tuple(block, &[cell, bag])
+            }
         }
 
         EmptyArray => {
@@ -1296,6 +1319,14 @@ fn str_type<TC: TypeContext>(builder: &mut TC) -> Result<TypeId> {
     builder.add_tuple_type(&[cell_id])
 }
 
+fn static_list_type<TC: TypeContext>(builder: &mut TC) -> Result<TypeId> {
+    let unit_type = builder.add_tuple_type(&[])?;
+    let cell = builder.add_heap_cell_type();
+    let bag = builder.add_bag_type(unit_type)?;
+
+    builder.add_tuple_type(&[cell, bag])
+}
+
 // const OK_TAG_ID: u8 = 1u8;
 // const ERR_TAG_ID: u8 = 0u8;
 
@@ -1327,6 +1358,12 @@ fn new_static_string(builder: &mut FuncDefBuilder, block: BlockId) -> Result<Val
     let module = MOD_APP;
 
     builder.add_const_ref(block, module, STATIC_STR_NAME)
+}
+
+fn new_static_list(builder: &mut FuncDefBuilder, block: BlockId) -> Result<ValueId> {
+    let module = MOD_APP;
+
+    builder.add_const_ref(block, module, STATIC_LIST_NAME)
 }
 
 fn new_num(builder: &mut FuncDefBuilder, block: BlockId) -> Result<ValueId> {
