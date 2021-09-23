@@ -138,20 +138,21 @@ extern "C" fn roc_fx_httpGetUtf8(url: RocStr) -> Pair<RocStr, u16> {
     let call = ureq::get(url.as_str()).call();
     std::mem::forget(url);
     match call {
-        Ok(resp) => match resp.into_string() {
-            Ok(contents) => match RocStr::from_utf8(contents.as_bytes()) {
-                Ok(roc_str) => Pair(roc_str, 0),
-                Err(_) => {
-                    // TODO FIXME don't always return "unknown" error
-                    Pair(RocStr::default(), u16::MAX)
-                }
-            },
-            // TODO turn this error into an integer
-            Err(err) => Pair(
-                RocStr::from_slice(format!("{:?}", err).as_bytes()),
-                u16::MAX,
-            ),
-        },
+        Ok(resp) => {
+            let status = resp.status();
+
+            match resp.into_string() {
+                Ok(contents) => match RocStr::from_utf8(contents.as_bytes()) {
+                    Ok(roc_str) => Pair(roc_str, status),
+                    Err(_) => {
+                        // TODO FIXME don't always return "unknown" error
+                        Pair(RocStr::default(), u16::MAX)
+                    }
+                },
+                // TODO turn this error into an integer
+                Err(err) => Pair(RocStr::from_slice(format!("{:?}", err).as_bytes()), status),
+            }
+        }
         // TODO turn this error into an integer
         Err(err) => Pair(
             RocStr::from_slice(format!("{:?}", err).as_bytes()),
@@ -163,7 +164,7 @@ extern "C" fn roc_fx_httpGetUtf8(url: RocStr) -> Pair<RocStr, u16> {
 #[no_mangle]
 pub fn roc_fx_writeAllUtf8(path: RocStr, contents: RocStr) -> i32 {
     // TODO use libc to do the operation with minimal overhead and get errno
-    let errno = match fs::write(path.as_str(), dbg!(contents.as_bytes())) {
+    let errno = match fs::write(path.as_str(), contents.as_bytes()) {
         Ok(()) => 0,
         Err(_) => {
             // TODO FIXME don't always return "unknown" error
