@@ -1,5 +1,5 @@
 interface File
-    exposes [ FileReadErr, FileReadUtf8Err, FileWriteErr, ReadErr, OpenErr, WriteErr, DirReadErr, Path, readUtf8, writeUtf8 ]
+    exposes [ FileReadBytesErr, FileReadUtf8Err, FileWriteErr, ReadErr, OpenErr, WriteErr, DirReadErr, Path, readUtf8, writeUtf8 ]
     imports [ Task.{ Task }, fx.Effect.{ after } ]
 
 Path : Str
@@ -15,7 +15,7 @@ Path : Str
 
 
 ## These errors can happen when opening a file, before attempting to read from
-## it or write to it. The #FileReadErr and #FileWriteErr tag unions begin with
+## it or write to it. The #FileReadBytesErr and #FileWriteErr tag unions begin with
 ## these tags and then add more specific ones.
 OpenErr a :
     [
@@ -37,7 +37,7 @@ ReadErr a :
         ]a
 
 ## Errors when attempting to read a non-directory file.
-FileReadErr a : [ FileReadErr (ReadErr []) ]a
+FileReadBytesErr a : [ FileReadBytesErr (ReadErr []) ]a
 
 ## Errors when attempting to read a non-directory UTF-8 file.
 FileReadUtf8Err a : [ FileReadUtf8Err (ReadErr [ BadUtf8 ]) ]a
@@ -60,7 +60,7 @@ DirReadErr a :
         ]a
 
 ## Read a file's raw bytes
-#readBytes : Path -> Task (List U8) (FileReadErr *)
+#readBytes : Path -> Task (List U8) (FileReadBytesErr *)
 #readBytes = \path ->
 #    Effect.readBytes path
 
@@ -100,7 +100,7 @@ writeUtf8 = \path, data ->
 ##
 ## After each chunk is read, it gets passed to a callback which builds up a
 ## state - optionally while running other tasks.
-#readChunks : Path, U64, state, (state, List U8 -> Task state []err) -> Task state (FileReadErr err)
+#readChunks : Path, U64, state, (state, List U8 -> Task state []err) -> Task state (FileReadBytesErr err)
 
 ## Like #readChunks except after each chunk you can either `Continue`,
 ## specifying how many bytes you'd like to read next, or `Stop` early.
