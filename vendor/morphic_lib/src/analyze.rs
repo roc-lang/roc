@@ -1048,18 +1048,6 @@ impl<'a, 'b> BackwardState<'a, 'b> {
         // the forward pass make it such that in these cases copy_fate is always called with an
         // identical src and dst.  Maybe we shouldn't bother with those cases?
         match op {
-            ir::OpKind::UnknownWith => {
-                // Note: we access ret_slots[0] in this function without explicitly checking that
-                // ret_slots is nonempty, but we only do this in cases where it is guaranteed to be
-                // nonempty by other means.
-                debug_assert!(ret_slots.iter().all(|&heap_cell| heap_cell == ret_slots[0]));
-                for input_slots in input_slot_arrs {
-                    for &heap_cell in input_slots {
-                        self.copy_fate(version, ret_slots[0], heap_cell);
-                    }
-                }
-            }
-
             ir::OpKind::Call {
                 callee_spec_var,
                 callee,
@@ -1130,8 +1118,7 @@ impl<'a, 'b> BackwardState<'a, 'b> {
                 debug_assert_eq!(input_slot_arrs.len(), 0);
             }
 
-            ir::OpKind::RecursiveTouch => {
-                debug_assert_eq!(ret_slots.len(), 0);
+            ir::OpKind::UnknownWith | ir::OpKind::RecursiveTouch => {
                 for input_slots in input_slot_arrs {
                     for &heap_cell in input_slots {
                         *self.fate(version, heap_cell) = Fate::DirectTouch;
