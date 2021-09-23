@@ -1,3 +1,5 @@
+#!/usr/bin/env roc
+
 app "http-example"
     packages { pf: "platform" }
     imports [ pf.Task.{ Task, await }, pf.Stdout, pf.Stderr, pf.Http, pf.File ]
