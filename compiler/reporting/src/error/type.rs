@@ -1,7 +1,8 @@
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{Index, MutSet, SendMap};
-use roc_module::ident::{IdentStr, Lowercase, TagName};
+use roc_module::ident::{Ident, IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
+use roc_region::all::{Located, Region};
 use roc_solve::solve;
 use roc_types::pretty_print::Parens;
 use roc_types::types::{Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt};
@@ -10,34 +11,39 @@ use std::path::PathBuf;
 use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder, Severity};
 use ven_pretty::DocAllocator;
 
+const DUPLICATE_NAME: &str = "DUPLICATE NAME";
 const ADD_ANNOTATIONS: &str = r#"Can more type annotations be added? Type annotations always help me give more specific messages, and I think they could help a lot in this case"#;
 
 pub fn type_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
     filename: PathBuf,
     problem: solve::TypeError,
-) -> Report<'b> {
+) -> Option<Report<'b>> {
     use solve::TypeError::*;
 
-    fn report(title: String, doc: RocDocBuilder<'_>, filename: PathBuf) -> Report<'_> {
-        Report {
+    fn report(title: String, doc: RocDocBuilder<'_>, filename: PathBuf) -> Option<Report<'_>> {
+        Some(Report {
             title,
             filename,
             doc,
             severity: Severity::RuntimeError,
-        }
+        })
     }
 
     match problem {
-        BadExpr(region, category, found, expected) => {
-            to_expr_report(alloc, filename, region, category, found, expected)
-        }
-        BadPattern(region, category, found, expected) => {
-            to_pattern_report(alloc, filename, region, category, found, expected)
-        }
-        CircularType(region, symbol, overall_type) => {
-            to_circular_report(alloc, filename, region, symbol, overall_type)
-        }
+        BadExpr(region, category, found, expected) => Some(to_expr_report(
+            alloc, filename, region, category, found, expected,
+        )),
+        BadPattern(region, category, found, expected) => Some(to_pattern_report(
+            alloc, filename, region, category, found, expected,
+        )),
+        CircularType(region, symbol, overall_type) => Some(to_circular_report(
+            alloc,
+            filename,
+            region,
+            symbol,
+            overall_type,
+        )),
         UnexposedLookup(symbol) => {
             let title = "UNRECOGNIZED NAME".to_string();
             let doc = alloc
@@ -97,10 +103,38 @@ pub fn type_problem<'b>(
                     report(title, doc, filename)
                 }
 
+                SolvedTypeError => None, // Don't re-report cascading errors - see https://github.com/rtfeldman/roc/pull/1711
+
+                Shadowed(original_region, shadow) => {
+                    let doc = report_shadowing(alloc, original_region, shadow);
+                    let title = DUPLICATE_NAME.to_string();
+
+                    report(title, doc, filename)
+                }
+
                 other => panic!("unhandled bad type: {:?}", other),
             }
         }
     }
+}
+
+fn report_shadowing<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    original_region: Region,
+    shadow: Located<Ident>,
+) -> RocDocBuilder<'b> {
+    let line = r#"Since these types have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#;
+
+    alloc.stack(vec![
+        alloc
+            .text("The ")
+            .append(alloc.ident(shadow.value))
+            .append(alloc.reflow(" name is first defined here:")),
+        alloc.region(original_region),
+        alloc.reflow("But then it's defined a second time here:"),
+        alloc.region(shadow.region),
+        alloc.reflow(line),
+    ])
 }
 
 pub fn cyclic_alias<'b>(

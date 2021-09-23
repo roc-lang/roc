@@ -20,7 +20,9 @@ comptime {
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn roc__mainForHost_1_exposed(RocList) RocList;
+// NOTE the LLVM backend expects this signature
+// extern fn roc__mainForHost_1_exposed(i64, *i64) void;
+extern fn roc__mainForHost_1_exposed(i64) i64;
 
 const Align = extern struct { a: usize, b: usize };
 extern fn malloc(size: usize) callconv(.C) ?*align(@alignOf(Align)) c_void;
@@ -67,50 +69,17 @@ export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
     std.process.exit(0);
 }
 
-// warning! the array is currently stack-allocated so don't make this too big
-const NUM_NUMS = 100000;
-
-const RocList = extern struct { elements: [*]i64, length: usize };
-
-const Unit = extern struct {};
-
 pub export fn main() u8 {
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
-
-    var raw_numbers: [NUM_NUMS + 1]i64 = undefined;
-
-    // set refcount to zero, this value lives on the stack here, not on the heap
-    raw_numbers[0] = 0;
-
-    var numbers = raw_numbers[1..];
-
-    for (numbers) |_, i| {
-        numbers[i] = @mod(@intCast(i64, i), 3);
-    }
-
-    const roc_list = RocList{ .elements = numbers, .length = NUM_NUMS };
 
     // start time
     var ts1: std.os.timespec = undefined;
     std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts1) catch unreachable;
 
-    // actually call roc to populate the callresult
-    var callresult = roc__mainForHost_1_exposed(roc_list);
+    const result = roc__mainForHost_1_exposed(10);
 
-    // stdout the result
-    const length = std.math.min(20, callresult.length);
-    var result = callresult.elements[0..length];
-
-    for (result) |x, i| {
-        if (i == 0) {
-            stdout.print("[{}, ", .{x}) catch unreachable;
-        } else if (i == length - 1) {
-            stdout.print("{}]\n", .{x}) catch unreachable;
-        } else {
-            stdout.print("{}, ", .{x}) catch unreachable;
-        }
-    }
+    stdout.print("{d}\n", .{result}) catch unreachable;
 
     // end time
     var ts2: std.os.timespec = undefined;

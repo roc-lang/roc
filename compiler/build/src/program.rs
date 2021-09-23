@@ -10,6 +10,8 @@ use roc_mono::ir::OptLevel;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use roc_collections::all::{MutMap, MutSet};
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CodeGenTiming {
     pub code_gen: Duration,
@@ -72,18 +74,19 @@ pub fn report_problems(loaded: &mut MonomorphizedModule) -> usize {
         let problems = loaded.type_problems.remove(home).unwrap_or_default();
 
         for problem in problems {
-            let report = type_problem(&alloc, module_path.clone(), problem);
-            let severity = report.severity;
-            let mut buf = String::new();
+            if let Some(report) = type_problem(&alloc, module_path.clone(), problem) {
+                let severity = report.severity;
+                let mut buf = String::new();
 
-            report.render_color_terminal(&mut buf, &alloc, &palette);
+                report.render_color_terminal(&mut buf, &alloc, &palette);
 
-            match severity {
-                Warning => {
-                    warnings.push(buf);
-                }
-                RuntimeError => {
-                    errors.push(buf);
+                match severity {
+                    Warning => {
+                        warnings.push(buf);
+                    }
+                    RuntimeError => {
+                        errors.push(buf);
+                    }
                 }
             }
         }
@@ -142,7 +145,7 @@ pub fn report_problems(loaded: &mut MonomorphizedModule) -> usize {
 // TODO this should probably use more helper functions
 // TODO make this polymorphic in the llvm functions so it can be reused for another backend.
 #[cfg(feature = "llvm")]
-pub fn gen_from_mono_module(
+pub fn gen_from_mono_module_llvm(
     arena: &bumpalo::Bump,
     loaded: MonomorphizedModule,
     roc_file_path: &Path,
@@ -370,4 +373,79 @@ pub fn gen_from_mono_module(
         code_gen,
         emit_o_file,
     }
+}
+
+pub fn gen_from_mono_module_dev(
+    arena: &bumpalo::Bump,
+    loaded: MonomorphizedModule,
+    target: &target_lexicon::Triple,
+    app_o_file: &Path,
+) -> CodeGenTiming {
+    use target_lexicon::Architecture;
+
+    match target.architecture {
+        Architecture::Wasm32 => gen_from_mono_module_dev_wasm32(arena, loaded, app_o_file),
+        Architecture::X86_64 => {
+            gen_from_mono_module_dev_assembly(arena, loaded, target, app_o_file)
+        }
+        _ => todo!(),
+    }
+}
+
+fn gen_from_mono_module_dev_wasm32(
+    arena: &bumpalo::Bump,
+    loaded: MonomorphizedModule,
+    app_o_file: &Path,
+) -> CodeGenTiming {
+    let mut procedures = MutMap::default();
+
+    for (key, proc) in loaded.procedures {
+        procedures.insert(key, proc);
+    }
+
+    let exposed_to_host = loaded
+        .exposed_to_host
+        .keys()
+        .copied()
+        .collect::<MutSet<_>>();
+
+    let env = roc_gen_wasm::Env {
+        arena,
+        interns: loaded.interns,
+        exposed_to_host,
+    };
+
+    let bytes = roc_gen_wasm::build_module(&env, procedures).unwrap();
+
+    std::fs::write(&app_o_file, &bytes).expect("failed to write object to file");
+
+    CodeGenTiming::default()
+}
+
+fn gen_from_mono_module_dev_assembly(
+    arena: &bumpalo::Bump,
+    loaded: MonomorphizedModule,
+    target: &target_lexicon::Triple,
+    app_o_file: &Path,
+) -> CodeGenTiming {
+    let lazy_literals = true;
+    let generate_allocators = false; // provided by the platform
+
+    let env = roc_gen_dev::Env {
+        arena,
+        interns: loaded.interns,
+        exposed_to_host: loaded.exposed_to_host.keys().copied().collect(),
+        lazy_literals,
+        generate_allocators,
+    };
+
+    let module_object = roc_gen_dev::build_module(&env, target, loaded.procedures)
+        .expect("failed to compile module");
+
+    let module_out = module_object
+        .write()
+        .expect("failed to build output object");
+    std::fs::write(&app_o_file, module_out).expect("failed to write object to file");
+
+    CodeGenTiming::default()
 }

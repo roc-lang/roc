@@ -107,12 +107,13 @@ pub fn gen_and_eval<'a>(
         }
 
         for problem in type_problems {
-            let report = type_problem(&alloc, module_path.clone(), problem);
-            let mut buf = String::new();
+            if let Some(report) = type_problem(&alloc, module_path.clone(), problem) {
+                let mut buf = String::new();
 
-            report.render_color_terminal(&mut buf, &alloc, &palette);
+                report.render_color_terminal(&mut buf, &alloc, &palette);
 
-            lines.push(buf);
+                lines.push(buf);
+            }
         }
 
         for problem in mono_problems {
