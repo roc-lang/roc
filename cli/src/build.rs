@@ -120,7 +120,7 @@ pub fn build_file<'a>(
     let app_o_file = Builder::new()
         .prefix("roc_app")
         .suffix(&format!(".{}", app_extension))
-        .tempfile()
+        .tempfile_in("/dev/shm/")
         .map_err(|err| {
             todo!("TODO Gracefully handle tempfile creation error {:?}", err);
         })?;

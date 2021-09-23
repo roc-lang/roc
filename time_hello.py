@@ -1,7 +1,9 @@
 #!/usr/bin/python3
 import numpy as np
+import os
 import random
 import re
+import shutil
 import sys
 import subprocess
 import secrets
@@ -46,17 +48,27 @@ if result_code != 0:
     print('Failed to precomile the roc host')
     exit()
 
+print('\nBuilding in mem version as well...')
+try:
+    if os.path.exists('/dev/shm/hello-zig'):
+        shutil.rmtree('/dev/shm/hello-zig')
+    shutil.copytree('examples/hello-zig', '/dev/shm/hello-zig', symlinks=True)
+except Exception as e:
+    print(f'Failed to copy app into memory: {e}')
+    exit()
 
 print('\nBenchmarking...')
 
 N = int(sys.argv[1])
 program_names = [
     'roc',
+    'roc shm',
     'python3',
     # 'zig'
 ]
 program_files = [
     'examples/hello-zig/Hello.roc',
+    '/dev/shm/hello-zig/Hello.roc',
     'hello.py',
     # 'hello.zig'
 ]
@@ -66,6 +78,12 @@ programs = [[
     '--roc-linker',
     '--precompiled-host',
     'examples/hello-zig/Hello.roc'
+], [
+    'target/release/roc',
+    '--dev',
+    '--roc-linker',
+    '--precompiled-host',
+    '/dev/shm/hello-zig/Hello.roc'
 ], [
     '/usr/bin/python3',
     'hello.py'
