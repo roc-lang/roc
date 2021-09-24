@@ -9,7 +9,7 @@ use roc_can::expected::PExpected;
 use roc_can::expr::Expr::{self, *};
 use roc_can::expr::{Field, WhenBranch};
 use roc_can::pattern::Pattern;
-use roc_collections::all::{ImMap, Index, SendMap};
+use roc_collections::all::{ImMap, Index, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Located, Region};
@@ -1438,12 +1438,14 @@ fn instantiate_rigids(
     annotation: &Type,
     introduced_vars: &IntroducedVariables,
     new_rigids: &mut Vec<Variable>,
-    ftv: &mut ImMap<Lowercase, Variable>,
+    ftv: &mut ImMap<Lowercase, Variable>, // rigids defined before the current annotation
     loc_pattern: &Located<Pattern>,
     headers: &mut SendMap<Symbol, Located<Type>>,
 ) -> Type {
     let mut annotation = annotation.clone();
     let mut rigid_substitution: ImMap<Variable, Type> = ImMap::default();
+
+    let outside_rigids: MutSet<Variable> = ftv.values().copied().collect();
 
     for (name, var) in introduced_vars.var_by_name.iter() {
         if let Some(existing_rigid) = ftv.get(name) {
@@ -1464,7 +1466,12 @@ fn instantiate_rigids(
         &Located::at(loc_pattern.region, annotation.clone()),
     ) {
         for (symbol, loc_type) in new_headers {
-            new_rigids.extend(loc_type.value.variables());
+            for var in loc_type.value.variables() {
+                // a rigid is only new if this annotation is the first occurence of this rigid
+                if !outside_rigids.contains(&var) {
+                    new_rigids.push(var);
+                }
+            }
             headers.insert(symbol, loc_type);
         }
     }
