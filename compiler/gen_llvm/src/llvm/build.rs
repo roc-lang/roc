@@ -3219,7 +3219,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
 ) -> FunctionValue<'ctx> {
     let context = env.context;
 
-    // a tagged union to indicate to the test loader that a panic occured.
+    // a tagged union to indicate to the test loader that a panic occurred.
     // especially when running 32-bit binaries on a 64-bit machine, there
     // does not seem to be a smarter solution
     let wrapper_return_type = context.struct_type(
