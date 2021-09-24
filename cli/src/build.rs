@@ -88,7 +88,11 @@ pub fn build_file<'a>(
     let app_extension = if emit_wasm { "bc" } else { "o" };
 
     let cwd = roc_file_path.parent().unwrap();
-    let binary_path = cwd.join(&*loaded.output_path); // TODO should join ".exe" on Windows
+    let mut binary_path = cwd.join(&*loaded.output_path); // TODO should join ".exe" on Windows
+
+    if emit_wasm {
+        binary_path.set_extension("wasm");
+    }
 
     let mut host_input_path = PathBuf::from(cwd);
     let path_to_platform = loaded.platform_path.clone();

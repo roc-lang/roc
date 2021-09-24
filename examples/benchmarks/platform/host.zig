@@ -23,7 +23,7 @@ comptime {
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn roc__mainForHost_1_exposed([*]u8) void;
+extern fn roc__mainForHost_1_exposed_generic([*]u8) void;
 extern fn roc__mainForHost_size() i64;
 extern fn roc__mainForHost_1_Fx_caller(*const u8, [*]u8, [*]u8) void;
 extern fn roc__mainForHost_1_Fx_size() i64;
@@ -101,7 +101,7 @@ pub export fn main() callconv(.C) u8 {
     var ts1: std.os.timespec = undefined;
     std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts1) catch unreachable;
 
-    roc__mainForHost_1_exposed(output);
+    roc__mainForHost_1_exposed_generic(output);
 
     const closure_data_pointer = @ptrCast([*]u8, output);
 

@@ -1933,7 +1933,29 @@ fn specialize_external<'a>(
             match layout {
                 RawFunctionLayout::Function(argument_layouts, lambda_set, return_layout) => {
                     let assigned = env.unique_symbol();
-                    let unit = env.unique_symbol();
+
+                    let mut argument_symbols =
+                        Vec::with_capacity_in(argument_layouts.len(), env.arena);
+                    let mut proc_arguments =
+                        Vec::with_capacity_in(argument_layouts.len() + 1, env.arena);
+                    let mut top_level_arguments =
+                        Vec::with_capacity_in(argument_layouts.len() + 1, env.arena);
+
+                    for layout in argument_layouts {
+                        let symbol = env.unique_symbol();
+
+                        proc_arguments.push((*layout, symbol));
+
+                        argument_symbols.push(symbol);
+                        top_level_arguments.push(*layout);
+                    }
+
+                    // the proc needs to take an extra closure argument
+                    let lambda_set_layout = Layout::LambdaSet(lambda_set);
+                    proc_arguments.push((lambda_set_layout, Symbol::ARG_CLOSURE));
+
+                    // this should also be reflected in the TopLevel signature
+                    top_level_arguments.push(lambda_set_layout);
 
                     let hole = env.arena.alloc(Stmt::Ret(assigned));
 
@@ -1941,19 +1963,16 @@ fn specialize_external<'a>(
                         env,
                         lambda_set,
                         Symbol::ARG_CLOSURE,
-                        env.arena.alloc([unit]),
+                        argument_symbols.into_bump_slice(),
                         argument_layouts,
                         *return_layout,
                         assigned,
                         hole,
                     );
 
-                    let body = let_empty_struct(unit, env.arena.alloc(body));
-                    let lambda_set_layout = Layout::LambdaSet(lambda_set);
-
                     let proc = Proc {
                         name,
-                        args: env.arena.alloc([(lambda_set_layout, Symbol::ARG_CLOSURE)]),
+                        args: proc_arguments.into_bump_slice(),
                         body,
                         closure_data_layout: None,
                         ret_layout: *return_layout,
@@ -1964,7 +1983,7 @@ fn specialize_external<'a>(
 
                     let top_level = ProcLayout::new(
                         env.arena,
-                        env.arena.alloc([lambda_set_layout]),
+                        top_level_arguments.into_bump_slice(),
                         *return_layout,
                     );
 

@@ -23,8 +23,6 @@ const Align = extern struct { a: usize, b: usize };
 extern fn malloc(size: usize) callconv(.C) ?*align(@alignOf(Align)) c_void;
 extern fn realloc(c_ptr: [*]align(@alignOf(Align)) u8, size: usize) callconv(.C) ?*c_void;
 extern fn free(c_ptr: [*]align(@alignOf(Align)) u8) callconv(.C) void;
-extern fn memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
-extern fn memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void;
 
 export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
     _ = alignment;
@@ -45,56 +43,30 @@ export fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
     free(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)));
 }
 
-export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
-    _ = tag_id;
-    const stderr = std.io.getStdErr().writer();
-    const msg = @ptrCast([*:0]const u8, c_ptr);
-    stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
-    std.process.exit(0);
-}
-
-export fn roc_memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void{
-    return memcpy(dst, src, size);
-}
-
-export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void{
-    return memset(dst, value, size);
-}
+// NOTE roc_panic is provided in the JS file, so it can throw an exception
 
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn roc__mainForHost_1_exposed() RocStr;
+extern fn roc__mainForHost_1_exposed(*RocCallResult) void;
+
+const RocCallResult = extern struct { flag: u64, content: RocStr };
 
 const Unit = extern struct {};
 
-pub fn main() u8 {
-    const stdout = std.io.getStdOut().writer();
-    const stderr = std.io.getStdErr().writer();
+extern fn js_display_roc_string(str_bytes: ?[*]u8, str_len: usize) void;
 
-    // start time
-    var ts1: std.os.timespec = undefined;
-    std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts1) catch unreachable;
+pub fn main() u8 {
+    // make space for the result
+    var callresult = RocCallResult{ .flag = 0, .content = RocStr.empty() };
 
     // actually call roc to populate the callresult
-    var callresult = roc__mainForHost_1_exposed();
+    roc__mainForHost_1_exposed(&callresult);
 
-    // stdout the result
-    stdout.print("{s}\n", .{callresult.asSlice()}) catch unreachable;
+    // display the result using JavaScript
+    js_display_roc_string(callresult.content.str_bytes, callresult.content.str_len);
 
-    callresult.deinit();
-
-    // end time
-    var ts2: std.os.timespec = undefined;
-    std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts2) catch unreachable;
-
-    const delta = to_seconds(ts2) - to_seconds(ts1);
-
-    stderr.print("runtime: {d:.3}ms\n", .{delta * 1000}) catch unreachable;
+    callresult.content.deinit();
 
     return 0;
-}
-
-fn to_seconds(tms: std.os.timespec) f64 {
-    return @intToFloat(f64, tms.tv_sec) + (@intToFloat(f64, tms.tv_nsec) / 1_000_000_000.0);
 }

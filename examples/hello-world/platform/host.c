@@ -53,34 +53,29 @@ size_t roc_str_len(struct RocStr str) {
   }
 }
 
-extern void roc__mainForHost_1_exposed(struct RocStr *re);
+extern struct RocStr roc__mainForHost_1_exposed();
 
 int main() {
-    // Make space for the Roc call result
-    struct RocStr call_result;
+  struct RocStr str = roc__mainForHost_1_exposed();
 
-    // Call Roc to populate call_result
-    roc__mainForHost_1_exposed(&call_result);
+  // Determine str_len and the str_bytes pointer,
+  // taking into account the small string optimization.
+  size_t str_len = roc_str_len(str);
+  char* str_bytes;
 
-    // Determine str_len and the str_bytes pointer,
-    // taking into account the small string optimization.
-    struct RocStr str = call_result;
-    size_t str_len = roc_str_len(str);
-    char* str_bytes;
+  if (is_small_str(str)) {
+    str_bytes = (char*)&str;
+  } else {
+    str_bytes = str.bytes;
+  }
 
-    if (is_small_str(str)) {
-        str_bytes = (char*)&str;
-    } else {
-        str_bytes = str.bytes;
-    }
+  // Write to stdout
+  if (write(1, str_bytes, str_len) >= 0) {
+    // Writing succeeded!
+    return 0;
+  } else {
+    printf("Error writing to stdout: %s\n", strerror(errno));
 
-    // Write to stdout
-    if (write(1, str_bytes, str_len) >= 0) {
-        // Writing succeeded!
-        return 0;
-    } else {
-        printf("Error writing to stdout: %s\n", strerror(errno));
-
-        return 1;
-    }
+    return 1;
+  }
 }
