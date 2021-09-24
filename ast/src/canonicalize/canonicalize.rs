@@ -20,7 +20,7 @@ enum FieldVar {
     OnlyVar(Variable),
 }
 
-pub fn canonicalize_fields<'a>(
+pub (crate) fn canonicalize_fields<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
     fields: &'a [Located<roc_parse::ast::AssignedField<'a, roc_parse::ast::Expr<'a>>>],

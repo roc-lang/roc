@@ -60,9 +60,9 @@ pub const NODE_BYTES: usize = 32;
 // to see if it was
 
 #[derive(Debug, Eq)]
-pub (crate) struct NodeId<T> {
+pub struct NodeId<T> {
     pub (super) index: u32,
-    _phantom: PhantomData<T>,
+    pub (super) _phantom: PhantomData<T>,
 }
 
 impl<T> Clone for NodeId<T> {

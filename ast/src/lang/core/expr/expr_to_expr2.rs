@@ -3,6 +3,7 @@ use roc_can::expr::Recursive;
 use roc_can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
 use roc_can::operator::desugar_expr;
 use roc_collections::all::MutSet;
+use roc_parse::parser::SyntaxError;
 use roc_parse::{ast::Expr, pattern::PatternType};
 use roc_problem::can::{Problem, RuntimeError};
 use roc_module::symbol::Symbol;
@@ -17,6 +18,19 @@ use crate::pool::shallow_clone::ShallowClone;
 use crate::{lang::{core::expr::expr2::{ExprId, FloatVal, IntStyle, IntVal}, env::Env, scope::Scope}, pool::{pool_str::PoolStr, pool_vec::PoolVec}};
 use crate::canonicalize::canonicalize::{CanonicalizeRecordProblem, canonicalize_fields, canonicalize_lookup, canonicalize_when_branch};
 use super::{expr2::Expr2, output::Output};
+
+pub fn str_to_expr2<'a>(
+    arena: &'a Bump,
+    input: &'a str,
+    env: &mut Env<'a>,
+    scope: &mut Scope,
+    region: Region,
+) -> Result<(Expr2, self::Output), SyntaxError<'a>> {
+    match roc_parse::test_helpers::parse_loc_with(arena, input.trim()) {
+        Ok(loc_expr) => Ok(loc_expr_to_expr2(arena, loc_expr, env, scope, region)),
+        Err(fail) => Err(fail),
+    }
+}
 
 pub fn loc_expr_to_expr2<'a>(
     arena: &'a Bump,

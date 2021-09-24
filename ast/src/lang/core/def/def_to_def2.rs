@@ -1,6 +1,6 @@
 use bumpalo::Bump;
 use bumpalo::collections::Vec as BumpVec;
-use roc_parse::pattern::PatternType;
+use roc_parse::{parser::SyntaxError, pattern::PatternType};
 use roc_region::all::Region;
 
 use crate::lang::{core::{expr::expr_to_expr2::loc_expr_to_expr2, pattern::to_pattern2}, env::Env, scope::Scope};
@@ -71,5 +71,24 @@ pub fn to_def2_from_def<'a>(
                 other
             )
         }
+    }
+}
+
+pub fn str_to_def2<'a>(
+    arena: &'a Bump,
+    input: &'a str,
+    env: &mut Env<'a>,
+    scope: &mut Scope,
+    region: Region,
+) -> Result<Vec<Def2>, SyntaxError<'a>> {
+    match roc_parse::test_helpers::parse_defs_with(arena, input.trim()) {
+        Ok(vec_loc_def) => Ok(defs_to_defs2(
+            arena,
+            env,
+            scope,
+            arena.alloc(vec_loc_def),
+            region,
+        )),
+        Err(fail) => Err(fail),
     }
 }

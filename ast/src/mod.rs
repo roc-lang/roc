@@ -1,5 +1,5 @@
 pub mod ast;
-mod constrain;
+pub mod constrain;
 pub mod lang;
 mod module;
 pub mod parse;
