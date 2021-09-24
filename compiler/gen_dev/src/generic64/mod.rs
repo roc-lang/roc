@@ -1513,8 +1513,6 @@ macro_rules! single_register_integers {
 #[macro_export]
 macro_rules! single_register_floats {
     () => {
-        // Float16 is explicitly ignored because it is not supported by must hardware and may require special exceptions.
-        // Builtin::Float16 |
         Builtin::Float32 | Builtin::Float64
     };
 }
