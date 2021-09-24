@@ -3,7 +3,7 @@ use bumpalo::collections::Vec as BumpVec;
 use roc_parse::pattern::PatternType;
 use roc_region::all::Region;
 
-use crate::lang::{core::pattern::to_pattern2, env::Env, scope::Scope};
+use crate::lang::{core::{expr::expr_to_expr2::loc_expr_to_expr2, pattern::to_pattern2}, env::Env, scope::Scope};
 
 use super::def2::Def2;
 

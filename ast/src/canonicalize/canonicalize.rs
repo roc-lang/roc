@@ -1,13 +1,13 @@
 
-use roc_can::{env::Env, expr::Output, scope::Scope};
+
 use roc_collections::all::MutMap;
 use roc_problem::can::{Problem};
 use roc_region::all::{Located, Region};
 use roc_types::{subs::Variable};
 
-use crate::{lang::core::{def::def::References, expr::expr2::{Expr2, ExprId, RecordField, WhenBranch}}, pool::{pool_str::PoolStr, pool_vec::PoolVec}};
+use crate::{lang::{core::{def::def::References, expr::{expr2::{Expr2, ExprId, RecordField, WhenBranch}, expr_to_expr2::to_expr2, output::Output}, pattern::to_pattern2}, env::Env, scope::Scope}, pool::{pool_str::PoolStr, pool_vec::PoolVec, shallow_clone::ShallowClone}};
 
-enum CanonicalizeRecordProblem {
+pub (crate) enum CanonicalizeRecordProblem {
     InvalidOptionalValue {
         field_name: PoolStr,
         field_region: Region,
@@ -20,7 +20,7 @@ enum FieldVar {
     OnlyVar(Variable),
 }
 
-fn canonicalize_fields<'a>(
+pub fn canonicalize_fields<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
     fields: &'a [Located<roc_parse::ast::AssignedField<'a, roc_parse::ast::Expr<'a>>>],
@@ -167,7 +167,7 @@ fn canonicalize_field<'a>(
 }
 
 #[inline(always)]
-fn canonicalize_when_branch<'a>(
+pub (crate) fn canonicalize_when_branch<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
     branch: &'a roc_parse::ast::WhenBranch<'a>,
@@ -239,7 +239,7 @@ fn canonicalize_when_branch<'a>(
     )
 }
 
-fn canonicalize_lookup(
+pub (crate) fn canonicalize_lookup(
     env: &mut Env<'_>,
     scope: &mut Scope,
     module_name: &str,

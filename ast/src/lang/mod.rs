@@ -1,4 +1,4 @@
 pub mod core;
-mod scope;
+pub mod scope;
 mod rigids;
-mod env;
+pub mod env;

@@ -1,14 +1,21 @@
 use bumpalo::Bump;
+use roc_can::expr::Recursive;
 use roc_can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
 use roc_can::operator::desugar_expr;
+use roc_collections::all::MutSet;
 use roc_parse::{ast::Expr, pattern::PatternType};
 use roc_problem::can::{Problem, RuntimeError};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 
-use crate::lang::core::pattern::flatten_str_literal;
+use crate::lang::core::declaration::decl_to_let;
+use crate::lang::core::def::def::{canonicalize_defs, sort_can_defs};
+use crate::lang::core::expr::expr2::ClosureExtra;
+use crate::lang::core::pattern::to_pattern2;
+use crate::lang::core::str::flatten_str_literal;
+use crate::pool::shallow_clone::ShallowClone;
 use crate::{lang::{core::expr::expr2::{ExprId, FloatVal, IntStyle, IntVal}, env::Env, scope::Scope}, pool::{pool_str::PoolStr, pool_vec::PoolVec}};
-
+use crate::canonicalize::canonicalize::{CanonicalizeRecordProblem, canonicalize_fields, canonicalize_lookup, canonicalize_when_branch};
 use super::{expr2::Expr2, output::Output};
 
 pub fn loc_expr_to_expr2<'a>(

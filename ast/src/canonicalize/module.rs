@@ -4,7 +4,6 @@
 #![allow(unused_variables)]
 use bumpalo::Bump;
 use roc_can::operator::desugar_def;
-use roc_can::scope::Scope;
 use roc_collections::all::{default_hasher, ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
@@ -15,13 +14,20 @@ use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
 
-use crate::env::Env;
-use crate::expr::output::Output;
-use crate::lang::expr::output::Output;
+use crate::lang::core::def::def::Def;
+use crate::lang::core::def::def::{sort_can_defs, Declaration};
+use crate::lang::core::expr::expr2::Expr2;
+use crate::lang::core::expr::output::Output;
+use crate::lang::core::pattern::Pattern2;
+use crate::lang::core::types::Alias;
+use crate::lang::core::val_def::ValueDef;
+use crate::lang::env::Env;
+use crate::lang::scope::Scope;
 use crate::pool::pool::NodeId;
 use crate::pool::pool::Pool;
 use crate::pool::pool_vec::PoolVec;
-use crate::types::Alias;
+use crate::pool::shallow_clone::ShallowClone;
+use crate::lang::core::def::def::canonicalize_defs;
 
 pub struct ModuleOutput {
     pub aliases: MutMap<Symbol, NodeId<Alias>>,

@@ -1,13 +1,5 @@
 use bumpalo::{collections::Vec as BumpVec, Bump};
 
-use crate::lang::{
-    ast::{ClosureExtra, Expr2, ExprId, RecordField, ValueDef, WhenBranch},
-    expr::Env,
-    pattern::{DestructType, Pattern2, PatternId, PatternState2, RecordDestruct},
-    pool::{Pool, PoolStr, PoolVec, ShallowClone},
-    types::{Type2, TypeId},
-};
-
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{BumpMap, BumpMapDefault, Index, SendMap};
 use roc_module::{
@@ -20,6 +12,8 @@ use roc_types::{
     types::{self, AnnotationSource, PReason, PatternCategory},
     types::{Category, Reason},
 };
+
+use crate::{lang::{core::{expr::expr2::{ClosureExtra, Expr2, ExprId, RecordField, WhenBranch}, pattern::{DestructType, Pattern2, PatternId, PatternState2, RecordDestruct}, types::{Type2, TypeId}, val_def::ValueDef}, env::Env}, pool::{pool::Pool, pool_str::PoolStr, pool_vec::PoolVec, shallow_clone::ShallowClone}};
 
 #[derive(Debug)]
 pub enum Constraint<'a> {
