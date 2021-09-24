@@ -9,6 +9,8 @@ use snafu::ensure;
 use super::{selection::Selection, text_pos::TextPos};
 use std::io::BufRead;
 
+// Do not use for large amounts of text.
+// This should become a trait in the future and be implemented by a SmallTextBuffer and Rope(for large amounts of text)
 #[derive(Debug)]
 pub struct TextBuffer {
     pub lines: Vec<String>,

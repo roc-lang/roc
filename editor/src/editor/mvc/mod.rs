@@ -1,5 +1,6 @@
 pub mod app_model;
 pub mod app_update;
+mod break_line;
 pub mod ed_model;
 pub mod ed_update;
 pub mod ed_view;
