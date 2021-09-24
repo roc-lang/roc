@@ -275,6 +275,7 @@ pub fn build_c_host_native(
         command.args(&[
             shared_lib_path.to_str().unwrap(),
             "-fPIE",
+            "-pie",
             "-lm",
             "-lpthread",
             "-ldl",
