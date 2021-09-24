@@ -5,7 +5,7 @@ use roc_problem::can::{Problem};
 use roc_region::all::{Located, Region};
 use roc_types::{subs::Variable};
 
-use crate::{lang::{core::{def::def::References, expr::{expr2::{Expr2, ExprId, RecordField, WhenBranch}, expr_to_expr2::to_expr2, output::Output}, pattern::to_pattern2}, env::Env, scope::Scope}, pool::{pool_str::PoolStr, pool_vec::PoolVec, shallow_clone::ShallowClone}};
+use crate::{lang::{core::{def::def::References, expr::{expr2::{Expr2, ExprId, WhenBranch}, expr_to_expr2::to_expr2, output::Output, record_field::RecordField}, pattern::to_pattern2}, env::Env, scope::Scope}, pool::{pool_str::PoolStr, pool_vec::PoolVec, shallow_clone::ShallowClone}};
 
 pub (crate) enum CanonicalizeRecordProblem {
     InvalidOptionalValue {

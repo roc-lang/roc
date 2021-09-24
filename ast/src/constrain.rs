@@ -13,7 +13,7 @@ use roc_types::{
     types::{Category, Reason},
 };
 
-use crate::{lang::{core::{expr::expr2::{ClosureExtra, Expr2, ExprId, RecordField, WhenBranch}, pattern::{DestructType, Pattern2, PatternId, PatternState2, RecordDestruct}, types::{Type2, TypeId}, val_def::ValueDef}, env::Env}, pool::{pool::Pool, pool_str::PoolStr, pool_vec::PoolVec, shallow_clone::ShallowClone}};
+use crate::{lang::{core::{expr::{expr2::{ClosureExtra, Expr2, ExprId, WhenBranch}, record_field::RecordField}, pattern::{DestructType, Pattern2, PatternId, PatternState2, RecordDestruct}, types::{Type2, TypeId}, val_def::ValueDef}, env::Env}, pool::{pool::Pool, pool_str::PoolStr, pool_vec::PoolVec, shallow_clone::ShallowClone}};
 
 #[derive(Debug)]
 pub enum Constraint<'a> {

@@ -7,6 +7,8 @@ use roc_module::symbol::Symbol;
 use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
 
+use super::record_field::RecordField;
+
 pub type ArrString = ArrayString<U30>;
 
 // TODO make the inner types private?
@@ -208,13 +210,6 @@ fn size_of_intval() {
 pub enum FloatVal {
     F64(f64),
     F32(f32),
-}
-
-#[derive(Debug)]
-pub enum RecordField {
-    InvalidLabelOnly(PoolStr, Variable),
-    LabelOnly(PoolStr, Variable, Symbol),
-    LabeledValue(PoolStr, Variable, ExprId),
 }
 
 #[derive(Debug)]

@@ -1,4 +1,4 @@
-use crate::{lang::core::{expr::expr2::RecordField, val_def::value_def_to_string}, pool::pool::Pool};
+use crate::{lang::core::{expr::record_field::RecordField, val_def::value_def_to_string}, pool::pool::Pool};
 
 use roc_types::subs::Variable;
 use super::expr2::{Expr2, ExprId};

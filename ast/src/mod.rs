@@ -11,4 +11,4 @@ mod solve;
 mod types;
 mod rigids;
 mod canonicalize;
-mod ast_error;
+pub mod ast_error;

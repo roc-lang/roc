@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2018"
-description = "AST as used by the editor and docs. In contrast to the compiler, these types do not keep track of a location in a file."
+description = "AST as used by the editor and (soon) docs. In contrast to the compiler, these types do not keep track of a location in a file."
 
 [dependencies]
 roc_can = { path = "../compiler/can" }

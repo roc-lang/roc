@@ -3530,6 +3530,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_code_markup"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "palette",
+ "roc_ast",
+ "roc_module",
+ "roc_utils",
+ "serde",
+ "snafu",
+]
+
+[[package]]
 name = "roc_collections"
 version = "0.1.0"
 dependencies = [
@@ -3954,6 +3967,13 @@ dependencies = [
  "roc_collections",
  "roc_module",
  "roc_types",
+]
+
+[[package]]
+name = "roc_utils"
+version = "0.1.0"
+dependencies = [
+ "snafu",
 ]
 
 [[package]]

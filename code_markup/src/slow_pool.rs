@@ -1,8 +1,7 @@
 
 use std::fmt;
 
-use super::markup::nodes::MarkupNode;
-
+use crate::markup::nodes::MarkupNode;
 
 pub type MarkNodeId = usize;
 
