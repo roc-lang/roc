@@ -199,6 +199,7 @@ fn generate_dynamic_lib(
         // TODO properly generate this list.
         for name in &[
             format!("roc__{}_1_exposed", sym),
+            format!("roc__{}_1_exposed_generic", sym),
             format!("roc__{}_1_Fx_caller", sym),
             format!("roc__{}_1_Fx_size", sym),
             format!("roc__{}_1_Fx_result_size", sym),

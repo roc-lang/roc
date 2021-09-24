@@ -18,6 +18,13 @@ mod cli_run {
     #[cfg(not(debug_assertions))]
     use roc_collections::all::MutMap;
 
+    #[cfg(target_os = "linux")]
+    const TEST_SURGICAL_LINKER: bool = true;
+
+    // Surgical linker currently only supports linux.
+    #[cfg(not(target_os = "linux"))]
+    const TEST_SURGICAL_LINKER: bool = false;
+
     #[cfg(not(target_os = "macos"))]
     const ALLOW_VALGRIND: bool = true;
 
@@ -136,7 +143,6 @@ mod cli_run {
             );
         }
     }
-
     /// This macro does two things.
     ///
     /// First, it generates and runs a separate test for each of the given
@@ -184,6 +190,24 @@ mod cli_run {
                         example.expected_ending,
                         example.use_valgrind,
                     );
+
+                    // Also check with the surgical linker.
+
+                    if TEST_SURGICAL_LINKER {
+                        if matches!(example.executable_filename, "echo" | "hello-rust") {
+                            eprintln!("WARNING: skipping testing example {} with surgical linking because rust is currently not supported!", example.filename);
+                            return;
+                        }
+
+                        check_output_with_stdin(
+                            &file_name,
+                            example.stdin,
+                            example.executable_filename,
+                            &["--roc-linker"],
+                            example.expected_ending,
+                            example.use_valgrind,
+                        );
+                    }
                 }
             )*
 
@@ -228,7 +252,7 @@ mod cli_run {
         },
         hello_rust:"hello-rust" => Example {
             filename: "Hello.roc",
-            executable_filename: "hello-world",
+            executable_filename: "hello-rust",
             stdin: &[],
             expected_ending:"Hello, World!\n",
             use_valgrind: true,
