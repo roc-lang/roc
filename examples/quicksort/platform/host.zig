@@ -20,29 +20,61 @@ comptime {
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn roc__mainForHost_1_exposed(RocList, *RocCallResult) void;
+extern fn roc__mainForHost_1_exposed(RocList) RocList;
 
-extern fn malloc(size: usize) callconv(.C) ?*c_void;
-extern fn realloc(c_ptr: [*]align(@alignOf(u128)) u8, size: usize) callconv(.C) ?*c_void;
-extern fn free(c_ptr: [*]align(@alignOf(u128)) u8) callconv(.C) void;
+const Align = extern struct { a: usize, b: usize };
+extern fn malloc(size: usize) callconv(.C) ?*align(@alignOf(Align)) c_void;
+extern fn realloc(c_ptr: [*]align(@alignOf(Align)) u8, size: usize) callconv(.C) ?*c_void;
+extern fn free(c_ptr: [*]align(@alignOf(Align)) u8) callconv(.C) void;
+extern fn memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
+extern fn memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void;
+
+const DEBUG: bool = false;
 
 export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
-    return malloc(size);
+    if (DEBUG) {
+        var ptr = malloc(size);
+        const stdout = std.io.getStdOut().writer();
+        stdout.print("alloc:   {d} (alignment {d}, size {d})\n", .{ ptr, alignment, size }) catch unreachable;
+        return ptr;
+    } else {
+        return malloc(size);
+    }
 }
 
 export fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*c_void {
-    return realloc(@alignCast(16, @ptrCast([*]u8, c_ptr)), new_size);
+    if (DEBUG) {
+        const stdout = std.io.getStdOut().writer();
+        stdout.print("realloc: {d} (alignment {d}, old_size {d})\n", .{ c_ptr, alignment, old_size }) catch unreachable;
+    }
+
+    return realloc(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)), new_size);
 }
 
 export fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
-    free(@alignCast(16, @ptrCast([*]u8, c_ptr)));
+    if (DEBUG) {
+        const stdout = std.io.getStdOut().writer();
+        stdout.print("dealloc: {d} (alignment {d})\n", .{ c_ptr, alignment }) catch unreachable;
+    }
+
+    free(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)));
 }
 
 export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
+    _ = tag_id;
+
     const stderr = std.io.getStdErr().writer();
     const msg = @ptrCast([*:0]const u8, c_ptr);
     stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
     std.process.exit(0);
+}
+
+export fn roc_memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void{
+    return memcpy(dst, src, size);
+}
+
+export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void{
+    return memset(dst, value, size);
 }
 
 // warning! the array is currently stack-allocated so don't make this too big
@@ -50,11 +82,9 @@ const NUM_NUMS = 100;
 
 const RocList = extern struct { elements: [*]i64, length: usize };
 
-const RocCallResult = extern struct { flag: usize, content: RocList };
-
 const Unit = extern struct {};
 
-pub export fn main() i32 {
+pub export fn main() u8 {
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
 
@@ -65,25 +95,22 @@ pub export fn main() i32 {
 
     var numbers = raw_numbers[1..];
 
-    for (numbers) |x, i| {
+    for (numbers) |_, i| {
         numbers[i] = @mod(@intCast(i64, i), 12);
     }
 
     const roc_list = RocList{ .elements = numbers, .length = NUM_NUMS };
-
-    // make space for the result
-    var callresult = RocCallResult{ .flag = 0, .content = undefined };
 
     // start time
     var ts1: std.os.timespec = undefined;
     std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts1) catch unreachable;
 
     // actually call roc to populate the callresult
-    roc__mainForHost_1_exposed(roc_list, &callresult);
+    var callresult = roc__mainForHost_1_exposed(roc_list);
 
     // stdout the result
-    const length = std.math.min(20, callresult.content.length);
-    var result = callresult.content.elements[0..length];
+    const length = std.math.min(20, callresult.length);
+    var result = callresult.elements[0..length];
 
     for (result) |x, i| {
         if (i == 0) {

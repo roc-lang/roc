@@ -1,6 +1,7 @@
 use crate::exhaustive::{Ctor, RenderAs, TagId, Union};
 use crate::ir::{
-    BranchInfo, DestructType, Env, Expr, JoinPointId, Literal, Param, Pattern, Procs, Stmt,
+    BranchInfo, DestructType, Env, Expr, FloatPrecision, IntPrecision, JoinPointId, Literal, Param,
+    Pattern, Procs, Stmt,
 };
 use crate::layout::{Builtin, Layout, LayoutCache, UnionLayout};
 use roc_collections::all::{MutMap, MutSet};
@@ -85,8 +86,8 @@ enum Test<'a> {
         union: crate::exhaustive::Union,
         arguments: Vec<(Pattern<'a>, Layout<'a>)>,
     },
-    IsInt(i128),
-    IsFloat(u64),
+    IsInt(i128, IntPrecision),
+    IsFloat(u64, FloatPrecision),
     IsDecimal(RocDec),
     IsStr(Box<str>),
     IsBit(bool),
@@ -95,6 +96,7 @@ enum Test<'a> {
         num_alts: usize,
     },
 }
+
 use std::hash::{Hash, Hasher};
 impl<'a> Hash for Test<'a> {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -106,13 +108,15 @@ impl<'a> Hash for Test<'a> {
                 tag_id.hash(state);
                 // The point of this custom implementation is to not hash the tag arguments
             }
-            IsInt(v) => {
+            IsInt(v, width) => {
                 state.write_u8(1);
                 v.hash(state);
+                width.hash(state);
             }
-            IsFloat(v) => {
+            IsFloat(v, width) => {
                 state.write_u8(2);
                 v.hash(state);
+                width.hash(state);
             }
             IsStr(v) => {
                 state.write_u8(3);
@@ -306,8 +310,8 @@ fn tests_are_complete_help(last_test: &Test, number_of_tests: usize) -> bool {
         Test::IsCtor { union, .. } => number_of_tests == union.alternatives.len(),
         Test::IsByte { num_alts, .. } => number_of_tests == *num_alts,
         Test::IsBit(_) => number_of_tests == 2,
-        Test::IsInt(_) => false,
-        Test::IsFloat(_) => false,
+        Test::IsInt(_, _) => false,
+        Test::IsFloat(_, _) => false,
         Test::IsDecimal(_) => false,
         Test::IsStr(_) => false,
     }
@@ -561,8 +565,8 @@ fn test_at_path<'a>(
                     tag_id: *tag_id,
                     num_alts: union.alternatives.len(),
                 },
-                IntLiteral(v) => IsInt(*v),
-                FloatLiteral(v) => IsFloat(*v),
+                IntLiteral(v, precision) => IsInt(*v, *precision),
+                FloatLiteral(v, precision) => IsFloat(*v, *precision),
                 DecimalLiteral(v) => IsDecimal(*v),
                 StrLiteral(v) => IsStr(v.clone()),
             };
@@ -807,8 +811,9 @@ fn to_relevant_branch_help<'a>(
             _ => None,
         },
 
-        IntLiteral(int) => match test {
-            IsInt(is_int) if int == *is_int => {
+        IntLiteral(int, p1) => match test {
+            IsInt(is_int, p2) if int == *is_int => {
+                debug_assert_eq!(p1, *p2);
                 start.extend(end);
                 Some(Branch {
                     goal: branch.goal,
@@ -819,8 +824,9 @@ fn to_relevant_branch_help<'a>(
             _ => None,
         },
 
-        FloatLiteral(float) => match test {
-            IsFloat(test_float) if float == *test_float => {
+        FloatLiteral(float, p1) => match test {
+            IsFloat(test_float, p2) if float == *test_float => {
+                debug_assert_eq!(p1, *p2);
                 start.extend(end);
                 Some(Branch {
                     goal: branch.goal,
@@ -928,8 +934,8 @@ fn needs_tests(pattern: &Pattern) -> bool {
         | AppliedTag { .. }
         | BitLiteral { .. }
         | EnumLiteral { .. }
-        | IntLiteral(_)
-        | FloatLiteral(_)
+        | IntLiteral(_, _)
+        | FloatLiteral(_, _)
         | DecimalLiteral(_)
         | StrLiteral(_) => true,
     }
@@ -1280,22 +1286,22 @@ fn test_to_equality<'a>(
                 _ => unreachable!("{:?}", (cond_layout, union)),
             }
         }
-        Test::IsInt(test_int) => {
+        Test::IsInt(test_int, precision) => {
             // TODO don't downcast i128 here
             debug_assert!(test_int <= i64::MAX as i128);
             let lhs = Expr::Literal(Literal::Int(test_int as i128));
             let lhs_symbol = env.unique_symbol();
-            stores.push((lhs_symbol, Layout::Builtin(Builtin::Int64), lhs));
+            stores.push((lhs_symbol, precision.as_layout(), lhs));
 
             (stores, lhs_symbol, rhs_symbol, None)
         }
 
-        Test::IsFloat(test_int) => {
+        Test::IsFloat(test_int, precision) => {
             // TODO maybe we can actually use i64 comparison here?
             let test_float = f64::from_bits(test_int as u64);
             let lhs = Expr::Literal(Literal::Float(test_float));
             let lhs_symbol = env.unique_symbol();
-            stores.push((lhs_symbol, Layout::Builtin(Builtin::Float64), lhs));
+            stores.push((lhs_symbol, precision.as_layout(), lhs));
 
             (stores, lhs_symbol, rhs_symbol, None)
         }
@@ -1303,7 +1309,7 @@ fn test_to_equality<'a>(
         Test::IsDecimal(test_dec) => {
             let lhs = Expr::Literal(Literal::Int(test_dec.0));
             let lhs_symbol = env.unique_symbol();
-            stores.push((lhs_symbol, Layout::Builtin(Builtin::Int128), lhs));
+            stores.push((lhs_symbol, *cond_layout, lhs));
 
             (stores, lhs_symbol, rhs_symbol, None)
         }
@@ -1737,8 +1743,8 @@ fn decide_to_branching<'a>(
                 );
 
                 let tag = match test {
-                    Test::IsInt(v) => v as u64,
-                    Test::IsFloat(v) => v as u64,
+                    Test::IsInt(v, _) => v as u64,
+                    Test::IsFloat(v, _) => v as u64,
                     Test::IsBit(v) => v as u64,
                     Test::IsByte { tag_id, .. } => tag_id as u64,
                     Test::IsCtor { tag_id, .. } => tag_id as u64,

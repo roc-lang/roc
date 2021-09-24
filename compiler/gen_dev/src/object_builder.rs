@@ -34,7 +34,7 @@ pub fn build_module<'a>(
                 x86_64::X86_64FloatReg,
                 x86_64::X86_64Assembler,
                 x86_64::X86_64SystemV,
-            > = Backend::new(env, target)?;
+            > = Backend::new(env)?;
             build_object(
                 env,
                 procedures,
@@ -52,7 +52,7 @@ pub fn build_module<'a>(
                 x86_64::X86_64FloatReg,
                 x86_64::X86_64Assembler,
                 x86_64::X86_64SystemV,
-            > = Backend::new(env, target)?;
+            > = Backend::new(env)?;
             build_object(
                 env,
                 procedures,
@@ -74,7 +74,7 @@ pub fn build_module<'a>(
                 aarch64::AArch64FloatReg,
                 aarch64::AArch64Assembler,
                 aarch64::AArch64Call,
-            > = Backend::new(env, target)?;
+            > = Backend::new(env)?;
             build_object(
                 env,
                 procedures,
@@ -191,9 +191,15 @@ fn build_object<'a, B: Backend<'a>>(
     let mut layout_ids = roc_mono::layout::LayoutIds::default();
     let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
     for ((sym, layout), proc) in procedures {
-        let fn_name = layout_ids
+        let base_name = layout_ids
             .get_toplevel(sym, &layout)
             .to_symbol_string(sym, &env.interns);
+
+        let fn_name = if env.exposed_to_host.contains(&sym) {
+            format!("roc_{}_exposed", base_name)
+        } else {
+            base_name
+        };
 
         let section_id = output.add_section(
             output.segment_name(StandardSegment::Text).to_vec(),
@@ -298,6 +304,7 @@ fn build_object<'a, B: Backend<'a>>(
                         return Err(format!("failed to find fn symbol for {:?}", name));
                     }
                 }
+                Relocation::JmpToReturn { .. } => unreachable!(),
             };
             relocations.push((section_id, elfreloc));
         }

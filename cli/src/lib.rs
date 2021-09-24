@@ -26,11 +26,16 @@ pub const CMD_BUILD: &str = "build";
 pub const CMD_REPL: &str = "repl";
 pub const CMD_EDIT: &str = "edit";
 pub const CMD_DOCS: &str = "docs";
+pub const CMD_CHECK: &str = "check";
 
 pub const FLAG_DEBUG: &str = "debug";
+pub const FLAG_DEV: &str = "dev";
 pub const FLAG_OPTIMIZE: &str = "optimize";
 pub const FLAG_LIB: &str = "lib";
 pub const FLAG_BACKEND: &str = "backend";
+pub const FLAG_TIME: &str = "time";
+pub const FLAG_LINK: &str = "roc-linker";
+pub const FLAG_PRECOMPILED: &str = "precompiled-host";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const BACKEND: &str = "BACKEND";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
@@ -54,6 +59,12 @@ pub fn build_app<'a>() -> App<'a> {
                     .required(false),
             )
             .arg(
+                Arg::with_name(FLAG_DEV)
+                    .long(FLAG_DEV)
+                    .help("Make compilation as fast as possible. (Runtime performance may suffer)")
+                    .required(false),
+            )
+            .arg(
                 Arg::with_name(FLAG_BACKEND)
                     .long(FLAG_BACKEND)
                     .help("Choose a different backend")
@@ -74,6 +85,24 @@ pub fn build_app<'a>() -> App<'a> {
                     .help("Store LLVM debug information in the generated program")
                     .required(false),
             )
+            .arg(
+                Arg::with_name(FLAG_TIME)
+                    .long(FLAG_TIME)
+                    .help("Prints detailed compilation time information.")
+                    .required(false),
+            )
+            .arg(
+                Arg::with_name(FLAG_LINK)
+                    .long(FLAG_LINK)
+                    .help("Uses the roc linker instead of the system linker.")
+                    .required(false),
+            )
+            .arg(
+                Arg::with_name(FLAG_PRECOMPILED)
+                    .long(FLAG_PRECOMPILED)
+                    .help("Assumes the host has been precompiled and skips recompiling the host.")
+                    .required(false),
+            )
         )
         .subcommand(App::new(CMD_RUN)
             .about("DEPRECATED - now use `roc [FILE]` instead of `roc run [FILE]`")
@@ -82,6 +111,12 @@ pub fn build_app<'a>() -> App<'a> {
                 Arg::with_name(FLAG_OPTIMIZE)
                     .long(FLAG_OPTIMIZE)
                     .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
+                    .required(false),
+            )
+            .arg(
+                Arg::with_name(FLAG_DEV)
+                    .long(FLAG_DEV)
+                    .help("Make compilation as fast as possible. (Runtime performance may suffer)")
                     .required(false),
             )
             .arg(
@@ -104,6 +139,20 @@ pub fn build_app<'a>() -> App<'a> {
         .subcommand(App::new(CMD_REPL)
             .about("Launch the interactive Read Eval Print Loop (REPL)")
         )
+        .subcommand(App::new(CMD_CHECK)
+            .about("Build a binary from the given .roc file, but don't run it")
+            .arg(
+                Arg::with_name(FLAG_TIME)
+                    .long(FLAG_TIME)
+                    .help("Prints detailed compilation time information.")
+                    .required(false),
+            )
+            .arg(
+                Arg::with_name(ROC_FILE)
+                    .help("The .roc file of an app to run")
+                    .required(true),
+            )
+            )
         .subcommand(
             App::new(CMD_DOCS)
                 .about("Generate documentation for Roc modules")
@@ -123,11 +172,35 @@ pub fn build_app<'a>() -> App<'a> {
                 .requires(ROC_FILE)
                 .required(false),
         )
+            .arg(
+                Arg::with_name(FLAG_DEV)
+                    .long(FLAG_DEV)
+                    .help("Make compilation as fast as possible. (Runtime performance may suffer)")
+                    .required(false),
+            )
         .arg(
             Arg::with_name(FLAG_DEBUG)
                 .long(FLAG_DEBUG)
                 .help("Store LLVM debug information in the generated program")
                 .requires(ROC_FILE)
+                .required(false),
+        )
+        .arg(
+            Arg::with_name(FLAG_TIME)
+                .long(FLAG_TIME)
+                .help("Prints detailed compilation time information.")
+                    .required(false),
+        )
+        .arg(
+            Arg::with_name(FLAG_LINK)
+                .long(FLAG_LINK)
+                .help("Uses the roc linker instead of the system linker.")
+                .required(false),
+        )
+        .arg(
+            Arg::with_name(FLAG_PRECOMPILED)
+                .long(FLAG_PRECOMPILED)
+                .help("Assumes the host has been precompiled and skips recompiling the host.")
                 .required(false),
         )
         .arg(
@@ -197,18 +270,31 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     let filename = matches.value_of(ROC_FILE).unwrap();
 
     let original_cwd = std::env::current_dir()?;
-    let opt_level = if matches.is_present(FLAG_OPTIMIZE) {
-        OptLevel::Optimize
-    } else {
-        OptLevel::Normal
+    let opt_level = match (
+        matches.is_present(FLAG_OPTIMIZE),
+        matches.is_present(FLAG_DEV),
+    ) {
+        (true, false) => OptLevel::Optimize,
+        (true, true) => panic!("development cannot be optimized!"),
+        (false, true) => OptLevel::Development,
+        (false, false) => OptLevel::Normal,
     };
     let emit_debug_info = matches.is_present(FLAG_DEBUG);
+    let emit_timings = matches.is_present(FLAG_TIME);
 
     let link_type = if matches.is_present(FLAG_LIB) {
         LinkType::Dylib
     } else {
         LinkType::Executable
     };
+    let surgically_link = matches.is_present(FLAG_LINK);
+    let precompiled = matches.is_present(FLAG_PRECOMPILED);
+    if surgically_link && !roc_linker::supported(&link_type, &target) {
+        panic!(
+            "Link type, {:?}, with target, {}, not supported by roc linker",
+            link_type, target
+        );
+    }
 
     let path = Path::new(filename);
 
@@ -239,7 +325,10 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
         path,
         opt_level,
         emit_debug_info,
+        emit_timings,
         link_type,
+        surgically_link,
+        precompiled,
     );
 
     match res_binary_path {
@@ -371,24 +460,29 @@ fn run_with_wasmer(wasm_path: &std::path::Path, args: &[String]) {
 
     // Then, we get the import object related to our WASI
     // and attach it to the Wasm instance.
-    let import_object = wasi_env
-        .import_object(&module)
-        .unwrap_or_else(|_| wasmer::imports!());
+    let import_object = wasi_env.import_object(&module).unwrap();
 
     let instance = Instance::new(&module, &import_object).unwrap();
 
     let start = instance.exports.get_function("_start").unwrap();
 
-    start.call(&[]).unwrap();
+    use wasmer_wasi::WasiError;
+    match start.call(&[]) {
+        Ok(_) => {}
+        Err(e) => match e.downcast::<WasiError>() {
+            Ok(WasiError::Exit(0)) => {
+                // we run the `_start` function, so exit(0) is expected
+            }
+            other => panic!("Wasmer error: {:?}", other),
+        },
+    }
 }
 
 enum Backend {
     Host,
     X86_32,
     X86_64,
-    Dev,
     Wasm32,
-    Wasm32Dev,
 }
 
 impl Default for Backend {
@@ -403,9 +497,7 @@ impl Backend {
             Backend::Host => "host",
             Backend::X86_32 => "x86_32",
             Backend::X86_64 => "x86_64",
-            Backend::Dev => "dev",
             Backend::Wasm32 => "wasm32",
-            Backend::Wasm32Dev => "wasm32_dev",
         }
     }
 
@@ -414,9 +506,7 @@ impl Backend {
         Backend::Host.as_str(),
         Backend::X86_32.as_str(),
         Backend::X86_64.as_str(),
-        Backend::Dev.as_str(),
         Backend::Wasm32.as_str(),
-        Backend::Wasm32Dev.as_str(),
     ];
 
     fn to_triple(&self) -> Triple {
@@ -439,8 +529,7 @@ impl Backend {
 
                 triple
             }
-            Backend::Dev => todo!(),
-            Backend::Wasm32 | Backend::Wasm32Dev => {
+            Backend::Wasm32 => {
                 triple.architecture = Architecture::Wasm32;
                 triple.binary_format = BinaryFormat::Wasm;
 
@@ -464,9 +553,7 @@ impl std::str::FromStr for Backend {
             "host" => Ok(Backend::Host),
             "x86_32" => Ok(Backend::X86_32),
             "x86_64" => Ok(Backend::X86_64),
-            "dev" => Ok(Backend::Dev),
             "wasm32" => Ok(Backend::Wasm32),
-            "wasm32_dev" => Ok(Backend::Wasm32Dev),
             _ => Err(()),
         }
     }

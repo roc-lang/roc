@@ -589,9 +589,9 @@ fn call_spec(
                         let index = builder.add_make_tuple(block, &[])?;
 
                         let argument = if closure_env_layout.is_none() {
-                            builder.add_make_tuple(block, &[first, index])?
+                            builder.add_make_tuple(block, &[index, first])?
                         } else {
-                            builder.add_make_tuple(block, &[first, index, closure_env])?
+                            builder.add_make_tuple(block, &[index, first, closure_env])?
                         };
                         builder.add_call(block, spec_var, module, name, argument)?;
                     }
@@ -1191,6 +1191,11 @@ fn layout_spec_help(
     match layout {
         Builtin(builtin) => builtin_spec(builder, builtin, when_recursive),
         Struct(fields) => build_recursive_tuple_type(builder, fields, when_recursive),
+        LambdaSet(lambda_set) => layout_spec_help(
+            builder,
+            &lambda_set.runtime_representation(),
+            when_recursive,
+        ),
         Union(union_layout) => {
             let variant_types = build_variant_types(builder, union_layout)?;
 
@@ -1236,7 +1241,7 @@ fn builtin_spec(
 
     match builtin {
         Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Usize => builder.add_tuple_type(&[]),
-        Decimal | Float128 | Float64 | Float32 | Float16 => builder.add_tuple_type(&[]),
+        Decimal | Float128 | Float64 | Float32 => builder.add_tuple_type(&[]),
         Str | EmptyStr => str_type(builder),
         Dict(key_layout, value_layout) => {
             let value_type = layout_spec_help(builder, value_layout, when_recursive)?;

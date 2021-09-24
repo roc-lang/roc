@@ -11,7 +11,7 @@ extern crate libc;
 mod helpers;
 
 #[cfg(all(test, any(target_os = "linux", target_os = "macos"), any(target_arch = "x86_64"/*, target_arch = "aarch64"*/)))]
-mod dev_num {
+mod wasm_num {
     #[test]
     fn i64_values() {
         assert_evals_to!("0", 0, i64);
@@ -37,6 +37,101 @@ mod dev_num {
     }
 
     #[test]
+    fn i8_add_wrap() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : I8
+                    x = 0x7f + 0x7f
+
+                    x
+                "#
+            ),
+            -2,
+            i8
+        );
+    }
+
+    #[test]
+    fn i16_add_wrap() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : I16
+                    x = 0x7fff + 0x7fff
+
+                    x
+                "#
+            ),
+            -2,
+            i16
+        );
+    }
+
+    #[test]
+    fn i32_add_wrap() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : I32
+                    x = 0x7fffffff + 0x7fffffff
+
+                    x
+                "#
+            ),
+            -2,
+            i32
+        );
+    }
+
+    #[test]
+    fn u8_add_wrap() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : U8
+                    x = 0xff + 0xff
+
+                    x
+                "#
+            ),
+            0xfe,
+            u8
+        );
+    }
+
+    #[test]
+    fn u16_add_wrap() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : U16
+                    x = 0xffff + 0xffff
+
+                    x
+                "#
+            ),
+            0xfffe,
+            u16
+        );
+    }
+    #[test]
+    fn u32_add_wrap() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : U32
+                    x = 0xffffffff + 0xffffffff
+
+                    x
+                "#
+            ),
+            0xfffffffe,
+            u32
+        );
+    }
+
+    #[test]
     fn gen_add_i64() {
         assert_evals_to!(
             indoc!(
@@ -49,44 +144,149 @@ mod dev_num {
         );
     }
 
-    // #[test]
-    // fn gen_add_f64() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 1.1 + 2.4 + 3
-    //             "#
-    //         ),
-    //         6.5,
-    //         f64
-    //     );
-    // }
+    #[test]
+    fn if_then_else() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                cond : Bool
+                cond = True
 
-    // #[test]
-    // fn gen_sub_i64() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 1 - 2 - 3
-    //             "#
-    //         ),
-    //         -4,
-    //         i64
-    //     );
-    // }
+                if cond then
+                    0
+                else
+                    1
+                 "#
+            ),
+            0,
+            i64
+        );
+    }
 
-    // #[test]
-    // fn gen_mul_i64() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 2 * 4 * 6
-    //             "#
-    //         ),
-    //         48,
-    //         i64
-    //     );
-    // }
+    #[test]
+    fn rgb_red() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Red is
+                    Red -> 111
+                    Green -> 222
+                    Blue -> 333
+                 "#
+            ),
+            111,
+            i64
+        );
+    }
+
+    #[test]
+    fn rgb_green() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Green is
+                    Red -> 111
+                    Green -> 222
+                    Blue -> 333
+                 "#
+            ),
+            222,
+            i64
+        );
+    }
+
+    #[test]
+    fn rgb_blue() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Blue is
+                    Red -> 111
+                    Green -> 222
+                    Blue -> 333
+                 "#
+            ),
+            333,
+            i64
+        );
+    }
+
+    #[test]
+    fn join_point() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x = if True then 111 else 222
+
+                x + 123
+                 "#
+            ),
+            234,
+            i64
+        );
+    }
+
+    #[test]
+    fn factorial() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                fac : I32, I32 -> I32
+                fac = \n, accum ->
+                    if n > 1 then
+                        fac (n - 1) (n * accum)
+                    else
+                        accum
+
+                main : I32
+                main = fac 8 1
+                 "#
+            ),
+            40_320,
+            i32
+        );
+    }
+
+    #[test]
+    fn gen_add_f64() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    1.1 + 2.4 + 3
+                "#
+            ),
+            6.5,
+            f64
+        );
+    }
+
+    #[test]
+    fn gen_sub_i64() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    1 - 2 - 3
+                "#
+            ),
+            -4,
+            i64
+        );
+    }
+
+    #[test]
+    fn gen_mul_i64() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    2 * 4 * 6
+                "#
+            ),
+            48,
+            i64
+        );
+    }
 
     #[test]
     fn i64_force_stack() {
@@ -371,18 +571,18 @@ mod dev_num {
     //     );
     // }
 
-    // #[test]
-    // fn gen_sub_f64() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 1.5 - 2.4 - 3
-    //             "#
-    //         ),
-    //         -3.9,
-    //         f64
-    //     );
-    // }
+    #[test]
+    fn gen_sub_f64() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    1.5 - 2.4 - 3
+                "#
+            ),
+            -3.9,
+            f64
+        );
+    }
 
     // #[test]
     // fn gen_div_i64() {
@@ -580,31 +780,31 @@ mod dev_num {
     //     assert_evals_to!("0.0 >= 0.0", true, bool);
     // }
 
-    // #[test]
-    // fn gen_order_of_arithmetic_ops() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 1 + 3 * 7 - 2
-    //             "#
-    //         ),
-    //         20,
-    //         i64
-    //     );
-    // }
+    #[test]
+    fn gen_order_of_arithmetic_ops() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    1 + 3 * 7 - 2
+                "#
+            ),
+            20,
+            i64
+        );
+    }
 
-    // #[test]
-    // fn gen_order_of_arithmetic_ops_complex_float() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 3 - 48 * 2.0
-    //             "#
-    //         ),
-    //         -93.0,
-    //         f64
-    //     );
-    // }
+    #[test]
+    fn gen_order_of_arithmetic_ops_complex_float() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    3 - 48 * 2.0
+                "#
+            ),
+            -93.0,
+            f64
+        );
+    }
 
     // #[test]
     // fn if_guard_bind_variable_false() {

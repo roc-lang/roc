@@ -33,16 +33,16 @@ pub fn make_tail_recursive<'a>(
     id: JoinPointId,
     needle: Symbol,
     stmt: Stmt<'a>,
-    args: &'a [(Layout<'a>, Symbol)],
-) -> Stmt<'a> {
+    args: &'a [(Layout<'a>, Symbol, Symbol)],
+) -> Option<Stmt<'a>> {
     let allocated = arena.alloc(stmt);
     match insert_jumps(arena, allocated, id, needle) {
-        None => allocated.clone(),
+        None => None,
         Some(new) => {
             // jumps were inserted, we must now add a join point
 
             let params = Vec::from_iter_in(
-                args.iter().map(|(layout, symbol)| Param {
+                args.iter().map(|(layout, symbol, _)| Param {
                     symbol: *symbol,
                     layout: *layout,
                     borrow: true,
@@ -52,16 +52,18 @@ pub fn make_tail_recursive<'a>(
             .into_bump_slice();
 
             // TODO could this be &[]?
-            let args = Vec::from_iter_in(args.iter().map(|t| t.1), arena).into_bump_slice();
+            let args = Vec::from_iter_in(args.iter().map(|t| t.2), arena).into_bump_slice();
 
             let jump = arena.alloc(Stmt::Jump(id, args));
 
-            Stmt::Join {
+            let join = Stmt::Join {
                 id,
                 remainder: jump,
                 parameters: params,
                 body: new,
-            }
+            };
+
+            Some(join)
         }
     }
 }

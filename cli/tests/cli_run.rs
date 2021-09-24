@@ -157,6 +157,15 @@ mod cli_run {
                     let example = $example;
                     let file_name = example_file(dir_name, example.filename);
 
+                    match example.executable_filename {
+                        "hello-web" => {
+                            // this is a web webassembly example, but we don't test with JS at the moment
+                            eprintln!("WARNING: skipping testing example {} because the test is broken right now!", example.filename);
+                            return;
+                        }
+                        _ => {}
+                    }
+
                     // Check with and without optimizations
                     check_output_with_stdin(
                         &file_name,
@@ -224,6 +233,20 @@ mod cli_run {
             expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
+        hello_web:"hello-web" => Example {
+            filename: "Hello.roc",
+            executable_filename: "hello-web",
+            stdin: &[],
+            expected_ending:"Hello, World!\n",
+            use_valgrind: true,
+        },
+        fib:"fib" => Example {
+            filename: "Fib.roc",
+            executable_filename: "fib",
+            stdin: &[],
+            expected_ending:"55\n",
+            use_valgrind: true,
+        },
         quicksort:"quicksort" => Example {
             filename: "Quicksort.roc",
             executable_filename: "quicksort",
@@ -242,7 +265,7 @@ mod cli_run {
             filename: "Main.roc",
             executable_filename: "effect-example",
             stdin: &["hi there!"],
-            expected_ending: "hi there!\n",
+            expected_ending: "hi there!\nIt is known\n",
             use_valgrind: true,
         },
         // tea:"tea" => Example {
@@ -603,7 +626,7 @@ mod cli_run {
     }
 }
 
-#[cfg(feature = "wasm32-cli-run")]
+#[allow(dead_code)]
 fn run_with_wasmer(wasm_path: &std::path::Path, stdin: &[&str]) -> String {
     use std::io::Write;
     use wasmer::{Instance, Module, Store};
@@ -647,21 +670,31 @@ fn run_with_wasmer(wasm_path: &std::path::Path, stdin: &[&str]) -> String {
     let start = instance.exports.get_function("_start").unwrap();
 
     match start.call(&[]) {
-        Ok(_) => {
-            let mut state = wasi_env.state.lock().unwrap();
-
-            match state.fs.stdout_mut() {
-                Ok(Some(stdout)) => {
-                    let mut buf = String::new();
-                    stdout.read_to_string(&mut buf).unwrap();
-
-                    return buf;
+        Ok(_) => read_wasi_stdout(wasi_env),
+        Err(e) => {
+            use wasmer_wasi::WasiError;
+            match e.downcast::<WasiError>() {
+                Ok(WasiError::Exit(0)) => {
+                    // we run the `_start` function, so exit(0) is expected
+                    read_wasi_stdout(wasi_env)
                 }
-                _ => todo!(),
+                other => format!("Something went wrong running a wasm test: {:?}", other),
             }
         }
-        Err(e) => {
-            panic!("Something went wrong running a wasm test:\n{:?}", e);
+    }
+}
+
+#[allow(dead_code)]
+fn read_wasi_stdout(wasi_env: wasmer_wasi::WasiEnv) -> String {
+    let mut state = wasi_env.state.lock().unwrap();
+
+    match state.fs.stdout_mut() {
+        Ok(Some(stdout)) => {
+            let mut buf = String::new();
+            stdout.read_to_string(&mut buf).unwrap();
+
+            return buf;
         }
+        _ => todo!(),
     }
 }

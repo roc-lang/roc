@@ -1778,4 +1778,48 @@ mod gen_num {
             u32
         );
     }
+
+    #[test]
+    fn when_on_i32() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                x : I32
+                x = 0
+
+                main : I32
+                main =
+                    when x is
+                        0 -> 42
+                        _ -> -1
+            "#
+            ),
+            42,
+            i32
+        );
+    }
+
+    #[test]
+    fn when_on_i16() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                x : I16
+                x = 0
+
+                main : I16
+                main =
+                    when x is
+                        0 -> 42
+                        _ -> -1
+            "#
+            ),
+            42,
+            i16
+        );
+    }
 }

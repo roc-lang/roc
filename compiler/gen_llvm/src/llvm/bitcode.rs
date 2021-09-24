@@ -10,7 +10,7 @@ use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValue, BasicValueEnum, CallSiteValue, FunctionValue, InstructionValue};
 use inkwell::AddressSpace;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{Layout, LayoutIds, UnionLayout};
+use roc_mono::layout::{LambdaSet, Layout, LayoutIds, UnionLayout};
 
 pub fn call_bitcode_fn<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -189,7 +189,7 @@ fn build_has_tag_id_help<'a, 'ctx, 'env>(
 pub fn build_transform_caller<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     function: FunctionValue<'ctx>,
-    closure_data_layout: Layout<'a>,
+    closure_data_layout: LambdaSet<'a>,
     argument_layouts: &[Layout<'a>],
 ) -> FunctionValue<'ctx> {
     let fn_name: &str = &format!(
@@ -212,7 +212,7 @@ pub fn build_transform_caller<'a, 'ctx, 'env>(
 fn build_transform_caller_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     roc_function: FunctionValue<'ctx>,
-    closure_data_layout: Layout<'a>,
+    closure_data_layout: LambdaSet<'a>,
     argument_layouts: &[Layout<'a>],
     fn_name: &str,
 ) -> FunctionValue<'ctx> {
@@ -270,7 +270,7 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
         arguments_cast.push(argument);
     }
 
-    match closure_data_layout {
+    match closure_data_layout.runtime_representation() {
         Layout::Struct(&[]) => {
             // nothing to add
         }
@@ -529,7 +529,7 @@ pub fn build_eq_wrapper<'a, 'ctx, 'env>(
 pub fn build_compare_wrapper<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     roc_function: FunctionValue<'ctx>,
-    closure_data_layout: Layout<'a>,
+    closure_data_layout: LambdaSet<'a>,
     layout: &Layout<'a>,
 ) -> FunctionValue<'ctx> {
     let block = env.builder.get_insert_block().expect("to be in a function");
@@ -595,7 +595,7 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
 
             let default = [value1, value2];
 
-            let arguments_cast = match closure_data_layout {
+            let arguments_cast = match closure_data_layout.runtime_representation() {
                 Layout::Struct(&[]) => {
                     // nothing to add
                     &default

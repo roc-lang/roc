@@ -3,15 +3,15 @@ use std::path::Path;
 
 use crate::llvm::bitcode::{call_bitcode_fn, call_void_bitcode_fn};
 use crate::llvm::build_dict::{
-    dict_contains, dict_difference, dict_empty, dict_get, dict_insert, dict_intersection,
+    self, dict_contains, dict_difference, dict_empty, dict_get, dict_insert, dict_intersection,
     dict_keys, dict_len, dict_remove, dict_union, dict_values, dict_walk, set_from_list,
 };
 use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
-    allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
-    list_drop, list_get_unsafe, list_join, list_keep_errs, list_keep_if, list_keep_oks, list_len,
-    list_map, list_map2, list_map3, list_map_with_index, list_prepend, list_range, list_repeat,
-    list_reverse, list_set, list_single, list_sort_with, list_swap,
+    self, allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat,
+    list_contains, list_drop, list_get_unsafe, list_join, list_keep_errs, list_keep_if,
+    list_keep_oks, list_len, list_map, list_map2, list_map3, list_map_with_index, list_prepend,
+    list_range, list_repeat, list_reverse, list_set, list_single, list_sort_with, list_swap,
 };
 use crate::llvm::build_str::{
     empty_str, str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int,
@@ -638,7 +638,7 @@ pub fn construct_optimization_passes<'a>(
 
     let pmb = PassManagerBuilder::create();
     match opt_level {
-        OptLevel::Normal => {
+        OptLevel::Development | OptLevel::Normal => {
             pmb.set_optimization_level(OptimizationLevel::None);
         }
         OptLevel::Optimize => {
@@ -704,7 +704,14 @@ fn promote_to_main_function<'a, 'ctx, 'env>(
     let main_fn_name = "$Test.main";
 
     // Add main to the module.
-    let main_fn = expose_function_to_host_help(env, main_fn_name, roc_main_fn, main_fn_name);
+    let main_fn = expose_function_to_host_help_c_abi(
+        env,
+        main_fn_name,
+        roc_main_fn,
+        &[],
+        top_level.result,
+        main_fn_name,
+    );
 
     (main_fn_name, main_fn)
 }
@@ -1163,8 +1170,16 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         StructAtIndex {
             index, structure, ..
         } => {
+            let (value, layout) = load_symbol_and_layout(scope, structure);
+
+            let layout = if let Layout::LambdaSet(lambda_set) = layout {
+                lambda_set.runtime_representation()
+            } else {
+                *layout
+            };
+
             // extract field from a record
-            match load_symbol_and_layout(scope, structure) {
+            match (value, layout) {
                 (StructValue(argument), Layout::Struct(fields)) => {
                     debug_assert!(!fields.is_empty());
                     env.builder
@@ -2304,32 +2319,6 @@ fn list_literal<'a, 'ctx, 'env>(
     }
 }
 
-fn decrement_with_size_check<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
-    size: IntValue<'ctx>,
-    layout: Layout<'a>,
-    refcount_ptr: PointerToRefcount<'ctx>,
-) {
-    let not_empty = env.context.append_basic_block(parent, "not_null");
-
-    let done = env.context.append_basic_block(parent, "done");
-
-    let is_empty =
-        env.builder
-            .build_int_compare(IntPredicate::EQ, size, size.get_type().const_zero(), "");
-
-    env.builder
-        .build_conditional_branch(is_empty, done, not_empty);
-
-    env.builder.position_at_end(not_empty);
-
-    refcount_ptr.decrement(env, &layout);
-
-    env.builder.build_unconditional_branch(done);
-    env.builder.position_at_end(done);
-}
-
 pub fn build_exp_stmt<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -2539,34 +2528,25 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     let (value, layout) = load_symbol_and_layout(scope, symbol);
 
                     match layout {
-                        Layout::Builtin(Builtin::List(_)) => {
+                        Layout::Builtin(Builtin::List(element_layout)) => {
                             debug_assert!(value.is_struct_value());
+                            let alignment = element_layout.alignment_bytes(env.ptr_bytes);
 
-                            // because of how we insert DECREF for lists, we can't guarantee that
-                            // the list is non-empty. When the list is empty, the pointer to the
-                            // elements is NULL, and trying to get to the RC address will
-                            // underflow, causing a segfault. Therefore, in this case we must
-                            // manually check that the list is non-empty
-                            let refcount_ptr = PointerToRefcount::from_list_wrapper(
-                                env,
-                                value.into_struct_value(),
-                            );
-
-                            let length = list_len(env.builder, value.into_struct_value());
-
-                            decrement_with_size_check(env, parent, length, *layout, refcount_ptr);
+                            build_list::decref(env, value.into_struct_value(), alignment);
                         }
-                        Layout::Builtin(Builtin::Dict(_, _)) | Layout::Builtin(Builtin::Set(_)) => {
+                        Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
                             debug_assert!(value.is_struct_value());
+                            let alignment = key_layout
+                                .alignment_bytes(env.ptr_bytes)
+                                .max(value_layout.alignment_bytes(env.ptr_bytes));
 
-                            let refcount_ptr = PointerToRefcount::from_list_wrapper(
-                                env,
-                                value.into_struct_value(),
-                            );
+                            build_dict::decref(env, value.into_struct_value(), alignment);
+                        }
+                        Layout::Builtin(Builtin::Set(key_layout)) => {
+                            debug_assert!(value.is_struct_value());
+                            let alignment = key_layout.alignment_bytes(env.ptr_bytes);
 
-                            let length = dict_len(env, scope, *symbol).into_int_value();
-
-                            decrement_with_size_check(env, parent, length, *layout, refcount_ptr);
+                            build_dict::decref(env, value.into_struct_value(), alignment);
                         }
 
                         _ if layout.is_refcounted() => {
@@ -2635,6 +2615,18 @@ pub fn load_symbol_and_layout<'a, 'ctx, 'b>(
         None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
     }
 }
+
+pub fn load_symbol_and_lambda_set<'a, 'ctx, 'b>(
+    scope: &'b Scope<'a, 'ctx>,
+    symbol: &Symbol,
+) -> (BasicValueEnum<'ctx>, LambdaSet<'a>) {
+    match scope.get(symbol) {
+        Some((Layout::LambdaSet(lambda_set), ptr)) => (*ptr, *lambda_set),
+        Some((other, ptr)) => panic!("Not a lambda set: {:?}, {:?}", other, ptr),
+        None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
+    }
+}
+
 fn access_index_struct_value<'ctx>(
     builder: &Builder<'ctx>,
     from_value: StructValue<'ctx>,
@@ -3088,33 +3080,42 @@ fn expose_function_to_host<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     symbol: Symbol,
     roc_function: FunctionValue<'ctx>,
+    arguments: &[Layout<'a>],
+    return_layout: Layout<'a>,
 ) {
     // Assumption: there is only one specialization of a host-exposed function
     let ident_string = symbol.as_str(&env.interns);
     let c_function_name: String = format!("roc__{}_1_exposed", ident_string);
 
-    expose_function_to_host_help(env, ident_string, roc_function, &c_function_name);
+    expose_function_to_host_help_c_abi(
+        env,
+        ident_string,
+        roc_function,
+        arguments,
+        return_layout,
+        &c_function_name,
+    );
 }
 
-fn expose_function_to_host_help<'a, 'ctx, 'env>(
+fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    ident_string: &str,
     roc_function: FunctionValue<'ctx>,
+    arguments: &[Layout<'a>],
     c_function_name: &str,
 ) -> FunctionValue<'ctx> {
-    let context = env.context;
+    // NOTE we ingore env.is_gen_test here
+    let wrapper_return_type = roc_function.get_type().get_return_type().unwrap();
 
-    let wrapper_return_type = context.struct_type(
-        &[
-            context.i64_type().into(),
-            roc_function.get_type().get_return_type().unwrap(),
-        ],
-        false,
-    );
+    let mut cc_argument_types = Vec::with_capacity_in(arguments.len(), env.arena);
+    for layout in arguments {
+        cc_argument_types.push(to_cc_type(env, layout));
+    }
 
     // STEP 1: turn `f : a,b,c -> d` into `f : a,b,c, &d -> {}`
-    let mut argument_types = roc_function.get_type().get_param_types();
+    // let mut argument_types = roc_function.get_type().get_param_types();
+    let mut argument_types = cc_argument_types;
     let return_type = wrapper_return_type;
+
     let output_type = return_type.ptr_type(AddressSpace::Generic);
     argument_types.push(output_type.into());
 
@@ -3142,33 +3143,61 @@ fn expose_function_to_host_help<'a, 'ctx, 'env>(
     debug_info_init!(env, c_function);
 
     // drop the final argument, which is the pointer we write the result into
-    let args = c_function.get_params();
-    let output_arg_index = args.len() - 1;
-    let args = &args[..args.len() - 1];
+    let args_vector = c_function.get_params();
+    let mut args = args_vector.as_slice();
+    let args_length = args.len();
+
+    args = &args[..args.len() - 1];
+
+    let mut arguments_for_call = Vec::with_capacity_in(args.len(), env.arena);
+
+    let it = args.iter().zip(roc_function.get_type().get_param_types());
+    for (arg, fastcc_type) in it {
+        let arg_type = arg.get_type();
+        if arg_type == fastcc_type {
+            // the C and Fast calling conventions agree
+            arguments_for_call.push(*arg);
+        } else {
+            let cast = complex_bitcast_check_size(env, *arg, fastcc_type, "to_fastcc_type");
+            arguments_for_call.push(cast);
+        }
+    }
+
+    let arguments_for_call = &arguments_for_call.into_bump_slice();
 
     debug_assert_eq!(args.len(), roc_function.get_params().len());
 
     let call_result = {
         if env.is_gen_test {
             let roc_wrapper_function = make_exception_catcher(env, roc_function);
-            debug_assert_eq!(args.len(), roc_wrapper_function.get_params().len());
+            debug_assert_eq!(
+                arguments_for_call.len(),
+                roc_wrapper_function.get_params().len()
+            );
 
             builder.position_at_end(entry);
 
-            let call_wrapped =
-                builder.build_call(roc_wrapper_function, args, "call_wrapped_function");
+            let call_wrapped = builder.build_call(
+                roc_wrapper_function,
+                arguments_for_call,
+                "call_wrapped_function",
+            );
             call_wrapped.set_call_convention(FAST_CALL_CONV);
 
             call_wrapped.try_as_basic_value().left().unwrap()
         } else {
-            let call_unwrapped = builder.build_call(roc_function, args, "call_unwrapped_function");
+            let call_unwrapped =
+                builder.build_call(roc_function, arguments_for_call, "call_unwrapped_function");
             call_unwrapped.set_call_convention(FAST_CALL_CONV);
 
             let call_unwrapped_result = call_unwrapped.try_as_basic_value().left().unwrap();
 
-            make_good_roc_result(env, call_unwrapped_result)
+            // make_good_roc_result(env, call_unwrapped_result)
+            call_unwrapped_result
         }
     };
+
+    let output_arg_index = args_length - 1;
 
     let output_arg = c_function
         .get_nth_param(output_arg_index as u32)
@@ -3176,8 +3205,173 @@ fn expose_function_to_host_help<'a, 'ctx, 'env>(
         .into_pointer_value();
 
     builder.build_store(output_arg, call_result);
-
     builder.build_return(None);
+
+    c_function
+}
+
+fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    ident_string: &str,
+    roc_function: FunctionValue<'ctx>,
+    arguments: &[Layout<'a>],
+    return_layout: Layout<'a>,
+    c_function_name: &str,
+) -> FunctionValue<'ctx> {
+    let context = env.context;
+
+    // a generic version that writes the result into a passed *u8 pointer
+    if !env.is_gen_test {
+        expose_function_to_host_help_c_abi_generic(
+            env,
+            roc_function,
+            arguments,
+            &format!("{}_generic", c_function_name),
+        );
+    }
+
+    let wrapper_return_type = if env.is_gen_test {
+        context
+            .struct_type(
+                &[
+                    context.i64_type().into(),
+                    roc_function.get_type().get_return_type().unwrap(),
+                ],
+                false,
+            )
+            .into()
+    } else {
+        roc_function.get_type().get_return_type().unwrap()
+    };
+
+    let mut cc_argument_types = Vec::with_capacity_in(arguments.len(), env.arena);
+    for layout in arguments {
+        cc_argument_types.push(to_cc_type(env, layout));
+    }
+
+    // STEP 1: turn `f : a,b,c -> d` into `f : a,b,c, &d -> {}` if the C abi demands it
+    let mut argument_types = cc_argument_types;
+    let return_type = wrapper_return_type;
+
+    let cc_return = to_cc_return(env, &return_layout);
+
+    let c_function_type = match cc_return {
+        CCReturn::Void if !env.is_gen_test => {
+            env.context.void_type().fn_type(&argument_types, false)
+        }
+        CCReturn::Return if !env.is_gen_test => return_type.fn_type(&argument_types, false),
+        _ => {
+            let output_type = return_type.ptr_type(AddressSpace::Generic);
+            argument_types.push(output_type.into());
+            env.context.void_type().fn_type(&argument_types, false)
+        }
+    };
+
+    let c_function = add_func(
+        env.module,
+        c_function_name,
+        c_function_type,
+        Linkage::External,
+        C_CALL_CONV,
+    );
+
+    let subprogram = env.new_subprogram(c_function_name);
+    c_function.set_subprogram(subprogram);
+
+    // STEP 2: build the exposed function's body
+    let builder = env.builder;
+    let context = env.context;
+
+    let entry = context.append_basic_block(c_function, "entry");
+
+    builder.position_at_end(entry);
+
+    debug_info_init!(env, c_function);
+
+    // drop the final argument, which is the pointer we write the result into
+    let args_vector = c_function.get_params();
+    let mut args = args_vector.as_slice();
+    let args_length = args.len();
+
+    match cc_return {
+        CCReturn::Return if !env.is_gen_test => {
+            debug_assert_eq!(args.len(), roc_function.get_params().len());
+        }
+        CCReturn::Void if !env.is_gen_test => {
+            debug_assert_eq!(args.len(), roc_function.get_params().len());
+        }
+        _ => {
+            args = &args[..args.len() - 1];
+            debug_assert_eq!(args.len(), roc_function.get_params().len());
+        }
+    }
+
+    let mut arguments_for_call = Vec::with_capacity_in(args.len(), env.arena);
+
+    let it = args.iter().zip(roc_function.get_type().get_param_types());
+    for (arg, fastcc_type) in it {
+        let arg_type = arg.get_type();
+        if arg_type == fastcc_type {
+            // the C and Fast calling conventions agree
+            arguments_for_call.push(*arg);
+        } else {
+            let cast = complex_bitcast_check_size(env, *arg, fastcc_type, "to_fastcc_type");
+            arguments_for_call.push(cast);
+        }
+    }
+
+    let arguments_for_call = &arguments_for_call.into_bump_slice();
+
+    let call_result = {
+        if env.is_gen_test {
+            let roc_wrapper_function = make_exception_catcher(env, roc_function);
+            debug_assert_eq!(
+                arguments_for_call.len(),
+                roc_wrapper_function.get_params().len()
+            );
+
+            builder.position_at_end(entry);
+
+            let call_wrapped = builder.build_call(
+                roc_wrapper_function,
+                arguments_for_call,
+                "call_wrapped_function",
+            );
+            call_wrapped.set_call_convention(FAST_CALL_CONV);
+
+            call_wrapped.try_as_basic_value().left().unwrap()
+        } else {
+            let call_unwrapped =
+                builder.build_call(roc_function, arguments_for_call, "call_unwrapped_function");
+            call_unwrapped.set_call_convention(FAST_CALL_CONV);
+
+            let call_unwrapped_result = call_unwrapped.try_as_basic_value().left().unwrap();
+
+            // make_good_roc_result(env, call_unwrapped_result)
+            call_unwrapped_result
+        }
+    };
+
+    match cc_return {
+        CCReturn::Void if !env.is_gen_test => {
+            // TODO return empty struct here?
+            builder.build_return(None);
+        }
+        CCReturn::Return if !env.is_gen_test => {
+            builder.build_return(Some(&call_result));
+        }
+        _ => {
+            let output_arg_index = args_length - 1;
+
+            let output_arg = c_function
+                .get_nth_param(output_arg_index as u32)
+                .unwrap()
+                .into_pointer_value();
+
+            builder.build_store(output_arg, call_result);
+            builder.build_return(None);
+        }
+    }
 
     // STEP 3: build a {} -> u64 function that gives the size of the return type
     let size_function_type = env.context.i64_type().fn_type(&[], false);
@@ -3691,7 +3885,14 @@ fn build_proc_header<'a, 'ctx, 'env>(
     fn_val.set_subprogram(subprogram);
 
     if env.exposed_to_host.contains(&symbol) {
-        expose_function_to_host(env, symbol, fn_val);
+        let arguments = Vec::from_iter_in(proc.args.iter().map(|(layout, _)| *layout), env.arena);
+        expose_function_to_host(
+            env,
+            symbol,
+            fn_val,
+            arguments.into_bump_slice(),
+            proc.ret_layout,
+        );
     }
 
     fn_val
@@ -3758,23 +3959,17 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
 
     builder.position_at_end(entry);
 
-    let mut parameters = function_value.get_params();
-    let output = parameters.pop().unwrap().into_pointer_value();
+    let mut evaluator_arguments = function_value.get_params();
 
-    let closure_data = if let Some(closure_data_ptr) = parameters.pop() {
-        let closure_data =
-            builder.build_load(closure_data_ptr.into_pointer_value(), "load_closure_data");
+    // the final parameter is the output pointer, pop it
+    let output = evaluator_arguments.pop().unwrap().into_pointer_value();
 
-        env.arena.alloc([closure_data]) as &[_]
-    } else {
-        &[]
-    };
-
-    let mut parameters = parameters;
-
-    for param in parameters.iter_mut() {
-        debug_assert!(param.is_pointer_value());
-        *param = builder.build_load(param.into_pointer_value(), "load_param");
+    // NOTE this may be incorrect in the long run
+    // here we load any argument that is a pointer
+    for param in evaluator_arguments.iter_mut() {
+        if param.is_pointer_value() {
+            *param = builder.build_load(param.into_pointer_value(), "load_param");
+        }
     }
 
     let call_result = if env.is_gen_test {
@@ -3783,13 +3978,13 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
             function_value,
             evaluator,
             evaluator.get_call_conventions(),
-            closure_data,
+            &evaluator_arguments,
             result_type,
         )
     } else {
         let call = env
             .builder
-            .build_call(evaluator, closure_data, "call_function");
+            .build_call(evaluator, &evaluator_arguments, "call_function");
 
         call.set_call_convention(evaluator.get_call_conventions());
 
@@ -4090,7 +4285,7 @@ fn roc_function_call<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     transform: FunctionValue<'ctx>,
     closure_data: BasicValueEnum<'ctx>,
-    closure_data_layout: Layout<'a>,
+    lambda_set: LambdaSet<'a>,
     closure_data_is_owned: bool,
     argument_layouts: &[Layout<'a>],
 ) -> RocFunctionCall<'ctx> {
@@ -4101,14 +4296,14 @@ fn roc_function_call<'a, 'ctx, 'env>(
         .build_alloca(closure_data.get_type(), "closure_data_ptr");
     env.builder.build_store(closure_data_ptr, closure_data);
 
-    let stepper_caller =
-        build_transform_caller(env, transform, closure_data_layout, argument_layouts)
-            .as_global_value()
-            .as_pointer_value();
-
-    let inc_closure_data = build_inc_n_wrapper(env, layout_ids, &closure_data_layout)
+    let stepper_caller = build_transform_caller(env, transform, lambda_set, argument_layouts)
         .as_global_value()
         .as_pointer_value();
+
+    let inc_closure_data =
+        build_inc_n_wrapper(env, layout_ids, &lambda_set.runtime_representation())
+            .as_global_value()
+            .as_pointer_value();
 
     let closure_data_is_owned = env
         .context
@@ -4163,7 +4358,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
             let function = passed_function_at_index!(2);
 
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[3]);
+            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[3]);
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => default,
@@ -4175,7 +4370,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         layout_ids,
                         function,
                         closure,
-                        *closure_layout,
+                        closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
                     );
@@ -4205,7 +4400,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
             let function = passed_function_at_index!(1);
 
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
+            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[2]);
 
             match (list_layout, return_layout) {
                 (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
@@ -4220,7 +4415,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         layout_ids,
                         function,
                         closure,
-                        *closure_layout,
+                        closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
                     );
@@ -4237,7 +4432,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             let (list2, list2_layout) = load_symbol_and_layout(scope, &args[1]);
 
             let function = passed_function_at_index!(2);
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[3]);
+            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[3]);
 
             match (list1_layout, list2_layout, return_layout) {
                 (
@@ -4252,7 +4447,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         layout_ids,
                         function,
                         closure,
-                        *closure_layout,
+                        closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
                     );
@@ -4281,7 +4476,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             let (list3, list3_layout) = load_symbol_and_layout(scope, &args[2]);
 
             let function = passed_function_at_index!(3);
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[4]);
+            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[4]);
 
             match (list1_layout, list2_layout, list3_layout, return_layout) {
                 (
@@ -4298,7 +4493,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         layout_ids,
                         function,
                         closure,
-                        *closure_layout,
+                        closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
                     );
@@ -4330,7 +4525,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
             let function = passed_function_at_index!(1);
 
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
+            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[2]);
 
             match (list_layout, return_layout) {
                 (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
@@ -4345,7 +4540,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         layout_ids,
                         function,
                         closure,
-                        *closure_layout,
+                        closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
                     );
@@ -4363,7 +4558,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
             let function = passed_function_at_index!(1);
 
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
+            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[2]);
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
@@ -4375,7 +4570,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         layout_ids,
                         function,
                         closure,
-                        *closure_layout,
+                        closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
                     );
@@ -4393,7 +4588,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
             let function = passed_function_at_index!(1);
 
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
+            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[2]);
 
             match (list_layout, return_layout) {
                 (_, Layout::Builtin(Builtin::EmptyList))
@@ -4409,7 +4604,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         layout_ids,
                         function,
                         closure,
-                        *closure_layout,
+                        closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
                     );
@@ -4437,7 +4632,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
             let function = passed_function_at_index!(1);
 
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
+            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[2]);
 
             match (list_layout, return_layout) {
                 (_, Layout::Builtin(Builtin::EmptyList))
@@ -4453,7 +4648,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         layout_ids,
                         function,
                         closure,
-                        *closure_layout,
+                        closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
                     );
@@ -4490,7 +4685,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
             let function = passed_function_at_index!(1);
 
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
+            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[2]);
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
@@ -4500,7 +4695,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                     let argument_layouts = &[**element_layout, **element_layout];
 
                     let compare_wrapper =
-                        build_compare_wrapper(env, function, *closure_layout, element_layout)
+                        build_compare_wrapper(env, function, closure_layout, element_layout)
                             .as_global_value()
                             .as_pointer_value();
 
@@ -4509,7 +4704,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         layout_ids,
                         function,
                         closure,
-                        *closure_layout,
+                        closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
                     );
@@ -4531,7 +4726,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
             let (default, default_layout) = load_symbol_and_layout(scope, &args[1]);
             let function = passed_function_at_index!(2);
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[3]);
+            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[3]);
 
             match dict_layout {
                 Layout::Builtin(Builtin::EmptyDict) => {
@@ -4546,7 +4741,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         layout_ids,
                         function,
                         closure,
-                        *closure_layout,
+                        closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
                     );
@@ -4832,7 +5027,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                         Usize | Int128 | Int64 | Int32 | Int16 | Int8 => {
                             build_int_unary_op(env, arg.into_int_value(), arg_builtin, op)
                         }
-                        Float128 | Float64 | Float32 | Float16 => {
+                        Float128 | Float64 | Float32 => {
                             build_float_unary_op(env, arg.into_float_value(), op)
                         }
                         _ => {
@@ -4928,7 +5123,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                                 "lt_or_gt",
                             )
                         }
-                        Float128 | Float64 | Float32 | Float16 => {
+                        Float128 | Float64 | Float32 => {
                             let are_equal = env.builder.build_float_compare(
                                 FloatPredicate::OEQ,
                                 lhs_arg.into_float_value(),
@@ -5374,8 +5569,7 @@ fn to_cc_type_builtin<'a, 'ctx, 'env>(
         | Builtin::Decimal
         | Builtin::Float128
         | Builtin::Float64
-        | Builtin::Float32
-        | Builtin::Float16 => basic_type_from_builtin(env, builtin),
+        | Builtin::Float32 => basic_type_from_builtin(env, builtin),
         Builtin::Str | Builtin::EmptyStr | Builtin::List(_) | Builtin::EmptyList => {
             env.str_list_c_abi().into()
         }
@@ -5738,7 +5932,7 @@ pub fn build_num_binop<'a, 'ctx, 'env>(
                     rhs_layout,
                     op,
                 ),
-                Float128 | Float64 | Float32 | Float16 => build_float_binop(
+                Float128 | Float64 | Float32 => build_float_binop(
                     env,
                     parent,
                     lhs_arg.into_float_value(),

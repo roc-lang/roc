@@ -56,10 +56,27 @@ fn find_zig_str_path() -> PathBuf {
         return zig_str_path;
     }
 
-    panic!("cannot find `str.zig`")
+    panic!("cannot find `str.zig`. Launch me from either the root of the roc repo or one level down(roc/examples, roc/cli...)")
+}
+
+fn find_wasi_libc_path() -> PathBuf {
+    let wasi_libc_path = PathBuf::from("compiler/builtins/bitcode/wasi-libc.a");
+
+    if std::path::Path::exists(&wasi_libc_path) {
+        return wasi_libc_path;
+    }
+
+    // when running the tests, we start in the /cli directory
+    let wasi_libc_path = PathBuf::from("../compiler/builtins/bitcode/wasi-libc.a");
+    if std::path::Path::exists(&wasi_libc_path) {
+        return wasi_libc_path;
+    }
+
+    panic!("cannot find `wasi-libc.a`")
 }
 
 #[cfg(not(target_os = "macos"))]
+#[allow(clippy::too_many_arguments)]
 pub fn build_zig_host_native(
     env_path: &str,
     env_home: &str,
@@ -67,33 +84,44 @@ pub fn build_zig_host_native(
     zig_host_src: &str,
     zig_str_path: &str,
     target: &str,
+    opt_level: OptLevel,
+    shared_lib_path: Option<&Path>,
 ) -> Output {
-    Command::new("zig")
+    let mut command = Command::new("zig");
+    command
         .env_clear()
         .env("PATH", env_path)
-        .env("HOME", env_home)
-        .args(&[
-            "build-obj",
-            zig_host_src,
-            emit_bin,
-            "--pkg-begin",
-            "str",
-            zig_str_path,
-            "--pkg-end",
-            // include the zig runtime
-            "-fcompiler-rt",
-            // include libc
-            "--library",
-            "c",
-            // cross-compile?
-            "-target",
-            target,
-        ])
-        .output()
-        .unwrap()
+        .env("HOME", env_home);
+    if let Some(shared_lib_path) = shared_lib_path {
+        command.args(&["build-exe", "-fPIE", shared_lib_path.to_str().unwrap()]);
+    } else {
+        command.args(&["build-obj", "-fPIC"]);
+    }
+    command.args(&[
+        zig_host_src,
+        emit_bin,
+        "--pkg-begin",
+        "str",
+        zig_str_path,
+        "--pkg-end",
+        // include the zig runtime
+        "-fcompiler-rt",
+        // include libc
+        "--library",
+        "c",
+        "--strip",
+        // cross-compile?
+        "-target",
+        target,
+    ]);
+    if matches!(opt_level, OptLevel::Optimize) {
+        command.args(&["-O", "ReleaseSafe"]);
+    }
+    command.output().unwrap()
 }
 
 #[cfg(target_os = "macos")]
+#[allow(clippy::too_many_arguments)]
 pub fn build_zig_host_native(
     env_path: &str,
     env_home: &str,
@@ -101,6 +129,8 @@ pub fn build_zig_host_native(
     zig_host_src: &str,
     zig_str_path: &str,
     _target: &str,
+    opt_level: OptLevel,
+    shared_lib_path: Option<&Path>,
 ) -> Output {
     use serde_json::Value;
 
@@ -142,29 +172,37 @@ pub fn build_zig_host_native(
     zig_compiler_rt_path.push("special");
     zig_compiler_rt_path.push("compiler_rt.zig");
 
-    Command::new("zig")
+    let mut command = Command::new("zig");
+    command
         .env_clear()
         .env("PATH", &env_path)
-        .env("HOME", &env_home)
-        .args(&[
-            "build-obj",
-            zig_host_src,
-            emit_bin,
-            "--pkg-begin",
-            "str",
-            zig_str_path,
-            "--pkg-end",
-            // include the zig runtime
-            "--pkg-begin",
-            "compiler_rt",
-            zig_compiler_rt_path.to_str().unwrap(),
-            "--pkg-end",
-            // include libc
-            "--library",
-            "c",
-        ])
-        .output()
-        .unwrap()
+        .env("HOME", &env_home);
+    if let Some(shared_lib_path) = shared_lib_path {
+        command.args(&["build-exe", "-fPIE", shared_lib_path.to_str().unwrap()]);
+    } else {
+        command.args(&["build-obj", "-fPIC"]);
+    }
+    command.args(&[
+        zig_host_src,
+        emit_bin,
+        "--pkg-begin",
+        "str",
+        zig_str_path,
+        "--pkg-end",
+        // include the zig runtime
+        "--pkg-begin",
+        "compiler_rt",
+        zig_compiler_rt_path.to_str().unwrap(),
+        "--pkg-end",
+        // include libc
+        "--library",
+        "c",
+        "--strip",
+    ]);
+    if matches!(opt_level, OptLevel::Optimize) {
+        command.args(&["-O", "ReleaseSafe"]);
+    }
+    command.output().unwrap()
 }
 
 pub fn build_zig_host_wasm32(
@@ -173,7 +211,12 @@ pub fn build_zig_host_wasm32(
     emit_bin: &str,
     zig_host_src: &str,
     zig_str_path: &str,
+    opt_level: OptLevel,
+    shared_lib_path: Option<&Path>,
 ) -> Output {
+    if shared_lib_path.is_some() {
+        unimplemented!("Linking a shared library to wasm not yet implemented");
+    }
     // NOTE currently just to get compiler warnings if the host code is invalid.
     // the produced artifact is not used
     //
@@ -182,7 +225,8 @@ pub fn build_zig_host_wasm32(
     // we'd like to compile with `-target wasm32-wasi` but that is blocked on
     //
     // https://github.com/ziglang/zig/issues/9414
-    Command::new("zig")
+    let mut command = Command::new("zig");
+    command
         .env_clear()
         .env("PATH", env_path)
         .env("HOME", env_home)
@@ -203,19 +247,67 @@ pub fn build_zig_host_wasm32(
             "i386-linux-musl",
             // "wasm32-wasi",
             // "-femit-llvm-ir=/home/folkertdev/roc/roc/examples/benchmarks/platform/host.ll",
-        ])
-        .output()
-        .unwrap()
+            "-fPIC",
+            "--strip",
+        ]);
+    if matches!(opt_level, OptLevel::Optimize) {
+        command.args(&["-O", "ReleaseSafe"]);
+    }
+    command.output().unwrap()
 }
 
-pub fn rebuild_host(target: &Triple, host_input_path: &Path) {
+pub fn build_c_host_native(
+    env_path: &str,
+    env_home: &str,
+    dest: &str,
+    sources: &[&str],
+    opt_level: OptLevel,
+    shared_lib_path: Option<&Path>,
+) -> Output {
+    let mut command = Command::new("clang");
+    command
+        .env_clear()
+        .env("PATH", &env_path)
+        .env("HOME", &env_home)
+        .args(sources)
+        .args(&["-o", dest]);
+    if let Some(shared_lib_path) = shared_lib_path {
+        command.args(&[
+            shared_lib_path.to_str().unwrap(),
+            "-fPIE",
+            "-pie",
+            "-lm",
+            "-lpthread",
+            "-ldl",
+            "-lrt",
+            "-lutil",
+        ]);
+    } else {
+        command.args(&["-fPIC", "-c"]);
+    }
+    if matches!(opt_level, OptLevel::Optimize) {
+        command.arg("-O2");
+    }
+    command.output().unwrap()
+}
+
+pub fn rebuild_host(
+    opt_level: OptLevel,
+    target: &Triple,
+    host_input_path: &Path,
+    shared_lib_path: Option<&Path>,
+) {
     let c_host_src = host_input_path.with_file_name("host.c");
     let c_host_dest = host_input_path.with_file_name("c_host.o");
     let zig_host_src = host_input_path.with_file_name("host.zig");
     let rust_host_src = host_input_path.with_file_name("host.rs");
     let rust_host_dest = host_input_path.with_file_name("rust_host.o");
     let cargo_host_src = host_input_path.with_file_name("Cargo.toml");
-    let host_dest_native = host_input_path.with_file_name("host.o");
+    let host_dest_native = host_input_path.with_file_name(if shared_lib_path.is_some() {
+        "dynhost"
+    } else {
+        "host.o"
+    });
     let host_dest_wasm = host_input_path.with_file_name("host.bc");
 
     let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
@@ -241,6 +333,8 @@ pub fn rebuild_host(target: &Triple, host_input_path: &Path) {
                     &emit_bin,
                     zig_host_src.to_str().unwrap(),
                     zig_str_path.to_str().unwrap(),
+                    opt_level,
+                    shared_lib_path,
                 )
             }
             Architecture::X86_64 => {
@@ -252,6 +346,8 @@ pub fn rebuild_host(target: &Triple, host_input_path: &Path) {
                     zig_host_src.to_str().unwrap(),
                     zig_str_path.to_str().unwrap(),
                     "native",
+                    opt_level,
+                    shared_lib_path,
                 )
             }
             Architecture::X86_32(_) => {
@@ -263,87 +359,142 @@ pub fn rebuild_host(target: &Triple, host_input_path: &Path) {
                     zig_host_src.to_str().unwrap(),
                     zig_str_path.to_str().unwrap(),
                     "i386-linux-musl",
+                    opt_level,
+                    shared_lib_path,
                 )
             }
             _ => panic!("Unsupported architecture {:?}", target.architecture),
         };
 
         validate_output("host.zig", "zig", output)
-    } else {
-        // Compile host.c
-        let output = Command::new("clang")
-            .env_clear()
-            .env("PATH", &env_path)
-            .args(&[
-                "-c",
-                c_host_src.to_str().unwrap(),
-                "-o",
-                c_host_dest.to_str().unwrap(),
-            ])
-            .output()
-            .unwrap();
-
-        validate_output("host.c", "clang", output);
-    }
-
-    if cargo_host_src.exists() {
+    } else if cargo_host_src.exists() {
         // Compile and link Cargo.toml, if it exists
         let cargo_dir = host_input_path.parent().unwrap();
-        let libhost_dir = cargo_dir.join("target").join("release");
+        let libhost_dir =
+            cargo_dir
+                .join("target")
+                .join(if matches!(opt_level, OptLevel::Optimize) {
+                    "release"
+                } else {
+                    "debug"
+                });
+        let libhost = libhost_dir.join("libhost.a");
 
-        let output = Command::new("cargo")
-            .args(&["build", "--release"])
-            .current_dir(cargo_dir)
-            .output()
-            .unwrap();
+        let mut command = Command::new("cargo");
+        command.arg("build").current_dir(cargo_dir);
+        if matches!(opt_level, OptLevel::Optimize) {
+            command.arg("--release");
+        }
+        let output = command.output().unwrap();
 
-        validate_output("src/lib.rs", "cargo build --release", output);
+        validate_output("src/lib.rs", "cargo build", output);
 
-        let output = Command::new("ld")
-            .env_clear()
-            .env("PATH", &env_path)
-            .args(&[
-                "-r",
-                "-L",
-                libhost_dir.to_str().unwrap(),
-                c_host_dest.to_str().unwrap(),
-                "-lhost",
-                "-o",
+        // Cargo hosts depend on a c wrapper for the api. Compile host.c as well.
+        if shared_lib_path.is_some() {
+            // If compiling to executable, let c deal with linking as well.
+            let output = build_c_host_native(
+                &env_path,
+                &env_home,
                 host_dest_native.to_str().unwrap(),
-            ])
-            .output()
-            .unwrap();
+                &[c_host_src.to_str().unwrap(), libhost.to_str().unwrap()],
+                opt_level,
+                shared_lib_path,
+            );
+            validate_output("host.c", "clang", output);
+        } else {
+            let output = build_c_host_native(
+                &env_path,
+                &env_home,
+                c_host_dest.to_str().unwrap(),
+                &[c_host_src.to_str().unwrap()],
+                opt_level,
+                shared_lib_path,
+            );
+            validate_output("host.c", "clang", output);
 
-        validate_output("c_host.o", "ld", output);
+            let output = Command::new("ld")
+                .env_clear()
+                .env("PATH", &env_path)
+                .args(&[
+                    "-r",
+                    "-L",
+                    libhost_dir.to_str().unwrap(),
+                    c_host_dest.to_str().unwrap(),
+                    "-lhost",
+                    "-o",
+                    host_dest_native.to_str().unwrap(),
+                ])
+                .output()
+                .unwrap();
+            validate_output("c_host.o", "ld", output);
+
+            // Clean up c_host.o
+            let output = Command::new("rm")
+                .env_clear()
+                .args(&["-f", c_host_dest.to_str().unwrap()])
+                .output()
+                .unwrap();
+
+            validate_output("rust_host.o", "rm", output);
+        }
     } else if rust_host_src.exists() {
         // Compile and link host.rs, if it exists
-        let output = Command::new("rustc")
-            .args(&[
-                rust_host_src.to_str().unwrap(),
-                "-o",
-                rust_host_dest.to_str().unwrap(),
-            ])
-            .output()
-            .unwrap();
+        let mut command = Command::new("rustc");
+        command.args(&[
+            rust_host_src.to_str().unwrap(),
+            "-o",
+            rust_host_dest.to_str().unwrap(),
+        ]);
+        if matches!(opt_level, OptLevel::Optimize) {
+            command.arg("-O");
+        }
+        let output = command.output().unwrap();
 
         validate_output("host.rs", "rustc", output);
 
-        let output = Command::new("ld")
-            .env_clear()
-            .env("PATH", &env_path)
-            .args(&[
-                "-r",
-                c_host_dest.to_str().unwrap(),
-                rust_host_dest.to_str().unwrap(),
-                "-o",
+        // Rust hosts depend on a c wrapper for the api. Compile host.c as well.
+        if shared_lib_path.is_some() {
+            // If compiling to executable, let c deal with linking as well.
+            let output = build_c_host_native(
+                &env_path,
+                &env_home,
                 host_dest_native.to_str().unwrap(),
-            ])
-            .output()
-            .unwrap();
+                &[
+                    c_host_src.to_str().unwrap(),
+                    rust_host_dest.to_str().unwrap(),
+                ],
+                opt_level,
+                shared_lib_path,
+            );
+            validate_output("host.c", "clang", output);
+        } else {
+            let output = build_c_host_native(
+                &env_path,
+                &env_home,
+                c_host_dest.to_str().unwrap(),
+                &[c_host_src.to_str().unwrap()],
+                opt_level,
+                shared_lib_path,
+            );
 
-        validate_output("rust_host.o", "ld", output);
+            validate_output("host.c", "clang", output);
+            let output = Command::new("ld")
+                .env_clear()
+                .env("PATH", &env_path)
+                .args(&[
+                    "-r",
+                    c_host_dest.to_str().unwrap(),
+                    rust_host_dest.to_str().unwrap(),
+                    "-o",
+                    host_dest_native.to_str().unwrap(),
+                ])
+                .output()
+                .unwrap();
 
-        // Clean up rust_host.o
+            validate_output("rust_host.o", "ld", output);
+        }
+
+        // Clean up rust_host.o and c_host.o
         let output = Command::new("rm")
             .env_clear()
             .args(&[
@@ -355,15 +506,17 @@ pub fn rebuild_host(target: &Triple, host_input_path: &Path) {
             .unwrap();
 
         validate_output("rust_host.o", "rm", output);
-    } else if c_host_dest.exists() {
-        // Clean up c_host.o
-        let output = Command::new("mv")
-            .env_clear()
-            .args(&[c_host_dest, host_dest_native])
-            .output()
-            .unwrap();
-
-        validate_output("c_host.o", "mv", output);
+    } else if c_host_src.exists() {
+        // Compile host.c, if it exists
+        let output = build_c_host_native(
+            &env_path,
+            &env_home,
+            host_dest_native.to_str().unwrap(),
+            &[c_host_src.to_str().unwrap()],
+            opt_level,
+            shared_lib_path,
+        );
+        validate_output("host.c", "clang", output);
     }
 }
 
@@ -505,6 +658,7 @@ fn link_linux(
                 "--eh-frame-hdr",
                 "-arch",
                 arch_str(target),
+                "-pie",
                 libcrt_path.join("crti.o").to_str().unwrap(),
                 libcrt_path.join("crtn.o").to_str().unwrap(),
             ])
@@ -605,6 +759,7 @@ fn link_wasm32(
     _link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
     let zig_str_path = find_zig_str_path();
+    let wasi_libc_path = find_wasi_libc_path();
 
     let child = Command::new("zig9")
         // .env_clear()
@@ -612,9 +767,10 @@ fn link_wasm32(
         .args(&["build-exe"])
         .args(input_paths)
         .args([
+            // include wasi libc
+            // using `-lc` is broken in zig 8 (and early 9) in combination with ReleaseSmall
+            wasi_libc_path.to_str().unwrap(),
             &format!("-femit-bin={}", output_path.to_str().unwrap()),
-            // include libc
-            "-lc",
             "-target",
             "wasm32-wasi-musl",
             "--pkg-begin",
@@ -622,7 +778,8 @@ fn link_wasm32(
             zig_str_path.to_str().unwrap(),
             "--pkg-end",
             "--strip",
-            // "-O", "ReleaseSmall",
+            "-O",
+            "ReleaseSmall",
             // useful for debugging
             // "-femit-llvm-ir=/home/folkertdev/roc/roc/examples/benchmarks/platform/host.ll",
         ])

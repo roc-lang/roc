@@ -128,6 +128,7 @@ impl<'b> Report<'b> {
 pub struct Palette<'a> {
     pub primary: &'a str,
     pub code_block: &'a str,
+    pub keyword: &'a str,
     pub variable: &'a str,
     pub type_variable: &'a str,
     pub structure: &'a str,
@@ -146,6 +147,7 @@ pub struct Palette<'a> {
 pub const DEFAULT_PALETTE: Palette = Palette {
     primary: WHITE_CODE,
     code_block: WHITE_CODE,
+    keyword: GREEN_CODE,
     variable: BLUE_CODE,
     type_variable: YELLOW_CODE,
     structure: GREEN_CODE,
@@ -810,6 +812,9 @@ where
             Symbol => {
                 self.write_str(self.palette.variable)?;
             }
+            Keyword => {
+                self.write_str(self.palette.keyword)?;
+            }
             GutterBar => {
                 self.write_str(self.palette.gutter_bar)?;
             }
@@ -837,7 +842,7 @@ where
             ParserSuggestion => {
                 self.write_str(self.palette.parser_suggestion)?;
             }
-            TypeBlock | GlobalTag | PrivateTag | RecordField | Keyword => { /* nothing yet */ }
+            TypeBlock | GlobalTag | PrivateTag | RecordField => { /* nothing yet */ }
         }
         self.style_stack.push(*annotation);
         Ok(())
@@ -851,11 +856,11 @@ where
             Some(annotation) => match annotation {
                 Emphasized | Url | TypeVariable | Alias | Symbol | BinOp | Error | GutterBar
                 | Typo | TypoSuggestion | ParserSuggestion | Structure | CodeBlock | PlainText
-                | LineNumber | Tip | Module | Header => {
+                | LineNumber | Tip | Module | Header | Keyword => {
                     self.write_str(RESET_CODE)?;
                 }
 
-                TypeBlock | GlobalTag | PrivateTag | RecordField | Keyword => { /* nothing yet */ }
+                TypeBlock | GlobalTag | PrivateTag | RecordField => { /* nothing yet */ }
             },
         }
         Ok(())

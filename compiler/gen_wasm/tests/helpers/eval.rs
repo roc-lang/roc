@@ -1,6 +1,10 @@
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
 // use roc_std::{RocDec, RocList, RocOrder, RocStr};
+use crate::helpers::wasm32_test_result::Wasm32TestResult;
+use roc_gen_wasm::from_wasm32_memory::FromWasm32Memory;
+
+const TEST_WRAPPER_NAME: &str = "test_wrapper";
 
 fn promote_expr_to_module(src: &str) -> String {
     let mut buffer = String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
@@ -16,12 +20,11 @@ fn promote_expr_to_module(src: &str) -> String {
 }
 
 #[allow(dead_code)]
-pub fn helper_wasm<'a>(
+pub fn helper_wasm<'a, T: Wasm32TestResult>(
     arena: &'a bumpalo::Bump,
     src: &str,
     stdlib: &'a roc_builtins::std::StdLib,
-    _is_gen_test: bool,
-    _ignore_problems: bool,
+    _result_type_dummy: &T,
 ) -> wasmer::Instance {
     use std::path::{Path, PathBuf};
 
@@ -91,7 +94,11 @@ pub fn helper_wasm<'a>(
         exposed_to_host,
     };
 
-    let module_bytes = roc_gen_wasm::build_module(&env, procedures).unwrap();
+    let (mut builder, main_function_index) =
+        roc_gen_wasm::build_module_help(&env, procedures).unwrap();
+    T::insert_test_wrapper(&mut builder, TEST_WRAPPER_NAME, main_function_index);
+
+    let module_bytes = builder.build().to_bytes().unwrap();
 
     // for debugging (e.g. with wasm2wat)
     if false {
@@ -128,44 +135,40 @@ pub fn helper_wasm<'a>(
 }
 
 #[allow(dead_code)]
-pub fn assert_wasm_evals_to_help<T>(src: &str, ignore_problems: bool) -> Result<T, String>
+pub fn assert_wasm_evals_to_help<T>(src: &str, expected: T) -> Result<T, String>
 where
-    T: Copy,
+    T: FromWasm32Memory + Wasm32TestResult,
 {
     let arena = bumpalo::Bump::new();
 
     // NOTE the stdlib must be in the arena; just taking a reference will segfault
     let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
 
-    let is_gen_test = true;
-    let instance =
-        crate::helpers::eval::helper_wasm(&arena, src, stdlib, is_gen_test, ignore_problems);
+    let instance = crate::helpers::eval::helper_wasm(&arena, src, stdlib, &expected);
 
-    let main_function = instance.exports.get_function("#UserApp_main_1").unwrap();
+    let memory = instance.exports.get_memory("memory").unwrap();
 
-    match main_function.call(&[]) {
+    let test_wrapper = instance.exports.get_function(TEST_WRAPPER_NAME).unwrap();
+
+    match test_wrapper.call(&[]) {
         Err(e) => Err(format!("{:?}", e)),
         Ok(result) => {
-            let integer = match result[0] {
-                wasmer::Value::I64(a) => a,
-                wasmer::Value::F64(a) => a.to_bits() as i64,
+            let address = match result[0] {
+                wasmer::Value::I32(a) => a,
                 _ => panic!(),
             };
 
-            let output_ptr: &T;
-            unsafe {
-                output_ptr = std::mem::transmute::<&i64, &T>(&integer);
-            }
+            let output = <T as FromWasm32Memory>::decode(memory, address as u32);
 
-            Ok(*output_ptr)
+            Ok(output)
         }
     }
 }
 
 #[macro_export]
 macro_rules! assert_wasm_evals_to {
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
-        match $crate::helpers::eval::assert_wasm_evals_to_help::<$ty>($src, $ignore_problems) {
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
+        match $crate::helpers::eval::assert_wasm_evals_to_help::<$ty>($src, $expected) {
             Err(msg) => println!("{:?}", msg),
             Ok(actual) => {
                 #[allow(clippy::bool_assert_comparison)]
@@ -175,11 +178,11 @@ macro_rules! assert_wasm_evals_to {
     };
 
     ($src:expr, $expected:expr, $ty:ty) => {
-        $crate::assert_wasm_evals_to!($src, $expected, $ty, $crate::helpers::eval::identity, false);
+        $crate::assert_wasm_evals_to!($src, $expected, $ty, $crate::helpers::eval::identity);
     };
 
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        $crate::assert_wasm_evals_to!($src, $expected, $ty, $transform, false);
+        $crate::assert_wasm_evals_to!($src, $expected, $ty, $transform);
     };
 }
 
@@ -191,7 +194,7 @@ macro_rules! assert_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
         // Same as above, except with an additional transformation argument.
         {
-            $crate::assert_wasm_evals_to!($src, $expected, $ty, $transform, false);
+            $crate::assert_wasm_evals_to!($src, $expected, $ty, $transform);
         }
     };
 }

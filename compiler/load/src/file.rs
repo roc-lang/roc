@@ -723,7 +723,21 @@ pub struct MonomorphizedModule<'a> {
 
 impl<'a> MonomorphizedModule<'a> {
     pub fn total_problems(&self) -> usize {
-        self.can_problems.len() + self.type_problems.len() + self.mono_problems.len()
+        let mut total = 0;
+
+        for problems in self.can_problems.values() {
+            total += problems.len();
+        }
+
+        for problems in self.type_problems.values() {
+            total += problems.len();
+        }
+
+        for problems in self.mono_problems.values() {
+            total += problems.len();
+        }
+
+        total
     }
 }
 
@@ -2099,8 +2113,6 @@ fn update<'a>(
                     &mut state.procedures,
                 );
 
-                Proc::insert_refcount_operations(arena, &mut state.procedures);
-
                 // display the mono IR of the module, for debug purposes
                 if roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS {
                     let procs_string = state
@@ -2113,6 +2125,8 @@ fn update<'a>(
 
                     println!("{}", result);
                 }
+
+                Proc::insert_refcount_operations(arena, &mut state.procedures);
 
                 // This is not safe with the new non-recursive RC updates that we do for tag unions
                 //
@@ -3927,7 +3941,7 @@ fn make_specializations<'a>(
     );
 
     let external_specializations_requested = procs.externals_we_need.clone();
-    let procedures = procs.get_specialized_procs_without_rc(mono_env.arena);
+    let procedures = procs.get_specialized_procs_without_rc(&mut mono_env);
 
     let make_specializations_end = SystemTime::now();
     module_timing.make_specializations = make_specializations_end
