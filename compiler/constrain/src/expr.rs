@@ -1467,7 +1467,7 @@ fn instantiate_rigids(
     ) {
         for (symbol, loc_type) in new_headers {
             for var in loc_type.value.variables() {
-                // a rigid is only new if this annotation is the first occurence of this rigid
+                // a rigid is only new if this annotation is the first occurrence of this rigid
                 if !outside_rigids.contains(&var) {
                     new_rigids.push(var);
                 }
