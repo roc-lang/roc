@@ -48,25 +48,21 @@ export fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn roc__mainForHost_1_exposed(*RocCallResult) void;
-
-const RocCallResult = extern struct { flag: u64, content: RocStr };
+extern fn roc__mainForHost_1_exposed(*RocStr) void;
 
 const Unit = extern struct {};
 
 extern fn js_display_roc_string(str_bytes: ?[*]u8, str_len: usize) void;
 
 pub fn main() u8 {
-    // make space for the result
-    var callresult = RocCallResult{ .flag = 0, .content = RocStr.empty() };
-
     // actually call roc to populate the callresult
+    var callresult = RocStr.empty();
     roc__mainForHost_1_exposed(&callresult);
 
     // display the result using JavaScript
-    js_display_roc_string(callresult.content.str_bytes, callresult.content.str_len);
+    js_display_roc_string(callresult.asU8ptr(), callresult.len());
 
-    callresult.content.deinit();
+    callresult.deinit();
 
     return 0;
 }
