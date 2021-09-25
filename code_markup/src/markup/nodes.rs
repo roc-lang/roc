@@ -11,33 +11,7 @@ use crate::{
 use super::{
     attribute::Attributes, common_nodes::new_blank_mn_w_nls, top_level_def::tld_mark_node,
 };
-/*use crate::editor::ed_error::EdResult;
-use crate::editor::ed_error::ExpectedTextNode;
-use crate::editor::ed_error::{NestedNodeMissingChild, NestedNodeRequired};
-use crate::editor::markup::common_nodes::new_blank_mn;
-use crate::editor::markup::common_nodes::new_blank_mn_w_nls;
-use crate::editor::markup::common_nodes::new_colon_mn;
-use crate::editor::markup::common_nodes::new_comma_mn;
-use crate::editor::markup::common_nodes::new_equals_mn;
-use crate::editor::markup::common_nodes::new_left_accolade_mn;
-use crate::editor::markup::common_nodes::new_left_square_mn;
-use crate::editor::markup::common_nodes::new_right_accolade_mn;
-use crate::editor::markup::common_nodes::new_right_square_mn;
-use crate::editor::mvc::tld_value_update::tld_mark_node;
-use crate::editor::slow_pool::MarkNodeId;
-use crate::editor::slow_pool::SlowPool;
-use crate::editor::syntax_highlight::HighlightStyle;
-use crate::editor::util::index_of;
-use crate::lang::ast::Def2;
-use crate::lang::ast::DefId;
-use crate::lang::ast::ExprId;
-use crate::lang::ast::RecordField;
-use crate::lang::ast::ValueDef;
-use crate::lang::parse::ASTNodeId;
-use crate::lang::parse::{AppHeader, AST};
-use crate::lang::pattern::get_identifier_string;
-use crate::lang::{ast::Expr2, expr::Env, pool::PoolStr};
-use crate::ui::util::slice_get;*/
+
 use crate::markup_error::{ExpectedTextNode, NestedNodeMissingChild, NestedNodeRequired};
 use bumpalo::Bump;
 use roc_ast::{
