@@ -4,6 +4,7 @@ zig-cache
 .direnv
 *.rs.bk
 *.o
+*.tmp
 
 # llvm human-readable output 
 *.ll

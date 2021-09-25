@@ -318,7 +318,7 @@ fn preprocess_impl(
         sym.is_definition() && sym.name().is_ok() && sym.name().unwrap().starts_with("roc_")
     }) {
         // remove potentially trailing "@version".
-        let name = sym.name().unwrap().split("@").next().unwrap().to_string();
+        let name = sym.name().unwrap().split('@').next().unwrap().to_string();
 
         // special exceptions for memcpy and memset.
         if &name == "roc_memcpy" {
@@ -406,7 +406,7 @@ fn preprocess_impl(
         }
         None
     })
-    .filter_map(|x| x)
+    .flatten()
     .collect();
 
     for sym in app_syms.iter() {
@@ -429,7 +429,6 @@ fn preprocess_impl(
             if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
                 let func_address = (i as u64 + 1) * PLT_ADDRESS_OFFSET + plt_address;
                 let func_offset = (i as u64 + 1) * PLT_ADDRESS_OFFSET + plt_offset;
-                println!("{}", symbol.name().unwrap().to_string());
                 app_func_addresses.insert(func_address, symbol.name().unwrap());
                 md.plt_addresses.insert(
                     symbol.name().unwrap().to_string(),
