@@ -31,7 +31,6 @@ This linker is run in 2 phases: preprocessing and surigical linking.
 
 ## TODO (In a lightly prioritized order)
 
-- Try to make rust hosts nicer. Currently making it expose functions is a huge pain.
 - Add Macho support
   - Honestly should be almost exactly the same code.
     This means we likely need to do a lot of refactoring to minimize the duplicate code.
@@ -40,4 +39,7 @@ This linker is run in 2 phases: preprocessing and surigical linking.
   - As a prereq, we need roc building on Windows (I'm not sure it does currently).
   - Definitely a solid bit different than elf, but hopefully after refactoring for Macho, won't be that crazy to add.
 - Look at enabling completely in memory linking that could be used with `roc run` and/or `roc repl`
+- Look more into roc hosts and keeping certain functions. Currently I just disabled linker garbage collection.
+  This works but adds 1.2MB (40%) to even a tiny app. It may be a size issue for large rust hosts.
+  Roc, for reference, adds 13MB (20%) when linked without garbage collection.
 - Add a feature to the compiler to make this linker optional.

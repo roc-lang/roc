@@ -1,7 +1,6 @@
 #![allow(non_snake_case)]
 
 use core::ffi::c_void;
-use core::mem::MaybeUninit;
 use libc::c_char;
 use roc_std::RocStr;
 use std::ffi::CStr;
@@ -55,7 +54,7 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 }
 
 #[no_mangle]
-pub extern "C" fn rust_main() -> isize {
+pub extern "C" fn rust_main() -> i32 {
     unsafe {
         let roc_str = roc_main();
 

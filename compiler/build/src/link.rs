@@ -385,6 +385,7 @@ pub fn rebuild_host(
             command.arg("--release");
         }
         let source_file = if shared_lib_path.is_some() {
+            command.env("RUSTFLAGS", "-C link-dead-code");
             command.args(&["--bin", "host"]);
             "src/main.rs"
         } else {
