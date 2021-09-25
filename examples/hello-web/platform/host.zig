@@ -60,7 +60,7 @@ pub fn main() u8 {
     roc__mainForHost_1_exposed(&callresult);
 
     // display the result using JavaScript
-    js_display_roc_string(callresult.str_bytes, callresult.str_len);
+    js_display_roc_string(callresult.asU8ptr(), callresult.len());
 
     callresult.deinit();
 
