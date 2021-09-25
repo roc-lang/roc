@@ -7,7 +7,6 @@ use crate::editor::render_debug::build_debug_graphics;
 use crate::editor::resources::strings::START_TIP;
 use crate::graphics::primitives::rect::Rect;
 use crate::graphics::primitives::text::{owned_section_from_text, Text};
-use crate::lang::pool::Pool;
 use crate::ui::text::caret_w_select::make_caret_rect;
 use crate::ui::text::caret_w_select::make_selection_rect;
 use crate::ui::text::caret_w_select::CaretWSelect;
@@ -15,6 +14,7 @@ use crate::ui::text::selection::Selection;
 use crate::ui::tooltip::ToolTip;
 use crate::ui::ui_error::MissingGlyphDims;
 use cgmath::Vector2;
+use roc_ast::pool::pool::Pool;
 use snafu::OptionExt;
 use winit::dpi::PhysicalSize;
 

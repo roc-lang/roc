@@ -7,7 +7,7 @@ mod pattern;
 pub mod pool;
 pub mod roc_file;
 mod scope;
-mod solve;
+pub mod solve;
 mod types;
 mod rigids;
 mod canonicalize;

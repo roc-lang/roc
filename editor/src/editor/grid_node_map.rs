@@ -2,20 +2,19 @@ use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::NestedNodeWithoutChildren;
 use crate::editor::ed_error::{NoDefMarkNodeBeforeLineNr, NodeIdNotInGridNodeMap};
 use crate::editor::mvc::ed_model::EdModel;
-use crate::editor::slow_pool::MarkNodeId;
-use crate::editor::slow_pool::SlowPool;
 use crate::editor::util::first_last_index_of;
 use crate::editor::util::index_of;
-use crate::lang::parse::ASTNodeId;
 use crate::ui::text::selection::Selection;
 use crate::ui::text::text_pos::TextPos;
 use crate::ui::ui_error::{LineInsertionFailed, OutOfBounds, UIResult};
 use crate::ui::util::{slice_get, slice_get_mut};
-use snafu::OptionExt;
+use roc_ast::lang::core::ast::ASTNodeId;
+use roc_code_markup::markup::nodes::get_root_mark_node_id;
+use roc_code_markup::slow_pool::MarkNodeId;
+use roc_code_markup::slow_pool::SlowPool;
 use std::cmp::Ordering;
 use std::fmt;
-
-use super::markup::nodes::get_root_mark_node_id;
+use snafu::OptionExt;
 
 #[derive(Debug)]
 pub struct GridNodeMap {

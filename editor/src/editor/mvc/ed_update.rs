@@ -4,14 +4,14 @@ use std::process::Command;
 use std::process::Stdio;
 
 use crate::editor::code_lines::CodeLines;
-use crate::editor::ed_error::from_ui_res;
+//use crate::editor::ed_error::from_ui_res;
 use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::MissingSelection;
 use crate::editor::grid_node_map::GridNodeMap;
-use crate::editor::markup::attribute::Attributes;
+/*use crate::editor::markup::attribute::Attributes;
 use crate::editor::markup::nodes;
 use crate::editor::markup::nodes::MarkupNode;
-use crate::editor::markup::nodes::EQUALS;
+use crate::editor::markup::nodes::EQUALS;*/
 use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::mvc::ed_model::SelectedBlock;
@@ -27,7 +27,7 @@ use crate::editor::mvc::string_update::start_new_string;
 use crate::editor::mvc::string_update::update_small_string;
 use crate::editor::mvc::string_update::update_string;
 use crate::editor::mvc::tld_value_update::{start_new_tld_value, update_tld_val_name};
-use crate::editor::slow_pool::MarkNodeId;
+/*use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::syntax_highlight::HighlightStyle;
 use crate::lang::ast::Def2;
@@ -38,7 +38,7 @@ use crate::lang::parse::ASTNodeId;
 use crate::lang::pool::Pool;
 use crate::lang::pool::PoolStr;
 use crate::lang::types::Type2;
-use crate::lang::{constrain::Constraint, solve};
+use crate::lang::{constrain::Constraint, solve};*/
 use crate::ui::text::caret_w_select::CaretWSelect;
 use crate::ui::text::lines::MoveCaretFun;
 use crate::ui::text::selection::validate_raw_sel;
@@ -51,7 +51,25 @@ use crate::ui::util::path_to_string;
 use crate::ui::util::write_to_file;
 use crate::window::keyboard_input::Modifiers;
 use bumpalo::Bump;
+use roc_ast::constrain::Constraint;
+use roc_ast::constrain::constrain_expr;
+use roc_ast::lang::core::ast::ASTNodeId;
+use roc_ast::lang::core::def::def2::Def2;
+use roc_ast::lang::core::def::def2::DefId;
+use roc_ast::lang::core::expr::expr2::Expr2;
+use roc_ast::lang::core::expr::expr2::ExprId;
+use roc_ast::lang::core::types::Type2;
+use roc_ast::pool::pool::Pool;
+use roc_ast::pool::pool_str::PoolStr;
+use roc_ast::solve_type;
 use roc_can::expected::Expected;
+use roc_code_markup::markup::attribute::Attributes;
+use roc_code_markup::markup::nodes;
+use roc_code_markup::markup::nodes::EQUALS;
+use roc_code_markup::markup::nodes::MarkupNode;
+use roc_code_markup::slow_pool::MarkNodeId;
+use roc_code_markup::slow_pool::SlowPool;
+use roc_code_markup::syntax_highlight::HighlightStyle;
 use roc_collections::all::MutMap;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
@@ -492,8 +510,8 @@ impl<'a> EdModel<'a> {
         rigid_variables: MutMap<Variable, Lowercase>,
         constraint: Constraint,
         var_store: VarStore,
-    ) -> (Solved<Subs>, solve::Env, Vec<solve::TypeError>) {
-        let env = solve::Env {
+    ) -> (Solved<Subs>, solve_type::Env, Vec<solve_type::TypeError>) {
+        let env = solve_type::Env {
             vars_by_symbol: MutMap::default(),
             aliases,
         };
@@ -511,7 +529,7 @@ impl<'a> EdModel<'a> {
 
         // Run the solver to populate Subs.
         let (solved_subs, solved_env) =
-            solve::run(&arena, mempool, &env, &mut problems, subs, &constraint);
+            solve_type::run(&arena, mempool, &env, &mut problems, subs, &constraint);
 
         (solved_subs, solved_env, problems)
     }
@@ -804,7 +822,7 @@ pub fn get_node_context<'a>(ed_model: &'a EdModel) -> EdResult<NodeContext<'a>> 
 
 fn if_modifiers(modifiers: &Modifiers, shortcut_result: UIResult<()>) -> EdResult<()> {
     if modifiers.cmd_or_ctrl() {
-        from_ui_res(shortcut_result)
+        Ok(shortcut_result?)
     } else {
         Ok(())
     }

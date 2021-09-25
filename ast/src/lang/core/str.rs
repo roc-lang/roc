@@ -1,9 +1,9 @@
 use roc_module::{operator::CalledVia, symbol::Symbol};
 use roc_parse::ast::StrLiteral;
 
-use crate::{lang::{core::expr::expr_to_expr2::to_expr2, env::Env, scope::Scope}, pool::{pool_str::PoolStr, pool_vec::PoolVec}};
+use crate::{ast_error::{ASTResult, UnexpectedASTNode}, lang::{core::expr::expr_to_expr2::to_expr2, env::Env, scope::Scope}, pool::{pool::Pool, pool_str::PoolStr, pool_vec::PoolVec}};
 
-use super::expr::{expr2::Expr2, output::Output};
+use super::expr::{expr2::{Expr2, ExprId}, output::Output};
 
 pub (crate) fn flatten_str_literal<'a>(
     env: &mut Env<'a>,
@@ -161,4 +161,61 @@ fn desugar_str_segments<'a>(env: &mut Env<'a>, segments: Vec<StrSegment>) -> Exp
     }
 
     expr
+}
+
+pub fn update_str_expr(
+    node_id: ExprId,
+    new_char: char,
+    insert_index: usize,
+    pool: &mut Pool,
+) -> ASTResult<()> {
+    let str_expr = pool.get_mut(node_id);
+
+    enum Either {
+        MyString(String),
+        MyPoolStr(PoolStr),
+        Done,
+    }
+
+    let insert_either = match str_expr {
+        Expr2::SmallStr(arr_string) => {
+            let insert_res = arr_string.try_insert(insert_index as u8, new_char);
+
+            match insert_res {
+                Ok(_) => Either::Done,
+                _ => {
+                    let mut new_string = arr_string.as_str().to_string();
+                    new_string.insert(insert_index, new_char);
+
+                    Either::MyString(new_string)
+                }
+            }
+        }
+        Expr2::Str(old_pool_str) => Either::MyPoolStr(*old_pool_str),
+        other => UnexpectedASTNode {
+            required_node_type: "SmallStr or Str",
+            encountered_node_type: format!("{:?}", other),
+        }
+        .fail()?,
+    };
+
+    match insert_either {
+        Either::MyString(new_string) => {
+            let new_pool_str = PoolStr::new(&new_string, pool);
+
+            pool.set(node_id, Expr2::Str(new_pool_str))
+        }
+        Either::MyPoolStr(old_pool_str) => {
+            let mut new_string = old_pool_str.as_str(pool).to_owned();
+
+            new_string.insert(insert_index, new_char);
+
+            let new_pool_str = PoolStr::new(&new_string, pool);
+
+            pool.set(node_id, Expr2::Str(new_pool_str))
+        }
+        Either::Done => (),
+    }
+
+    Ok(())
 }

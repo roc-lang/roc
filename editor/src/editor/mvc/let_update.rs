@@ -1,18 +1,19 @@
+use roc_ast::lang::core::ast::ASTNodeId;
+use roc_ast::lang::core::expr::expr2::Expr2;
+use roc_ast::lang::core::pattern::Pattern2;
+use roc_ast::lang::core::val_def::ValueDef;
+use roc_code_markup::markup::attribute::Attributes;
+use roc_code_markup::markup::common_nodes::new_blank_mn_w_nls;
+use roc_code_markup::markup::common_nodes::new_equals_mn;
+use roc_code_markup::markup::nodes::MarkupNode;
+use roc_code_markup::syntax_highlight::HighlightStyle;
 use roc_module::symbol::Symbol;
 
 use crate::editor::ed_error::EdResult;
-use crate::editor::markup::attribute::Attributes;
-use crate::editor::markup::common_nodes::new_blank_mn_w_nls;
-use crate::editor::markup::common_nodes::new_equals_mn;
-use crate::editor::markup::nodes::MarkupNode;
 use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::mvc::ed_update::get_node_context;
 use crate::editor::mvc::ed_update::NodeContext;
-use crate::editor::syntax_highlight::HighlightStyle;
-use crate::lang::ast::{Expr2, ValueDef};
-use crate::lang::parse::ASTNodeId;
-use crate::lang::pattern::Pattern2;
 
 pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<InputOutcome> {
     let NodeContext {

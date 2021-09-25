@@ -1,19 +1,16 @@
+use roc_ast::lang::core::ast::{ASTNodeId, ast_node_to_string};
+use roc_ast::lang::core::expr::expr2::{Expr2, ExprId};
+use roc_ast::pool::pool_vec::PoolVec;
+use roc_code_markup::markup::common_nodes::{new_blank_mn, new_comma_mn, new_left_square_mn, new_right_square_mn};
+use roc_code_markup::markup::nodes::{self, MarkupNode};
+use roc_code_markup::slow_pool::MarkNodeId;
+
 use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::{MissingParent, UnexpectedASTNode};
-use crate::editor::markup::common_nodes::{
-    new_blank_mn, new_comma_mn, new_left_square_mn, new_right_square_mn,
-};
-use crate::editor::markup::nodes;
-use crate::editor::markup::nodes::MarkupNode;
 use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::mvc::ed_update::get_node_context;
 use crate::editor::mvc::ed_update::NodeContext;
-use crate::editor::slow_pool::MarkNodeId;
-use crate::lang::ast::ExprId;
-use crate::lang::ast::{ast_node_to_string, Expr2};
-use crate::lang::parse::ASTNodeId;
-use crate::lang::pool::PoolVec;
 use crate::ui::text::text_pos::TextPos;
 
 pub fn start_new_list(ed_model: &mut EdModel) -> EdResult<InputOutcome> {

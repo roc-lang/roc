@@ -1,8 +1,5 @@
 #![allow(clippy::all)]
 #![allow(dead_code)]
-use crate::lang::constrain::Constraint::{self, *};
-use crate::lang::pool::{Pool, PoolVec, ShallowClone};
-use crate::lang::types::Type2;
 use bumpalo::Bump;
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{BumpMap, BumpMapDefault, MutMap};
@@ -19,6 +16,12 @@ use roc_types::types::{
 };
 use roc_unify::unify::unify;
 use roc_unify::unify::Unified::*;
+
+use crate::constrain::Constraint;
+use crate::lang::core::types::Type2;
+use crate::pool::pool::Pool;
+use crate::pool::pool_vec::PoolVec;
+use crate::pool::shallow_clone::ShallowClone;
 
 // Type checking system adapted from Elm by Evan Czaplicki, BSD-3-Clause Licensed
 // https://github.com/elm/compiler
@@ -197,6 +200,9 @@ fn solve<'a>(
     subs: &mut Subs,
     constraint: &Constraint,
 ) -> State {
+    
+    use crate::solve_type::Constraint::*;
+
     match constraint {
         True => state,
         //        SaveTheEnvironment => {

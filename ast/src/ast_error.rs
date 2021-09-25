@@ -16,6 +16,16 @@ pub enum ASTError {
         backtrace: Backtrace,
     },
     #[snafu(display(
+        "UnexpectedASTNode: required a {} at this position, node was a {}.",
+        required_node_type,
+        encountered_node_type
+    ))]
+    UnexpectedASTNode {
+        required_node_type: String,
+        encountered_node_type: String,
+        backtrace: Backtrace,
+    },
+    #[snafu(display(
         "UnexpectedPattern2Variant: required a {} at this position, Pattern2 was a {}.",
         required_pattern2,
         encountered_pattern2,

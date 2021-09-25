@@ -1,5 +1,7 @@
 pub mod lang;
 pub mod pool;
-mod constrain;
+pub mod parse;
+pub mod constrain;
 mod canonicalize;
 pub mod ast_error;
+pub mod solve_type;

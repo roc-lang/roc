@@ -1,8 +1,8 @@
 use gr_colors::{from_hsb, RgbaTup};
+use roc_code_markup::syntax_highlight::{HighlightStyle, default_highlight_map};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::editor::syntax_highlight::{default_highlight_map, HighlightStyle};
 use crate::graphics::colors as gr_colors;
 use crate::ui::theme::UITheme;
 

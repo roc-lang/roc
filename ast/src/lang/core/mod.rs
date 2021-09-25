@@ -6,5 +6,5 @@ pub mod val_def;
 mod fun_def;
 pub mod pattern;
 pub mod types;
-mod str;
+pub mod str;
 mod declaration;

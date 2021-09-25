@@ -1,6 +1,6 @@
-use crate::ast_error::{ASTResult, ASTNodeIdWithoutExprId};
+use crate::{ast_error::{ASTResult, ASTNodeIdWithoutExprId}, pool::pool::Pool};
 
-use super::{def::def2::DefId, expr::expr2::ExprId, header::AppHeader};
+use super::{def::def2::{DefId, def2_to_string}, expr::{expr2::ExprId, expr2_to_string::expr2_to_string}, header::AppHeader};
 
 #[derive(Debug)]
 pub struct AST {
@@ -27,5 +27,12 @@ impl ASTNodeId {
             ASTNodeId::ADefId(def_id) => Ok(*def_id),
             _ => ASTNodeIdWithoutExprId { ast_node_id: *self }.fail()?,
         }
+    }
+}
+
+pub fn ast_node_to_string(node_id: ASTNodeId, pool: &Pool) -> String {
+    match node_id {
+        ASTNodeId::ADefId(def_id) => def2_to_string(def_id, pool),
+        ASTNodeId::AExprId(expr_id) => expr2_to_string(expr_id, pool),
     }
 }

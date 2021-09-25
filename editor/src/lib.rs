@@ -10,7 +10,6 @@ extern crate pest_derive;
 
 mod editor;
 mod graphics;
-pub mod lang; //TODO remove pub for unused warnings
 mod ui;
 mod window;
 

@@ -17,14 +17,14 @@ use crate::graphics::{
     primitives::rect::Rect,
     primitives::text::{build_glyph_brush, example_code_glyph_rect, queue_text_draw, Text},
 };
-use crate::lang::expr::Env;
-use crate::lang::pool::Pool;
 use crate::ui::text::caret_w_select::CaretPos;
 use crate::ui::util::path_to_string;
 use bumpalo::Bump;
 use cgmath::Vector2;
 use fs_extra::dir::{copy, ls, CopyOptions, DirEntryAttr, DirEntryValue};
 use pipelines::RectResources;
+use roc_ast::lang::env::Env;
+use roc_ast::pool::pool::Pool;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
 use roc_load;
