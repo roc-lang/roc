@@ -11,6 +11,12 @@ async function roc_web_platform_run(wasm_filename, callback) {
 
   const importObj = {
     wasi_snapshot_preview1: {
+      proc_exit: (code) => {
+        if (code !== 0) {
+          console.error(`Exited with code ${code}`);
+        }
+        exit_code = code;
+      },
         roc_panic: (_pointer, _tag_id) => {
             throw 'Roc panicked!';
         }
