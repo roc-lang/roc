@@ -6437,8 +6437,6 @@ fn call_by_name<'a>(
                     assign_to_symbols(env, procs, layout_cache, iter, result)
                 }
             } else {
-                let argument_layouts = lambda_set.extend_argument_list(env.arena, arg_layouts);
-
                 call_by_name_help(
                     env,
                     procs,
@@ -6446,7 +6444,7 @@ fn call_by_name<'a>(
                     proc_name,
                     loc_args,
                     lambda_set,
-                    argument_layouts,
+                    arg_layouts,
                     ret_layout,
                     layout_cache,
                     assigned,
@@ -6489,14 +6487,10 @@ fn call_by_name_help<'a>(
     ret_layout: &'a Layout<'a>,
     layout_cache: &mut LayoutCache<'a>,
     assigned: Symbol,
-    hole: &'a Stmt<'a>,
+    mut hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     let original_fn_var = fn_var;
     let arena = env.arena;
-
-    // debug_assert!(!procs.module_thunks.contains(&proc_name), "{:?}", proc_name);
-
-    let top_level_layout = ProcLayout::new(env.arena, argument_layouts, *ret_layout);
 
     // the arguments given to the function, stored in symbols
     let mut field_symbols = Vec::with_capacity_in(loc_args.len(), arena);
@@ -6506,7 +6500,13 @@ fn call_by_name_help<'a>(
             .map(|(_, arg_expr)| possible_reuse_symbol(env, procs, &arg_expr.value)),
     );
 
-    let field_symbols = field_symbols.into_bump_slice();
+    // If required, add an extra argument to the layout that is the captured environment
+    // afterwards, we MUST make sure the number of arguments in the layout matches the
+    // number of arguments actually passed.
+    let top_level_layout = {
+        let argument_layouts = lambda_set.extend_argument_list(env.arena, argument_layouts);
+        ProcLayout::new(env.arena, argument_layouts, *ret_layout)
+    };
 
     // the variables of the given arguments
     let mut pattern_vars = Vec::with_capacity_in(loc_args.len(), arena);
@@ -6534,6 +6534,8 @@ fn call_by_name_help<'a>(
             "see call_by_name for background (scroll down a bit), function is {:?}",
             proc_name,
         );
+
+        let field_symbols = field_symbols.into_bump_slice();
 
         let call = self::Call {
             call_type: CallType::ByName {
@@ -6573,6 +6575,9 @@ fn call_by_name_help<'a>(
                 "see call_by_name for background (scroll down a bit), function is {:?}",
                 proc_name,
             );
+
+            let field_symbols = field_symbols.into_bump_slice();
+
             let call = self::Call {
                 call_type: CallType::ByName {
                     name: proc_name,
@@ -6625,6 +6630,8 @@ fn call_by_name_help<'a>(
                     proc_name,
                 );
 
+                let field_symbols = field_symbols.into_bump_slice();
+
                 let call = self::Call {
                     call_type: CallType::ByName {
                         name: proc_name,
@@ -6643,6 +6650,19 @@ fn call_by_name_help<'a>(
             None => {
                 let opt_partial_proc = procs.partial_procs.get(&proc_name);
 
+                /*
+                debug_assert_eq!(
+                    argument_layouts.len(),
+                    field_symbols.len(),
+                    "Function {:?} is called with {} arguments, but the layout expects {}",
+                    proc_name,
+                    field_symbols.len(),
+                    argument_layouts.len(),
+                );
+                */
+
+                let field_symbols = field_symbols.into_bump_slice();
+
                 match opt_partial_proc {
                     Some(partial_proc) => {
                         // TODO should pending_procs hold a Rc<Proc> to avoid this .clone()?
@@ -6655,20 +6675,74 @@ fn call_by_name_help<'a>(
                             .specialized
                             .insert((proc_name, top_level_layout), InProgress);
 
+                        let captured = partial_proc.captured_symbols.clone();
+
                         match specialize(env, procs, proc_name, layout_cache, pending, partial_proc)
                         {
-                            Ok((proc, layout)) => call_specialized_proc(
-                                env,
-                                procs,
-                                proc_name,
-                                proc,
-                                layout,
-                                field_symbols,
-                                loc_args,
-                                layout_cache,
-                                assigned,
-                                hole,
-                            ),
+                            Ok((proc, layout)) => {
+                                // ugh
+
+                                if lambda_set.is_represented().is_some() {
+                                    let closure_data_symbol = env.unique_symbol();
+
+                                    let function_layout = ProcLayout::from_raw(env.arena, layout);
+
+                                    procs.specialized.remove(&(proc_name, function_layout));
+
+                                    procs
+                                        .specialized
+                                        .insert((proc_name, function_layout), Done(proc));
+
+                                    let symbols = match captured {
+                                        CapturedSymbols::Captured(captured_symbols) => {
+                                            Vec::from_iter_in(
+                                                captured_symbols.iter().map(|x| x.0),
+                                                env.arena,
+                                            )
+                                            .into_bump_slice()
+                                        }
+                                        CapturedSymbols::None => unreachable!(),
+                                    };
+
+                                    dbg!(field_symbols, argument_layouts);
+                                    let new_hole = match_on_lambda_set(
+                                        env,
+                                        lambda_set,
+                                        closure_data_symbol,
+                                        field_symbols,
+                                        argument_layouts,
+                                        *ret_layout,
+                                        assigned,
+                                        hole,
+                                    );
+
+                                    construct_closure_data(
+                                        env,
+                                        lambda_set,
+                                        proc_name,
+                                        symbols,
+                                        closure_data_symbol,
+                                        env.arena.alloc(new_hole),
+                                    )
+
+                                    // field_symbols.push(closure_data_symbol);
+                                    // debug_assert_eq!(argument_layouts.len(), field_symbols.len());
+                                    // hole
+                                } else {
+                                    call_specialized_proc(
+                                        env,
+                                        procs,
+                                        proc_name,
+                                        proc,
+                                        layout,
+                                        field_symbols,
+                                        loc_args,
+                                        layout_cache,
+                                        assigned,
+                                        hole,
+                                    )
+                                }
+                            }
                             Err(SpecializeFailure {
                                 attempted_layout,
                                 problem: _,
@@ -6881,7 +6955,7 @@ fn call_specialized_proc<'a>(
         debug_assert_eq!(
             function_layout.arguments.len(),
             field_symbols.len(),
-            "function {:?} with layout {:?} expects {:?} arguments, but is applied to {:?}",
+            "function {:?} with layout {:#?} expects {:?} arguments, but is applied to {:?}",
             proc_name,
             function_layout,
             function_layout.arguments.len(),
