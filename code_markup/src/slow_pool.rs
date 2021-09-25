@@ -1,4 +1,3 @@
-
 use std::fmt;
 
 use crate::markup::nodes::MarkupNode;

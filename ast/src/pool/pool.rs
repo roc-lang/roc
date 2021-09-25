@@ -61,8 +61,8 @@ pub const NODE_BYTES: usize = 32;
 
 #[derive(Debug, Eq)]
 pub struct NodeId<T> {
-    pub (super) index: u32,
-    pub (super) _phantom: PhantomData<T>,
+    pub(super) index: u32,
+    pub(super) _phantom: PhantomData<T>,
 }
 
 impl<T> Clone for NodeId<T> {
@@ -84,7 +84,7 @@ impl<T> Copy for NodeId<T> {}
 
 #[derive(Debug)]
 pub struct Pool {
-    pub (super) nodes: *mut [u8; NODE_BYTES],
+    pub(super) nodes: *mut [u8; NODE_BYTES],
     num_nodes: u32,
     capacity: u32,
     // free_1node_slots: Vec<NodeId<T>>,
@@ -149,7 +149,7 @@ impl Pool {
 
     /// Reserves the given number of contiguous node slots, and returns
     /// the NodeId of the first one. We only allow reserving 2^32 in a row.
-    pub (super) fn reserve<T>(&mut self, nodes: u32) -> NodeId<T> {
+    pub(super) fn reserve<T>(&mut self, nodes: u32) -> NodeId<T> {
         // TODO once we have a free list, look in there for an open slot first!
         let index = self.num_nodes;
 

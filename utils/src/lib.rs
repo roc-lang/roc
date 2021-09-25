@@ -1,7 +1,6 @@
-
 use snafu::OptionExt;
-use util_error::{UtilResult, KeyNotFound, IndexOfFailed, OutOfBounds};
 use std::{collections::HashMap, slice::SliceIndex};
+use util_error::{IndexOfFailed, KeyNotFound, OutOfBounds, UtilResult};
 
 pub mod util_error;
 

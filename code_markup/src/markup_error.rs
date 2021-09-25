@@ -1,6 +1,5 @@
-
 use roc_utils::util_error::UtilError;
-use snafu::{Backtrace, NoneError, Snafu, ResultExt};
+use snafu::{Backtrace, NoneError, ResultExt, Snafu};
 
 use crate::slow_pool::MarkNodeId;
 

@@ -1,5 +1,5 @@
+use roc_ast::lang::core::expr::expr2::Expr2::SmallInt;
 use roc_ast::lang::core::expr::expr2::IntStyle;
-use roc_ast::lang::core::expr::expr2::Expr2::{SmallInt};
 use roc_ast::lang::core::expr::expr2::IntVal;
 use roc_ast::pool::pool_str::PoolStr;
 use roc_code_markup::markup::attribute::Attributes;
@@ -146,7 +146,6 @@ pub fn update_int(
 }
 
 fn update_small_int_num(number: &mut IntVal, updated_str: &str) -> EdResult<()> {
-
     use IntVal::*;
 
     *number = match number {

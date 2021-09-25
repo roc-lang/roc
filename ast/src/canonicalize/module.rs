@@ -14,6 +14,7 @@ use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
 
+use crate::lang::core::def::def::canonicalize_defs;
 use crate::lang::core::def::def::Def;
 use crate::lang::core::def::def::{sort_can_defs, Declaration};
 use crate::lang::core::expr::expr2::Expr2;
@@ -27,7 +28,6 @@ use crate::pool::pool::NodeId;
 use crate::pool::pool::Pool;
 use crate::pool::pool_vec::PoolVec;
 use crate::pool::shallow_clone::ShallowClone;
-use crate::lang::core::def::def::canonicalize_defs;
 
 pub struct ModuleOutput {
     pub aliases: MutMap<Symbol, NodeId<Alias>>,

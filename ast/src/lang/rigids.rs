@@ -1,8 +1,11 @@
-use std::{collections::{HashMap, HashSet}, hash::BuildHasherDefault};
+use std::{
+    collections::{HashMap, HashSet},
+    hash::BuildHasherDefault,
+};
 
 use crate::pool::{pool::Pool, pool_str::PoolStr, pool_vec::PoolVec, shallow_clone::ShallowClone};
 use roc_collections::all::WyHash;
-use roc_types::subs::{Variable};
+use roc_types::subs::Variable;
 
 #[derive(Debug)]
 pub struct Rigids {

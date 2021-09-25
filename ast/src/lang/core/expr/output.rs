@@ -1,4 +1,7 @@
-use crate::{lang::core::{def::def::References, types::{Alias}}, pool::pool::NodeId};
+use crate::{
+    lang::core::{def::def::References, types::Alias},
+    pool::pool::NodeId,
+};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::Symbol;
 
@@ -25,4 +28,3 @@ impl Output {
         self.non_closures.extend(other.non_closures);
     }
 }
-   

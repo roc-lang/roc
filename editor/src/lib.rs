@@ -3,7 +3,6 @@
 #![allow(clippy::large_enum_variant, clippy::upper_case_acronyms)]
 
 #[cfg_attr(test, macro_use)]
-extern crate indoc;
 extern crate pest;
 #[cfg_attr(test, macro_use)]
 extern crate pest_derive;

@@ -13,7 +13,21 @@ use roc_types::{
     types::{Category, Reason},
 };
 
-use crate::{lang::{core::{expr::{expr2::{ClosureExtra, Expr2, ExprId, WhenBranch}, record_field::RecordField}, pattern::{DestructType, Pattern2, PatternId, PatternState2, RecordDestruct}, types::{Type2, TypeId}, val_def::ValueDef}, env::Env}, pool::{pool::Pool, pool_str::PoolStr, pool_vec::PoolVec, shallow_clone::ShallowClone}};
+use crate::{
+    lang::{
+        core::{
+            expr::{
+                expr2::{ClosureExtra, Expr2, ExprId, WhenBranch},
+                record_field::RecordField,
+            },
+            pattern::{DestructType, Pattern2, PatternId, PatternState2, RecordDestruct},
+            types::{Type2, TypeId},
+            val_def::ValueDef,
+        },
+        env::Env,
+    },
+    pool::{pool::Pool, pool_str::PoolStr, pool_vec::PoolVec, shallow_clone::ShallowClone},
+};
 
 #[derive(Debug)]
 pub enum Constraint<'a> {
@@ -1739,18 +1753,38 @@ fn num_num(pool: &mut Pool, type_id: TypeId) -> Type2 {
     )
 }
 
+#[cfg(test)]
 pub mod test_constrain {
     use bumpalo::Bump;
     use roc_can::expected::Expected;
     use roc_collections::all::MutMap;
-    use roc_module::{ident::Lowercase, symbol::{IdentIds, Interns, ModuleIds, Symbol}};
+    use roc_module::{
+        ident::Lowercase,
+        symbol::{IdentIds, Interns, ModuleIds, Symbol},
+    };
+    use roc_parse::parser::SyntaxError;
     use roc_region::all::Region;
-    use roc_types::{pretty_print::content_to_string, solved_types::Solved, subs::{Subs, VarStore, Variable}};
+    use roc_types::{
+        pretty_print::content_to_string,
+        solved_types::Solved,
+        subs::{Subs, VarStore, Variable},
+    };
 
-    use crate::{constrain::constrain_expr, lang::{core::{expr::expr_to_expr2::str_to_expr2, types::Type2}, env::Env, scope::Scope}, pool::pool::Pool, solve_type};
     use super::Constraint;
+    use crate::{
+        constrain::constrain_expr,
+        lang::{
+            core::{
+                expr::{expr2::Expr2, expr_to_expr2::loc_expr_to_expr2, output::Output},
+                types::Type2,
+            },
+            env::Env,
+            scope::Scope,
+        },
+        pool::pool::Pool,
+        solve_type,
+    };
     use indoc::indoc;
-
 
     fn run_solve<'a>(
         arena: &'a Bump,
@@ -1764,36 +1798,36 @@ pub mod test_constrain {
             vars_by_symbol: MutMap::default(),
             aliases,
         };
-    
+
         let mut subs = Subs::new(var_store);
-    
+
         for (var, name) in rigid_variables {
             subs.rigid_var(var, name);
         }
-    
+
         // Now that the module is parsed, canonicalized, and constrained,
         // we need to type check it.
         let mut problems = Vec::new();
-    
+
         // Run the solver to populate Subs.
         let (solved_subs, solved_env) =
             solve_type::run(arena, mempool, &env, &mut problems, subs, &constraint);
-    
+
         (solved_subs, solved_env, problems)
     }
-    
+
     fn infer_eq(actual: &str, expected_str: &str) {
         let mut env_pool = Pool::with_capacity(1024);
         let env_arena = Bump::new();
         let code_arena = Bump::new();
-    
+
         let mut var_store = VarStore::default();
         let var = var_store.fresh();
         let dep_idents = IdentIds::exposed_builtins(8);
         let exposed_ident_ids = IdentIds::default();
         let mut module_ids = ModuleIds::default();
         let mod_id = module_ids.get_or_insert(&"ModId123".into());
-    
+
         let mut env = Env::new(
             mod_id,
             &env_arena,
@@ -1803,13 +1837,13 @@ pub mod test_constrain {
             &module_ids,
             exposed_ident_ids,
         );
-    
+
         let mut scope = Scope::new(env.home, env.pool, env.var_store);
-    
+
         let region = Region::zero();
-    
+
         let expr2_result = str_to_expr2(&code_arena, actual, &mut env, &mut scope, region);
-    
+
         match expr2_result {
             Ok((expr, _)) => {
                 let constraint = constrain_expr(
@@ -1819,18 +1853,18 @@ pub mod test_constrain {
                     Expected::NoExpectation(Type2::Variable(var)),
                     Region::zero(),
                 );
-    
+
                 let Env {
                     pool,
                     var_store: ref_var_store,
                     mut dep_idents,
                     ..
                 } = env;
-    
+
                 // extract the var_store out of the env again
                 let mut var_store = VarStore::default();
                 std::mem::swap(ref_var_store, &mut var_store);
-    
+
                 let (mut solved, _, _) = run_solve(
                     &code_arena,
                     pool,
@@ -1839,27 +1873,40 @@ pub mod test_constrain {
                     constraint,
                     var_store,
                 );
-    
+
                 let subs = solved.inner_mut();
-    
+
                 let content = subs.get_content_without_compacting(var);
-    
+
                 // Connect the ModuleId to it's IdentIds
                 dep_idents.insert(mod_id, env.ident_ids);
-    
+
                 let interns = Interns {
                     module_ids: env.module_ids.clone(),
                     all_ident_ids: dep_idents,
                 };
-    
+
                 let actual_str = content_to_string(content, subs, mod_id, &interns);
-    
+
                 assert_eq!(actual_str, expected_str);
             }
             Err(e) => panic!("syntax error {:?}", e),
         }
     }
-    
+
+    pub fn str_to_expr2<'a>(
+        arena: &'a Bump,
+        input: &'a str,
+        env: &mut Env<'a>,
+        scope: &mut Scope,
+        region: Region,
+    ) -> Result<(Expr2, Output), SyntaxError<'a>> {
+        match roc_parse::test_helpers::parse_loc_with(arena, input.trim()) {
+            Ok(loc_expr) => Ok(loc_expr_to_expr2(arena, loc_expr, env, scope, region)),
+            Err(fail) => Err(fail),
+        }
+    }
+
     #[test]
     fn constrain_str() {
         infer_eq(
@@ -1871,7 +1918,7 @@ pub mod test_constrain {
             "Str",
         )
     }
-    
+
     // This will be more useful once we actually map
     // strings less than 15 chars to SmallStr
     #[test]
@@ -1885,7 +1932,7 @@ pub mod test_constrain {
             "Str",
         )
     }
-    
+
     #[test]
     fn constrain_empty_record() {
         infer_eq(
@@ -1897,7 +1944,7 @@ pub mod test_constrain {
             "{}",
         )
     }
-    
+
     #[test]
     fn constrain_small_int() {
         infer_eq(
@@ -1909,7 +1956,7 @@ pub mod test_constrain {
             "Num *",
         )
     }
-    
+
     #[test]
     fn constrain_float() {
         infer_eq(
@@ -1921,7 +1968,7 @@ pub mod test_constrain {
             "Float *",
         )
     }
-    
+
     #[test]
     fn constrain_record() {
         infer_eq(
@@ -1933,7 +1980,7 @@ pub mod test_constrain {
             "{ x : Num *, y : Str }",
         )
     }
-    
+
     #[test]
     fn constrain_empty_list() {
         infer_eq(
@@ -1945,7 +1992,7 @@ pub mod test_constrain {
             "List *",
         )
     }
-    
+
     #[test]
     fn constrain_list() {
         infer_eq(
@@ -1957,7 +2004,7 @@ pub mod test_constrain {
             "List (Num *)",
         )
     }
-    
+
     #[test]
     fn constrain_list_of_records() {
         infer_eq(
@@ -1969,7 +2016,7 @@ pub mod test_constrain {
             "List { x : Num * }",
         )
     }
-    
+
     #[test]
     fn constrain_global_tag() {
         infer_eq(
@@ -1981,7 +2028,7 @@ pub mod test_constrain {
             "[ Foo ]*",
         )
     }
-    
+
     #[test]
     fn constrain_private_tag() {
         infer_eq(
@@ -1993,7 +2040,7 @@ pub mod test_constrain {
             "[ @Foo ]*",
         )
     }
-    
+
     #[test]
     fn constrain_call_and_accessor() {
         infer_eq(
@@ -2005,7 +2052,7 @@ pub mod test_constrain {
             "Str",
         )
     }
-    
+
     #[test]
     fn constrain_access() {
         infer_eq(
@@ -2017,7 +2064,7 @@ pub mod test_constrain {
             "Str",
         )
     }
-    
+
     #[test]
     fn constrain_if() {
         infer_eq(
@@ -2029,7 +2076,7 @@ pub mod test_constrain {
             "[ Green, Red ]*",
         )
     }
-    
+
     #[test]
     fn constrain_when() {
         infer_eq(
@@ -2043,7 +2090,7 @@ pub mod test_constrain {
             "[ Blue, Purple ]*",
         )
     }
-    
+
     #[test]
     fn constrain_let_value() {
         infer_eq(
@@ -2057,7 +2104,7 @@ pub mod test_constrain {
             "{ name : Str }",
         )
     }
-    
+
     #[test]
     fn constrain_update() {
         infer_eq(
@@ -2071,7 +2118,7 @@ pub mod test_constrain {
             "{ name : Str }",
         )
     }
-    
+
     #[ignore = "TODO: implement builtins in the editor"]
     #[test]
     fn constrain_run_low_level() {
@@ -2084,7 +2131,7 @@ pub mod test_constrain {
             "List Str",
         )
     }
-    
+
     #[test]
     fn constrain_closure() {
         infer_eq(
@@ -2098,5 +2145,4 @@ pub mod test_constrain {
             "{}* -> Num *",
         )
     }
-    
 }

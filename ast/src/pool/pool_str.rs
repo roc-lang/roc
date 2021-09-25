@@ -1,10 +1,8 @@
-
 use super::pool::{NodeId, Pool, NODE_BYTES};
 use super::shallow_clone::ShallowClone;
-use libc::{c_void};
+use libc::c_void;
 use std::marker::PhantomData;
 use std::mem::size_of;
-
 
 /// A string containing at most 2^32 pool-allocated bytes.
 #[derive(Debug, Copy, Clone)]

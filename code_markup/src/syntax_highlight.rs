@@ -1,8 +1,7 @@
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::colors::{self, RgbaTup, from_hsb};
+use crate::colors::{self, from_hsb, RgbaTup};
 
 #[derive(Hash, Eq, PartialEq, Copy, Clone, Debug, Deserialize, Serialize)]
 pub enum HighlightStyle {

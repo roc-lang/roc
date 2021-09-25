@@ -1,6 +1,13 @@
-use crate::{ast_error::{ASTResult, ASTNodeIdWithoutExprId}, pool::pool::Pool};
+use crate::{
+    ast_error::{ASTNodeIdWithoutExprId, ASTResult},
+    pool::pool::Pool,
+};
 
-use super::{def::def2::{DefId, def2_to_string}, expr::{expr2::ExprId, expr2_to_string::expr2_to_string}, header::AppHeader};
+use super::{
+    def::def2::{def2_to_string, DefId},
+    expr::{expr2::ExprId, expr2_to_string::expr2_to_string},
+    header::AppHeader,
+};
 
 #[derive(Debug)]
 pub struct AST {

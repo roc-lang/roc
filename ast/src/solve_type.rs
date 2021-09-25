@@ -200,7 +200,6 @@ fn solve<'a>(
     subs: &mut Subs,
     constraint: &Constraint,
 ) -> State {
-    
     use crate::solve_type::Constraint::*;
 
     match constraint {

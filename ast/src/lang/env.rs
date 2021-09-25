@@ -4,7 +4,7 @@ use roc_module::ident::{Ident, ModuleName};
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Located, Region};
-use roc_types::subs::{VarStore};
+use roc_types::subs::VarStore;
 
 use crate::pool::pool::{NodeId, Pool};
 

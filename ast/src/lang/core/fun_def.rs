@@ -1,10 +1,15 @@
-
-
-use crate::{lang::rigids::Rigids, pool::{pool::NodeId, pool_vec::PoolVec, shallow_clone::ShallowClone}};
+use crate::{
+    lang::rigids::Rigids,
+    pool::{pool::NodeId, pool_vec::PoolVec, shallow_clone::ShallowClone},
+};
 use roc_module::symbol::Symbol;
 use roc_types::subs::Variable;
 
-use super::{expr::expr2::ExprId, pattern::PatternId, types::{Type2, TypeId}};
+use super::{
+    expr::expr2::ExprId,
+    pattern::PatternId,
+    types::{Type2, TypeId},
+};
 
 #[derive(Debug)]
 pub enum FunctionDef {

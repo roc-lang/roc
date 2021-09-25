@@ -1,7 +1,10 @@
-use crate::{lang::core::{expr::record_field::RecordField, val_def::value_def_to_string}, pool::pool::Pool};
+use crate::{
+    lang::core::{expr::record_field::RecordField, val_def::value_def_to_string},
+    pool::pool::Pool,
+};
 
-use roc_types::subs::Variable;
 use super::expr2::{Expr2, ExprId};
+use roc_types::subs::Variable;
 
 pub fn expr2_to_string(node_id: ExprId, pool: &Pool) -> String {
     let mut full_string = String::new();

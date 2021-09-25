@@ -1,11 +1,18 @@
 use roc_module::{operator::CalledVia, symbol::Symbol};
 use roc_parse::ast::StrLiteral;
 
-use crate::{ast_error::{ASTResult, UnexpectedASTNode}, lang::{core::expr::expr_to_expr2::to_expr2, env::Env, scope::Scope}, pool::{pool::Pool, pool_str::PoolStr, pool_vec::PoolVec}};
+use crate::{
+    ast_error::{ASTResult, UnexpectedASTNode},
+    lang::{core::expr::expr_to_expr2::to_expr2, env::Env, scope::Scope},
+    pool::{pool::Pool, pool_str::PoolStr, pool_vec::PoolVec},
+};
 
-use super::expr::{expr2::{Expr2, ExprId}, output::Output};
+use super::expr::{
+    expr2::{Expr2, ExprId},
+    output::Output,
+};
 
-pub (crate) fn flatten_str_literal<'a>(
+pub(crate) fn flatten_str_literal<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
     literal: &StrLiteral<'a>,

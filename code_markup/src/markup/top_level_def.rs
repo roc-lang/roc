@@ -1,8 +1,20 @@
-use roc_ast::{ast_error::ASTResult, lang::{core::{ast::ASTNodeId, pattern::{PatternId, get_identifier_string}}, env::Env}};
+use roc_ast::{
+    ast_error::ASTResult,
+    lang::{
+        core::{
+            ast::ASTNodeId,
+            pattern::{get_identifier_string, PatternId},
+        },
+        env::Env,
+    },
+};
 use roc_module::symbol::Interns;
 
-use crate::{markup::{attribute::Attributes, common_nodes::new_equals_mn, nodes::MarkupNode}, slow_pool::{MarkNodeId, SlowPool}, syntax_highlight::HighlightStyle};
-
+use crate::{
+    markup::{attribute::Attributes, common_nodes::new_equals_mn, nodes::MarkupNode},
+    slow_pool::{MarkNodeId, SlowPool},
+    syntax_highlight::HighlightStyle,
+};
 
 pub fn tld_mark_node<'a>(
     identifier_id: PatternId,

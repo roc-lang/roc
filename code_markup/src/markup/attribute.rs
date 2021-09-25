@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use snafu::ensure;
 
-use crate::markup_error::{MarkResult, CaretNotFound};
+use crate::markup_error::{CaretNotFound, MarkResult};
 
 #[derive(Debug, Copy, Clone)]
 pub struct Caret {

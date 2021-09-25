@@ -1,4 +1,3 @@
-
 use snafu::{Backtrace, Snafu};
 
 #[derive(Debug, Snafu)]

@@ -1,5 +1,3 @@
-
-
 use snafu::{Backtrace, Snafu};
 
 use crate::lang::core::ast::ASTNodeId;

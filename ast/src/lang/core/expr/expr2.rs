@@ -1,11 +1,14 @@
 use arraystring::{typenum::U30, ArrayString};
 use roc_types::subs::Variable;
 
-use crate::{lang::core::{fun_def::FunctionDef, pattern::Pattern2, val_def::ValueDef}, pool::{pool::NodeId, pool_str::PoolStr, pool_vec::PoolVec}};
+use crate::{
+    lang::core::{fun_def::FunctionDef, pattern::Pattern2, val_def::ValueDef},
+    pool::{pool::NodeId, pool_str::PoolStr, pool_vec::PoolVec},
+};
 use roc_can::expr::Recursive;
-use roc_module::symbol::Symbol;
 use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
+use roc_module::symbol::Symbol;
 
 use super::record_field::RecordField;
 

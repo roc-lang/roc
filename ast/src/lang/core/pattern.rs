@@ -13,6 +13,7 @@ use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError};
 use roc_region::all::Region;
 use roc_types::subs::Variable;
 
+use crate::ast_error::{ASTResult, UnexpectedPattern2Variant};
 use crate::constrain::Constraint;
 use crate::lang::core::expr::expr_to_expr2::to_expr_id;
 use crate::lang::env::Env;
@@ -21,7 +22,6 @@ use crate::pool::pool::{NodeId, Pool};
 use crate::pool::pool_str::PoolStr;
 use crate::pool::pool_vec::PoolVec;
 use crate::pool::shallow_clone::ShallowClone;
-use crate::ast_error::{ASTResult, UnexpectedPattern2Variant};
 
 use super::expr::expr2::{ExprId, FloatVal, IntVal};
 use super::expr::output::Output;
@@ -576,7 +576,7 @@ fn underscore_in_def<'a>(env: &mut Env<'a>, region: Region) -> Pattern2 {
     Pattern2::UnsupportedPattern(region)
 }
 
-pub (crate) fn flatten_str_literal(pool: &mut Pool, literal: &StrLiteral<'_>) -> Pattern2 {
+pub(crate) fn flatten_str_literal(pool: &mut Pool, literal: &StrLiteral<'_>) -> Pattern2 {
     use roc_parse::ast::StrLiteral::*;
 
     match literal {
@@ -586,7 +586,7 @@ pub (crate) fn flatten_str_literal(pool: &mut Pool, literal: &StrLiteral<'_>) ->
     }
 }
 
-pub (crate) fn flatten_str_lines(pool: &mut Pool, lines: &[&[StrSegment<'_>]]) -> Pattern2 {
+pub(crate) fn flatten_str_lines(pool: &mut Pool, lines: &[&[StrSegment<'_>]]) -> Pattern2 {
     use StrSegment::*;
 
     let mut buf = String::new();

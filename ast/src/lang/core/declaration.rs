@@ -1,10 +1,18 @@
 use roc_types::subs::VarStore;
 
-use crate::{lang::core::{def::def::Def, expr::expr2::Expr2}, pool::{pool::Pool, pool_vec::PoolVec}};
+use crate::{
+    lang::core::{def::def::Def, expr::expr2::Expr2},
+    pool::{pool::Pool, pool_vec::PoolVec},
+};
 
 use super::def::def::Declaration;
 
-pub(crate) fn decl_to_let(pool: &mut Pool, var_store: &mut VarStore, decl: Declaration, ret: Expr2) -> Expr2 {
+pub(crate) fn decl_to_let(
+    pool: &mut Pool,
+    var_store: &mut VarStore,
+    decl: Declaration,
+    ret: Expr2,
+) -> Expr2 {
     match decl {
         Declaration::Declare(def) => match def {
             Def::AnnotationOnly { .. } => todo!(),

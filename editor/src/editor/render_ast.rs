@@ -1,10 +1,9 @@
-
 use crate::editor::mvc::ed_view::RenderedWgpu;
 use crate::editor::{ed_error::EdResult, theme::EdTheme, util::map_get};
 use crate::graphics::primitives::rect::Rect;
 use crate::graphics::primitives::text as gr_text;
 use cgmath::Vector2;
-use roc_code_markup::markup::nodes::{BLANK_PLACEHOLDER, MarkupNode};
+use roc_code_markup::markup::nodes::{MarkupNode, BLANK_PLACEHOLDER};
 use roc_code_markup::slow_pool::{MarkNodeId, SlowPool};
 use winit::dpi::PhysicalSize;
 

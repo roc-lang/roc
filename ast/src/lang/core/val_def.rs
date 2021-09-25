@@ -1,7 +1,17 @@
-use crate::{lang::{core::expr::expr2_to_string::expr2_to_string, rigids::Rigids}, pool::{pool::{NodeId, Pool}, shallow_clone::ShallowClone}};
-use roc_types::subs::{Variable};
+use crate::{
+    lang::{core::expr::expr2_to_string::expr2_to_string, rigids::Rigids},
+    pool::{
+        pool::{NodeId, Pool},
+        shallow_clone::ShallowClone,
+    },
+};
+use roc_types::subs::Variable;
 
-use super::{expr::expr2::ExprId, pattern::{Pattern2, PatternId}, types::TypeId};
+use super::{
+    expr::expr2::ExprId,
+    pattern::{Pattern2, PatternId},
+    types::TypeId,
+};
 
 #[derive(Debug)]
 pub enum ValueDef {

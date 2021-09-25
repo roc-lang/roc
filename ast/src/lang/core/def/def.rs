@@ -24,7 +24,21 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use ven_graph::{strongly_connected_components, topological_sort_into_groups};
 
-use crate::{lang::{core::{expr::{expr2::Expr2, expr_to_expr2::to_expr2, output::Output}, fun_def::FunctionDef, pattern::{self, Pattern2, PatternId, symbols_from_pattern, to_pattern_id}, types::{Alias, Annotation2, Signature, Type2, TypeId, to_annotation2}, val_def::ValueDef}, env::Env, rigids::Rigids, scope::Scope}, pool::{pool::Pool, pool_vec::PoolVec, shallow_clone::ShallowClone}};
+use crate::{
+    lang::{
+        core::{
+            expr::{expr2::Expr2, expr_to_expr2::to_expr2, output::Output},
+            fun_def::FunctionDef,
+            pattern::{self, symbols_from_pattern, to_pattern_id, Pattern2, PatternId},
+            types::{to_annotation2, Alias, Annotation2, Signature, Type2, TypeId},
+            val_def::ValueDef,
+        },
+        env::Env,
+        rigids::Rigids,
+        scope::Scope,
+    },
+    pool::{pool::Pool, pool_vec::PoolVec, shallow_clone::ShallowClone},
+};
 
 #[derive(Debug)]
 pub enum Def {

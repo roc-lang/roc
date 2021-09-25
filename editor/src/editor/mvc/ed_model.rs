@@ -11,7 +11,7 @@ use crate::ui::text::text_pos::TextPos;
 use crate::ui::ui_error::UIResult;
 use bumpalo::Bump;
 use nonempty::NonEmpty;
-use roc_ast::lang::core::ast::{AST, ASTNodeId};
+use roc_ast::lang::core::ast::{ASTNodeId, AST};
 use roc_ast::lang::env::Env;
 use roc_ast::parse::parse_ast;
 use roc_ast::pool::pool_str::PoolStr;
@@ -62,15 +62,13 @@ pub fn init_model<'a>(
     let markup_ids = if code_str.is_empty() {
         EmptyCodeString {}.fail()
     } else {
-        Ok(
-            ast_to_mark_nodes(
-                code_arena,
-                &mut module.env,
-                &module.ast,
-                &mut mark_node_pool,
-                &loaded_module.interns,
-            )?
-        )
+        Ok(ast_to_mark_nodes(
+            code_arena,
+            &mut module.env,
+            &module.ast,
+            &mut mark_node_pool,
+            &loaded_module.interns,
+        )?)
     }?;
 
     let mut code_lines = CodeLines::default();

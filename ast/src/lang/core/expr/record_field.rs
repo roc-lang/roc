@@ -1,7 +1,6 @@
-
 use roc_types::subs::Variable;
 
-use crate::{pool::{pool_str::PoolStr}};
+use crate::pool::pool_str::PoolStr;
 use roc_module::symbol::Symbol;
 
 use super::expr2::ExprId;
@@ -16,8 +15,6 @@ pub enum RecordField {
 use RecordField::*;
 
 impl RecordField {
-    
-
     pub fn get_record_field_var(&self) -> &Variable {
         match self {
             InvalidLabelOnly(_, var) => var,

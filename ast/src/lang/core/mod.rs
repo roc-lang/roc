@@ -1,10 +1,10 @@
+pub mod ast;
+mod declaration;
 pub mod def;
 pub mod expr;
-pub mod header;
-pub mod ast;
-pub mod val_def;
 mod fun_def;
+pub mod header;
 pub mod pattern;
-pub mod types;
 pub mod str;
-mod declaration;
+pub mod types;
+pub mod val_def;

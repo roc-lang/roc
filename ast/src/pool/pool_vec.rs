@@ -1,11 +1,10 @@
-
 use super::pool::{NodeId, Pool, NODE_BYTES};
 use super::shallow_clone::ShallowClone;
-use libc::{c_void};
-use std::marker::PhantomData;
-use std::mem::size_of;
+use libc::c_void;
 use std::any::type_name;
 use std::cmp::Ordering;
+use std::marker::PhantomData;
+use std::mem::size_of;
 
 /// An array of at most 2^32 pool-allocated nodes.
 #[derive(Debug)]

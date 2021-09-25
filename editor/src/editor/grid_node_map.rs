@@ -12,9 +12,9 @@ use roc_ast::lang::core::ast::ASTNodeId;
 use roc_code_markup::markup::nodes::get_root_mark_node_id;
 use roc_code_markup::slow_pool::MarkNodeId;
 use roc_code_markup::slow_pool::SlowPool;
+use snafu::OptionExt;
 use std::cmp::Ordering;
 use std::fmt;
-use snafu::OptionExt;
 
 #[derive(Debug)]
 pub struct GridNodeMap {

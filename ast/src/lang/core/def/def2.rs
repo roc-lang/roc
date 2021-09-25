@@ -1,5 +1,10 @@
-use crate::{lang::core::{expr::{expr2::Expr2, expr2_to_string::expr2_to_string}, pattern::Pattern2}, pool::pool::{NodeId, Pool}};
-
+use crate::{
+    lang::core::{
+        expr::{expr2::Expr2, expr2_to_string::expr2_to_string},
+        pattern::Pattern2,
+    },
+    pool::pool::{NodeId, Pool},
+};
 
 // A top level definition, not inside a function. For example: `main = "Hello, world!"`
 #[derive(Debug)]

@@ -2,11 +2,17 @@ use bumpalo::Bump;
 use roc_parse::parser::SyntaxError;
 use roc_region::all::Region;
 
-use crate::lang::{core::{ast::AST, def::{def2::DefId, def_to_def2::str_to_def2}, expr::expr2::Expr2}, env::Env, scope::Scope};
+use crate::lang::{
+    core::{
+        ast::AST,
+        def::{def2::DefId, def_to_def2::str_to_def2},
+        expr::expr2::Expr2,
+    },
+    env::Env,
+    scope::Scope,
+};
 
 use super::parse_header;
-
-
 
 pub fn parse_from_string<'a>(
     code_str: &'a str,

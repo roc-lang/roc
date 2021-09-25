@@ -1,11 +1,28 @@
-use roc_ast::{lang::{core::{ast::ASTNodeId, def::def2::Def2, expr::expr2::Expr2, pattern::{Pattern2, get_identifier_string}}, env::Env}, pool::pool::NodeId};
-use roc_code_markup::{markup::{attribute::Attributes, common_nodes::{new_blank_mn_w_nls, new_equals_mn}, nodes::{MarkupNode, set_parent_for_all}}, slow_pool::{MarkNodeId, SlowPool}, syntax_highlight::HighlightStyle};
+use roc_ast::{
+    lang::{
+        core::{
+            ast::ASTNodeId,
+            def::def2::Def2,
+            expr::expr2::Expr2,
+            pattern::{get_identifier_string, Pattern2},
+        },
+        env::Env,
+    },
+    pool::pool::NodeId,
+};
+use roc_code_markup::{
+    markup::{
+        attribute::Attributes,
+        common_nodes::{new_blank_mn_w_nls, new_equals_mn},
+        nodes::{set_parent_for_all, MarkupNode},
+    },
+    slow_pool::{MarkNodeId, SlowPool},
+    syntax_highlight::HighlightStyle,
+};
 use roc_module::symbol::{Interns, Symbol};
 
 use crate::{
-    editor::{
-        ed_error::{EdResult, FailedToUpdateIdentIdName, KeyNotFound},
-    },
+    editor::ed_error::{EdResult, FailedToUpdateIdentIdName, KeyNotFound},
     ui::text::text_pos::TextPos,
 };
 
