@@ -56,7 +56,7 @@ use roc_ast::{
         },
         env::Env,
     },
-    pool::pool_str::PoolStr,
+    mem_pool::pool_str::PoolStr,
 };
 use roc_module::symbol::Interns;
 use roc_utils::{index_of, slice_get};
@@ -323,7 +323,7 @@ fn new_markup_node(
         content: text,
         ast_node_id: node_id,
         syn_high_style: highlight_style,
-        attributes: Attributes::new(),
+        attributes: Attributes::default(),
         parent_id_opt: None,
         newlines_at_end: 0,
     };
@@ -528,7 +528,7 @@ pub fn expr2_to_markup<'a, 'b>(
                 content: val_name,
                 ast_node_id,
                 syn_high_style: HighlightStyle::Variable,
-                attributes: Attributes::new(),
+                attributes: Attributes::default(),
                 parent_id_opt: None,
                 newlines_at_end: 0,
             };
@@ -637,7 +637,7 @@ fn header_mn(content: String, expr_id: ExprId, mark_node_pool: &mut SlowPool) ->
         content,
         ast_node_id: ASTNodeId::AExprId(expr_id),
         syn_high_style: HighlightStyle::PackageRelated,
-        attributes: Attributes::new(),
+        attributes: Attributes::default(),
         parent_id_opt: None,
         newlines_at_end: 0,
     };
@@ -655,7 +655,7 @@ fn header_val_mn(
         content,
         ast_node_id: ASTNodeId::AExprId(expr_id),
         syn_high_style: highlight_style,
-        attributes: Attributes::new(),
+        attributes: Attributes::default(),
         parent_id_opt: None,
         newlines_at_end: 0,
     };

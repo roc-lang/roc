@@ -2,7 +2,7 @@ use roc_types::subs::VarStore;
 
 use crate::{
     lang::core::{def::def::Def, expr::expr2::Expr2},
-    pool::{pool::Pool, pool_vec::PoolVec},
+    mem_pool::{pool::Pool, pool_vec::PoolVec},
 };
 
 use super::def::def::Declaration;

@@ -1,6 +1,6 @@
 use crate::{
     lang::core::{def::def::References, types::Alias},
-    pool::pool::NodeId,
+    mem_pool::pool::NodeId,
 };
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::Symbol;

@@ -67,7 +67,7 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
         content: val_name_string,
         ast_node_id,
         syn_high_style: HighlightStyle::Variable,
-        attributes: Attributes::new(),
+        attributes: Attributes::default(),
         parent_id_opt: Some(curr_mark_node_id),
         newlines_at_end: curr_mark_node_nls,
     };

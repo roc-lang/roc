@@ -13,8 +13,8 @@ use bumpalo::Bump;
 use nonempty::NonEmpty;
 use roc_ast::lang::core::ast::{ASTNodeId, AST};
 use roc_ast::lang::env::Env;
+use roc_ast::mem_pool::pool_str::PoolStr;
 use roc_ast::parse::parse_ast;
-use roc_ast::pool::pool_str::PoolStr;
 use roc_code_markup::markup::nodes::ast_to_mark_nodes;
 use roc_code_markup::slow_pool::{MarkNodeId, SlowPool};
 use roc_load::file::LoadedModule;
@@ -57,7 +57,7 @@ pub fn init_model<'a>(
 ) -> EdResult<EdModel<'a>> {
     let mut module = EdModule::new(code_str, env, code_arena)?;
 
-    let mut mark_node_pool = SlowPool::new();
+    let mut mark_node_pool = SlowPool::default();
 
     let markup_ids = if code_str.is_empty() {
         EmptyCodeString {}.fail()
@@ -211,7 +211,7 @@ pub mod test_ed_model {
     use bumpalo::Bump;
     use ed_model::EdModel;
     use roc_ast::lang::env::Env;
-    use roc_ast::pool::pool::Pool;
+    use roc_ast::mem_pool::pool::Pool;
     use roc_load::file::LoadedModule;
     use roc_module::symbol::IdentIds;
     use roc_module::symbol::ModuleIds;

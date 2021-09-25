@@ -4,7 +4,7 @@ use roc_parse::ast::StrLiteral;
 use crate::{
     ast_error::{ASTResult, UnexpectedASTNode},
     lang::{core::expr::expr_to_expr2::to_expr2, env::Env, scope::Scope},
-    pool::{pool::Pool, pool_str::PoolStr, pool_vec::PoolVec},
+    mem_pool::{pool::Pool, pool_str::PoolStr, pool_vec::PoolVec},
 };
 
 use super::expr::{
@@ -123,7 +123,7 @@ fn flatten_str_lines<'a>(
 
 /// Resolve string interpolations by desugaring a sequence of StrSegments
 /// into nested calls to Str.concat
-fn desugar_str_segments<'a>(env: &mut Env<'a>, segments: Vec<StrSegment>) -> Expr2 {
+fn desugar_str_segments(env: &mut Env, segments: Vec<StrSegment>) -> Expr2 {
     use StrSegment::*;
 
     let pool = &mut env.pool;

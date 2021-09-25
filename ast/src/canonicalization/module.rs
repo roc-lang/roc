@@ -24,10 +24,10 @@ use crate::lang::core::types::Alias;
 use crate::lang::core::val_def::ValueDef;
 use crate::lang::env::Env;
 use crate::lang::scope::Scope;
-use crate::pool::pool::NodeId;
-use crate::pool::pool::Pool;
-use crate::pool::pool_vec::PoolVec;
-use crate::pool::shallow_clone::ShallowClone;
+use crate::mem_pool::pool::NodeId;
+use crate::mem_pool::pool::Pool;
+use crate::mem_pool::pool_vec::PoolVec;
+use crate::mem_pool::shallow_clone::ShallowClone;
 
 pub struct ModuleOutput {
     pub aliases: MutMap<Symbol, NodeId<Alias>>,

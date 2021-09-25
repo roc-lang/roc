@@ -1,6 +1,6 @@
 use roc_ast::lang::core::ast::{ast_node_to_string, ASTNodeId};
 use roc_ast::lang::core::expr::expr2::{Expr2, ExprId};
-use roc_ast::pool::pool_vec::PoolVec;
+use roc_ast::mem_pool::pool_vec::PoolVec;
 use roc_code_markup::markup::common_nodes::{
     new_blank_mn, new_comma_mn, new_left_square_mn, new_right_square_mn,
 };

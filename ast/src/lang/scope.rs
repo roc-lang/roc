@@ -2,10 +2,10 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
-use crate::pool::pool::Pool;
-use crate::pool::pool_str::PoolStr;
-use crate::pool::pool_vec::PoolVec;
-use crate::pool::shallow_clone::ShallowClone;
+use crate::mem_pool::pool::Pool;
+use crate::mem_pool::pool_str::PoolStr;
+use crate::mem_pool::pool_vec::PoolVec;
+use crate::mem_pool::shallow_clone::ShallowClone;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};

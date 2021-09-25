@@ -65,10 +65,6 @@ pub struct Attributes {
 }
 
 impl Attributes {
-    pub fn new() -> Attributes {
-        Attributes { all: Vec::new() }
-    }
-
     pub fn add(&mut self, attr: Attribute) {
         self.all.push(attr);
     }
@@ -119,5 +115,11 @@ impl Attributes {
         ensure!(old_len != new_len, CaretNotFound { node_id });
 
         Ok(())
+    }
+}
+
+impl Default for Attributes {
+    fn default() -> Self {
+        Attributes { all: Vec::new() }
     }
 }

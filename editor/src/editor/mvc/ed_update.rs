@@ -59,8 +59,8 @@ use roc_ast::lang::core::def::def2::DefId;
 use roc_ast::lang::core::expr::expr2::Expr2;
 use roc_ast::lang::core::expr::expr2::ExprId;
 use roc_ast::lang::core::types::Type2;
-use roc_ast::pool::pool::Pool;
-use roc_ast::pool::pool_str::PoolStr;
+use roc_ast::mem_pool::pool::Pool;
+use roc_ast::mem_pool::pool_str::PoolStr;
 use roc_ast::solve_type;
 use roc_can::expected::Expected;
 use roc_code_markup::markup::attribute::Attributes;
@@ -589,7 +589,7 @@ impl<'a> EdModel<'a> {
 
             let blank_replacement = MarkupNode::Blank {
                 ast_node_id: sel_block.ast_node_id,
-                attributes: Attributes::new(),
+                attributes: Attributes::default(),
                 syn_high_style: HighlightStyle::Blank,
                 parent_id_opt: expr2_level_mark_node.get_parent_id_opt(),
                 newlines_at_end,

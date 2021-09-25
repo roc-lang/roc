@@ -10,10 +10,6 @@ pub struct SlowPool {
 }
 
 impl SlowPool {
-    pub fn new() -> SlowPool {
-        SlowPool { nodes: Vec::new() }
-    }
-
     pub fn add(&mut self, node: MarkupNode) -> MarkNodeId {
         let id = self.nodes.len();
 
@@ -71,5 +67,11 @@ impl fmt::Display for SlowPool {
         }
 
         Ok(())
+    }
+}
+
+impl Default for SlowPool {
+    fn default() -> Self {
+        SlowPool { nodes: Vec::new() }
     }
 }

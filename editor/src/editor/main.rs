@@ -24,7 +24,7 @@ use cgmath::Vector2;
 use fs_extra::dir::{copy, ls, CopyOptions, DirEntryAttr, DirEntryValue};
 use pipelines::RectResources;
 use roc_ast::lang::env::Env;
-use roc_ast::pool::pool::Pool;
+use roc_ast::mem_pool::pool::Pool;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
 use roc_load;

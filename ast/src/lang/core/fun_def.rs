@@ -1,6 +1,6 @@
 use crate::{
     lang::rigids::Rigids,
-    pool::{pool::NodeId, pool_vec::PoolVec, shallow_clone::ShallowClone},
+    mem_pool::{pool::NodeId, pool_vec::PoolVec, shallow_clone::ShallowClone},
 };
 use roc_module::symbol::Symbol;
 use roc_types::subs::Variable;

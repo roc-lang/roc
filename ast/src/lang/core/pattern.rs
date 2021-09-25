@@ -18,10 +18,10 @@ use crate::constrain::Constraint;
 use crate::lang::core::expr::expr_to_expr2::to_expr_id;
 use crate::lang::env::Env;
 use crate::lang::scope::Scope;
-use crate::pool::pool::{NodeId, Pool};
-use crate::pool::pool_str::PoolStr;
-use crate::pool::pool_vec::PoolVec;
-use crate::pool::shallow_clone::ShallowClone;
+use crate::mem_pool::pool::{NodeId, Pool};
+use crate::mem_pool::pool_str::PoolStr;
+use crate::mem_pool::pool_vec::PoolVec;
+use crate::mem_pool::shallow_clone::ShallowClone;
 
 use super::expr::expr2::{ExprId, FloatVal, IntVal};
 use super::expr::output::Output;

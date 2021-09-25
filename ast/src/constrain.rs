@@ -26,7 +26,7 @@ use crate::{
         },
         env::Env,
     },
-    pool::{pool::Pool, pool_str::PoolStr, pool_vec::PoolVec, shallow_clone::ShallowClone},
+    mem_pool::{pool::Pool, pool_str::PoolStr, pool_vec::PoolVec, shallow_clone::ShallowClone},
 };
 
 #[derive(Debug)]
@@ -1781,7 +1781,7 @@ pub mod test_constrain {
             env::Env,
             scope::Scope,
         },
-        pool::pool::Pool,
+        mem_pool::pool::Pool,
         solve_type,
     };
     use indoc::indoc;

@@ -1,7 +1,7 @@
 use roc_ast::lang::core::expr::expr2::Expr2::SmallInt;
 use roc_ast::lang::core::expr::expr2::IntStyle;
 use roc_ast::lang::core::expr::expr2::IntVal;
-use roc_ast::pool::pool_str::PoolStr;
+use roc_ast::mem_pool::pool_str::PoolStr;
 use roc_code_markup::markup::attribute::Attributes;
 use roc_code_markup::markup::nodes::MarkupNode;
 use roc_code_markup::slow_pool::MarkNodeId;
@@ -49,7 +49,7 @@ pub fn start_new_int(ed_model: &mut EdModel, digit_char: &char) -> EdResult<Inpu
         content: digit_string,
         ast_node_id,
         syn_high_style: HighlightStyle::Number,
-        attributes: Attributes::new(),
+        attributes: Attributes::default(),
         parent_id_opt,
         newlines_at_end: curr_mark_node_nls,
     };

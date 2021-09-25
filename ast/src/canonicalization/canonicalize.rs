@@ -18,7 +18,7 @@ use crate::{
         env::Env,
         scope::Scope,
     },
-    pool::{pool_str::PoolStr, pool_vec::PoolVec, shallow_clone::ShallowClone},
+    mem_pool::{pool_str::PoolStr, pool_vec::PoolVec, shallow_clone::ShallowClone},
 };
 
 pub(crate) enum CanonicalizeRecordProblem {
@@ -275,7 +275,7 @@ pub(crate) fn canonicalize_lookup(
                 Var(symbol)
             }
             Err(problem) => {
-                env.problem(Problem::RuntimeError(problem.clone()));
+                env.problem(Problem::RuntimeError(problem));
 
                 RuntimeError()
             }
@@ -292,7 +292,7 @@ pub(crate) fn canonicalize_lookup(
             Err(problem) => {
                 // Either the module wasn't imported, or
                 // it was imported but it doesn't expose this ident.
-                env.problem(Problem::RuntimeError(problem.clone()));
+                env.problem(Problem::RuntimeError(problem));
 
                 RuntimeError()
             }

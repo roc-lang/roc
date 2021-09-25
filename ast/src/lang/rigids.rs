@@ -3,7 +3,9 @@ use std::{
     hash::BuildHasherDefault,
 };
 
-use crate::pool::{pool::Pool, pool_str::PoolStr, pool_vec::PoolVec, shallow_clone::ShallowClone};
+use crate::mem_pool::{
+    pool::Pool, pool_str::PoolStr, pool_vec::PoolVec, shallow_clone::ShallowClone,
+};
 use roc_collections::all::WyHash;
 use roc_types::subs::Variable;
 
@@ -45,11 +47,7 @@ impl Rigids {
             .names
             .iter(pool)
             .filter_map(|(opt_pool_str, var)| {
-                if let Some(pool_str) = opt_pool_str {
-                    Some((*pool_str, *var))
-                } else {
-                    None
-                }
+                opt_pool_str.as_ref().map(|pool_str| (*pool_str, *var))
             })
             .collect::<Vec<(PoolStr, Variable)>>();
 

@@ -19,9 +19,9 @@ use roc_unify::unify::Unified::*;
 
 use crate::constrain::Constraint;
 use crate::lang::core::types::Type2;
-use crate::pool::pool::Pool;
-use crate::pool::pool_vec::PoolVec;
-use crate::pool::shallow_clone::ShallowClone;
+use crate::mem_pool::pool::Pool;
+use crate::mem_pool::pool_vec::PoolVec;
+use crate::mem_pool::shallow_clone::ShallowClone;
 
 // Type checking system adapted from Elm by Evan Czaplicki, BSD-3-Clause Licensed
 // https://github.com/elm/compiler

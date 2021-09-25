@@ -14,7 +14,7 @@ use crate::ui::text::selection::Selection;
 use crate::ui::tooltip::ToolTip;
 use crate::ui::ui_error::MissingGlyphDims;
 use cgmath::Vector2;
-use roc_ast::pool::pool::Pool;
+use roc_ast::mem_pool::pool::Pool;
 use snafu::OptionExt;
 use winit::dpi::PhysicalSize;
 

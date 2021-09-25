@@ -1,7 +1,7 @@
 use roc_ast::lang::core::expr::expr2::ArrString;
 use roc_ast::lang::core::expr::expr2::Expr2;
 use roc_ast::lang::core::str::update_str_expr;
-use roc_ast::pool::pool_str::PoolStr;
+use roc_ast::mem_pool::pool_str::PoolStr;
 use roc_code_markup::markup::attribute::Attributes;
 use roc_code_markup::markup::nodes;
 use roc_code_markup::markup::nodes::MarkupNode;
@@ -150,7 +150,7 @@ pub fn start_new_string(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
             content: nodes::STRING_QUOTES.to_owned(),
             ast_node_id,
             syn_high_style: HighlightStyle::String,
-            attributes: Attributes::new(),
+            attributes: Attributes::default(),
             parent_id_opt,
             newlines_at_end: curr_mark_node_nls,
         };

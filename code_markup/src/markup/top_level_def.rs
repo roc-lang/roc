@@ -31,7 +31,7 @@ pub fn tld_mark_node<'a>(
         content: val_name,
         ast_node_id,
         syn_high_style: HighlightStyle::Variable,
-        attributes: Attributes::new(),
+        attributes: Attributes::default(),
         parent_id_opt: None,
         newlines_at_end: 0,
     };

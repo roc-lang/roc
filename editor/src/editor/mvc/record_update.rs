@@ -11,8 +11,8 @@ use roc_ast::lang::core::ast::ASTNodeId;
 use roc_ast::lang::core::expr::expr2::Expr2;
 use roc_ast::lang::core::expr::expr2::ExprId;
 use roc_ast::lang::core::expr::record_field::RecordField;
-use roc_ast::pool::pool_str::PoolStr;
-use roc_ast::pool::pool_vec::PoolVec;
+use roc_ast::mem_pool::pool_str::PoolStr;
+use roc_ast::mem_pool::pool_vec::PoolVec;
 use roc_code_markup::markup::attribute::Attributes;
 use roc_code_markup::markup::common_nodes::new_blank_mn;
 use roc_code_markup::markup::common_nodes::new_left_accolade_mn;
@@ -126,7 +126,7 @@ pub fn update_empty_record(
                 content: new_input.to_owned(),
                 ast_node_id,
                 syn_high_style: HighlightStyle::RecordField,
-                attributes: Attributes::new(),
+                attributes: Attributes::default(),
                 parent_id_opt,
                 newlines_at_end: 0,
             };
@@ -235,7 +235,7 @@ pub fn update_record_colon(
                                             content: record_colon.to_owned(),
                                             ast_node_id: ASTNodeId::AExprId(record_ast_node_id),
                                             syn_high_style: HighlightStyle::Operator,
-                                            attributes: Attributes::new(),
+                                            attributes: Attributes::default(),
                                             parent_id_opt: Some(parent_id),
                                             newlines_at_end: 0,
                                         };

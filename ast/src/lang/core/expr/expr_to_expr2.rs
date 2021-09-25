@@ -9,7 +9,7 @@ use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Located, Region};
 
 use super::{expr2::Expr2, output::Output};
-use crate::canonicalize::canonicalize::{
+use crate::canonicalization::canonicalize::{
     canonicalize_fields, canonicalize_lookup, canonicalize_when_branch, CanonicalizeRecordProblem,
 };
 use crate::lang::core::declaration::decl_to_let;
@@ -17,14 +17,14 @@ use crate::lang::core::def::def::{canonicalize_defs, sort_can_defs};
 use crate::lang::core::expr::expr2::ClosureExtra;
 use crate::lang::core::pattern::to_pattern2;
 use crate::lang::core::str::flatten_str_literal;
-use crate::pool::shallow_clone::ShallowClone;
+use crate::mem_pool::shallow_clone::ShallowClone;
 use crate::{
     lang::{
         core::expr::expr2::{ExprId, FloatVal, IntStyle, IntVal},
         env::Env,
         scope::Scope,
     },
-    pool::{pool_str::PoolStr, pool_vec::PoolVec},
+    mem_pool::{pool_str::PoolStr, pool_vec::PoolVec},
 };
 
 pub fn loc_expr_to_expr2<'a>(
@@ -65,7 +65,7 @@ pub fn to_expr2<'a>(
                     // emit runtime error
                     let runtime_error = RuntimeError::InvalidFloat(error, ZERO, raw.into());
 
-                    env.problem(Problem::RuntimeError(runtime_error.clone()));
+                    env.problem(Problem::RuntimeError(runtime_error));
                     //
                     //                    Expr::RuntimeError(runtime_error)
                     todo!()
@@ -94,7 +94,7 @@ pub fn to_expr2<'a>(
                         raw.into(),
                     );
 
-                    env.problem(Problem::RuntimeError(runtime_error.clone()));
+                    env.problem(Problem::RuntimeError(runtime_error));
                     //
                     //                    Expr::RuntimeError(runtime_error)
                     todo!()
@@ -122,7 +122,7 @@ pub fn to_expr2<'a>(
                     // emit runtime error
                     let runtime_error = RuntimeError::InvalidInt(error, *base, ZERO, raw.into());
 
-                    env.problem(Problem::RuntimeError(runtime_error.clone()));
+                    env.problem(Problem::RuntimeError(runtime_error));
                     //
                     //                    Expr::RuntimeError(runtime_error)
                     todo!()
@@ -130,7 +130,7 @@ pub fn to_expr2<'a>(
             }
         }
 
-        Str(literal) => flatten_str_literal(env, scope, &literal),
+        Str(literal) => flatten_str_literal(env, scope, literal),
 
         List { items, .. } => {
             let mut output = Output::default();
@@ -585,7 +585,7 @@ pub fn to_expr2<'a>(
             let (unsorted, mut scope, defs_output, symbols_introduced) = canonicalize_defs(
                 env,
                 Output::default(),
-                &scope,
+                scope,
                 loc_defs,
                 PatternType::DefExpr,
             );

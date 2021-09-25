@@ -37,7 +37,7 @@ use crate::{
         rigids::Rigids,
         scope::Scope,
     },
-    pool::{pool::Pool, pool_vec::PoolVec, shallow_clone::ShallowClone},
+    mem_pool::{pool::Pool, pool_vec::PoolVec, shallow_clone::ShallowClone},
 };
 
 #[derive(Debug)]

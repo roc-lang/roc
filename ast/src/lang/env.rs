@@ -6,7 +6,7 @@ use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Located, Region};
 use roc_types::subs::VarStore;
 
-use crate::pool::pool::{NodeId, Pool};
+use crate::mem_pool::pool::{NodeId, Pool};
 
 use super::core::def::def::References;
 
@@ -147,7 +147,7 @@ impl<'a> Env<'a> {
                             Ok(symbol)
                         }
                         None => Err(RuntimeError::ValueNotExposed {
-                            module_name: ModuleName::from(module_name),
+                            module_name,
                             ident,
                             region,
                         }),

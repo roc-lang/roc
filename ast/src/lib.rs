@@ -1,7 +1,7 @@
 pub mod ast_error;
-mod canonicalize;
+mod canonicalization;
 pub mod constrain;
 pub mod lang;
+pub mod mem_pool;
 pub mod parse;
-pub mod pool;
 pub mod solve_type;

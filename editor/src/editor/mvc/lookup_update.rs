@@ -1,5 +1,5 @@
 use roc_ast::lang::core::expr::expr2::{Expr2, ExprId};
-use roc_ast::pool::pool_str::PoolStr;
+use roc_ast::mem_pool::pool_str::PoolStr;
 use roc_code_markup::slow_pool::MarkNodeId;
 
 use crate::editor::ed_error::EdResult;
