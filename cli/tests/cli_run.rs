@@ -194,11 +194,6 @@ mod cli_run {
                     // Also check with the surgical linker.
 
                     if TEST_SURGICAL_LINKER {
-                        if matches!(example.executable_filename, "echo" | "hello-rust") {
-                            eprintln!("WARNING: skipping testing example {} with surgical linking because rust is currently not supported!", example.filename);
-                            return;
-                        }
-
                         check_output_with_stdin(
                             &file_name,
                             example.stdin,

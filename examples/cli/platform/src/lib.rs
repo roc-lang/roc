@@ -27,12 +27,12 @@ extern "C" {
 }
 
 #[no_mangle]
-pub unsafe fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
+pub unsafe extern "C" fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
     libc::malloc(size)
 }
 
 #[no_mangle]
-pub unsafe fn roc_realloc(
+pub unsafe extern "C" fn roc_realloc(
     c_ptr: *mut c_void,
     new_size: usize,
     _old_size: usize,
@@ -42,12 +42,12 @@ pub unsafe fn roc_realloc(
 }
 
 #[no_mangle]
-pub unsafe fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
+pub unsafe extern "C" fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
     libc::free(c_ptr)
 }
 
 #[no_mangle]
-pub unsafe fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
+pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
     match tag_id {
         0 => {
             let slice = CStr::from_ptr(c_ptr as *const c_char);
@@ -60,7 +60,17 @@ pub unsafe fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
 }
 
 #[no_mangle]
-pub fn rust_main() -> isize {
+pub unsafe extern "C" fn roc_memcpy(dst: *mut c_void, src: *mut c_void, n: usize) -> *mut c_void {
+    libc::memcpy(dst, src, n)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut c_void {
+    libc::memset(dst, c, n)
+}
+
+#[no_mangle]
+pub extern "C" fn rust_main() -> isize {
     let size = unsafe { roc_main_size() } as usize;
     let layout = Layout::array::<u8>(size).unwrap();
 
@@ -81,7 +91,7 @@ pub fn rust_main() -> isize {
     0
 }
 
-unsafe fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
+unsafe extern "C" fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
     let size = size_Fx_result() as usize;
     let layout = Layout::array::<u8>(size).unwrap();
     let buffer = std::alloc::alloc(layout) as *mut u8;
@@ -99,7 +109,7 @@ unsafe fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
 }
 
 #[no_mangle]
-pub fn roc_fx_getLine() -> RocStr {
+pub extern "C" fn roc_fx_getLine() -> RocStr {
     use std::io::{self, BufRead};
 
     let stdin = io::stdin();
@@ -109,7 +119,7 @@ pub fn roc_fx_getLine() -> RocStr {
 }
 
 #[no_mangle]
-pub fn roc_fx_putLine(line: RocStr) -> () {
+pub extern "C" fn roc_fx_putLine(line: RocStr) -> () {
     let bytes = line.as_slice();
     let string = unsafe { std::str::from_utf8_unchecked(bytes) };
     println!("{}", string);
