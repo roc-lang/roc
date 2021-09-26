@@ -224,6 +224,11 @@ impl<'a> WasmBackend<'a> {
         })
     }
 
+    fn local_id_from_symbol(&self, sym: &Symbol) -> Result<LocalId, String> {
+        let SymbolStorage(local_id, _) = self.get_symbol_storage(sym)?;
+        Ok(*local_id)
+    }
+
     fn load_from_symbol(&mut self, sym: &Symbol) -> Result<(), String> {
         let SymbolStorage(LocalId(local_id), _) = self.get_symbol_storage(sym)?;
         let id: u32 = *local_id;
@@ -329,15 +334,12 @@ impl<'a> WasmBackend<'a> {
                 }
 
                 // the LocalId of the symbol that we match on
-                let matched_on = match self.symbol_storage_map.get(cond_symbol) {
-                    Some(SymbolStorage(local_id, _)) => local_id.0,
-                    None => unreachable!("symbol not defined: {:?}", cond_symbol),
-                };
+                let matched_on = self.local_id_from_symbol(cond_symbol)?;
 
                 // then, we jump whenever the value under scrutiny is equal to the value of a branch
                 for (i, (value, _, _)) in branches.iter().enumerate() {
                     // put the cond_symbol on the top of the stack
-                    self.instructions.push(GetLocal(matched_on));
+                    self.instructions.push(GetLocal(matched_on.0));
 
                     self.instructions.push(I32Const(*value as i32));
 
@@ -404,12 +406,8 @@ impl<'a> WasmBackend<'a> {
 
                 // put the arguments on the stack
                 for (symbol, local_id) in arguments.iter().zip(locals.iter()) {
-                    let argument = match self.symbol_storage_map.get(symbol) {
-                        Some(SymbolStorage(local_id, _)) => local_id.0,
-                        None => unreachable!("symbol not defined: {:?}", symbol),
-                    };
-
-                    self.instructions.push(GetLocal(argument));
+                    let argument = self.local_id_from_symbol(symbol)?;
+                    self.instructions.push(GetLocal(argument.0));
                     self.instructions.push(SetLocal(local_id.0));
                 }
 
