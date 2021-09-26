@@ -6495,7 +6495,7 @@ fn call_by_name_help<'a>(
     ret_layout: &'a Layout<'a>,
     layout_cache: &mut LayoutCache<'a>,
     assigned: Symbol,
-    mut hole: &'a Stmt<'a>,
+    hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     let original_fn_var = fn_var;
     let arena = env.arena;
