@@ -117,7 +117,7 @@ pub fn type_problem<'b>(
                     let doc = alloc
                         .reflow("No type could be found with the name or alias ")
                         .append(alloc.ident(ident))
-                        .append(alloc.reflow("."));
+                        .append(alloc.reflow(". Note that types and type aliases must be defined before they are used (unlike variables)."));
 
                     report(title, doc, filename)
                 }
