@@ -112,6 +112,16 @@ pub fn type_problem<'b>(
                     report(title, doc, filename)
                 }
 
+                UnrecognizedIdent(ident) => {
+                    let title = "UNRECOGNIZED TYPE".to_string();
+                    let doc = alloc
+                        .reflow("No type could be found with the name or alias ")
+                        .append(alloc.ident(ident))
+                        .append(alloc.reflow("."));
+
+                    report(title, doc, filename)
+                }
+
                 other => panic!("unhandled bad type: {:?}", other),
             }
         }
