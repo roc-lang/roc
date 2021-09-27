@@ -37,13 +37,13 @@ use roc_types::subs::{Subs, VarStore, Variable};
 use roc_types::types::{Alias, Type};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::{HashMap, HashSet};
-use std::fs;
 use std::io;
 use std::iter;
 use std::path::{Path, PathBuf};
 use std::str::from_utf8_unchecked;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
+use std::{env, fs};
 
 /// Default name for the binary generated for an app, if an invalid one was specified.
 const DEFAULT_APP_OUTPUT_PATH: &str = "app";
@@ -1351,7 +1351,12 @@ where
     // doing .max(1) on the entire expression guards against
     // num_cpus returning 0, while also avoiding wrapping
     // unsigned subtraction overflow.
-    let num_workers = num_cpus::get().max(2) - 1;
+    let default_num_workers = num_cpus::get().max(2) - 1;
+
+    let num_workers = match env::var("ROC_NUM_WORKERS") {
+        Ok(env_str) => env_str.parse::<usize>().unwrap_or(default_num_workers),
+        Err(_) => default_num_workers,
+    };
 
     let worker_arenas = arena.alloc(bumpalo::collections::Vec::with_capacity_in(
         num_workers,
