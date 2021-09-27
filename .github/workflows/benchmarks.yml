@@ -43,4 +43,4 @@ jobs:
         run: cd ci/bench-runner && cargo build --release && cd ../..
 
       - name: run benchmarks with regression check
-        run: echo "TODO re-enable benchmarks once race condition is fixed"#./ci/bench-runner/target/release/bench-runner --check-executables-changed
+        run: ./ci/bench-runner/target/release/bench-runner --check-executables-changed
