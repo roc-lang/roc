@@ -1,7 +1,10 @@
 #![allow(dead_code)]
 
+use std::fs::File;
+use std::io::BufReader;
 use std::process::Command;
 use std::process::Stdio;
+use std::time::Duration;
 
 use crate::editor::code_lines::CodeLines;
 use crate::editor::ed_error::from_ui_res;
@@ -59,6 +62,12 @@ use roc_region::all::Region;
 use roc_types::solved_types::Solved;
 use roc_types::subs::{Subs, Variable};
 use roc_types::{pretty_print::content_to_string, subs::VarStore};
+use rodio::Decoder;
+use rodio::OutputStream;
+use rodio::OutputStreamHandle;
+use rodio::Sink;
+use rodio::Source;
+use rodio::source::SineWave;
 use snafu::OptionExt;
 use winit::event::VirtualKeyCode;
 use VirtualKeyCode::*;
@@ -520,7 +529,10 @@ impl<'a> EdModel<'a> {
         &mut self,
         modifiers: &Modifiers,
         virtual_keycode: VirtualKeyCode,
+        sound_output_stream_opt: Option<&OutputStreamHandle>,
+        sound_file_name_opt: Option<&str>,
     ) -> EdResult<()> {
+
         match virtual_keycode {
             Left => self.move_caret_left(modifiers)?,
             Up => {
@@ -555,6 +567,18 @@ impl<'a> EdModel<'a> {
             F11 => {
                 self.show_debug_view = !self.show_debug_view;
                 self.dirty = true;
+            }
+            F12 => {
+                let (_stream, stream_handle) = OutputStream::try_default().unwrap();
+                // Load a sound from a file, using a path relative to Cargo.toml
+                let file = BufReader::new(File::open("./editor/src/editor/resources/sounds/bell_sound.mp3").unwrap());
+                // Decode that sound file into a source
+                let source = Decoder::new(file).unwrap();
+                // Play the sound directly on the device
+                stream_handle.play_raw(source.convert_samples()).unwrap();
+                dbg!("played sound");
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                
             }
             _ => (),
         }
@@ -2646,7 +2670,7 @@ pub mod test_ed_update {
         }
 
         for _ in 0..repeats {
-            ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up)?;
+            ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up, None, None)?;
         }
 
         let mut post_lines = ui_res_to_res(ed_model_to_dsl(&ed_model))?;
@@ -3223,7 +3247,7 @@ pub mod test_ed_update {
         )?;
 
         for _ in 0..repeats {
-            ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up)?;
+            ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up, None, None)?;
         }
 
         move_caret_fun(&mut ed_model, &no_mods())?;
@@ -3387,7 +3411,7 @@ pub mod test_ed_update {
         )?;
 
         for _ in 0..repeats {
-            ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up)?;
+            ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up, None, None)?;
         }
 
         handle_new_char(&'\u{8}', &mut ed_model)?; // \u{8} is the char for backspace on linux

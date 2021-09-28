@@ -1,7 +1,11 @@
+use std::fs::File;
+use std::io::BufReader;
+
 use super::app_model::AppModel;
 use super::ed_update;
 use crate::window::keyboard_input::Modifiers;
 use crate::{editor::ed_error::EdResult, window::keyboard_input::from_winit};
+use rodio::{Decoder, OutputStream, Source};
 use winit::event::{ModifiersState, VirtualKeyCode};
 
 pub fn handle_copy(app_model: &mut AppModel) -> EdResult<()> {
@@ -39,9 +43,15 @@ pub fn pass_keydown_to_focused(
     virtual_keycode: VirtualKeyCode,
     app_model: &mut AppModel,
 ) -> EdResult<()> {
+
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
         if ed_model.has_focus {
-            ed_model.ed_handle_key_down(modifiers, virtual_keycode)?;
+            ed_model.ed_handle_key_down(
+                modifiers,
+                virtual_keycode,
+                app_model.sound_output_stream_opt.as_ref(),
+                app_model.sound_file_name_opt,
+            )?;
         }
     }
 

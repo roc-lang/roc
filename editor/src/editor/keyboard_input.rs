@@ -1,9 +1,13 @@
+use std::fs::File;
+use std::io::BufReader;
+
 use crate::editor::ed_error::EdResult;
 use crate::editor::mvc::app_model::AppModel;
 use crate::editor::mvc::app_update::{
     handle_copy, handle_cut, handle_paste, pass_keydown_to_focused,
 };
 use crate::window::keyboard_input::from_winit;
+use rodio::{Decoder, OutputStream, Source};
 use winit::event::VirtualKeyCode::*;
 use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
 
@@ -13,6 +17,7 @@ pub fn handle_keydown(
     modifiers_winit: ModifiersState,
     app_model: &mut AppModel,
 ) -> EdResult<()> {
+                
     if let ElementState::Released = elem_state {
         return Ok(());
     }
@@ -43,11 +48,7 @@ pub fn handle_keydown(
             }
         }
 
-        A | S | R | Home | End => pass_keydown_to_focused(&modifiers, virtual_keycode, app_model)?,
-
-        F11 => pass_keydown_to_focused(&modifiers, virtual_keycode, app_model)?,
-
-        _ => (),
+        _ => pass_keydown_to_focused(&modifiers, virtual_keycode, app_model)?,
     }
 
     Ok(())

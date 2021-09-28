@@ -31,9 +31,10 @@ use roc_load;
 use roc_load::file::LoadedModule;
 use roc_module::symbol::IdentIds;
 use roc_types::subs::VarStore;
+use rodio::{Decoder, OutputStream, Source};
 use std::collections::HashSet;
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{BufReader, Write};
 use std::{error::Error, io, path::Path};
 use wgpu::{CommandEncoder, LoadOp, RenderPass, TextureView};
 use wgpu_glyph::GlyphBrush;
@@ -62,6 +63,15 @@ pub fn launch(project_dir_path_opt: Option<&Path>) -> io::Result<()> {
 fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     env_logger::init();
 
+    //let (_, stream_handle) = OutputStream::try_default().unwrap();
+    /* 
+    // Load a sound from a file, using a path relative to Cargo.toml
+    let file = BufReader::new(File::open("./editor/src/editor/resources/sounds/bell_sound.mp3").unwrap());
+    // Decode that sound file into a source
+    let source = Decoder::new(file).unwrap();
+    // Play the sound directly on the device
+    stream_handle.play_raw(source.convert_samples()).unwrap();
+    */
     // Open window and create a surface
     let mut event_loop = winit::event_loop::EventLoop::new();
 
@@ -173,7 +183,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
 
     let mut rendered_wgpu_opt: Option<RenderedWgpu> = None;
 
-    let mut app_model = AppModel::init(ed_model_opt);
+    let mut app_model = AppModel::init(ed_model_opt, None);
 
     let mut keyboard_modifiers = ModifiersState::empty();
 
