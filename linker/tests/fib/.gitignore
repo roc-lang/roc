@@ -4,3 +4,8 @@ zig-cache
 zig-out
 
 *.o
+
+dynhost
+preprocessedhost
+metadata
+libapp.so

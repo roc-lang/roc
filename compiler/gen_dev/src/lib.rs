@@ -9,10 +9,10 @@ use roc_module::ident::{ModuleName, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::ir::{
-    BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, Proc, Stmt,
+    BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, Param, Proc,
+    SelfRecursive, Stmt,
 };
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
-use target_lexicon::Triple;
 
 mod generic64;
 mod object_builder;
@@ -46,6 +46,11 @@ pub enum Relocation {
         offset: u64,
         name: String,
     },
+    JmpToReturn {
+        inst_loc: u64,
+        inst_size: u64,
+        offset: u64,
+    },
 }
 
 trait Backend<'a>
@@ -53,12 +58,13 @@ where
     Self: Sized,
 {
     /// new creates a new backend that will output to the specific Object.
-    fn new(env: &'a Env, target: &Triple) -> Result<Self, String>;
+    fn new(env: &'a Env) -> Result<Self, String>;
 
     fn env(&self) -> &'a Env<'a>;
 
     /// reset resets any registers or other values that may be occupied at the end of a procedure.
-    fn reset(&mut self);
+    /// It also passes basic procedure information to the builder for setup of the next function.
+    fn reset(&mut self, name: String, is_self_recursive: SelfRecursive);
 
     /// finalize does any setup and cleanup that should happen around the procedure.
     /// finalize does setup because things like stack size and jump locations are not know until the function is written.
@@ -79,17 +85,16 @@ where
 
     /// build_proc creates a procedure and outputs it to the wrapped object writer.
     fn build_proc(&mut self, proc: Proc<'a>) -> Result<(&'a [u8], &[Relocation]), String> {
-        self.reset();
+        let proc_name = LayoutIds::default()
+            .get(proc.name, &proc.ret_layout)
+            .to_symbol_string(proc.name, &self.env().interns);
+        self.reset(proc_name, proc.is_self_recursive);
         self.load_args(proc.args, &proc.ret_layout)?;
         for (layout, sym) in proc.args {
             self.set_layout_map(*sym, layout)?;
         }
-        // let start = std::time::Instant::now();
         self.scan_ast(&proc.body);
         self.create_free_map();
-        // let duration = start.elapsed();
-        // println!("Time to calculate lifetimes: {:?}", duration);
-        // println!("{:?}", self.last_seen_map());
         self.build_stmt(&proc.body, &proc.ret_layout)?;
         self.finalize()
     }
@@ -110,6 +115,11 @@ where
                 self.free_symbols(stmt)?;
                 Ok(())
             }
+            Stmt::Refcounting(_modify, following) => {
+                // TODO: actually deal with refcounting. For hello world, we just skipped it.
+                self.build_stmt(following, ret_layout)?;
+                Ok(())
+            }
             Stmt::Switch {
                 cond_symbol,
                 cond_layout,
@@ -128,6 +138,35 @@ where
                 self.free_symbols(stmt)?;
                 Ok(())
             }
+            Stmt::Join {
+                id,
+                parameters,
+                body,
+                remainder,
+            } => {
+                for param in parameters.iter() {
+                    self.set_layout_map(param.symbol, &param.layout)?;
+                }
+                self.build_join(id, parameters, body, remainder, ret_layout)?;
+                self.free_symbols(stmt)?;
+                Ok(())
+            }
+            Stmt::Jump(id, args) => {
+                let mut arg_layouts: bumpalo::collections::Vec<Layout<'a>> =
+                    bumpalo::vec![in self.env().arena];
+                arg_layouts.reserve(args.len());
+                let layout_map = self.layout_map();
+                for arg in *args {
+                    if let Some(layout) = layout_map.get(arg) {
+                        arg_layouts.push(*layout);
+                    } else {
+                        return Err(format!("the argument, {:?}, has no know layout", arg));
+                    }
+                }
+                self.build_jump(id, args, arg_layouts.into_bump_slice(), ret_layout)?;
+                self.free_symbols(stmt)?;
+                Ok(())
+            }
             x => Err(format!("the statement, {:?}, is not yet implemented", x)),
         }
     }
@@ -138,6 +177,25 @@ where
         cond_layout: &Layout<'a>,
         branches: &'a [(u64, BranchInfo<'a>, Stmt<'a>)],
         default_branch: &(BranchInfo<'a>, &'a Stmt<'a>),
+        ret_layout: &Layout<'a>,
+    ) -> Result<(), String>;
+
+    // build_join generates a instructions for a join statement.
+    fn build_join(
+        &mut self,
+        id: &JoinPointId,
+        parameters: &'a [Param<'a>],
+        body: &'a Stmt<'a>,
+        remainder: &'a Stmt<'a>,
+        ret_layout: &Layout<'a>,
+    ) -> Result<(), String>;
+
+    // build_jump generates a instructions for a jump statement.
+    fn build_jump(
+        &mut self,
+        id: &JoinPointId,
+        args: &'a [Symbol],
+        arg_layouts: &[Layout<'a>],
         ret_layout: &Layout<'a>,
     ) -> Result<(), String>;
 
@@ -241,6 +299,13 @@ where
                                 arg_layouts,
                                 ret_layout,
                             ),
+                            Symbol::STR_CONCAT => self.build_run_low_level(
+                                sym,
+                                &LowLevel::StrConcat,
+                                arguments,
+                                arg_layouts,
+                                ret_layout,
+                            ),
                             x if x
                                 .module_string(&self.env().interns)
                                 .starts_with(ModuleName::APP) =>
@@ -263,8 +328,7 @@ where
                         let layout_map = self.layout_map();
                         for arg in *arguments {
                             if let Some(layout) = layout_map.get(arg) {
-                                // This is safe because every value in the map is always set with a valid layout and cannot be null.
-                                arg_layouts.push(unsafe { *(*layout) });
+                                arg_layouts.push(*layout);
                             } else {
                                 return Err(format!("the argument, {:?}, has no know layout", arg));
                             }
@@ -414,6 +478,13 @@ where
                 arg_layouts,
                 ret_layout,
             ),
+            LowLevel::StrConcat => self.build_fn_call(
+                sym,
+                bitcode::STR_CONCAT.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
             x => Err(format!("low level, {:?}. is not yet implemented", x)),
         }
     }
@@ -507,7 +578,7 @@ where
     /// load_literal sets a symbol to be equal to a literal.
     fn load_literal(&mut self, sym: &Symbol, lit: &Literal<'a>) -> Result<(), String>;
 
-    /// return_symbol moves a symbol to the correct return location for the backend.
+    /// return_symbol moves a symbol to the correct return location for the backend and adds a jump to the end of the function.
     fn return_symbol(&mut self, sym: &Symbol, layout: &Layout<'a>) -> Result<(), String>;
 
     /// free_symbols will free all symbols for the given statement.
@@ -542,12 +613,10 @@ where
 
     /// set_layout_map sets the layout for a specific symbol.
     fn set_layout_map(&mut self, sym: Symbol, layout: &Layout<'a>) -> Result<(), String> {
-        if let Some(x) = self.layout_map().insert(sym, layout) {
+        if let Some(old_layout) = self.layout_map().insert(sym, *layout) {
             // Layout map already contains the symbol. We should never need to overwrite.
             // If the layout is not the same, that is a bug.
-            // There is always an old layout value and this dereference is safe.
-            let old_layout = unsafe { *x };
-            if old_layout != *layout {
+            if &old_layout != layout {
                 Err(format!(
                     "Overwriting layout for symbol, {:?}. This should never happen. got {:?}, want {:?}",
                     sym, layout, old_layout
@@ -561,7 +630,7 @@ where
     }
 
     /// layout_map gets the map from symbol to layout.
-    fn layout_map(&mut self) -> &mut MutMap<Symbol, *const Layout<'a>>;
+    fn layout_map(&mut self) -> &mut MutMap<Symbol, Layout<'a>>;
 
     fn create_free_map(&mut self) {
         let mut free_map = MutMap::default();

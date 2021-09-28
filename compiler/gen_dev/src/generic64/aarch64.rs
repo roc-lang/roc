@@ -226,6 +226,7 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
 
     #[inline(always)]
     fn load_args<'a>(
+        _buf: &mut Vec<'a, u8>,
         _symbol_map: &mut MutMap<Symbol, SymbolStorage<AArch64GeneralReg, AArch64FloatReg>>,
         _args: &'a [(Layout<'a>, Symbol)],
         _ret_layout: &Layout<'a>,

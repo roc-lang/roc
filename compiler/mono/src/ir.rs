@@ -1933,7 +1933,29 @@ fn specialize_external<'a>(
             match layout {
                 RawFunctionLayout::Function(argument_layouts, lambda_set, return_layout) => {
                     let assigned = env.unique_symbol();
-                    let unit = env.unique_symbol();
+
+                    let mut argument_symbols =
+                        Vec::with_capacity_in(argument_layouts.len(), env.arena);
+                    let mut proc_arguments =
+                        Vec::with_capacity_in(argument_layouts.len() + 1, env.arena);
+                    let mut top_level_arguments =
+                        Vec::with_capacity_in(argument_layouts.len() + 1, env.arena);
+
+                    for layout in argument_layouts {
+                        let symbol = env.unique_symbol();
+
+                        proc_arguments.push((*layout, symbol));
+
+                        argument_symbols.push(symbol);
+                        top_level_arguments.push(*layout);
+                    }
+
+                    // the proc needs to take an extra closure argument
+                    let lambda_set_layout = Layout::LambdaSet(lambda_set);
+                    proc_arguments.push((lambda_set_layout, Symbol::ARG_CLOSURE));
+
+                    // this should also be reflected in the TopLevel signature
+                    top_level_arguments.push(lambda_set_layout);
 
                     let hole = env.arena.alloc(Stmt::Ret(assigned));
 
@@ -1941,19 +1963,16 @@ fn specialize_external<'a>(
                         env,
                         lambda_set,
                         Symbol::ARG_CLOSURE,
-                        env.arena.alloc([unit]),
+                        argument_symbols.into_bump_slice(),
                         argument_layouts,
                         *return_layout,
                         assigned,
                         hole,
                     );
 
-                    let body = let_empty_struct(unit, env.arena.alloc(body));
-                    let lambda_set_layout = Layout::LambdaSet(lambda_set);
-
                     let proc = Proc {
                         name,
-                        args: env.arena.alloc([(lambda_set_layout, Symbol::ARG_CLOSURE)]),
+                        args: proc_arguments.into_bump_slice(),
                         body,
                         closure_data_layout: None,
                         ret_layout: *return_layout,
@@ -1964,7 +1983,7 @@ fn specialize_external<'a>(
 
                     let top_level = ProcLayout::new(
                         env.arena,
-                        env.arena.alloc([lambda_set_layout]),
+                        top_level_arguments.into_bump_slice(),
                         *return_layout,
                     );
 
@@ -2774,13 +2793,13 @@ pub fn with_hole<'a>(
                 IntOrFloat::SignedIntType(precision) => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Int(int)),
-                    Layout::Builtin(int_precision_to_builtin(precision)),
+                    precision.as_layout(),
                     hole,
                 ),
                 IntOrFloat::UnsignedIntType(precision) => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Int(int)),
-                    Layout::Builtin(int_precision_to_builtin(precision)),
+                    precision.as_layout(),
                     hole,
                 ),
                 _ => unreachable!("unexpected float precision for integer"),
@@ -2792,7 +2811,7 @@ pub fn with_hole<'a>(
                 IntOrFloat::BinaryFloatType(precision) => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Float(float)),
-                    Layout::Builtin(float_precision_to_builtin(precision)),
+                    precision.as_layout(),
                     hole,
                 ),
                 IntOrFloat::DecimalFloatType => {
@@ -2824,19 +2843,19 @@ pub fn with_hole<'a>(
                 IntOrFloat::SignedIntType(precision) => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Int(num.into())),
-                    Layout::Builtin(int_precision_to_builtin(precision)),
+                    precision.as_layout(),
                     hole,
                 ),
                 IntOrFloat::UnsignedIntType(precision) => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Int(num.into())),
-                    Layout::Builtin(int_precision_to_builtin(precision)),
+                    precision.as_layout(),
                     hole,
                 ),
                 IntOrFloat::BinaryFloatType(precision) => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Float(num as f64)),
-                    Layout::Builtin(float_precision_to_builtin(precision)),
+                    precision.as_layout(),
                     hole,
                 ),
                 IntOrFloat::DecimalFloatType => {
@@ -5634,8 +5653,8 @@ fn store_pattern_help<'a>(
             // do nothing
             return StorePattern::NotProductive(stmt);
         }
-        IntLiteral(_)
-        | FloatLiteral(_)
+        IntLiteral(_, _)
+        | FloatLiteral(_, _)
         | DecimalLiteral(_)
         | EnumLiteral { .. }
         | BitLiteral { .. }
@@ -5769,8 +5788,8 @@ fn store_tag_pattern<'a>(
             Underscore => {
                 // ignore
             }
-            IntLiteral(_)
-            | FloatLiteral(_)
+            IntLiteral(_, _)
+            | FloatLiteral(_, _)
             | DecimalLiteral(_)
             | EnumLiteral { .. }
             | BitLiteral { .. }
@@ -5845,8 +5864,8 @@ fn store_newtype_pattern<'a>(
             Underscore => {
                 // ignore
             }
-            IntLiteral(_)
-            | FloatLiteral(_)
+            IntLiteral(_, _)
+            | FloatLiteral(_, _)
             | DecimalLiteral(_)
             | EnumLiteral { .. }
             | BitLiteral { .. }
@@ -5921,8 +5940,8 @@ fn store_record_destruct<'a>(
                 // internally. But `y` is never used, so we must make sure it't not stored/loaded.
                 return StorePattern::NotProductive(stmt);
             }
-            IntLiteral(_)
-            | FloatLiteral(_)
+            IntLiteral(_, _)
+            | FloatLiteral(_, _)
             | DecimalLiteral(_)
             | EnumLiteral { .. }
             | BitLiteral { .. }
@@ -6892,8 +6911,8 @@ fn call_specialized_proc<'a>(
 pub enum Pattern<'a> {
     Identifier(Symbol),
     Underscore,
-    IntLiteral(i128),
-    FloatLiteral(u64),
+    IntLiteral(i128, IntPrecision),
+    FloatLiteral(u64, FloatPrecision),
     DecimalLiteral(RocDec),
     BitLiteral {
         value: bool,
@@ -6971,22 +6990,36 @@ fn from_can_pattern_help<'a>(
     match can_pattern {
         Underscore => Ok(Pattern::Underscore),
         Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
-        IntLiteral(_, _, int) => Ok(Pattern::IntLiteral(*int as i128)),
+        IntLiteral(var, _, int) => {
+            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, false) {
+                IntOrFloat::SignedIntType(precision) | IntOrFloat::UnsignedIntType(precision) => {
+                    Ok(Pattern::IntLiteral(*int as i128, precision))
+                }
+                other => {
+                    panic!(
+                        "Invalid precision for int pattern: {:?} has {:?}",
+                        can_pattern, other
+                    )
+                }
+            }
+        }
         FloatLiteral(var, float_str, float) => {
             // TODO: Can I reuse num_argument_to_int_or_float here if I pass in true?
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, true) {
-                IntOrFloat::SignedIntType(_) => {
-                    panic!("Invalid percision for float literal = {:?}", var)
+                IntOrFloat::SignedIntType(_) | IntOrFloat::UnsignedIntType(_) => {
+                    panic!("Invalid precision for float pattern {:?}", var)
                 }
-                IntOrFloat::UnsignedIntType(_) => {
-                    panic!("Invalid percision for float literal = {:?}", var)
+                IntOrFloat::BinaryFloatType(precision) => {
+                    Ok(Pattern::FloatLiteral(f64::to_bits(*float), precision))
                 }
-                IntOrFloat::BinaryFloatType(_) => Ok(Pattern::FloatLiteral(f64::to_bits(*float))),
                 IntOrFloat::DecimalFloatType => {
                     let dec = match RocDec::from_str(float_str) {
-                            Some(d) => d,
-                            None => panic!("Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message", float_str),
-                        };
+                        Some(d) => d,
+                        None => panic!(
+                            r"Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message",
+                            float_str
+                        ),
+                    };
                     Ok(Pattern::DecimalLiteral(dec))
                 }
             }
@@ -7003,9 +7036,15 @@ fn from_can_pattern_help<'a>(
         }
         NumLiteral(var, num_str, num) => {
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, false) {
-                IntOrFloat::SignedIntType(_) => Ok(Pattern::IntLiteral(*num as i128)),
-                IntOrFloat::UnsignedIntType(_) => Ok(Pattern::IntLiteral(*num as i128)),
-                IntOrFloat::BinaryFloatType(_) => Ok(Pattern::FloatLiteral(*num as u64)),
+                IntOrFloat::SignedIntType(precision) => {
+                    Ok(Pattern::IntLiteral(*num as i128, precision))
+                }
+                IntOrFloat::UnsignedIntType(precision) => {
+                    Ok(Pattern::IntLiteral(*num as i128, precision))
+                }
+                IntOrFloat::BinaryFloatType(precision) => {
+                    Ok(Pattern::FloatLiteral(*num as u64, precision))
+                }
                 IntOrFloat::DecimalFloatType => {
                     let dec = match RocDec::from_str(num_str) {
                             Some(d) => d,
@@ -7587,7 +7626,7 @@ fn from_can_record_destruct<'a>(
     })
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub enum IntPrecision {
     Usize,
     I128,
@@ -7597,36 +7636,50 @@ pub enum IntPrecision {
     I8,
 }
 
+impl IntPrecision {
+    pub fn as_layout(&self) -> Layout<'static> {
+        Layout::Builtin(self.as_builtin())
+    }
+
+    pub fn as_builtin(&self) -> Builtin<'static> {
+        use IntPrecision::*;
+        match self {
+            I128 => Builtin::Int128,
+            I64 => Builtin::Int64,
+            I32 => Builtin::Int32,
+            I16 => Builtin::Int16,
+            I8 => Builtin::Int8,
+            Usize => Builtin::Usize,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub enum FloatPrecision {
     F64,
     F32,
 }
 
+impl FloatPrecision {
+    pub fn as_layout(&self) -> Layout<'static> {
+        Layout::Builtin(self.as_builtin())
+    }
+
+    pub fn as_builtin(&self) -> Builtin<'static> {
+        use FloatPrecision::*;
+        match self {
+            F64 => Builtin::Float64,
+            F32 => Builtin::Float32,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub enum IntOrFloat {
     SignedIntType(IntPrecision),
     UnsignedIntType(IntPrecision),
     BinaryFloatType(FloatPrecision),
     DecimalFloatType,
-}
-
-fn float_precision_to_builtin(precision: FloatPrecision) -> Builtin<'static> {
-    use FloatPrecision::*;
-    match precision {
-        F64 => Builtin::Float64,
-        F32 => Builtin::Float32,
-    }
-}
-
-fn int_precision_to_builtin(precision: IntPrecision) -> Builtin<'static> {
-    use IntPrecision::*;
-    match precision {
-        I128 => Builtin::Int128,
-        I64 => Builtin::Int64,
-        I32 => Builtin::Int32,
-        I16 => Builtin::Int16,
-        I8 => Builtin::Int8,
-        Usize => Builtin::Usize,
-    }
 }
 
 /// Given the `a` in `Num a`, determines whether it's an int or a float

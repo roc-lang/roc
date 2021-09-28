@@ -3,6 +3,7 @@ generated-docs
 zig-cache
 .direnv
 *.rs.bk
+*.o
 
 # llvm human-readable output 
 *.ll
