@@ -569,16 +569,29 @@ impl<'a> EdModel<'a> {
                 self.dirty = true;
             }
             F12 => {
-                let (_stream, stream_handle) = OutputStream::try_default().unwrap();
+                /*let (_stream, stream_handle) = OutputStream::try_default().unwrap();
                 // Load a sound from a file, using a path relative to Cargo.toml
                 let file = BufReader::new(File::open("./editor/src/editor/resources/sounds/bell_sound.mp3").unwrap());
                 // Decode that sound file into a source
                 let source = Decoder::new(file).unwrap();
                 // Play the sound directly on the device
                 stream_handle.play_raw(source.convert_samples()).unwrap();
-                dbg!("played sound");
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                
+                dbg!("played sound");*/
+                // TODO use thread pool for efficiency
+                std::thread::spawn(|| {
+                    let (_stream, stream_handle) = OutputStream::try_default().unwrap();
+                    let sink = Sink::try_new(&stream_handle).unwrap();
+            
+                    // Add a dummy source of the sake of the example.
+                    let file = BufReader::new(File::open("./editor/src/editor/resources/sounds/bell_sound.mp3").unwrap());
+                    // Decode that sound file into a source
+                    let source = Decoder::new(file).unwrap();
+                    sink.append(source);
+            
+                    // The sound plays in a separate thread. This call will block the current thread until the sink
+                    // has finished playing all its queued sounds.
+                    sink.sleep_until_end();
+                });
             }
             _ => (),
         }
