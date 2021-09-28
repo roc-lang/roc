@@ -11,6 +11,7 @@ use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
 use roc_mono::layout::{Builtin, Layout};
 
 use crate::layout::WasmLayout;
+use crate::storage::SymbolStorage;
 use crate::{allocate_stack_frame, copy_memory, free_stack_frame, LocalId, PTR_TYPE};
 
 // Don't allocate any constant data at address zero or near it. Would be valid, but bug-prone.
@@ -19,54 +20,6 @@ const UNUSED_DATA_SECTION_BYTES: u32 = 1024;
 
 #[derive(Clone, Copy, Debug)]
 struct LabelId(u32);
-
-#[derive(Debug)]
-enum SymbolStorage {
-    ParamPrimitive {
-        local_id: LocalId,
-        value_type: ValueType,
-        size: u32,
-    },
-    ParamPointer {
-        local_id: LocalId,
-    },
-    VarPrimitive {
-        local_id: LocalId,
-        value_type: ValueType,
-        size: u32,
-    },
-    VarStackMemory {
-        local_id: LocalId,
-        size: u32,
-        offset: u32,
-    },
-    VarHeapMemory {
-        local_id: LocalId,
-    },
-}
-
-impl SymbolStorage {
-    fn local_id(&self) -> LocalId {
-        match self {
-            Self::ParamPrimitive { local_id, .. } => *local_id,
-            Self::ParamPointer { local_id, .. } => *local_id,
-            Self::VarPrimitive { local_id, .. } => *local_id,
-            Self::VarStackMemory { local_id, .. } => *local_id,
-            Self::VarHeapMemory { local_id, .. } => *local_id,
-        }
-    }
-
-    #[allow(dead_code)]
-    fn value_type(&self) -> ValueType {
-        match self {
-            Self::ParamPrimitive { value_type, .. } => *value_type,
-            Self::VarPrimitive { value_type, .. } => *value_type,
-            Self::ParamPointer { .. } => ValueType::I32,
-            Self::VarStackMemory { .. } => ValueType::I32,
-            Self::VarHeapMemory { .. } => ValueType::I32,
-        }
-    }
-}
 
 enum LocalKind {
     Parameter,
@@ -205,7 +158,7 @@ impl<'a> WasmBackend<'a> {
         wasm_layout: WasmLayout,
         symbol: Symbol,
         kind: LocalKind,
-    ) -> LocalId {
+    ) -> SymbolStorage {
         let local_index = (self.arg_types.len() + self.locals.len()) as u32;
         let local_id = LocalId(local_index);
 
@@ -219,7 +172,10 @@ impl<'a> WasmBackend<'a> {
                         value_type,
                         size,
                     },
-                    _ => SymbolStorage::ParamPointer { local_id },
+                    _ => SymbolStorage::ParamPointer {
+                        local_id,
+                        wasm_layout,
+                    },
                 }
             }
             LocalKind::Variable => {
@@ -242,11 +198,13 @@ impl<'a> WasmBackend<'a> {
                         let mut offset = self.stack_memory;
                         offset += align - 1;
                         offset &= -align;
-                        self.stack_memory = offset + (size - alignment_bytes) as i32;
+                        self.stack_memory = offset + size as i32;
 
+                        // TODO: if we're creating the frame pointer just reuse the same local_id!
                         let frame_pointer = self.get_or_create_frame_pointer();
 
                         // initialise the local with the appropriate address
+                        // TODO: skip this the first time, no point adding zero offset!
                         self.instructions.extend([
                             GetLocal(frame_pointer.0),
                             I32Const(offset),
@@ -258,15 +216,16 @@ impl<'a> WasmBackend<'a> {
                             local_id,
                             size,
                             offset: offset as u32,
+                            alignment_bytes,
                         }
                     }
                 }
             }
         };
 
-        self.symbol_storage_map.insert(symbol, storage);
+        self.symbol_storage_map.insert(symbol, storage.clone());
 
-        local_id
+        storage
     }
 
     fn get_or_create_frame_pointer(&mut self) -> LocalId {
@@ -334,17 +293,20 @@ impl<'a> WasmBackend<'a> {
                     // Saves us from having to copy it later
                     let storage = SymbolStorage::ParamPointer {
                         local_id: LocalId(0),
+                        wasm_layout,
                     };
                     self.symbol_storage_map.insert(*let_sym, storage);
                 }
                 self.build_expr(let_sym, expr, layout)?;
-                self.instructions.push(Return);
+                self.instructions.push(Return); // TODO: branch instead of return so we can clean up stack
                 Ok(())
             }
 
             Stmt::Let(sym, expr, layout, following) => {
                 let wasm_layout = WasmLayout::new(layout);
-                let local_id = self.insert_local(wasm_layout, *sym, LocalKind::Variable);
+                let local_id = self
+                    .insert_local(wasm_layout, *sym, LocalKind::Variable)
+                    .local_id();
 
                 self.build_expr(sym, expr, layout)?;
                 self.instructions.push(SetLocal(local_id.0));
@@ -354,35 +316,37 @@ impl<'a> WasmBackend<'a> {
             }
 
             Stmt::Ret(sym) => {
-                use crate::layout::WasmLayout::*;
+                use crate::storage::SymbolStorage::*;
 
                 let storage = self.symbol_storage_map.get(sym).unwrap();
 
                 match storage {
-                    SymbolStorage::ParamPrimitive { local_id, .. }
-                    | SymbolStorage::VarPrimitive { local_id, .. }
-                    | SymbolStorage::ParamPointer { local_id, .. }
-                    | SymbolStorage::VarHeapMemory { local_id, .. } => {
-                        self.instructions.push(GetLocal(local_id.0));
-                        self.instructions.push(Return);
+                    VarStackMemory {
+                        local_id,
+                        size,
+                        alignment_bytes,
+                        ..
+                    }
+                    | ParamPointer {
+                        local_id,
+                        wasm_layout:
+                            WasmLayout::StackMemory {
+                                size,
+                                alignment_bytes,
+                                ..
+                            },
+                    } => {
+                        let from = local_id.clone();
+                        let to = LocalId(0);
+                        copy_memory(&mut self.instructions, from, to, *size, *alignment_bytes, 0)?;
                     }
 
-                    SymbolStorage::VarStackMemory { local_id, size, .. } => {
-                        let ret_wasm_layout = WasmLayout::new(ret_layout);
-                        if let StackMemory { alignment_bytes, .. } = ret_wasm_layout {
-                            let from = local_id.clone();
-                            let to = LocalId(0);
-                            let copy_size: u32 = *size;
-                            copy_memory(
-                                &mut self.instructions,
-                                from,
-                                to,
-                                copy_size,
-                                alignment_bytes,
-                            )?;
-                        } else {
-                            panic!("Return layout doesn't match");
-                        }
+                    ParamPrimitive { local_id, .. }
+                    | VarPrimitive { local_id, .. }
+                    | ParamPointer { local_id, .. }
+                    | VarHeapMemory { local_id, .. } => {
+                        self.instructions.push(GetLocal(local_id.0));
+                        self.instructions.push(Return); // TODO: branch instead of return so we can clean up stack
                     }
                 }
 
@@ -446,8 +410,9 @@ impl<'a> WasmBackend<'a> {
                 let mut jp_parameter_local_ids = std::vec::Vec::with_capacity(parameters.len());
                 for parameter in parameters.iter() {
                     let wasm_layout = WasmLayout::new(&parameter.layout);
-                    let local_id =
-                        self.insert_local(wasm_layout, parameter.symbol, LocalKind::Variable);
+                    let local_id = self
+                        .insert_local(wasm_layout, parameter.symbol, LocalKind::Variable)
+                        .local_id();
 
                     jp_parameter_local_ids.push(local_id);
                 }
@@ -524,6 +489,8 @@ impl<'a> WasmBackend<'a> {
                 x => Err(format!("the call type, {:?}, is not yet implemented", x)),
             },
 
+            Expr::Struct(fields) => self.create_struct(sym, layout, fields),
+
             x => Err(format!("Expression is not yet implemented {:?}", x)),
         }
     }
@@ -558,6 +525,78 @@ impl<'a> WasmBackend<'a> {
         };
         self.instructions.push(instruction);
         Ok(())
+    }
+
+    fn create_struct(
+        &mut self,
+        sym: &Symbol,
+        layout: &Layout<'a>,
+        fields: &'a [Symbol],
+    ) -> Result<(), String> {
+        let storage = self.get_symbol_storage(sym)?.to_owned();
+
+        if let Layout::Struct(field_layouts) = layout {
+            match storage {
+                SymbolStorage::VarStackMemory { local_id, size, .. }
+                | SymbolStorage::ParamPointer {
+                    local_id,
+                    wasm_layout: WasmLayout::StackMemory { size, .. },
+                } => {
+                    if size > 0 {
+                        let mut relative_offset = 0;
+                        for (field, _) in fields.iter().zip(field_layouts.iter()) {
+                            relative_offset += self.copy_symbol_to_pointer_at_offset(
+                                local_id,
+                                relative_offset,
+                                field,
+                            )?;
+                        }
+                    } else {
+                        return Err(format!("Not supported yet: zero-size struct at {:?}", sym));
+                    }
+                }
+                _ => {
+                    return Err(format!("Cannot create struct {:?} with storage {:?}", sym, storage));
+                }
+            }
+        } else {
+            // Struct expression but not Struct layout => single element. Copy it.
+            let field_storage = self.get_symbol_storage(&fields[0])?.to_owned();
+            self.copy_storage(&storage, &field_storage)?;
+        }
+        Ok(())
+    }
+
+    fn copy_symbol_to_pointer_at_offset(
+        &mut self,
+        to_ptr: LocalId,
+        to_offset: u32,
+        from_symbol: &Symbol,
+    ) -> Result<u32, String> {
+        let from_storage = self.get_symbol_storage(from_symbol)?.to_owned();
+        from_storage.copy_to_memory(&mut self.instructions, to_ptr, to_offset)
+    }
+
+    fn copy_storage(&mut self, to: &SymbolStorage, from: &SymbolStorage) -> Result<(), String> {
+        let has_stack_memory = to.has_stack_memory();
+        debug_assert!(from.has_stack_memory() == has_stack_memory);
+
+        if !has_stack_memory {
+            debug_assert!(from.value_type() == to.value_type());
+            self.instructions.push(GetLocal(from.local_id().0));
+            self.instructions.push(SetLocal(to.local_id().0));
+            Ok(())
+        } else {
+            let (size, alignment_bytes) = from.stack_size_and_alignment();
+            copy_memory(
+                &mut self.instructions,
+                from.local_id(),
+                to.local_id(),
+                size,
+                alignment_bytes,
+                0,
+            )
+        }
     }
 
     fn build_call_low_level(

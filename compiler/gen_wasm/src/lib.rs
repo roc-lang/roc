@@ -1,6 +1,7 @@
 mod backend;
 pub mod from_wasm32_memory;
 mod layout;
+mod storage;
 
 use bumpalo::Bump;
 use parity_wasm::builder;
@@ -110,13 +111,13 @@ pub fn build_module_help<'a>(
     Ok((backend.builder, main_function_index))
 }
 
-fn encode_alignment(bytes: u32) -> Result<u32, String> {
+fn encode_alignment(bytes: u32) -> u32 {
     match bytes {
-        1 => Ok(ALIGN_1),
-        2 => Ok(ALIGN_2),
-        4 => Ok(ALIGN_4),
-        8 => Ok(ALIGN_8),
-        _ => Err(format!("{:?}-byte alignment is not supported", bytes)),
+        1 => ALIGN_1,
+        2 => ALIGN_2,
+        4 => ALIGN_4,
+        8 => ALIGN_8,
+        _ => panic!("{:?}-byte alignment is not supported", bytes),
     }
 }
 
@@ -124,32 +125,32 @@ fn copy_memory(
     instructions: &mut Vec<Instruction>,
     from_ptr: LocalId,
     to_ptr: LocalId,
-    size_with_alignment: u32,
+    size: u32,
     alignment_bytes: u32,
+    offset: u32,
 ) -> Result<(), String> {
-    let alignment_flag = encode_alignment(alignment_bytes)?;
-    let size = size_with_alignment - alignment_bytes;
-    let mut offset = 0;
-    while size - offset >= 8 {
+    let alignment_flag = encode_alignment(alignment_bytes);
+    let mut current_offset = offset;
+    while size - current_offset >= 8 {
         instructions.push(GetLocal(to_ptr.0));
         instructions.push(GetLocal(from_ptr.0));
-        instructions.push(I64Load(alignment_flag, offset));
-        instructions.push(I64Store(alignment_flag, offset));
-        offset += 8;
+        instructions.push(I64Load(alignment_flag, current_offset));
+        instructions.push(I64Store(alignment_flag, current_offset));
+        current_offset += 8;
     }
-    if size - offset >= 4 {
+    if size - current_offset >= 4 {
         instructions.push(GetLocal(to_ptr.0));
         instructions.push(GetLocal(from_ptr.0));
-        instructions.push(I32Load(alignment_flag, offset));
-        instructions.push(I32Store(alignment_flag, offset));
-        offset += 4;
+        instructions.push(I32Load(alignment_flag, current_offset));
+        instructions.push(I32Store(alignment_flag, current_offset));
+        current_offset += 4;
     }
-    while size - offset > 0 {
+    while size - current_offset > 0 {
         instructions.push(GetLocal(to_ptr.0));
         instructions.push(GetLocal(from_ptr.0));
-        instructions.push(I32Load8U(alignment_flag, offset));
-        instructions.push(I32Store8(alignment_flag, offset));
-        offset += 1;
+        instructions.push(I32Load8U(alignment_flag, current_offset));
+        instructions.push(I32Store8(alignment_flag, current_offset));
+        current_offset += 1;
     }
     Ok(())
 }
