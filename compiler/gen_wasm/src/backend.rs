@@ -204,7 +204,7 @@ impl<'a> WasmBackend<'a> {
                         let frame_pointer = self.get_or_create_frame_pointer();
 
                         // initialise the local with the appropriate address
-                        // TODO: skip this the first time, no point adding zero offset!
+                        // TODO: skip this the first time, no point generating code to add zero offset!
                         self.instructions.extend([
                             GetLocal(frame_pointer.0),
                             I32Const(offset),
