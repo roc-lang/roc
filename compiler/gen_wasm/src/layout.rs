@@ -31,7 +31,7 @@ impl WasmLayout {
 
             Layout::Builtin(Int64) => Self::LocalOnly(I64, size),
 
-            Layout::Builtin(Float32 | Float16) => Self::LocalOnly(F32, size),
+            Layout::Builtin(Float32) => Self::LocalOnly(F32, size),
 
             Layout::Builtin(Float64) => Self::LocalOnly(F64, size),
 

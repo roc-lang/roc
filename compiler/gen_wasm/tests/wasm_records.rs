@@ -307,19 +307,19 @@ mod wasm_records {
     //            ()
     //        );
     //    }
-    //
-       #[test]
-       fn i64_record1_literal() {
-           assert_evals_to!(
-               indoc!(
-                   r#"
-                          { x: 3 }
-                   "#
-               ),
-               3,
-               i64
-           );
-       }
+
+    #[test]
+    fn i64_record1_literal() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    { x: 3 }
+                "#
+            ),
+            3,
+            i64
+        );
+    }
 
     #[test]
     fn i64_record2_literal() {
@@ -401,7 +401,6 @@ mod wasm_records {
             [i64; 9]
         );
     }
-
 
     #[test]
     fn bool_literal() {

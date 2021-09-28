@@ -155,12 +155,20 @@ fn copy_memory(
     Ok(())
 }
 
+/// Round up to alignment_bytes (assumed to be a power of 2)
+pub fn round_up_to_alignment(unaligned: i32, alignment_bytes: i32) -> i32 {
+    let mut aligned = unaligned;
+    aligned += alignment_bytes - 1; // if lower bits are non-zero, push it over the next boundary
+    aligned &= -alignment_bytes; // mask with a flag that has upper bits 1, lower bits 0
+    aligned
+}
+
 pub fn allocate_stack_frame(
     instructions: &mut Vec<Instruction>,
     size: i32,
     local_frame_pointer: LocalId,
 ) {
-    let aligned_size = (size + STACK_ALIGNMENT_BYTES - 1) & (-STACK_ALIGNMENT_BYTES);
+    let aligned_size = round_up_to_alignment(size, STACK_ALIGNMENT_BYTES);
     instructions.extend([
         GetGlobal(STACK_POINTER_GLOBAL_ID),
         I32Const(aligned_size),
@@ -175,7 +183,7 @@ pub fn free_stack_frame(
     size: i32,
     local_frame_pointer: LocalId,
 ) {
-    let aligned_size = (size + STACK_ALIGNMENT_BYTES - 1) & (-STACK_ALIGNMENT_BYTES);
+    let aligned_size = round_up_to_alignment(size, STACK_ALIGNMENT_BYTES);
     instructions.extend([
         GetLocal(local_frame_pointer.0),
         I32Const(aligned_size),

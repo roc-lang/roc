@@ -111,7 +111,10 @@ impl SymbolStorage {
                     (ValueType::F32, 4) => F32Store(ALIGN_4, to_offset),
                     (ValueType::F64, 8) => F64Store(ALIGN_8, to_offset),
                     _ => {
-                        return Err(format!("Cannot store {:?} with alignment of {:?}", value_type, size));
+                        return Err(format!(
+                            "Cannot store {:?} with alignment of {:?}",
+                            value_type, size
+                        ));
                     }
                 };
                 instructions.push(GetLocal(to_pointer.0));

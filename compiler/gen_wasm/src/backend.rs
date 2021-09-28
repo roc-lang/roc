@@ -12,7 +12,9 @@ use roc_mono::layout::{Builtin, Layout};
 
 use crate::layout::WasmLayout;
 use crate::storage::SymbolStorage;
-use crate::{allocate_stack_frame, copy_memory, free_stack_frame, LocalId, PTR_TYPE};
+use crate::{
+    allocate_stack_frame, copy_memory, free_stack_frame, round_up_to_alignment, LocalId, PTR_TYPE,
+};
 
 // Don't allocate any constant data at address zero or near it. Would be valid, but bug-prone.
 // Follow Emscripten's example by using 1kB (4 bytes would probably do)
@@ -142,15 +144,13 @@ impl<'a> WasmBackend<'a> {
         }
         final_instructions.push(Instruction::End);
 
-        let function_def = builder::function()
+        builder::function()
             .with_signature(signature_builder.build_sig())
             .body()
             .with_locals(self.locals.clone())
             .with_instructions(Instructions::new(final_instructions))
             .build() // body
-            .build(); // function
-
-        function_def
+            .build() // function
     }
 
     fn insert_local(
@@ -194,10 +194,9 @@ impl<'a> WasmBackend<'a> {
                         size,
                         alignment_bytes,
                     } => {
-                        let align = alignment_bytes as i32;
-                        let mut offset = self.stack_memory;
-                        offset += align - 1;
-                        offset &= -align;
+                        let offset =
+                            round_up_to_alignment(self.stack_memory, alignment_bytes as i32);
+
                         self.stack_memory = offset + size as i32;
 
                         // TODO: if we're creating the frame pointer just reuse the same local_id!
@@ -336,7 +335,7 @@ impl<'a> WasmBackend<'a> {
                                 ..
                             },
                     } => {
-                        let from = local_id.clone();
+                        let from = *local_id;
                         let to = LocalId(0);
                         copy_memory(&mut self.instructions, from, to, *size, *alignment_bytes, 0)?;
                     }
@@ -556,7 +555,10 @@ impl<'a> WasmBackend<'a> {
                     }
                 }
                 _ => {
-                    return Err(format!("Cannot create struct {:?} with storage {:?}", sym, storage));
+                    return Err(format!(
+                        "Cannot create struct {:?} with storage {:?}",
+                        sym, storage
+                    ));
                 }
             }
         } else {
