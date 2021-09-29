@@ -66,6 +66,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_FROM_UTF8_RANGE => str_from_utf8_range,
         STR_TO_UTF8 => str_to_utf8,
         STR_FROM_FLOAT=> str_from_float,
+        STR_REPEAT => str_repeat,
         LIST_LEN => list_len,
         LIST_GET => list_get,
         LIST_SET => list_set,
@@ -1230,6 +1231,26 @@ fn str_split(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         ret_list_var,
+    )
+}
+
+/// Str.repeat : Str, Nat -> Str
+fn str_repeat(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let str_var = var_store.fresh();
+    let nat_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::StrRepeat,
+        args: vec![(str_var, Var(Symbol::ARG_1)), (nat_var, Var(Symbol::ARG_2))],
+        ret_var: str_var,
+    };
+
+    defn(
+        symbol,
+        vec![(str_var, Symbol::ARG_1), (nat_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        str_var,
     )
 }
 

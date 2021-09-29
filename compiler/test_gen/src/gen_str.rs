@@ -949,3 +949,30 @@ fn str_from_utf8_range_count_too_high_for_start() {
         RocStr
     );
 }
+
+#[test]
+fn str_repeat() {
+    assert_evals_to!(
+        indoc!(r#"Str.repeat "Roc" 3"#),
+        RocStr::from("RocRocRoc"),
+        RocStr
+    );
+}
+
+#[test]
+fn str_repeat_empty_string() {
+    assert_evals_to!(
+        indoc!(r#"Str.repeat "" 3"#),
+        RocStr::from(""),
+        RocStr
+    );
+}
+
+#[test]
+fn str_repeat_zero_times() {
+    assert_evals_to!(
+        indoc!(r#"Str.repeat "Roc" 0"#),
+        RocStr::from(""),
+        RocStr
+    );
+}
