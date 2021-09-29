@@ -33,7 +33,7 @@ use roc_module::symbol::IdentIds;
 use roc_types::subs::VarStore;
 use std::collections::HashSet;
 use std::fs::{self, File};
-use std::io::{Write};
+use std::io::Write;
 use std::{error::Error, io, path::Path};
 use wgpu::{CommandEncoder, LoadOp, RenderPass, TextureView};
 use wgpu_glyph::GlyphBrush;
@@ -63,7 +63,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
     env_logger::init();
 
     //let (_, stream_handle) = OutputStream::try_default().unwrap();
-    /* 
+    /*
     // Load a sound from a file, using a path relative to Cargo.toml
     let file = BufReader::new(File::open("./editor/src/editor/resources/sounds/bell_sound.mp3").unwrap());
     // Decode that sound file into a source

@@ -7,8 +7,8 @@ use crate::editor::ed_error::{
     EdResult,
 };
 use copypasta::{ClipboardContext, ClipboardProvider};
+use std::fmt;
 use threadpool::ThreadPool;
-use std::{fmt};
 
 pub struct AppModel<'a> {
     pub ed_model_opt: Option<EdModel<'a>>,
@@ -18,7 +18,6 @@ pub struct AppModel<'a> {
 
 impl<'a> AppModel<'a> {
     pub fn init(ed_model_opt: Option<EdModel<'a>>) -> AppModel {
-
         AppModel {
             ed_model_opt,
             clipboard_opt: AppModel::init_clipboard_opt(),

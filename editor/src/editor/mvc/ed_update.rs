@@ -524,7 +524,6 @@ impl<'a> EdModel<'a> {
         virtual_keycode: VirtualKeyCode,
         sound_thread_pool: &mut ThreadPool,
     ) -> EdResult<()> {
-
         match virtual_keycode {
             Left => self.move_caret_left(modifiers)?,
             Up => {

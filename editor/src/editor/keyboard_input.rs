@@ -1,4 +1,3 @@
-
 use crate::editor::ed_error::EdResult;
 use crate::editor::mvc::app_model::AppModel;
 use crate::editor::mvc::app_update::{
@@ -14,7 +13,6 @@ pub fn handle_keydown(
     modifiers_winit: ModifiersState,
     app_model: &mut AppModel,
 ) -> EdResult<()> {
-                
     if let ElementState::Released = elem_state {
         return Ok(());
     }
