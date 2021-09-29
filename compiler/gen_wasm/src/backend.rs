@@ -160,8 +160,7 @@ impl<'a> WasmBackend<'a> {
         symbol: Symbol,
         kind: LocalKind,
     ) -> SymbolStorage {
-        let local_index = (self.arg_types.len() + self.locals.len()) as u32;
-        let local_id = LocalId(local_index);
+        let local_id = LocalId((self.arg_types.len() + self.locals.len()) as u32);
 
         let storage = match kind {
             LocalKind::Parameter => {
@@ -208,20 +207,28 @@ impl<'a> WasmBackend<'a> {
                     } => {
                         let offset =
                             round_up_to_alignment(self.stack_memory, alignment_bytes as i32);
-
                         self.stack_memory = offset + size as i32;
 
-                        // TODO: if we're creating the frame pointer just reuse the same local_id!
-                        let frame_pointer = self.get_or_create_frame_pointer();
+                        match self.stack_frame_pointer {
+                            None => {
+                                // This is the first stack-memory variable in the function
+                                // That means we can reuse it as the stack frame pointer,
+                                // and it will get initialised at the start of the function
+                                self.stack_frame_pointer = Some(local_id);
+                            }
 
-                        // initialise the local with the appropriate address
-                        // TODO: skip this the first time, no point generating code to add zero offset!
-                        self.instructions.extend([
-                            GetLocal(frame_pointer.0),
-                            I32Const(offset),
-                            I32Add,
-                            SetLocal(local_index),
-                        ]);
+                            Some(frame_ptr_id) => {
+                                // This local points to the base of a struct, at an offset from the stack frame pointer
+                                // Having one local per variable means params and locals work the same way in code gen.
+                                // (alternatively we could use one frame pointer + offset for all struct variables)
+                                self.instructions.extend([
+                                    GetLocal(frame_ptr_id.0),
+                                    I32Const(offset),
+                                    I32Add,
+                                    SetLocal(local_id.0),
+                                ]);
+                            }
+                        };
 
                         SymbolStorage::VarStackMemory {
                             local_id,
@@ -237,19 +244,6 @@ impl<'a> WasmBackend<'a> {
         self.symbol_storage_map.insert(symbol, storage.clone());
 
         storage
-    }
-
-    fn get_or_create_frame_pointer(&mut self) -> LocalId {
-        match self.stack_frame_pointer {
-            Some(local_id) => local_id,
-            None => {
-                let local_index = (self.arg_types.len() + self.locals.len()) as u32;
-                let local_id = LocalId(local_index);
-                self.stack_frame_pointer = Some(local_id);
-                self.locals.push(Local::new(1, ValueType::I32));
-                local_id
-            }
-        }
     }
 
     fn get_symbol_storage(&self, sym: &Symbol) -> Result<&SymbolStorage, String> {
