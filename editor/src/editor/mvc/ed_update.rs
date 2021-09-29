@@ -1,10 +1,7 @@
 #![allow(dead_code)]
 
-use std::fs::File;
-use std::io::BufReader;
 use std::process::Command;
 use std::process::Stdio;
-use std::time::Duration;
 
 use crate::editor::code_lines::CodeLines;
 use crate::editor::ed_error::from_ui_res;
@@ -32,6 +29,7 @@ use crate::editor::mvc::string_update::update_string;
 use crate::editor::mvc::tld_value_update::{start_new_tld_value, update_tld_val_name};
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
+use crate::editor::sound::play_sound;
 use crate::editor::syntax_highlight::HighlightStyle;
 use crate::lang::ast::Def2;
 use crate::lang::ast::DefId;
@@ -62,13 +60,8 @@ use roc_region::all::Region;
 use roc_types::solved_types::Solved;
 use roc_types::subs::{Subs, Variable};
 use roc_types::{pretty_print::content_to_string, subs::VarStore};
-use rodio::Decoder;
-use rodio::OutputStream;
-use rodio::OutputStreamHandle;
-use rodio::Sink;
-use rodio::Source;
-use rodio::source::SineWave;
 use snafu::OptionExt;
+use threadpool::ThreadPool;
 use winit::event::VirtualKeyCode;
 use VirtualKeyCode::*;
 
@@ -529,8 +522,7 @@ impl<'a> EdModel<'a> {
         &mut self,
         modifiers: &Modifiers,
         virtual_keycode: VirtualKeyCode,
-        sound_output_stream_opt: Option<&OutputStreamHandle>,
-        sound_file_name_opt: Option<&str>,
+        sound_thread_pool: &mut ThreadPool,
     ) -> EdResult<()> {
 
         match virtual_keycode {
@@ -569,28 +561,8 @@ impl<'a> EdModel<'a> {
                 self.dirty = true;
             }
             F12 => {
-                /*let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-                // Load a sound from a file, using a path relative to Cargo.toml
-                let file = BufReader::new(File::open("./editor/src/editor/resources/sounds/bell_sound.mp3").unwrap());
-                // Decode that sound file into a source
-                let source = Decoder::new(file).unwrap();
-                // Play the sound directly on the device
-                stream_handle.play_raw(source.convert_samples()).unwrap();
-                dbg!("played sound");*/
-                // TODO use thread pool for efficiency
-                std::thread::spawn(|| {
-                    let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-                    let sink = Sink::try_new(&stream_handle).unwrap();
-            
-                    // Add a dummy source of the sake of the example.
-                    let file = BufReader::new(File::open("./editor/src/editor/resources/sounds/bell_sound.mp3").unwrap());
-                    // Decode that sound file into a source
-                    let source = Decoder::new(file).unwrap();
-                    sink.append(source);
-            
-                    // The sound plays in a separate thread. This call will block the current thread until the sink
-                    // has finished playing all its queued sounds.
-                    sink.sleep_until_end();
+                sound_thread_pool.execute(move || {
+                    play_sound("./editor/src/editor/resources/sounds/bell_sound.mp3");
                 });
             }
             _ => (),
@@ -1274,6 +1246,7 @@ pub mod test_ed_update {
     use crate::window::keyboard_input::Modifiers;
     use bumpalo::Bump;
     use roc_module::symbol::ModuleIds;
+    use threadpool::ThreadPool;
     use winit::event::VirtualKeyCode::*;
 
     fn ed_res_to_res<T>(ed_res: EdResult<T>) -> Result<T, String> {
@@ -2683,7 +2656,7 @@ pub mod test_ed_update {
         }
 
         for _ in 0..repeats {
-            ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up, None, None)?;
+            ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up, &mut ThreadPool::new(1))?;
         }
 
         let mut post_lines = ui_res_to_res(ed_model_to_dsl(&ed_model))?;
@@ -3260,7 +3233,7 @@ pub mod test_ed_update {
         )?;
 
         for _ in 0..repeats {
-            ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up, None, None)?;
+            ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up, &mut ThreadPool::new(1))?;
         }
 
         move_caret_fun(&mut ed_model, &no_mods())?;
@@ -3424,7 +3397,7 @@ pub mod test_ed_update {
         )?;
 
         for _ in 0..repeats {
-            ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up, None, None)?;
+            ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up, &mut ThreadPool::new(1))?;
         }
 
         handle_new_char(&'\u{8}', &mut ed_model)?; // \u{8} is the char for backspace on linux

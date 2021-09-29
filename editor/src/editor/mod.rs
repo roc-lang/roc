@@ -14,3 +14,4 @@ mod style;
 mod syntax_highlight;
 mod theme;
 mod util;
+mod sound;

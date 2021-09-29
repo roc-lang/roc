@@ -7,31 +7,22 @@ use crate::editor::ed_error::{
     EdResult,
 };
 use copypasta::{ClipboardContext, ClipboardProvider};
-use rodio::{Decoder, OutputStream, OutputStreamHandle};
-use std::{fmt, fs::File, io::BufReader};
+use threadpool::ThreadPool;
+use std::{fmt};
 
 pub struct AppModel<'a> {
     pub ed_model_opt: Option<EdModel<'a>>,
     pub clipboard_opt: Option<Clipboard>,
-    pub sound_output_stream_opt: Option<OutputStreamHandle>,
-    pub sound_file_name_opt: Option<&'static str>
+    pub sound_thread_pool: ThreadPool, // thread is blocked while sound is played, hence the threadpool
 }
 
 impl<'a> AppModel<'a> {
-    pub fn init(ed_model_opt: Option<EdModel<'a>>, sound_output_stream_opt: Option<OutputStreamHandle>) -> AppModel {
-
-        /*let (sound_output_stream_opt, sound_file_name_opt) =
-            if let Some((sound_output_stream, sound_file_name)) = setup_sound() {
-                (Some(sound_output_stream), Some(sound_file_name))
-            } else {
-                (None, None)
-            };*/
+    pub fn init(ed_model_opt: Option<EdModel<'a>>) -> AppModel {
 
         AppModel {
             ed_model_opt,
             clipboard_opt: AppModel::init_clipboard_opt(),
-            sound_output_stream_opt,
-            sound_file_name_opt: None
+            sound_thread_pool: ThreadPool::new(7), // can play up to 7 sounds simultaneously
         }
     }
 
@@ -108,16 +99,6 @@ pub fn get_clipboard_txt(clipboard_opt: &mut Option<Clipboard>) -> EdResult<Stri
             err_msg: "Clipboard was never initialized successfully.".to_owned(),
         })
     }
-}
-
-fn setup_sound() -> Option<(OutputStreamHandle, &'static str)> {
-    // TODO no unwrap
-    //let (_, stream_handle) = OutputStream::try_default().unwrap();
-    // Load a sound from a file, using a path relative to Cargo.toml
-    let file_path_str = "./editor/src/editor/resources/sounds/bell_sound.mp3";
-    
-    //Some((stream_handle, file_path_str))
-    None
 }
 
 impl fmt::Debug for Clipboard {

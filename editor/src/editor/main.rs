@@ -31,10 +31,9 @@ use roc_load;
 use roc_load::file::LoadedModule;
 use roc_module::symbol::IdentIds;
 use roc_types::subs::VarStore;
-use rodio::{Decoder, OutputStream, Source};
 use std::collections::HashSet;
 use std::fs::{self, File};
-use std::io::{BufReader, Write};
+use std::io::{Write};
 use std::{error::Error, io, path::Path};
 use wgpu::{CommandEncoder, LoadOp, RenderPass, TextureView};
 use wgpu_glyph::GlyphBrush;
@@ -183,7 +182,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
 
     let mut rendered_wgpu_opt: Option<RenderedWgpu> = None;
 
-    let mut app_model = AppModel::init(ed_model_opt, None);
+    let mut app_model = AppModel::init(ed_model_opt);
 
     let mut keyboard_modifiers = ModifiersState::empty();
 
