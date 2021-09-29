@@ -1,5 +1,6 @@
 extern crate pulldown_cmark;
 extern crate roc_load;
+use crate::html::ToHtml;
 use bumpalo::Bump;
 use roc_builtins::std::StdLib;
 use roc_can::builtins::builtin_defs_map;
@@ -11,10 +12,16 @@ use roc_load::docs::{ModuleDocumentation, RecordField};
 use roc_load::file::{LoadedModule, LoadingProblem};
 use roc_module::symbol::{IdentIds, Interns, ModuleId};
 use roc_parse::ident::{parse_ident, Ident};
-use roc_parse::parser::State;
+use roc_parse::parser::{State, SyntaxError};
 use roc_region::all::Region;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+mod comment_or_new_line;
+mod def;
+mod expr;
+mod html;
+mod pattern;
 
 pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
     let files_docs = files_to_documentations(filenames, std_lib);
@@ -119,6 +126,28 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
     }
 
     println!("🎉 Docs generated in {}", build_dir.display());
+}
+
+pub fn syntax_highlight_code<'a>(
+    arena: &'a Bump,
+    buf: &mut bumpalo::collections::String<'a>,
+    code_str: &'a str,
+) -> Result<String, SyntaxError<'a>> {
+    let trimmed_code_str = code_str.trim_end().trim();
+    let state = State::new(trimmed_code_str.as_bytes());
+
+    match roc_parse::expr::test_parse_expr(0, arena, state) {
+        Ok(loc_expr) => {
+            loc_expr.value.html(buf);
+            Ok(buf.to_string())
+        }
+        Err(fail) => Err(SyntaxError::Expr(fail)),
+    }
+    // roc_parse::test_helpers::parse_expr_with(&arena, trimmed_code_str).map(|expr| {
+    //     expr.html(buf);
+    //
+    //     buf.to_string()
+    // })
 }
 
 fn render_main_content(
@@ -843,6 +872,9 @@ fn markdown_to_html(
     };
 
     let markdown_options = pulldown_cmark::Options::empty();
+
+    let mut expecting_code_block = false;
+
     let mut docs_parser = vec![];
     let (_, _) = pulldown_cmark::Parser::new_with_broken_link_callback(
         &markdown,
@@ -850,6 +882,7 @@ fn markdown_to_html(
         Some(&mut broken_link_callback),
     )
     .fold((0, 0), |(start_quote_count, end_quote_count), event| {
+
         match &event {
             // Replace this sequence (`>>>` syntax):
             //     Start(BlockQuote)
@@ -914,6 +947,31 @@ fn markdown_to_html(
                 docs_parser.push(event);
 
                 (start_quote_count, end_quote_count)
+            }
+            Event::Start(CodeBlock(CodeBlockKind::Fenced(_))) => {
+                expecting_code_block = true;
+                docs_parser.push(event);
+                (0, 0)
+            }
+            Event::End(CodeBlock(_)) => {
+                expecting_code_block = false;
+                docs_parser.push(event);
+                (0, 0)
+            }
+            Event::Text(CowStr::Borrowed(code_str)) if expecting_code_block => {
+                let code_block_arena = Bump::new();
+
+                let mut code_block_buf = bumpalo::collections::String::new_in(&code_block_arena);
+                match syntax_highlight_code(&code_block_arena, &mut code_block_buf, code_str) {
+                    Ok(highlighted_code_str) => {
+                        docs_parser.push(Event::Html(CowStr::from(highlighted_code_str)));
+                    }
+                    Err(syntax_error) => {
+                        panic!("Unexpected parse failure when parsing this for rendering in docs:\n\n{}\n\nParse error was:\n\n{:?}\n\n", code_str, syntax_error)
+                    }
+                };
+
+                (0, 0)
             }
             _ => {
                 docs_parser.push(event);

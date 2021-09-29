@@ -12,6 +12,7 @@ pulldown-cmark = { version = "0.8", default-features = false }
 roc_load = { path = "../compiler/load" }
 roc_builtins = { path = "../compiler/builtins" }
 roc_can = { path = "../compiler/can" }
+roc_fmt = { path = "../compiler/fmt" }
 roc_module = { path = "../compiler/module" }
 roc_region = { path = "../compiler/region" }
 roc_types = { path = "../compiler/types" }
