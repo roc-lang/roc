@@ -99,29 +99,29 @@ The Mono IR contains two functions, `Num.add` and `main`, so we generate two cor
 
   (func (;1;) (result i64)   ; declare function index 1 (main) with no parameters and an i64 result
     (local i64 i64 i64 i64)  ; declare 4 local variables, all with type i64, one for each symbol in the Mono IR
-    i64.const 1              ; load constant of type i64 and value 1                stack=[1]
-    local.set 0              ; store top of stack to local0                         stack=[]     local0=1
-    i64.const 2              ; load constant of type i64 and value 2                stack=[2]    local0=1
-    local.set 1              ; store top of stack to local1                         stack=[]     local0=1  local1=2
-    local.get 0              ; load local0 to top of stack                          stack=[1]    local0=1  local1=2
-    local.get 1              ; load local1 to top of stack                          stack=[1,2]  local0=1  local1=2
-    call 0                   ; call function index 0 (which pops 2 and pushes 1)    stack=[3]    local0=1  local1=2
-    local.set 2              ; store top of stack to local2                         stack=[]     local0=1  local1=2  local2=3
-    i64.const 4              ; load constant of type i64 and value 4                stack=[4]    local0=1  local1=2  local2=3
-    local.set 3              ; store top of stack to local3                         stack=[]     local0=1  local1=2  local2=3  local3=4
-    local.get 2              ; load local2 to top of stack                          stack=[3]    local0=1  local1=2  local2=3  local3=4
-    local.get 3              ; load local3 to top of stack                          stack=[3,4]  local0=1  local1=2  local2=3  local3=4
-    call 0                   ; call function index 0 (which pops 2 and pushes 1)    stack=[7]    local0=1  local1=2  local2=3  local3=4
+    i64.const 1              ; stack=[1]
+    local.set 0              ; stack=[]     local0=1
+    i64.const 2              ; stack=[2]    local0=1
+    local.set 1              ; stack=[]     local0=1  local1=2
+    local.get 0              ; stack=[1]    local0=1  local1=2
+    local.get 1              ; stack=[1,2]  local0=1  local1=2
+    call 0                   ; stack=[3]    local0=1  local1=2
+    local.set 2              ; stack=[]     local0=1  local1=2  local2=3
+    i64.const 4              ; stack=[4]    local0=1  local1=2  local2=3
+    local.set 3              ; stack=[]     local0=1  local1=2  local2=3  local3=4
+    local.get 2              ; stack=[3]    local0=1  local1=2  local2=3  local3=4
+    local.get 3              ; stack=[3,4]  local0=1  local1=2  local2=3  local3=4
+    call 0                   ; stack=[7]    local0=1  local1=2  local2=3  local3=4
     return)                  ; return the value at the top of the stack
 ```
 
-If we run this code through the `wasm-opt` tool from the [binaryen toolkit](https://github.com/WebAssembly/binaryen#tools), the unnecessary locals get optimised away. The command line below runs the minimum number of passes to achieve this (`--simplify-locals` must come first).
+If we run this code through the `wasm-opt` tool from the [binaryen toolkit](https://github.com/WebAssembly/binaryen#tools), the unnecessary locals get optimised away (which is all of them in this example!). The command line below runs the minimum number of passes to achieve this (`--simplify-locals` must come first).
 
 ```
 $ wasm-opt --simplify-locals --reorder-locals --vacuum example.wasm > opt.wasm
 ```
 
-The optimised functions have no local variables, and the code shrinks to about 60% of its original size.
+The optimised functions have no local variables at all for this example. (Of course, this is an oversimplified toy example! It might not be so extreme in a real program.)
 
 ```
   (func (;0;) (param i64 i64) (result i64)
@@ -132,8 +132,19 @@ The optimised functions have no local variables, and the code shrinks to about 6
     i64.const 1
     i64.const 2
     call 0
-    i64.const 4)
+    i64.const 4
+    call 0)
 ```
+
+### Reducing sets and gets
+
+It would be nice to find some cheap optimisation to reduce the number of `local.set` and `local.get` instructions.
+
+We don't need a `local` if the value we want is already at the top of the VM stack. In fact, for our example above, it just so happens that if we simply skip generating the `local.set` instructions, everything _does_ appear on the VM stack in the right order, which means we can skip the `local.get` too. It ends up being very close to the fully optimised version! I assume this is because the Mono IR within the function is in dependency order, but I'm not sure...
+
+Of course the trick is to do this reliably for more complex dependency graphs. I am investigating whether we can do it by optimistically assuming it's OK not to create a local, and then keeping track of which symbols are at which positions in the VM stack after every instruction. Then when we need to use a symbol we can first check if it's on the VM stack and only create a local if it's not. In cases where we _do_ need to create a local, we need to go back and insert a `local.set` instruction at an earlier point in the program. We can make this fast by waiting to do all of the insertions in one batch when we're finalising the procedure.
+
+For a while we thought it would be very helpful to reuse the same local for multiple symbols at different points in the program. And we already have similar code in the CPU backends for register allocation. But on further examination, it doesn't actually buy us much! In our example above, we would still have the same number of `local.set` and `local.get` instructions - they'd just be operating on two locals instead of four! That doesn't shrink much code. Only the declaration at the top of the function would shrink from `(local i64 i64 i64 i64)` to `(local i64 i64)`... and in fact that's only smaller in the text format, it's the same size in the binary format! So the `scan_ast` pass doesn't seem worthwhile for Wasm.
 
 ## Memory
 
