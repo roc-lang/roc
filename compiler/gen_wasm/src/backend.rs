@@ -1,5 +1,5 @@
 use parity_wasm::builder;
-use parity_wasm::builder::{CodeLocation, ModuleBuilder};
+use parity_wasm::builder::{CodeLocation, FunctionDefinition, ModuleBuilder, SignatureBuilder};
 use parity_wasm::elements::{
     BlockType, Instruction, Instruction::*, Instructions, Local, ValueType,
 };
@@ -8,147 +8,27 @@ use roc_collections::all::MutMap;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
-use roc_mono::layout::{Builtin, Layout, UnionLayout};
+use roc_mono::layout::{Builtin, Layout};
 
-use crate::*;
+use crate::layout::WasmLayout;
+use crate::storage::SymbolStorage;
+use crate::{
+    allocate_stack_frame, copy_memory, free_stack_frame, round_up_to_alignment, LocalId, PTR_TYPE,
+};
 
 // Don't allocate any constant data at address zero or near it. Would be valid, but bug-prone.
 // Follow Emscripten's example by using 1kB (4 bytes would probably do)
 const UNUSED_DATA_SECTION_BYTES: u32 = 1024;
 
 #[derive(Clone, Copy, Debug)]
-struct LocalId(u32);
-
-#[derive(Clone, Copy, Debug)]
 struct LabelId(u32);
 
-#[derive(Debug)]
-struct SymbolStorage(LocalId, WasmLayout);
-
-// See README for background information on Wasm locals, memory and function calls
-#[derive(Debug)]
-pub enum WasmLayout {
-    // Most number types can fit in a Wasm local without any stack memory.
-    // Roc i8 is represented as an i32 local. Store the type and the original size.
-    LocalOnly(ValueType, u32),
-
-    // A `local` pointing to stack memory
-    StackMemory(u32),
-
-    // A `local` pointing to heap memory
-    HeapMemory,
+enum LocalKind {
+    Parameter,
+    Variable,
 }
 
-impl WasmLayout {
-    fn new(layout: &Layout) -> Self {
-        use ValueType::*;
-        let size = layout.stack_size(PTR_SIZE);
-        match layout {
-            Layout::Builtin(Builtin::Int128) => Self::StackMemory(size),
-            Layout::Builtin(Builtin::Int64) => Self::LocalOnly(I64, size),
-            Layout::Builtin(Builtin::Int32) => Self::LocalOnly(I32, size),
-            Layout::Builtin(Builtin::Int16) => Self::LocalOnly(I32, size),
-            Layout::Builtin(Builtin::Int8) => Self::LocalOnly(I32, size),
-            Layout::Builtin(Builtin::Int1) => Self::LocalOnly(I32, size),
-            Layout::Builtin(Builtin::Usize) => Self::LocalOnly(I32, size),
-            Layout::Builtin(Builtin::Decimal) => Self::StackMemory(size),
-            Layout::Builtin(Builtin::Float128) => Self::StackMemory(size),
-            Layout::Builtin(Builtin::Float64) => Self::LocalOnly(F64, size),
-            Layout::Builtin(Builtin::Float32) => Self::LocalOnly(F32, size),
-            Layout::Builtin(Builtin::Str) => Self::StackMemory(size),
-            Layout::Builtin(Builtin::Dict(_, _)) => Self::StackMemory(size),
-            Layout::Builtin(Builtin::Set(_)) => Self::StackMemory(size),
-            Layout::Builtin(Builtin::List(_)) => Self::StackMemory(size),
-            Layout::Builtin(Builtin::EmptyStr) => Self::StackMemory(size),
-            Layout::Builtin(Builtin::EmptyList) => Self::StackMemory(size),
-            Layout::Builtin(Builtin::EmptyDict) => Self::StackMemory(size),
-            Layout::Builtin(Builtin::EmptySet) => Self::StackMemory(size),
-            Layout::LambdaSet(lambda_set) => WasmLayout::new(&lambda_set.runtime_representation()),
-            Layout::Struct(_) => Self::StackMemory(size),
-            Layout::Union(UnionLayout::NonRecursive(_)) => Self::StackMemory(size),
-            Layout::Union(UnionLayout::Recursive(_)) => Self::HeapMemory,
-            Layout::Union(UnionLayout::NonNullableUnwrapped(_)) => Self::HeapMemory,
-            Layout::Union(UnionLayout::NullableWrapped { .. }) => Self::HeapMemory,
-            Layout::Union(UnionLayout::NullableUnwrapped { .. }) => Self::HeapMemory,
-            Layout::RecursivePointer => Self::HeapMemory,
-        }
-    }
-
-    fn value_type(&self) -> ValueType {
-        match self {
-            Self::LocalOnly(type_, _) => *type_,
-            _ => PTR_TYPE,
-        }
-    }
-
-    fn stack_memory(&self) -> u32 {
-        match self {
-            Self::StackMemory(size) => *size,
-            _ => 0,
-        }
-    }
-
-    #[allow(dead_code)]
-    fn load(&self, offset: u32) -> Result<Instruction, String> {
-        use crate::backend::WasmLayout::*;
-        use ValueType::*;
-
-        match self {
-            LocalOnly(I32, 4) => Ok(I32Load(ALIGN_4, offset)),
-            LocalOnly(I32, 2) => Ok(I32Load16S(ALIGN_2, offset)),
-            LocalOnly(I32, 1) => Ok(I32Load8S(ALIGN_1, offset)),
-            LocalOnly(I64, 8) => Ok(I64Load(ALIGN_8, offset)),
-            LocalOnly(F64, 8) => Ok(F64Load(ALIGN_8, offset)),
-            LocalOnly(F32, 4) => Ok(F32Load(ALIGN_4, offset)),
-
-            // LocalOnly(F32, 2) => Ok(), // convert F16 to F32 (lowlevel function? Wasm-only?)
-            // StackMemory(size) => Ok(), // would this be some kind of memcpy in the IR?
-            HeapMemory => {
-                if PTR_TYPE == I64 {
-                    Ok(I64Load(ALIGN_8, offset))
-                } else {
-                    Ok(I32Load(ALIGN_4, offset))
-                }
-            }
-
-            _ => Err(format!(
-                "Failed to generate load instruction for WasmLayout {:?}",
-                self
-            )),
-        }
-    }
-
-    #[allow(dead_code)]
-    fn store(&self, offset: u32) -> Result<Instruction, String> {
-        use crate::backend::WasmLayout::*;
-        use ValueType::*;
-
-        match self {
-            LocalOnly(I32, 4) => Ok(I32Store(ALIGN_4, offset)),
-            LocalOnly(I32, 2) => Ok(I32Store16(ALIGN_2, offset)),
-            LocalOnly(I32, 1) => Ok(I32Store8(ALIGN_1, offset)),
-            LocalOnly(I64, 8) => Ok(I64Store(ALIGN_8, offset)),
-            LocalOnly(F64, 8) => Ok(F64Store(ALIGN_8, offset)),
-            LocalOnly(F32, 4) => Ok(F32Store(ALIGN_4, offset)),
-
-            // LocalOnly(F32, 2) => Ok(), // convert F32 to F16 (lowlevel function? Wasm-only?)
-            // StackMemory(size) => Ok(), // would this be some kind of memcpy in the IR?
-            HeapMemory => {
-                if PTR_TYPE == I64 {
-                    Ok(I64Store(ALIGN_8, offset))
-                } else {
-                    Ok(I32Store(ALIGN_4, offset))
-                }
-            }
-
-            _ => Err(format!(
-                "Failed to generate store instruction for WasmLayout {:?}",
-                self
-            )),
-        }
-    }
-}
-
+// TODO: use Bumpalo Vec once parity_wasm supports general iterators (>=0.43)
 pub struct WasmBackend<'a> {
     // Module: Wasm AST
     pub builder: ModuleBuilder,
@@ -160,12 +40,12 @@ pub struct WasmBackend<'a> {
 
     // Functions: Wasm AST
     instructions: std::vec::Vec<Instruction>,
-    ret_type: ValueType,
     arg_types: std::vec::Vec<ValueType>,
     locals: std::vec::Vec<Local>,
 
     // Functions: internal state & IR mappings
-    stack_memory: u32,
+    stack_memory: i32,
+    stack_frame_pointer: Option<LocalId>,
     symbol_storage_map: MutMap<Symbol, SymbolStorage>,
     /// how many blocks deep are we (used for jumps)
     block_depth: u32,
@@ -185,12 +65,12 @@ impl<'a> WasmBackend<'a> {
 
             // Functions: Wasm AST
             instructions: std::vec::Vec::with_capacity(256),
-            ret_type: ValueType::I32,
             arg_types: std::vec::Vec::with_capacity(8),
             locals: std::vec::Vec::with_capacity(32),
 
             // Functions: internal state & IR mappings
             stack_memory: 0,
+            stack_frame_pointer: None,
             symbol_storage_map: MutMap::default(),
             block_depth: 0,
             joinpoint_label_map: MutMap::default(),
@@ -205,48 +85,18 @@ impl<'a> WasmBackend<'a> {
 
         // Functions: internal state & IR mappings
         self.stack_memory = 0;
+        self.stack_frame_pointer = None;
         self.symbol_storage_map.clear();
-        // joinpoint_label_map.clear();
+        self.joinpoint_label_map.clear();
+        assert_eq!(self.block_depth, 0);
     }
 
     pub fn build_proc(&mut self, proc: Proc<'a>, sym: Symbol) -> Result<u32, String> {
-        let ret_layout = WasmLayout::new(&proc.ret_layout);
-
-        if let WasmLayout::StackMemory { .. } = ret_layout {
-            return Err(format!(
-                "Not yet implemented: Returning values to callee stack memory {:?} {:?}",
-                proc.name, sym
-            ));
-        }
-
-        self.ret_type = ret_layout.value_type();
-        self.arg_types.reserve(proc.args.len());
-
-        for (layout, symbol) in proc.args {
-            let wasm_layout = WasmLayout::new(layout);
-            self.arg_types.push(wasm_layout.value_type());
-            self.insert_local(wasm_layout, *symbol);
-        }
+        let signature_builder = self.build_signature(&proc);
 
         self.build_stmt(&proc.body, &proc.ret_layout)?;
 
-        let signature = builder::signature()
-            .with_params(self.arg_types.clone()) // requires std::Vec, not Bumpalo
-            .with_result(self.ret_type)
-            .build_sig();
-
-        // functions must end with an End instruction/opcode
-        let mut instructions = self.instructions.clone();
-        instructions.push(Instruction::End);
-
-        let function_def = builder::function()
-            .with_signature(signature)
-            .body()
-            .with_locals(self.locals.clone())
-            .with_instructions(Instructions::new(instructions))
-            .build() // body
-            .build(); // function
-
+        let function_def = self.finalize_proc(signature_builder);
         let location = self.builder.push_function(function_def);
         let function_index = location.body;
         self.proc_symbol_map.insert(sym, location);
@@ -255,16 +105,139 @@ impl<'a> WasmBackend<'a> {
         Ok(function_index)
     }
 
-    fn insert_local(&mut self, layout: WasmLayout, symbol: Symbol) -> LocalId {
-        self.stack_memory += layout.stack_memory();
-        let index = self.symbol_storage_map.len();
-        if index >= self.arg_types.len() {
-            self.locals.push(Local::new(1, layout.value_type()));
+    fn build_signature(&mut self, proc: &Proc<'a>) -> SignatureBuilder {
+        let ret_layout = WasmLayout::new(&proc.ret_layout);
+
+        let signature_builder = if let WasmLayout::StackMemory { .. } = ret_layout {
+            self.arg_types.push(PTR_TYPE);
+            builder::signature()
+        } else {
+            builder::signature().with_result(ret_layout.value_type())
+        };
+
+        for (layout, symbol) in proc.args {
+            self.insert_local(WasmLayout::new(layout), *symbol, LocalKind::Parameter);
         }
-        let local_id = LocalId(index as u32);
-        let storage = SymbolStorage(local_id, layout);
-        self.symbol_storage_map.insert(symbol, storage);
-        local_id
+
+        signature_builder.with_params(self.arg_types.clone())
+    }
+
+    fn finalize_proc(&mut self, signature_builder: SignatureBuilder) -> FunctionDefinition {
+        let mut final_instructions = Vec::with_capacity(self.instructions.len() + 10);
+
+        if self.stack_memory > 0 {
+            allocate_stack_frame(
+                &mut final_instructions,
+                self.stack_memory,
+                self.stack_frame_pointer.unwrap(),
+            );
+        }
+
+        final_instructions.extend(self.instructions.drain(0..));
+
+        if self.stack_memory > 0 {
+            free_stack_frame(
+                &mut final_instructions,
+                self.stack_memory,
+                self.stack_frame_pointer.unwrap(),
+            );
+        }
+        final_instructions.push(Instruction::End);
+
+        builder::function()
+            .with_signature(signature_builder.build_sig())
+            .body()
+            .with_locals(self.locals.clone())
+            .with_instructions(Instructions::new(final_instructions))
+            .build() // body
+            .build() // function
+    }
+
+    fn insert_local(
+        &mut self,
+        wasm_layout: WasmLayout,
+        symbol: Symbol,
+        kind: LocalKind,
+    ) -> SymbolStorage {
+        let local_index = (self.arg_types.len() + self.locals.len()) as u32;
+        let local_id = LocalId(local_index);
+
+        let storage = match kind {
+            LocalKind::Parameter => {
+                // Already stack-allocated by the caller if needed.
+                self.arg_types.push(wasm_layout.value_type());
+                match wasm_layout {
+                    WasmLayout::LocalOnly(value_type, size) => SymbolStorage::ParamPrimitive {
+                        local_id,
+                        value_type,
+                        size,
+                    },
+                    _ => SymbolStorage::ParamPointer {
+                        local_id,
+                        wasm_layout,
+                    },
+                }
+            }
+            LocalKind::Variable => {
+                self.locals.push(Local::new(1, wasm_layout.value_type()));
+
+                match wasm_layout {
+                    WasmLayout::LocalOnly(value_type, size) => SymbolStorage::VarPrimitive {
+                        local_id,
+                        value_type,
+                        size,
+                    },
+
+                    WasmLayout::HeapMemory => SymbolStorage::VarHeapMemory { local_id },
+
+                    WasmLayout::StackMemory {
+                        size,
+                        alignment_bytes,
+                    } => {
+                        let offset =
+                            round_up_to_alignment(self.stack_memory, alignment_bytes as i32);
+
+                        self.stack_memory = offset + size as i32;
+
+                        // TODO: if we're creating the frame pointer just reuse the same local_id!
+                        let frame_pointer = self.get_or_create_frame_pointer();
+
+                        // initialise the local with the appropriate address
+                        // TODO: skip this the first time, no point generating code to add zero offset!
+                        self.instructions.extend([
+                            GetLocal(frame_pointer.0),
+                            I32Const(offset),
+                            I32Add,
+                            SetLocal(local_index),
+                        ]);
+
+                        SymbolStorage::VarStackMemory {
+                            local_id,
+                            size,
+                            offset: offset as u32,
+                            alignment_bytes,
+                        }
+                    }
+                }
+            }
+        };
+
+        self.symbol_storage_map.insert(symbol, storage.clone());
+
+        storage
+    }
+
+    fn get_or_create_frame_pointer(&mut self) -> LocalId {
+        match self.stack_frame_pointer {
+            Some(local_id) => local_id,
+            None => {
+                let local_index = (self.arg_types.len() + self.locals.len()) as u32;
+                let local_id = LocalId(local_index);
+                self.stack_frame_pointer = Some(local_id);
+                self.locals.push(Local::new(1, ValueType::I32));
+                local_id
+            }
+        }
     }
 
     fn get_symbol_storage(&self, sym: &Symbol) -> Result<&SymbolStorage, String> {
@@ -276,10 +249,15 @@ impl<'a> WasmBackend<'a> {
         })
     }
 
-    fn load_from_symbol(&mut self, sym: &Symbol) -> Result<(), String> {
-        let SymbolStorage(LocalId(local_id), _) = self.get_symbol_storage(sym)?;
-        let id: u32 = *local_id;
-        self.instructions.push(GetLocal(id));
+    fn local_id_from_symbol(&self, sym: &Symbol) -> Result<LocalId, String> {
+        let storage = self.get_symbol_storage(sym)?;
+        Ok(storage.local_id())
+    }
+
+    fn load_symbol(&mut self, sym: &Symbol) -> Result<(), String> {
+        let storage = self.get_symbol_storage(sym)?;
+        let index: u32 = storage.local_id().0;
+        self.instructions.push(GetLocal(index));
         Ok(())
     }
 
@@ -306,17 +284,28 @@ impl<'a> WasmBackend<'a> {
 
     fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) -> Result<(), String> {
         match stmt {
-            // This pattern is a simple optimisation to get rid of one local and two instructions per proc.
-            // If we are just returning the expression result, then don't SetLocal and immediately GetLocal
+            // Simple optimisation: if we are just returning the expression, we don't need a local
             Stmt::Let(let_sym, expr, layout, Stmt::Ret(ret_sym)) if let_sym == ret_sym => {
+                let wasm_layout = WasmLayout::new(layout);
+                if let WasmLayout::StackMemory { .. } = wasm_layout {
+                    // Map this symbol to the first argument (pointer into caller's stack)
+                    // Saves us from having to copy it later
+                    let storage = SymbolStorage::ParamPointer {
+                        local_id: LocalId(0),
+                        wasm_layout,
+                    };
+                    self.symbol_storage_map.insert(*let_sym, storage);
+                }
                 self.build_expr(let_sym, expr, layout)?;
-                self.instructions.push(Return);
+                self.instructions.push(Return); // TODO: branch instead of return so we can clean up stack
                 Ok(())
             }
 
             Stmt::Let(sym, expr, layout, following) => {
                 let wasm_layout = WasmLayout::new(layout);
-                let local_id = self.insert_local(wasm_layout, *sym);
+                let local_id = self
+                    .insert_local(wasm_layout, *sym, LocalKind::Variable)
+                    .local_id();
 
                 self.build_expr(sym, expr, layout)?;
                 self.instructions.push(SetLocal(local_id.0));
@@ -326,16 +315,41 @@ impl<'a> WasmBackend<'a> {
             }
 
             Stmt::Ret(sym) => {
-                if let Some(SymbolStorage(local_id, _)) = self.symbol_storage_map.get(sym) {
-                    self.instructions.push(GetLocal(local_id.0));
-                    self.instructions.push(Return);
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "Not yet implemented: returning values with layout {:?}",
-                        ret_layout
-                    ))
+                use crate::storage::SymbolStorage::*;
+
+                let storage = self.symbol_storage_map.get(sym).unwrap();
+
+                match storage {
+                    VarStackMemory {
+                        local_id,
+                        size,
+                        alignment_bytes,
+                        ..
+                    }
+                    | ParamPointer {
+                        local_id,
+                        wasm_layout:
+                            WasmLayout::StackMemory {
+                                size,
+                                alignment_bytes,
+                                ..
+                            },
+                    } => {
+                        let from = *local_id;
+                        let to = LocalId(0);
+                        copy_memory(&mut self.instructions, from, to, *size, *alignment_bytes, 0)?;
+                    }
+
+                    ParamPrimitive { local_id, .. }
+                    | VarPrimitive { local_id, .. }
+                    | ParamPointer { local_id, .. }
+                    | VarHeapMemory { local_id, .. } => {
+                        self.instructions.push(GetLocal(local_id.0));
+                        self.instructions.push(Return); // TODO: branch instead of return so we can clean up stack
+                    }
                 }
+
+                Ok(())
             }
 
             Stmt::Switch {
@@ -355,15 +369,12 @@ impl<'a> WasmBackend<'a> {
                 }
 
                 // the LocalId of the symbol that we match on
-                let matched_on = match self.symbol_storage_map.get(cond_symbol) {
-                    Some(SymbolStorage(local_id, _)) => local_id.0,
-                    None => unreachable!("symbol not defined: {:?}", cond_symbol),
-                };
+                let matched_on = self.local_id_from_symbol(cond_symbol)?;
 
                 // then, we jump whenever the value under scrutiny is equal to the value of a branch
                 for (i, (value, _, _)) in branches.iter().enumerate() {
                     // put the cond_symbol on the top of the stack
-                    self.instructions.push(GetLocal(matched_on));
+                    self.instructions.push(GetLocal(matched_on.0));
 
                     self.instructions.push(I32Const(*value as i32));
 
@@ -398,7 +409,9 @@ impl<'a> WasmBackend<'a> {
                 let mut jp_parameter_local_ids = std::vec::Vec::with_capacity(parameters.len());
                 for parameter in parameters.iter() {
                     let wasm_layout = WasmLayout::new(&parameter.layout);
-                    let local_id = self.insert_local(wasm_layout, parameter.symbol);
+                    let local_id = self
+                        .insert_local(wasm_layout, parameter.symbol, LocalKind::Variable)
+                        .local_id();
 
                     jp_parameter_local_ids.push(local_id);
                 }
@@ -429,12 +442,8 @@ impl<'a> WasmBackend<'a> {
 
                 // put the arguments on the stack
                 for (symbol, local_id) in arguments.iter().zip(locals.iter()) {
-                    let argument = match self.symbol_storage_map.get(symbol) {
-                        Some(SymbolStorage(local_id, _)) => local_id.0,
-                        None => unreachable!("symbol not defined: {:?}", symbol),
-                    };
-
-                    self.instructions.push(GetLocal(argument));
+                    let argument = self.local_id_from_symbol(symbol)?;
+                    self.instructions.push(GetLocal(argument.0));
                     self.instructions.push(SetLocal(local_id.0));
                 }
 
@@ -463,7 +472,7 @@ impl<'a> WasmBackend<'a> {
             }) => match call_type {
                 CallType::ByName { name: func_sym, .. } => {
                     for arg in *arguments {
-                        self.load_from_symbol(arg)?;
+                        self.load_symbol(arg)?;
                     }
                     let function_location = self.proc_symbol_map.get(func_sym).ok_or(format!(
                         "Cannot find function {:?} called from {:?}",
@@ -479,45 +488,116 @@ impl<'a> WasmBackend<'a> {
                 x => Err(format!("the call type, {:?}, is not yet implemented", x)),
             },
 
+            Expr::Struct(fields) => self.create_struct(sym, layout, fields),
+
             x => Err(format!("Expression is not yet implemented {:?}", x)),
         }
     }
 
     fn load_literal(&mut self, lit: &Literal<'a>, layout: &Layout<'a>) -> Result<(), String> {
-        match lit {
-            Literal::Bool(x) => {
-                self.instructions.push(I32Const(*x as i32));
-                Ok(())
+        let instruction = match lit {
+            Literal::Bool(x) => I32Const(*x as i32),
+            Literal::Byte(x) => I32Const(*x as i32),
+            Literal::Int(x) => match layout {
+                Layout::Builtin(Builtin::Int64) => I64Const(*x as i64),
+                Layout::Builtin(
+                    Builtin::Int32
+                    | Builtin::Int16
+                    | Builtin::Int8
+                    | Builtin::Int1
+                    | Builtin::Usize,
+                ) => I32Const(*x as i32),
+                x => {
+                    return Err(format!("loading literal, {:?}, is not yet implemented", x));
+                }
+            },
+            Literal::Float(x) => match layout {
+                Layout::Builtin(Builtin::Float64) => F64Const((*x as f64).to_bits()),
+                Layout::Builtin(Builtin::Float32) => F32Const((*x as f32).to_bits()),
+                x => {
+                    return Err(format!("loading literal, {:?}, is not yet implemented", x));
+                }
+            },
+            x => {
+                return Err(format!("loading literal, {:?}, is not yet implemented", x));
             }
-            Literal::Byte(x) => {
-                self.instructions.push(I32Const(*x as i32));
-                Ok(())
+        };
+        self.instructions.push(instruction);
+        Ok(())
+    }
+
+    fn create_struct(
+        &mut self,
+        sym: &Symbol,
+        layout: &Layout<'a>,
+        fields: &'a [Symbol],
+    ) -> Result<(), String> {
+        let storage = self.get_symbol_storage(sym)?.to_owned();
+
+        if let Layout::Struct(field_layouts) = layout {
+            match storage {
+                SymbolStorage::VarStackMemory { local_id, size, .. }
+                | SymbolStorage::ParamPointer {
+                    local_id,
+                    wasm_layout: WasmLayout::StackMemory { size, .. },
+                } => {
+                    if size > 0 {
+                        let mut relative_offset = 0;
+                        for (field, _) in fields.iter().zip(field_layouts.iter()) {
+                            relative_offset += self.copy_symbol_to_pointer_at_offset(
+                                local_id,
+                                relative_offset,
+                                field,
+                            )?;
+                        }
+                    } else {
+                        return Err(format!("Not supported yet: zero-size struct at {:?}", sym));
+                    }
+                }
+                _ => {
+                    return Err(format!(
+                        "Cannot create struct {:?} with storage {:?}",
+                        sym, storage
+                    ));
+                }
             }
-            Literal::Int(x) => {
-                let instruction = match layout {
-                    Layout::Builtin(Builtin::Int64) => I64Const(*x as i64),
-                    Layout::Builtin(
-                        Builtin::Int32
-                        | Builtin::Int16
-                        | Builtin::Int8
-                        | Builtin::Int1
-                        | Builtin::Usize,
-                    ) => I32Const(*x as i32),
-                    x => panic!("loading literal, {:?}, is not yet implemented", x),
-                };
-                self.instructions.push(instruction);
-                Ok(())
-            }
-            Literal::Float(x) => {
-                let instruction = match layout {
-                    Layout::Builtin(Builtin::Float64) => F64Const((*x as f64).to_bits()),
-                    Layout::Builtin(Builtin::Float32) => F32Const((*x as f32).to_bits()),
-                    x => panic!("loading literal, {:?}, is not yet implemented", x),
-                };
-                self.instructions.push(instruction);
-                Ok(())
-            }
-            x => Err(format!("loading literal, {:?}, is not yet implemented", x)),
+        } else {
+            // Struct expression but not Struct layout => single element. Copy it.
+            let field_storage = self.get_symbol_storage(&fields[0])?.to_owned();
+            self.copy_storage(&storage, &field_storage)?;
+        }
+        Ok(())
+    }
+
+    fn copy_symbol_to_pointer_at_offset(
+        &mut self,
+        to_ptr: LocalId,
+        to_offset: u32,
+        from_symbol: &Symbol,
+    ) -> Result<u32, String> {
+        let from_storage = self.get_symbol_storage(from_symbol)?.to_owned();
+        from_storage.copy_to_memory(&mut self.instructions, to_ptr, to_offset)
+    }
+
+    fn copy_storage(&mut self, to: &SymbolStorage, from: &SymbolStorage) -> Result<(), String> {
+        let has_stack_memory = to.has_stack_memory();
+        debug_assert!(from.has_stack_memory() == has_stack_memory);
+
+        if !has_stack_memory {
+            debug_assert!(from.value_type() == to.value_type());
+            self.instructions.push(GetLocal(from.local_id().0));
+            self.instructions.push(SetLocal(to.local_id().0));
+            Ok(())
+        } else {
+            let (size, alignment_bytes) = from.stack_size_and_alignment();
+            copy_memory(
+                &mut self.instructions,
+                from.local_id(),
+                to.local_id(),
+                size,
+                alignment_bytes,
+                0,
+            )
         }
     }
 
@@ -528,7 +608,7 @@ impl<'a> WasmBackend<'a> {
         return_layout: &Layout<'a>,
     ) -> Result<(), String> {
         for arg in args {
-            self.load_from_symbol(arg)?;
+            self.load_symbol(arg)?;
         }
         let wasm_layout = WasmLayout::new(return_layout);
         self.build_instructions_lowlevel(lowlevel, wasm_layout.value_type())?;
@@ -546,7 +626,7 @@ impl<'a> WasmBackend<'a> {
         // For those, we'll need to pre-process each argument before the main op,
         // so simple arrays of instructions won't work. But there are common patterns.
         let instructions: &[Instruction] = match lowlevel {
-            // Wasm type might not be enough, may need to sign-extend i8 etc. Maybe in load_from_symbol?
+            // Wasm type might not be enough, may need to sign-extend i8 etc. Maybe in load_symbol?
             LowLevel::NumAdd => match return_value_type {
                 ValueType::I32 => &[I32Add],
                 ValueType::I64 => &[I64Add],

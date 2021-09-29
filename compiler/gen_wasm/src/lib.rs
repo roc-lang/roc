@@ -1,9 +1,11 @@
 mod backend;
 pub mod from_wasm32_memory;
+mod layout;
+mod storage;
 
 use bumpalo::Bump;
 use parity_wasm::builder;
-use parity_wasm::elements::{Instruction, Internal, ValueType};
+use parity_wasm::elements::{Instruction, Instruction::*, Internal, ValueType};
 
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::{Interns, Symbol};
@@ -22,6 +24,10 @@ pub const ALIGN_4: u32 = 2;
 pub const ALIGN_8: u32 = 3;
 
 pub const STACK_POINTER_GLOBAL_ID: u32 = 0;
+pub const STACK_ALIGNMENT_BYTES: i32 = 16;
+
+#[derive(Clone, Copy, Debug)]
+pub struct LocalId(pub u32);
 
 pub struct Env<'a> {
     pub arena: &'a Bump, // not really using this much, parity_wasm works with std::vec a lot
@@ -103,4 +109,85 @@ pub fn build_module_help<'a>(
     backend.builder.push_global(stack_pointer_global);
 
     Ok((backend.builder, main_function_index))
+}
+
+fn encode_alignment(bytes: u32) -> u32 {
+    match bytes {
+        1 => ALIGN_1,
+        2 => ALIGN_2,
+        4 => ALIGN_4,
+        8 => ALIGN_8,
+        _ => panic!("{:?}-byte alignment is not supported", bytes),
+    }
+}
+
+fn copy_memory(
+    instructions: &mut Vec<Instruction>,
+    from_ptr: LocalId,
+    to_ptr: LocalId,
+    size: u32,
+    alignment_bytes: u32,
+    offset: u32,
+) -> Result<(), String> {
+    let alignment_flag = encode_alignment(alignment_bytes);
+    let mut current_offset = offset;
+    while size - current_offset >= 8 {
+        instructions.push(GetLocal(to_ptr.0));
+        instructions.push(GetLocal(from_ptr.0));
+        instructions.push(I64Load(alignment_flag, current_offset));
+        instructions.push(I64Store(alignment_flag, current_offset));
+        current_offset += 8;
+    }
+    if size - current_offset >= 4 {
+        instructions.push(GetLocal(to_ptr.0));
+        instructions.push(GetLocal(from_ptr.0));
+        instructions.push(I32Load(alignment_flag, current_offset));
+        instructions.push(I32Store(alignment_flag, current_offset));
+        current_offset += 4;
+    }
+    while size - current_offset > 0 {
+        instructions.push(GetLocal(to_ptr.0));
+        instructions.push(GetLocal(from_ptr.0));
+        instructions.push(I32Load8U(alignment_flag, current_offset));
+        instructions.push(I32Store8(alignment_flag, current_offset));
+        current_offset += 1;
+    }
+    Ok(())
+}
+
+/// Round up to alignment_bytes (assumed to be a power of 2)
+pub fn round_up_to_alignment(unaligned: i32, alignment_bytes: i32) -> i32 {
+    let mut aligned = unaligned;
+    aligned += alignment_bytes - 1; // if lower bits are non-zero, push it over the next boundary
+    aligned &= -alignment_bytes; // mask with a flag that has upper bits 1, lower bits 0
+    aligned
+}
+
+pub fn allocate_stack_frame(
+    instructions: &mut Vec<Instruction>,
+    size: i32,
+    local_frame_pointer: LocalId,
+) {
+    let aligned_size = round_up_to_alignment(size, STACK_ALIGNMENT_BYTES);
+    instructions.extend([
+        GetGlobal(STACK_POINTER_GLOBAL_ID),
+        I32Const(aligned_size),
+        I32Sub,
+        TeeLocal(local_frame_pointer.0),
+        SetGlobal(STACK_POINTER_GLOBAL_ID),
+    ]);
+}
+
+pub fn free_stack_frame(
+    instructions: &mut Vec<Instruction>,
+    size: i32,
+    local_frame_pointer: LocalId,
+) {
+    let aligned_size = round_up_to_alignment(size, STACK_ALIGNMENT_BYTES);
+    instructions.extend([
+        GetLocal(local_frame_pointer.0),
+        I32Const(aligned_size),
+        I32Add,
+        SetGlobal(STACK_POINTER_GLOBAL_ID),
+    ]);
 }
