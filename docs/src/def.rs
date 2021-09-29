@@ -1,47 +1,12 @@
 use crate::html::ToHtml;
-use roc_parse::ast::Def;
+use roc_code_markup::{markup::nodes::{MarkupNode}};
 
-impl<'a> ToHtml<'a> for Def<'a> {
+impl<'a> ToHtml<'a> for MarkupNode {
     fn css_class(&self) -> Option<&'a str> {
-        match self {
-            // Def::Annotation(_, _) => {}
-            // Def::Alias { .. } => {}
-            Def::Body(_, _) => None,
-            // Def::AnnotatedBody { .. } => {}
-            // Def::Expect(_) => {}
-            Def::SpaceBefore(_, _) => None,
-            Def::SpaceAfter(_, _) => None,
-            // Def::NotYetImplemented(_) => {}
-            _ => None,
-        }
+        Some("operator")
     }
-
     fn html_body(&self, buf: &mut bumpalo::collections::String<'a>) {
-        match self {
-            // Def::Annotation(_, _) => {}
-            // Def::Alias { .. } => {}
-            Def::Body(pattern, expr) => {
-                pattern.html(buf);
-                EqualSign.html(buf);
-                expr.html(buf);
-            }
-            // Def::AnnotatedBody { .. } => {}
-            // Def::Expect(_) => {}
-            Def::SpaceBefore(sub_def, spaces) => {
-                for space in spaces.iter() {
-                    space.html(buf);
-                }
-                sub_def.html(buf);
-            }
-            Def::SpaceAfter(sub_def, spaces) => {
-                sub_def.html(buf);
-                for space in spaces.iter() {
-                    space.html(buf);
-                }
-            }
-            // Def::NotYetImplemented(_) => {}
-            _ => {}
-        }
+        buf.push_str("MarkupNode")
     }
 }
 

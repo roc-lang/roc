@@ -809,11 +809,11 @@ pub fn ast_to_mark_nodes<'a, 'b>(
     for &def_id in ast.def_ids.iter() {
         let def2 = env.pool.get(def_id);
 
-        let expr2_markup_id = def2_to_markup(arena, env, def2, def_id, mark_node_pool, interns)?;
+        let def2_markup_id = def2_to_markup(arena, env, def2, def_id, mark_node_pool, interns)?;
 
-        set_parent_for_all(expr2_markup_id, mark_node_pool);
+        set_parent_for_all(def2_markup_id, mark_node_pool);
 
-        all_mark_node_ids.push(expr2_markup_id);
+        all_mark_node_ids.push(def2_markup_id);
     }
 
     Ok(all_mark_node_ids)

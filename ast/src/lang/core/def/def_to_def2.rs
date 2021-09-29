@@ -20,11 +20,11 @@ pub fn defs_to_defs2<'a>(
 ) -> Vec<Def2> {
     parsed_defs
         .iter()
-        .map(|loc| to_def2_from_def(arena, env, scope, &loc.value, region))
+        .map(|loc| def_to_def2(arena, env, scope, &loc.value, region))
         .collect()
 }
 
-pub fn to_def2_from_def<'a>(
+pub fn def_to_def2<'a>(
     arena: &'a Bump,
     env: &mut Env<'a>,
     scope: &mut Scope,
@@ -34,8 +34,8 @@ pub fn to_def2_from_def<'a>(
     use roc_parse::ast::Def::*;
 
     match parsed_def {
-        SpaceBefore(inner_def, _) => to_def2_from_def(arena, env, scope, inner_def, region),
-        SpaceAfter(inner_def, _) => to_def2_from_def(arena, env, scope, inner_def, region),
+        SpaceBefore(inner_def, _) => def_to_def2(arena, env, scope, inner_def, region),
+        SpaceAfter(inner_def, _) => def_to_def2(arena, env, scope, inner_def, region),
         Body(&loc_pattern, &loc_expr) => {
             // TODO loc_pattern use identifier
             let expr2 = loc_expr_to_expr2(arena, loc_expr, env, scope, region).0;

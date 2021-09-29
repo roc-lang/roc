@@ -27,7 +27,7 @@ use ven_graph::{strongly_connected_components, topological_sort_into_groups};
 use crate::{
     lang::{
         core::{
-            expr::{expr2::Expr2, expr_to_expr2::to_expr2, output::Output},
+            expr::{expr2::Expr2, expr_to_expr2::expr_to_expr2, output::Output},
             fun_def::FunctionDef,
             pattern::{self, symbols_from_pattern, to_pattern_id, Pattern2, PatternId},
             types::{to_annotation2, Alias, Annotation2, Signature, Type2, TypeId},
@@ -472,7 +472,7 @@ fn canonicalize_pending_def<'a>(
                     };
 
                     let (loc_can_expr, can_output) =
-                        to_expr2(env, scope, &loc_expr.value, loc_expr.region);
+                        expr_to_expr2(env, scope, &loc_expr.value, loc_expr.region);
 
                     output.references.union_mut(can_output.references.clone());
 
@@ -639,7 +639,7 @@ fn canonicalize_pending_def<'a>(
                 env.closure_name_symbol = Some(*defined_symbol);
             };
 
-            let (loc_can_expr, can_output) = to_expr2(env, scope, &loc_expr.value, loc_expr.region);
+            let (loc_can_expr, can_output) = expr_to_expr2(env, scope, &loc_expr.value, loc_expr.region);
 
             output.references.union_mut(can_output.references.clone());
 

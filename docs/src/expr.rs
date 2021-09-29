@@ -1,6 +1,10 @@
 use crate::html::ToHtml;
-use roc_parse::ast::{CommentOrNewline, Expr, StrLiteral, StrSegment};
-use roc_region::all::Located;
+use bumpalo::Bump;
+use roc_ast::{ast_error::ASTResult, lang::{core::expr::expr_to_expr2::expr_to_expr2, env::Env, scope::Scope}, mem_pool::pool::Pool};
+use roc_code_markup::{markup::nodes::expr2_to_markup, slow_pool::SlowPool};
+use roc_module::symbol::Interns;
+use roc_parse::ast::{Expr, StrLiteral};
+use roc_region::all::{Located, Region};
 
 impl<'a> ToHtml<'a> for Expr<'a> {
     fn css_class(&self) -> Option<&'a str> {
@@ -154,4 +158,36 @@ impl<'a> ToHtml<'a> for ParamComma {
     fn html_body(&self, buf: &mut bumpalo::collections::String<'a>) {
         buf.push_str(", ")
     }
+}
+
+fn write_expr_to_bump_str_html<'a>(
+    arena: &mut Bump,
+    env: &mut Env<'a>,
+    scope: &mut Scope,
+    region: Region,
+    expr: &'a Expr,
+    interns: &Interns,
+    bump_str: &mut bumpalo::collections::String<'a>
+) -> ASTResult<()> {
+    let (expr2, _) = expr_to_expr2(env, scope, expr, region);
+
+    let mut expr2_pool = Pool::with_capacity(1024);
+    let expr2_id = expr2_pool.add(expr2);
+
+    let mut mark_node_pool = SlowPool::default();
+
+    let expr2_markup_id = expr2_to_markup(
+        arena,
+        env,
+        &expr2,
+        expr2_id,
+        &mut mark_node_pool,
+        interns,
+    )?;
+
+    let expr2_markup_node = mark_node_pool.get(expr2_markup_id);
+
+    expr2_markup_node.html(bump_str);
+
+    Ok(())
 }
