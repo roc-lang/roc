@@ -1,0 +1,10 @@
+{
+    Dijkstra's odd words Problem
+    You'll need to enter a sentence in the Input box, ending with a period. Odd words are reversed.
+}
+
+[[$' =][%^]#]b:
+[$$'.=\' =|~]w:
+[$'.=~[' ,]?]s:
+[w;![^o;!\,]?]o:
+^b;![$'.=~][w;[,^]#b;!s;!o;!b;!s;!]#,
