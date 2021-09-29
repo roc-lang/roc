@@ -13,7 +13,8 @@ use roc_mono::layout::{Builtin, Layout};
 use crate::layout::WasmLayout;
 use crate::storage::SymbolStorage;
 use crate::{
-    allocate_stack_frame, copy_memory, free_stack_frame, round_up_to_alignment, LocalId, PTR_TYPE,
+    allocate_stack_frame, copy_memory, free_stack_frame, round_up_to_alignment, LocalId, PTR_SIZE,
+    PTR_TYPE,
 };
 
 // Don't allocate any constant data at address zero or near it. Would be valid, but bug-prone.
@@ -172,9 +173,20 @@ impl<'a> WasmBackend<'a> {
                         value_type,
                         size,
                     },
-                    _ => SymbolStorage::ParamPointer {
+
+                    WasmLayout::HeapMemory => SymbolStorage::ParamPrimitive {
                         local_id,
-                        wasm_layout,
+                        value_type: PTR_TYPE,
+                        size: PTR_SIZE,
+                    },
+
+                    WasmLayout::StackMemory {
+                        size,
+                        alignment_bytes,
+                    } => SymbolStorage::ParamStackMemory {
+                        local_id,
+                        size,
+                        alignment_bytes,
                     },
                 }
             }
@@ -287,12 +299,17 @@ impl<'a> WasmBackend<'a> {
             // Simple optimisation: if we are just returning the expression, we don't need a local
             Stmt::Let(let_sym, expr, layout, Stmt::Ret(ret_sym)) if let_sym == ret_sym => {
                 let wasm_layout = WasmLayout::new(layout);
-                if let WasmLayout::StackMemory { .. } = wasm_layout {
+                if let WasmLayout::StackMemory {
+                    size,
+                    alignment_bytes,
+                } = wasm_layout
+                {
                     // Map this symbol to the first argument (pointer into caller's stack)
                     // Saves us from having to copy it later
-                    let storage = SymbolStorage::ParamPointer {
+                    let storage = SymbolStorage::ParamStackMemory {
                         local_id: LocalId(0),
-                        wasm_layout,
+                        size,
+                        alignment_bytes,
                     };
                     self.symbol_storage_map.insert(*let_sym, storage);
                 }
@@ -326,14 +343,10 @@ impl<'a> WasmBackend<'a> {
                         alignment_bytes,
                         ..
                     }
-                    | ParamPointer {
+                    | ParamStackMemory {
                         local_id,
-                        wasm_layout:
-                            WasmLayout::StackMemory {
-                                size,
-                                alignment_bytes,
-                                ..
-                            },
+                        size,
+                        alignment_bytes,
                     } => {
                         let from = *local_id;
                         let to = LocalId(0);
@@ -342,7 +355,6 @@ impl<'a> WasmBackend<'a> {
 
                     ParamPrimitive { local_id, .. }
                     | VarPrimitive { local_id, .. }
-                    | ParamPointer { local_id, .. }
                     | VarHeapMemory { local_id, .. } => {
                         self.instructions.push(GetLocal(local_id.0));
                         self.instructions.push(Return); // TODO: branch instead of return so we can clean up stack
@@ -537,10 +549,7 @@ impl<'a> WasmBackend<'a> {
         if let Layout::Struct(field_layouts) = layout {
             match storage {
                 SymbolStorage::VarStackMemory { local_id, size, .. }
-                | SymbolStorage::ParamPointer {
-                    local_id,
-                    wasm_layout: WasmLayout::StackMemory { size, .. },
-                } => {
+                | SymbolStorage::ParamStackMemory { local_id, size, .. } => {
                     if size > 0 {
                         let mut relative_offset = 0;
                         for (field, _) in fields.iter().zip(field_layouts.iter()) {
