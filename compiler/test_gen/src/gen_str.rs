@@ -951,7 +951,7 @@ fn str_from_utf8_range_count_too_high_for_start() {
 }
 
 #[test]
-fn str_repeat() {
+fn str_repeat_small() {
     assert_evals_to!(
         indoc!(r#"Str.repeat "Roc" 3"#),
         RocStr::from("RocRocRoc"),
@@ -960,19 +960,20 @@ fn str_repeat() {
 }
 
 #[test]
-fn str_repeat_empty_string() {
+fn str_repeat_big() {
     assert_evals_to!(
-        indoc!(r#"Str.repeat "" 3"#),
-        RocStr::from(""),
+        indoc!(r#"Str.repeat "more than 16 characters" 2"#),
+        RocStr::from("more than 16 charactersmore than 16 characters"),
         RocStr
     );
 }
 
 #[test]
+fn str_repeat_empty_string() {
+    assert_evals_to!(indoc!(r#"Str.repeat "" 3"#), RocStr::from(""), RocStr);
+}
+
+#[test]
 fn str_repeat_zero_times() {
-    assert_evals_to!(
-        indoc!(r#"Str.repeat "Roc" 0"#),
-        RocStr::from(""),
-        RocStr
-    );
+    assert_evals_to!(indoc!(r#"Str.repeat "Roc" 0"#), RocStr::from(""), RocStr);
 }
