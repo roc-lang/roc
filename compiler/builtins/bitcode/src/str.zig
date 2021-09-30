@@ -866,7 +866,6 @@ pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.C) bool {
     return true;
 }
 
-
 // Str.repeat
 pub fn repeat(string: RocStr, count: usize) callconv(.C) RocStr {
     const bytes_len = string.len();
