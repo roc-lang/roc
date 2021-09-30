@@ -46,7 +46,7 @@ macro_rules! build_wrapper_body_primitive {
         fn build_wrapper_body(main_function_index: u32) -> Vec<Instruction> {
             let size: i32 = 8;
             let mut instructions = Vec::with_capacity(16);
-            allocate_stack_frame(&mut instructions, size, LocalId(STACK_POINTER_LOCAL_ID));
+            push_stack_frame(&mut instructions, size, LocalId(STACK_POINTER_LOCAL_ID));
             instructions.extend([
                 // load result address to prepare for the store instruction later
                 GetLocal(STACK_POINTER_LOCAL_ID),
@@ -60,7 +60,7 @@ macro_rules! build_wrapper_body_primitive {
                 // Return the result pointer
                 GetLocal(STACK_POINTER_LOCAL_ID),
             ]);
-            free_stack_frame(&mut instructions, size, LocalId(STACK_POINTER_LOCAL_ID));
+            pop_stack_frame(&mut instructions, size, LocalId(STACK_POINTER_LOCAL_ID));
             instructions.push(End);
             instructions
         }
@@ -77,7 +77,7 @@ macro_rules! wasm_test_result_primitive {
 
 fn build_wrapper_body_stack_memory(main_function_index: u32, size: usize) -> Vec<Instruction> {
     let mut instructions = Vec::with_capacity(16);
-    allocate_stack_frame(
+    push_stack_frame(
         &mut instructions,
         size as i32,
         LocalId(STACK_POINTER_LOCAL_ID),
@@ -92,7 +92,7 @@ fn build_wrapper_body_stack_memory(main_function_index: u32, size: usize) -> Vec
         // Return the result address
         GetLocal(STACK_POINTER_LOCAL_ID),
     ]);
-    free_stack_frame(
+    pop_stack_frame(
         &mut instructions,
         size as i32,
         LocalId(STACK_POINTER_LOCAL_ID),

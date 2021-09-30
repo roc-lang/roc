@@ -1,18 +1,14 @@
-use crate::{copy_memory, layout::WasmLayout, LocalId, ALIGN_1, ALIGN_2, ALIGN_4, ALIGN_8};
+use crate::{copy_memory, LocalId, ALIGN_1, ALIGN_2, ALIGN_4, ALIGN_8};
 use parity_wasm::elements::{Instruction, Instruction::*, ValueType};
 
 #[derive(Debug, Clone)]
 pub enum SymbolStorage {
-    ParamPrimitive {
+    VarPrimitive {
         local_id: LocalId,
         value_type: ValueType,
         size: u32,
     },
-    ParamPointer {
-        local_id: LocalId,
-        wasm_layout: WasmLayout,
-    },
-    VarPrimitive {
+    ParamPrimitive {
         local_id: LocalId,
         value_type: ValueType,
         size: u32,
@@ -21,6 +17,11 @@ pub enum SymbolStorage {
         local_id: LocalId,
         size: u32,
         offset: u32,
+        alignment_bytes: u32,
+    },
+    ParamStackMemory {
+        local_id: LocalId,
+        size: u32,
         alignment_bytes: u32,
     },
     VarHeapMemory {
@@ -32,7 +33,7 @@ impl SymbolStorage {
     pub fn local_id(&self) -> LocalId {
         match self {
             Self::ParamPrimitive { local_id, .. } => *local_id,
-            Self::ParamPointer { local_id, .. } => *local_id,
+            Self::ParamStackMemory { local_id, .. } => *local_id,
             Self::VarPrimitive { local_id, .. } => *local_id,
             Self::VarStackMemory { local_id, .. } => *local_id,
             Self::VarHeapMemory { local_id, .. } => *local_id,
@@ -43,7 +44,7 @@ impl SymbolStorage {
         match self {
             Self::ParamPrimitive { value_type, .. } => *value_type,
             Self::VarPrimitive { value_type, .. } => *value_type,
-            Self::ParamPointer { .. } => ValueType::I32,
+            Self::ParamStackMemory { .. } => ValueType::I32,
             Self::VarStackMemory { .. } => ValueType::I32,
             Self::VarHeapMemory { .. } => ValueType::I32,
         }
@@ -51,11 +52,7 @@ impl SymbolStorage {
 
     pub fn has_stack_memory(&self) -> bool {
         match self {
-            Self::ParamPointer {
-                wasm_layout: WasmLayout::StackMemory { .. },
-                ..
-            } => true,
-            Self::ParamPointer { .. } => false,
+            Self::ParamStackMemory { .. } => true,
             Self::VarStackMemory { .. } => true,
             Self::ParamPrimitive { .. } => false,
             Self::VarPrimitive { .. } => false,
@@ -70,13 +67,9 @@ impl SymbolStorage {
                 alignment_bytes,
                 ..
             }
-            | Self::ParamPointer {
-                wasm_layout:
-                    WasmLayout::StackMemory {
-                        size,
-                        alignment_bytes,
-                        ..
-                    },
+            | Self::ParamStackMemory {
+                size,
+                alignment_bytes,
                 ..
             } => (*size, *alignment_bytes),
 
@@ -123,13 +116,10 @@ impl SymbolStorage {
                 Ok(*size)
             }
 
-            Self::ParamPointer {
+            Self::ParamStackMemory {
                 local_id,
-                wasm_layout:
-                    WasmLayout::StackMemory {
-                        size,
-                        alignment_bytes,
-                    },
+                size,
+                alignment_bytes,
             }
             | Self::VarStackMemory {
                 local_id,
@@ -148,7 +138,7 @@ impl SymbolStorage {
                 Ok(*size)
             }
 
-            Self::ParamPointer { local_id, .. } | Self::VarHeapMemory { local_id, .. } => {
+            Self::VarHeapMemory { local_id, .. } => {
                 instructions.push(GetLocal(to_pointer.0));
                 instructions.push(GetLocal(local_id.0));
                 instructions.push(I32Store(ALIGN_4, to_offset));

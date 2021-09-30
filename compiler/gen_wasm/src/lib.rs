@@ -26,7 +26,7 @@ pub const ALIGN_8: u32 = 3;
 pub const STACK_POINTER_GLOBAL_ID: u32 = 0;
 pub const STACK_ALIGNMENT_BYTES: i32 = 16;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LocalId(pub u32);
 
 pub struct Env<'a> {
@@ -163,7 +163,7 @@ pub fn round_up_to_alignment(unaligned: i32, alignment_bytes: i32) -> i32 {
     aligned
 }
 
-pub fn allocate_stack_frame(
+pub fn push_stack_frame(
     instructions: &mut Vec<Instruction>,
     size: i32,
     local_frame_pointer: LocalId,
@@ -178,7 +178,7 @@ pub fn allocate_stack_frame(
     ]);
 }
 
-pub fn free_stack_frame(
+pub fn pop_stack_frame(
     instructions: &mut Vec<Instruction>,
     size: i32,
     local_frame_pointer: LocalId,

@@ -873,6 +873,24 @@ mod wasm_records {
     //     );
     // }
 
+    #[test]
+    fn stack_memory_return_from_branch() {
+        // stack memory pointer should end up in the right place after returning from a branch
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    stackMemoryJunk = { x: 999, y: 111 }
+                    if True then
+                        { x: 123, y: 321 }
+                    else
+                        stackMemoryJunk
+                "#
+            ),
+            (123, 321),
+            (i64, i64)
+        );
+    }
+
     // #[test]
     // fn blue_and_present() {
     //     assert_evals_to!(
