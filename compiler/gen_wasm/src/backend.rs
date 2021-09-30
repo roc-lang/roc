@@ -13,7 +13,7 @@ use roc_mono::layout::{Builtin, Layout};
 use crate::layout::WasmLayout;
 use crate::storage::SymbolStorage;
 use crate::{
-    push_stack_frame, copy_memory, pop_stack_frame, round_up_to_alignment, LocalId, PTR_SIZE,
+    copy_memory, pop_stack_frame, push_stack_frame, round_up_to_alignment, LocalId, PTR_SIZE,
     PTR_TYPE,
 };
 
@@ -325,7 +325,7 @@ impl<'a> WasmBackend<'a> {
                 // If this local is shared with the stack frame pointer, it's already assigned
                 match self.stack_frame_pointer {
                     Some(sfp) if sfp == local_id => {}
-                    _ => self.instructions.push(SetLocal(local_id.0))
+                    _ => self.instructions.push(SetLocal(local_id.0)),
                 }
 
                 self.build_stmt(following, ret_layout)?;
