@@ -21,7 +21,7 @@ pub fn str_repeat<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let str_c_abi = str_symbol_to_c_abi(env, scope, str_symbol);
     let count = load_symbol(scope, &count_symbol);
-    call_bitcode_fn(env, &[str_c_abi.into(), count.into()], bitcode::STR_REPEAT)
+    call_bitcode_fn(env, &[str_c_abi.into(), count], bitcode::STR_REPEAT)
 }
 
 /// Str.split : Str, Str -> List Str
