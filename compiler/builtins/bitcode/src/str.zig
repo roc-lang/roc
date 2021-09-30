@@ -866,6 +866,22 @@ pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.C) bool {
     return true;
 }
 
+// Str.repeat
+pub fn repeat(string: RocStr, count: usize) callconv(.C) RocStr {
+    const bytes_len = string.len();
+    const bytes_ptr = string.asU8ptr();
+
+    var ret_string = RocStr.allocate(.Clone, count * bytes_len);
+    var ret_string_ptr = ret_string.asU8ptr();
+
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        @memcpy(ret_string_ptr + (i * bytes_len), bytes_ptr, bytes_len);
+    }
+
+    return ret_string;
+}
+
 // Str.startsWithCodePt
 pub fn startsWithCodePt(string: RocStr, prefix: u32) callconv(.C) bool {
     const bytes_ptr = string.asU8ptr();
