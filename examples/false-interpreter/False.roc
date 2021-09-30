@@ -160,8 +160,9 @@ interpretContext = \ctx ->
                         Ok a -> interpretContext a
                         # Being explicit with error type is required to stop the need to propogate the error parameters to Context.popStack
                         Err EmptyStack -> Task.fail EmptyStack
-                0xC3 -> # `ø` pick
+                0xC3 -> # `ø` pick or `ß` flush
                     # this is actually 2 bytes, 0xC3 0xB8
+                    # or it is 0xC3 0x9F
                     result2 <- Task.attempt (Context.getChar (Context.consumeChar newCtx))
                     when result2 is
                         Ok (T 0xB8 newCtx2) ->
@@ -178,6 +179,9 @@ interpretContext = \ctx ->
                             when result3 is
                                 Ok a -> interpretContext a
                                 Err e -> Task.fail e
+                        Ok (T 0x9F newCtx2) ->
+                            # This is supposed to flush io buffers. We don't buffer, so it does nothing
+                            interpretContext (Context.consumeChar newCtx2)
                         Ok (T x _) ->
                             data = Str.fromInt (Num.intCast x)
                             Task.fail (InvalidChar data)
@@ -197,6 +201,9 @@ interpretContext = \ctx ->
                     when result2 is
                         Ok a -> interpretContext a
                         Err e -> Task.fail e
+                0x42 -> # `B` also treat this as flush for easier script writing
+                    # This is supposed to flush io buffers. We don't buffer, so it does nothing
+                    interpretContext (Context.consumeChar newCtx)
                 0x27 -> # `'` load next char
                     result2 <- Task.attempt (Context.getChar (Context.consumeChar newCtx))
                     when result2 is
@@ -299,9 +306,6 @@ interpretContext = \ctx ->
                 0x7B -> # `{` comment start
                     afterCommentCtx <- Task.await (consumeComment (Context.consumeChar newCtx))
                     interpretContext afterCommentCtx
-                0xE1 -> # `ß` flush
-                    # This is supposed to flush io buffers. We don't buffer, so it does nothing
-                    interpretContext (Context.consumeChar newCtx)
                 x if isDigit x -> # number start
                     afterNumberCtx <- Task.await (pushNumber newCtx)
                     interpretContext afterNumberCtx

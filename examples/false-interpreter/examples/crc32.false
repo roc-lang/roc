@@ -1,4 +1,9 @@
-{ This currently doesn't run cause the interpreter will stack overflow, even in optimized build}
+{ 
+This currently doesn't run cause the interpreter will stack overflow, even in optimized build
+I tried to run this with unlimited stack size, but I gave up after it used 24+ GB of my memory on stack space.
+This is just to do the CRC32 of the letter a, which runs essentially instantly in one of the JS interpreters.
+Maybe a really need to model things differently to help Roc figure out how to optimize or otherwise avoid essentially infinite recursion
+}
 
 { unix cksum, CRC32. -- Jonathan Neuschäfer <j.neuschaefer@gmx.net> }
 [[$0>][\2*\1-]#%]l:[0\128[$0>][$2O&0>[$@\64/x;!@@$g;*@x;!@@]?2/]#%%]h:
@@ -6,4 +11,4 @@
 [q1_0[\1+\^$1_>]s;#%@%\$@[1O0>][1O255&s;!\8r;!\]#~n;!32,%.10,]m:[$2O&@@|~|~]x:
 [$0\>\1O[$u;!]?\~[$.]?%]n:[h;y:[3+O]h:255[$0>][$y;!\1-]#m;!256[$0>][\%1-]#%]o:
 [1000$$**0@[$$0\>\4O\>~|][2O-\1+\]#\.\[10/$0>][\$2O/$.2O*-\]#%%]u: {width: 78}
-{ usage: run m for "main" or o for "optimized" (builds a lookup table) }   o;!
+{ usage: run m for "main" or o for "optimized" (builds a lookup table) }   m;!
