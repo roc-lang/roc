@@ -13,7 +13,6 @@ use super::{
 };
 
 use crate::markup_error::{ExpectedTextNode, NestedNodeMissingChild, NestedNodeRequired};
-use bumpalo::Bump;
 use roc_ast::{
     ast_error::ASTResult,
     lang::{
@@ -306,7 +305,6 @@ fn new_markup_node(
 }
 
 pub fn def2_to_markup<'a, 'b>(
-    arena: &'a Bump,
     env: &mut Env<'b>,
     def2: &Def2,
     def2_node_id: DefId,
@@ -321,7 +319,6 @@ pub fn def2_to_markup<'a, 'b>(
             expr_id,
         } => {
             let expr_mn_id = expr2_to_markup(
-                arena,
                 env,
                 env.pool.get(*expr_id),
                 *expr_id,
@@ -348,7 +345,6 @@ pub fn def2_to_markup<'a, 'b>(
 
 // make Markup Nodes: generate String representation, assign Highlighting Style
 pub fn expr2_to_markup<'a, 'b>(
-    arena: &'a Bump,
     env: &mut Env<'b>,
     expr2: &Expr2,
     expr2_node_id: ExprId,
@@ -380,7 +376,7 @@ pub fn expr2_to_markup<'a, 'b>(
         ),
         Expr2::Call { expr: expr_id, .. } => {
             let expr = env.pool.get(*expr_id);
-            expr2_to_markup(arena, env, expr, *expr_id, mark_node_pool, interns)?
+            expr2_to_markup(env, expr, *expr_id, mark_node_pool, interns)?
         }
         Expr2::Var(symbol) => {
             //TODO make bump_format with arena
@@ -398,7 +394,6 @@ pub fn expr2_to_markup<'a, 'b>(
                 let sub_expr2 = env.pool.get(*node_id);
 
                 children_ids.push(expr2_to_markup(
-                    arena,
                     env,
                     sub_expr2,
                     *node_id,
@@ -460,7 +455,6 @@ pub fn expr2_to_markup<'a, 'b>(
 
                         let sub_expr2 = env.pool.get(*sub_expr2_node_id);
                         children_ids.push(expr2_to_markup(
-                            arena,
                             env,
                             sub_expr2,
                             *sub_expr2_node_id,
@@ -520,7 +514,6 @@ pub fn expr2_to_markup<'a, 'b>(
                     expr_var: _,
                 } => {
                     let body_mn_id = expr2_to_markup(
-                        arena,
                         env,
                         env.pool.get(*expr_id),
                         *expr_id,
@@ -798,7 +791,6 @@ fn add_header_mn_list(
 }
 
 pub fn ast_to_mark_nodes<'a, 'b>(
-    arena: &'a Bump,
     env: &mut Env<'b>,
     ast: &AST,
     mark_node_pool: &mut SlowPool,
@@ -809,7 +801,7 @@ pub fn ast_to_mark_nodes<'a, 'b>(
     for &def_id in ast.def_ids.iter() {
         let def2 = env.pool.get(def_id);
 
-        let def2_markup_id = def2_to_markup(arena, env, def2, def_id, mark_node_pool, interns)?;
+        let def2_markup_id = def2_to_markup(env, def2, def_id, mark_node_pool, interns)?;
 
         set_parent_for_all(def2_markup_id, mark_node_pool);
 

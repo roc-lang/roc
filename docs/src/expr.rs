@@ -1,10 +1,19 @@
 use crate::html::ToHtml;
-use bumpalo::Bump;
-use roc_ast::{ast_error::ASTResult, lang::{core::expr::expr_to_expr2::expr_to_expr2, env::Env, scope::Scope}, mem_pool::pool::Pool};
+use roc_ast::{ast_error::ASTResult, lang::{self, core::expr::expr_to_expr2::expr_to_expr2}, mem_pool::pool::Pool};
 use roc_code_markup::{markup::nodes::expr2_to_markup, slow_pool::SlowPool};
 use roc_module::symbol::Interns;
 use roc_parse::ast::{Expr, StrLiteral};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Region};
+use roc_code_markup::{markup::nodes::{MarkupNode}};
+
+impl<'a> ToHtml<'a> for MarkupNode {
+    fn css_class(&self) -> Option<&'a str> {
+        Some("operator")
+    }
+    fn html_body(&self, buf: &mut bumpalo::collections::String<'a>) {
+        buf.push_str("MarkupNode")
+    }
+}
 
 impl<'a> ToHtml<'a> for Expr<'a> {
     fn css_class(&self) -> Option<&'a str> {
@@ -95,7 +104,8 @@ impl<'a> ToHtml<'a> for Expr<'a> {
             }
             Expr::Defs(defs, sub_expr) => {
                 for def_loc in defs.iter() {
-                    def_loc.html(buf);
+                    unimplemented!();
+                    //def_loc.html(buf);
                 }
                 sub_expr.html(buf)
             }
@@ -160,14 +170,13 @@ impl<'a> ToHtml<'a> for ParamComma {
     }
 }
 
-fn write_expr_to_bump_str_html<'a>(
-    arena: &mut Bump,
-    env: &mut Env<'a>,
-    scope: &mut Scope,
+pub fn write_expr_to_bump_str_html<'a, 'b>(
+    env: &mut lang::env::Env<'a>,
+    scope: &mut lang::scope::Scope,
     region: Region,
     expr: &'a Expr,
     interns: &Interns,
-    bump_str: &mut bumpalo::collections::String<'a>
+    bump_str: &mut bumpalo::collections::String<'b>
 ) -> ASTResult<()> {
     let (expr2, _) = expr_to_expr2(env, scope, expr, region);
 
@@ -177,9 +186,8 @@ fn write_expr_to_bump_str_html<'a>(
     let mut mark_node_pool = SlowPool::default();
 
     let expr2_markup_id = expr2_to_markup(
-        arena,
         env,
-        &expr2,
+        &expr2_pool.get(expr2_id),
         expr2_id,
         &mut mark_node_pool,
         interns,

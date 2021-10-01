@@ -63,7 +63,6 @@ pub fn init_model<'a>(
         EmptyCodeString {}.fail()
     } else {
         Ok(ast_to_mark_nodes(
-            code_arena,
             &mut module.env,
             &module.ast,
             &mut mark_node_pool,

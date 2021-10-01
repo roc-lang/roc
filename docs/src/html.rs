@@ -2,7 +2,9 @@ use roc_region::all::Located;
 
 pub trait ToHtml<'a> {
     fn css_class(&self) -> Option<&'a str>;
+
     fn html_body(&self, buf: &mut bumpalo::collections::String<'a>);
+    
     fn html(&self, buf: &mut bumpalo::collections::String<'a>) {
         let maybe_css_class = self.css_class();
 
