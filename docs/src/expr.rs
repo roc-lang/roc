@@ -6,15 +6,6 @@ use roc_parse::ast::{Expr, StrLiteral};
 use roc_region::all::{Region};
 use roc_code_markup::{markup::nodes::{MarkupNode}};
 
-impl<'a> ToHtml<'a> for MarkupNode {
-    fn css_class(&self) -> Option<&'a str> {
-        Some("operator")
-    }
-    fn html_body(&self, buf: &mut bumpalo::collections::String<'a>) {
-        buf.push_str("MarkupNode")
-    }
-}
-
 impl<'a> ToHtml<'a> for Expr<'a> {
     fn css_class(&self) -> Option<&'a str> {
         match self {

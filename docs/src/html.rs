@@ -1,4 +1,6 @@
+use roc_code_markup::{markup::nodes::MarkupNode, slow_pool::SlowPool};
 use roc_region::all::Located;
+use bumpalo::{collections::String as BumpString};
 
 pub trait ToHtml<'a> {
     fn css_class(&self) -> Option<&'a str>;
@@ -43,3 +45,63 @@ where
         self.value.html(buf);
     }
 }
+
+
+// determine appropriate css class for MarkupNode
+fn mark_node_html<'a>(mark_node: &MarkupNode, mark_node_pool: &SlowPool, buf: &mut bumpalo::collections::String<'a>) {
+    match mark_node {
+        MarkupNode::Nested { children_ids, newlines_at_end, .. } => {
+            for &child_id in children_ids {
+                mark_node_html(
+                    mark_node_pool.get(child_id),
+                    mark_node_pool,
+                    buf
+                )
+            }
+
+            for _ in 0..*newlines_at_end {
+                buf.push('\n')
+            }
+        }
+        MarkupNode::Text { syn_high_style, newlines_at_end, .. } => {
+            use HighlightStyle::*;
+
+            let css_class = match syn_high_style {
+                Operator => "operator",
+                String => "string",
+                FunctionName => "function_name",
+                Type => "type",
+                Bracket => "bracket",
+                Number => "number",
+                PackageRelated => "package-related",
+                Variable => "variable",
+                RecordField => "recordfield",
+                Import => "import",
+                Provides => "provides",
+                Blank => "blank",
+            };
+        }
+        MarkupNode::Blank { syn_high_style, newlines_at_end, .. } => {
+            let mut content_str = " ".to_string();
+
+            for _ in 0..*newlines_at_end {
+                content_str.push('\n');
+            }
+
+            write_html_to_buf(content_str, "blank", buf)
+        }
+    }
+    
+}
+
+fn write_html_to_buf<'a>(content: String, css_class: &'static str, buf: &mut BumpString<'a>) {
+    
+    let opening_tag: String = ["<span class=\"syntax-", css_class, "\">"].concat();
+
+    buf.push_str(opening_tag.as_str());
+    
+    buf.push_str(&content);
+
+    buf.push_str("</span>");
+}
+
