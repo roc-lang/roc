@@ -3,6 +3,7 @@ use roc_build::{
     link::{link, rebuild_host, LinkType},
     program,
 };
+#[cfg(feature = "llvm")]
 use roc_builtins::bitcode;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
@@ -11,6 +12,7 @@ use roc_mono::ir::OptLevel;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 use target_lexicon::Triple;
+#[cfg(feature = "llvm")]
 use tempfile::Builder;
 
 fn report_timing(buf: &mut String, label: &str, duration: Duration) {
