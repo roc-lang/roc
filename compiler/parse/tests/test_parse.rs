@@ -421,6 +421,12 @@ mod test_parse {
         assert_parses_to(num.to_string().as_str(), Float(num.to_string().as_str()));
     }
 
+    // SINGLE QUOTE LITERAL
+    #[test]
+    fn single_quote() {
+        assert_parses_to("'b'", Expr::SingleQuote("b"));
+    }
+
     // RECORD LITERALS
 
     #[test]

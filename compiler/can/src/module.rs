@@ -386,6 +386,7 @@ fn fix_values_captured_in_closure_pattern(
         | IntLiteral(_, _, _)
         | FloatLiteral(_, _, _)
         | StrLiteral(_)
+        | SingleQuote(_)
         | Underscore
         | Shadowed(_, _)
         | MalformedPattern(_, _)
@@ -442,6 +443,7 @@ fn fix_values_captured_in_closure_expr(
         | Int(_, _, _, _)
         | Float(_, _, _, _)
         | Str(_)
+        | SingleQuote(_)
         | Var(_)
         | EmptyRecord
         | RuntimeError(_)

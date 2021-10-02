@@ -125,6 +125,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
         | Num(_)
         | NonBase10Int { .. }
         | Str(_)
+        | SingleQuote(_)
         | AccessorFunction(_)
         | Var { .. }
         | Underscore { .. }

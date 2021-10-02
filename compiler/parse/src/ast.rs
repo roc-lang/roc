@@ -92,7 +92,7 @@ pub enum Expr<'a> {
     /// e.g. `.foo`
     AccessorFunction(&'a str),
     /// eg 'b'
-    SingleQuote(char),
+    SingleQuote(&'a str),
 
     // Collection Literals
     List {
@@ -360,7 +360,7 @@ pub enum Pattern<'a> {
     FloatLiteral(&'a str),
     StrLiteral(StrLiteral<'a>),
     Underscore(&'a str),
-    SingleQuote(char),
+    SingleQuote(&'a str),
 
     // Space
     SpaceBefore(&'a Pattern<'a>, &'a [CommentOrNewline<'a>]),

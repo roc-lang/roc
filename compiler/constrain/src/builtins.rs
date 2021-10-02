@@ -159,6 +159,16 @@ pub fn num_signed64() -> Type {
 }
 
 #[inline(always)]
+pub fn num_unsigned32() -> Type {
+    let alias_content = Type::TagUnion(
+        vec![(TagName::Private(Symbol::NUM_AT_UNSIGNED32), vec![])],
+        Box::new(Type::EmptyTagUnion),
+    );
+
+    builtin_alias(Symbol::NUM_UNSIGNED32, vec![], Box::new(alias_content))
+}
+
+#[inline(always)]
 pub fn num_integer(range: Type) -> Type {
     let alias_content = Type::TagUnion(
         vec![(

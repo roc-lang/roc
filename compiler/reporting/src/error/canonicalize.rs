@@ -843,13 +843,17 @@ fn pretty_runtime_error<'b>(
                 }
                 Unknown => " ",
                 QualifiedIdentifier => " qualified ",
+                EmptySingleQuote => " empty character literal ",
+                MulitpleCharsInSingleQuote => " overfull literal ",
             };
 
             let tip = match problem {
                 MalformedInt | MalformedFloat | MalformedBase(_) => alloc
                     .tip()
                     .append(alloc.reflow("Learn more about number literals at TODO")),
-                Unknown | BadIdent(_) => alloc.nil(),
+                EmptySingleQuote | MulitpleCharsInSingleQuote | Unknown | BadIdent(_) => {
+                    alloc.nil()
+                }
                 QualifiedIdentifier => alloc.tip().append(
                     alloc.reflow("In patterns, only private and global tags can be qualified"),
                 ),
@@ -1121,6 +1125,37 @@ fn pretty_runtime_error<'b>(
                 )]);
 
             title = MISSING_DEFINITION;
+        }
+        RuntimeError::EmptySingleQuote(region) => {
+            let tip = alloc
+                .tip()
+                .append(alloc.reflow("Learn more about character literals at TODO"));
+
+            doc = alloc.stack(vec![
+                alloc.concat(vec![alloc.reflow("This character literal is empty.")]),
+                alloc.region(region),
+                tip,
+            ]);
+
+            title = SYNTAX_PROBLEM;
+        }
+        RuntimeError::MulitpleCharsInSingleQuote(region) => {
+            let tip = alloc
+                .tip()
+                .append(alloc.reflow("Learn more about character literals at TODO"));
+
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("This character literal contains more than one code point.")
+                ]),
+                alloc.region(region),
+                alloc.concat(vec![
+                    alloc.reflow("Character literals can only contain one code point.")
+                ]),
+                tip,
+            ]);
+
+            title = SYNTAX_PROBLEM;
         }
     }
 

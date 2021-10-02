@@ -27,6 +27,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
             Float(_)
             | Num(_)
             | NonBase10Int { .. }
+            | SingleQuote(_)
             | Access(_, _)
             | AccessorFunction(_)
             | Var { .. }
@@ -227,6 +228,11 @@ impl<'a> Formattable<'a> for Expr<'a> {
             }
             Num(string) | Float(string) | GlobalTag(string) | PrivateTag(string) => {
                 buf.push_str(string)
+            }
+            SingleQuote(string) => {
+                buf.push('\'');
+                buf.push_str(string);
+                buf.push('\'');
             }
             NonBase10Int {
                 base,

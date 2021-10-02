@@ -1,5 +1,3 @@
-use std::convert::TryInto;
-
 use crate::ast::{EscapedChar, StrLiteral, StrSegment};
 use crate::expr;
 use crate::parser::Progress::*;
@@ -48,8 +46,8 @@ macro_rules! advance_state {
     };
 }
 
-pub fn parse_single_quote<'a>() -> impl Parser<'a, char, EString<'a>> {
-    move |_arena: &'a Bump, mut state: State<'a>| {
+pub fn parse_single_quote<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
+    move |arena: &'a Bump, mut state: State<'a>| {
         if state.bytes.starts_with(b"\'") {
             // we will be parsing a single-quote-string
         } else {
@@ -73,9 +71,11 @@ pub fn parse_single_quote<'a>() -> impl Parser<'a, char, EString<'a>> {
                                 state = advance_state!(state, 1)?;
                                 // since we checked the current char between the single quotes we
                                 // know they are valid UTF-8, allowing us to use 'from_u32_unchecked'
+                                let test = unsafe { char::from_u32_unchecked(ch as u32) };
+
                                 return Ok((
                                     MadeProgress,
-                                    unsafe { char::from_u32_unchecked(ch as u32) },
+                                    &*arena.alloc_str(&test.to_string()),
                                     state,
                                 ));
                             }
@@ -112,6 +112,8 @@ pub fn parse_single_quote<'a>() -> impl Parser<'a, char, EString<'a>> {
         let mut bytes = state.bytes.iter();
         let mut end_index = 1;
 
+        // Copy paste problem in mono
+
         loop {
             match bytes.next() {
                 Some(b'\'') => {
@@ -138,19 +140,14 @@ pub fn parse_single_quote<'a>() -> impl Parser<'a, char, EString<'a>> {
 
         // happy case -> we have some bytes that will fit into a u32
         // ending up w/ a slice of bytes that we want to convert into an integer
-        let bytes_array: [u8; 4] = match state.bytes[1..end_index].try_into() {
-            Ok(bytes) => bytes,
-            Err(_) => {
-                return Err((NoProgress, EString::Open(state.line, state.column), state));
-            }
-        };
+        let raw_bytes = &state.bytes[0..end_index - 1];
 
         state = advance_state!(state, end_index)?;
-        match char::from_u32(u32::from_ne_bytes(bytes_array)) {
-            Some(ch) => {
-                return Ok((MadeProgress, ch, state));
+        match std::str::from_utf8(raw_bytes) {
+            Ok(string) => {
+                return Ok((MadeProgress, string, state));
             }
-            None => {
+            Err(_) => {
                 // invalid UTF-8
                 return Err((
                     NoProgress,

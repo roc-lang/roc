@@ -1159,6 +1159,7 @@ pub enum Category {
     Num,
     List,
     Str,
+    Character,
 
     // records
     Record,
@@ -1180,6 +1181,7 @@ pub enum PatternCategory {
     Num,
     Int,
     Float,
+    Character,
 }
 
 #[derive(Clone, Debug, PartialEq)]

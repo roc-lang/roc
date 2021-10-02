@@ -1492,6 +1492,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::UnaryOp(_, _) => Err(()),
 
         Expr::Str(string) => Ok(Pattern::StrLiteral(*string)),
+        Expr::SingleQuote(string) => Ok(Pattern::SingleQuote(*string)),
         Expr::MalformedIdent(string, _problem) => Ok(Pattern::Malformed(string)),
     }
 }

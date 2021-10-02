@@ -1676,7 +1676,11 @@ fn pattern_to_when<'a>(
             (symbol, Located::at_zero(wrapped_body))
         }
 
-        IntLiteral(_, _, _) | NumLiteral(_, _, _) | FloatLiteral(_, _, _) | StrLiteral(_) => {
+        IntLiteral(_, _, _)
+        | NumLiteral(_, _, _)
+        | FloatLiteral(_, _, _)
+        | StrLiteral(_)
+        | roc_can::pattern::Pattern::SingleQuote(_) => {
             // These patters are refutable, and thus should never occur outside a `when` expression
             // They should have been replaced with `UnsupportedPattern` during canonicalization
             unreachable!("refutable pattern {:?} where irrefutable pattern is expected. This should never happen!", pattern.value)
@@ -2834,6 +2838,13 @@ pub fn with_hole<'a>(
             assigned,
             Expr::Literal(Literal::Str(arena.alloc(string))),
             Layout::Builtin(Builtin::Str),
+            hole,
+        ),
+
+        SingleQuote(character) => Stmt::Let(
+            assigned,
+            Expr::Literal(Literal::Int(character as _)),
+            Layout::Builtin(Builtin::Int32),
             hole,
         ),
 
@@ -7025,6 +7036,7 @@ fn from_can_pattern_help<'a>(
             }
         }
         StrLiteral(v) => Ok(Pattern::StrLiteral(v.clone())),
+        SingleQuote(c) => Ok(Pattern::IntLiteral(*c as _, IntPrecision::I32)),
         Shadowed(region, ident) => Err(RuntimeError::Shadowing {
             original_region: *region,
             shadow: ident.clone(),
