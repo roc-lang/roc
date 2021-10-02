@@ -329,6 +329,21 @@ mod gen_num {
     }
 
     #[test]
+    fn character_literal() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x = 'A'
+
+                    x
+                "#
+            ),
+            'A' as _,
+            u32
+        );
+    }
+
+    #[test]
     fn dec_float_alias() {
         assert_evals_to!(
             indoc!(
