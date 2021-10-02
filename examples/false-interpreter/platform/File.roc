@@ -1,5 +1,5 @@
 interface File
-    exposes [ line, Handle, withOpen, open, close, chunk ]
+    exposes [ line, Handle, withOpen, chunk ]
     imports [ fx.Effect, Task.{ Task } ]
 
 Handle: [ @Handle U64 ]
@@ -19,9 +19,11 @@ open = \path ->
 close : Handle -> Task.Task {} *
 close = \@Handle handle -> Effect.after (Effect.closeFile handle) Task.succeed
 
-# The compiler fails to type check if I uncomment this.
-# withOpen : Str, (Handle -> Task {} *) -> Task {} *
+withOpen : Str, (Handle -> Task {} a) -> Task {} a
 withOpen = \path, callback ->
     handle <- Task.await (open path)
-    {} <- Task.await (callback handle)
-    close handle
+    result <- Task.attempt (callback handle)
+    {} <- Task.await (close handle)
+    when result is
+        Ok a -> Task.succeed a
+        Err e -> Task.fail e

@@ -286,10 +286,12 @@ interpretContext = \ctx ->
                 0x3A -> # `:` store to variable
                     result2 =
                         (T popCtx1 var) <- Result.after (popVariable (Context.consumeChar newCtx))
-                        (T popCtx2 n1) <- Result.after (Context.popStack popCtx1)
+                        # The Result.mapErr on the next line maps from EmptyStack in Context.roc to the full InterpreterErrors union here.
+                        (T popCtx2 n1) <- Result.after (Result.mapErr (Context.popStack popCtx1) (\(EmptyStack) -> EmptyStack))
                         Ok {popCtx2 & vars: List.set popCtx2.vars (Variable.toIndex var) n1}
                     when result2 is
                         Ok a -> interpretContext a
+                        Err EmptyStack -> Task.fail EmptyStack
                         Err e -> Task.fail e
                 0x3B -> # `;` load from variable
                     result2 =

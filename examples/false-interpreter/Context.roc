@@ -14,8 +14,10 @@ pushStack: Context, Data -> Context
 pushStack = \ctx, data ->
     {ctx & stack: List.append ctx.stack data}
 
-# The compiler fails to type check if I uncomment this.
-#popStack: Context -> Result [T Context Data] [EmptyStack]*
+# I think an open tag union should just work here.
+# Instead at a call sites, I need to match on the error and then return the same error.
+# Otherwise it hits unreachable code in ir.rs
+popStack: Context -> Result [T Context Data] [ EmptyStack ]*
 popStack = \ctx ->
     when List.last ctx.stack is
         Ok val ->
@@ -39,12 +41,10 @@ toStr = \{stack, vars} ->
     varsStr = Str.joinWith (List.map vars toStrData) " "
     "\n============\nStack: [\(stackStr)]\nVars: [\(varsStr)]\n============\n"
 
-# The compiler fails to type check if I uncomment this.
-# with : Str, (Context -> Task {} *) -> Task {} *
+with : Str, (Context -> Task {} a) -> Task {} a
 with = \path, callback ->
-    handle <- Task.await (File.open path)
-    {} <- Task.await (callback { data: Some handle, index: 0, buf: [], stack: [], vars: (List.repeat Variable.totalCount (Number 0)) })
-    File.close handle
+    handle <- File.withOpen path
+    callback { data: Some handle, index: 0, buf: [], stack: [], vars: (List.repeat Variable.totalCount (Number 0)) }
 
 # I am pretty sure there is a syntax to destructure and keep a reference to the whole, but Im not sure what it is.
 getChar: Context -> Task [T U8 Context] [ EndOfData ]*
