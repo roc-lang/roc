@@ -128,7 +128,7 @@ fn copy_memory(
     size: u32,
     alignment_bytes: u32,
     offset: u32,
-) -> Result<(), String> {
+) {
     let alignment_flag = encode_alignment(alignment_bytes);
     let mut current_offset = offset;
     while size - current_offset >= 8 {
@@ -152,7 +152,6 @@ fn copy_memory(
         instructions.push(I32Store8(alignment_flag, current_offset));
         current_offset += 1;
     }
-    Ok(())
 }
 
 /// Round up to alignment_bytes (assumed to be a power of 2)

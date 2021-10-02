@@ -251,25 +251,24 @@ impl<'a> WasmBackend<'a> {
         storage
     }
 
-    fn get_symbol_storage(&self, sym: &Symbol) -> Result<&SymbolStorage, String> {
-        self.symbol_storage_map.get(sym).ok_or_else(|| {
-            format!(
+    fn get_symbol_storage(&self, sym: &Symbol) -> &SymbolStorage {
+        self.symbol_storage_map.get(sym).unwrap_or_else(|| {
+            panic!(
                 "Symbol {:?} not found in function scope:\n{:?}",
                 sym, self.symbol_storage_map
             )
         })
     }
 
-    fn local_id_from_symbol(&self, sym: &Symbol) -> Result<LocalId, String> {
-        let storage = self.get_symbol_storage(sym)?;
-        Ok(storage.local_id())
+    fn local_id_from_symbol(&self, sym: &Symbol) -> LocalId {
+        let storage = self.get_symbol_storage(sym);
+        storage.local_id()
     }
 
-    fn load_symbol(&mut self, sym: &Symbol) -> Result<(), String> {
-        let storage = self.get_symbol_storage(sym)?;
+    fn load_symbol(&mut self, sym: &Symbol) {
+        let storage = self.get_symbol_storage(sym);
         let index: u32 = storage.local_id().0;
         self.instructions.push(GetLocal(index));
-        Ok(())
     }
 
     /// start a loop that leaves a value on the stack
@@ -351,7 +350,7 @@ impl<'a> WasmBackend<'a> {
                     } => {
                         let from = *local_id;
                         let to = LocalId(0);
-                        copy_memory(&mut self.instructions, from, to, *size, *alignment_bytes, 0)?;
+                        copy_memory(&mut self.instructions, from, to, *size, *alignment_bytes, 0);
                     }
 
                     ParamPrimitive { local_id, .. }
@@ -382,7 +381,7 @@ impl<'a> WasmBackend<'a> {
                 }
 
                 // the LocalId of the symbol that we match on
-                let matched_on = self.local_id_from_symbol(cond_symbol)?;
+                let matched_on = self.local_id_from_symbol(cond_symbol);
 
                 // then, we jump whenever the value under scrutiny is equal to the value of a branch
                 for (i, (value, _, _)) in branches.iter().enumerate() {
@@ -455,7 +454,7 @@ impl<'a> WasmBackend<'a> {
 
                 // put the arguments on the stack
                 for (symbol, local_id) in arguments.iter().zip(locals.iter()) {
-                    let argument = self.local_id_from_symbol(symbol)?;
+                    let argument = self.local_id_from_symbol(symbol);
                     self.instructions.push(GetLocal(argument.0));
                     self.instructions.push(SetLocal(local_id.0));
                 }
@@ -485,7 +484,7 @@ impl<'a> WasmBackend<'a> {
             }) => match call_type {
                 CallType::ByName { name: func_sym, .. } => {
                     for arg in *arguments {
-                        self.load_symbol(arg)?;
+                        self.load_symbol(arg);
                     }
                     let function_location = self.proc_symbol_map.get(func_sym).ok_or(format!(
                         "Cannot find function {:?} called from {:?}",
@@ -545,7 +544,7 @@ impl<'a> WasmBackend<'a> {
         layout: &Layout<'a>,
         fields: &'a [Symbol],
     ) -> Result<(), String> {
-        let storage = self.get_symbol_storage(sym)?.to_owned();
+        let storage = self.get_symbol_storage(sym).to_owned();
 
         if let Layout::Struct(field_layouts) = layout {
             match storage {
@@ -558,7 +557,7 @@ impl<'a> WasmBackend<'a> {
                                 local_id,
                                 relative_offset,
                                 field,
-                            )?;
+                            );
                         }
                     } else {
                         return Err(format!("Not supported yet: zero-size struct at {:?}", sym));
@@ -573,8 +572,8 @@ impl<'a> WasmBackend<'a> {
             }
         } else {
             // Struct expression but not Struct layout => single element. Copy it.
-            let field_storage = self.get_symbol_storage(&fields[0])?.to_owned();
-            self.copy_storage(&storage, &field_storage)?;
+            let field_storage = self.get_symbol_storage(&fields[0]).to_owned();
+            self.copy_storage(&storage, &field_storage);
         }
         Ok(())
     }
@@ -584,12 +583,12 @@ impl<'a> WasmBackend<'a> {
         to_ptr: LocalId,
         to_offset: u32,
         from_symbol: &Symbol,
-    ) -> Result<u32, String> {
-        let from_storage = self.get_symbol_storage(from_symbol)?.to_owned();
+    ) -> u32 {
+        let from_storage = self.get_symbol_storage(from_symbol).to_owned();
         from_storage.copy_to_memory(&mut self.instructions, to_ptr, to_offset)
     }
 
-    fn copy_storage(&mut self, to: &SymbolStorage, from: &SymbolStorage) -> Result<(), String> {
+    fn copy_storage(&mut self, to: &SymbolStorage, from: &SymbolStorage) {
         let has_stack_memory = to.has_stack_memory();
         debug_assert!(from.has_stack_memory() == has_stack_memory);
 
@@ -597,7 +596,6 @@ impl<'a> WasmBackend<'a> {
             debug_assert!(from.value_type() == to.value_type());
             self.instructions.push(GetLocal(from.local_id().0));
             self.instructions.push(SetLocal(to.local_id().0));
-            Ok(())
         } else {
             let (size, alignment_bytes) = from.stack_size_and_alignment();
             copy_memory(
@@ -607,7 +605,7 @@ impl<'a> WasmBackend<'a> {
                 size,
                 alignment_bytes,
                 0,
-            )
+            );
         }
     }
 
@@ -618,7 +616,7 @@ impl<'a> WasmBackend<'a> {
         return_layout: &Layout<'a>,
     ) -> Result<(), String> {
         for arg in args {
-            self.load_symbol(arg)?;
+            self.load_symbol(arg);
         }
         let wasm_layout = WasmLayout::new(return_layout);
         self.build_instructions_lowlevel(lowlevel, wasm_layout.value_type())?;
