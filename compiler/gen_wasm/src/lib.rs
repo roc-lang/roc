@@ -121,7 +121,7 @@ fn encode_alignment(bytes: u32) -> u32 {
     }
 }
 
-pub struct MemoryCopy {
+pub struct CopyMemoryConfig {
     from_ptr: LocalId,
     from_offset: u32,
     to_ptr: LocalId,
@@ -130,31 +130,29 @@ pub struct MemoryCopy {
     alignment_bytes: u32,
 }
 
-impl MemoryCopy {
-    pub fn generate(&self, instructions: &mut Vec<Instruction>) {
-        let alignment_flag = encode_alignment(self.alignment_bytes);
-        let mut i = 0;
-        while self.size - i >= 8 {
-            instructions.push(GetLocal(self.to_ptr.0));
-            instructions.push(GetLocal(self.from_ptr.0));
-            instructions.push(I64Load(alignment_flag, i + self.from_offset));
-            instructions.push(I64Store(alignment_flag, i + self.to_offset));
-            i += 8;
-        }
-        if self.size - i >= 4 {
-            instructions.push(GetLocal(self.to_ptr.0));
-            instructions.push(GetLocal(self.from_ptr.0));
-            instructions.push(I32Load(alignment_flag, i + self.from_offset));
-            instructions.push(I32Store(alignment_flag, i + self.to_offset));
-            i += 4;
-        }
-        while self.size - i > 0 {
-            instructions.push(GetLocal(self.to_ptr.0));
-            instructions.push(GetLocal(self.from_ptr.0));
-            instructions.push(I32Load8U(alignment_flag, i + self.from_offset));
-            instructions.push(I32Store8(alignment_flag, i + self.to_offset));
-            i += 1;
-        }
+pub fn copy_memory(instructions: &mut Vec<Instruction>, config: CopyMemoryConfig) {
+    let alignment_flag = encode_alignment(config.alignment_bytes);
+    let mut i = 0;
+    while config.size - i >= 8 {
+        instructions.push(GetLocal(config.to_ptr.0));
+        instructions.push(GetLocal(config.from_ptr.0));
+        instructions.push(I64Load(alignment_flag, i + config.from_offset));
+        instructions.push(I64Store(alignment_flag, i + config.to_offset));
+        i += 8;
+    }
+    if config.size - i >= 4 {
+        instructions.push(GetLocal(config.to_ptr.0));
+        instructions.push(GetLocal(config.from_ptr.0));
+        instructions.push(I32Load(alignment_flag, i + config.from_offset));
+        instructions.push(I32Store(alignment_flag, i + config.to_offset));
+        i += 4;
+    }
+    while config.size - i > 0 {
+        instructions.push(GetLocal(config.to_ptr.0));
+        instructions.push(GetLocal(config.from_ptr.0));
+        instructions.push(I32Load8U(alignment_flag, i + config.from_offset));
+        instructions.push(I32Store8(alignment_flag, i + config.to_offset));
+        i += 1;
     }
 }
 

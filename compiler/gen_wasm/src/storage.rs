@@ -1,14 +1,25 @@
-use crate::{LocalId, MemoryCopy, ALIGN_1, ALIGN_2, ALIGN_4, ALIGN_8};
+use crate::{copy_memory, CopyMemoryConfig, LocalId, ALIGN_1, ALIGN_2, ALIGN_4, ALIGN_8};
 use parity_wasm::elements::{Instruction, Instruction::*, ValueType};
 
 #[derive(Debug, Clone)]
 pub enum StackMemoryLocation {
-    ExternalPointer(LocalId),
-    InternalOffset(u32),
+    CallerFrame(LocalId),
+    OwnFrame(u32),
+}
+
+impl StackMemoryLocation {
+    pub fn local_and_offset(&self, stack_frame_pointer: Option<LocalId>) -> (LocalId, u32) {
+        match self {
+            Self::CallerFrame(local_id) => (*local_id, 0),
+            Self::OwnFrame(offset) => (stack_frame_pointer.unwrap(), *offset),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub enum SymbolStorage {
+    // TODO: implicit storage in the VM stack
+    // TODO: const data storage
     Local {
         local_id: LocalId,
         value_type: ValueType,
@@ -22,58 +33,69 @@ pub enum SymbolStorage {
 }
 
 impl SymbolStorage {
-    pub fn local_id(&self, stack_frame_pointer: Option<LocalId>) -> LocalId {
-        use StackMemoryLocation::*;
-        match self {
-            Self::Local { local_id, .. } => *local_id,
-            Self::StackMemory { location, .. } => match *location {
-                ExternalPointer(local_id) => local_id,
-                InternalOffset(_) => stack_frame_pointer.unwrap(),
-            },
+    /// generate code to copy from another storage of the same type
+    pub fn copy_from(
+        &self,
+        from: &Self,
+        instructions: &mut Vec<Instruction>,
+        stack_frame_pointer: Option<LocalId>,
+    ) {
+        match (self, from) {
+            (
+                Self::Local {
+                    local_id: to_local_id,
+                    ..
+                },
+                Self::Local {
+                    local_id: from_local_id,
+                    ..
+                },
+            ) => {
+                instructions.push(GetLocal(from_local_id.0));
+                instructions.push(SetLocal(to_local_id.0));
+            }
+            (
+                Self::StackMemory {
+                    location: to_location,
+                    size: to_size,
+                    alignment_bytes: to_alignment_bytes,
+                },
+                Self::StackMemory {
+                    location: from_location,
+                    size: from_size,
+                    alignment_bytes: from_alignment_bytes,
+                },
+            ) => {
+                let (from_ptr, from_offset) = from_location.local_and_offset(stack_frame_pointer);
+                let (to_ptr, to_offset) = to_location.local_and_offset(stack_frame_pointer);
+                debug_assert!(*to_size == *from_size);
+                debug_assert!(*to_alignment_bytes == *from_alignment_bytes);
+                copy_memory(
+                    instructions,
+                    CopyMemoryConfig {
+                        from_ptr,
+                        from_offset,
+                        to_ptr,
+                        to_offset,
+                        size: *from_size,
+                        alignment_bytes: *from_alignment_bytes,
+                    },
+                );
+            }
+            _ => {
+                panic!(
+                    "Cannot copy different storage types {:?} to {:?}",
+                    from, self
+                );
+            }
         }
     }
 
-    pub fn value_type(&self) -> ValueType {
-        match self {
-            Self::Local { value_type, .. } => *value_type,
-            Self::StackMemory { .. } => ValueType::I32,
-        }
-    }
-
-    pub fn has_stack_memory(&self) -> bool {
-        match self {
-            Self::Local { .. } => false,
-            Self::StackMemory { .. } => true,
-        }
-    }
-
-    pub fn address_offset(&self) -> Option<u32> {
-        use StackMemoryLocation::*;
-        match self {
-            Self::Local { .. } => None,
-            Self::StackMemory { location, .. } => match *location {
-                ExternalPointer(_) => Some(0),
-                InternalOffset(offset) => Some(offset),
-            },
-        }
-    }
-
-    pub fn stack_size_and_alignment(&self) -> (u32, u32) {
-        match self {
-            Self::StackMemory {
-                size,
-                alignment_bytes,
-                ..
-            } => (*size, *alignment_bytes),
-
-            _ => (0, 0),
-        }
-    }
-
+    /// Generate code to copy to a memory address (such as a struct index)
     pub fn copy_to_memory(
         &self,
         instructions: &mut Vec<Instruction>,
-        to_pointer: LocalId,
+        to_ptr: LocalId,
         to_offset: u32,
         stack_frame_pointer: Option<LocalId>,
     ) -> u32 {
@@ -95,27 +117,29 @@ impl SymbolStorage {
                         panic!("Cannot store {:?} with alignment of {:?}", value_type, size);
                     }
                 };
-                instructions.push(GetLocal(to_pointer.0));
+                instructions.push(GetLocal(to_ptr.0));
                 instructions.push(GetLocal(local_id.0));
                 instructions.push(store_instruction);
                 *size
             }
 
             Self::StackMemory {
+                location,
                 size,
                 alignment_bytes,
-                ..
             } => {
-                let local_id = self.local_id(stack_frame_pointer);
-                let copy = MemoryCopy {
-                    from_ptr: local_id,
-                    from_offset: 0,
-                    to_ptr: to_pointer,
-                    to_offset,
-                    size: *size,
-                    alignment_bytes: *alignment_bytes,
-                };
-                copy.generate(instructions);
+                let (from_ptr, from_offset) = location.local_and_offset(stack_frame_pointer);
+                copy_memory(
+                    instructions,
+                    CopyMemoryConfig {
+                        from_ptr,
+                        from_offset,
+                        to_ptr,
+                        to_offset,
+                        size: *size,
+                        alignment_bytes: *alignment_bytes,
+                    },
+                );
                 *size
             }
         }
