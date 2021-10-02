@@ -186,7 +186,7 @@ pub fn constrain_pattern(
             state.constraints.push(Constraint::Pattern(
                 region,
                 PatternCategory::Character,
-                builtins::num_unsigned32(),
+                builtins::num_u32(),
                 expected,
             ));
         }

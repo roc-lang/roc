@@ -1,6 +1,4 @@
-use crate::builtins::{
-    empty_list_type, float_literal, int_literal, list_type, num_unsigned32, str_type,
-};
+use crate::builtins::{empty_list_type, float_literal, int_literal, list_type, num_u32, str_type};
 use crate::pattern::{constrain_pattern, PatternState};
 use roc_can::annotation::IntroducedVariables;
 use roc_can::constraint::Constraint::{self, *};
@@ -219,7 +217,7 @@ pub fn constrain_expr(
             exists(vars, And(cons))
         }
         Str(_) => Eq(str_type(), expected, Category::Str, region),
-        SingleQuote(_) => Eq(num_unsigned32(), expected, Category::Character, region),
+        SingleQuote(_) => Eq(num_u32(), expected, Category::Character, region),
         List {
             elem_var,
             loc_elems,
