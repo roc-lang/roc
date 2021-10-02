@@ -934,7 +934,9 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
         CallType::LowLevel { op, update_mode } => {
             let bytes = update_mode.to_bytes();
             let update_var = UpdateModeVar(&bytes);
-            let update_mode = func_spec_solutions.update_mode(update_var).ok();
+            let update_mode = func_spec_solutions
+                .update_mode(update_var)
+                .unwrap_or(UpdateMode::Immutable);
 
             run_low_level(
                 env,
@@ -2229,13 +2231,13 @@ fn list_literal<'a, 'ctx, 'env>(
                     }
                     ListLiteralElement::Symbol(symbol) => {
                         let val = load_symbol(scope, symbol);
-                        let intval = val.into_int_value();
 
                         // here we'd like to furthermore check for intval.is_const().
                         // if all elements are const for LLVM, we could make the array a constant.
                         // BUT morphic does not know about this, and could allow us to modify that
                         // array in-place. That would cause a segfault. So, we'll have to find
                         // constants ourselves and cannot lean on LLVM here.
+
                         is_all_constant = false;
 
                         runtime_evaluated_elements.push((index, val));
@@ -4790,7 +4792,7 @@ fn run_low_level<'a, 'ctx, 'env>(
     layout: &Layout<'a>,
     op: LowLevel,
     args: &[Symbol],
-    update_mode: Option<UpdateMode>,
+    update_mode: UpdateMode,
     // expect_failed: *const (),
 ) -> BasicValueEnum<'ctx> {
     use LowLevel::*;
@@ -4990,6 +4992,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                     index_1.into_int_value(),
                     index_2.into_int_value(),
                     element_layout,
+                    update_mode,
                 ),
                 _ => unreachable!("Invalid layout {:?} in List.swap", list_layout),
             }
@@ -5317,7 +5320,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                     index.into_int_value(),
                     element,
                     element_layout,
-                    update_mode.unwrap(),
+                    update_mode,
                 ),
                 _ => unreachable!("invalid dict layout"),
             }

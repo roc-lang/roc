@@ -763,18 +763,24 @@ pub fn listSwap(
     element_width: usize,
     index_1: usize,
     index_2: usize,
+    can_update_in_place: bool,
 ) callconv(.C) RocList {
     const size = list.len();
-    if (index_1 >= size or index_2 >= size) {
+    if (index_1 == index_2 or index_1 >= size or index_2 >= size) {
         // Either index out of bounds so we just return
         return list;
     }
 
-    const newList = list.makeUnique(alignment, element_width);
+    const newList = blk: {
+        if (can_update_in_place) {
+            break :blk list;
+        } else {
+            break :blk list.makeUnique(alignment, element_width);
+        }
+    };
 
-    if (newList.bytes) |source_ptr| {
-        swapElements(source_ptr, element_width, index_1, index_2);
-    }
+    const source_ptr = @ptrCast([*]u8, newList.bytes);
+    swapElements(source_ptr, element_width, index_1, index_2);
 
     return newList;
 }
