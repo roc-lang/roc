@@ -4109,19 +4109,28 @@ pub fn build_proc<'a, 'ctx, 'env>(
                         let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
 
                         let mut it = func_solutions.specs();
-                        let func_spec = it.next().unwrap();
-                        debug_assert!(
-                            it.next().is_none(),
-                            "we expect only one specialization of this symbol"
-                        );
+                        let evaluator = match it.next() {
+                            Some(func_spec) => {
+                                debug_assert!(
+                                    it.next().is_none(),
+                                    "we expect only one specialization of this symbol"
+                                );
 
-                        let evaluator = function_value_by_func_spec(
-                            env,
-                            *func_spec,
-                            symbol,
-                            top_level.arguments,
-                            &top_level.result,
-                        );
+                                function_value_by_func_spec(
+                                    env,
+                                    *func_spec,
+                                    symbol,
+                                    top_level.arguments,
+                                    &top_level.result,
+                                )
+                            }
+                            None => {
+                                // morphic did not generate a specialization for this function,
+                                // therefore it must actually be unused.
+                                // An example is our closure callers
+                                panic!("morphic did not specialize {:?}", symbol);
+                            }
+                        };
 
                         let ident_string = proc.name.as_str(&env.interns);
                         let fn_name: String = format!("{}_1", ident_string);
