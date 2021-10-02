@@ -11,7 +11,7 @@ use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
 use roc_mono::layout::{Builtin, Layout};
 
 use crate::layout::WasmLayout;
-use crate::storage::SymbolStorage;
+use crate::storage::{StackMemoryLocation, SymbolStorage};
 use crate::{
     pop_stack_frame, push_stack_frame, round_up_to_alignment, LocalId, MemoryCopy, PTR_SIZE,
     PTR_TYPE,
@@ -167,68 +167,55 @@ impl<'a> WasmBackend<'a> {
     ) -> SymbolStorage {
         let next_local_id = LocalId((self.arg_types.len() + self.locals.len()) as u32);
 
-        let storage = match kind {
+        match kind {
             LocalKind::Parameter => {
-                // Already stack-allocated by the caller if needed.
                 self.arg_types.push(wasm_layout.value_type());
-                match wasm_layout {
-                    WasmLayout::LocalOnly(value_type, size) => SymbolStorage::ParamPrimitive {
-                        local_id: next_local_id,
-                        value_type,
-                        size,
-                    },
-
-                    WasmLayout::HeapMemory => SymbolStorage::ParamPrimitive {
-                        local_id: next_local_id,
-                        value_type: PTR_TYPE,
-                        size: PTR_SIZE,
-                    },
-
-                    WasmLayout::StackMemory {
-                        size,
-                        alignment_bytes,
-                    } => SymbolStorage::ParamStackMemory {
-                        local_id: next_local_id,
-                        size,
-                        alignment_bytes,
-                    },
-                }
             }
             LocalKind::Variable => {
                 self.locals.push(Local::new(1, wasm_layout.value_type()));
+            }
+        }
 
-                match wasm_layout {
-                    WasmLayout::LocalOnly(value_type, size) => SymbolStorage::VarPrimitive {
-                        local_id: next_local_id,
-                        value_type,
-                        size,
-                    },
+        let storage = match wasm_layout {
+            WasmLayout::LocalOnly(value_type, size) => SymbolStorage::Local {
+                local_id: next_local_id,
+                value_type,
+                size,
+            },
 
-                    WasmLayout::HeapMemory => SymbolStorage::VarHeapMemory {
-                        local_id: next_local_id,
-                    },
+            WasmLayout::HeapMemory => SymbolStorage::Local {
+                local_id: next_local_id,
+                value_type: PTR_TYPE,
+                size: PTR_SIZE,
+            },
 
-                    WasmLayout::StackMemory {
-                        size,
-                        alignment_bytes,
-                    } => {
+            WasmLayout::StackMemory {
+                size,
+                alignment_bytes,
+            } => {
+                let location = match kind {
+                    LocalKind::Parameter => StackMemoryLocation::ExternalPointer(next_local_id),
+
+                    LocalKind::Variable => {
                         let offset =
                             round_up_to_alignment(self.stack_memory, alignment_bytes as i32);
+
                         self.stack_memory = offset + size as i32;
 
                         match self.stack_frame_pointer {
+                            Some(_) => {}
                             None => {
                                 self.stack_frame_pointer = Some(next_local_id);
                             }
-                            Some(_) => {}
                         };
 
-                        SymbolStorage::VarStackMemory {
-                            size,
-                            offset: offset as u32,
-                            alignment_bytes,
-                        }
+                        StackMemoryLocation::InternalOffset(offset as u32)
                     }
+                };
+                SymbolStorage::StackMemory {
+                    location,
+                    size,
+                    alignment_bytes,
                 }
             }
         };
@@ -288,8 +275,8 @@ impl<'a> WasmBackend<'a> {
                 {
                     // Map this symbol to the first argument (pointer into caller's stack)
                     // Saves us from having to copy it later
-                    let storage = SymbolStorage::ParamStackMemory {
-                        local_id: LocalId(0),
+                    let storage = SymbolStorage::StackMemory {
+                        location: StackMemoryLocation::ExternalPointer(LocalId(0)),
                         size,
                         alignment_bytes,
                     };
@@ -324,14 +311,21 @@ impl<'a> WasmBackend<'a> {
                 let storage = self.symbol_storage_map.get(sym).unwrap();
 
                 match storage {
-                    VarStackMemory {
+                    StackMemory {
+                        location,
                         size,
                         alignment_bytes,
-                        offset,
                     } => {
+                        let (from_ptr, from_offset) = match location {
+                            StackMemoryLocation::ExternalPointer(local_id) => (*local_id, 0),
+                            StackMemoryLocation::InternalOffset(offset) => {
+                                (self.stack_frame_pointer.unwrap(), *offset)
+                            }
+                        };
+
                         let copy = MemoryCopy {
-                            from_ptr: self.stack_frame_pointer.unwrap(),
-                            from_offset: *offset,
+                            from_ptr,
+                            from_offset,
                             to_ptr: LocalId(0),
                             to_offset: 0,
                             size: *size,
@@ -340,25 +334,7 @@ impl<'a> WasmBackend<'a> {
                         copy.generate(&mut self.instructions);
                     }
 
-                    ParamStackMemory {
-                        local_id,
-                        size,
-                        alignment_bytes,
-                    } => {
-                        let copy = MemoryCopy {
-                            from_ptr: *local_id,
-                            from_offset: 0,
-                            to_ptr: LocalId(0),
-                            to_offset: 0,
-                            size: *size,
-                            alignment_bytes: *alignment_bytes,
-                        };
-                        copy.generate(&mut self.instructions);
-                    }
-
-                    ParamPrimitive { local_id, .. }
-                    | VarPrimitive { local_id, .. }
-                    | VarHeapMemory { local_id, .. } => {
+                    Local { local_id, .. } => {
                         self.instructions.push(GetLocal(local_id.0));
                         self.instructions.push(Br(self.block_depth)); // jump to end of function (for stack frame pop)
                     }
@@ -551,10 +527,9 @@ impl<'a> WasmBackend<'a> {
 
         if let Layout::Struct(field_layouts) = layout {
             let (local_id, size) = match storage {
-                SymbolStorage::VarStackMemory { size, .. } => {
-                    (self.stack_frame_pointer.unwrap(), size)
+                SymbolStorage::StackMemory { size, .. } => {
+                    (storage.local_id(self.stack_frame_pointer), size)
                 }
-                SymbolStorage::ParamStackMemory { local_id, size, .. } => (local_id, size),
                 _ => {
                     return Err(format!(
                         "Cannot create struct {:?} with storage {:?}",

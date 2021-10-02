@@ -2,81 +2,65 @@ use crate::{LocalId, MemoryCopy, ALIGN_1, ALIGN_2, ALIGN_4, ALIGN_8};
 use parity_wasm::elements::{Instruction, Instruction::*, ValueType};
 
 #[derive(Debug, Clone)]
+pub enum StackMemoryLocation {
+    ExternalPointer(LocalId),
+    InternalOffset(u32),
+}
+
+#[derive(Debug, Clone)]
 pub enum SymbolStorage {
-    VarPrimitive {
+    Local {
         local_id: LocalId,
         value_type: ValueType,
         size: u32,
     },
-    ParamPrimitive {
-        local_id: LocalId,
-        value_type: ValueType,
-        size: u32,
-    },
-    VarStackMemory {
-        size: u32,
-        offset: u32,
-        alignment_bytes: u32,
-    },
-    ParamStackMemory {
-        local_id: LocalId,
+    StackMemory {
+        location: StackMemoryLocation,
         size: u32,
         alignment_bytes: u32,
-    },
-    VarHeapMemory {
-        local_id: LocalId,
     },
 }
 
 impl SymbolStorage {
     pub fn local_id(&self, stack_frame_pointer: Option<LocalId>) -> LocalId {
+        use StackMemoryLocation::*;
         match self {
-            Self::ParamPrimitive { local_id, .. } => *local_id,
-            Self::ParamStackMemory { local_id, .. } => *local_id,
-            Self::VarPrimitive { local_id, .. } => *local_id,
-            Self::VarStackMemory { .. } => stack_frame_pointer.unwrap(),
-            Self::VarHeapMemory { local_id, .. } => *local_id,
+            Self::Local { local_id, .. } => *local_id,
+            Self::StackMemory { location, .. } => match *location {
+                ExternalPointer(local_id) => local_id,
+                InternalOffset(_) => stack_frame_pointer.unwrap(),
+            },
         }
     }
 
     pub fn value_type(&self) -> ValueType {
         match self {
-            Self::ParamPrimitive { value_type, .. } => *value_type,
-            Self::VarPrimitive { value_type, .. } => *value_type,
-            Self::ParamStackMemory { .. } => ValueType::I32,
-            Self::VarStackMemory { .. } => ValueType::I32,
-            Self::VarHeapMemory { .. } => ValueType::I32,
+            Self::Local { value_type, .. } => *value_type,
+            Self::StackMemory { .. } => ValueType::I32,
         }
     }
 
     pub fn has_stack_memory(&self) -> bool {
         match self {
-            Self::ParamStackMemory { .. } => true,
-            Self::VarStackMemory { .. } => true,
-            Self::ParamPrimitive { .. } => false,
-            Self::VarPrimitive { .. } => false,
-            Self::VarHeapMemory { .. } => false,
+            Self::Local { .. } => false,
+            Self::StackMemory { .. } => true,
         }
     }
 
     pub fn address_offset(&self) -> Option<u32> {
+        use StackMemoryLocation::*;
         match self {
-            Self::ParamStackMemory { .. } => Some(0),
-            Self::VarStackMemory { offset, .. } => Some(*offset),
-            Self::ParamPrimitive { .. } => None,
-            Self::VarPrimitive { .. } => None,
-            Self::VarHeapMemory { .. } => None,
+            Self::Local { .. } => None,
+            Self::StackMemory { location, .. } => match *location {
+                ExternalPointer(_) => Some(0),
+                InternalOffset(offset) => Some(offset),
+            },
         }
     }
 
     pub fn stack_size_and_alignment(&self) -> (u32, u32) {
         match self {
-            Self::VarStackMemory {
-                size,
-                alignment_bytes,
-                ..
-            }
-            | Self::ParamStackMemory {
+            Self::StackMemory {
                 size,
                 alignment_bytes,
                 ..
@@ -94,13 +78,7 @@ impl SymbolStorage {
         stack_frame_pointer: Option<LocalId>,
     ) -> u32 {
         match self {
-            Self::ParamPrimitive {
-                local_id,
-                value_type,
-                size,
-                ..
-            }
-            | Self::VarPrimitive {
+            Self::Local {
                 local_id,
                 value_type,
                 size,
@@ -123,13 +101,14 @@ impl SymbolStorage {
                 *size
             }
 
-            Self::ParamStackMemory {
-                local_id,
+            Self::StackMemory {
                 size,
                 alignment_bytes,
+                ..
             } => {
+                let local_id = self.local_id(stack_frame_pointer);
                 let copy = MemoryCopy {
-                    from_ptr: *local_id,
+                    from_ptr: local_id,
                     from_offset: 0,
                     to_ptr: to_pointer,
                     to_offset,
@@ -138,31 +117,6 @@ impl SymbolStorage {
                 };
                 copy.generate(instructions);
                 *size
-            }
-
-            Self::VarStackMemory {
-                size,
-                alignment_bytes,
-                offset,
-                ..
-            } => {
-                let copy = MemoryCopy {
-                    from_ptr: stack_frame_pointer.unwrap(),
-                    from_offset: *offset,
-                    to_ptr: to_pointer,
-                    to_offset,
-                    size: *size,
-                    alignment_bytes: *alignment_bytes,
-                };
-                copy.generate(instructions);
-                *size
-            }
-
-            Self::VarHeapMemory { local_id, .. } => {
-                instructions.push(GetLocal(to_pointer.0));
-                instructions.push(GetLocal(local_id.0));
-                instructions.push(I32Store(ALIGN_4, to_offset));
-                4
             }
         }
     }
