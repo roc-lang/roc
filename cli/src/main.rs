@@ -11,12 +11,13 @@ use std::path::{Path, PathBuf};
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-#[cfg(feature = "llvm")]
-use roc_cli::build;
 use std::ffi::{OsStr, OsString};
 
+#[cfg(feature = "llvm")]
+use roc_cli::build;
+
 #[cfg(not(feature = "llvm"))]
-fn build(_target: &Triple, _matches: &clap::ArgMatches, _config: BuildConfig) -> io::Result<i32> {
+fn build(_matches: &clap::ArgMatches, _config: BuildConfig) -> io::Result<i32> {
     panic!("Building without LLVM is not currently supported.");
 }
 
