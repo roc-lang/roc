@@ -82,7 +82,7 @@ impl SymbolStorage {
         instructions: &mut Vec<Instruction>,
         to_pointer: LocalId,
         to_offset: u32,
-    ) -> Result<u32, String> {
+    ) -> u32 {
         match self {
             Self::ParamPrimitive {
                 local_id,
@@ -104,16 +104,13 @@ impl SymbolStorage {
                     (ValueType::F32, 4) => F32Store(ALIGN_4, to_offset),
                     (ValueType::F64, 8) => F64Store(ALIGN_8, to_offset),
                     _ => {
-                        return Err(format!(
-                            "Cannot store {:?} with alignment of {:?}",
-                            value_type, size
-                        ));
+                        panic!("Cannot store {:?} with alignment of {:?}", value_type, size);
                     }
                 };
                 instructions.push(GetLocal(to_pointer.0));
                 instructions.push(GetLocal(local_id.0));
                 instructions.push(store_instruction);
-                Ok(*size)
+                *size
             }
 
             Self::ParamStackMemory {
@@ -134,15 +131,15 @@ impl SymbolStorage {
                     *size,
                     *alignment_bytes,
                     to_offset,
-                )?;
-                Ok(*size)
+                );
+                *size
             }
 
             Self::VarHeapMemory { local_id, .. } => {
                 instructions.push(GetLocal(to_pointer.0));
                 instructions.push(GetLocal(local_id.0));
                 instructions.push(I32Store(ALIGN_4, to_offset));
-                Ok(4)
+                4
             }
         }
     }
