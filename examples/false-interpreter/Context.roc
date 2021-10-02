@@ -1,14 +1,17 @@
 interface Context
-    exposes [ Context, Data, with, getChar, Option, consumeChar, pushStack, popStack, toStr ]
+    exposes [ Context, Data, with, getChar, Option, pushStack, popStack, toStr, inWhileScope ]
     imports [ base.File, base.Task.{ Task }, Variable.{ Variable } ]
 
 Option a : [ Some a, None ]
 
 # The underlying context of the current location within the file
 
-# I want to change Number to I32, but now that everything is built out, I run into errors when doing so.
 Data : [ Lambda (List U8), Number I64, Var Variable ] 
-Context : { data: Option File.Handle, index: Nat, buf: List U8, stack: List Data, vars: List Data }
+# While loops are special and have their own Scope specific state.
+WhileState: { cond: List U8, body: List U8, state: [ InCond, InBody ] }
+Scope : { data: Option File.Handle, index: Nat, buf: List U8, whileInfo: Option WhileState }
+State : [ Executing, InComment, InLambda Nat (List U8), InString (List U8), InNumber I64, InSpecialChar, LoadChar]
+Context : { scopes: List Scope, stack: List Data, vars: List Data, state: State }
 
 pushStack: Context, Data -> Context
 pushStack = \ctx, data ->
@@ -35,35 +38,65 @@ toStrData = \data ->
         Number n -> Str.fromInt n
         Var v -> Variable.toStr v
 
+toStrState: State -> Str
+toStrState = \state ->
+    when state is
+        Executing -> "Executing"
+        InComment -> "InComment"
+        InString _ -> "InString"
+        InNumber _ -> "InNumber"
+        InLambda _ _ -> "InLambda"
+        InSpecialChar -> "InSpecialChar"
+        LoadChar -> "LoadChar"
+
 toStr: Context -> Str
-toStr = \{stack, vars} ->
+toStr = \{scopes, stack, state, vars} ->
+    depth = Str.fromInt (List.len scopes)
+    stateStr = toStrState state
     stackStr = Str.joinWith (List.map stack toStrData) " "
     varsStr = Str.joinWith (List.map vars toStrData) " "
-    "\n============\nStack: [\(stackStr)]\nVars: [\(varsStr)]\n============\n"
+    "\n============\nDepth: \(depth)\nState: \(stateStr)\nStack: [\(stackStr)]\nVars: [\(varsStr)]\n============\n"
 
 with : Str, (Context -> Task {} a) -> Task {} a
 with = \path, callback ->
     handle <- File.withOpen path
-    callback { data: Some handle, index: 0, buf: [], stack: [], vars: (List.repeat Variable.totalCount (Number 0)) }
+    # I cant define scope here and put it in the list in callback. It breaks alias anaysis.
+    # Instead I have to inline this.
+    # root_scope = { data: Some handle, index: 0, buf: [], whileInfo: None }
+    callback { scopes: [{ data: Some handle, index: 0, buf: [], whileInfo: None }], state: Executing, stack: [], vars: (List.repeat Variable.totalCount (Number 0)) }
 
 # I am pretty sure there is a syntax to destructure and keep a reference to the whole, but Im not sure what it is.
-getChar: Context -> Task [T U8 Context] [ EndOfData ]*
+getChar: Context -> Task [T U8 Context] [ EndOfData, NoScope ]*
 getChar = \ctx ->
-    when List.get ctx.buf ctx.index is
-        Ok val -> Task.succeed (T val ctx)
+    when List.last ctx.scopes is
+        Ok scope ->
+            (T val newScope) <- Task.await (getCharScope scope)
+            Task.succeed (T val {ctx & scopes: List.set ctx.scopes ((List.len ctx.scopes) - 1) newScope })
+        Err ListWasEmpty ->
+            Task.fail NoScope
+
+getCharScope: Scope -> Task [T U8 Scope] [ EndOfData, NoScope ]*
+getCharScope = \scope ->
+    when List.get scope.buf scope.index is
+        Ok val -> Task.succeed (T val { scope & index: scope.index + 1 })
         Err OutOfBounds -> 
-            when ctx.data is
+            when scope.data is
                 Some h ->
                     chunk <- Task.await (File.chunk h)
                     bytes = Str.toUtf8 chunk 
                     when List.first bytes is
                         Ok val ->
-                            Task.succeed (T val {ctx & buf: bytes, index: 0 })
+                            # This starts at 1 because the first charater is already being returned.
+                            Task.succeed (T val {scope & buf: bytes, index: 1 })
                         Err ListWasEmpty -> 
                             Task.fail EndOfData
                 None ->
                     Task.fail EndOfData
 
-consumeChar: Context -> Context
-consumeChar = \ctx ->
-    { ctx & index: ctx.index + 1 }
+inWhileScope: Context -> Bool
+inWhileScope = \ctx ->
+    when List.last ctx.scopes is
+        Ok scope ->
+            scope.whileInfo != None
+        Err ListWasEmpty ->
+            False

@@ -15,7 +15,7 @@ platform examples/cli
             putRaw : Str -> Effect {},
             # Is there a limit to the number of effect, uncomment the next line and it crashes
             #getLine : Effect Str,
-            getChar : Effect I8
+            getChar : Effect U8
         }
 
 mainForHost : List Str -> Task {} [] as Fx

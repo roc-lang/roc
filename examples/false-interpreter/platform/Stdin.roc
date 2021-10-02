@@ -5,5 +5,5 @@ interface Stdin
 #line : Task.Task Str *
 #line = Effect.after Effect.getLine Task.succeed # TODO FIXME Effect.getLine should suffice
 
-char : Task.Task I8 *
+char : Task.Task U8 *
 char = Effect.after Effect.getChar Task.succeed # TODO FIXME Effect.getLine should suffice

@@ -24,6 +24,4 @@ withOpen = \path, callback ->
     handle <- Task.await (open path)
     result <- Task.attempt (callback handle)
     {} <- Task.await (close handle)
-    when result is
-        Ok a -> Task.succeed a
-        Err e -> Task.fail e
+    Task.fromResult result

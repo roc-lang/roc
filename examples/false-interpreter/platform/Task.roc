@@ -1,5 +1,5 @@
 interface Task
-    exposes [ Task, succeed, fail, await, map, onFail, attempt ]
+    exposes [ Task, succeed, fail, await, map, onFail, attempt, fromResult ]
     imports [ fx.Effect ]
 
 
@@ -14,6 +14,12 @@ succeed = \val ->
 fail : err -> Task * err
 fail = \val ->
     Effect.always (Err val)
+
+fromResult : Result a e -> Task a e
+fromResult = \result ->
+    when result is
+        Ok a -> succeed a
+        Err e -> fail e
 
 attempt : Task a b, (Result a b -> Task c d) -> Task c d
 attempt = \effect, transform ->
