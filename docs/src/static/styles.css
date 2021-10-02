@@ -7,7 +7,6 @@
   --body-bg-color: #fdfdfd;
   --border-color: #e9e9e9;
   --faded-color: #4c4c4c;
-  --monospace-font;
   --font-sans: -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
   --font-mono: SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier, monospace;
   --top-header-height: 67px;
@@ -310,22 +309,25 @@ pre {
   display: none !important;
 }
 
-.syntax-num {
-    color: #8080ff;
+.syntax-number {
+    color: #60B7BF;
+}
+.syntax-string {
+  color:#F7577C;
 }
 
+.syntax-bracket {
+  color:#FF335F;
+}
 .syntax-closure-dash,
 .syntax-closure-arrow,
-.syntax-operator ,
-.syntax-param-comma
+.syntax-operator
 {
-    color: #ff0000;
+    color: #ffffff;
 }
-
-.syntax-str {
-    color:#ffff00;
+.syntax-comma {
+  color: #9573E6;
 }
-
 .syntax-comment {
   color: #ff0000;
 }

@@ -1,9 +1,8 @@
 extern crate pulldown_cmark;
 extern crate roc_load;
 use bumpalo::{collections::String as BumpString, collections::Vec as BumpVec, Bump};
-use expr::write_expr_to_bump_str_html;
-use roc_ast::lang;
-use roc_ast::mem_pool::pool::Pool;
+use def::defs_to_html;
+use expr::{expr_to_html};
 use roc_builtins::std::StdLib;
 use roc_can::builtins::builtin_defs_map;
 use roc_can::scope::Scope;
@@ -13,11 +12,9 @@ use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{ModuleDocumentation, RecordField};
 use roc_load::file::{LoadedModule, LoadingProblem};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
-use roc_parse::ast::Expr;
 use roc_parse::ident::{parse_ident, Ident};
 use roc_parse::parser::{State, SyntaxError};
 use roc_region::all::Region;
-use roc_types::subs::VarStore;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -130,42 +127,8 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &
     println!("🎉 Docs generated in {}", build_dir.display());
 }
 
-// html is written to buf
-fn expr_to_html<'a>(buf: &mut BumpString<'a>, expr: Expr<'a>, env_module_id: ModuleId, env_module_ids: &'a ModuleIds, interns: &Interns) {
-
-    let mut env_pool = Pool::with_capacity(1024);
-    let mut env_arena = Bump::new();
-
-    let mut var_store = VarStore::default();
-    let dep_idents = IdentIds::exposed_builtins(8);
-    let exposed_ident_ids = IdentIds::default();
-
-    let mut env = lang::env::Env::new(
-        env_module_id,
-        &mut env_arena,
-        &mut env_pool,
-        &mut var_store,
-        dep_idents,
-        env_module_ids,
-        exposed_ident_ids,
-    );
-
-    let mut scope = lang::scope::Scope::new(env.home, env.pool, env.var_store);
-    let region = Region::new(0, 0, 0, 0);
-
-    // TODO remove unwrap
-    write_expr_to_bump_str_html(
-        &mut env,
-        &mut scope,
-        region,
-        &expr,
-        interns,
-        buf
-    ).unwrap();
-}
-
-// converts plain text code to highlighted html
-pub fn syntax_highlight_code<'a>(
+// converts plain-text code to highlighted html
+pub fn syntax_highlight_expr<'a>(
     arena: &'a Bump,
     buf: &mut BumpString<'a>,
     code_str: &'a str,
@@ -184,11 +147,30 @@ pub fn syntax_highlight_code<'a>(
         }
         Err(fail) => Err(SyntaxError::Expr(fail)),
     }
-    // roc_parse::test_helpers::parse_expr_with(&arena, trimmed_code_str).map(|expr| {
-    //     expr.html(buf);
-    //
-    //     buf.to_string()
-    // })
+}
+
+// converts plain-text code to highlighted html
+pub fn syntax_highlight_top_level_defs<'a>(
+    arena: &'a Bump,
+    buf: &mut BumpString<'a>,
+    code_str: &'a str,
+    env_module_id: ModuleId,
+    env_module_ids: &'a ModuleIds,
+    interns: &Interns
+) -> Result<String, SyntaxError<'a>> {
+    let trimmed_code_str = code_str.trim_end().trim();
+
+    match roc_parse::test_helpers::parse_defs_with(arena, trimmed_code_str) {
+        Ok(vec_loc_def) => {
+            let vec_def =
+                vec_loc_def.iter().map(|loc| loc.value).collect();
+                
+            defs_to_html(buf, vec_def, env_module_id, env_module_ids, interns);
+
+            Ok(buf.to_string())
+        }
+        Err(err) => Err(err),
+    }
 }
 
 // TODO improve name, what is main content?
@@ -997,7 +979,7 @@ fn markdown_to_html(
                 let code_block_arena = Bump::new();
 
                 let mut code_block_buf = BumpString::new_in(&code_block_arena);
-                match syntax_highlight_code(
+                match syntax_highlight_expr(
                     &code_block_arena,
                     &mut code_block_buf,
                     code_str,
