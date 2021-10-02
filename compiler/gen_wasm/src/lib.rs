@@ -121,36 +121,40 @@ fn encode_alignment(bytes: u32) -> u32 {
     }
 }
 
-fn copy_memory(
-    instructions: &mut Vec<Instruction>,
+pub struct MemoryCopy {
     from_ptr: LocalId,
+    from_offset: u32,
     to_ptr: LocalId,
+    to_offset: u32,
     size: u32,
     alignment_bytes: u32,
-    offset: u32,
-) {
-    let alignment_flag = encode_alignment(alignment_bytes);
-    let mut current_offset = offset;
-    while size - current_offset >= 8 {
-        instructions.push(GetLocal(to_ptr.0));
-        instructions.push(GetLocal(from_ptr.0));
-        instructions.push(I64Load(alignment_flag, current_offset));
-        instructions.push(I64Store(alignment_flag, current_offset));
-        current_offset += 8;
-    }
-    if size - current_offset >= 4 {
-        instructions.push(GetLocal(to_ptr.0));
-        instructions.push(GetLocal(from_ptr.0));
-        instructions.push(I32Load(alignment_flag, current_offset));
-        instructions.push(I32Store(alignment_flag, current_offset));
-        current_offset += 4;
-    }
-    while size - current_offset > 0 {
-        instructions.push(GetLocal(to_ptr.0));
-        instructions.push(GetLocal(from_ptr.0));
-        instructions.push(I32Load8U(alignment_flag, current_offset));
-        instructions.push(I32Store8(alignment_flag, current_offset));
-        current_offset += 1;
+}
+
+impl MemoryCopy {
+    pub fn generate(&self, instructions: &mut Vec<Instruction>) {
+        let alignment_flag = encode_alignment(self.alignment_bytes);
+        let mut i = 0;
+        while self.size - i >= 8 {
+            instructions.push(GetLocal(self.to_ptr.0));
+            instructions.push(GetLocal(self.from_ptr.0));
+            instructions.push(I64Load(alignment_flag, i + self.from_offset));
+            instructions.push(I64Store(alignment_flag, i + self.to_offset));
+            i += 8;
+        }
+        if self.size - i >= 4 {
+            instructions.push(GetLocal(self.to_ptr.0));
+            instructions.push(GetLocal(self.from_ptr.0));
+            instructions.push(I32Load(alignment_flag, i + self.from_offset));
+            instructions.push(I32Store(alignment_flag, i + self.to_offset));
+            i += 4;
+        }
+        while self.size - i > 0 {
+            instructions.push(GetLocal(self.to_ptr.0));
+            instructions.push(GetLocal(self.from_ptr.0));
+            instructions.push(I32Load8U(alignment_flag, i + self.from_offset));
+            instructions.push(I32Store8(alignment_flag, i + self.to_offset));
+            i += 1;
+        }
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::{copy_memory, LocalId, ALIGN_1, ALIGN_2, ALIGN_4, ALIGN_8};
+use crate::{LocalId, MemoryCopy, ALIGN_1, ALIGN_2, ALIGN_4, ALIGN_8};
 use parity_wasm::elements::{Instruction, Instruction::*, ValueType};
 
 #[derive(Debug, Clone)]
@@ -14,7 +14,6 @@ pub enum SymbolStorage {
         size: u32,
     },
     VarStackMemory {
-        local_id: LocalId,
         size: u32,
         offset: u32,
         alignment_bytes: u32,
@@ -30,12 +29,12 @@ pub enum SymbolStorage {
 }
 
 impl SymbolStorage {
-    pub fn local_id(&self) -> LocalId {
+    pub fn local_id(&self, stack_frame_pointer: Option<LocalId>) -> LocalId {
         match self {
             Self::ParamPrimitive { local_id, .. } => *local_id,
             Self::ParamStackMemory { local_id, .. } => *local_id,
             Self::VarPrimitive { local_id, .. } => *local_id,
-            Self::VarStackMemory { local_id, .. } => *local_id,
+            Self::VarStackMemory { .. } => stack_frame_pointer.unwrap(),
             Self::VarHeapMemory { local_id, .. } => *local_id,
         }
     }
@@ -57,6 +56,16 @@ impl SymbolStorage {
             Self::ParamPrimitive { .. } => false,
             Self::VarPrimitive { .. } => false,
             Self::VarHeapMemory { .. } => false,
+        }
+    }
+
+    pub fn address_offset(&self) -> Option<u32> {
+        match self {
+            Self::ParamStackMemory { .. } => Some(0),
+            Self::VarStackMemory { offset, .. } => Some(*offset),
+            Self::ParamPrimitive { .. } => None,
+            Self::VarPrimitive { .. } => None,
+            Self::VarHeapMemory { .. } => None,
         }
     }
 
@@ -82,6 +91,7 @@ impl SymbolStorage {
         instructions: &mut Vec<Instruction>,
         to_pointer: LocalId,
         to_offset: u32,
+        stack_frame_pointer: Option<LocalId>,
     ) -> u32 {
         match self {
             Self::ParamPrimitive {
@@ -117,21 +127,34 @@ impl SymbolStorage {
                 local_id,
                 size,
                 alignment_bytes,
+            } => {
+                let copy = MemoryCopy {
+                    from_ptr: *local_id,
+                    from_offset: 0,
+                    to_ptr: to_pointer,
+                    to_offset,
+                    size: *size,
+                    alignment_bytes: *alignment_bytes,
+                };
+                copy.generate(instructions);
+                *size
             }
-            | Self::VarStackMemory {
-                local_id,
+
+            Self::VarStackMemory {
                 size,
                 alignment_bytes,
+                offset,
                 ..
             } => {
-                copy_memory(
-                    instructions,
-                    *local_id,
-                    to_pointer,
-                    *size,
-                    *alignment_bytes,
+                let copy = MemoryCopy {
+                    from_ptr: stack_frame_pointer.unwrap(),
+                    from_offset: *offset,
+                    to_ptr: to_pointer,
                     to_offset,
-                );
+                    size: *size,
+                    alignment_bytes: *alignment_bytes,
+                };
+                copy.generate(instructions);
                 *size
             }
 
