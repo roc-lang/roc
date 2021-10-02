@@ -19,7 +19,9 @@ app "false"
 # This implementation is easy to overflow, either make the input long enough or make a false while loop run long enough.
 # I assume all of the Task.awaits are the cause of this, but I am not 100% sure.
 
-main : List Str -> Task {} *
+InterpreterErrors : [ BadUtf8, DivByZero, EmptyStack, InvalidBooleanValue, InvalidChar Str, NoLambdaOnStack, NoNumberOnStack Context.Data, NoVariableOnStack, OutOfBounds, UnexpectedEndOfData ]
+
+main : List Str -> Task {} []
 main = \filenames ->
     filenames
         |> List.walk  (\filename, task  -> Task.await task (\_ -> (interpretFile filename))) (Task.succeed {})
@@ -27,7 +29,7 @@ main = \filenames ->
         |> Task.onFail (\StringErr e -> Stdout.line "Ran into problem:\n\(e)\n")
     
 
-interpretFile : Str -> Task {} [ StringErr Str ]*
+interpretFile : Str -> Task {} [ StringErr Str ]
 interpretFile = \filename ->
     {} <- Task.await (Stdout.line "\nInterpreting file: \(filename)\n")
     ctx <- Context.with filename
@@ -74,7 +76,7 @@ isWhitespace = \char ->
     || char == 0x20 # space
     || char == 0x9 # tab
 
-interpretContext : Context -> Task Context [ BadUtf8, DivByZero, EmptyStack, InvalidBooleanValue, InvalidChar Str, NoLambdaOnStack, NoNumberOnStack Context.Data, NoVariableOnStack, OutOfBounds, UnexpectedEndOfData ]*
+interpretContext : Context -> Task Context InterpreterErrors
 interpretContext = \ctx ->
     # If I move this definition below interpretContext it breaks.
     runLambda = \baseCtx, bytes ->
@@ -321,7 +323,7 @@ interpretContext = \ctx ->
             # Computation complete.
             Task.succeed ctx
 
-unaryOp: Context, (I64 -> I64) -> Task Context [ BadUtf8, DivByZero, EmptyStack, InvalidBooleanValue, InvalidChar Str, NoLambdaOnStack, NoNumberOnStack Context.Data, NoVariableOnStack, OutOfBounds, UnexpectedEndOfData ]*
+unaryOp: Context, (I64 -> I64) -> Task Context InterpreterErrors
 unaryOp = \ctx, op ->
     result =
         (T popCtx num) <- Result.after (popNumber ctx)
@@ -332,7 +334,7 @@ unaryOp = \ctx, op ->
         Err e ->
             Task.fail e
 
-binaryOp: Context, (I64, I64 -> I64) -> Task Context [ BadUtf8, DivByZero, EmptyStack, InvalidBooleanValue, InvalidChar Str, NoLambdaOnStack, NoNumberOnStack Context.Data, NoVariableOnStack, OutOfBounds, UnexpectedEndOfData ]*
+binaryOp: Context, (I64, I64 -> I64) -> Task Context InterpreterErrors
 binaryOp = \ctx, op ->
     result =
         (T popCtx1 numR) <- Result.after (popNumber ctx)
@@ -345,7 +347,7 @@ binaryOp = \ctx, op ->
             Task.fail e
 
 
-popNumber: Context -> Result [T Context I64] [ BadUtf8, DivByZero, EmptyStack, InvalidBooleanValue, InvalidChar Str, NoLambdaOnStack, NoNumberOnStack Context.Data, NoVariableOnStack, OutOfBounds, UnexpectedEndOfData ]*
+popNumber: Context -> Result [T Context I64] InterpreterErrors
 popNumber = \ctx ->
     when Context.popStack ctx is
         Ok (T popCtx (Number num)) ->
@@ -355,7 +357,7 @@ popNumber = \ctx ->
         Err EmptyStack ->
             Err EmptyStack
 
-popLambda: Context -> Result [T Context (List U8)] [ BadUtf8, DivByZero, EmptyStack, InvalidBooleanValue, InvalidChar Str, NoLambdaOnStack, NoNumberOnStack Context.Data, NoVariableOnStack, OutOfBounds, UnexpectedEndOfData ]*
+popLambda: Context -> Result [T Context (List U8)] InterpreterErrors
 popLambda = \ctx ->
     when Context.popStack ctx is
         Ok (T popCtx (Lambda bytes)) ->
@@ -365,7 +367,7 @@ popLambda = \ctx ->
         Err EmptyStack ->
             Err EmptyStack
 
-popVariable: Context -> Result [T Context Variable] [ BadUtf8, DivByZero, EmptyStack, InvalidBooleanValue, InvalidChar Str, NoLambdaOnStack, NoNumberOnStack Context.Data, NoVariableOnStack, OutOfBounds, UnexpectedEndOfData ]*
+popVariable: Context -> Result [T Context Variable] InterpreterErrors
 popVariable = \ctx ->
     when Context.popStack ctx is
         Ok (T popCtx (Var var)) ->
@@ -377,12 +379,12 @@ popVariable = \ctx ->
 
 # This has to be a bit more complex than other options because they can be nested.
 # Also, it puts the lambda on the stack
-pushLambda: Context -> Task Context [ BadUtf8, DivByZero, EmptyStack, InvalidBooleanValue, InvalidChar Str, NoLambdaOnStack, NoNumberOnStack Context.Data, NoVariableOnStack, OutOfBounds, UnexpectedEndOfData ]*
+pushLambda: Context -> Task Context InterpreterErrors
 pushLambda = \ctx ->
     (T newCtx bytes) <- Task.await (pushLambdaHelper ctx [] 0)
     Task.succeed (Context.pushStack newCtx (Lambda bytes))
 
-pushLambdaHelper: Context, List U8, U64 -> Task [ T Context (List U8) ] [ BadUtf8, DivByZero, EmptyStack, InvalidBooleanValue, InvalidChar Str, NoLambdaOnStack, NoNumberOnStack Context.Data, NoVariableOnStack, OutOfBounds, UnexpectedEndOfData ]*
+pushLambdaHelper: Context, List U8, U64 -> Task [ T Context (List U8) ] InterpreterErrors
 pushLambdaHelper = \ctx, base, depth ->
     result <- Task.attempt (Context.getChar ctx)
     when result is
@@ -398,11 +400,11 @@ pushLambdaHelper = \ctx, base, depth ->
         Err EndOfData ->
             Task.fail UnexpectedEndOfData
 
-pushNumber: Context -> Task Context [ BadUtf8, DivByZero, EmptyStack, InvalidBooleanValue, InvalidChar Str, NoLambdaOnStack, NoNumberOnStack Context.Data, NoVariableOnStack, OutOfBounds, UnexpectedEndOfData ]*
+pushNumber: Context -> Task Context InterpreterErrors
 pushNumber = \ctx ->
     pushNumberHelper ctx 0
 
-pushNumberHelper: Context, I64 -> Task Context [ BadUtf8, DivByZero, EmptyStack, InvalidBooleanValue, InvalidChar Str, NoLambdaOnStack, NoNumberOnStack Context.Data, NoVariableOnStack, OutOfBounds, UnexpectedEndOfData ]*
+pushNumberHelper: Context, I64 -> Task Context InterpreterErrors
 pushNumberHelper = \ctx, accum ->
     result <- Task.attempt (Context.getChar ctx)
     when result is
@@ -420,7 +422,7 @@ pushNumberHelper = \ctx, accum ->
 
 # It seems that I need to specify all error types in every function for some reason.
 # I feel like this should just need to say UnexpectedEndOfData.
-printString : Context -> Task Context [ BadUtf8, DivByZero, EmptyStack, InvalidBooleanValue, InvalidChar Str, NoLambdaOnStack, NoNumberOnStack Context.Data, NoVariableOnStack, OutOfBounds, UnexpectedEndOfData ]*
+printString : Context -> Task Context InterpreterErrors
 printString = \ctx ->
     (T afterStringCtx bytes) <- Task.await (printStringHelper ctx [])
     when Str.fromUtf8 bytes is
@@ -430,7 +432,7 @@ printString = \ctx ->
         Err _ ->
             Task.fail BadUtf8
 
-printStringHelper : Context, List U8 -> Task [ T Context (List U8) ] [ BadUtf8, DivByZero, EmptyStack, InvalidBooleanValue, InvalidChar Str, NoLambdaOnStack, NoNumberOnStack Context.Data, NoVariableOnStack, OutOfBounds, UnexpectedEndOfData ]*
+printStringHelper : Context, List U8 -> Task [ T Context (List U8) ] InterpreterErrors
 printStringHelper = \ctx, base ->
     result <- Task.attempt (Context.getChar ctx)
     when result is
@@ -442,7 +444,7 @@ printStringHelper = \ctx, base ->
         Err EndOfData ->
             Task.fail UnexpectedEndOfData
 
-consumeComment : Context -> Task Context [ BadUtf8, DivByZero, EmptyStack, InvalidBooleanValue, InvalidChar Str, NoLambdaOnStack, NoNumberOnStack Context.Data, NoVariableOnStack, OutOfBounds, UnexpectedEndOfData ]*
+consumeComment : Context -> Task Context InterpreterErrors
 consumeComment = \ctx ->
     result <- Task.attempt (Context.getChar ctx)
     when result is
