@@ -2,7 +2,7 @@ use crate::target::arch_str;
 #[cfg(feature = "llvm")]
 use libloading::{Error, Library};
 use roc_builtins::bitcode;
-#[cfg(feature = "llvm")]
+// #[cfg(feature = "llvm")]
 use roc_mono::ir::OptLevel;
 use std::collections::HashMap;
 use std::env;

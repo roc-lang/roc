@@ -2,11 +2,9 @@
 use roc_gen_llvm::llvm::build::module_from_builtins;
 #[cfg(feature = "llvm")]
 pub use roc_gen_llvm::llvm::build::FunctionIterator;
-#[cfg(feature = "llvm")]
 use roc_load::file::MonomorphizedModule;
 #[cfg(feature = "llvm")]
 use roc_mono::ir::OptLevel;
-#[cfg(feature = "llvm")]
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
