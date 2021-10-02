@@ -242,6 +242,22 @@ where
     morphic_lib::solve(program)
 }
 
+/// if you want an "escape hatch" which allows you construct "best-case scenario" values
+/// of an arbitrary type in much the same way that 'unknown_with' allows you to construct
+/// "worst-case scenario" values of an arbitrary type, you can use the following terrible hack:
+/// use 'add_make_union' to construct an instance of variant 0 of a union type 'union {(), your_type}',
+/// and then use 'add_unwrap_union' to extract variant 1 from the value you just constructed.
+/// In the current implementation (but not necessarily in future versions),
+/// I can promise this will effectively give you a value of type 'your_type'
+/// all of whose heap cells are considered unique and mutable.
+fn terrible_hack(builder: &mut FuncDefBuilder, block: BlockId, type_id: TypeId) -> Result<ValueId> {
+    let variant_types = vec![builder.add_tuple_type(&[])?, type_id];
+    let unit = builder.add_make_tuple(block, &[])?;
+    let value = builder.add_make_union(block, &variant_types, 0, unit)?;
+
+    builder.add_unwrap_union(block, value, 1)
+}
+
 fn build_entry_point(
     layout: crate::ir::ProcLayout,
     func_name: FuncName,
@@ -257,7 +273,12 @@ fn build_entry_point(
 
         // to the modelling language, the arguments appear out of thin air
         let argument_type = build_tuple_type(&mut builder, layout.arguments)?;
-        let argument = builder.add_unknown_with(block, &[], argument_type)?;
+
+        // does not make any assumptions about the input
+        // let argument = builder.add_unknown_with(block, &[], argument_type)?;
+
+        // assumes the input can be updated in-place
+        let argument = terrible_hack(&mut builder, block, argument_type)?;
 
         let name_bytes = [0; 16];
         let spec_var = CalleeSpecVar(&name_bytes);
