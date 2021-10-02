@@ -46,6 +46,7 @@ let
     python3
     llvmPkgs.llvm.dev
     llvmPkgs.clang
+    libxkbcommon
     pkg-config
     zig
 

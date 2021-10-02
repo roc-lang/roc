@@ -7,6 +7,7 @@ name: Benchmarks
 
 env:
   RUST_BACKTRACE: 1
+  ROC_NUM_WORKERS: 1
 
 jobs:
   prep-dependency-container:

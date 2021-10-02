@@ -103,7 +103,6 @@ fn build_eq_builtin<'a, 'ctx, 'env>(
         Builtin::Float128 => float_cmp(FloatPredicate::OEQ, "eq_f128"),
         Builtin::Float64 => float_cmp(FloatPredicate::OEQ, "eq_f64"),
         Builtin::Float32 => float_cmp(FloatPredicate::OEQ, "eq_f32"),
-        Builtin::Float16 => float_cmp(FloatPredicate::OEQ, "eq_f16"),
 
         Builtin::Str => str_equal(env, lhs_val, rhs_val),
         Builtin::List(elem) => build_list_eq(
@@ -155,6 +154,8 @@ fn build_eq<'a, 'ctx, 'env>(
             lhs_val.into_struct_value(),
             rhs_val.into_struct_value(),
         ),
+
+        Layout::LambdaSet(_) => unreachable!("cannot compare closures"),
 
         Layout::Union(union_layout) => build_tag_eq(
             env,
@@ -245,7 +246,6 @@ fn build_neq_builtin<'a, 'ctx, 'env>(
         Builtin::Float128 => float_cmp(FloatPredicate::ONE, "neq_f128"),
         Builtin::Float64 => float_cmp(FloatPredicate::ONE, "neq_f64"),
         Builtin::Float32 => float_cmp(FloatPredicate::ONE, "neq_f32"),
-        Builtin::Float16 => float_cmp(FloatPredicate::ONE, "neq_f16"),
 
         Builtin::Str => {
             let is_equal = str_equal(env, lhs_val, rhs_val).into_int_value();
@@ -336,6 +336,7 @@ fn build_neq<'a, 'ctx, 'env>(
         Layout::RecursivePointer => {
             unreachable!("recursion pointers should never be compared directly")
         }
+        Layout::LambdaSet(_) => unreachable!("cannot compare closure"),
     }
 }
 

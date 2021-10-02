@@ -189,6 +189,7 @@ pub enum Layout<'a> {
     /// this is important for closures that capture zero-sized values
     Struct(&'a [Layout<'a>]),
     Union(UnionLayout<'a>),
+    LambdaSet(LambdaSet<'a>),
     RecursivePointer,
 }
 
@@ -454,6 +455,17 @@ impl<'a> LambdaSet<'a> {
         }
     }
 
+    pub fn member_does_not_need_closure_argument(&self, function_symbol: Symbol) -> bool {
+        match self.layout_for_member(function_symbol) {
+            ClosureRepresentation::Union {
+                alphabetic_order_fields,
+                ..
+            } => alphabetic_order_fields.is_empty(),
+            ClosureRepresentation::AlphabeticOrderStruct(fields) => fields.is_empty(),
+            ClosureRepresentation::Other(_) => false,
+        }
+    }
+
     pub fn layout_for_member(&self, function_symbol: Symbol) -> ClosureRepresentation<'a> {
         debug_assert!(
             self.set.iter().any(|(s, _)| *s == function_symbol),
@@ -531,7 +543,7 @@ impl<'a> LambdaSet<'a> {
                 _ => {
                     let mut arguments = Vec::with_capacity_in(argument_layouts.len() + 1, arena);
                     arguments.extend(argument_layouts);
-                    arguments.push(self.runtime_representation());
+                    arguments.push(Layout::LambdaSet(*self));
 
                     arguments.into_bump_slice()
                 }
@@ -587,7 +599,7 @@ impl<'a> LambdaSet<'a> {
                 // this can happen when there is a type error somewhere
                 Ok(LambdaSet {
                     set: &[],
-                    representation: arena.alloc(Layout::Union(UnionLayout::NonRecursive(&[]))),
+                    representation: arena.alloc(Layout::Struct(&[])),
                 })
             }
             _ => panic!("called LambdaSet.from_var on invalid input"),
@@ -606,7 +618,9 @@ impl<'a> LambdaSet<'a> {
         use UnionVariant::*;
         match variant {
             Never => Layout::Union(UnionLayout::NonRecursive(&[])),
-            Unit | UnitWithArguments | BoolUnion { .. } | ByteUnion(_) => {
+            BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
+            ByteUnion { .. } => Layout::Builtin(Builtin::Int8),
+            Unit | UnitWithArguments => {
                 // no useful information to store
                 Layout::Struct(&[])
             }
@@ -667,7 +681,6 @@ pub enum Builtin<'a> {
     Float128,
     Float64,
     Float32,
-    Float16,
     Str,
     Dict(&'a Layout<'a>, &'a Layout<'a>),
     Set(&'a Layout<'a>),
@@ -826,6 +839,7 @@ impl<'a> Layout<'a> {
                     }
                 }
             }
+            LambdaSet(lambda_set) => lambda_set.runtime_representation().safe_to_memcpy(),
             RecursivePointer => {
                 // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
                 false
@@ -890,6 +904,9 @@ impl<'a> Layout<'a> {
                     | NonNullableUnwrapped(_) => pointer_size,
                 }
             }
+            LambdaSet(lambda_set) => lambda_set
+                .runtime_representation()
+                .stack_size_without_alignment(pointer_size),
             RecursivePointer => pointer_size,
         }
     }
@@ -919,6 +936,9 @@ impl<'a> Layout<'a> {
                     | NonNullableUnwrapped(_) => pointer_size,
                 }
             }
+            Layout::LambdaSet(lambda_set) => lambda_set
+                .runtime_representation()
+                .alignment_bytes(pointer_size),
             Layout::Builtin(builtin) => builtin.alignment_bytes(pointer_size),
             Layout::RecursivePointer => pointer_size,
         }
@@ -929,6 +949,9 @@ impl<'a> Layout<'a> {
             Layout::Builtin(builtin) => builtin.allocation_alignment_bytes(pointer_size),
             Layout::Struct(_) => unreachable!("not heap-allocated"),
             Layout::Union(union_layout) => union_layout.allocation_alignment_bytes(pointer_size),
+            Layout::LambdaSet(lambda_set) => lambda_set
+                .runtime_representation()
+                .allocation_alignment_bytes(pointer_size),
             Layout::RecursivePointer => unreachable!("should be looked up to get an actual layout"),
         }
     }
@@ -979,6 +1002,7 @@ impl<'a> Layout<'a> {
                     | NonNullableUnwrapped(_) => true,
                 }
             }
+            LambdaSet(lambda_set) => lambda_set.runtime_representation().contains_refcounted(),
             RecursivePointer => true,
         }
     }
@@ -1002,6 +1026,7 @@ impl<'a> Layout<'a> {
                     .append(alloc.text("}"))
             }
             Union(union_layout) => union_layout.to_doc(alloc, parens),
+            LambdaSet(lambda_set) => lambda_set.runtime_representation().to_doc(alloc, parens),
             RecursivePointer => alloc.text("*self"),
         }
     }
@@ -1093,7 +1118,6 @@ impl<'a> Builtin<'a> {
     const F128_SIZE: u32 = 16;
     const F64_SIZE: u32 = std::mem::size_of::<f64>() as u32;
     const F32_SIZE: u32 = std::mem::size_of::<f32>() as u32;
-    const F16_SIZE: u32 = 2;
 
     /// Number of machine words in an empty one of these
     pub const STR_WORDS: u32 = 2;
@@ -1123,7 +1147,6 @@ impl<'a> Builtin<'a> {
             Float128 => Builtin::F128_SIZE,
             Float64 => Builtin::F64_SIZE,
             Float32 => Builtin::F32_SIZE,
-            Float16 => Builtin::F16_SIZE,
             Str | EmptyStr => Builtin::STR_WORDS * pointer_size,
             Dict(_, _) | EmptyDict => Builtin::DICT_WORDS * pointer_size,
             Set(_) | EmptySet => Builtin::SET_WORDS * pointer_size,
@@ -1150,7 +1173,6 @@ impl<'a> Builtin<'a> {
             Float128 => align_of::<i128>() as u32,
             Float64 => align_of::<f64>() as u32,
             Float32 => align_of::<f32>() as u32,
-            Float16 => align_of::<i16>() as u32,
             Dict(_, _) | EmptyDict => pointer_size,
             Set(_) | EmptySet => pointer_size,
             // we often treat these as i128 (64-bit systems)
@@ -1158,8 +1180,8 @@ impl<'a> Builtin<'a> {
             //
             // In webassembly, For that to be safe
             // they must be aligned to allow such access
-            List(_) | EmptyList => pointer_size.max(8),
-            Str | EmptyStr => pointer_size.max(8),
+            List(_) | EmptyList => pointer_size,
+            Str | EmptyStr => pointer_size,
         }
     }
 
@@ -1168,7 +1190,7 @@ impl<'a> Builtin<'a> {
 
         match self {
             Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Usize | Decimal | Float128 | Float64
-            | Float32 | Float16 | EmptyStr | EmptyDict | EmptyList | EmptySet => true,
+            | Float32 | EmptyStr | EmptyDict | EmptyList | EmptySet => true,
             Str | Dict(_, _) | Set(_) | List(_) => false,
         }
     }
@@ -1179,7 +1201,7 @@ impl<'a> Builtin<'a> {
 
         match self {
             Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Usize | Decimal | Float128 | Float64
-            | Float32 | Float16 | EmptyStr | EmptyDict | EmptyList | EmptySet => false,
+            | Float32 | EmptyStr | EmptyDict | EmptyList | EmptySet => false,
             List(_) => true,
 
             Str | Dict(_, _) | Set(_) => true,
@@ -1206,7 +1228,6 @@ impl<'a> Builtin<'a> {
             Float128 => alloc.text("Float128"),
             Float64 => alloc.text("Float64"),
             Float32 => alloc.text("Float32"),
-            Float16 => alloc.text("Float16"),
 
             EmptyStr => alloc.text("EmptyStr"),
             EmptyList => alloc.text("EmptyList"),
@@ -1240,8 +1261,7 @@ impl<'a> Builtin<'a> {
             | Builtin::Decimal
             | Builtin::Float128
             | Builtin::Float64
-            | Builtin::Float32
-            | Builtin::Float16 => unreachable!("not heap-allocated"),
+            | Builtin::Float32 => unreachable!("not heap-allocated"),
             Builtin::Str => pointer_size,
             Builtin::Dict(k, v) => k
                 .alignment_bytes(pointer_size)
@@ -1360,7 +1380,7 @@ fn layout_from_flat_type<'a>(
         Func(_, closure_var, _) => {
             let lambda_set = LambdaSet::from_var(env.arena, env.subs, closure_var, env.ptr_bytes)?;
 
-            Ok(lambda_set.runtime_representation())
+            Ok(Layout::LambdaSet(lambda_set))
         }
         Record(fields, ext_var) => {
             // extract any values from the ext_var

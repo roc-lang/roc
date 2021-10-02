@@ -54,6 +54,7 @@ macro_rules! return_on_layout_error_help {
 
 #[derive(Debug, Clone, Copy)]
 pub enum OptLevel {
+    Development,
     Normal,
     Optimize,
 }
@@ -694,7 +695,20 @@ impl<'a> Procs<'a> {
                         // the `layout` is a function pointer, while `_ignore_layout` can be a
                         // closure. We only specialize functions, storing this value with a closure
                         // layout will give trouble.
-                        self.specialized.insert((symbol, layout), Done(proc));
+                        let arguments =
+                            Vec::from_iter_in(proc.args.iter().map(|(l, _)| *l), env.arena)
+                                .into_bump_slice();
+
+                        let proper_layout = ProcLayout {
+                            arguments,
+                            result: proc.ret_layout,
+                        };
+
+                        // NOTE: some function are specialized to have a closure, but don't actually
+                        // need any closure argument. Here is where we correct this sort of thing,
+                        // by trusting the layout of the Proc, not of what we specialize for
+                        self.specialized.remove(&(symbol, layout));
+                        self.specialized.insert((symbol, proper_layout), Done(proc));
                     }
                     Err(error) => {
                         panic!("TODO generate a RuntimeError message for {:?}", error);
@@ -1843,7 +1857,7 @@ fn generate_runtime_error_function<'a>(
                 args.push((*arg, env.unique_symbol()));
             }
 
-            args.push((lambda_set.runtime_representation(), Symbol::ARG_CLOSURE));
+            args.push((Layout::LambdaSet(lambda_set), Symbol::ARG_CLOSURE));
 
             (args.into_bump_slice(), *ret_layout)
         }
@@ -1919,7 +1933,29 @@ fn specialize_external<'a>(
             match layout {
                 RawFunctionLayout::Function(argument_layouts, lambda_set, return_layout) => {
                     let assigned = env.unique_symbol();
-                    let unit = env.unique_symbol();
+
+                    let mut argument_symbols =
+                        Vec::with_capacity_in(argument_layouts.len(), env.arena);
+                    let mut proc_arguments =
+                        Vec::with_capacity_in(argument_layouts.len() + 1, env.arena);
+                    let mut top_level_arguments =
+                        Vec::with_capacity_in(argument_layouts.len() + 1, env.arena);
+
+                    for layout in argument_layouts {
+                        let symbol = env.unique_symbol();
+
+                        proc_arguments.push((*layout, symbol));
+
+                        argument_symbols.push(symbol);
+                        top_level_arguments.push(*layout);
+                    }
+
+                    // the proc needs to take an extra closure argument
+                    let lambda_set_layout = Layout::LambdaSet(lambda_set);
+                    proc_arguments.push((lambda_set_layout, Symbol::ARG_CLOSURE));
+
+                    // this should also be reflected in the TopLevel signature
+                    top_level_arguments.push(lambda_set_layout);
 
                     let hole = env.arena.alloc(Stmt::Ret(assigned));
 
@@ -1927,20 +1963,16 @@ fn specialize_external<'a>(
                         env,
                         lambda_set,
                         Symbol::ARG_CLOSURE,
-                        env.arena.alloc([unit]),
+                        argument_symbols.into_bump_slice(),
                         argument_layouts,
                         *return_layout,
                         assigned,
                         hole,
                     );
 
-                    let body = let_empty_struct(unit, env.arena.alloc(body));
-
                     let proc = Proc {
                         name,
-                        args: env
-                            .arena
-                            .alloc([(lambda_set.runtime_representation(), Symbol::ARG_CLOSURE)]),
+                        args: proc_arguments.into_bump_slice(),
                         body,
                         closure_data_layout: None,
                         ret_layout: *return_layout,
@@ -1951,7 +1983,7 @@ fn specialize_external<'a>(
 
                     let top_level = ProcLayout::new(
                         env.arena,
-                        env.arena.alloc([lambda_set.runtime_representation()]),
+                        top_level_arguments.into_bump_slice(),
                         *return_layout,
                     );
 
@@ -1999,7 +2031,7 @@ fn specialize_external<'a>(
             env.subs.rollback_to(snapshot);
 
             let closure_data_layout = match opt_closure_layout {
-                Some(closure_layout) => closure_layout.runtime_representation(),
+                Some(lambda_set) => Layout::LambdaSet(lambda_set),
                 None => Layout::Struct(&[]),
             };
 
@@ -2149,7 +2181,7 @@ fn specialize_external<'a>(
             env.subs.rollback_to(snapshot);
 
             let closure_data_layout = match opt_closure_layout {
-                Some(closure_layout) => Some(closure_layout.runtime_representation()),
+                Some(lambda_set) => Some(Layout::LambdaSet(lambda_set)),
                 None => None,
             };
 
@@ -2260,7 +2292,7 @@ fn build_specialized_proc<'a>(
         Some(lambda_set) if pattern_symbols.last() == Some(&Symbol::ARG_CLOSURE) => {
             // here we define the lifted (now top-level) f function. Its final argument is `Symbol::ARG_CLOSURE`,
             // it stores the closure structure (just an integer in this case)
-            proc_args.push((lambda_set.runtime_representation(), Symbol::ARG_CLOSURE));
+            proc_args.push((Layout::LambdaSet(lambda_set), Symbol::ARG_CLOSURE));
 
             debug_assert_eq!(
                 pattern_layouts_len + 1,
@@ -2297,7 +2329,7 @@ fn build_specialized_proc<'a>(
                 }
                 Ordering::Greater => {
                     if pattern_symbols.is_empty() {
-                        let ret_layout = lambda_set.runtime_representation();
+                        let ret_layout = Layout::LambdaSet(lambda_set);
                         Ok(FunctionPointerBody {
                             closure: None,
                             ret_layout,
@@ -2482,7 +2514,7 @@ where
     let raw = if procs.module_thunks.contains(&proc_name) {
         match raw {
             RawFunctionLayout::Function(_, lambda_set, _) => {
-                RawFunctionLayout::ZeroArgumentThunk(lambda_set.runtime_representation())
+                RawFunctionLayout::ZeroArgumentThunk(Layout::LambdaSet(lambda_set))
             }
             _ => raw,
         }
@@ -2656,6 +2688,7 @@ macro_rules! match_on_closure_argument {
         let ret_layout = top_level.result;
 
 
+
         match closure_data_layout {
             RawFunctionLayout::Function(_, lambda_set, _) =>  {
                 lowlevel_match_on_lambda_set(
@@ -2760,13 +2793,13 @@ pub fn with_hole<'a>(
                 IntOrFloat::SignedIntType(precision) => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Int(int)),
-                    Layout::Builtin(int_precision_to_builtin(precision)),
+                    precision.as_layout(),
                     hole,
                 ),
                 IntOrFloat::UnsignedIntType(precision) => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Int(int)),
-                    Layout::Builtin(int_precision_to_builtin(precision)),
+                    precision.as_layout(),
                     hole,
                 ),
                 _ => unreachable!("unexpected float precision for integer"),
@@ -2778,7 +2811,7 @@ pub fn with_hole<'a>(
                 IntOrFloat::BinaryFloatType(precision) => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Float(float)),
-                    Layout::Builtin(float_precision_to_builtin(precision)),
+                    precision.as_layout(),
                     hole,
                 ),
                 IntOrFloat::DecimalFloatType => {
@@ -2810,19 +2843,19 @@ pub fn with_hole<'a>(
                 IntOrFloat::SignedIntType(precision) => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Int(num.into())),
-                    Layout::Builtin(int_precision_to_builtin(precision)),
+                    precision.as_layout(),
                     hole,
                 ),
                 IntOrFloat::UnsignedIntType(precision) => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Int(num.into())),
-                    Layout::Builtin(int_precision_to_builtin(precision)),
+                    precision.as_layout(),
                     hole,
                 ),
                 IntOrFloat::BinaryFloatType(precision) => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Float(num as f64)),
-                    Layout::Builtin(float_precision_to_builtin(precision)),
+                    precision.as_layout(),
                     hole,
                 ),
                 IntOrFloat::DecimalFloatType => {
@@ -4131,6 +4164,8 @@ fn construct_closure_data<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
+    let lambda_set_layout = Layout::LambdaSet(lambda_set);
+
     match lambda_set.layout_for_member(name) {
         ClosureRepresentation::Union {
             tag_id,
@@ -4162,12 +4197,7 @@ fn construct_closure_data<'a>(
                 arguments: symbols,
             };
 
-            Stmt::Let(
-                assigned,
-                expr,
-                lambda_set.runtime_representation(),
-                env.arena.alloc(hole),
-            )
+            Stmt::Let(assigned, expr, lambda_set_layout, env.arena.alloc(hole))
         }
         ClosureRepresentation::AlphabeticOrderStruct(field_layouts) => {
             debug_assert_eq!(field_layouts.len(), symbols.len());
@@ -4198,7 +4228,7 @@ fn construct_closure_data<'a>(
 
             let expr = Expr::Struct(symbols);
 
-            Stmt::Let(assigned, expr, lambda_set.runtime_representation(), hole)
+            Stmt::Let(assigned, expr, lambda_set_layout, hole)
         }
         ClosureRepresentation::Other(Layout::Builtin(Builtin::Int1)) => {
             debug_assert_eq!(symbols.len(), 0);
@@ -4207,7 +4237,7 @@ fn construct_closure_data<'a>(
             let tag_id = name != lambda_set.set[0].0;
             let expr = Expr::Literal(Literal::Bool(tag_id));
 
-            Stmt::Let(assigned, expr, lambda_set.runtime_representation(), hole)
+            Stmt::Let(assigned, expr, lambda_set_layout, hole)
         }
         ClosureRepresentation::Other(Layout::Builtin(Builtin::Int8)) => {
             debug_assert_eq!(symbols.len(), 0);
@@ -4216,7 +4246,7 @@ fn construct_closure_data<'a>(
             let tag_id = lambda_set.set.iter().position(|(s, _)| *s == name).unwrap() as u8;
             let expr = Expr::Literal(Literal::Byte(tag_id));
 
-            Stmt::Let(assigned, expr, lambda_set.runtime_representation(), hole)
+            Stmt::Let(assigned, expr, lambda_set_layout, hole)
         }
         _ => unreachable!(),
     }
@@ -5623,8 +5653,8 @@ fn store_pattern_help<'a>(
             // do nothing
             return StorePattern::NotProductive(stmt);
         }
-        IntLiteral(_)
-        | FloatLiteral(_)
+        IntLiteral(_, _)
+        | FloatLiteral(_, _)
         | DecimalLiteral(_)
         | EnumLiteral { .. }
         | BitLiteral { .. }
@@ -5758,8 +5788,8 @@ fn store_tag_pattern<'a>(
             Underscore => {
                 // ignore
             }
-            IntLiteral(_)
-            | FloatLiteral(_)
+            IntLiteral(_, _)
+            | FloatLiteral(_, _)
             | DecimalLiteral(_)
             | EnumLiteral { .. }
             | BitLiteral { .. }
@@ -5834,8 +5864,8 @@ fn store_newtype_pattern<'a>(
             Underscore => {
                 // ignore
             }
-            IntLiteral(_)
-            | FloatLiteral(_)
+            IntLiteral(_, _)
+            | FloatLiteral(_, _)
             | DecimalLiteral(_)
             | EnumLiteral { .. }
             | BitLiteral { .. }
@@ -5910,8 +5940,8 @@ fn store_record_destruct<'a>(
                 // internally. But `y` is never used, so we must make sure it't not stored/loaded.
                 return StorePattern::NotProductive(stmt);
             }
-            IntLiteral(_)
-            | FloatLiteral(_)
+            IntLiteral(_, _)
+            | FloatLiteral(_, _)
             | DecimalLiteral(_)
             | EnumLiteral { .. }
             | BitLiteral { .. }
@@ -6060,7 +6090,7 @@ fn reuse_function_symbol<'a>(
                         let layout = match raw {
                             RawFunctionLayout::ZeroArgumentThunk(layout) => layout,
                             RawFunctionLayout::Function(_, lambda_set, _) => {
-                                lambda_set.runtime_representation()
+                                Layout::LambdaSet(lambda_set)
                             }
                         };
 
@@ -6158,7 +6188,7 @@ fn reuse_function_symbol<'a>(
                         // TODO suspicious
                         // let layout = Layout::Closure(argument_layouts, lambda_set, ret_layout);
                         // panic!("suspicious");
-                        let layout = lambda_set.runtime_representation();
+                        let layout = Layout::LambdaSet(lambda_set);
                         let top_level = ProcLayout::new(env.arena, &[], layout);
                         procs.insert_passed_by_name(
                             env,
@@ -6178,9 +6208,14 @@ fn reuse_function_symbol<'a>(
                             layout_cache,
                         );
 
-                        // a function name (non-closure) that is passed along
-                        // it never has closure data, so we use the empty struct
-                        return let_empty_struct(symbol, env.arena.alloc(result));
+                        construct_closure_data(
+                            env,
+                            lambda_set,
+                            original,
+                            &[],
+                            symbol,
+                            env.arena.alloc(result),
+                        )
                     }
                 }
                 RawFunctionLayout::ZeroArgumentThunk(ret_layout) => {
@@ -6348,7 +6383,7 @@ fn call_by_name<'a>(
                         procs,
                         fn_var,
                         proc_name,
-                        env.arena.alloc(lambda_set.runtime_representation()),
+                        env.arena.alloc(Layout::LambdaSet(lambda_set)),
                         layout_cache,
                         assigned,
                         hole,
@@ -6392,7 +6427,7 @@ fn call_by_name<'a>(
                         procs,
                         fn_var,
                         proc_name,
-                        env.arena.alloc(lambda_set.runtime_representation()),
+                        env.arena.alloc(Layout::LambdaSet(lambda_set)),
                         layout_cache,
                         closure_data_symbol,
                         env.arena.alloc(result),
@@ -6522,7 +6557,7 @@ fn call_by_name_help<'a>(
             force_thunk(
                 env,
                 proc_name,
-                lambda_set.runtime_representation(),
+                Layout::LambdaSet(lambda_set),
                 assigned,
                 hole,
             )
@@ -6836,13 +6871,7 @@ fn call_specialized_proc<'a>(
                     arguments: field_symbols,
                 };
 
-                build_call(
-                    env,
-                    call,
-                    assigned,
-                    lambda_set.runtime_representation(),
-                    hole,
-                )
+                build_call(env, call, assigned, Layout::LambdaSet(lambda_set), hole)
             }
             RawFunctionLayout::ZeroArgumentThunk(_) => {
                 unreachable!()
@@ -6882,8 +6911,8 @@ fn call_specialized_proc<'a>(
 pub enum Pattern<'a> {
     Identifier(Symbol),
     Underscore,
-    IntLiteral(i128),
-    FloatLiteral(u64),
+    IntLiteral(i128, IntPrecision),
+    FloatLiteral(u64, FloatPrecision),
     DecimalLiteral(RocDec),
     BitLiteral {
         value: bool,
@@ -6961,22 +6990,36 @@ fn from_can_pattern_help<'a>(
     match can_pattern {
         Underscore => Ok(Pattern::Underscore),
         Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
-        IntLiteral(_, _, int) => Ok(Pattern::IntLiteral(*int as i128)),
+        IntLiteral(var, _, int) => {
+            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, false) {
+                IntOrFloat::SignedIntType(precision) | IntOrFloat::UnsignedIntType(precision) => {
+                    Ok(Pattern::IntLiteral(*int as i128, precision))
+                }
+                other => {
+                    panic!(
+                        "Invalid precision for int pattern: {:?} has {:?}",
+                        can_pattern, other
+                    )
+                }
+            }
+        }
         FloatLiteral(var, float_str, float) => {
             // TODO: Can I reuse num_argument_to_int_or_float here if I pass in true?
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, true) {
-                IntOrFloat::SignedIntType(_) => {
-                    panic!("Invalid percision for float literal = {:?}", var)
+                IntOrFloat::SignedIntType(_) | IntOrFloat::UnsignedIntType(_) => {
+                    panic!("Invalid precision for float pattern {:?}", var)
                 }
-                IntOrFloat::UnsignedIntType(_) => {
-                    panic!("Invalid percision for float literal = {:?}", var)
+                IntOrFloat::BinaryFloatType(precision) => {
+                    Ok(Pattern::FloatLiteral(f64::to_bits(*float), precision))
                 }
-                IntOrFloat::BinaryFloatType(_) => Ok(Pattern::FloatLiteral(f64::to_bits(*float))),
                 IntOrFloat::DecimalFloatType => {
                     let dec = match RocDec::from_str(float_str) {
-                            Some(d) => d,
-                            None => panic!("Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message", float_str),
-                        };
+                        Some(d) => d,
+                        None => panic!(
+                            r"Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message",
+                            float_str
+                        ),
+                    };
                     Ok(Pattern::DecimalLiteral(dec))
                 }
             }
@@ -6993,9 +7036,15 @@ fn from_can_pattern_help<'a>(
         }
         NumLiteral(var, num_str, num) => {
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, false) {
-                IntOrFloat::SignedIntType(_) => Ok(Pattern::IntLiteral(*num as i128)),
-                IntOrFloat::UnsignedIntType(_) => Ok(Pattern::IntLiteral(*num as i128)),
-                IntOrFloat::BinaryFloatType(_) => Ok(Pattern::FloatLiteral(*num as u64)),
+                IntOrFloat::SignedIntType(precision) => {
+                    Ok(Pattern::IntLiteral(*num as i128, precision))
+                }
+                IntOrFloat::UnsignedIntType(precision) => {
+                    Ok(Pattern::IntLiteral(*num as i128, precision))
+                }
+                IntOrFloat::BinaryFloatType(precision) => {
+                    Ok(Pattern::FloatLiteral(*num as u64, precision))
+                }
                 IntOrFloat::DecimalFloatType => {
                     let dec = match RocDec::from_str(num_str) {
                             Some(d) => d,
@@ -7577,7 +7626,7 @@ fn from_can_record_destruct<'a>(
     })
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub enum IntPrecision {
     Usize,
     I128,
@@ -7587,36 +7636,50 @@ pub enum IntPrecision {
     I8,
 }
 
+impl IntPrecision {
+    pub fn as_layout(&self) -> Layout<'static> {
+        Layout::Builtin(self.as_builtin())
+    }
+
+    pub fn as_builtin(&self) -> Builtin<'static> {
+        use IntPrecision::*;
+        match self {
+            I128 => Builtin::Int128,
+            I64 => Builtin::Int64,
+            I32 => Builtin::Int32,
+            I16 => Builtin::Int16,
+            I8 => Builtin::Int8,
+            Usize => Builtin::Usize,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub enum FloatPrecision {
     F64,
     F32,
 }
 
+impl FloatPrecision {
+    pub fn as_layout(&self) -> Layout<'static> {
+        Layout::Builtin(self.as_builtin())
+    }
+
+    pub fn as_builtin(&self) -> Builtin<'static> {
+        use FloatPrecision::*;
+        match self {
+            F64 => Builtin::Float64,
+            F32 => Builtin::Float32,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub enum IntOrFloat {
     SignedIntType(IntPrecision),
     UnsignedIntType(IntPrecision),
     BinaryFloatType(FloatPrecision),
     DecimalFloatType,
-}
-
-fn float_precision_to_builtin(precision: FloatPrecision) -> Builtin<'static> {
-    use FloatPrecision::*;
-    match precision {
-        F64 => Builtin::Float64,
-        F32 => Builtin::Float32,
-    }
-}
-
-fn int_precision_to_builtin(precision: IntPrecision) -> Builtin<'static> {
-    use IntPrecision::*;
-    match precision {
-        I128 => Builtin::Int128,
-        I64 => Builtin::Int64,
-        I32 => Builtin::Int32,
-        I16 => Builtin::Int16,
-        I8 => Builtin::Int8,
-        Usize => Builtin::Usize,
-    }
 }
 
 /// Given the `a` in `Num a`, determines whether it's an int or a float
@@ -7915,8 +7978,8 @@ fn match_on_lambda_set<'a>(
 
             let result = union_lambda_set_to_switch(
                 env,
-                lambda_set.set,
-                lambda_set.runtime_representation(),
+                lambda_set,
+                Layout::Union(union_layout),
                 closure_tag_id_symbol,
                 union_layout.tag_id_layout(),
                 closure_data_symbol,
@@ -7946,6 +8009,7 @@ fn match_on_lambda_set<'a>(
             union_lambda_set_branch_help(
                 env,
                 function_symbol,
+                lambda_set,
                 closure_data_symbol,
                 Layout::Struct(fields),
                 argument_symbols,
@@ -7994,7 +8058,7 @@ fn match_on_lambda_set<'a>(
 #[allow(clippy::too_many_arguments)]
 fn union_lambda_set_to_switch<'a>(
     env: &mut Env<'a, '_>,
-    lambda_set: &'a [(Symbol, &'a [Layout<'a>])],
+    lambda_set: LambdaSet<'a>,
     closure_layout: Layout<'a>,
     closure_tag_id_symbol: Symbol,
     closure_tag_id_layout: Layout<'a>,
@@ -8005,7 +8069,7 @@ fn union_lambda_set_to_switch<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    if lambda_set.is_empty() {
+    if lambda_set.set.is_empty() {
         // NOTE this can happen if there is a type error somewhere. Since the lambda set is empty,
         // there is really nothing we can do here. We generate a runtime error here which allows
         // code gen to proceed. We then assume that we hit another (more descriptive) error before
@@ -8017,11 +8081,12 @@ fn union_lambda_set_to_switch<'a>(
 
     let join_point_id = JoinPointId(env.unique_symbol());
 
-    let mut branches = Vec::with_capacity_in(lambda_set.len(), env.arena);
+    let mut branches = Vec::with_capacity_in(lambda_set.set.len(), env.arena);
 
-    for (i, (function_symbol, _)) in lambda_set.iter().enumerate() {
+    for (i, (function_symbol, _)) in lambda_set.set.iter().enumerate() {
         let stmt = union_lambda_set_branch(
             env,
+            lambda_set,
             join_point_id,
             *function_symbol,
             closure_data_symbol,
@@ -8064,6 +8129,7 @@ fn union_lambda_set_to_switch<'a>(
 #[allow(clippy::too_many_arguments)]
 fn union_lambda_set_branch<'a>(
     env: &mut Env<'a, '_>,
+    lambda_set: LambdaSet<'a>,
     join_point_id: JoinPointId,
     function_symbol: Symbol,
     closure_data_symbol: Symbol,
@@ -8079,6 +8145,7 @@ fn union_lambda_set_branch<'a>(
     union_lambda_set_branch_help(
         env,
         function_symbol,
+        lambda_set,
         closure_data_symbol,
         closure_data_layout,
         argument_symbols_slice,
@@ -8093,6 +8160,7 @@ fn union_lambda_set_branch<'a>(
 fn union_lambda_set_branch_help<'a>(
     env: &mut Env<'a, '_>,
     function_symbol: Symbol,
+    lambda_set: LambdaSet<'a>,
     closure_data_symbol: Symbol,
     closure_data_layout: Layout<'a>,
     argument_symbols_slice: &'a [Symbol],
@@ -8105,12 +8173,19 @@ fn union_lambda_set_branch_help<'a>(
         Layout::Struct(&[]) | Layout::Builtin(Builtin::Int1) | Layout::Builtin(Builtin::Int8) => {
             (argument_layouts_slice, argument_symbols_slice)
         }
+        _ if lambda_set.member_does_not_need_closure_argument(function_symbol) => {
+            // sometimes unification causes a function that does not itself capture anything
+            // to still get a lambda set that does store information. We must not pass a closure
+            // argument in this case
+
+            (argument_layouts_slice, argument_symbols_slice)
+        }
         _ => {
             // extend layouts with the layout of the closure environment
             let mut argument_layouts =
                 Vec::with_capacity_in(argument_layouts_slice.len() + 1, env.arena);
             argument_layouts.extend(argument_layouts_slice);
-            argument_layouts.push(closure_data_layout);
+            argument_layouts.push(Layout::LambdaSet(lambda_set));
 
             // extend symbols with the symbol of the closure environment
             let mut argument_symbols =

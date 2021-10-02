@@ -2017,3 +2017,45 @@ fn lists_with_incompatible_type_param_in_if() {
         RocStr
     );
 }
+
+#[test]
+fn map_with_index_multi_record() {
+    // see https://github.com/rtfeldman/roc/issues/1700
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.mapWithIndex [ { x: {}, y: {} } ] \_, _ -> {}
+            "#
+        ),
+        RocList::from_slice(&[((), ())]),
+        RocList<((), ())>
+    );
+}
+
+#[test]
+fn empty_list_of_function_type() {
+    // see https://github.com/rtfeldman/roc/issues/1732
+    assert_evals_to!(
+        indoc!(
+            r#"
+            myList : List (Str -> Str)
+            myList = []
+
+            myClosure : Str -> Str
+            myClosure = \_ -> "bar"
+
+            choose =
+                if False then
+                    myList
+                else
+                    [ myClosure ]
+
+            when List.get choose 0 is
+                Ok f -> f "foo"
+                Err _ -> "bad!"
+            "#
+        ),
+        RocStr::from_slice(b"bar"),
+        RocStr
+    );
+}

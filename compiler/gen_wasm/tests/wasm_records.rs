@@ -5,7 +5,7 @@ extern crate indoc;
 mod helpers;
 
 #[cfg(all(test, target_os = "linux", any(target_arch = "x86_64"/*, target_arch = "aarch64"*/)))]
-mod dev_records {
+mod wasm_records {
     //    #[test]
     //    fn basic_record() {
     //        assert_evals_to!(
@@ -307,142 +307,116 @@ mod dev_records {
     //            ()
     //        );
     //    }
-    //
-    //    #[test]
-    //    fn i64_record1_literal() {
-    //        assert_evals_to!(
-    //            indoc!(
-    //                r#"
-    //                       { x: 3 }
-    //                "#
-    //            ),
-    //            3,
-    //            i64
-    //        );
-    //    }
 
-    // #[test]
-    // fn i64_record2_literal() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                    { x: 3, y: 5 }
-    //             "#
-    //         ),
-    //         (3, 5),
-    //         (i64, i64)
-    //     );
-    // }
+    #[test]
+    fn i64_record1_literal() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    { x: 3 }
+                "#
+            ),
+            3,
+            i64
+        );
+    }
 
-    // // #[test]
-    // // fn i64_record3_literal() {
-    // //     assert_evals_to!(
-    // //         indoc!(
-    // //             r#"
-    // //                { x: 3, y: 5, z: 17 }
-    // //             "#
-    // //         ),
-    // //         (3, 5, 17),
-    // //         (i64, i64, i64)
-    // //     );
-    // // }
+    #[test]
+    fn i64_record2_literal() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                       { x: 3, y: 5 }
+                "#
+            ),
+            (3, 5),
+            (i64, i64)
+        );
+    }
 
-    // #[test]
-    // fn f64_record2_literal() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                    { x: 3.1, y: 5.1 }
-    //                 "#
-    //         ),
-    //         (3.1, 5.1),
-    //         (f64, f64)
-    //     );
-    // }
+    #[test]
+    fn i64_record3_literal() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   { x: 3, y: 5, z: 17 }
+                "#
+            ),
+            (3, 5, 17),
+            (i64, i64, i64)
+        );
+    }
 
-    // // #[test]
-    // // fn f64_record3_literal() {
-    // //     assert_evals_to!(
-    // //         indoc!(
-    // //             r#"
-    // //                { x: 3.1, y: 5.1, z: 17.1 }
-    // //             "#
-    // //         ),
-    // //         (3.1, 5.1, 17.1),
-    // //         (f64, f64, f64)
-    // //     );
-    // // }
+    #[test]
+    fn f64_record2_literal() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                       { x: 3.1, y: 5.1 }
+                    "#
+            ),
+            (3.1, 5.1),
+            (f64, f64)
+        );
+    }
 
-    // // #[test]
-    // // fn bool_record4_literal() {
-    // //     assert_evals_to!(
-    // //         indoc!(
-    // //             r#"
-    // //                record : { a : Bool, b : Bool, c : Bool, d : Bool }
-    // //                record = { a: True, b: True, c : True, d : Bool }
+    #[test]
+    fn f64_record3_literal() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   { x: 3.1, y: 5.1, z: 17.1 }
+                "#
+            ),
+            (3.1, 5.1, 17.1),
+            (f64, f64, f64)
+        );
+    }
 
-    // //                record
-    // //             "#
-    // //         ),
-    // //         (true, false, false, true),
-    // //         (bool, bool, bool, bool)
-    // //     );
-    // // }
+    #[test]
+    fn bool_record4_literal() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   record : { a : Bool, b : Bool, c : Bool, d : Bool }
+                   record = { a: True, b: False, c : False, d : True }
 
-    // #[test]
-    // fn i64_record1_literal() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                    { a: 3 }
-    //                 "#
-    //         ),
-    //         3,
-    //         i64
-    //     );
-    // }
+                   record
+                "#
+            ),
+            [true, false, false, true],
+            [bool; 4]
+        );
+    }
 
-    // // #[test]
-    // // fn i64_record9_literal() {
-    // //     assert_evals_to!(
-    // //         indoc!(
-    // //             r#"
-    // //                { a: 3, b: 5, c: 17, d: 1, e: 9, f: 12, g: 13, h: 14, i: 15 }
-    // //             "#
-    // //         ),
-    // //         (3, 5, 17, 1, 9, 12, 13, 14, 15),
-    // //         (i64, i64, i64, i64, i64, i64, i64, i64, i64)
-    // //     );
-    // // }
+    #[test]
+    fn i64_record9_literal() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   { a: 3, b: 5, c: 17, d: 1, e: 9, f: 12, g: 13, h: 14, i: 15 }
+                "#
+            ),
+            [3, 5, 17, 1, 9, 12, 13, 14, 15],
+            [i64; 9]
+        );
+    }
 
-    // // #[test]
-    // // fn f64_record3_literal() {
-    // //     assert_evals_to!(
-    // //         indoc!(
-    // //             r#"
-    // //                { x: 3.1, y: 5.1, z: 17.1 }
-    // //             "#
-    // //         ),
-    // //         (3.1, 5.1, 17.1),
-    // //         (f64, f64, f64)
-    // //     );
-    // // }
+    #[test]
+    fn bool_literal() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : Bool
+                    x = True
 
-    // #[test]
-    // fn bool_literal() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 x : Bool
-    //                 x = True
-
-    //                 x
-    //                 "#
-    //         ),
-    //         true,
-    //         bool
-    //     );
-    // }
+                    x
+                "#
+            ),
+            true,
+            bool
+        );
+    }
 
     // #[test]
     // fn optional_field_when_use_default() {
@@ -667,135 +641,135 @@ mod dev_records {
     //     );
     // }
 
-    // #[test]
-    // fn return_record_2() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 { x: 3, y: 5 }
-    //                 "#
-    //         ),
-    //         [3, 5],
-    //         [i64; 2]
-    //     );
-    // }
+    #[test]
+    fn return_record_2() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    { x: 3, y: 5 }
+                    "#
+            ),
+            [3, 5],
+            [i64; 2]
+        );
+    }
 
-    // #[test]
-    // fn return_record_3() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 { x: 3, y: 5, z: 4 }
-    //                 "#
-    //         ),
-    //         (3, 5, 4),
-    //         (i64, i64, i64)
-    //     );
-    // }
+    #[test]
+    fn return_record_3() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    { x: 3, y: 5, z: 4 }
+                    "#
+            ),
+            (3, 5, 4),
+            (i64, i64, i64)
+        );
+    }
 
-    // #[test]
-    // fn return_record_4() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 { a: 3, b: 5, c: 4, d: 2 }
-    //                 "#
-    //         ),
-    //         [3, 5, 4, 2],
-    //         [i64; 4]
-    //     );
-    // }
+    #[test]
+    fn return_record_4() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    { a: 3, b: 5, c: 4, d: 2 }
+                    "#
+            ),
+            [3, 5, 4, 2],
+            [i64; 4]
+        );
+    }
 
-    // #[test]
-    // fn return_record_5() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 { a: 3, b: 5, c: 4, d: 2, e: 1 }
-    //                 "#
-    //         ),
-    //         [3, 5, 4, 2, 1],
-    //         [i64; 5]
-    //     );
-    // }
+    #[test]
+    fn return_record_5() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    { a: 3, b: 5, c: 4, d: 2, e: 1 }
+                    "#
+            ),
+            [3, 5, 4, 2, 1],
+            [i64; 5]
+        );
+    }
 
-    // #[test]
-    // fn return_record_6() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 { a: 3, b: 5, c: 4, d: 2, e: 1, f: 7 }
-    //                 "#
-    //         ),
-    //         [3, 5, 4, 2, 1, 7],
-    //         [i64; 6]
-    //     );
-    // }
+    #[test]
+    fn return_record_6() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    { a: 3, b: 5, c: 4, d: 2, e: 1, f: 7 }
+                    "#
+            ),
+            [3, 5, 4, 2, 1, 7],
+            [i64; 6]
+        );
+    }
 
-    // #[test]
-    // fn return_record_7() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 { a: 3, b: 5, c: 4, d: 2, e: 1, f: 7, g: 8 }
-    //                 "#
-    //         ),
-    //         [3, 5, 4, 2, 1, 7, 8],
-    //         [i64; 7]
-    //     );
-    // }
+    #[test]
+    fn return_record_7() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    { a: 3, b: 5, c: 4, d: 2, e: 1, f: 7, g: 8 }
+                    "#
+            ),
+            [3, 5, 4, 2, 1, 7, 8],
+            [i64; 7]
+        );
+    }
 
-    // #[test]
-    // fn return_record_float_int() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 { a: 3.14, b: 0x1 }
-    //                 "#
-    //         ),
-    //         (3.14, 0x1),
-    //         (f64, i64)
-    //     );
-    // }
+    #[test]
+    fn return_record_float_int() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    { a: 3.14, b: 0x1 }
+                    "#
+            ),
+            (3.14, 0x1),
+            (f64, i64)
+        );
+    }
 
-    // #[test]
-    // fn return_record_int_float() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 { a: 0x1, b: 3.14 }
-    //                 "#
-    //         ),
-    //         (0x1, 3.14),
-    //         (i64, f64)
-    //     );
-    // }
+    #[test]
+    fn return_record_int_float() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    { a: 0x1, b: 3.14 }
+                    "#
+            ),
+            (0x1, 3.14),
+            (i64, f64)
+        );
+    }
 
-    // #[test]
-    // fn return_record_float_float() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 { a: 6.28, b: 3.14 }
-    //                 "#
-    //         ),
-    //         (6.28, 3.14),
-    //         (f64, f64)
-    //     );
-    // }
+    #[test]
+    fn return_record_float_float() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    { a: 6.28, b: 3.14 }
+                    "#
+            ),
+            (6.28, 3.14),
+            (f64, f64)
+        );
+    }
 
-    // #[test]
-    // fn return_record_float_float_float() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 { a: 6.28, b: 3.14, c: 0.1 }
-    //                 "#
-    //         ),
-    //         (6.28, 3.14, 0.1),
-    //         (f64, f64, f64)
-    //     );
-    // }
+    #[test]
+    fn return_record_float_float_float() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    { a: 6.28, b: 3.14, c: 0.1 }
+                    "#
+            ),
+            (6.28, 3.14, 0.1),
+            (f64, f64, f64)
+        );
+    }
 
     // #[test]
     // fn return_nested_record() {
@@ -851,20 +825,20 @@ mod dev_records {
     //     );
     // }
 
-    #[test]
-    fn update_single_element_record() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    rec = { foo: 42}
+    // #[test]
+    // fn update_single_element_record() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 rec = { foo: 42}
 
-                    { rec & foo: rec.foo + 1 }
-                "#
-            ),
-            43,
-            i64
-        );
-    }
+    //                 { rec & foo: rec.foo + 1 }
+    //             "#
+    //         ),
+    //         43,
+    //         i64
+    //     );
+    // }
 
     // #[test]
     // fn booleans_in_record() {
@@ -898,6 +872,24 @@ mod dev_records {
     //         (i64, bool, u8)
     //     );
     // }
+
+    #[test]
+    fn stack_memory_return_from_branch() {
+        // stack memory pointer should end up in the right place after returning from a branch
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    stackMemoryJunk = { x: 999, y: 111 }
+                    if True then
+                        { x: 123, y: 321 }
+                    else
+                        stackMemoryJunk
+                "#
+            ),
+            (123, 321),
+            (i64, i64)
+        );
+    }
 
     // #[test]
     // fn blue_and_present() {

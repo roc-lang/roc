@@ -1084,6 +1084,33 @@ fn specialize_lowlevel() {
     )
 }
 
+#[mono_test]
+fn empty_list_of_function_type() {
+    // see https://github.com/rtfeldman/roc/issues/1732
+    indoc!(
+        r#"
+         app "test" provides [ main ] to "./platform"
+
+         main =
+            myList : List (Str -> Str)
+            myList = []
+
+            myClosure : Str -> Str
+            myClosure = \_ -> "bar"
+
+            choose =
+                if False then
+                    myList
+                else
+                    [ myClosure ]
+
+            when List.get choose 0 is
+                Ok f -> f "foo"
+                Err _ -> "bad!"
+            "#
+    )
+}
+
 // #[ignore]
 // #[mono_test]
 // fn static_str_closure() {

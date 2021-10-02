@@ -2531,6 +2531,8 @@ fn pattern_match_unit_tag() {
     );
 }
 
+// see for why this is disabled on wasm32 https://github.com/rtfeldman/roc/issues/1687
+#[cfg(not(feature = "wasm-cli-run"))]
 #[test]
 fn mirror_llvm_alignment_padding() {
     // see https://github.com/rtfeldman/roc/issues/1569
@@ -2616,7 +2618,8 @@ fn lambda_set_struct_byte() {
                     r = Red
 
                     p1 = (\u -> r == u)
-                    oneOfResult = List.map [p1, p1] (\p -> p Green)
+                    foobarbaz = (\p -> p Green)
+                    oneOfResult = List.map [p1, p1] foobarbaz
 
                     when oneOfResult is
                         _ -> 32
@@ -2777,5 +2780,129 @@ fn value_not_exposed_hits_panic() {
         ),
         32,
         i64
+    );
+}
+
+#[test]
+fn mix_function_and_closure() {
+    // see https://github.com/rtfeldman/roc/pull/1706
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                # foo does not capture any variables
+                # but through unification will get a lambda set that does store information
+                # we must handle that correctly
+                foo = \x -> x
+
+                bar = \y -> \_ -> y
+
+                main : Str
+                main =
+                    (if 1 == 1 then foo else (bar "nope nope nope")) "hello world"
+            "#
+        ),
+        RocStr::from_slice(b"hello world"),
+        RocStr
+    );
+}
+
+#[test]
+fn mix_function_and_closure_level_of_indirection() {
+    // see https://github.com/rtfeldman/roc/pull/1706
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                foo = \x -> x
+
+                bar = \y -> \_ -> y
+
+                f = (if 1 == 1 then foo else (bar "nope nope nope"))
+
+                main : Str
+                main =
+                    f "hello world"
+            "#
+        ),
+        RocStr::from_slice(b"hello world"),
+        RocStr
+    );
+}
+
+#[test]
+fn do_pass_bool_byte_closure_layout() {
+    // see https://github.com/rtfeldman/roc/pull/1706
+    // the distinction is actually important, dropping that info means some functions just get
+    // skipped
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            ## PARSER
+
+            Parser a : List U8 -> List [Pair a (List U8)]
+
+
+            ## ANY
+
+            # If succcessful, the any parser consumes one character
+
+            any: Parser U8
+            any = \inp ->
+               when List.first inp is
+                 Ok u -> [Pair u (List.drop inp 1)]
+                 _ -> [ ]
+
+
+
+            ## SATISFY
+
+            satisfy : (U8 -> Bool) -> Parser U8
+            satisfy = \predicate ->
+                \input ->
+                    walker = \(Pair u rest), accum ->
+                        if predicate u then
+                            Stop [ Pair u rest ]
+
+                        else
+                            Stop accum
+
+                    List.walkUntil (any input) walker []
+
+
+
+            oneOf : List (Parser a) -> Parser a
+            oneOf = \parserList ->
+                \input ->
+                    walker = \p, accum ->
+                        output = p input
+                        if List.len output == 1 then
+                            Stop output
+
+                        else
+                            Continue accum
+
+                    List.walkUntil parserList walker []
+
+
+            satisfyA = satisfy (\u -> u == 97) # recognize 97
+            satisfyB = satisfy (\u -> u == 98) # recognize 98
+
+            test1 = if List.len ((oneOf [satisfyA, satisfyB]) [97, 98, 99, 100] ) == 1  then "PASS" else "FAIL"
+            test2 = if List.len ((oneOf [satisfyA, satisfyB]) [98, 99, 100, 97] ) == 1  then "PASS" else "FAIL"
+            test3 = if List.len ((oneOf [satisfyB , satisfyA]) [98, 99, 100, 97] ) == 1  then "PASS" else "FAIL"
+            test4 = if List.len ((oneOf [satisfyA, satisfyB]) [99, 100, 101] ) == 0  then "PASS" else "FAIL"
+
+
+            main : Str
+            main = [test1, test2, test3, test4] |> Str.joinWith ", "
+       "#
+        ),
+        RocStr::from_slice(b"PASS, PASS, PASS, PASS"),
+        RocStr
     );
 }

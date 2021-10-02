@@ -1013,6 +1013,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         StrFromUtf8 => arena.alloc_slice_copy(&[owned]),
         StrFromUtf8Range => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrToUtf8 => arena.alloc_slice_copy(&[owned]),
+        StrRepeat => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrFromInt | StrFromFloat => arena.alloc_slice_copy(&[irrelevant]),
         Hash => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         DictSize => arena.alloc_slice_copy(&[borrowed]),

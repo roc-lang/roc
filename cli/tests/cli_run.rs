@@ -157,6 +157,15 @@ mod cli_run {
                     let example = $example;
                     let file_name = example_file(dir_name, example.filename);
 
+                    match example.executable_filename {
+                        "hello-web" => {
+                            // this is a web webassembly example, but we don't test with JS at the moment
+                            eprintln!("WARNING: skipping testing example {} because the test is broken right now!", example.filename);
+                            return;
+                        }
+                        _ => {}
+                    }
+
                     // Check with and without optimizations
                     check_output_with_stdin(
                         &file_name,
@@ -224,6 +233,20 @@ mod cli_run {
             expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
+        hello_web:"hello-web" => Example {
+            filename: "Hello.roc",
+            executable_filename: "hello-web",
+            stdin: &[],
+            expected_ending:"Hello, World!\n",
+            use_valgrind: true,
+        },
+        fib:"fib" => Example {
+            filename: "Fib.roc",
+            executable_filename: "fib",
+            stdin: &[],
+            expected_ending:"55\n",
+            use_valgrind: true,
+        },
         quicksort:"quicksort" => Example {
             filename: "Quicksort.roc",
             executable_filename: "quicksort",
@@ -242,7 +265,7 @@ mod cli_run {
             filename: "Main.roc",
             executable_filename: "effect-example",
             stdin: &["hi there!"],
-            expected_ending: "hi there!\n",
+            expected_ending: "hi there!\nIt is known\n",
             use_valgrind: true,
         },
         // tea:"tea" => Example {
