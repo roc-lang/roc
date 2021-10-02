@@ -5637,89 +5637,115 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
     let builder = env.builder;
     let context = env.context;
 
-    // Here we build two functions:
-    //
-    // - an C_CALL_CONV extern that will be provided by the host, e.g. `roc_fx_putLine`
-    //      This is just a type signature that we make available to the linker,
-    //      and can use in the wrapper
-    // - a FAST_CALL_CONV wrapper that we make here, e.g. `roc_fx_putLine_fastcc_wrapper`
+    let fastcc_function_name = format!("{}_fastcc_wrapper", foreign.as_str());
 
-    let return_type = basic_type_from_layout(env, ret_layout);
-    let cc_return = to_cc_return(env, ret_layout);
+    let (fastcc_function, arguments) = match env.module.get_function(fastcc_function_name.as_str())
+    {
+        Some(function_value) => {
+            let mut arguments = Vec::with_capacity_in(argument_symbols.len(), env.arena);
 
-    let mut cc_argument_types = Vec::with_capacity_in(argument_symbols.len() + 1, env.arena);
-    let mut fastcc_argument_types = Vec::with_capacity_in(argument_symbols.len(), env.arena);
-    let mut arguments = Vec::with_capacity_in(argument_symbols.len(), env.arena);
+            for symbol in argument_symbols {
+                let (value, _) = load_symbol_and_layout(scope, symbol);
 
-    for symbol in argument_symbols {
-        let (value, layout) = load_symbol_and_layout(scope, symbol);
+                arguments.push(value);
+            }
 
-        cc_argument_types.push(to_cc_type(env, layout));
-
-        let basic_type = basic_type_from_layout(env, layout);
-        fastcc_argument_types.push(basic_type);
-
-        arguments.push(value);
-    }
-
-    let cc_type = match cc_return {
-        CCReturn::Void => env.context.void_type().fn_type(&cc_argument_types, false),
-        CCReturn::ByPointer => {
-            cc_argument_types.push(return_type.ptr_type(AddressSpace::Generic).into());
-            env.context.void_type().fn_type(&cc_argument_types, false)
+            (function_value, arguments)
         }
-        CCReturn::Return => return_type.fn_type(&cc_argument_types, false),
+        None => {
+            // Here we build two functions:
+            //
+            // - an C_CALL_CONV extern that will be provided by the host, e.g. `roc_fx_putLine`
+            //      This is just a type signature that we make available to the linker,
+            //      and can use in the wrapper
+            // - a FAST_CALL_CONV wrapper that we make here, e.g. `roc_fx_putLine_fastcc_wrapper`
+
+            let return_type = basic_type_from_layout(env, ret_layout);
+            let cc_return = to_cc_return(env, ret_layout);
+
+            let mut cc_argument_types =
+                Vec::with_capacity_in(argument_symbols.len() + 1, env.arena);
+            let mut fastcc_argument_types =
+                Vec::with_capacity_in(argument_symbols.len(), env.arena);
+            let mut arguments = Vec::with_capacity_in(argument_symbols.len(), env.arena);
+
+            for symbol in argument_symbols {
+                let (value, layout) = load_symbol_and_layout(scope, symbol);
+
+                cc_argument_types.push(to_cc_type(env, layout));
+
+                let basic_type = basic_type_from_layout(env, layout);
+                fastcc_argument_types.push(basic_type);
+
+                arguments.push(value);
+            }
+
+            let cc_type = match cc_return {
+                CCReturn::Void => env.context.void_type().fn_type(&cc_argument_types, false),
+                CCReturn::ByPointer => {
+                    cc_argument_types.push(return_type.ptr_type(AddressSpace::Generic).into());
+                    env.context.void_type().fn_type(&cc_argument_types, false)
+                }
+                CCReturn::Return => return_type.fn_type(&cc_argument_types, false),
+            };
+
+            let cc_function = get_foreign_symbol(env, foreign.clone(), cc_type);
+
+            let fastcc_type = return_type.fn_type(&fastcc_argument_types, false);
+
+            let fastcc_function = add_func(
+                env.module,
+                &fastcc_function_name,
+                fastcc_type,
+                Linkage::Private,
+                FAST_CALL_CONV,
+            );
+
+            let old = builder.get_insert_block().unwrap();
+
+            let entry = context.append_basic_block(fastcc_function, "entry");
+            {
+                builder.position_at_end(entry);
+                let return_pointer = env.builder.build_alloca(return_type, "return_value");
+
+                let fastcc_parameters = fastcc_function.get_params();
+                let mut cc_arguments =
+                    Vec::with_capacity_in(fastcc_parameters.len() + 1, env.arena);
+
+                for (param, cc_type) in fastcc_parameters.into_iter().zip(cc_argument_types.iter())
+                {
+                    if param.get_type() == *cc_type {
+                        cc_arguments.push(param);
+                    } else {
+                        let as_cc_type =
+                            complex_bitcast(env.builder, param, *cc_type, "to_cc_type");
+                        cc_arguments.push(as_cc_type);
+                    }
+                }
+
+                if let CCReturn::ByPointer = cc_return {
+                    cc_arguments.push(return_pointer.into());
+                }
+
+                let call = env.builder.build_call(cc_function, &cc_arguments, "tmp");
+                call.set_call_convention(C_CALL_CONV);
+
+                let return_value = match cc_return {
+                    CCReturn::Return => call.try_as_basic_value().left().unwrap(),
+
+                    CCReturn::ByPointer => env.builder.build_load(return_pointer, "read_result"),
+                    CCReturn::Void => return_type.const_zero(),
+                };
+
+                builder.build_return(Some(&return_value));
+            }
+
+            builder.position_at_end(old);
+
+            (fastcc_function, arguments)
+        }
     };
 
-    let cc_function = get_foreign_symbol(env, foreign.clone(), cc_type);
-
-    let fastcc_type = return_type.fn_type(&fastcc_argument_types, false);
-
-    let fastcc_function = add_func(
-        env.module,
-        &format!("{}_fastcc_wrapper", foreign.as_str()),
-        fastcc_type,
-        Linkage::Private,
-        FAST_CALL_CONV,
-    );
-
-    let old = builder.get_insert_block().unwrap();
-
-    let entry = context.append_basic_block(fastcc_function, "entry");
-    {
-        builder.position_at_end(entry);
-        let return_pointer = env.builder.build_alloca(return_type, "return_value");
-
-        let fastcc_parameters = fastcc_function.get_params();
-        let mut cc_arguments = Vec::with_capacity_in(fastcc_parameters.len() + 1, env.arena);
-
-        for (param, cc_type) in fastcc_parameters.into_iter().zip(cc_argument_types.iter()) {
-            if param.get_type() == *cc_type {
-                cc_arguments.push(param);
-            } else {
-                let as_cc_type = complex_bitcast(env.builder, param, *cc_type, "to_cc_type");
-                cc_arguments.push(as_cc_type);
-            }
-        }
-
-        if let CCReturn::ByPointer = cc_return {
-            cc_arguments.push(return_pointer.into());
-        }
-
-        let call = env.builder.build_call(cc_function, &cc_arguments, "tmp");
-        call.set_call_convention(C_CALL_CONV);
-
-        let return_value = match cc_return {
-            CCReturn::Return => call.try_as_basic_value().left().unwrap(),
-
-            CCReturn::ByPointer => env.builder.build_load(return_pointer, "read_result"),
-            CCReturn::Void => return_type.const_zero(),
-        };
-
-        builder.build_return(Some(&return_value));
-    }
-
-    builder.position_at_end(old);
     let call = env.builder.build_call(fastcc_function, &arguments, "tmp");
     call.set_call_convention(FAST_CALL_CONV);
     return call.try_as_basic_value().left().unwrap();
