@@ -2185,7 +2185,10 @@ fn list_literal<'a, 'ctx, 'env>(
     let list_length = elems.len();
     let list_length_intval = env.ptr_int().const_int(list_length as _, false);
 
-    if element_type.is_int_type() {
+    // TODO re-enable, currently causes morphic segfaults because it tries to update
+    // constants in-place...
+    // if element_type.is_int_type() {
+    if false {
         let element_type = element_type.into_int_type();
         let element_width = elem_layout.stack_size(env.ptr_bytes);
         let size = list_length * element_width as usize;
@@ -2228,15 +2231,16 @@ fn list_literal<'a, 'ctx, 'env>(
                         let val = load_symbol(scope, symbol);
                         let intval = val.into_int_value();
 
-                        if intval.is_const() {
-                            global_elements.push(intval);
-                        } else {
-                            is_all_constant = false;
+                        // here we'd like to furthermore check for intval.is_const().
+                        // if all elements are const for LLVM, we could make the array a constant.
+                        // BUT morphic does not know about this, and could allow us to modify that
+                        // array in-place. That would cause a segfault. So, we'll have to find
+                        // constants ourselves and cannot lean on LLVM here.
+                        is_all_constant = false;
 
-                            runtime_evaluated_elements.push((index, val));
+                        runtime_evaluated_elements.push((index, val));
 
-                            global_elements.push(element_type.get_undef());
-                        }
+                        global_elements.push(element_type.get_undef());
                     }
                 };
             }
