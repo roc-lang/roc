@@ -70,7 +70,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
         .build(&event_loop)
         .unwrap();
 
-    let instance = wgpu::Instance::new(wgpu::BackendBit::all());
+    let instance = wgpu::Instance::new(wgpu::Backends::all());
 
     let surface = unsafe { instance.create_surface(&window) };
 
@@ -106,17 +106,17 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
     let render_format = wgpu::TextureFormat::Bgra8Unorm;
     let mut size = window.inner_size();
 
-    let swap_chain_descr = wgpu::SwapChainDescriptor {
-        usage: wgpu::TextureUsage::RENDER_ATTACHMENT,
+    let surface_config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format: render_format,
         width: size.width,
         height: size.height,
         present_mode: wgpu::PresentMode::Mailbox,
     };
 
-    let mut swap_chain = gpu_device.create_swap_chain(&surface, &swap_chain_descr);
+    surface.configure(&gpu_device, &surface_config);
 
-    let rect_resources = pipelines::make_rect_pipeline(&gpu_device, &swap_chain_descr);
+    let rect_resources = pipelines::make_rect_pipeline(&gpu_device, &surface_config);
 
     let mut glyph_brush = build_glyph_brush(&gpu_device, render_format)?;
 
@@ -205,10 +205,10 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
             } => {
                 size = new_size;
 
-                swap_chain = gpu_device.create_swap_chain(
-                    &surface,
-                    &wgpu::SwapChainDescriptor {
-                        usage: wgpu::TextureUsage::RENDER_ATTACHMENT,
+                surface.configure(
+                    &gpu_device,
+                    &wgpu::SurfaceConfiguration {
+                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                         format: render_format,
                         width: size.width,
                         height: size.height,
@@ -274,10 +274,14 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                         label: Some("Redraw"),
                     });
 
-                let frame = swap_chain
+                let frame = surface
                     .get_current_frame()
                     .expect("Failed to acquire next SwapChainFrame")
                     .output;
+
+                let view = frame
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default());
 
                 if let Some(ref mut ed_model) = app_model.ed_model_opt {
                     if rendered_wgpu_opt.is_none() || ed_model.dirty {
@@ -296,7 +300,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                         draw_rects(
                             &rendered_wgpu.rects_behind,
                             &mut encoder,
-                            &frame.view,
+                            &view,
                             &gpu_device,
                             &rect_resources,
                             wgpu::LoadOp::Clear(to_wgpu_color(ed_theme.background)),
@@ -314,7 +318,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                                 &gpu_device,
                                 &mut staging_belt,
                                 &mut encoder,
-                                &frame.view,
+                                &view,
                                 size.width,
                                 size.height,
                             )
@@ -324,7 +328,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                         draw_rects(
                             &rendered_wgpu.rects_front,
                             &mut encoder,
-                            &frame.view,
+                            &view,
                             &gpu_device,
                             &rect_resources,
                             wgpu::LoadOp::Load,
@@ -339,7 +343,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                 } else {
                     begin_render_pass(
                         &mut encoder,
-                        &frame.view,
+                        &view,
                         wgpu::LoadOp::Clear(to_wgpu_color(ed_theme.background)),
                     );
 
@@ -358,7 +362,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                         &gpu_device,
                         &mut staging_belt,
                         &mut encoder,
-                        &frame.view,
+                        &view,
                         size.width,
                         size.height,
                     )

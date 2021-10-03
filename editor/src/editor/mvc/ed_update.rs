@@ -4,7 +4,6 @@ use std::process::Command;
 use std::process::Stdio;
 
 use crate::editor::code_lines::CodeLines;
-use crate::editor::ed_error::from_ui_res;
 use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::MissingSelection;
 use crate::editor::grid_node_map::GridNodeMap;
@@ -800,14 +799,6 @@ pub fn get_node_context<'a>(ed_model: &'a EdModel) -> EdResult<NodeContext<'a>> 
         parent_id_opt,
         ast_node_id,
     })
-}
-
-fn if_modifiers(modifiers: &Modifiers, shortcut_result: UIResult<()>) -> EdResult<()> {
-    if modifiers.cmd_or_ctrl() {
-        from_ui_res(shortcut_result)
-    } else {
-        Ok(())
-    }
 }
 
 // current(=caret is here) MarkupNode corresponds to a Def2 in the AST
