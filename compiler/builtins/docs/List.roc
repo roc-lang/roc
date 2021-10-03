@@ -31,6 +31,7 @@ interface List
             range,
             sortWith,
             drop,
+            dropAt,
             swap
         ]
     imports []
@@ -425,9 +426,9 @@ min : List (Num a) -> Result (Num a) [ ListWasEmpty ]*
 ## To drop the element at a given index, instead of replacing it, see [List.dropAt].
 set : List elem, Nat, elem -> List elem
 
-# GIESCH figure out if we should add docs for List.drop;
-#   what's the relationship with List.dropFirst, below?
-# GIESCH add docs re: uniqueness and performance
+## Drops n elements from the beginning of the list.
+drop : List elem, Nat -> List elem
+
 ## Drops the element at the given index from the list.
 ##
 ## This has no effect if the given index is outside the bounds of the list.

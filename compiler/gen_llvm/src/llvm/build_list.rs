@@ -319,7 +319,6 @@ pub fn list_drop<'a, 'ctx, 'env>(
     )
 }
 
-// GIESCH ask about how this calling/linking to compiled zig works
 /// List.dropAt : List elem, Nat -> List elem
 pub fn list_drop_at<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,

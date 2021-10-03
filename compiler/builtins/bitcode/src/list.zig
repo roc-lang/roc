@@ -833,8 +833,6 @@ pub fn listDrop(
     }
 }
 
-// GIESCH do a uniqueness check, and reuse the same array if possible
-// GIESCH figure out where to specify uniqueness of output, update builtins readme
 pub fn listDropAt(
     list: RocList,
     alignment: u32,
@@ -846,7 +844,6 @@ pub fn listDropAt(
         const size = list.len();
 
         if (drop_index >= size) {
-            // GIESCH should this still copy/reallocate if non-unique?
             return list;
         }
 
@@ -866,7 +863,6 @@ pub fn listDropAt(
         const tail_size = (size - drop_index - 1) * element_width;
         @memcpy(tail_target, tail_source, tail_size);
 
-        // GIESCH what's the difference between this and Dec?
         utils.decref(list.bytes, size * element_width, alignment);
 
         return output;
