@@ -207,7 +207,7 @@ fn list_drop_at() {
     );
     assert_evals_to!(
         "List.dropAt [0, 0, 0] 3",
-        RocList::from_slice(&[1, 2, 3]),
+        RocList::from_slice(&[0, 0, 0]),
         RocList<i64>
     );
     assert_evals_to!("List.dropAt [] 1", RocList::from_slice(&[]), RocList<i64>);
