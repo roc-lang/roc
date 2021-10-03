@@ -875,9 +875,6 @@ pub fn listDropAt(
             return new_list;
         }
 
-        const stdout = std.io.getStdOut().writer();
-        stdout.print("Hit non-unique branch with list, {any}!\n", .{list}) catch unreachable;
-
         const output = RocList.allocate(alignment, size - 1, element_width);
         const target_ptr = output.bytes orelse unreachable;
 

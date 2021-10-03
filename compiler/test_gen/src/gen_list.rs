@@ -212,21 +212,24 @@ fn list_drop_at() {
     );
     assert_evals_to!("List.dropAt [] 1", RocList::from_slice(&[]), RocList<i64>);
     assert_evals_to!("List.dropAt [0] 0", RocList::from_slice(&[]), RocList<i64>);
+}
 
+#[test]
+fn list_drop_at_mutable() {
     assert_evals_to!(
         indoc!(
             r#"
                list : List I64
-               list = [ 1, 2, 3 ]
+               list = [ if True then 4 else 4, 5, 6 ]
 
                { newList: List.dropAt list 0, original: list }
                "#
         ),
         (
             // new_list
-            RocList::from_slice(&[2, 3]),
+            RocList::from_slice(&[5, 6]),
             // original
-            RocList::from_slice(&[1, 2, 3]),
+            RocList::from_slice(&[4, 5, 6]),
         ),
         (RocList<i64>, RocList<i64>,)
     );
