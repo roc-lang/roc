@@ -4972,7 +4972,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
             let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            list_append(env, original_wrapper, elem, elem_layout)
+            list_append(env, original_wrapper, elem, elem_layout, update_mode)
         }
         ListSwap => {
             // List.swap : List elem, Nat, Nat -> List elem

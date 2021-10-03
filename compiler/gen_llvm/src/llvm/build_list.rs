@@ -238,6 +238,7 @@ pub fn list_append<'a, 'ctx, 'env>(
     original_wrapper: StructValue<'ctx>,
     element: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
+    update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
     call_bitcode_fn_returns_list(
         env,
@@ -246,6 +247,7 @@ pub fn list_append<'a, 'ctx, 'env>(
             env.alignment_intvalue(element_layout),
             pass_element_as_opaque(env, element),
             layout_width(env, element_layout),
+            pass_update_mode(env, update_mode),
         ],
         bitcode::LIST_APPEND,
     )
