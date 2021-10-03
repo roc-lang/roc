@@ -44,13 +44,17 @@ impl SymbolStorage {
             (
                 Self::Local {
                     local_id: to_local_id,
-                    ..
+                    value_type: to_value_type,
+                    size: to_size,
                 },
                 Self::Local {
                     local_id: from_local_id,
-                    ..
+                    value_type: from_value_type,
+                    size: from_size,
                 },
             ) => {
+                debug_assert!(to_value_type == from_value_type);
+                debug_assert!(to_size == from_size);
                 instructions.push(GetLocal(from_local_id.0));
                 instructions.push(SetLocal(to_local_id.0));
             }
