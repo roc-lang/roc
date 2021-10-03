@@ -133,6 +133,7 @@ pub struct CopyMemoryConfig {
 }
 
 pub fn copy_memory(instructions: &mut CodeBuilder, config: CopyMemoryConfig) {
+    debug_assert!(config.from_ptr != config.to_ptr || config.from_offset != config.to_offset);
     let alignment_flag = encode_alignment(config.alignment_bytes);
     let mut i = 0;
     while config.size - i >= 8 {
@@ -158,8 +159,9 @@ pub fn copy_memory(instructions: &mut CodeBuilder, config: CopyMemoryConfig) {
     }
 }
 
-/// Round up to alignment_bytes (assumed to be a power of 2)
+/// Round up to alignment_bytes (which must be a power of 2)
 pub fn round_up_to_alignment(unaligned: i32, alignment_bytes: i32) -> i32 {
+    debug_assert!(alignment_bytes.count_ones() == 1);
     let mut aligned = unaligned;
     aligned += alignment_bytes - 1; // if lower bits are non-zero, push it over the next boundary
     aligned &= -alignment_bytes; // mask with a flag that has upper bits 1, lower bits 0
