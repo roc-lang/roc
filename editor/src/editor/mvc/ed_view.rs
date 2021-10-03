@@ -1,7 +1,7 @@
 use super::ed_model::EdModel;
 use crate::editor::config::Config;
 use crate::editor::ed_error::EdResult;
-use crate::editor::mvc::ed_model::SelectedExpression;
+use crate::editor::mvc::ed_model::SelectedBlock;
 use crate::editor::render_ast::build_code_graphics;
 use crate::editor::render_debug::build_debug_graphics;
 use crate::editor::resources::strings::START_TIP;
@@ -20,33 +20,49 @@ use winit::dpi::PhysicalSize;
 
 #[derive(Debug)]
 pub struct RenderedWgpu {
-    pub text_sections: Vec<glyph_brush::OwnedSection>,
-    pub rects: Vec<Rect>,
+    pub text_sections_behind: Vec<glyph_brush::OwnedSection>, // displayed in front of rect_behind, behind everything else
+    pub text_sections_front: Vec<glyph_brush::OwnedSection>,  // displayed in front of everything
+    pub rects_behind: Vec<Rect>,                              // displayed at lowest depth
+    pub rects_front: Vec<Rect>, // displayed in front of text_sections_behind, behind text_sections_front
 }
 
 impl RenderedWgpu {
     pub fn new() -> Self {
         Self {
-            text_sections: Vec::new(),
-            rects: Vec::new(),
+            text_sections_behind: Vec::new(),
+            text_sections_front: Vec::new(),
+            rects_behind: Vec::new(),
+            rects_front: Vec::new(),
         }
     }
 
-    pub fn add_text(&mut self, new_text_section: glyph_brush::OwnedSection) {
-        self.text_sections.push(new_text_section);
+    pub fn add_text_behind(&mut self, new_text_section: glyph_brush::OwnedSection) {
+        self.text_sections_behind.push(new_text_section);
     }
 
-    pub fn add_rect(&mut self, new_rect: Rect) {
-        self.rects.push(new_rect);
+    pub fn add_text_front(&mut self, new_text_section: glyph_brush::OwnedSection) {
+        self.text_sections_front.push(new_text_section);
     }
 
-    pub fn add_rects(&mut self, new_rects: Vec<Rect>) {
-        self.rects.extend(new_rects);
+    pub fn add_rect_behind(&mut self, new_rect: Rect) {
+        self.rects_behind.push(new_rect);
+    }
+
+    pub fn add_rects_behind(&mut self, new_rects: Vec<Rect>) {
+        self.rects_behind.extend(new_rects);
+    }
+
+    pub fn add_rect_front(&mut self, new_rect: Rect) {
+        self.rects_front.push(new_rect);
     }
 
     pub fn extend(&mut self, rendered_wgpu: RenderedWgpu) {
-        self.text_sections.extend(rendered_wgpu.text_sections);
-        self.rects.extend(rendered_wgpu.rects);
+        self.text_sections_behind
+            .extend(rendered_wgpu.text_sections_behind);
+        self.text_sections_front
+            .extend(rendered_wgpu.text_sections_front);
+        self.rects_behind.extend(rendered_wgpu.rects_behind);
+        self.rects_front.extend(rendered_wgpu.rects_front);
     }
 }
 
@@ -61,7 +77,10 @@ pub fn model_to_wgpu<'a>(
 
     let mut all_rendered = RenderedWgpu::new();
 
-    let tip_txt_coords = (txt_coords.x, txt_coords.y - 4.0 * config.code_font_size);
+    let tip_txt_coords = (
+        txt_coords.x,
+        txt_coords.y - (START_TIP.matches('\n').count() as f32 + 1.0) * config.code_font_size,
+    );
 
     let start_tip_text = owned_section_from_text(&Text {
         position: tip_txt_coords.into(),
@@ -72,15 +91,15 @@ pub fn model_to_wgpu<'a>(
         ..Default::default()
     });
 
-    all_rendered.add_text(start_tip_text);
+    all_rendered.add_text_behind(start_tip_text);
 
     let rendered_code_graphics = build_code_graphics(
-        ed_model.markup_node_pool.get(ed_model.markup_root_id),
+        &ed_model.markup_ids,
         size,
         txt_coords,
         config,
         glyph_dim_rect,
-        &ed_model.markup_node_pool,
+        &ed_model.mark_node_pool,
     )?;
 
     all_rendered.extend(rendered_code_graphics);
@@ -93,7 +112,7 @@ pub fn model_to_wgpu<'a>(
 
     let rendered_selection = build_selection_graphics(
         caret_w_sel_vec,
-        &ed_model.selected_expr_opt,
+        &ed_model.selected_block_opt,
         txt_coords,
         config,
         glyph_dim_rect,
@@ -103,7 +122,7 @@ pub fn model_to_wgpu<'a>(
     all_rendered.extend(rendered_selection);
 
     if ed_model.show_debug_view {
-        all_rendered.add_text(build_debug_graphics(size, txt_coords, config, ed_model)?);
+        all_rendered.add_text_behind(build_debug_graphics(size, txt_coords, config, ed_model)?);
     }
 
     Ok(all_rendered)
@@ -111,7 +130,7 @@ pub fn model_to_wgpu<'a>(
 
 pub fn build_selection_graphics(
     caret_w_select_vec: Vec<CaretWSelect>,
-    selected_expr_opt: &Option<SelectedExpression>,
+    selected_expr_opt: &Option<SelectedBlock>,
     txt_coords: Vector2<f32>,
     config: &Config,
     glyph_dim_rect: Rect,
@@ -139,7 +158,7 @@ pub fn build_selection_graphics(
             let width =
                 ((end_pos.column as f32) * char_width) - ((start_pos.column as f32) * char_width);
 
-            all_rendered.add_rect(make_selection_rect(
+            all_rendered.add_rect_behind(make_selection_rect(
                 sel_rect_x,
                 sel_rect_y,
                 width,
@@ -158,12 +177,12 @@ pub fn build_selection_graphics(
                 let (tip_rect, tip_text) =
                     tooltip.render_tooltip(&glyph_dim_rect, &config.ed_theme.ui_theme);
 
-                all_rendered.add_rect(tip_rect);
-                all_rendered.add_text(tip_text);
+                all_rendered.add_rect_front(tip_rect);
+                all_rendered.add_text_front(tip_text);
             }
         }
 
-        all_rendered.add_rect(make_caret_rect(
+        all_rendered.add_rect_front(make_caret_rect(
             top_left_x,
             top_left_y,
             &glyph_dim_rect,

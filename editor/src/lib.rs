@@ -17,6 +17,6 @@ mod window;
 use std::io;
 use std::path::Path;
 
-pub fn launch(filepaths: &[&Path]) -> io::Result<()> {
-    editor::main::launch(filepaths)
+pub fn launch(project_dir_path_opt: Option<&Path>) -> io::Result<()> {
+    editor::main::launch(project_dir_path_opt)
 }

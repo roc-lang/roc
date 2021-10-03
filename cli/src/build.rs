@@ -3,6 +3,8 @@ use roc_build::{
     link::{link, rebuild_host, LinkType},
     program,
 };
+#[cfg(feature = "llvm")]
+use roc_builtins::bitcode;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
 use roc_load::file::LoadingProblem;
@@ -10,6 +12,7 @@ use roc_mono::ir::OptLevel;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 use target_lexicon::Triple;
+#[cfg(feature = "llvm")]
 use tempfile::Builder;
 
 fn report_timing(buf: &mut String, label: &str, duration: Duration) {
@@ -240,11 +243,19 @@ pub fn build_file<'a>(
             })?;
         BuildOutcome::NoProblems
     } else {
+        let mut inputs = vec![
+            host_input_path.as_path().to_str().unwrap(),
+            app_o_file.to_str().unwrap(),
+        ];
+        if matches!(opt_level, OptLevel::Development) {
+            inputs.push(bitcode::OBJ_PATH);
+        }
+
         let (mut child, _) =  // TODO use lld
             link(
                 target,
                 binary_path.clone(),
-                &[host_input_path.as_path().to_str().unwrap(), app_o_file.to_str().unwrap()],
+            &inputs,
                 link_type
             )
             .map_err(|_| {

@@ -2980,3 +2980,30 @@ fn nested_rigid_tag_union() {
         RocStr
     );
 }
+
+#[test]
+fn call_that_needs_closure_parameter() {
+    // here both p2 is lifted to the top-level, which means that `list` must be
+    // passed to it from `manyAux`.
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Step state a : [ Loop state, Done a ]
+
+            manyAux : List a -> [ Pair (Step (List a) (List a))]
+            manyAux = \list ->
+                    p2 = \_ -> Pair (Done list)
+
+                    p2 "foo"
+
+            manyAuxTest =  (manyAux [ ]) == Pair (Loop [97])
+
+            runTest = \t -> if t then "PASS" else "FAIL"
+
+            runTest manyAuxTest
+            "#
+        ),
+        RocStr::from_slice(b"FAIL"),
+        RocStr
+    );
+}

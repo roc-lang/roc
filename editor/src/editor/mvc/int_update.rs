@@ -25,6 +25,7 @@ pub fn start_new_int(ed_model: &mut EdModel, digit_char: &char) -> EdResult<Inpu
     } = get_node_context(ed_model)?;
 
     let is_blank_node = curr_mark_node.is_blank();
+    let curr_mark_node_nls = curr_mark_node.get_newlines_at_end();
 
     let int_var = ed_model.module.env.var_store.fresh();
 
@@ -37,7 +38,11 @@ pub fn start_new_int(ed_model: &mut EdModel, digit_char: &char) -> EdResult<Inpu
         text: PoolStr::new(&digit_string, &mut ed_model.module.env.pool),
     };
 
-    ed_model.module.env.pool.set(ast_node_id, expr2_node);
+    ed_model
+        .module
+        .env
+        .pool
+        .set(ast_node_id.to_expr_id()?, expr2_node);
 
     let int_node = MarkupNode::Text {
         content: digit_string,
@@ -45,11 +50,12 @@ pub fn start_new_int(ed_model: &mut EdModel, digit_char: &char) -> EdResult<Inpu
         syn_high_style: HighlightStyle::Number,
         attributes: Attributes::new(),
         parent_id_opt,
+        newlines_at_end: curr_mark_node_nls,
     };
 
     if is_blank_node {
         ed_model
-            .markup_node_pool
+            .mark_node_pool
             .replace_node(curr_mark_node_id, int_node);
 
         // remove data corresponding to Blank node
@@ -59,11 +65,13 @@ pub fn start_new_int(ed_model: &mut EdModel, digit_char: &char) -> EdResult<Inpu
         ed_model.simple_move_carets_right(char_len);
 
         // update GridNodeMap and CodeLines
-        ed_model.insert_between_line(
+        EdModel::insert_between_line(
             old_caret_pos.line,
             old_caret_pos.column,
             &digit_char.to_string(),
             curr_mark_node_id,
+            &mut ed_model.grid_node_map,
+            &mut ed_model.code_lines,
         )?;
 
         Ok(InputOutcome::Accepted)
@@ -85,7 +93,7 @@ pub fn update_int(
             .grid_node_map
             .get_offset_to_node_id(old_caret_pos, int_mark_node_id)?;
 
-        let int_mark_node = ed_model.markup_node_pool.get_mut(int_mark_node_id);
+        let int_mark_node = ed_model.mark_node_pool.get_mut(int_mark_node_id);
         let int_ast_node_id = int_mark_node.get_ast_node_id();
 
         let content_str_mut = int_mark_node.get_content_mut()?;
@@ -98,19 +106,25 @@ pub fn update_int(
         } else {
             content_str_mut.insert(node_caret_offset, *ch);
 
-            let content_str = int_mark_node.get_content()?;
+            let content_str = int_mark_node.get_content();
 
             // update GridNodeMap and CodeLines
-            ed_model.insert_between_line(
+            EdModel::insert_between_line(
                 old_caret_pos.line,
                 old_caret_pos.column,
                 &ch.to_string(),
                 int_mark_node_id,
+                &mut ed_model.grid_node_map,
+                &mut ed_model.code_lines,
             )?;
 
             // update ast
             let new_pool_str = PoolStr::new(&content_str, ed_model.module.env.pool);
-            let int_ast_node = ed_model.module.env.pool.get_mut(int_ast_node_id);
+            let int_ast_node = ed_model
+                .module
+                .env
+                .pool
+                .get_mut(int_ast_node_id.to_expr_id()?);
             match int_ast_node {
                 SmallInt { number, text, .. } => {
                     update_small_int_num(number, &content_str)?;

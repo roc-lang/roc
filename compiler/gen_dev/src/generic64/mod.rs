@@ -9,7 +9,7 @@ use std::marker::PhantomData;
 pub mod aarch64;
 pub mod x86_64;
 
-const PTR_SIZE: u32 = 64;
+const PTR_SIZE: u32 = 8;
 
 pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait> {
     const GENERAL_PARAM_REGS: &'static [GeneralReg];
@@ -48,6 +48,7 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait> {
 
     // load_args updates the symbol map to know where every arg is stored.
     fn load_args<'a>(
+        buf: &mut Vec<'a, u8>,
         symbol_map: &mut MutMap<Symbol, SymbolStorage<GeneralReg, FloatReg>>,
         args: &'a [(Layout<'a>, Symbol)],
         // ret_layout is needed because if it is a complex type, we pass a pointer as the first arg.
@@ -422,7 +423,12 @@ impl<
         args: &'a [(Layout<'a>, Symbol)],
         ret_layout: &Layout<'a>,
     ) -> Result<(), String> {
-        CC::load_args(&mut self.symbol_storage_map, args, ret_layout)?;
+        CC::load_args(
+            &mut self.buf,
+            &mut self.symbol_storage_map,
+            args,
+            ret_layout,
+        )?;
         // Update used and free regs.
         for (sym, storage) in &self.symbol_storage_map {
             match storage {
@@ -488,6 +494,25 @@ impl<
                 let dst_reg = self.claim_float_reg(dst)?;
                 ASM::mov_freg64_freg64(&mut self.buf, dst_reg, CC::FLOAT_RETURN_REGS[0]);
                 Ok(())
+            }
+            Layout::Builtin(Builtin::Str) => {
+                if CC::returns_via_arg_pointer(ret_layout)? {
+                    // This will happen on windows, return via pointer here.
+                    Err("FnCall: Returning strings via pointer not yet implemented".to_string())
+                } else {
+                    let offset = self.claim_stack_size(16)?;
+                    self.symbol_storage_map.insert(
+                        *dst,
+                        SymbolStorage::Base {
+                            offset,
+                            size: 16,
+                            owned: true,
+                        },
+                    );
+                    ASM::mov_base32_reg64(&mut self.buf, offset, CC::GENERAL_RETURN_REGS[0]);
+                    ASM::mov_base32_reg64(&mut self.buf, offset + 8, CC::GENERAL_RETURN_REGS[1]);
+                    Ok(())
+                }
             }
             x => Err(format!(
                 "FnCall: receiving return type, {:?}, is not yet implemented",
@@ -893,6 +918,35 @@ impl<
                 ASM::mov_freg64_imm64(&mut self.buf, &mut self.relocs, reg, val);
                 Ok(())
             }
+            Literal::Str(x) if x.len() < 16 => {
+                // Load small string.
+                let reg = self.get_tmp_general_reg()?;
+
+                let offset = self.claim_stack_size(16)?;
+                self.symbol_storage_map.insert(
+                    *sym,
+                    SymbolStorage::Base {
+                        offset,
+                        size: 16,
+                        owned: true,
+                    },
+                );
+                let mut bytes = [0; 16];
+                bytes[..x.len()].copy_from_slice(x.as_bytes());
+                bytes[15] = (x.len() as u8) | 0b1000_0000;
+
+                let mut num_bytes = [0; 8];
+                num_bytes.copy_from_slice(&bytes[..8]);
+                let num = i64::from_ne_bytes(num_bytes);
+                ASM::mov_reg64_imm64(&mut self.buf, reg, num);
+                ASM::mov_base32_reg64(&mut self.buf, offset, reg);
+
+                num_bytes.copy_from_slice(&bytes[8..]);
+                let num = i64::from_ne_bytes(num_bytes);
+                ASM::mov_reg64_imm64(&mut self.buf, reg, num);
+                ASM::mov_base32_reg64(&mut self.buf, offset + 8, reg);
+                Ok(())
+            }
             x => Err(format!("loading literal, {:?}, is not yet implemented", x)),
         }
     }
@@ -1011,6 +1065,19 @@ impl<
                 }
                 Layout::Builtin(Builtin::Float64) => {
                     ASM::mov_freg64_base32(&mut self.buf, CC::FLOAT_RETURN_REGS[0], *offset);
+                }
+                Layout::Builtin(Builtin::Str) => {
+                    if self.symbol_storage_map.contains_key(&Symbol::RET_POINTER) {
+                        // This will happen on windows, return via pointer here.
+                        return Err("Returning strings via pointer not yet implemented".to_string());
+                    } else {
+                        ASM::mov_reg64_base32(&mut self.buf, CC::GENERAL_RETURN_REGS[0], *offset);
+                        ASM::mov_reg64_base32(
+                            &mut self.buf,
+                            CC::GENERAL_RETURN_REGS[1],
+                            *offset + 8,
+                        );
+                    }
                 }
                 Layout::Struct(field_layouts) => {
                     let (offset, size) = (*offset, *size);
@@ -1446,8 +1513,6 @@ macro_rules! single_register_integers {
 #[macro_export]
 macro_rules! single_register_floats {
     () => {
-        // Float16 is explicitly ignored because it is not supported by must hardware and may require special exceptions.
-        // Builtin::Float16 |
         Builtin::Float32 | Builtin::Float64
     };
 }

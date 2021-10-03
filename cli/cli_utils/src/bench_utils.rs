@@ -131,6 +131,7 @@ pub fn bench_rbtree_ck<T: Measurement>(bench_group_opt: Option<&mut BenchmarkGro
     );
 }
 
+#[allow(dead_code)]
 pub fn bench_rbtree_delete<T: Measurement>(bench_group_opt: Option<&mut BenchmarkGroup<T>>) {
     exec_bench_w_input(
         &example_file("benchmarks", "RBTreeDel.roc"),

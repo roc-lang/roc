@@ -1,6 +1,7 @@
 #![allow(clippy::all)]
 #![allow(dead_code)]
 #![allow(unused_imports)]
+use crate::editor::ed_error::{EdResult, UnexpectedPattern2Variant};
 use crate::lang::ast::{ExprId, FloatVal, IntVal};
 use crate::lang::expr::{to_expr_id, Env, Output};
 use crate::lang::pool::{NodeId, Pool, PoolStr, PoolVec, ShallowClone};
@@ -9,7 +10,7 @@ use bumpalo::collections::Vec as BumpVec;
 use roc_can::expr::unescape_char;
 use roc_can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
 use roc_collections::all::BumpMap;
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{Interns, Symbol};
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError};
@@ -480,6 +481,17 @@ pub fn symbols_from_pattern(pool: &Pool, initial: &Pattern2) -> Vec<Symbol> {
     }
 
     symbols
+}
+
+pub fn get_identifier_string(pattern: &Pattern2, interns: &Interns) -> EdResult<String> {
+    match pattern {
+        Pattern2::Identifier(symbol) => Ok(symbol.ident_str(interns).to_string()),
+        other => UnexpectedPattern2Variant {
+            required_pattern2: "Identifier".to_string(),
+            encountered_pattern2: format!("{:?}", other),
+        }
+        .fail()?,
+    }
 }
 
 pub fn symbols_and_variables_from_pattern(

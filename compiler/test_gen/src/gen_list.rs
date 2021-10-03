@@ -2031,3 +2031,31 @@ fn map_with_index_multi_record() {
         RocList<((), ())>
     );
 }
+
+#[test]
+fn empty_list_of_function_type() {
+    // see https://github.com/rtfeldman/roc/issues/1732
+    assert_evals_to!(
+        indoc!(
+            r#"
+            myList : List (Str -> Str)
+            myList = []
+
+            myClosure : Str -> Str
+            myClosure = \_ -> "bar"
+
+            choose =
+                if False then
+                    myList
+                else
+                    [ myClosure ]
+
+            when List.get choose 0 is
+                Ok f -> f "foo"
+                Err _ -> "bad!"
+            "#
+        ),
+        RocStr::from_slice(b"bar"),
+        RocStr
+    );
+}
