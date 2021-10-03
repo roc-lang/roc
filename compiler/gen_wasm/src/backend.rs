@@ -200,7 +200,7 @@ impl<'a> WasmBackend<'a> {
                 alignment_bytes,
             } => {
                 let location = match kind {
-                    LocalKind::Parameter => StackMemoryLocation::CallerFrame(next_local_id),
+                    LocalKind::Parameter => StackMemoryLocation::PointerArg(next_local_id),
 
                     LocalKind::Variable => {
                         match self.stack_frame_pointer {
@@ -215,7 +215,7 @@ impl<'a> WasmBackend<'a> {
 
                         self.stack_memory = offset + size as i32;
 
-                        StackMemoryLocation::OwnFrame(offset as u32)
+                        StackMemoryLocation::FrameOffset(offset as u32)
                     }
                 };
 
@@ -260,14 +260,14 @@ impl<'a> WasmBackend<'a> {
         match storage {
             SymbolStorage::Local { local_id, .. }
             | SymbolStorage::StackMemory {
-                location: StackMemoryLocation::CallerFrame(local_id),
+                location: StackMemoryLocation::PointerArg(local_id),
                 ..
             } => {
                 self.instructions.push(GetLocal(local_id.0));
             }
 
             SymbolStorage::StackMemory {
-                location: StackMemoryLocation::OwnFrame(offset),
+                location: StackMemoryLocation::FrameOffset(offset),
                 ..
             } => {
                 self.instructions.extend([
@@ -308,7 +308,7 @@ impl<'a> WasmBackend<'a> {
                     // Map this symbol to the first argument (pointer into caller's stack)
                     // Saves us from having to copy it later
                     let storage = SymbolStorage::StackMemory {
-                        location: StackMemoryLocation::CallerFrame(LocalId(0)),
+                        location: StackMemoryLocation::PointerArg(LocalId(0)),
                         size,
                         alignment_bytes,
                     };
@@ -345,8 +345,8 @@ impl<'a> WasmBackend<'a> {
                         alignment_bytes,
                     } => {
                         let (from_ptr, from_offset) = match location {
-                            StackMemoryLocation::CallerFrame(local_id) => (*local_id, 0),
-                            StackMemoryLocation::OwnFrame(offset) => {
+                            StackMemoryLocation::PointerArg(local_id) => (*local_id, 0),
+                            StackMemoryLocation::FrameOffset(offset) => {
                                 (self.stack_frame_pointer.unwrap(), *offset)
                             }
                         };

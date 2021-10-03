@@ -3,15 +3,15 @@ use parity_wasm::elements::{Instruction, Instruction::*, ValueType};
 
 #[derive(Debug, Clone)]
 pub enum StackMemoryLocation {
-    CallerFrame(LocalId),
-    OwnFrame(u32),
+    FrameOffset(u32),
+    PointerArg(LocalId),
 }
 
 impl StackMemoryLocation {
     pub fn local_and_offset(&self, stack_frame_pointer: Option<LocalId>) -> (LocalId, u32) {
         match self {
-            Self::CallerFrame(local_id) => (*local_id, 0),
-            Self::OwnFrame(offset) => (stack_frame_pointer.unwrap(), *offset),
+            Self::PointerArg(local_id) => (*local_id, 0),
+            Self::FrameOffset(offset) => (stack_frame_pointer.unwrap(), *offset),
         }
     }
 }
