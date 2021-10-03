@@ -562,10 +562,10 @@ mod cli_run {
                 file.read_exact(buf).unwrap();
 
                 // Only app modules in this directory are considered benchmarks.
-                if "app".as_bytes() == buf {
+                if "app".as_bytes() == buf && !benchmark_file_name.contains("RBTreeDel") {
                     all_benchmarks.remove(benchmark_file_name.as_str()).unwrap_or_else(|| {
-                    panic!("The benchmark {}/{} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!", benchmarks_dir, benchmark_file_name);
-                });
+                        panic!("The benchmark {}/{} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!", benchmarks_dir, benchmark_file_name);
+                    });
                 }
             }
         }
