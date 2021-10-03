@@ -772,7 +772,7 @@ pub fn listSwap(
     element_width: usize,
     index_1: usize,
     index_2: usize,
-    update_mode: update_mode,
+    update_mode: UpdateMode,
 ) callconv(.C) RocList {
     const size = list.len();
     if (index_1 == index_2 or index_1 >= size or index_2 >= size) {

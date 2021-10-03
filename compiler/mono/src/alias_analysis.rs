@@ -933,6 +933,27 @@ fn lowlevel_spec(
             let new_cell = builder.add_new_heap_cell(block)?;
             builder.add_make_tuple(block, &[new_cell, bag])
         }
+        StrToUtf8 => {
+            let string = env.symbols[&arguments[0]];
+
+            let u8_type = builder.add_tuple_type(&[])?;
+            let bag = builder.add_empty_bag(block, u8_type)?;
+            let cell = builder.add_get_tuple_field(block, string, LIST_CELL_INDEX)?;
+
+            builder.add_make_tuple(block, &[cell, bag])
+        }
+        StrFromUtf8 => {
+            let list = env.symbols[&arguments[0]];
+
+            let cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
+            let string = builder.add_make_tuple(block, &[cell])?;
+
+            let byte_index = builder.add_make_tuple(block, &[])?;
+            let is_ok = builder.add_make_tuple(block, &[])?;
+            let problem_code = builder.add_make_tuple(block, &[])?;
+
+            builder.add_make_tuple(block, &[byte_index, string, is_ok, problem_code])
+        }
         DictEmpty => {
             match layout {
                 Layout::Builtin(Builtin::EmptyDict) => {

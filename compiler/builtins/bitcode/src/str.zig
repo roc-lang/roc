@@ -1148,10 +1148,10 @@ test "RocStr.joinWith: result is big" {
 
 // Str.toUtf8
 pub fn strToUtf8C(arg: RocStr) callconv(.C) RocList {
-    return @call(.{ .modifier = always_inline }, strToBytes, .{arg});
+    return strToBytes(arg);
 }
 
-fn strToBytes(arg: RocStr) RocList {
+inline fn strToBytes(arg: RocStr) RocList {
     if (arg.isEmpty()) {
         return RocList.empty();
     } else if (arg.isSmallStr()) {
