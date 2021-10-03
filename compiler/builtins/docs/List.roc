@@ -422,15 +422,18 @@ min : List (Num a) -> Result (Num a) [ ListWasEmpty ]*
 ## If the given index is outside the bounds of the list, returns the original
 ## list unmodified.
 ##
-## To drop the element at a given index, instead of replacing it, see [List.drop].
+## To drop the element at a given index, instead of replacing it, see [List.dropAt].
 set : List elem, Nat, elem -> List elem
 
+# GIESCH figure out if we should add docs for List.drop;
+#   what's the relationship with List.dropFirst, below?
+# GIESCH add docs re: uniqueness and performance
 ## Drops the element at the given index from the list.
 ##
 ## This has no effect if the given index is outside the bounds of the list.
 ##
 ## To replace the element at a given index, instead of dropping it, see [List.set].
-drop : List elem, Nat -> List elem
+dropAt : List elem, Nat -> List elem
 
 ## Adds a new element to the end of the list.
 ##

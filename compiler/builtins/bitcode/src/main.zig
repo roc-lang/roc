@@ -39,6 +39,7 @@ comptime {
     exportListFn(list.listSortWith, "sort_with");
     exportListFn(list.listConcat, "concat");
     exportListFn(list.listDrop, "drop");
+    exportListFn(list.listDropAt, "drop_at");
     exportListFn(list.listSet, "set");
     exportListFn(list.listSetInPlace, "set_in_place");
     exportListFn(list.listSwap, "swap");

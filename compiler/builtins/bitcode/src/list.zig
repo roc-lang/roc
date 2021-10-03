@@ -833,6 +833,54 @@ pub fn listDrop(
     }
 }
 
+// GIESCH add type inference test
+// GIESCH add unit tests
+// GIESCH do a uniqueness check, and reuse the same array if possible
+// GIESCH figure out where to specify uniqueness of output, update builtins readme
+pub fn listDropAt(
+    list: RocList,
+    alignment: u32,
+    element_width: usize,
+    drop_index: usize,
+    dec: Dec,
+) callconv(.C) RocList {
+    if (list.bytes) |source_ptr| {
+        const size = list.len();
+
+        if (drop_index >= size) {
+            return RocList.empty();
+        }
+
+        if (drop_index < size) {
+            const element = source_ptr + drop_index * element_width;
+            dec(element);
+        }
+
+        // GIESCH is this necessary?
+        if (size < 2 and drop_index == 0) {
+            return RocList.empty();
+        }
+
+        const output = RocList.allocate(alignment, (size - 1), element_width);
+        const target_ptr = output.bytes orelse unreachable;
+
+        const head_size = drop_index * element_width;
+        @memcpy(target_ptr, source_ptr, head_size);
+
+        const tail_target = target_ptr + drop_index * element_width;
+        const tail_source = source_ptr + (drop_index + 1) * element_width;
+        const tail_size = (size - drop_index - 1) * element_width;
+        @memcpy(tail_target, tail_source, tail_size);
+
+        // GIESCH what's the difference between this and Dec?
+        utils.decref(list.bytes, size * element_width, alignment);
+
+        return output;
+    } else {
+        return RocList.empty();
+    }
+}
+
 pub fn listRange(width: utils.IntWidth, low: Opaque, high: Opaque) callconv(.C) RocList {
     return switch (width) {
         .U8 => helper1(u8, low, high),
