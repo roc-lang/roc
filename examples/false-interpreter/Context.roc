@@ -6,11 +6,11 @@ Option a : [ Some a, None ]
 
 # The underlying context of the current location within the file
 
-Data : [ Lambda (List U8), Number I64, Var Variable ] 
+Data : [ Lambda (List U8), Number I32, Var Variable ]
 # While loops are special and have their own Scope specific state.
 WhileState: { cond: List U8, body: List U8, state: [ InCond, InBody ] }
 Scope : { data: Option File.Handle, index: Nat, buf: List U8, whileInfo: Option WhileState }
-State : [ Executing, InComment, InLambda Nat (List U8), InString (List U8), InNumber I64, InSpecialChar, LoadChar]
+State : [ Executing, InComment, InLambda Nat (List U8), InString (List U8), InNumber I32, InSpecialChar, LoadChar]
 Context : { scopes: List Scope, stack: List Data, vars: List Data, state: State }
 
 pushStack: Context, Data -> Context
@@ -35,7 +35,7 @@ toStrData: Data -> Str
 toStrData = \data ->
     when data is
         Lambda _ -> "[]"
-        Number n -> Str.fromInt n
+        Number n -> Str.fromInt (Num.intCast n)
         Var v -> Variable.toStr v
 
 toStrState: State -> Str

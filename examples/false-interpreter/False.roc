@@ -76,7 +76,6 @@ isWhitespace = \char ->
 
 interpretCtx : Context -> Task Context InterpreterErrors
 interpretCtx = \ctx ->
-    # {} <- Task.await (Stdout.line (Context.toStr ctx))
     when ctx.state is
         Executing if Context.inWhileScope ctx ->
             # Deal with the current while loop potentially looping.
@@ -104,6 +103,7 @@ interpretCtx = \ctx ->
                 Err OutOfBounds ->
                     Task.fail NoScope
         Executing ->
+            # {} <- Task.await (Stdout.line (Context.toStr ctx))
             result <- Task.attempt (Context.getChar ctx)
             when result is
                 Ok (T val newCtx) ->
@@ -140,8 +140,8 @@ interpretCtx = \ctx ->
                         # i32 multiplication is kinda broken because it implicitly seems to want to upcast to i64.
                         # so like should be (i32, i32) -> i32, but seems to be (i32, i32) -> i64
                         # so this is make i64 mul by 10 then convert back to i32. 
-                        nextAccum = (10 * accum) + (Num.intCast (val - 0x30))
-                        interpretCtx {newCtx & state: InNumber nextAccum }
+                        nextAccum = (10 * Num.intCast accum) + (Num.intCast (val - 0x30))
+                        interpretCtx {newCtx & state: InNumber (Num.intCast nextAccum) }
                     else
                         # outside of number now, this needs to be executed.
                         pushCtx = Context.pushStack newCtx (Number accum)
@@ -361,7 +361,7 @@ stepExecCtx = \ctx, char ->
         0x2E -> # `.` write int
             when popNumber ctx is
                 Ok (T popCtx num) ->
-                    {} <- Task.await (Stdout.raw (Str.fromInt num))
+                    {} <- Task.await (Stdout.raw (Str.fromInt (Num.intCast num)))
                     Task.succeed popCtx
                 Err e ->
                     Task.fail e
@@ -401,19 +401,19 @@ stepExecCtx = \ctx, char ->
                     data = Str.fromInt (Num.intCast x)
                     Task.fail (InvalidChar data)
 
-unaryOp: Context, (I64 -> I64) -> Result Context InterpreterErrors
+unaryOp: Context, (I32 -> I32) -> Result Context InterpreterErrors
 unaryOp = \ctx, op ->
     (T popCtx num) <- Result.after (popNumber ctx)
     Ok (Context.pushStack popCtx (Number (op num)))
 
-binaryOp: Context, (I64, I64 -> I64) -> Result Context InterpreterErrors
+binaryOp: Context, (I32, I32 -> I32) -> Result Context InterpreterErrors
 binaryOp = \ctx, op ->
     (T popCtx1 numR) <- Result.after (popNumber ctx)
     (T popCtx2 numL) <- Result.after (popNumber popCtx1)
     Ok (Context.pushStack popCtx2 (Number (op numL numR)))
 
 
-popNumber: Context -> Result [T Context I64] InterpreterErrors
+popNumber: Context -> Result [T Context I32] InterpreterErrors
 popNumber = \ctx ->
     when Context.popStack ctx is
         Ok (T popCtx (Number num)) ->

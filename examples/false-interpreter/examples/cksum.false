@@ -112,6 +112,9 @@ Its values are then shifted back and merged together.
         {divide the bottom value by 2}
         2/
 
+        {zero top bit to avoid sign extension}
+        65535 32767 65536*|&
+
         {swap back}
         \
     ]#
@@ -153,12 +156,9 @@ Its values are then shifted back and merged together.
 
     {left shift it by 8 (multiply by 0x100)}
     256*
-    
+
     {xor with the loaded constant}
     x;!
-    
-    {truncate back to 32 bits (and with 0xFFFF_FFFF_FFFF_FFFF)}
-    65535 65535 65536*|&
 
     {load the next character}
     ^
@@ -203,9 +203,8 @@ i;
     {xor with the loaded constant}
     x;!
 
-    {truncate back to 32 bits (and with 0xFFFF_FFFF_FFFF_FFFF)}
-    65535 65535 65536*|&
-    
+
+
     {swap i back on top of the stack and right shift it by 8}
     \8r;!
 ]#
@@ -214,9 +213,6 @@ i;
 
 { binary negate the crc32 }
 ~
-
-{truncate back to 32 bits (and with 0xFFFF_FFFF_FFFF_FFFF)}
-65535 65535 65536*|&
 
 {print the crc32}
 .
