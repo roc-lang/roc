@@ -82,8 +82,7 @@ getCharScope = \scope ->
         Err OutOfBounds -> 
             when scope.data is
                 Some h ->
-                    chunk <- Task.await (File.chunk h)
-                    bytes = Str.toUtf8 chunk 
+                    bytes <- Task.await (File.chunk h)
                     when List.first bytes is
                         Ok val ->
                             # This starts at 1 because the first charater is already being returned.

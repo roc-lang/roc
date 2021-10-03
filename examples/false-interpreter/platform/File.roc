@@ -7,7 +7,7 @@ Handle: [ @Handle U64 ]
 line : Handle -> Task.Task Str *
 line = \@Handle handle -> Effect.after (Effect.getFileLine handle) Task.succeed
 
-chunk : Handle -> Task.Task Str *
+chunk : Handle -> Task.Task (List U8) *
 chunk = \@Handle handle -> Effect.after (Effect.getFileBytes handle) Task.succeed
 
 open : Str -> Task.Task Handle *

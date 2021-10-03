@@ -171,7 +171,7 @@ pub fn roc_fx_getFileLine(br_ptr: *mut BufReader<File>) -> RocStr {
 }
 
 #[no_mangle]
-pub fn roc_fx_getFileBytes(br_ptr: *mut BufReader<File>) -> RocStr {
+pub fn roc_fx_getFileBytes(br_ptr: *mut BufReader<File>) -> RocList<u8> {
     let br = unsafe { &mut *br_ptr };
     let mut buffer = [0; 0x10 /* This is intentially small to ensure correct implementation */];
 
@@ -179,7 +179,7 @@ pub fn roc_fx_getFileBytes(br_ptr: *mut BufReader<File>) -> RocStr {
         .read(&mut buffer[..])
         .expect("Failed to read bytes from file");
 
-    RocStr::from_slice(&buffer[..count])
+    RocList::from_slice(&buffer[..count])
 }
 
 #[no_mangle]

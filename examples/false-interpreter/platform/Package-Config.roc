@@ -10,7 +10,7 @@ platform examples/cli
             closeFile : U64 -> Effect {},
             withFileOpen : Str, (U64 -> Effect (Result ok err)) -> Effect {},
             getFileLine : U64 -> Effect Str,
-            getFileBytes : U64 -> Effect Str,
+            getFileBytes : U64 -> Effect (List U8),
             putLine : Str -> Effect {},
             putRaw : Str -> Effect {},
             # Is there a limit to the number of effect, uncomment the next line and it crashes
