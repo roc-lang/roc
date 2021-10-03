@@ -172,6 +172,7 @@ pub fn list_reverse<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     list: BasicValueEnum<'ctx>,
     list_layout: &Layout<'a>,
+    update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
     let element_layout = match *list_layout {
         Layout::Builtin(Builtin::EmptyList) => {
@@ -190,6 +191,7 @@ pub fn list_reverse<'a, 'ctx, 'env>(
             pass_list_cc(env, list),
             env.alignment_intvalue(&element_layout),
             layout_width(env, &element_layout),
+            pass_update_mode(env, update_mode),
         ],
         bitcode::LIST_REVERSE,
     )

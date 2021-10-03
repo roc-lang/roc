@@ -918,6 +918,17 @@ fn lowlevel_spec(
             let new_cell = builder.add_new_heap_cell(block)?;
             builder.add_make_tuple(block, &[new_cell, bag])
         }
+        ListReverse => {
+            let list = env.symbols[&arguments[0]];
+
+            let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
+            let cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
+
+            let _unit = builder.add_update(block, update_mode_var, cell)?;
+
+            let new_cell = builder.add_new_heap_cell(block)?;
+            builder.add_make_tuple(block, &[new_cell, bag])
+        }
         ListAppend => {
             let list = env.symbols[&arguments[0]];
             let to_insert = env.symbols[&arguments[1]];

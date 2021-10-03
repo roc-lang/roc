@@ -4930,7 +4930,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            list_reverse(env, list, list_layout)
+            list_reverse(env, list, list_layout, update_mode)
         }
         ListConcat => {
             debug_assert_eq!(args.len(), 2);

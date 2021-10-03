@@ -141,14 +141,14 @@ const Caller1 = fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 const Caller2 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 const Caller3 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 
-pub fn listReverse(list: RocList, alignment: u32, element_width: usize) callconv(.C) RocList {
+pub fn listReverse(list: RocList, alignment: u32, element_width: usize, update_mode: UpdateMode) callconv(.C) RocList {
     if (list.bytes) |source_ptr| {
         const size = list.len();
 
         var i: usize = 0;
         const end: usize = size - 1;
 
-        if (list.isUnique()) {
+        if (update_mode == .InPlace or list.isUnique()) {
 
             // Working from the front and back so
             // we only need to go ~(n / 2) iterations.
