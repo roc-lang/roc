@@ -852,7 +852,33 @@ pub fn listDropAt(
             dec(element);
         }
 
-        const output = RocList.allocate(alignment, (size - 1), element_width);
+        // NOTE
+        // we need to return an empty list explicitly,
+        // because we rely on the pointer field being null if the list is empty
+        // which also requires duplicating the utils.decref call to spend the RC token
+        if (size < 2) {
+            utils.decref(list.bytes, size * element_width, alignment);
+            return RocList.empty();
+        }
+
+        if (list.isUnique()) {
+            var i = drop_index;
+            while (i < size) : (i += 1) {
+                const copy_target = source_ptr + i * element_width;
+                const copy_source = copy_target + element_width;
+                @memcpy(copy_target, copy_source, element_width);
+            }
+
+            var new_list = list;
+
+            new_list.length -= 1;
+            return new_list;
+        }
+
+        const stdout = std.io.getStdOut().writer();
+        stdout.print("Hit non-unique branch with list, {any}!\n", .{list}) catch unreachable;
+
+        const output = RocList.allocate(alignment, size - 1, element_width);
         const target_ptr = output.bytes orelse unreachable;
 
         const head_size = drop_index * element_width;
