@@ -12,6 +12,7 @@ use roc_mono::layout::{Builtin, Layout};
 
 use crate::layout::WasmLayout;
 use crate::storage::{StackMemoryLocation, SymbolStorage};
+use crate::code_builder::CodeBuilder;
 use crate::{
     copy_memory, pop_stack_frame, push_stack_frame, round_up_to_alignment, CopyMemoryConfig,
     LocalId, PTR_SIZE, PTR_TYPE,
@@ -40,7 +41,7 @@ pub struct WasmBackend<'a> {
     proc_symbol_map: MutMap<Symbol, CodeLocation>,
 
     // Functions: Wasm AST
-    instructions: std::vec::Vec<Instruction>,
+    instructions: CodeBuilder,
     arg_types: std::vec::Vec<ValueType>,
     locals: std::vec::Vec<Local>,
 
@@ -65,7 +66,7 @@ impl<'a> WasmBackend<'a> {
             proc_symbol_map: MutMap::default(),
 
             // Functions: Wasm AST
-            instructions: std::vec::Vec::with_capacity(256),
+            instructions: CodeBuilder::new(),
             arg_types: std::vec::Vec::with_capacity(8),
             locals: std::vec::Vec::with_capacity(32),
 
@@ -139,7 +140,7 @@ impl<'a> WasmBackend<'a> {
             );
         }
 
-        final_instructions.extend(self.instructions.drain(0..));
+        final_instructions.extend(self.instructions.drain());
 
         if self.stack_memory > 0 {
             pop_stack_frame(
@@ -270,7 +271,7 @@ impl<'a> WasmBackend<'a> {
                 location: StackMemoryLocation::FrameOffset(offset),
                 ..
             } => {
-                self.instructions.extend([
+                self.instructions.extend(&[
                     GetLocal(self.stack_frame_pointer.unwrap().0),
                     I32Const(offset as i32),
                     I32Add,
@@ -658,7 +659,7 @@ impl<'a> WasmBackend<'a> {
                 return Err(format!("unsupported low-level op {:?}", lowlevel));
             }
         };
-        self.instructions.extend_from_slice(instructions);
+        self.instructions.extend(instructions);
         Ok(())
     }
 }

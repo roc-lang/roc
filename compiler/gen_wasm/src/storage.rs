@@ -1,5 +1,6 @@
+use crate::code_builder::CodeBuilder;
 use crate::{copy_memory, CopyMemoryConfig, LocalId, ALIGN_1, ALIGN_2, ALIGN_4, ALIGN_8};
-use parity_wasm::elements::{Instruction, Instruction::*, ValueType};
+use parity_wasm::elements::{Instruction::*, ValueType};
 
 #[derive(Debug, Clone)]
 pub enum StackMemoryLocation {
@@ -37,7 +38,7 @@ impl SymbolStorage {
     pub fn copy_from(
         &self,
         from: &Self,
-        instructions: &mut Vec<Instruction>,
+        instructions: &mut CodeBuilder,
         stack_frame_pointer: Option<LocalId>,
     ) {
         match (self, from) {
@@ -98,7 +99,7 @@ impl SymbolStorage {
     /// Generate code to copy to a memory address (such as a struct index)
     pub fn copy_to_memory(
         &self,
-        instructions: &mut Vec<Instruction>,
+        instructions: &mut CodeBuilder,
         to_ptr: LocalId,
         to_offset: u32,
         stack_frame_pointer: Option<LocalId>,

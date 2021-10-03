@@ -2,6 +2,7 @@ mod backend;
 pub mod from_wasm32_memory;
 mod layout;
 mod storage;
+mod code_builder;
 
 use bumpalo::Bump;
 use parity_wasm::builder;
@@ -13,6 +14,7 @@ use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::LayoutIds;
 
 use crate::backend::WasmBackend;
+use crate::code_builder::CodeBuilder;
 
 const PTR_SIZE: u32 = 4;
 const PTR_TYPE: ValueType = ValueType::I32;
@@ -130,7 +132,7 @@ pub struct CopyMemoryConfig {
     alignment_bytes: u32,
 }
 
-pub fn copy_memory(instructions: &mut Vec<Instruction>, config: CopyMemoryConfig) {
+pub fn copy_memory(instructions: &mut CodeBuilder, config: CopyMemoryConfig) {
     let alignment_flag = encode_alignment(config.alignment_bytes);
     let mut i = 0;
     while config.size - i >= 8 {
