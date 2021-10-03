@@ -1308,11 +1308,11 @@ pub const Utf8ByteProblem = enum(u8) {
 };
 
 fn validateUtf8Bytes(bytes: [*]u8, length: usize) FromUtf8Result {
-    return fromUtf8(RocList{ .bytes = bytes, .length = length });
+    return fromUtf8(RocList{ .bytes = bytes, .length = length }, .Immutable);
 }
 
 fn validateUtf8BytesX(str: RocList) FromUtf8Result {
-    return fromUtf8(str);
+    return fromUtf8(str, .Immutable);
 }
 
 fn expectOk(result: FromUtf8Result) !void {
