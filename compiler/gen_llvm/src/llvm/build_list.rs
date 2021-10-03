@@ -17,13 +17,13 @@ use morphic_lib::UpdateMode;
 use roc_builtins::bitcode;
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
-fn pass_update_mode<'a, 'ctx, 'env>(
+pub fn pass_update_mode<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
     match update_mode {
-        UpdateMode::Immutable => env.context.bool_type().const_zero().into(),
-        UpdateMode::InPlace => env.context.bool_type().const_int(1, false).into(),
+        UpdateMode::Immutable => env.context.i8_type().const_zero().into(),
+        UpdateMode::InPlace => env.context.i8_type().const_int(1, false).into(),
     }
 }
 

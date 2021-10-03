@@ -1,6 +1,7 @@
 const std = @import("std");
 const utils = @import("utils.zig");
 const RocResult = utils.RocResult;
+const UpdateMode = utils.UpdateMode;
 const mem = std.mem;
 
 const EqFn = fn (?[*]u8, ?[*]u8) callconv(.C) bool;
@@ -50,6 +51,14 @@ pub const RocList = extern struct {
             .bytes = utils.allocateWithRefcount(data_bytes, alignment),
             .length = length,
         };
+    }
+
+    pub fn makeUniqueExtra(self: RocList, alignment: u32, element_width: usize, update_mode: UpdateMode) RocList {
+        if (update_mode == .InPlace) {
+            return self;
+        } else {
+            return self.makeUnique(alignment, element_width);
+        }
     }
 
     pub fn makeUnique(self: RocList, alignment: u32, element_width: usize) RocList {
@@ -763,7 +772,7 @@ pub fn listSwap(
     element_width: usize,
     index_1: usize,
     index_2: usize,
-    can_update_in_place: bool,
+    update_mode: update_mode,
 ) callconv(.C) RocList {
     const size = list.len();
     if (index_1 == index_2 or index_1 >= size or index_2 >= size) {
@@ -772,7 +781,7 @@ pub fn listSwap(
     }
 
     const newList = blk: {
-        if (can_update_in_place) {
+        if (update_mode == .InPlace) {
             break :blk list;
         } else {
             break :blk list.makeUnique(alignment, element_width);

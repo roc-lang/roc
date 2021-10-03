@@ -4848,7 +4848,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
 
-            str_from_utf8(env, parent, original_wrapper)
+            str_from_utf8(env, parent, original_wrapper, update_mode)
         }
         StrFromUtf8Range => {
             debug_assert_eq!(args.len(), 2);
