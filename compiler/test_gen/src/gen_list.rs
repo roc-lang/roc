@@ -199,6 +199,21 @@ fn list_drop() {
 }
 
 #[test]
+fn list_drop_at() {
+    assert_evals_to!(
+        "List.dropAt [1, 2, 3] 0",
+        RocList::from_slice(&[2, 3]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.dropAt [0, 0, 0] 3",
+        RocList::from_slice(&[1, 2, 3]),
+        RocList<i64>
+    );
+    assert_evals_to!("List.dropAt [] 1", RocList::from_slice(&[]), RocList<i64>);
+}
+
+#[test]
 fn list_swap() {
     assert_evals_to!("List.swap [] 0 1", RocList::from_slice(&[]), RocList<i64>);
     assert_evals_to!(

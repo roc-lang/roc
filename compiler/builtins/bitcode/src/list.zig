@@ -833,8 +833,6 @@ pub fn listDrop(
     }
 }
 
-// GIESCH add type inference test
-// GIESCH add unit tests
 // GIESCH do a uniqueness check, and reuse the same array if possible
 // GIESCH figure out where to specify uniqueness of output, update builtins readme
 pub fn listDropAt(
@@ -848,17 +846,13 @@ pub fn listDropAt(
         const size = list.len();
 
         if (drop_index >= size) {
-            return RocList.empty();
+            // GIESCH should this still copy/reallocate if non-unique?
+            return list;
         }
 
         if (drop_index < size) {
             const element = source_ptr + drop_index * element_width;
             dec(element);
-        }
-
-        // GIESCH is this necessary?
-        if (size < 2 and drop_index == 0) {
-            return RocList.empty();
         }
 
         const output = RocList.allocate(alignment, (size - 1), element_width);
