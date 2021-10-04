@@ -378,8 +378,13 @@ fn preprocess_impl(
             return Ok(-1);
         }
     })
-    .map(|(_, reloc)| reloc)
-    .filter(|reloc| matches!(reloc.kind(), RelocationKind::Elf(7)));
+    .filter_map(|(_, reloc)| {
+        if let RelocationKind::Elf(7) = reloc.kind() {
+            Some(reloc)
+        } else {
+            None
+        }
+    });
 
     let app_syms: Vec<Symbol> = exec_obj
         .dynamic_symbols()
@@ -396,17 +401,16 @@ fn preprocess_impl(
             return Ok(-1);
         }
     })
-    .map(|(_, reloc)| reloc)
-    .filter(|reloc| matches!(reloc.kind(), RelocationKind::Elf(6)))
-    .map(|reloc| {
-        for symbol in app_syms.iter() {
-            if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
-                return Some((symbol.name().unwrap().to_string(), symbol.index().0));
+    .filter_map(|(_, reloc)| {
+        if let RelocationKind::Elf(6) = reloc.kind() {
+            for symbol in app_syms.iter() {
+                if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
+                    return Some((symbol.name().unwrap().to_string(), symbol.index().0));
+                }
             }
         }
         None
     })
-    .flatten()
     .collect();
 
     for sym in app_syms.iter() {
@@ -831,8 +835,13 @@ fn preprocess_impl(
     // Get last segment virtual address.
     let last_segment_vaddr = program_headers
         .iter()
-        .filter(|ph| ph.p_type.get(NativeEndian) != elf::PT_GNU_STACK)
-        .map(|ph| ph.p_vaddr.get(NativeEndian) + ph.p_memsz.get(NativeEndian))
+        .filter_map(|ph| {
+            if ph.p_type.get(NativeEndian) != elf::PT_GNU_STACK {
+                Some(ph.p_vaddr.get(NativeEndian) + ph.p_memsz.get(NativeEndian))
+            } else {
+                None
+            }
+        })
         .max()
         .unwrap();
 
