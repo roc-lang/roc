@@ -258,6 +258,18 @@ mapWithIndex : List before, (before, Nat -> after) -> List after
 ## cancel the entire operation immediately, and return that #Err.
 mapOrCancel : List before, (before -> Result after err) -> Result (List after) err
 
+## Like [List.map], except the transformation function specifies whether to
+## `Keep` or `Drop` each element from the final [List].
+##
+## You may know a similar function named `filterMap` in other languages.
+mapOrDrop : List before, (before -> [ Keep after, Drop ]) -> List after
+
+## Like [List.map], except the transformation function wraps the return value
+## in a list. At the end, all the lists get joined together into one list.
+##
+## You may know a similar function named `concatMap` in other languages.
+mapJoin : List before, (before -> List after) -> List after
+
 ## This works like [List.map], except only the transformed values that are
 ## wrapped in `Ok` are kept. Any that are wrapped in `Err` are dropped.
 ##
@@ -321,10 +333,6 @@ concat : List elem, List elem -> List elem
 ##
 ## >>> List.join []
 join : List (List elem) -> List elem
-
-## Like [List.map], except the transformation function wraps the return value
-## in a list. At the end, all the lists get joined together into one list.
-joinMap : List before, (before -> List after) -> List after
 
 ## Like [List.join], but only keeps elements tagged with `Ok`. Elements
 ## tagged with `Err` are dropped.
