@@ -5,3 +5,4 @@ pub mod lang;
 pub mod mem_pool;
 pub mod parse;
 pub mod solve_type;
+pub mod module;

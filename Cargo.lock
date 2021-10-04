@@ -3397,8 +3397,10 @@ dependencies = [
  "libc",
  "page_size",
  "pretty_assertions 0.6.1",
+ "roc_builtins",
  "roc_can",
  "roc_collections",
+ "roc_load",
  "roc_module",
  "roc_parse",
  "roc_problem",
@@ -3593,6 +3595,8 @@ dependencies = [
  "roc_parse",
  "roc_region",
  "roc_types",
+ "tempfile",
+ "uuid",
 ]
 
 [[package]]

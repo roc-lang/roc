@@ -25,7 +25,7 @@ mod html;
 mod pattern;
 
 pub fn generate_docs_html(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
-    let files_docs = load_modules_for_files(filenames, std_lib);
+    let loaded_modules = load_modules_for_files(filenames, std_lib);
     let mut arena = Bump::new();
 
     //
@@ -34,7 +34,7 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &
         name: "roc/builtins".to_string(),
         version: "1.0.0".to_string(),
         docs: "Package introduction or README.".to_string(),
-        modules: files_docs,
+        modules: loaded_modules,
     };
 
     if !build_dir.exists() {
@@ -111,7 +111,7 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &
                 )
                 .replace(
                     "<!-- Module Docs -->",
-                    render_main_content(
+                    render_module_documentation(
                         exports,
                         module_docs,
                         &loaded_module
@@ -173,8 +173,7 @@ pub fn syntax_highlight_top_level_defs<'a>(
     }
 }
 
-// TODO improve name, what is main content?
-fn render_main_content(
+fn render_module_documentation(
     exposed_values: &[&str],
     module: &ModuleDocumentation,
     loaded_module: &LoadedModule,

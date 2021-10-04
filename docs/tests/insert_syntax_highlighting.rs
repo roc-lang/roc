@@ -3,25 +3,21 @@ extern crate pretty_assertions;
 
 #[cfg(test)]
 mod insert_doc_syntax_highlighting {
+    use std::{fs::File, io::Write, path::PathBuf};
+
+
     use bumpalo::{collections::String as BumpString, Bump};
-    use roc_can::env::Env;
-    use roc_can::scope::Scope;
-    use roc_collections::all::MutMap;
+    use roc_ast::module::load_module;
     use roc_docs::{syntax_highlight_expr, syntax_highlight_top_level_defs};
-    use roc_module::symbol::{IdentIds, Interns, ModuleIds};
-    use roc_types::subs::VarStore;
+    use roc_load::file::LoadedModule;
+    use tempfile::tempdir;
+    use uuid::Uuid;
 
     fn expect_html(code_str: &str, want: &str, use_expr: bool) {
+
+        let loaded_module = make_mock_module();
+
         let code_block_arena = Bump::new();
-
-        
-        let mut module_ids = ModuleIds::default();
-        let mod_id = module_ids.get_or_insert(&"ModId123".into());
-
-        let interns = Interns {
-            module_ids: module_ids.clone(),
-            all_ident_ids: IdentIds::exposed_builtins(8),
-        };
         let mut code_block_buf = BumpString::new_in(&code_block_arena);
 
         if use_expr {
@@ -29,9 +25,9 @@ mod insert_doc_syntax_highlighting {
                 &code_block_arena,
                 &mut code_block_buf,
                 code_str,
-                mod_id,
-                &module_ids,
-                &interns
+                loaded_module.module_id,
+                &loaded_module.interns.module_ids,
+                &loaded_module.interns
             ) {
                 Ok(highlighted_code_str) => {
                     assert_eq!(highlighted_code_str, want);
@@ -45,9 +41,9 @@ mod insert_doc_syntax_highlighting {
                 &code_block_arena,
                 &mut code_block_buf,
                 code_str,
-                mod_id,
-                &module_ids,
-                &interns
+                loaded_module.module_id,
+                &loaded_module.interns.module_ids,
+                &loaded_module.interns
             ) {
                 Ok(highlighted_code_str) => {
                     assert_eq!(highlighted_code_str, want);
@@ -58,6 +54,36 @@ mod insert_doc_syntax_highlighting {
             };
         }
         
+    }
+
+    pub const HELLO_WORLD: &str = r#"
+app "test-app"
+    packages { base: "platform" }
+    imports []
+    provides [ main ] to base
+
+main = "Hello, world!"
+
+
+"#;
+
+
+    fn make_mock_module() -> LoadedModule {
+        let temp_dir = tempdir().expect("Failed to create temporary directory for test.");
+        let temp_file_path_buf =
+            PathBuf::from([Uuid::new_v4().to_string(), ".roc".to_string()].join(""));
+        let temp_file_full_path = temp_dir.path().join(temp_file_path_buf);
+
+        let mut file = File::create(temp_file_full_path.clone()).expect(&format!(
+            "Failed to create temporary file for path {:?}",
+            temp_file_full_path
+        ));
+        writeln!(file, "{}", HELLO_WORLD).expect(&format!(
+            "Failed to write {:?} to file: {:?}",
+            HELLO_WORLD, file
+        ));
+
+        load_module(&temp_file_full_path)
     }
 
     fn expect_html_expr(code_str: &str, want: &str) {
@@ -111,10 +137,10 @@ mod insert_doc_syntax_highlighting {
     // TODO test record, nested records
 
     #[test]
-    fn function_def() {
+    fn top_level_value_def() {
         expect_html_def(
             r#"main = "Hello, World!""#,
-            r#"TODO"#,
+            "<span class=\"syntax-variable\">main</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-string\">\"Hello, World!\"</span>\n\n",
         );
     }
 }

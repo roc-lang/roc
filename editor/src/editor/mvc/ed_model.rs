@@ -198,7 +198,6 @@ impl<'a> EdModule<'a> {
 #[cfg(test)]
 pub mod test_ed_model {
     use crate::editor::ed_error::EdResult;
-    use crate::editor::main::load_module;
     use crate::editor::mvc::ed_model;
     use crate::editor::resources::strings::HELLO_WORLD;
     use crate::ui::text::caret_w_select::test_caret_w_select::convert_dsl_to_selection;
@@ -211,6 +210,7 @@ pub mod test_ed_model {
     use ed_model::EdModel;
     use roc_ast::lang::env::Env;
     use roc_ast::mem_pool::pool::Pool;
+    use roc_ast::module::load_module;
     use roc_load::file::LoadedModule;
     use roc_module::symbol::IdentIds;
     use roc_module::symbol::ModuleIds;
