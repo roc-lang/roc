@@ -41,6 +41,7 @@ pub enum LowLevel {
     ListKeepErrs,
     ListSortWith,
     ListDrop,
+    ListDropAt,
     ListSwap,
     DictSize,
     DictEmpty,
@@ -116,13 +117,13 @@ impl LowLevel {
             StrConcat | StrJoinWith | StrIsEmpty | StrStartsWith | StrStartsWithCodePt
             | StrEndsWith | StrSplit | StrCountGraphemes | StrFromInt | StrFromUtf8
             | StrFromUtf8Range | StrToUtf8 | StrRepeat | StrFromFloat | ListLen | ListGetUnsafe
-            | ListSet | ListDrop | ListSingle | ListRepeat | ListReverse | ListConcat
-            | ListContains | ListAppend | ListPrepend | ListJoin | ListRange | ListSwap
-            | DictSize | DictEmpty | DictInsert | DictRemove | DictContains | DictGetUnsafe
-            | DictKeys | DictValues | DictUnion | DictIntersection | DictDifference
-            | SetFromList | NumAdd | NumAddWrap | NumAddChecked | NumSub | NumSubWrap
-            | NumSubChecked | NumMul | NumMulWrap | NumMulChecked | NumGt | NumGte | NumLt
-            | NumLte | NumCompare | NumDivUnchecked | NumRemUnchecked | NumIsMultipleOf
+            | ListSet | ListDrop | ListDropAt | ListSingle | ListRepeat | ListReverse
+            | ListConcat | ListContains | ListAppend | ListPrepend | ListJoin | ListRange
+            | ListSwap | DictSize | DictEmpty | DictInsert | DictRemove | DictContains
+            | DictGetUnsafe | DictKeys | DictValues | DictUnion | DictIntersection
+            | DictDifference | SetFromList | NumAdd | NumAddWrap | NumAddChecked | NumSub
+            | NumSubWrap | NumSubChecked | NumMul | NumMulWrap | NumMulChecked | NumGt | NumGte
+            | NumLt | NumLte | NumCompare | NumDivUnchecked | NumRemUnchecked | NumIsMultipleOf
             | NumAbs | NumNeg | NumSin | NumCos | NumSqrtUnchecked | NumLogUnchecked | NumRound
             | NumToFloat | NumPow | NumCeiling | NumPowInt | NumFloor | NumIsFinite | NumAtan
             | NumAcos | NumAsin | NumBitwiseAnd | NumBitwiseXor | NumBitwiseOr | NumShiftLeftBy

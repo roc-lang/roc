@@ -833,6 +833,67 @@ pub fn listDrop(
     }
 }
 
+pub fn listDropAt(
+    list: RocList,
+    alignment: u32,
+    element_width: usize,
+    drop_index: usize,
+    dec: Dec,
+) callconv(.C) RocList {
+    if (list.bytes) |source_ptr| {
+        const size = list.len();
+
+        if (drop_index >= size) {
+            return list;
+        }
+
+        if (drop_index < size) {
+            const element = source_ptr + drop_index * element_width;
+            dec(element);
+        }
+
+        // NOTE
+        // we need to return an empty list explicitly,
+        // because we rely on the pointer field being null if the list is empty
+        // which also requires duplicating the utils.decref call to spend the RC token
+        if (size < 2) {
+            utils.decref(list.bytes, size * element_width, alignment);
+            return RocList.empty();
+        }
+
+        if (list.isUnique()) {
+            var i = drop_index;
+            while (i < size) : (i += 1) {
+                const copy_target = source_ptr + i * element_width;
+                const copy_source = copy_target + element_width;
+                @memcpy(copy_target, copy_source, element_width);
+            }
+
+            var new_list = list;
+
+            new_list.length -= 1;
+            return new_list;
+        }
+
+        const output = RocList.allocate(alignment, size - 1, element_width);
+        const target_ptr = output.bytes orelse unreachable;
+
+        const head_size = drop_index * element_width;
+        @memcpy(target_ptr, source_ptr, head_size);
+
+        const tail_target = target_ptr + drop_index * element_width;
+        const tail_source = source_ptr + (drop_index + 1) * element_width;
+        const tail_size = (size - drop_index - 1) * element_width;
+        @memcpy(tail_target, tail_source, tail_size);
+
+        utils.decref(list.bytes, size * element_width, alignment);
+
+        return output;
+    } else {
+        return RocList.empty();
+    }
+}
+
 pub fn listRange(width: utils.IntWidth, low: Opaque, high: Opaque) callconv(.C) RocList {
     return switch (width) {
         .U8 => helper1(u8, low, high),
