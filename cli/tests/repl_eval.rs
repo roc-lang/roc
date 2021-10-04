@@ -503,6 +503,11 @@ mod repl_eval {
     }
 
     #[test]
+    fn sum_lambda() {
+        expect_success("\\x, y -> x + y", "<function> : Num a, Num a -> Num a");
+    }
+
+    #[test]
     fn stdlib_function() {
         expect_success("Num.abs", "<function> : Num a -> Num a");
     }

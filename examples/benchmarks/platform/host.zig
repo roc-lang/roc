@@ -23,16 +23,19 @@ comptime {
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn roc__mainForHost_1_exposed([*]u8) void;
+extern fn roc__mainForHost_1_exposed_generic([*]u8) void;
 extern fn roc__mainForHost_size() i64;
 extern fn roc__mainForHost_1_Fx_caller(*const u8, [*]u8, [*]u8) void;
 extern fn roc__mainForHost_1_Fx_size() i64;
 extern fn roc__mainForHost_1_Fx_result_size() i64;
 
+
 const Align = 2 * @alignOf(usize);
 extern fn malloc(size: usize) callconv(.C) ?*align(Align) c_void;
 extern fn realloc(c_ptr: [*]align(Align) u8, size: usize) callconv(.C) ?*c_void;
 extern fn free(c_ptr: [*]align(Align) u8) callconv(.C) void;
+extern fn memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
+extern fn memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void;
 
 const DEBUG: bool = false;
 
@@ -74,6 +77,14 @@ export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
     std.process.exit(0);
 }
 
+export fn roc_memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void{
+    return memcpy(dst, src, size);
+}
+
+export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void{
+    return memset(dst, value, size);
+}
+
 const Unit = extern struct {};
 
 pub export fn main() callconv(.C) u8 {
@@ -90,23 +101,11 @@ pub export fn main() callconv(.C) u8 {
     var ts1: std.os.timespec = undefined;
     std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts1) catch unreachable;
 
-    roc__mainForHost_1_exposed(output);
+    roc__mainForHost_1_exposed_generic(output);
 
-    const flag = @ptrCast(*u64, @alignCast(@alignOf(u64), output)).*;
+    const closure_data_pointer = @ptrCast([*]u8, output);
 
-    if (flag == 0) {
-        // all is well
-        const closure_data_pointer = @ptrCast([*]u8, output[@sizeOf(u64)..size]);
-
-        call_the_closure(closure_data_pointer);
-    } else {
-        const ptr = @ptrCast(*u32, output + @sizeOf(u64));
-        const msg = @intToPtr([*:0]const u8, ptr.*);
-        const stderr = std.io.getStdErr().writer();
-        stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
-
-        return 0;
-    }
+    call_the_closure(closure_data_pointer);
 
     var ts2: std.os.timespec = undefined;
     std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts2) catch unreachable;

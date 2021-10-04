@@ -1,4 +1,5 @@
-use crate::ui::text::text_pos::TextPos;
+use crate::lang::parse::ASTNodeId;
+use crate::{editor::slow_pool::MarkNodeId, ui::text::text_pos::TextPos};
 use colored::*;
 use roc_ast::ast_error::ASTError;
 use roc_ast::lang::core::ast::ASTNodeId;

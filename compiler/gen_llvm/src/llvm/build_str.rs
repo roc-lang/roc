@@ -1,9 +1,12 @@
 use crate::llvm::bitcode::{call_bitcode_fn, call_void_bitcode_fn};
 use crate::llvm::build::{complex_bitcast, Env, Scope};
-use crate::llvm::build_list::{allocate_list, call_bitcode_fn_returns_list, store_list};
+use crate::llvm::build_list::{
+    allocate_list, call_bitcode_fn_returns_list, pass_update_mode, store_list,
+};
 use inkwell::builder::Builder;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::AddressSpace;
+use morphic_lib::UpdateMode;
 use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
@@ -11,6 +14,18 @@ use roc_mono::layout::{Builtin, Layout};
 use super::build::load_symbol;
 
 pub static CHAR_LAYOUT: Layout = Layout::Builtin(Builtin::Int8);
+
+/// Str.repeat : Str, Nat -> Str
+pub fn str_repeat<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    str_symbol: Symbol,
+    count_symbol: Symbol,
+) -> BasicValueEnum<'ctx> {
+    let str_c_abi = str_symbol_to_c_abi(env, scope, str_symbol);
+    let count = load_symbol(scope, &count_symbol);
+    call_bitcode_fn(env, &[str_c_abi.into(), count], bitcode::STR_REPEAT)
+}
 
 /// Str.split : Str, Str -> List Str
 pub fn str_split<'a, 'ctx, 'env>(
@@ -338,6 +353,7 @@ pub fn str_from_utf8<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     _parent: FunctionValue<'ctx>,
     original_wrapper: StructValue<'ctx>,
+    update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
@@ -353,6 +369,7 @@ pub fn str_from_utf8<'a, 'ctx, 'env>(
                 env.str_list_c_abi().into(),
                 "to_i128",
             ),
+            pass_update_mode(env, update_mode),
             result_ptr.into(),
         ],
         bitcode::STR_FROM_UTF8,

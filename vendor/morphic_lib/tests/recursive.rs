@@ -1,6 +1,6 @@
 use morphic_lib::{
     BlockExpr, CalleeSpecVar, EntryPointName, Error, ExprContext, FuncDefBuilder, FuncName,
-    ModDefBuilder, ModName, ProgramBuilder, TypeContext, UpdateModeVar,
+    ModDefBuilder, ModName, ProgramBuilder, TypeContext, UpdateMode, UpdateModeVar,
 };
 
 #[test]
@@ -83,7 +83,8 @@ fn test_recursive() {
             .func_solutions(FuncName(b"rec"))?
             .spec(&rec_spec)?;
 
-        let _update_mode = rec_sol.update_mode(UpdateModeVar(b"mode"))?;
+        let update_mode = rec_sol.update_mode(UpdateModeVar(b"mode"))?;
+        assert_eq!(update_mode, UpdateMode::InPlace);
 
         Ok(())
     }

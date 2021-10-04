@@ -100,7 +100,7 @@ test-all:
     BUILD +test-rust
     BUILD +verify-no-git-changes
 
-# compile everything needed for benchmarks and output a self-contained folder
+# compile everything needed for benchmarks and output a self-contained dir from which benchmarks can be run.
 prep-bench-folder:
     FROM +copy-dirs
     ARG BENCH_SUFFIX=branch
