@@ -1,9 +1,10 @@
+use roc_ast::lang::core::expr::expr2::{Expr2, ExprId};
+use roc_ast::mem_pool::pool_str::PoolStr;
+use roc_code_markup::slow_pool::MarkNodeId;
+
 use crate::editor::ed_error::EdResult;
 use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::mvc::ed_model::EdModel;
-use crate::editor::slow_pool::MarkNodeId;
-use crate::lang::ast::{Expr2, ExprId};
-use crate::lang::pool::PoolStr;
 use crate::ui::text::lines::SelectableLines;
 
 pub fn update_invalid_lookup(

@@ -1,23 +1,28 @@
+use roc_ast::{
+    lang::{
+        core::{
+            ast::ASTNodeId,
+            def::def2::Def2,
+            expr::expr2::Expr2,
+            pattern::{get_identifier_string, Pattern2},
+        },
+        env::Env,
+    },
+    mem_pool::pool::NodeId,
+};
+use roc_code_markup::{
+    markup::{
+        attribute::Attributes,
+        common_nodes::{new_blank_mn_w_nls, new_equals_mn},
+        nodes::{set_parent_for_all, MarkupNode},
+    },
+    slow_pool::{MarkNodeId, SlowPool},
+    syntax_highlight::HighlightStyle,
+};
 use roc_module::symbol::{Interns, Symbol};
 
 use crate::{
-    editor::{
-        ed_error::{EdResult, FailedToUpdateIdentIdName, KeyNotFound},
-        markup::{
-            attribute::Attributes,
-            common_nodes::{new_blank_mn_w_nls, new_equals_mn},
-            nodes::{set_parent_for_all, MarkupNode},
-        },
-        slow_pool::{MarkNodeId, SlowPool},
-        syntax_highlight::HighlightStyle,
-    },
-    lang::{
-        ast::{Def2, Expr2},
-        expr::Env,
-        parse::ASTNodeId,
-        pattern::{get_identifier_string, Pattern2},
-        pool::NodeId,
-    },
+    editor::ed_error::{EdResult, FailedToUpdateIdentIdName, KeyNotFound},
     ui::text::text_pos::TextPos,
 };
 
@@ -44,7 +49,7 @@ pub fn tld_mark_node<'a>(
         content: val_name,
         ast_node_id,
         syn_high_style: HighlightStyle::Variable,
-        attributes: Attributes::new(),
+        attributes: Attributes::default(),
         parent_id_opt: None,
         newlines_at_end: 0,
     };

@@ -1,17 +1,18 @@
+use roc_ast::lang::core::expr::expr2::Expr2::SmallInt;
+use roc_ast::lang::core::expr::expr2::IntStyle;
+use roc_ast::lang::core::expr::expr2::IntVal;
+use roc_ast::mem_pool::pool_str::PoolStr;
+use roc_code_markup::markup::attribute::Attributes;
+use roc_code_markup::markup::nodes::MarkupNode;
+use roc_code_markup::slow_pool::MarkNodeId;
+use roc_code_markup::syntax_highlight::HighlightStyle;
+
 use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::StringParseError;
-use crate::editor::markup::attribute::Attributes;
-use crate::editor::markup::nodes::MarkupNode;
 use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::mvc::ed_update::get_node_context;
 use crate::editor::mvc::ed_update::NodeContext;
-use crate::editor::slow_pool::MarkNodeId;
-use crate::editor::syntax_highlight::HighlightStyle;
-use crate::lang::ast::Expr2::SmallInt;
-use crate::lang::ast::IntVal;
-use crate::lang::ast::{IntStyle, IntVal::*};
-use crate::lang::pool::PoolStr;
 use crate::ui::text::lines::SelectableLines;
 
 // digit_char should be verified to be a digit before calling this function
@@ -48,7 +49,7 @@ pub fn start_new_int(ed_model: &mut EdModel, digit_char: &char) -> EdResult<Inpu
         content: digit_string,
         ast_node_id,
         syn_high_style: HighlightStyle::Number,
-        attributes: Attributes::new(),
+        attributes: Attributes::default(),
         parent_id_opt,
         newlines_at_end: curr_mark_node_nls,
     };
@@ -145,6 +146,8 @@ pub fn update_int(
 }
 
 fn update_small_int_num(number: &mut IntVal, updated_str: &str) -> EdResult<()> {
+    use IntVal::*;
+
     *number = match number {
         I64(_) => I64(check_parse_res(updated_str.parse::<i64>())?),
         U64(_) => U64(check_parse_res(updated_str.parse::<u64>())?),

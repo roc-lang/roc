@@ -3219,6 +3219,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_ast"
+version = "0.1.0"
+dependencies = [
+ "arraystring",
+ "bumpalo",
+ "indoc 1.0.3",
+ "libc",
+ "page_size",
+ "pretty_assertions 0.6.1",
+ "roc_can",
+ "roc_collections",
+ "roc_module",
+ "roc_parse",
+ "roc_problem",
+ "roc_region",
+ "roc_types",
+ "roc_unify",
+ "snafu",
+ "ven_graph",
+]
+
+[[package]]
 name = "roc_build"
 version = "0.1.0"
 dependencies = [
@@ -3343,6 +3365,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_code_markup"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "palette",
+ "roc_ast",
+ "roc_module",
+ "roc_utils",
+ "serde",
+ "snafu",
+]
+
+[[package]]
 name = "roc_collections"
 version = "0.1.0"
 dependencies = [
@@ -3419,8 +3454,10 @@ dependencies = [
  "quickcheck 1.0.3",
  "quickcheck_macros 1.0.0",
  "rand 0.8.4",
+ "roc_ast",
  "roc_builtins",
  "roc_can",
+ "roc_code_markup",
  "roc_collections",
  "roc_fmt",
  "roc_load",
@@ -3771,6 +3808,13 @@ dependencies = [
  "roc_collections",
  "roc_module",
  "roc_types",
+]
+
+[[package]]
+name = "roc_utils"
+version = "0.1.0"
+dependencies = [
+ "snafu",
 ]
 
 [[package]]
