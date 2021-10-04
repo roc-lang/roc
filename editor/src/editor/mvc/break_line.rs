@@ -1,10 +1,11 @@
+use roc_ast::lang::core::ast::ASTNodeId;
+use roc_ast::lang::core::def::def2::Def2;
+use roc_code_markup::markup::common_nodes::new_blank_mn_w_nls;
+
 use crate::editor::ed_error::EdResult;
-use crate::editor::markup::common_nodes::new_blank_mn_w_nls;
 use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::util::index_of;
-use crate::lang::ast::Def2;
-use crate::lang::parse::ASTNodeId;
 use crate::ui::text::text_pos::TextPos;
 
 // put everything after caret on new line, create a Def2::Blank if there was nothing after the caret.

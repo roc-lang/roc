@@ -973,6 +973,7 @@ define_builtins! {
         16 STR_STARTS_WITH_CODE_PT: "startsWithCodePt"
         17 STR_ALIAS_ANALYSIS_STATIC: "#aliasAnalysisStatic" // string with the static lifetime
         18 STR_FROM_UTF8_RANGE: "fromUtf8Range"
+        19 STR_REPEAT: "repeat"
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
@@ -1009,6 +1010,7 @@ define_builtins! {
         31 LIST_SORT_WITH: "sortWith"
         32 LIST_DROP: "drop"
         33 LIST_SWAP: "swap"
+        34 LIST_DROP_AT: "dropAt"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

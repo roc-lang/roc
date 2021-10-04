@@ -599,7 +599,7 @@ impl<'a> LambdaSet<'a> {
                 // this can happen when there is a type error somewhere
                 Ok(LambdaSet {
                     set: &[],
-                    representation: arena.alloc(Layout::Union(UnionLayout::NonRecursive(&[]))),
+                    representation: arena.alloc(Layout::Struct(&[])),
                 })
             }
             _ => panic!("called LambdaSet.from_var on invalid input"),

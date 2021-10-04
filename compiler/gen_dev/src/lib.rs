@@ -93,12 +93,8 @@ where
         for (layout, sym) in proc.args {
             self.set_layout_map(*sym, layout)?;
         }
-        // let start = std::time::Instant::now();
         self.scan_ast(&proc.body);
         self.create_free_map();
-        // let duration = start.elapsed();
-        // println!("Time to calculate lifetimes: {:?}", duration);
-        // println!("{:?}", self.last_seen_map());
         self.build_stmt(&proc.body, &proc.ret_layout)?;
         self.finalize()
     }
@@ -117,6 +113,11 @@ where
                 self.load_literal_symbols(&[*sym])?;
                 self.return_symbol(sym, ret_layout)?;
                 self.free_symbols(stmt)?;
+                Ok(())
+            }
+            Stmt::Refcounting(_modify, following) => {
+                // TODO: actually deal with refcounting. For hello world, we just skipped it.
+                self.build_stmt(following, ret_layout)?;
                 Ok(())
             }
             Stmt::Switch {
@@ -298,6 +299,13 @@ where
                                 arg_layouts,
                                 ret_layout,
                             ),
+                            Symbol::STR_CONCAT => self.build_run_low_level(
+                                sym,
+                                &LowLevel::StrConcat,
+                                arguments,
+                                arg_layouts,
+                                ret_layout,
+                            ),
                             x if x
                                 .module_string(&self.env().interns)
                                 .starts_with(ModuleName::APP) =>
@@ -466,6 +474,13 @@ where
             LowLevel::NumRound => self.build_fn_call(
                 sym,
                 bitcode::NUM_ROUND.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::StrConcat => self.build_fn_call(
+                sym,
+                bitcode::STR_CONCAT.to_string(),
                 args,
                 arg_layouts,
                 ret_layout,

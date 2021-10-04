@@ -1,11 +1,11 @@
 use crate::editor::ed_error::EdResult;
-use crate::editor::markup::nodes::tree_as_string;
 use crate::editor::mvc::ed_model::EdModel;
 use crate::graphics::colors;
 use crate::graphics::colors::from_hsb;
 use crate::graphics::primitives::text as gr_text;
-use crate::lang::ast::def2_to_string;
 use cgmath::Vector2;
+use roc_ast::lang::core::def::def2::def2_to_string;
+use roc_code_markup::markup::nodes::tree_as_string;
 use winit::dpi::PhysicalSize;
 
 use crate::editor::config::Config;
