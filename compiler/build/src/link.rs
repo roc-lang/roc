@@ -192,8 +192,17 @@ pub fn build_zig_host_native(
     } else {
         command.args(&["build-obj", "-fPIC"]);
     }
+
+    let mut split_path: Vec<&str> = zig_host_src.split("/").collect();
+
+    split_path.pop();
+
+    let platform_path = split_path.join("/");
+
     command.args(&[
         zig_host_src,
+        &format!("-I{}/include", platform_path),
+        &format!("-L{}/lib", platform_path),
         emit_bin,
         "--pkg-begin",
         "str",
@@ -724,6 +733,12 @@ fn link_macos(
         String::from("-lSystem")
     };
 
+    let mut split_path: Vec<&str> = output_path.to_str().unwrap().split("/").collect();
+
+    split_path.pop();
+
+    let extra_lib = split_path.join("/");
+
     Ok((
         // NOTE: order of arguments to `ld` matters here!
         // The `-l` flags should go after the `.o` arguments
@@ -745,9 +760,11 @@ fn link_macos(
                 // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274
                 // for discussion and further references
                 &big_sur_fix,
+                &format!("-L{}", extra_lib),
                 "-lSystem",
                 "-lresolv",
                 "-lpthread",
+                "-lSDL2-2.0.0",
                 // "-lrt", // TODO shouldn't we need this?
                 // "-lc_nonshared", // TODO shouldn't we need this?
                 // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
