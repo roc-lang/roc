@@ -6,7 +6,6 @@ interface List
             get,
             set,
             append,
-            map,
             len,
             walkBackwards,
             concat,
@@ -23,9 +22,12 @@ interface List
             last,
             keepOks,
             keepErrs,
-            mapWithIndex,
+            map,
             map2,
             map3,
+            mapWithIndex,
+            mapOrDrop,
+            mapJoin,
             product,
             walkUntil,
             range,
@@ -251,6 +253,21 @@ sortDesc : List elem, (elem -> Num *) -> List elem
 ## See for example `Set.map`, `Dict.map`, and [Result.map].
 map : List before, (before -> after) -> List after
 
+## Run a transformation function on the first element of each list,
+## and use that as the first element in the returned list.
+## Repeat until a list runs out of elements.
+##
+## Some languages have a function named `zip`, which does something similar to
+## calling [List.map2] passing two lists and `Pair`:
+##
+## >>> zipped = List.map2 [ "a", "b", "c" ] [ 1, 2, 3 ] Pair
+map2 : List a, List b, (a, b -> c) -> List c
+
+## Run a transformation function on the first element of each list,
+## and use that as the first element in the returned list.
+## Repeat until a list runs out of elements.
+map3 : List a, List b, List c, (a, b, c -> d) -> List d
+
 ## This works like [List.map], except it also passes the index
 ## of the element to the conversion function.
 mapWithIndex : List before, (before, Nat -> after) -> List after
@@ -258,6 +275,18 @@ mapWithIndex : List before, (before, Nat -> after) -> List after
 ## This works like [List.map], except at any time you can return `Err` to
 ## cancel the entire operation immediately, and return that #Err.
 mapOrCancel : List before, (before -> Result after err) -> Result (List after) err
+
+## Like [List.map], except the transformation function specifies whether to
+## `Keep` or `Drop` each element from the final [List].
+##
+## You may know a similar function named `filterMap` in other languages.
+mapOrDrop : List before, (before -> [ Keep after, Drop ]) -> List after
+
+## Like [List.map], except the transformation function wraps the return value
+## in a list. At the end, all the lists get joined together into one list.
+##
+## You may know a similar function named `concatMap` in other languages.
+mapJoin : List before, (before -> List after) -> List after
 
 ## This works like [List.map], except only the transformed values that are
 ## wrapped in `Ok` are kept. Any that are wrapped in `Err` are dropped.
@@ -323,10 +352,6 @@ concat : List elem, List elem -> List elem
 ## >>> List.join []
 join : List (List elem) -> List elem
 
-## Like [List.map], except the transformation function wraps the return value
-## in a list. At the end, all the lists get joined together into one list.
-joinMap : List before, (before -> List after) -> List after
-
 ## Like [List.join], but only keeps elements tagged with `Ok`. Elements
 ## tagged with `Err` are dropped.
 ##
@@ -341,28 +366,6 @@ joinMap : List before, (before -> List after) -> List after
 ## The implementation for that is a lot tricker then `List (Result elem *)`
 ## so we're sticking with `Result` for now.
 oks : List (Result elem *) -> List elem
-
-## Iterates over the shortest of the given lists and returns a list of `Pair`
-## tags, each wrapping one of the elements in that list, along with the elements
-## in the same index in # the other lists.
-##
-## >>> List.zip [ "a1", "b1" "c1" ] [ "a2", "b2" ] [ "a3", "b3", "c3" ]
-##
-## Accepts up to 8 lists.
-##
-## > For a generalized version that returns whatever you like, instead of a `Pair`,
-## > see `zipMap`.
-zip : List a, List b -> List [ Pair a b ]*
-
-## Like `zip` but you can specify what to do with each element.
-##
-## More specifically, [repeat what zip's docs say here]
-##
-## >>> List.zipMap [ 1, 2, 3 ] [ 0, 5, 4 ] [ 2, 1 ] \num1 num2 num3 -> num1 + num2 - num3
-##
-## Accepts up to 8 lists.
-zipMap : List a, List b, (a, b -> c) -> List c
-
 
 ## Filter
 
