@@ -256,3 +256,8 @@ pub const Ordering = enum(u8) {
     GT = 1,
     LT = 2,
 };
+
+pub const UpdateMode = extern enum(u8) {
+    Immutable = 0,
+    InPlace = 1,
+};

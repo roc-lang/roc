@@ -29,9 +29,12 @@ members = [
     "vendor/pathfinding",
     "vendor/pretty",
     "editor",
+    "ast",
     "cli",
     "cli/cli_utils",
+    "code_markup",
     "roc_std",
+    "utils",
     "docs",
     "linker",
 ]

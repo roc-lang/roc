@@ -9,13 +9,16 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use std::convert::TryFrom;
 
-use crate::ir::{Call, CallType, Expr, ListLiteralElement, Literal, ModifyRc, Proc, Stmt};
-use crate::layout::{Builtin, Layout, ListLayout, UnionLayout};
+use crate::ir::{
+    Call, CallType, Expr, HostExposedLayouts, ListLiteralElement, Literal, ModifyRc, Proc, Stmt,
+};
+use crate::layout::{Builtin, Layout, ListLayout, RawFunctionLayout, UnionLayout};
 
 // just using one module for now
 pub const MOD_APP: ModName = ModName(b"UserApp");
 
 pub const STATIC_STR_NAME: ConstName = ConstName(&Symbol::STR_ALIAS_ANALYSIS_STATIC.to_ne_bytes());
+pub const STATIC_LIST_NAME: ConstName = ConstName(b"THIS IS A STATIC LIST");
 
 const ENTRY_POINT_NAME: &[u8] = b"mainForHost";
 
@@ -128,24 +131,48 @@ where
         };
         m.add_const(STATIC_STR_NAME, static_str_def)?;
 
-        // the entry point wrapper
-        let roc_main_bytes = func_name_bytes_help(
-            entry_point.symbol,
-            entry_point.layout.arguments.iter().copied(),
-            entry_point.layout.result,
-        );
-        let roc_main = FuncName(&roc_main_bytes);
+        // a const that models all static lists
+        let static_list_def = {
+            let mut cbuilder = ConstDefBuilder::new();
+            let block = cbuilder.add_block();
+            let cell = cbuilder.add_new_heap_cell(block)?;
 
-        let entry_point_function = build_entry_point(entry_point.layout, roc_main)?;
-        let entry_point_name = FuncName(ENTRY_POINT_NAME);
-        m.add_func(entry_point_name, entry_point_function)?;
+            let unit_type = cbuilder.add_tuple_type(&[])?;
+            let bag = cbuilder.add_empty_bag(block, unit_type)?;
+            let value_id = cbuilder.add_make_tuple(block, &[cell, bag])?;
+            let root = BlockExpr(block, value_id);
+            let list_type_id = static_list_type(&mut cbuilder)?;
+
+            cbuilder.build(list_type_id, root)?
+        };
+        m.add_const(STATIC_LIST_NAME, static_list_def)?;
 
         let mut type_definitions = MutSet::default();
+        let mut host_exposed_functions = Vec::new();
 
         // all other functions
         for proc in procs {
             let bytes = func_name_bytes(proc);
             let func_name = FuncName(&bytes);
+
+            if let HostExposedLayouts::HostExposed { aliases, .. } = &proc.host_exposed_layouts {
+                for (_, (symbol, top_level, layout)) in aliases {
+                    match layout {
+                        RawFunctionLayout::Function(_, _, _) => {
+                            let it = top_level.arguments.iter().copied();
+                            let bytes = func_name_bytes_help(*symbol, it, top_level.result);
+
+                            host_exposed_functions.push((bytes, top_level.arguments));
+                        }
+                        RawFunctionLayout::ZeroArgumentThunk(_) => {
+                            let it = std::iter::once(Layout::Struct(&[]));
+                            let bytes = func_name_bytes_help(*symbol, it, top_level.result);
+
+                            host_exposed_functions.push((bytes, top_level.arguments));
+                        }
+                    }
+                }
+            }
 
             if DEBUG {
                 eprintln!(
@@ -162,6 +189,19 @@ where
 
             m.add_func(func_name, spec)?;
         }
+
+        // the entry point wrapper
+        let roc_main_bytes = func_name_bytes_help(
+            entry_point.symbol,
+            entry_point.layout.arguments.iter().copied(),
+            entry_point.layout.result,
+        );
+        let roc_main = FuncName(&roc_main_bytes);
+
+        let entry_point_function =
+            build_entry_point(entry_point.layout, roc_main, &host_exposed_functions)?;
+        let entry_point_name = FuncName(ENTRY_POINT_NAME);
+        m.add_func(entry_point_name, entry_point_function)?;
 
         for union_layout in type_definitions {
             let type_name_bytes = recursive_tag_union_name_bytes(&union_layout).as_bytes();
@@ -202,23 +242,83 @@ where
     morphic_lib::solve(program)
 }
 
-fn build_entry_point(layout: crate::ir::ProcLayout, func_name: FuncName) -> Result<FuncDef> {
+/// if you want an "escape hatch" which allows you construct "best-case scenario" values
+/// of an arbitrary type in much the same way that 'unknown_with' allows you to construct
+/// "worst-case scenario" values of an arbitrary type, you can use the following terrible hack:
+/// use 'add_make_union' to construct an instance of variant 0 of a union type 'union {(), your_type}',
+/// and then use 'add_unwrap_union' to extract variant 1 from the value you just constructed.
+/// In the current implementation (but not necessarily in future versions),
+/// I can promise this will effectively give you a value of type 'your_type'
+/// all of whose heap cells are considered unique and mutable.
+fn terrible_hack(builder: &mut FuncDefBuilder, block: BlockId, type_id: TypeId) -> Result<ValueId> {
+    let variant_types = vec![builder.add_tuple_type(&[])?, type_id];
+    let unit = builder.add_make_tuple(block, &[])?;
+    let value = builder.add_make_union(block, &variant_types, 0, unit)?;
+
+    builder.add_unwrap_union(block, value, 1)
+}
+
+fn build_entry_point(
+    layout: crate::ir::ProcLayout,
+    func_name: FuncName,
+    host_exposed_functions: &[([u8; SIZE], &[Layout])],
+) -> Result<FuncDef> {
     let mut builder = FuncDefBuilder::new();
-    let block = builder.add_block();
+    let outer_block = builder.add_block();
 
-    // to the modelling language, the arguments appear out of thin air
-    let argument_type = build_tuple_type(&mut builder, layout.arguments)?;
-    let argument = builder.add_unknown_with(block, &[], argument_type)?;
+    let mut cases = Vec::new();
 
-    let name_bytes = [0; 16];
-    let spec_var = CalleeSpecVar(&name_bytes);
-    let result = builder.add_call(block, spec_var, MOD_APP, func_name, argument)?;
+    {
+        let block = builder.add_block();
 
-    // to the modelling language, the result disappears into the void
+        // to the modelling language, the arguments appear out of thin air
+        let argument_type = build_tuple_type(&mut builder, layout.arguments)?;
+
+        // does not make any assumptions about the input
+        // let argument = builder.add_unknown_with(block, &[], argument_type)?;
+
+        // assumes the input can be updated in-place
+        let argument = terrible_hack(&mut builder, block, argument_type)?;
+
+        let name_bytes = [0; 16];
+        let spec_var = CalleeSpecVar(&name_bytes);
+        let result = builder.add_call(block, spec_var, MOD_APP, func_name, argument)?;
+
+        // to the modelling language, the result disappears into the void
+        let unit_type = builder.add_tuple_type(&[])?;
+        let unit_value = builder.add_unknown_with(block, &[result], unit_type)?;
+
+        cases.push(BlockExpr(block, unit_value));
+    }
+
+    // add fake calls to host-exposed functions so they are specialized
+    for (name_bytes, layouts) in host_exposed_functions {
+        let host_exposed_func_name = FuncName(name_bytes);
+
+        if host_exposed_func_name == func_name {
+            continue;
+        }
+
+        let block = builder.add_block();
+
+        let type_id = layout_spec(&mut builder, &Layout::Struct(layouts))?;
+
+        let argument = builder.add_unknown_with(block, &[], type_id)?;
+
+        let spec_var = CalleeSpecVar(name_bytes);
+        let result =
+            builder.add_call(block, spec_var, MOD_APP, host_exposed_func_name, argument)?;
+
+        let unit_type = builder.add_tuple_type(&[])?;
+        let unit_value = builder.add_unknown_with(block, &[result], unit_type)?;
+
+        cases.push(BlockExpr(block, unit_value));
+    }
+
     let unit_type = builder.add_tuple_type(&[])?;
-    let unit_value = builder.add_unknown_with(block, &[result], unit_type)?;
+    let unit_value = builder.add_choice(outer_block, &cases)?;
 
-    let root = BlockExpr(block, unit_value);
+    let root = BlockExpr(outer_block, unit_value);
     let spec = builder.build(unit_type, unit_type, root)?;
 
     Ok(spec)
@@ -818,6 +918,17 @@ fn lowlevel_spec(
             let new_cell = builder.add_new_heap_cell(block)?;
             builder.add_make_tuple(block, &[new_cell, bag])
         }
+        ListReverse => {
+            let list = env.symbols[&arguments[0]];
+
+            let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
+            let cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
+
+            let _unit = builder.add_update(block, update_mode_var, cell)?;
+
+            let new_cell = builder.add_new_heap_cell(block)?;
+            builder.add_make_tuple(block, &[new_cell, bag])
+        }
         ListAppend => {
             let list = env.symbols[&arguments[0]];
             let to_insert = env.symbols[&arguments[1]];
@@ -832,6 +943,27 @@ fn lowlevel_spec(
 
             let new_cell = builder.add_new_heap_cell(block)?;
             builder.add_make_tuple(block, &[new_cell, bag])
+        }
+        StrToUtf8 => {
+            let string = env.symbols[&arguments[0]];
+
+            let u8_type = builder.add_tuple_type(&[])?;
+            let bag = builder.add_empty_bag(block, u8_type)?;
+            let cell = builder.add_get_tuple_field(block, string, LIST_CELL_INDEX)?;
+
+            builder.add_make_tuple(block, &[cell, bag])
+        }
+        StrFromUtf8 => {
+            let list = env.symbols[&arguments[0]];
+
+            let cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
+            let string = builder.add_make_tuple(block, &[cell])?;
+
+            let byte_index = builder.add_make_tuple(block, &[])?;
+            let is_ok = builder.add_make_tuple(block, &[])?;
+            let problem_code = builder.add_make_tuple(block, &[])?;
+
+            builder.add_make_tuple(block, &[byte_index, string, is_ok, problem_code])
         }
         DictEmpty => {
             match layout {
@@ -1117,9 +1249,11 @@ fn expr_spec<'a>(
             let list = new_list(builder, block, type_id)?;
 
             let mut bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
+            let mut all_constants = true;
 
             for element in elems.iter() {
                 let value_id = if let ListLiteralElement::Symbol(symbol) = element {
+                    all_constants = false;
                     env.symbols[symbol]
                 } else {
                     builder.add_make_tuple(block, &[]).unwrap()
@@ -1128,9 +1262,13 @@ fn expr_spec<'a>(
                 bag = builder.add_bag_insert(block, bag, value_id)?;
             }
 
-            let cell = builder.add_new_heap_cell(block)?;
+            if all_constants {
+                new_static_list(builder, block)
+            } else {
+                let cell = builder.add_new_heap_cell(block)?;
 
-            builder.add_make_tuple(block, &[cell, bag])
+                builder.add_make_tuple(block, &[cell, bag])
+            }
         }
 
         EmptyArray => {
@@ -1296,6 +1434,14 @@ fn str_type<TC: TypeContext>(builder: &mut TC) -> Result<TypeId> {
     builder.add_tuple_type(&[cell_id])
 }
 
+fn static_list_type<TC: TypeContext>(builder: &mut TC) -> Result<TypeId> {
+    let unit_type = builder.add_tuple_type(&[])?;
+    let cell = builder.add_heap_cell_type();
+    let bag = builder.add_bag_type(unit_type)?;
+
+    builder.add_tuple_type(&[cell, bag])
+}
+
 // const OK_TAG_ID: u8 = 1u8;
 // const ERR_TAG_ID: u8 = 0u8;
 
@@ -1327,6 +1473,12 @@ fn new_static_string(builder: &mut FuncDefBuilder, block: BlockId) -> Result<Val
     let module = MOD_APP;
 
     builder.add_const_ref(block, module, STATIC_STR_NAME)
+}
+
+fn new_static_list(builder: &mut FuncDefBuilder, block: BlockId) -> Result<ValueId> {
+    let module = MOD_APP;
+
+    builder.add_const_ref(block, module, STATIC_LIST_NAME)
 }
 
 fn new_num(builder: &mut FuncDefBuilder, block: BlockId) -> Result<ValueId> {

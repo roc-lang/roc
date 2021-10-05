@@ -105,7 +105,7 @@ pub fn create_rect_buffers(
     let vertex_buffer = gpu_device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
         size: Vertex::SIZE * 4 * nr_of_rects,
-        usage: wgpu::BufferUsage::VERTEX | wgpu::BufferUsage::COPY_DST,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
 
@@ -114,7 +114,7 @@ pub fn create_rect_buffers(
     let index_buffer = gpu_device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
         size: u32_size * 6 * nr_of_rects,
-        usage: wgpu::BufferUsage::INDEX | wgpu::BufferUsage::COPY_DST,
+        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
 
@@ -148,7 +148,7 @@ impl StagingBuffer {
         StagingBuffer {
             buffer: device.create_buffer_init(&BufferInitDescriptor {
                 contents: bytemuck::cast_slice(data),
-                usage: wgpu::BufferUsage::COPY_SRC,
+                usage: wgpu::BufferUsages::COPY_SRC,
                 label: Some("Staging Buffer"),
             }),
             size: size_of_slice(data) as wgpu::BufferAddress,

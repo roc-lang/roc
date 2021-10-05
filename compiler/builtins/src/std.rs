@@ -618,6 +618,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(str_type())
     );
 
+    // repeat : Str, Nat -> Str
+    add_top_level_function_type!(
+        Symbol::STR_REPEAT,
+        vec![str_type(), nat_type()],
+        Box::new(str_type())
+    );
+
     // fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8Problem ]*
     {
         let bad_utf8 = SolvedType::TagUnion(
@@ -909,6 +916,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // drop : List elem, Nat -> List elem
     add_top_level_function_type!(
         Symbol::LIST_DROP,
+        vec![list_type(flex(TVAR1)), nat_type()],
+        Box::new(list_type(flex(TVAR1))),
+    );
+
+    // dropAt : List elem, Nat -> List elem
+    add_top_level_function_type!(
+        Symbol::LIST_DROP_AT,
         vec![list_type(flex(TVAR1)), nat_type()],
         Box::new(list_type(flex(TVAR1))),
     );

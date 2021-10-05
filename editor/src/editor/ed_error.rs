@@ -1,7 +1,9 @@
-use crate::lang::parse::ASTNodeId;
-use crate::ui::ui_error::UIResult;
-use crate::{editor::slow_pool::MarkNodeId, ui::text::text_pos::TextPos};
+use crate::ui::text::text_pos::TextPos;
 use colored::*;
+use roc_ast::ast_error::ASTError;
+use roc_ast::lang::core::ast::ASTNodeId;
+use roc_code_markup::markup_error::MarkError;
+use roc_code_markup::slow_pool::MarkNodeId;
 use snafu::{Backtrace, ErrorCompat, NoneError, ResultExt, Snafu};
 
 //import errors as follows:
@@ -212,8 +214,12 @@ pub enum EdError {
     #[snafu(display("StringParseError: {}", msg))]
     StringParseError { msg: String, backtrace: Backtrace },
 
+    #[snafu(display("ASTError: {}", msg))]
+    ASTErrorBacktrace { msg: String, backtrace: Backtrace },
     #[snafu(display("UIError: {}", msg))]
     UIErrorBacktrace { msg: String, backtrace: Backtrace },
+    #[snafu(display("MarkError: {}", msg))]
+    MarkErrorBacktrace { msg: String, backtrace: Backtrace },
 }
 
 pub type EdResult<T, E = EdError> = std::result::Result<T, E>;
@@ -285,9 +291,22 @@ impl From<UIError> for EdError {
     }
 }
 
-pub fn from_ui_res<T>(ui_res: UIResult<T>) -> EdResult<T> {
-    match ui_res {
-        Ok(t) => Ok(t),
-        Err(ui_err) => Err(EdError::from(ui_err)),
+impl From<MarkError> for EdError {
+    fn from(mark_err: MarkError) -> Self {
+        let msg = format!("{}", mark_err);
+
+        // hack to handle EdError derive
+        let dummy_res: Result<(), NoneError> = Err(NoneError {});
+        dummy_res.context(MarkErrorBacktrace { msg }).unwrap_err()
+    }
+}
+
+impl From<ASTError> for EdError {
+    fn from(ast_err: ASTError) -> Self {
+        let msg = format!("{}", ast_err);
+
+        // hack to handle EdError derive
+        let dummy_res: Result<(), NoneError> = Err(NoneError {});
+        dummy_res.context(ASTErrorBacktrace { msg }).unwrap_err()
     }
 }
