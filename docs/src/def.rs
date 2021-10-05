@@ -59,14 +59,13 @@ fn write_def_to_bump_str_html<'a, 'b>(
 ) -> ASTResult<()> {
     let def2 = def_to_def2(arena, env, scope, def, region);
 
-    let mut def2_pool = Pool::with_capacity(1024);
-    let def2_id = def2_pool.add(def2);
+    let def2_id = env.pool.add(def2);
 
     let mut mark_node_pool = SlowPool::default();
 
     let def2_markup_id = def2_to_markup(
         env,
-        def2_pool.get(def2_id),
+        env.pool.get(def2_id),
         def2_id,
         &mut mark_node_pool,
         interns,

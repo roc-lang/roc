@@ -53,14 +53,13 @@ fn write_expr_to_bump_str_html<'a, 'b>(
 ) -> ASTResult<()> {
     let (expr2, _) = expr_to_expr2(env, scope, expr, region);
 
-    let mut expr2_pool = Pool::with_capacity(1024);
-    let expr2_id = expr2_pool.add(expr2);
+    let expr2_id = env.pool.add(expr2);
 
     let mut mark_node_pool = SlowPool::default();
 
     let expr2_markup_id = expr2_to_markup(
         env,
-        expr2_pool.get(expr2_id),
+        env.pool.get(expr2_id),
         expr2_id,
         &mut mark_node_pool,
         interns,
