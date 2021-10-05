@@ -2906,3 +2906,104 @@ fn do_pass_bool_byte_closure_layout() {
         RocStr
     );
 }
+
+#[test]
+fn nested_rigid_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                foo : List a -> List a
+                foo = \list ->
+                    p2 : List a
+                    p2 = list
+
+                    p2
+
+                main =
+                    when foo [] is
+                        _ -> "hello world"
+            "#
+        ),
+        RocStr::from_slice(b"hello world"),
+        RocStr
+    );
+}
+
+#[test]
+fn nested_rigid_alias() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                Identity a : [ @Identity a ]
+
+                foo : Identity a -> Identity a
+                foo = \list ->
+                    p2 : Identity a
+                    p2 = list
+
+                    p2
+
+                main =
+                    when foo (@Identity "foo") is
+                        _ -> "hello world"
+            "#
+        ),
+        RocStr::from_slice(b"hello world"),
+        RocStr
+    );
+}
+
+#[test]
+fn nested_rigid_tag_union() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                foo : [ @Identity a ] -> [ @Identity a ]
+                foo = \list ->
+                    p2 : [ @Identity a ]
+                    p2 = list
+
+                    p2
+
+                main =
+                    when foo (@Identity "foo") is
+                        _ -> "hello world"
+            "#
+        ),
+        RocStr::from_slice(b"hello world"),
+        RocStr
+    );
+}
+
+#[test]
+fn call_that_needs_closure_parameter() {
+    // here both p2 is lifted to the top-level, which means that `list` must be
+    // passed to it from `manyAux`.
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Step state a : [ Loop state, Done a ]
+
+            manyAux : List a -> [ Pair (Step (List a) (List a))]
+            manyAux = \list ->
+                    p2 = \_ -> Pair (Done list)
+
+                    p2 "foo"
+
+            manyAuxTest =  (manyAux [ ]) == Pair (Loop [97])
+
+            runTest = \t -> if t then "PASS" else "FAIL"
+
+            runTest manyAuxTest
+            "#
+        ),
+        RocStr::from_slice(b"FAIL"),
+        RocStr
+    );
+}

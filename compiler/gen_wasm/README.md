@@ -3,47 +3,56 @@
 ## Plan
 
 - Initial bringup
-  - Get a wasm backend working for some of the number tests.
-  - Use a separate `gen_wasm` directory for now, to avoid trying to do bringup and integration at the same time.
-- Improve the fundamentals
+  - [x] Get a wasm backend working for some of the number tests.
+  - [x] Use a separate `gen_wasm` directory for now, to avoid trying to do bringup and integration at the same time.
+- Get the fundamentals working
+
   - [x] Come up with a way to do control flow
   - [x] Flesh out the details of value representations between local variables and stack memory
-  - [ ] Set up a way to write tests with any return value rather than just i64 and f64
-  - [ ] Figure out relocations for linking object files
-  - [ ] Think about the Wasm module builder library we're using, are we happy with it?
+  - [x] Set up a way to write tests with any return value rather than just i64 and f64
+  - [x] Implement stack memory
+    - [x] Push and pop stack frames
+    - [x] Deal with returning structs
+    - [x] Distinguish which variables go in locals, own stack frame, caller stack frame, etc.
+    - [ ] Ensure early Return statements don't skip stack cleanup
+  - [ ] Vendor-in parity_wasm library so that we can use `bumpalo::Vec`
+  - [ ] Implement relocations
+    - Requires knowing the _byte_ offset of each call site. This is awkward as the backend builds a `Vec<Instruction>` rather than a `Vec<u8>`. It may be worth serialising each instruction as it is inserted.
+
+- Refactor for code sharing with CPU backends
+
+  - [ ] Implement a `scan_ast` pre-pass like `Backend` does, but for reusing Wasm locals rather than CPU registers
+  - [ ] Extract a trait from `WasmBackend` that looks as similar as possible to `Backend`, to prepare for code sharing
+  - [ ] Refactor to actually share code between `WasmBackend` and `Backend` if it seems feasible
+
 - Integration
   - Move wasm files to `gen_dev/src/wasm`
   - Share tests between wasm and x64, with some way of saying which tests work on which backends, and dispatching to different eval helpers based on that.
   - Get `build_module` in object_builder.rs to dispatch to the wasm generator (adding some Wasm options to the `Triple` struct)
   - Get `build_module` to write to a file, or maybe return `Vec<u8>`, instead of returning an Object structure
-- Code sharing
-  - Try to ensure that both Wasm and x64 use the same `Backend` trait so that we can share code.
-  - We need to work towards this after we've progressed a bit more with Wasm and gained more understanding and experience of the differences.
-  - We will have to think about how to deal with the `Backend` code that doesn't apply to Wasm. Perhaps we will end up with more traits like `RegisterBackend` / `StackBackend` or `NativeBackend` / `WasmBackend`, and perhaps even some traits to do with backends that support jumps and those that don't.
 
 ## Structured control flow
-
-🚨 **This is an area that could be tricky** 🚨
 
 One of the security features of WebAssembly is that it does not allow unrestricted "jumps" to anywhere you like. It does not have an instruction for that. All of the [control instructions][control-inst] can only implement "structured" control flow, and have names like `if`, `loop`, `block` that you'd normally associate with high-level languages. There are branch (`br`) instructions that can jump to labelled blocks within the same function, but the blocks have to be nested in sensible ways.
 
 [control-inst]: https://webassembly.github.io/spec/core/syntax/instructions.html#control-instructions
 
-Implications:
+This way of representing control flow is similar to parts of the Roc AST like `When`, `If` and `LetRec`. But Mono IR converts this to jumps and join points, which are more of a Control Flow Graph than a tree. We need to map back from graph to a tree again in the Wasm backend.
 
-Roc, like most modern languages, is already enforcing structured control flow in the source program. Constructs from the Roc AST like `When`, `If` and `LetRec` can all be converted straightforwardly to Wasm constructs.
+Our solution is to wrap all joinpoint/jump graphs in an outer `loop`, with nested `block`s inside it.
 
-However the Mono IR converts this to jumps and join points, which are more of a Control Flow Graph than a tree. That doesn't map so directly to the Wasm structures. This is such a common issue for compiler back-ends that the WebAssembly compiler toolkit `binaryen` has an [API for control-flow graphs][cfg-api]. We're not using `binaryen` right now. It's a C++ library, though it does have a (very thin and somewhat hard-to-use) [Rust wrapper][binaryen-rs]. We should probably investigate this area sooner rather than later. If relooping turns out to be necessary or difficult, we might need to switch from parity_wasm to binaryen.
+### Possible future optimisations
 
-> By the way, it's not obvious how to pronounce "binaryen" but apparently it rhymes with "Targaryen", the family name from the "Game of Thrones" TV series
+There are other algorithms available that may result in more optimised control flow. We are not focusing on that for our development backend, but here are some notes for future reference.
+
+The WebAssembly compiler toolkit `binaryen` has an [API for control-flow graphs][cfg-api]. We're not using `binaryen` right now. It's a C++ library, though it does have a (very thin and somewhat hard-to-use) [Rust wrapper][binaryen-rs]. Binaryen's control-flow graph API implements the "Relooper" algorithm developed by the Emscripten project and described in [this paper](https://github.com/emscripten-core/emscripten/blob/main/docs/paper.pdf).
+
+> By the way, apparently "binaryen" rhymes with "Targaryen", the family name from the "Game of Thrones" TV series
+
+There is also an improvement on Relooper called ["Stackifier"](https://medium.com/leaningtech/solving-the-structured-control-flow-problem-once-and-for-all-5123117b1ee2). It can reorder the joinpoints and jumps to make code more efficient. (It is also has things Roc wouldn't need but C++ does, like support for "irreducible" graphs that include `goto`).
 
 [cfg-api]: https://github.com/WebAssembly/binaryen/wiki/Compiling-to-WebAssembly-with-Binaryen#cfg-api
 [binaryen-rs]: https://crates.io/crates/binaryen
-
-Binaryen's control-flow graph API implements the "Relooper" algorithm developed by the Emscripten project and described in [this paper](https://github.com/emscripten-core/emscripten/blob/main/docs/paper.pdf).
-
-There is an alternative algorithm that is supposed to be an improvement on Relooper, called ["Stackifier"](https://medium.com/leaningtech/solving-the-structured-control-flow-problem-once-and-for-all-5123117b1ee2).
-
 
 ## Stack machine vs register machine
 
@@ -90,29 +99,30 @@ The Mono IR contains two functions, `Num.add` and `main`, so we generate two cor
 
   (func (;1;) (result i64)   ; declare function index 1 (main) with no parameters and an i64 result
     (local i64 i64 i64 i64)  ; declare 4 local variables, all with type i64, one for each symbol in the Mono IR
-    i64.const 1              ; load constant of type i64 and value 1                stack=[1]
-    local.set 0              ; store top of stack to local0                         stack=[]     local0=1
-    i64.const 2              ; load constant of type i64 and value 2                stack=[2]    local0=1
-    local.set 1              ; store top of stack to local1                         stack=[]     local0=1  local1=2
-    local.get 0              ; load local0 to top of stack                          stack=[1]    local0=1  local1=2
-    local.get 1              ; load local1 to top of stack                          stack=[1,2]  local0=1  local1=2
-    call 0                   ; call function index 0 (which pops 2 and pushes 1)    stack=[3]    local0=1  local1=2
-    local.set 2              ; store top of stack to local2                         stack=[]     local0=1  local1=2  local2=3
-    i64.const 4              ; load constant of type i64 and value 4                stack=[4]    local0=1  local1=2  local2=3
-    local.set 3              ; store top of stack to local3                         stack=[]     local0=1  local1=2  local2=3  local3=4
-    local.get 2              ; load local2 to top of stack                          stack=[3]    local0=1  local1=2  local2=3  local3=4
-    local.get 3              ; load local3 to top of stack                          stack=[3,4]  local0=1  local1=2  local2=3  local3=4
-    call 0                   ; call function index 0 (which pops 2 and pushes 1)    stack=[7]    local0=1  local1=2  local2=3  local3=4
+    i64.const 1              ; stack=[1]
+    local.set 0              ; stack=[]     local0=1
+    i64.const 2              ; stack=[2]    local0=1
+    local.set 1              ; stack=[]     local0=1  local1=2
+    local.get 0              ; stack=[1]    local0=1  local1=2
+    local.get 1              ; stack=[1,2]  local0=1  local1=2
+    call 0                   ; stack=[3]    local0=1  local1=2
+    local.set 2              ; stack=[]     local0=1  local1=2  local2=3
+    i64.const 4              ; stack=[4]    local0=1  local1=2  local2=3
+    local.set 3              ; stack=[]     local0=1  local1=2  local2=3  local3=4
+    local.get 2              ; stack=[3]    local0=1  local1=2  local2=3  local3=4
+    local.get 3              ; stack=[3,4]  local0=1  local1=2  local2=3  local3=4
+    call 0                   ; stack=[7]    local0=1  local1=2  local2=3  local3=4
     return)                  ; return the value at the top of the stack
 ```
 
-If we run this code through the `wasm-opt` tool from the [binaryen toolkit](https://github.com/WebAssembly/binaryen#tools), the unnecessary locals get optimised away. The command line below runs the minimum number of passes to achieve this (`--simplify-locals` must come first).
+If we run this code through the `wasm-opt` tool from the [binaryen toolkit](https://github.com/WebAssembly/binaryen#tools), the unnecessary locals get optimised away (which is all of them in this example!). The command line below runs the minimum number of passes to achieve this (`--simplify-locals` must come first).
 
 ```
 $ wasm-opt --simplify-locals --reorder-locals --vacuum example.wasm > opt.wasm
 ```
 
-The optimised functions have no local variables, and the code shrinks to about 60% of its original size.
+The optimised functions have no local variables at all for this example. (Of course, this is an oversimplified toy example! It might not be so extreme in a real program.)
+
 ```
   (func (;0;) (param i64 i64) (result i64)
     local.get 0
@@ -122,8 +132,19 @@ The optimised functions have no local variables, and the code shrinks to about 6
     i64.const 1
     i64.const 2
     call 0
-    i64.const 4)
+    i64.const 4
+    call 0)
 ```
+
+### Reducing sets and gets
+
+It would be nice to find some cheap optimisation to reduce the number of `local.set` and `local.get` instructions.
+
+We don't need a `local` if the value we want is already at the top of the VM stack. In fact, for our example above, it just so happens that if we simply skip generating the `local.set` instructions, everything _does_ appear on the VM stack in the right order, which means we can skip the `local.get` too. It ends up being very close to the fully optimised version! I assume this is because the Mono IR within the function is in dependency order, but I'm not sure...
+
+Of course the trick is to do this reliably for more complex dependency graphs. I am investigating whether we can do it by optimistically assuming it's OK not to create a local, and then keeping track of which symbols are at which positions in the VM stack after every instruction. Then when we need to use a symbol we can first check if it's on the VM stack and only create a local if it's not. In cases where we _do_ need to create a local, we need to go back and insert a `local.set` instruction at an earlier point in the program. We can make this fast by waiting to do all of the insertions in one batch when we're finalising the procedure.
+
+For a while we thought it would be very helpful to reuse the same local for multiple symbols at different points in the program. And we already have similar code in the CPU backends for register allocation. But on further examination, it doesn't actually buy us much! In our example above, we would still have the same number of `local.set` and `local.get` instructions - they'd just be operating on two locals instead of four! That doesn't shrink much code. Only the declaration at the top of the function would shrink from `(local i64 i64 i64 i64)` to `(local i64 i64)`... and in fact that's only smaller in the text format, it's the same size in the binary format! So the `scan_ast` pass doesn't seem worthwhile for Wasm.
 
 ## Memory
 
@@ -143,7 +164,7 @@ When we are talking about how we store values in _memory_, I'll use the term _st
 
 Of course our program can use another area of memory as a heap as well. WebAssembly doesn't mind how you divide up your memory. It just gives you some memory and some instructions for loading and storing.
 
-## Function calls
+## Calling conventions & stack memory
 
 In WebAssembly you call a function by pushing arguments to the stack and then issuing a `call` instruction, which specifies a function index. The VM knows how many values to pop off the stack by examining the _type_ of the function. In our example earlier, `Num.add` had the type `[i64 i64] → [i64]` so it expects to find two i64's on the stack and pushes one i64 back as the result. Remember, the runtime engine will validate the module before running it, and if your generated code is trying to call a function at a point in the program where the wrong value types are on the stack, it will fail validation.
 
@@ -151,11 +172,17 @@ Function arguments are restricted to the four value types, `i32`, `i64`, `f32` a
 
 That's all great for primitive values but what happens when we want to pass more complex data structures between functions?
 
-Well, remember, "stack memory" is not a special kind of memory in WebAssembly, it's just an area of our memory where we _decide_ that we want to implement a stack data structure. So we can implement it however we want. A good choice would be to make our stack frame look the same as it would when we're targeting a CPU, except without the return address (since there's no need for one). We can also decide to pass numbers through the machine stack rather than in stack memory, since that takes fewer instructions.
+Well, remember, "stack memory" is not a special kind of memory in WebAssembly, and is separate from the VM stack. It's just an area of our memory where we implement a stack data structure. But there are some conventions that it makes sense to follow so that we can easily link to Wasm code generated from Zig or other languages.
 
-The only other thing we need is a stack pointer. On CPU targets, there's often have a specific "stack pointer" register. WebAssembly has no equivalent to that, but we can use a `global` variable.
+### Observations from compiled C code
 
-The system I've outlined above is based on my experience of compiling C to WebAssembly via the Emscripten toolchain (which is built on top of clang). It's also in line with what the WebAssembly project describes [here](https://github.com/WebAssembly/design/blob/main/Rationale.md#locals).
+- `global 0` is used as the stack pointer, and its value is normally copied to a `local` as well (presumably because locals tend to be assigned to CPU registers)
+- Stack memory grows downwards
+- If a C function returns a struct, the compiled WebAssembly function has no return value, but instead has an extra _argument_. The argument is an `i32` pointer to space allocated in the caller's stack, that the called function can write to.
+- There is no maximum number of arguments for a WebAssembly function, and arguments are not passed via _stack memory_. This makes sense because the _VM stack_ has no size limit. It's like having a CPU with an unlimited number of registers.
+- Stack memory is only used for allocating local variables, not for passing arguments. And it's only used for values that cannot be stored in one of WebAssembly's primitive values (`i32`, `i64`, `f32`, `f64`).
+
+These observations are based on experiments compiling C to WebAssembly via the Emscripten toolchain (which is built on top of clang). It's also in line with what the WebAssembly project describes [here](https://github.com/WebAssembly/design/blob/main/Rationale.md#locals).
 
 ## Modules vs Instances
 

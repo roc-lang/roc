@@ -199,6 +199,43 @@ fn list_drop() {
 }
 
 #[test]
+fn list_drop_at() {
+    assert_evals_to!(
+        "List.dropAt [1, 2, 3] 0",
+        RocList::from_slice(&[2, 3]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.dropAt [0, 0, 0] 3",
+        RocList::from_slice(&[0, 0, 0]),
+        RocList<i64>
+    );
+    assert_evals_to!("List.dropAt [] 1", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!("List.dropAt [0] 0", RocList::from_slice(&[]), RocList<i64>);
+}
+
+#[test]
+fn list_drop_at_mutable() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+               list : List I64
+               list = [ if True then 4 else 4, 5, 6 ]
+
+               { newList: List.dropAt list 0, original: list }
+               "#
+        ),
+        (
+            // new_list
+            RocList::from_slice(&[5, 6]),
+            // original
+            RocList::from_slice(&[4, 5, 6]),
+        ),
+        (RocList<i64>, RocList<i64>,)
+    );
+}
+
+#[test]
 fn list_swap() {
     assert_evals_to!("List.swap [] 0 1", RocList::from_slice(&[]), RocList<i64>);
     assert_evals_to!(
@@ -2029,5 +2066,33 @@ fn map_with_index_multi_record() {
         ),
         RocList::from_slice(&[((), ())]),
         RocList<((), ())>
+    );
+}
+
+#[test]
+fn empty_list_of_function_type() {
+    // see https://github.com/rtfeldman/roc/issues/1732
+    assert_evals_to!(
+        indoc!(
+            r#"
+            myList : List (Str -> Str)
+            myList = []
+
+            myClosure : Str -> Str
+            myClosure = \_ -> "bar"
+
+            choose =
+                if False then
+                    myList
+                else
+                    [ myClosure ]
+
+            when List.get choose 0 is
+                Ok f -> f "foo"
+                Err _ -> "bad!"
+            "#
+        ),
+        RocStr::from_slice(b"bar"),
+        RocStr
     );
 }

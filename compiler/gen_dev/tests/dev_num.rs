@@ -1,11 +1,5 @@
 #[macro_use]
-extern crate pretty_assertions;
-
-#[macro_use]
 extern crate indoc;
-
-extern crate bumpalo;
-extern crate libc;
 
 #[macro_use]
 mod helpers;
@@ -274,6 +268,24 @@ mod dev_num {
                             (fib (n - 1)) + (fib (n - 2))
 
                     fib 10
+                "#
+            ),
+            55,
+            i64
+        );
+    }
+
+    #[test]
+    fn gen_fast_fib_fn() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    fib = \n, a, b ->
+                        if n == 0 then
+                            a
+                        else
+                            fib (n - 1) b (a + b)
+                    fib 10 0 1
                 "#
             ),
             55,
@@ -580,18 +592,18 @@ mod dev_num {
     //     assert_evals_to!("0.0 >= 0.0", true, bool);
     // }
 
-    // #[test]
-    // fn gen_order_of_arithmetic_ops() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 1 + 3 * 7 - 2
-    //             "#
-    //         ),
-    //         20,
-    //         i64
-    //     );
-    // }
+    #[test]
+    fn gen_order_of_arithmetic_ops() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    1 + 3 * 7 - 2
+                "#
+            ),
+            20,
+            i64
+        );
+    }
 
     // #[test]
     // fn gen_order_of_arithmetic_ops_complex_float() {
@@ -606,59 +618,59 @@ mod dev_num {
     //     );
     // }
 
-    // #[test]
-    // fn if_guard_bind_variable_false() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //             wrapper = \{} ->
-    //                 when 10 is
-    //                     x if x == 5 -> 0
-    //                     _ -> 42
+    #[test]
+    fn if_guard_bind_variable_false() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                wrapper = \{} ->
+                    when 10 is
+                        x if x == 5 -> 0
+                        _ -> 42
 
-    //             wrapper {}
-    //             "#
-    //         ),
-    //         42,
-    //         i64
-    //     );
-    // }
+                wrapper {}
+                "#
+            ),
+            42,
+            i64
+        );
+    }
 
-    // #[test]
-    // fn if_guard_bind_variable_true() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //             wrapper = \{} ->
-    //                 when 10 is
-    //                     x if x == 10 -> 42
-    //                     _ -> 0
+    #[test]
+    fn if_guard_bind_variable_true() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                wrapper = \{} ->
+                    when 10 is
+                        x if x == 10 -> 42
+                        _ -> 0
 
-    //             wrapper {}
-    //             "#
-    //         ),
-    //         42,
-    //         i64
-    //     );
-    // }
+                wrapper {}
+                "#
+            ),
+            42,
+            i64
+        );
+    }
 
-    // #[test]
-    // fn tail_call_elimination() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 sum = \n, accum ->
-    //                     when n is
-    //                         0 -> accum
-    //                         _ -> sum (n - 1) (n + accum)
+    #[test]
+    fn tail_call_elimination() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    sum = \n, accum ->
+                        when n is
+                            0 -> accum
+                            _ -> sum (n - 1) (n + accum)
 
-    //                 sum 1_000_000 0
-    //             "#
-    //         ),
-    //         500000500000,
-    //         i64
-    //     );
-    // }
+                    sum 1_000_000 0
+                "#
+            ),
+            500000500000,
+            i64
+        );
+    }
 
     // #[test]
     // fn int_negate() {

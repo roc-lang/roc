@@ -17,6 +17,16 @@ use morphic_lib::UpdateMode;
 use roc_builtins::bitcode;
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
+pub fn pass_update_mode<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    update_mode: UpdateMode,
+) -> BasicValueEnum<'ctx> {
+    match update_mode {
+        UpdateMode::Immutable => env.context.i8_type().const_zero().into(),
+        UpdateMode::InPlace => env.context.i8_type().const_int(1, false).into(),
+    }
+}
+
 fn list_returned_from_zig<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     output: BasicValueEnum<'ctx>,
@@ -162,6 +172,7 @@ pub fn list_reverse<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     list: BasicValueEnum<'ctx>,
     list_layout: &Layout<'a>,
+    update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
     let element_layout = match *list_layout {
         Layout::Builtin(Builtin::EmptyList) => {
@@ -180,6 +191,7 @@ pub fn list_reverse<'a, 'ctx, 'env>(
             pass_list_cc(env, list),
             env.alignment_intvalue(&element_layout),
             layout_width(env, &element_layout),
+            pass_update_mode(env, update_mode),
         ],
         bitcode::LIST_REVERSE,
     )
@@ -228,6 +240,7 @@ pub fn list_append<'a, 'ctx, 'env>(
     original_wrapper: StructValue<'ctx>,
     element: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
+    update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
     call_bitcode_fn_returns_list(
         env,
@@ -236,6 +249,7 @@ pub fn list_append<'a, 'ctx, 'env>(
             env.alignment_intvalue(element_layout),
             pass_element_as_opaque(env, element),
             layout_width(env, element_layout),
+            pass_update_mode(env, update_mode),
         ],
         bitcode::LIST_APPEND,
     )
@@ -267,6 +281,7 @@ pub fn list_swap<'a, 'ctx, 'env>(
     index_1: IntValue<'ctx>,
     index_2: IntValue<'ctx>,
     element_layout: &Layout<'a>,
+    update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
     call_bitcode_fn_returns_list(
         env,
@@ -276,12 +291,13 @@ pub fn list_swap<'a, 'ctx, 'env>(
             layout_width(env, element_layout),
             index_1.into(),
             index_2.into(),
+            pass_update_mode(env, update_mode),
         ],
         bitcode::LIST_SWAP,
     )
 }
 
-/// List.drop : List elem, Nat, Nat -> List elem
+/// List.drop : List elem, Nat -> List elem
 pub fn list_drop<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -300,6 +316,28 @@ pub fn list_drop<'a, 'ctx, 'env>(
             dec_element_fn.as_global_value().as_pointer_value().into(),
         ],
         bitcode::LIST_DROP,
+    )
+}
+
+/// List.dropAt : List elem, Nat -> List elem
+pub fn list_drop_at<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    original_wrapper: StructValue<'ctx>,
+    count: IntValue<'ctx>,
+    element_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
+    call_bitcode_fn_returns_list(
+        env,
+        &[
+            pass_list_cc(env, original_wrapper.into()),
+            env.alignment_intvalue(element_layout),
+            layout_width(env, element_layout),
+            count.into(),
+            dec_element_fn.as_global_value().as_pointer_value().into(),
+        ],
+        bitcode::LIST_DROP_AT,
     )
 }
 

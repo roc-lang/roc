@@ -34,7 +34,7 @@ pub fn build_module<'a>(
                 x86_64::X86_64FloatReg,
                 x86_64::X86_64Assembler,
                 x86_64::X86_64SystemV,
-            > = Backend::new(env, target)?;
+            > = Backend::new(env)?;
             build_object(
                 env,
                 procedures,
@@ -52,7 +52,7 @@ pub fn build_module<'a>(
                 x86_64::X86_64FloatReg,
                 x86_64::X86_64Assembler,
                 x86_64::X86_64SystemV,
-            > = Backend::new(env, target)?;
+            > = Backend::new(env)?;
             build_object(
                 env,
                 procedures,
@@ -74,7 +74,7 @@ pub fn build_module<'a>(
                 aarch64::AArch64FloatReg,
                 aarch64::AArch64Assembler,
                 aarch64::AArch64Call,
-            > = Backend::new(env, target)?;
+            > = Backend::new(env)?;
             build_object(
                 env,
                 procedures,
@@ -304,6 +304,7 @@ fn build_object<'a, B: Backend<'a>>(
                         return Err(format!("failed to find fn symbol for {:?}", name));
                     }
                 }
+                Relocation::JmpToReturn { .. } => unreachable!(),
             };
             relocations.push((section_id, elfreloc));
         }

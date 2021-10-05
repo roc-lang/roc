@@ -4,7 +4,6 @@ use std::process::Command;
 use std::process::Stdio;
 
 use crate::editor::code_lines::CodeLines;
-//use crate::editor::ed_error::from_ui_res;
 use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::MissingSelection;
 use crate::editor::grid_node_map::GridNodeMap;
