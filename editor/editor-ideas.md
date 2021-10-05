@@ -357,4 +357,4 @@ Thoughts and ideas possibly taken from above inspirations or separate.
 * We could provide a more expansive explanation in errors that can benefit from it. This explanation could be folded(shown on click) by default in the editor.
 * Code coverage visualization: allow to display code in different color when it is covered by test.
 * Make "maximal privacy version" of editor available for download, next to regular version. This version would not be capable of sharing any usage/user data.
-* Live code view with wasm editor. This saves bandwith when pairing.
+* Live code view with wasm editor. This saves bandwidth when pairing.
