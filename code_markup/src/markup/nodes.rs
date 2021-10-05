@@ -304,8 +304,8 @@ fn new_markup_node(
     mark_node_pool.add(node)
 }
 
-pub fn def2_to_markup<'a, 'b>(
-    env: &mut Env<'b>,
+pub fn def2_to_markup<'a>(
+    env: &mut Env<'a>,
     def2: &Def2,
     def2_node_id: DefId,
     mark_node_pool: &mut SlowPool,
@@ -344,8 +344,8 @@ pub fn def2_to_markup<'a, 'b>(
 }
 
 // make Markup Nodes: generate String representation, assign Highlighting Style
-pub fn expr2_to_markup<'a, 'b>(
-    env: &mut Env<'b>,
+pub fn expr2_to_markup<'a>(
+    env: &mut Env<'a>,
     expr2: &Expr2,
     expr2_node_id: ExprId,
     mark_node_pool: &mut SlowPool,
@@ -790,8 +790,8 @@ fn add_header_mn_list(
         .collect()
 }
 
-pub fn ast_to_mark_nodes<'a, 'b>(
-    env: &mut Env<'b>,
+pub fn ast_to_mark_nodes<'a>(
+    env: &mut Env<'a>,
     ast: &AST,
     mark_node_pool: &mut SlowPool,
     interns: &Interns,

@@ -309,7 +309,8 @@ pub fn expr_to_expr2<'a>(
             let mut output = Output::default();
 
             for (condition, then_branch) in branches.iter() {
-                let (cond, cond_output) = expr_to_expr2(env, scope, &condition.value, condition.region);
+                let (cond, cond_output) =
+                    expr_to_expr2(env, scope, &condition.value, condition.region);
 
                 let (then_expr, then_output) =
                     expr_to_expr2(env, scope, &then_branch.value, then_branch.region);
@@ -338,7 +339,8 @@ pub fn expr_to_expr2<'a>(
         When(loc_cond, branches) => {
             // Infer the condition expression's type.
             let cond_var = env.var_store.fresh();
-            let (can_cond, mut output) = expr_to_expr2(env, scope, &loc_cond.value, loc_cond.region);
+            let (can_cond, mut output) =
+                expr_to_expr2(env, scope, &loc_cond.value, loc_cond.region);
 
             // the condition can never be a tail-call
             output.tail_call = None;
@@ -592,7 +594,8 @@ pub fn expr_to_expr2<'a>(
 
             // The def as a whole is a tail call iff its return expression is a tail call.
             // Use its output as a starting point because its tail_call already has the right answer!
-            let (ret_expr, mut output) = expr_to_expr2(env, &mut scope, &loc_ret.value, loc_ret.region);
+            let (ret_expr, mut output) =
+                expr_to_expr2(env, &mut scope, &loc_ret.value, loc_ret.region);
 
             output
                 .introduced_variables

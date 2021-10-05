@@ -639,7 +639,8 @@ fn canonicalize_pending_def<'a>(
                 env.closure_name_symbol = Some(*defined_symbol);
             };
 
-            let (loc_can_expr, can_output) = expr_to_expr2(env, scope, &loc_expr.value, loc_expr.region);
+            let (loc_can_expr, can_output) =
+                expr_to_expr2(env, scope, &loc_expr.value, loc_expr.region);
 
             output.references.union_mut(can_output.references.clone());
 

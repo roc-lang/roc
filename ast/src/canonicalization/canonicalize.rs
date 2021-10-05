@@ -147,7 +147,8 @@ fn canonicalize_field<'a>(
         // Both a label and a value, e.g. `{ name: "blah" }`
         RequiredValue(label, _, loc_expr) => {
             let field_var = env.var_store.fresh();
-            let (loc_can_expr, output) = expr_to_expr2(env, scope, &loc_expr.value, loc_expr.region);
+            let (loc_can_expr, output) =
+                expr_to_expr2(env, scope, &loc_expr.value, loc_expr.region);
 
             Ok(CanonicalField::LabelAndValue {
                 label: label.value,

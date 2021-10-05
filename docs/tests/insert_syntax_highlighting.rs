@@ -5,7 +5,6 @@ extern crate pretty_assertions;
 mod insert_doc_syntax_highlighting {
     use std::{fs::File, io::Write, path::PathBuf};
 
-
     use bumpalo::{collections::String as BumpString, Bump};
     use roc_ast::module::load_module;
     use roc_docs::{syntax_highlight_expr, syntax_highlight_top_level_defs};
@@ -14,7 +13,6 @@ mod insert_doc_syntax_highlighting {
     use uuid::Uuid;
 
     fn expect_html(code_str: &str, want: &str, use_expr: bool) {
-
         let loaded_module = make_mock_module();
 
         let code_block_arena = Bump::new();
@@ -27,7 +25,7 @@ mod insert_doc_syntax_highlighting {
                 code_str,
                 loaded_module.module_id,
                 &loaded_module.interns.module_ids,
-                &loaded_module.interns
+                &loaded_module.interns,
             ) {
                 Ok(highlighted_code_str) => {
                     assert_eq!(highlighted_code_str, want);
@@ -43,7 +41,7 @@ mod insert_doc_syntax_highlighting {
                 code_str,
                 loaded_module.module_id,
                 &loaded_module.interns.module_ids,
-                &loaded_module.interns
+                &loaded_module.interns,
             ) {
                 Ok(highlighted_code_str) => {
                     assert_eq!(highlighted_code_str, want);
@@ -53,7 +51,6 @@ mod insert_doc_syntax_highlighting {
                 }
             };
         }
-        
     }
 
     pub const HELLO_WORLD: &str = r#"
@@ -66,7 +63,6 @@ main = "Hello, world!"
 
 
 "#;
-
 
     fn make_mock_module() -> LoadedModule {
         let temp_dir = tempdir().expect("Failed to create temporary directory for test.");
@@ -96,18 +92,12 @@ main = "Hello, world!"
 
     #[test]
     fn number_expr() {
-        expect_html_expr(
-            "2",
-            r#"<span class="syntax-number">2</span>"#,
-        );
+        expect_html_expr("2", r#"<span class="syntax-number">2</span>"#);
     }
 
     #[test]
     fn string_expr() {
-        expect_html_expr(
-            r#""abc""#,
-            r#"<span class="syntax-string">"abc"</span>"#,
-        );
+        expect_html_expr(r#""abc""#, r#"<span class="syntax-string">"abc"</span>"#);
     }
 
     #[test]
@@ -134,13 +124,35 @@ main = "Hello, world!"
         );
     }
 
-    // TODO test record, nested records
+    #[test]
+    fn record_expr() {
+        expect_html_expr(
+            r#"{ a: "hello!" }"#,
+            "<span class=\"syntax-bracket\">{ </span><span class=\"syntax-recordfield\">a</span><span class=\"syntax-operator\">: </span><span class=\"syntax-string\">\"hello!\"</span><span class=\"syntax-bracket\"> }</span>",
+        );
+    }
 
     #[test]
-    fn top_level_value_def() {
+    fn nested_record_expr() {
+        expect_html_expr(
+            r#"{ a: { bB: "WoRlD" } }"#,
+            "<span class=\"syntax-bracket\">{ </span><span class=\"syntax-recordfield\">a</span><span class=\"syntax-operator\">: </span><span class=\"syntax-bracket\">{ </span><span class=\"syntax-recordfield\">bB</span><span class=\"syntax-operator\">: </span><span class=\"syntax-string\">\"WoRlD\"</span><span class=\"syntax-bracket\"> }</span><span class=\"syntax-bracket\"> }</span>",
+        );
+    }
+
+    #[test]
+    fn top_level_def_value() {
         expect_html_def(
             r#"main = "Hello, World!""#,
             "<span class=\"syntax-variable\">main</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-string\">\"Hello, World!\"</span>\n\n",
+        );
+    }
+
+    #[test]
+    fn tld_list() {
+        expect_html_def(
+            r#"main = [ 1, 2, 3 ]"#,
+            "<span class=\"syntax-variable\">main</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-bracket\">[ </span><span class=\"syntax-number\">1</span><span class=\"syntax-comma\">, </span><span class=\"syntax-number\">2</span><span class=\"syntax-comma\">, </span><span class=\"syntax-number\">3</span><span class=\"syntax-bracket\"> ]</span>\n\n",
         );
     }
 }

@@ -2,7 +2,7 @@ extern crate pulldown_cmark;
 extern crate roc_load;
 use bumpalo::{collections::String as BumpString, collections::Vec as BumpVec, Bump};
 use def::defs_to_html;
-use expr::{expr_to_html};
+use expr::expr_to_html;
 use roc_builtins::std::StdLib;
 use roc_can::builtins::builtin_defs_map;
 use roc_can::scope::Scope;
@@ -18,11 +18,9 @@ use roc_region::all::Region;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-mod comment_or_new_line;
 mod def;
 mod expr;
 mod html;
-mod pattern;
 
 pub fn generate_docs_html(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
     let loaded_modules = load_modules_for_files(filenames, std_lib);
@@ -111,12 +109,7 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &
                 )
                 .replace(
                     "<!-- Module Docs -->",
-                    render_module_documentation(
-                        exports,
-                        module_docs,
-                        &loaded_module
-                    )
-                    .as_str(),
+                    render_module_documentation(exports, module_docs, loaded_module).as_str(),
                 );
 
             fs::write(module_dir.join("index.html"), rendered_module)
@@ -134,7 +127,7 @@ pub fn syntax_highlight_expr<'a>(
     code_str: &'a str,
     env_module_id: ModuleId,
     env_module_ids: &'a ModuleIds,
-    interns: &Interns
+    interns: &Interns,
 ) -> Result<String, SyntaxError<'a>> {
     let trimmed_code_str = code_str.trim_end().trim();
     let state = State::new(trimmed_code_str.as_bytes());
@@ -156,15 +149,14 @@ pub fn syntax_highlight_top_level_defs<'a>(
     code_str: &'a str,
     env_module_id: ModuleId,
     env_module_ids: &'a ModuleIds,
-    interns: &Interns
+    interns: &Interns,
 ) -> Result<String, SyntaxError<'a>> {
     let trimmed_code_str = code_str.trim_end().trim();
 
     match roc_parse::test_helpers::parse_defs_with(arena, trimmed_code_str) {
         Ok(vec_loc_def) => {
-            let vec_def =
-                vec_loc_def.iter().map(|loc| loc.value).collect();
-                
+            let vec_def = vec_loc_def.iter().map(|loc| loc.value).collect();
+
             defs_to_html(buf, vec_def, env_module_id, env_module_ids, interns);
 
             Ok(buf.to_string())
@@ -208,7 +200,9 @@ fn render_module_documentation(
 
                     let mut content = String::new();
 
-                    content.push_str(html_to_string("a", vec![("href", href.as_str())], name).as_str());
+                    content.push_str(
+                        html_to_string("a", vec![("href", href.as_str())], name).as_str(),
+                    );
 
                     for type_var in &doc_def.type_vars {
                         content.push(' ');
@@ -985,7 +979,7 @@ fn markdown_to_html(
                     loaded_module.module_id,
                     &loaded_module.interns.module_ids,
                     &loaded_module.interns
-                ) 
+                )
                 {
                     Ok(highlighted_code_str) => {
                         docs_parser.push(Event::Html(CowStr::from(highlighted_code_str)));

@@ -70,7 +70,6 @@ impl Symbol {
     }
 
     pub fn ident_str(self, interns: &Interns) -> &IdentStr {
-
         let ident_ids = interns
             .all_ident_ids
             .get(&self.module_id())
