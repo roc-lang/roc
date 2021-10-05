@@ -24,9 +24,7 @@ popStack: Context -> Result [T Context Data] [ EmptyStack ]*
 popStack = \ctx ->
     when List.last ctx.stack is
         Ok val ->
-            # This is terrible, but is the simplest way to drop the last element that I can think of.
-            # Long term it looks like there is a List.dropLast builtin.
-            poppedCtx = { ctx & stack: List.reverse (List.drop (List.reverse ctx.stack) 1)}
+            poppedCtx = { ctx & stack: List.dropAt ctx.stack (List.len ctx.stack - 1) }
             Ok (T poppedCtx val)
         Err ListWasEmpty ->
             Err EmptyStack

@@ -114,7 +114,7 @@ interpretCtx = \ctx ->
                 Err EndOfData ->
                     # Computation complete for this scope.
                     # Drop a scope.
-                    dropCtx = {ctx & scopes: List.reverse (List.drop (List.reverse ctx.scopes) 1)}
+                    dropCtx = {ctx & scopes: List.dropAt ctx.scopes (List.len ctx.scopes - 1) }
                     # If no scopes left, all execution complete.
                     if List.isEmpty dropCtx.scopes then
                         Task.succeed dropCtx
