@@ -1,36 +1,63 @@
+use core::panic;
+use std::collections::BTreeMap;
+
 use parity_wasm::elements::{Instruction, Instruction::*};
 use roc_module::symbol::Symbol;
 
+use crate::LocalId;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum VirtualMachineSymbolState {
+    /// Value has been pushed onto the VM stack but not yet popped
+    /// Remember which instruction pushed it, in case we need it
+    Pushed { pushed_at: usize },
+
+    /// Value has been pushed and popped. If we want to use it again, we will
+    /// have to go back and insert an instruction where it was pushed
+    Popped { pushed_at: usize },
+}
+
 pub struct CodeBuilder {
-    stack: Vec<Option<(Symbol, usize)>>,
+    /// The main container for the instructions
     code: Vec<Instruction>,
+
+    /// Extra instructions to insert at specific positions during finalisation
+    /// (Mainly to go back and set locals when we realise we need them)
+    insertions: BTreeMap<usize, Instruction>,
+
+    /// Our simulation model of the Wasm stack machine
+    /// Keeps track of where Symbol values are in the VM stack
+    vm_stack: Vec<Option<Symbol>>,
 }
 
 impl CodeBuilder {
     pub fn new() -> Self {
         CodeBuilder {
-            stack: Vec::with_capacity(32),
+            vm_stack: Vec::with_capacity(32),
+            insertions: BTreeMap::default(),
             code: Vec::with_capacity(1024),
         }
     }
 
     pub fn clear(&mut self) {
-        self.stack.clear();
         self.code.clear();
+        self.insertions.clear();
+        self.vm_stack.clear();
     }
 
     pub fn push(&mut self, inst: Instruction) {
         let (pops, push) = get_pops_and_pushes(&inst);
-        let new_len = self.stack.len() - pops as usize;
-        self.stack.truncate(new_len);
+        let new_len = self.vm_stack.len() - pops as usize;
+        self.vm_stack.truncate(new_len);
         if push {
-            self.stack.push(None);
+            self.vm_stack.push(None);
         }
+        // println!("{:?} {:?}", inst, self.vm_stack);
         self.code.push(inst);
     }
 
     pub fn extend(&mut self, instructions: &[Instruction]) {
-        let old_len = self.stack.len();
+        let old_len = self.vm_stack.len();
         let mut len = old_len;
         let mut min_len = len;
         for inst in instructions {
@@ -43,28 +70,126 @@ impl CodeBuilder {
                 len += 1;
             }
         }
-        self.stack.truncate(min_len);
-        self.stack.resize(len, None);
+        self.vm_stack.truncate(min_len);
+        self.vm_stack.resize(len, None);
+        // println!("{:?} {:?}", instructions, self.vm_stack);
         self.code.extend_from_slice(instructions);
     }
 
-    pub fn drain(&mut self) -> std::vec::Drain<Instruction> {
-        self.code.drain(0..)
+    pub fn call(&mut self, function_index: u32, pops: usize, push: bool) {
+        let stack_depth = self.vm_stack.len();
+        if pops > stack_depth {
+            let mut final_code = Vec::with_capacity(self.code.len() + self.insertions.len());
+            self.finalize_into(&mut final_code);
+            panic!(
+                "Trying to call to call function {:?} with {:?} values but only {:?} on the VM stack\nfinal_code={:?}\nvm_stack={:?}",
+                function_index, pops, stack_depth, final_code, self.vm_stack
+            );
+        }
+        let new_stack_depth = stack_depth - pops as usize;
+        self.vm_stack.truncate(new_stack_depth);
+        if push {
+            self.vm_stack.push(None);
+        }
+        self.code.push(Call(function_index));
     }
 
+    pub fn finalize_into(&mut self, final_code: &mut Vec<Instruction>) {
+        let mut insertions_iter = self.insertions.iter();
+        let mut next_insertion = insertions_iter.next();
+
+        for (pos, instruction) in self.code.drain(0..).enumerate() {
+            match next_insertion {
+                Some((&insert_pos, insert_inst)) if insert_pos == pos => {
+                    final_code.push(insert_inst.to_owned());
+                    final_code.push(instruction);
+                    next_insertion = insertions_iter.next();
+                }
+                _ => {
+                    final_code.push(instruction);
+                }
+            }
+        }
+    }
+
+    /// Total number of instructions in the final output
     pub fn len(&self) -> usize {
-        self.code.len()
+        self.code.len() + self.insertions.len()
     }
 
-    pub fn set_top_symbol(&mut self, sym: Symbol) {
-        let len = self.stack.len();
-        let code_index = self.code.len();
-        self.stack[len - 1] = Some((sym, code_index));
+    pub fn set_top_symbol(&mut self, sym: Symbol) -> VirtualMachineSymbolState {
+        let len = self.vm_stack.len();
+        let pushed_at = self.code.len();
+
+        if len == 0 {
+            panic!(
+                "trying to set symbol with nothing on stack, code = {:?}",
+                self.code
+            );
+        }
+
+        self.vm_stack[len - 1] = Some(sym);
+
+        VirtualMachineSymbolState::Pushed { pushed_at }
     }
 
-    pub fn get_top_symbol(&self) -> Option<(Symbol, usize)> {
-        let len = self.stack.len();
-        self.stack[len - 1]
+    pub fn load_symbol(
+        &mut self,
+        symbol: Symbol,
+        vm_state: VirtualMachineSymbolState,
+        next_local_id: LocalId,
+    ) -> Option<VirtualMachineSymbolState> {
+        use VirtualMachineSymbolState::*;
+
+        match vm_state {
+            Pushed { pushed_at } => {
+                let &top = self.vm_stack.last().unwrap();
+                match top {
+                    Some(top_symbol) if top_symbol == symbol => {
+                        // We're lucky, the symbol is already on top of the VM stack
+                        // No code to generate, just let the caller know what happened
+                        Some(Popped { pushed_at })
+                    }
+                    _ => {
+                        // Symbol is not on top of the stack. Find it.
+                        if let Some(found_index) =
+                            self.vm_stack.iter().rposition(|&s| s == Some(symbol))
+                        {
+                            // Insert a SetLocal where the value was created (this removes it from the VM stack)
+                            self.insertions.insert(pushed_at, SetLocal(next_local_id.0));
+                            self.vm_stack.remove(found_index);
+
+                            // Insert a GetLocal at the current position
+                            self.code.push(GetLocal(next_local_id.0));
+                            self.vm_stack.push(Some(symbol));
+
+                            // This Symbol is no longer stored in the VM stack, but in a local
+                            None
+                        } else {
+                            panic!(
+                                "{:?} has state {:?} but not found in VM stack",
+                                symbol, vm_state
+                            );
+                        }
+                    }
+                }
+            }
+
+            Popped { pushed_at } => {
+                // This Symbol is being used for a second time
+
+                // Insert a TeeLocal where it was created (must remain on the stack for the first usage)
+                self.insertions.insert(pushed_at, TeeLocal(next_local_id.0));
+
+                // Insert a GetLocal at the current position
+                self.code.push(GetLocal(next_local_id.0));
+                self.vm_stack.push(Some(symbol));
+
+                // This symbol has been promoted to a Local
+                // Tell the caller it no longer has a VirtualMachineSymbolState
+                None
+            }
+        }
     }
 }
 
@@ -82,8 +207,9 @@ fn get_pops_and_pushes(inst: &Instruction) -> (u8, bool) {
         BrTable(_) => (0, false),
         Return => (0, false),
 
-        Call(_) => (0, false), // depends on the function! handle this elsewhere
-        CallIndirect(_, _) => (0, false),
+        Call(_) | CallIndirect(_, _) => {
+            panic!("Unknown number of pushes and pops. Use Codebuilder::call() instead.");
+        }
 
         Drop => (1, false),
         Select => (3, true),

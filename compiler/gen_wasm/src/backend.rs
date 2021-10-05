@@ -10,12 +10,12 @@ use roc_module::symbol::Symbol;
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
 use roc_mono::layout::{Builtin, Layout};
 
+use crate::code_builder::CodeBuilder;
 use crate::layout::WasmLayout;
 use crate::storage::{StackMemoryLocation, SymbolStorage};
-use crate::code_builder::CodeBuilder;
 use crate::{
     copy_memory, pop_stack_frame, push_stack_frame, round_up_to_alignment, CopyMemoryConfig,
-    LocalId, PTR_SIZE, PTR_TYPE,
+    LocalId, ALIGN_1, ALIGN_2, ALIGN_4, ALIGN_8, PTR_SIZE, PTR_TYPE,
 };
 
 // Don't allocate any constant data at address zero or near it. Would be valid, but bug-prone.
@@ -94,6 +94,8 @@ impl<'a> WasmBackend<'a> {
     }
 
     pub fn build_proc(&mut self, proc: Proc<'a>, sym: Symbol) -> Result<u32, String> {
+        // println!("\ngenerating procedure {:?}\n", sym);
+
         let signature_builder = self.start_proc(&proc);
 
         self.build_stmt(&proc.body, &proc.ret_layout)?;
@@ -103,6 +105,7 @@ impl<'a> WasmBackend<'a> {
         let function_index = location.body;
         self.proc_symbol_map.insert(sym, location);
         self.reset();
+        // println!("\nfinished generating {:?}\n", sym);
 
         Ok(function_index)
     }
@@ -121,7 +124,7 @@ impl<'a> WasmBackend<'a> {
         };
 
         for (layout, symbol) in proc.args {
-            self.insert_local(WasmLayout::new(layout), *symbol, LocalKind::Parameter);
+            self.create_storage(WasmLayout::new(layout), *symbol, LocalKind::Parameter);
         }
 
         signature_builder.with_params(self.arg_types.clone())
@@ -140,7 +143,7 @@ impl<'a> WasmBackend<'a> {
             );
         }
 
-        final_instructions.extend(self.instructions.drain());
+        self.instructions.finalize_into(&mut final_instructions);
 
         if self.stack_memory > 0 {
             pop_stack_frame(
@@ -160,41 +163,37 @@ impl<'a> WasmBackend<'a> {
             .build() // function
     }
 
-    fn insert_local(
+    fn get_next_local_id(&self) -> LocalId {
+        LocalId((self.arg_types.len() + self.locals.len()) as u32)
+    }
+
+    fn create_storage(
         &mut self,
         wasm_layout: WasmLayout,
         symbol: Symbol,
         kind: LocalKind,
     ) -> Option<LocalId> {
-        let next_local_id = LocalId((self.arg_types.len() + self.locals.len()) as u32);
+        let next_local_id = self.get_next_local_id();
 
-        match kind {
-            LocalKind::Parameter => {
-                self.arg_types.push(wasm_layout.value_type());
-            }
-            LocalKind::Variable => {
-                self.locals.push(Local::new(1, wasm_layout.value_type()));
-            }
-        }
-
-        let (maybe_local_id, storage) = match wasm_layout {
-            WasmLayout::LocalOnly(value_type, size) => (
-                Some(next_local_id),
-                SymbolStorage::Local {
+        let storage = match wasm_layout {
+            WasmLayout::LocalOnly(value_type, size) => match kind {
+                LocalKind::Parameter => SymbolStorage::Local {
                     local_id: next_local_id,
                     value_type,
                     size,
                 },
-            ),
-
-            WasmLayout::HeapMemory => (
-                Some(next_local_id),
-                SymbolStorage::Local {
-                    local_id: next_local_id,
-                    value_type: PTR_TYPE,
-                    size: PTR_SIZE,
+                LocalKind::Variable => SymbolStorage::VirtualMachineStack {
+                    vm_state: self.instructions.set_top_symbol(symbol),
+                    value_type,
+                    size,
                 },
-            ),
+            },
+
+            WasmLayout::HeapMemory => SymbolStorage::Local {
+                local_id: next_local_id,
+                value_type: PTR_TYPE,
+                size: PTR_SIZE,
+            },
 
             WasmLayout::StackMemory {
                 size,
@@ -220,16 +219,27 @@ impl<'a> WasmBackend<'a> {
                     }
                 };
 
-                (
-                    None,
-                    SymbolStorage::StackMemory {
-                        location,
-                        size,
-                        alignment_bytes,
-                    },
-                )
+                SymbolStorage::StackMemory {
+                    location,
+                    size,
+                    alignment_bytes,
+                }
             }
         };
+
+        let maybe_local_id = storage.local_id();
+
+        match kind {
+            LocalKind::Parameter => {
+                self.arg_types.push(wasm_layout.value_type());
+            }
+            LocalKind::Variable => match maybe_local_id {
+                Some(_) => {
+                    self.locals.push(Local::new(1, wasm_layout.value_type()));
+                }
+                None => {}
+            },
+        }
 
         self.symbol_storage_map.insert(symbol, storage);
 
@@ -259,6 +269,41 @@ impl<'a> WasmBackend<'a> {
     fn load_symbol(&mut self, sym: &Symbol) {
         let storage = self.get_symbol_storage(sym).to_owned();
         match storage {
+            SymbolStorage::VirtualMachineStack {
+                vm_state,
+                value_type,
+                size,
+            } => {
+                let next_local_id = self.get_next_local_id();
+                let maybe_next_vm_state =
+                    self.instructions.load_symbol(*sym, vm_state, next_local_id);
+                match maybe_next_vm_state {
+                    // The act of loading the value changed the VM state, so update it
+                    Some(next_vm_state) => {
+                        self.symbol_storage_map.insert(
+                            *sym,
+                            SymbolStorage::VirtualMachineStack {
+                                vm_state: next_vm_state,
+                                value_type,
+                                size,
+                            },
+                        );
+                    }
+                    None => {
+                        // Loading the value required creating a new local, because
+                        // it was not in a convenient position in the VM stack.
+                        self.locals.push(Local::new(1, value_type));
+                        self.symbol_storage_map.insert(
+                            *sym,
+                            SymbolStorage::Local {
+                                local_id: next_local_id,
+                                value_type,
+                                size,
+                            },
+                        );
+                    }
+                }
+            }
             SymbolStorage::Local { local_id, .. }
             | SymbolStorage::StackMemory {
                 location: StackMemoryLocation::PointerArg(local_id),
@@ -322,12 +367,21 @@ impl<'a> WasmBackend<'a> {
 
             Stmt::Let(sym, expr, layout, following) => {
                 let wasm_layout = WasmLayout::new(layout);
-                let maybe_local_id = self.insert_local(wasm_layout, *sym, LocalKind::Variable);
 
-                self.build_expr(sym, expr, layout)?;
-
-                if let Some(local_id) = maybe_local_id {
-                    self.instructions.push(SetLocal(local_id.0));
+                match wasm_layout {
+                    WasmLayout::StackMemory { .. } => {
+                        // If the expression writes to stack memory, allocate *before* generating
+                        // so that know where to write it
+                        self.create_storage(wasm_layout, *sym, LocalKind::Variable);
+                        self.build_expr(sym, expr, layout)?;
+                    }
+                    _ => {
+                        // If the expression produces a primitive, create storage *after* generating,
+                        // because we don't know if we need a local until afterwards
+                        // TODO: should we make this uniform by having a "not yet pushed" state in VirtualMachineSymbolState?
+                        self.build_expr(sym, expr, layout)?;
+                        self.create_storage(wasm_layout, *sym, LocalKind::Variable);
+                    }
                 }
 
                 self.build_stmt(following, ret_layout)?;
@@ -345,13 +399,8 @@ impl<'a> WasmBackend<'a> {
                         size,
                         alignment_bytes,
                     } => {
-                        let (from_ptr, from_offset) = match location {
-                            StackMemoryLocation::PointerArg(local_id) => (*local_id, 0),
-                            StackMemoryLocation::FrameOffset(offset) => {
-                                (self.stack_frame_pointer.unwrap(), *offset)
-                            }
-                        };
-
+                        let (from_ptr, from_offset) =
+                            location.local_and_offset(self.stack_frame_pointer);
                         copy_memory(
                             &mut self.instructions,
                             CopyMemoryConfig {
@@ -365,8 +414,8 @@ impl<'a> WasmBackend<'a> {
                         );
                     }
 
-                    Local { local_id, .. } => {
-                        self.instructions.push(GetLocal(local_id.0));
+                    _ => {
+                        self.load_symbol(sym);
                         self.instructions.push(Br(self.block_depth)); // jump to end of function (for stack frame pop)
                     }
                 }
@@ -432,7 +481,7 @@ impl<'a> WasmBackend<'a> {
                 for parameter in parameters.iter() {
                     let wasm_layout = WasmLayout::new(&parameter.layout);
                     let maybe_local_id =
-                        self.insert_local(wasm_layout, parameter.symbol, LocalKind::Variable);
+                        self.create_storage(wasm_layout, parameter.symbol, LocalKind::Variable);
                     let jp_param_id = maybe_local_id.unwrap();
                     jp_parameter_local_ids.push(jp_param_id);
                 }
@@ -499,7 +548,12 @@ impl<'a> WasmBackend<'a> {
                         "Cannot find function {:?} called from {:?}",
                         func_sym, sym
                     ))?;
-                    self.instructions.push(Call(function_location.body));
+
+                    // TODO: Recreating the same WasmLayout as in the Let, for Backend compatibility
+                    let wasm_layout = WasmLayout::new(layout);
+                    let push = wasm_layout.stack_memory() == 0;
+                    let pops = arguments.len();
+                    self.instructions.call(function_location.body, pops, push);
                     Ok(())
                 }
 
@@ -553,6 +607,8 @@ impl<'a> WasmBackend<'a> {
         layout: &Layout<'a>,
         fields: &'a [Symbol],
     ) -> Result<(), String> {
+        // TODO: we just calculated storage and now we're getting it out of a map
+        // Not passing it as an argument because I'm trying to match Backend method signatures
         let storage = self.get_symbol_storage(sym).to_owned();
 
         if let Layout::Struct(field_layouts) = layout {
@@ -563,11 +619,8 @@ impl<'a> WasmBackend<'a> {
                             location.local_and_offset(self.stack_frame_pointer);
                         let mut field_offset = struct_offset;
                         for (field, _) in fields.iter().zip(field_layouts.iter()) {
-                            field_offset += self.copy_symbol_to_pointer_at_offset(
-                                local_id,
-                                field_offset,
-                                field,
-                            );
+                            field_offset +=
+                                self.copy_symbol_to_memory(local_id, field_offset, *field);
                         }
                     } else {
                         return Err(format!("Not supported yet: zero-size struct at {:?}", sym));
@@ -592,19 +645,57 @@ impl<'a> WasmBackend<'a> {
         Ok(())
     }
 
-    fn copy_symbol_to_pointer_at_offset(
+    fn copy_symbol_to_memory(
         &mut self,
         to_ptr: LocalId,
         to_offset: u32,
-        from_symbol: &Symbol,
+        from_symbol: Symbol,
     ) -> u32 {
-        let from_storage = self.get_symbol_storage(from_symbol).to_owned();
-        from_storage.copy_to_memory(
-            &mut self.instructions,
-            to_ptr,
-            to_offset,
-            self.stack_frame_pointer,
-        )
+        let from_storage = self.get_symbol_storage(&from_symbol).to_owned();
+        match from_storage {
+            SymbolStorage::StackMemory {
+                location,
+                size,
+                alignment_bytes,
+            } => {
+                let (from_ptr, from_offset) = location.local_and_offset(self.stack_frame_pointer);
+                copy_memory(
+                    &mut self.instructions,
+                    CopyMemoryConfig {
+                        from_ptr,
+                        from_offset,
+                        to_ptr,
+                        to_offset,
+                        size,
+                        alignment_bytes,
+                    },
+                );
+                size
+            }
+
+            SymbolStorage::VirtualMachineStack {
+                value_type, size, ..
+            }
+            | SymbolStorage::Local {
+                value_type, size, ..
+            } => {
+                let store_instruction = match (value_type, size) {
+                    (ValueType::I64, 8) => I64Store(ALIGN_8, to_offset),
+                    (ValueType::I32, 4) => I32Store(ALIGN_4, to_offset),
+                    (ValueType::I32, 2) => I32Store16(ALIGN_2, to_offset),
+                    (ValueType::I32, 1) => I32Store8(ALIGN_1, to_offset),
+                    (ValueType::F32, 4) => F32Store(ALIGN_4, to_offset),
+                    (ValueType::F64, 8) => F64Store(ALIGN_8, to_offset),
+                    _ => {
+                        panic!("Cannot store {:?} with alignment of {:?}", value_type, size);
+                    }
+                };
+                self.instructions.push(GetLocal(to_ptr.0));
+                self.load_symbol(&from_symbol);
+                self.instructions.push(store_instruction);
+                size
+            }
+        }
     }
 
     fn build_call_low_level(

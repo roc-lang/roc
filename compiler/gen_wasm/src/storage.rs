@@ -1,5 +1,5 @@
-use crate::code_builder::CodeBuilder;
-use crate::{copy_memory, CopyMemoryConfig, LocalId, ALIGN_1, ALIGN_2, ALIGN_4, ALIGN_8};
+use crate::code_builder::{CodeBuilder, VirtualMachineSymbolState};
+use crate::{copy_memory, CopyMemoryConfig, LocalId};
 use parity_wasm::elements::{Instruction::*, ValueType};
 
 #[derive(Debug, Clone)]
@@ -19,21 +19,49 @@ impl StackMemoryLocation {
 
 #[derive(Debug, Clone)]
 pub enum SymbolStorage {
-    // TODO: implicit storage in the VM stack
-    // TODO: const data storage
+    /// Value is stored implicitly in the VM stack
+    VirtualMachineStack {
+        vm_state: VirtualMachineSymbolState,
+        value_type: ValueType,
+        size: u32,
+    },
+
+    /// A local variable in the Wasm function
     Local {
         local_id: LocalId,
         value_type: ValueType,
         size: u32,
     },
+
+    /// Value is stored in stack memory
     StackMemory {
         location: StackMemoryLocation,
         size: u32,
         alignment_bytes: u32,
     },
+    // TODO: const data storage (fixed address)
 }
 
 impl SymbolStorage {
+    pub fn local_id(&self) -> Option<LocalId> {
+        use StackMemoryLocation::*;
+        match self {
+            Self::VirtualMachineStack { .. } => None,
+
+            Self::Local { local_id, .. } => Some(*local_id),
+
+            Self::StackMemory {
+                location: FrameOffset(_),
+                ..
+            } => None,
+
+            Self::StackMemory {
+                location: PointerArg(local_id),
+                ..
+            } => Some(*local_id),
+        }
+    }
+
     /// generate code to copy from another storage of the same type
     pub fn copy_from(
         &self,
@@ -92,60 +120,6 @@ impl SymbolStorage {
                     "Cannot copy different storage types {:?} to {:?}",
                     from, self
                 );
-            }
-        }
-    }
-
-    /// Generate code to copy to a memory address (such as a struct index)
-    pub fn copy_to_memory(
-        &self,
-        instructions: &mut CodeBuilder,
-        to_ptr: LocalId,
-        to_offset: u32,
-        stack_frame_pointer: Option<LocalId>,
-    ) -> u32 {
-        match self {
-            Self::Local {
-                local_id,
-                value_type,
-                size,
-                ..
-            } => {
-                let store_instruction = match (value_type, size) {
-                    (ValueType::I64, 8) => I64Store(ALIGN_8, to_offset),
-                    (ValueType::I32, 4) => I32Store(ALIGN_4, to_offset),
-                    (ValueType::I32, 2) => I32Store16(ALIGN_2, to_offset),
-                    (ValueType::I32, 1) => I32Store8(ALIGN_1, to_offset),
-                    (ValueType::F32, 4) => F32Store(ALIGN_4, to_offset),
-                    (ValueType::F64, 8) => F64Store(ALIGN_8, to_offset),
-                    _ => {
-                        panic!("Cannot store {:?} with alignment of {:?}", value_type, size);
-                    }
-                };
-                instructions.push(GetLocal(to_ptr.0));
-                instructions.push(GetLocal(local_id.0));
-                instructions.push(store_instruction);
-                *size
-            }
-
-            Self::StackMemory {
-                location,
-                size,
-                alignment_bytes,
-            } => {
-                let (from_ptr, from_offset) = location.local_and_offset(stack_frame_pointer);
-                copy_memory(
-                    instructions,
-                    CopyMemoryConfig {
-                        from_ptr,
-                        from_offset,
-                        to_ptr,
-                        to_offset,
-                        size: *size,
-                        alignment_bytes: *alignment_bytes,
-                    },
-                );
-                *size
             }
         }
     }
