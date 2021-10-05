@@ -2,7 +2,7 @@ use crate::target::arch_str;
 #[cfg(feature = "llvm")]
 use libloading::{Error, Library};
 use roc_builtins::bitcode;
-#[cfg(feature = "llvm")]
+// #[cfg(feature = "llvm")]
 use roc_mono::ir::OptLevel;
 use std::collections::HashMap;
 use std::env;
@@ -380,7 +380,7 @@ pub fn rebuild_host(
     } else if cargo_host_src.exists() {
         // Compile and link Cargo.toml, if it exists
         let cargo_dir = host_input_path.parent().unwrap();
-        let libhost_dir =
+        let cargo_out_dir =
             cargo_dir
                 .join("target")
                 .join(if matches!(opt_level, OptLevel::Optimize) {
@@ -388,30 +388,30 @@ pub fn rebuild_host(
                 } else {
                     "debug"
                 });
-        let libhost = libhost_dir.join("libhost.a");
 
         let mut command = Command::new("cargo");
         command.arg("build").current_dir(cargo_dir);
         if matches!(opt_level, OptLevel::Optimize) {
             command.arg("--release");
         }
+        let source_file = if shared_lib_path.is_some() {
+            command.env("RUSTFLAGS", "-C link-dead-code");
+            command.args(&["--bin", "host"]);
+            "src/main.rs"
+        } else {
+            command.arg("--lib");
+            "src/lib.rs"
+        };
         let output = command.output().unwrap();
 
-        validate_output("src/lib.rs", "cargo build", output);
+        validate_output(source_file, "cargo build", output);
 
-        // Cargo hosts depend on a c wrapper for the api. Compile host.c as well.
         if shared_lib_path.is_some() {
-            // If compiling to executable, let c deal with linking as well.
-            let output = build_c_host_native(
-                &env_path,
-                &env_home,
-                host_dest_native.to_str().unwrap(),
-                &[c_host_src.to_str().unwrap(), libhost.to_str().unwrap()],
-                opt_level,
-                shared_lib_path,
-            );
-            validate_output("host.c", "clang", output);
+            // For surgical linking, just copy the dynamically linked rust app.
+            std::fs::copy(cargo_out_dir.join("host"), host_dest_native).unwrap();
         } else {
+            // Cargo hosts depend on a c wrapper for the api. Compile host.c as well.
+
             let output = build_c_host_native(
                 &env_path,
                 &env_home,
@@ -428,7 +428,7 @@ pub fn rebuild_host(
                 .args(&[
                     "-r",
                     "-L",
-                    libhost_dir.to_str().unwrap(),
+                    cargo_out_dir.to_str().unwrap(),
                     c_host_dest.to_str().unwrap(),
                     "-lhost",
                     "-o",

@@ -1,6 +1,7 @@
 const std = @import("std");
 const utils = @import("utils.zig");
 const RocResult = utils.RocResult;
+const UpdateMode = utils.UpdateMode;
 const mem = std.mem;
 
 const EqFn = fn (?[*]u8, ?[*]u8) callconv(.C) bool;
@@ -50,6 +51,14 @@ pub const RocList = extern struct {
             .bytes = utils.allocateWithRefcount(data_bytes, alignment),
             .length = length,
         };
+    }
+
+    pub fn makeUniqueExtra(self: RocList, alignment: u32, element_width: usize, update_mode: UpdateMode) RocList {
+        if (update_mode == .InPlace) {
+            return self;
+        } else {
+            return self.makeUnique(alignment, element_width);
+        }
     }
 
     pub fn makeUnique(self: RocList, alignment: u32, element_width: usize) RocList {
@@ -132,14 +141,14 @@ const Caller1 = fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 const Caller2 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 const Caller3 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 
-pub fn listReverse(list: RocList, alignment: u32, element_width: usize) callconv(.C) RocList {
+pub fn listReverse(list: RocList, alignment: u32, element_width: usize, update_mode: UpdateMode) callconv(.C) RocList {
     if (list.bytes) |source_ptr| {
         const size = list.len();
 
         var i: usize = 0;
         const end: usize = size - 1;
 
-        if (list.isUnique()) {
+        if (update_mode == .InPlace or list.isUnique()) {
 
             // Working from the front and back so
             // we only need to go ~(n / 2) iterations.
@@ -720,9 +729,12 @@ pub fn listSingle(alignment: u32, element: Opaque, element_width: usize) callcon
     return output;
 }
 
-pub fn listAppend(list: RocList, alignment: u32, element: Opaque, element_width: usize) callconv(.C) RocList {
+pub fn listAppend(list: RocList, alignment: u32, element: Opaque, element_width: usize, update_mode: UpdateMode) callconv(.C) RocList {
     const old_length = list.len();
     var output = list.reallocate(alignment, old_length + 1, element_width);
+
+    // we'd need capacity to use update_mode here
+    _ = update_mode;
 
     if (output.bytes) |target| {
         if (element) |source| {
@@ -763,18 +775,24 @@ pub fn listSwap(
     element_width: usize,
     index_1: usize,
     index_2: usize,
+    update_mode: UpdateMode,
 ) callconv(.C) RocList {
     const size = list.len();
-    if (index_1 >= size or index_2 >= size) {
+    if (index_1 == index_2 or index_1 >= size or index_2 >= size) {
         // Either index out of bounds so we just return
         return list;
     }
 
-    const newList = list.makeUnique(alignment, element_width);
+    const newList = blk: {
+        if (update_mode == .InPlace) {
+            break :blk list;
+        } else {
+            break :blk list.makeUnique(alignment, element_width);
+        }
+    };
 
-    if (newList.bytes) |source_ptr| {
-        swapElements(source_ptr, element_width, index_1, index_2);
-    }
+    const source_ptr = @ptrCast([*]u8, newList.bytes);
+    swapElements(source_ptr, element_width, index_1, index_2);
 
     return newList;
 }
@@ -806,6 +824,67 @@ pub fn listDrop(
         const target_ptr = output.bytes orelse unreachable;
 
         @memcpy(target_ptr, source_ptr + drop_count * element_width, keep_count * element_width);
+
+        utils.decref(list.bytes, size * element_width, alignment);
+
+        return output;
+    } else {
+        return RocList.empty();
+    }
+}
+
+pub fn listDropAt(
+    list: RocList,
+    alignment: u32,
+    element_width: usize,
+    drop_index: usize,
+    dec: Dec,
+) callconv(.C) RocList {
+    if (list.bytes) |source_ptr| {
+        const size = list.len();
+
+        if (drop_index >= size) {
+            return list;
+        }
+
+        if (drop_index < size) {
+            const element = source_ptr + drop_index * element_width;
+            dec(element);
+        }
+
+        // NOTE
+        // we need to return an empty list explicitly,
+        // because we rely on the pointer field being null if the list is empty
+        // which also requires duplicating the utils.decref call to spend the RC token
+        if (size < 2) {
+            utils.decref(list.bytes, size * element_width, alignment);
+            return RocList.empty();
+        }
+
+        if (list.isUnique()) {
+            var i = drop_index;
+            while (i < size) : (i += 1) {
+                const copy_target = source_ptr + i * element_width;
+                const copy_source = copy_target + element_width;
+                @memcpy(copy_target, copy_source, element_width);
+            }
+
+            var new_list = list;
+
+            new_list.length -= 1;
+            return new_list;
+        }
+
+        const output = RocList.allocate(alignment, size - 1, element_width);
+        const target_ptr = output.bytes orelse unreachable;
+
+        const head_size = drop_index * element_width;
+        @memcpy(target_ptr, source_ptr, head_size);
+
+        const tail_target = target_ptr + drop_index * element_width;
+        const tail_source = source_ptr + (drop_index + 1) * element_width;
+        const tail_size = (size - drop_index - 1) * element_width;
+        @memcpy(tail_target, tail_source, tail_size);
 
         utils.decref(list.bytes, size * element_width, alignment);
 

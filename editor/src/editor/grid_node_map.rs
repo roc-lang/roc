@@ -1,17 +1,19 @@
 use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::NestedNodeWithoutChildren;
-use crate::editor::ed_error::NodeIdNotInGridNodeMap;
+use crate::editor::ed_error::{NoDefMarkNodeBeforeLineNr, NodeIdNotInGridNodeMap};
 use crate::editor::mvc::ed_model::EdModel;
-use crate::editor::slow_pool::MarkNodeId;
-use crate::editor::slow_pool::SlowPool;
 use crate::editor::util::first_last_index_of;
 use crate::editor::util::index_of;
-use crate::lang::ast::ExprId;
 use crate::ui::text::selection::Selection;
 use crate::ui::text::text_pos::TextPos;
-use crate::ui::ui_error::UIResult;
+use crate::ui::ui_error::{LineInsertionFailed, OutOfBounds, UIResult};
 use crate::ui::util::{slice_get, slice_get_mut};
+use roc_ast::lang::core::ast::ASTNodeId;
+use roc_code_markup::markup::nodes::get_root_mark_node_id;
+use roc_code_markup::slow_pool::MarkNodeId;
+use roc_code_markup::slow_pool::SlowPool;
 use snafu::OptionExt;
+use std::cmp::Ordering;
 use std::fmt;
 
 #[derive(Debug)]
@@ -20,21 +22,6 @@ pub struct GridNodeMap {
 }
 
 impl GridNodeMap {
-    pub fn new() -> GridNodeMap {
-        GridNodeMap {
-            lines: vec![vec![]],
-        }
-    }
-
-    pub fn add_to_line(&mut self, line_nr: usize, len: usize, node_id: MarkNodeId) -> UIResult<()> {
-        let line_ref = slice_get_mut(line_nr, &mut self.lines)?;
-        let mut new_cols_vec: Vec<MarkNodeId> = std::iter::repeat(node_id).take(len).collect();
-
-        line_ref.append(&mut new_cols_vec);
-
-        Ok(())
-    }
-
     pub fn insert_between_line(
         &mut self,
         line_nr: usize,
@@ -42,18 +29,105 @@ impl GridNodeMap {
         len: usize,
         node_id: MarkNodeId,
     ) -> UIResult<()> {
-        let line_ref = slice_get_mut(line_nr, &mut self.lines)?;
-        let new_cols_vec: Vec<MarkNodeId> = std::iter::repeat(node_id).take(len).collect();
+        let nr_of_lines = self.lines.len();
 
-        line_ref.splice(index..index, new_cols_vec);
+        if line_nr < nr_of_lines {
+            let line_ref = slice_get_mut(line_nr, &mut self.lines)?;
+            let new_cols_vec: Vec<MarkNodeId> = std::iter::repeat(node_id).take(len).collect();
+
+            line_ref.splice(index..index, new_cols_vec);
+        } else if line_nr >= nr_of_lines {
+            for _ in 0..((line_nr - nr_of_lines) + 1) {
+                self.push_empty_line();
+            }
+
+            self.insert_between_line(line_nr, index, len, node_id)?;
+        } else {
+            LineInsertionFailed {
+                line_nr,
+                nr_of_lines,
+            }
+            .fail()?;
+        }
 
         Ok(())
     }
 
-    pub fn del_at_line(&mut self, line_nr: usize, index: usize) -> UIResult<()> {
+    pub fn insert_empty_line(&mut self, line_nr: usize) -> UIResult<()> {
+        if line_nr <= self.lines.len() {
+            self.lines.insert(line_nr, Vec::new());
+
+            Ok(())
+        } else {
+            OutOfBounds {
+                index: line_nr,
+                collection_name: "code_lines.lines".to_owned(),
+                len: self.lines.len(),
+            }
+            .fail()
+        }
+    }
+
+    pub fn push_empty_line(&mut self) {
+        self.lines.push(vec![]);
+    }
+
+    pub fn break_line(&mut self, line_nr: usize, col_nr: usize) -> UIResult<()> {
+        // clippy prefers this over if-else
+        match line_nr.cmp(&self.lines.len()) {
+            Ordering::Less => {
+                self.insert_empty_line(line_nr + 1)?;
+
+                let line_ref = self.lines.get_mut(line_nr).unwrap(); // safe because we checked line_nr
+
+                if col_nr < line_ref.len() {
+                    let next_line_str: Vec<MarkNodeId> = line_ref.drain(col_nr..).collect();
+
+                    let next_line_ref = self.lines.get_mut(line_nr + 1).unwrap(); // safe because we just added the line
+
+                    *next_line_ref = next_line_str;
+                }
+
+                Ok(())
+            }
+            Ordering::Equal => self.insert_empty_line(line_nr + 1),
+            Ordering::Greater => OutOfBounds {
+                index: line_nr,
+                collection_name: "grid_node_map.lines".to_owned(),
+                len: self.lines.len(),
+            }
+            .fail(),
+        }
+    }
+
+    pub fn clear_line(&mut self, line_nr: usize) -> UIResult<()> {
         let line_ref = slice_get_mut(line_nr, &mut self.lines)?;
 
-        line_ref.remove(index);
+        *line_ref = vec![];
+
+        Ok(())
+    }
+
+    pub fn del_line(&mut self, line_nr: usize) {
+        self.lines.remove(line_nr);
+    }
+
+    pub fn del_at_line(&mut self, line_nr: usize, column: usize) -> UIResult<()> {
+        let line_ref = slice_get_mut(line_nr, &mut self.lines)?;
+
+        line_ref.remove(column);
+
+        Ok(())
+    }
+
+    pub fn del_range_at_line(
+        &mut self,
+        line_nr: usize,
+        col_range: std::ops::Range<usize>,
+    ) -> UIResult<()> {
+        let line_ref = slice_get_mut(line_nr, &mut self.lines)?;
+
+        line_ref.drain(col_range);
 
         Ok(())
     }
@@ -64,15 +138,11 @@ impl GridNodeMap {
 
             line_ref.drain(selection.start_pos.column..selection.end_pos.column);
         } else {
-            // TODO support multiline
+            unimplemented!("TODO support deleting multiline selection")
         }
 
         Ok(())
     }
-
-    /*pub fn new_line(&mut self) {
-        self.lines.push(vec![])
-    }*/
 
     pub fn get_id_at_row_col(&self, caret_pos: TextPos) -> UIResult<MarkNodeId> {
         let line = slice_get(caret_pos.line, &self.lines)?;
@@ -133,15 +203,15 @@ impl GridNodeMap {
         }
     }
 
-    // returns start and end pos of Expr2, relevant AST node and MarkNodeId of the corresponding MarkupNode
-    pub fn get_expr_start_end_pos(
+    // returns start and end pos of Expr2/Def2, relevant AST node and MarkNodeId of the corresponding MarkupNode
+    pub fn get_block_start_end_pos(
         &self,
         caret_pos: TextPos,
         ed_model: &EdModel,
-    ) -> EdResult<(TextPos, TextPos, ExprId, MarkNodeId)> {
+    ) -> EdResult<(TextPos, TextPos, ASTNodeId, MarkNodeId)> {
         let line = slice_get(caret_pos.line, &self.lines)?;
         let node_id = slice_get(caret_pos.column, line)?;
-        let node = ed_model.markup_node_pool.get(*node_id);
+        let node = ed_model.mark_node_pool.get(*node_id);
 
         if node.is_nested() {
             let (start_pos, end_pos) = self.get_nested_start_end_pos(*node_id, ed_model)?;
@@ -151,10 +221,7 @@ impl GridNodeMap {
             let (first_node_index, last_node_index) = first_last_index_of(*node_id, line)?;
 
             let curr_node_id = slice_get(first_node_index, line)?;
-            let curr_ast_node_id = ed_model
-                .markup_node_pool
-                .get(*curr_node_id)
-                .get_ast_node_id();
+            let curr_ast_node_id = ed_model.mark_node_pool.get(*curr_node_id).get_ast_node_id();
 
             let mut expr_start_index = first_node_index;
             let mut expr_end_index = last_node_index;
@@ -165,7 +232,7 @@ impl GridNodeMap {
             for i in (0..first_node_index).rev() {
                 let prev_pos_node_id = slice_get(i, line)?;
                 let prev_ast_node_id = ed_model
-                    .markup_node_pool
+                    .mark_node_pool
                     .get(*prev_pos_node_id)
                     .get_ast_node_id();
 
@@ -187,7 +254,7 @@ impl GridNodeMap {
             for i in last_node_index..line.len() {
                 let next_pos_node_id = slice_get(i, line)?;
                 let next_ast_node_id = ed_model
-                    .markup_node_pool
+                    .mark_node_pool
                     .get(*next_pos_node_id)
                     .get_ast_node_id();
 
@@ -204,7 +271,7 @@ impl GridNodeMap {
             }
 
             let correct_mark_node_id =
-                GridNodeMap::get_top_node_with_expr_id(*curr_node_id, &ed_model.markup_node_pool);
+                GridNodeMap::get_top_node_with_expr_id(*curr_node_id, &ed_model.mark_node_pool);
 
             Ok((
                 TextPos {
@@ -225,12 +292,12 @@ impl GridNodeMap {
     // `{` is not the entire Expr2
     fn get_top_node_with_expr_id(
         curr_node_id: MarkNodeId,
-        markup_node_pool: &SlowPool,
+        mark_node_pool: &SlowPool,
     ) -> MarkNodeId {
-        let curr_node = markup_node_pool.get(curr_node_id);
+        let curr_node = mark_node_pool.get(curr_node_id);
 
         if let Some(parent_id) = curr_node.get_parent_id_opt() {
-            let parent = markup_node_pool.get(parent_id);
+            let parent = mark_node_pool.get(parent_id);
 
             if parent.get_ast_node_id() == curr_node.get_ast_node_id() {
                 parent_id
@@ -247,29 +314,108 @@ impl GridNodeMap {
         nested_node_id: MarkNodeId,
         ed_model: &EdModel,
     ) -> EdResult<(TextPos, TextPos)> {
-        let parent_mark_node = ed_model.markup_node_pool.get(nested_node_id);
+        let left_most_leaf = self.get_leftmost_leaf(nested_node_id, ed_model)?;
 
-        let all_child_ids = parent_mark_node.get_children_ids();
-        let first_child_id = all_child_ids
-            .first()
-            .with_context(|| NestedNodeWithoutChildren {
-                node_id: nested_node_id,
-            })?;
-        let last_child_id = all_child_ids
-            .last()
-            .with_context(|| NestedNodeWithoutChildren {
-                node_id: nested_node_id,
-            })?;
+        let right_most_leaf = self.get_rightmost_leaf(nested_node_id, ed_model)?;
 
         let expr_start_pos = ed_model
             .grid_node_map
-            .get_node_position(*first_child_id, true)?;
+            .get_node_position(left_most_leaf, true)?;
         let expr_end_pos = ed_model
             .grid_node_map
-            .get_node_position(*last_child_id, false)?
+            .get_node_position(right_most_leaf, false)?
             .increment_col();
 
         Ok((expr_start_pos, expr_end_pos))
+    }
+
+    fn get_leftmost_leaf(
+        &self,
+        nested_node_id: MarkNodeId,
+        ed_model: &EdModel,
+    ) -> EdResult<MarkNodeId> {
+        let mut children_ids = ed_model
+            .mark_node_pool
+            .get(nested_node_id)
+            .get_children_ids();
+        let mut first_child_id = 0;
+
+        while !children_ids.is_empty() {
+            first_child_id = *children_ids
+                .first()
+                .with_context(|| NestedNodeWithoutChildren {
+                    node_id: nested_node_id,
+                })?;
+
+            children_ids = ed_model
+                .mark_node_pool
+                .get(first_child_id)
+                .get_children_ids();
+        }
+
+        Ok(first_child_id)
+    }
+
+    fn get_rightmost_leaf(
+        &self,
+        nested_node_id: MarkNodeId,
+        ed_model: &EdModel,
+    ) -> EdResult<MarkNodeId> {
+        let mut children_ids = ed_model
+            .mark_node_pool
+            .get(nested_node_id)
+            .get_children_ids();
+        let mut last_child_id = 0;
+
+        while !children_ids.is_empty() {
+            last_child_id = *children_ids
+                .last()
+                .with_context(|| NestedNodeWithoutChildren {
+                    node_id: nested_node_id,
+                })?;
+
+            children_ids = ed_model
+                .mark_node_pool
+                .get(last_child_id)
+                .get_children_ids();
+        }
+
+        Ok(last_child_id)
+    }
+
+    // get id of root mark_node whose ast_node_id points to a DefId
+    pub fn get_def_mark_node_id_before_line(
+        &self,
+        line_nr: usize,
+        mark_node_pool: &SlowPool,
+    ) -> EdResult<MarkNodeId> {
+        for curr_line_nr in (0..line_nr).rev() {
+            let first_col_pos = TextPos {
+                line: curr_line_nr,
+                column: 0,
+            };
+
+            if self.node_exists_at_pos(first_col_pos) {
+                let mark_node_id = self.get_id_at_row_col(first_col_pos)?;
+                let root_mark_node_id = get_root_mark_node_id(mark_node_id, mark_node_pool);
+
+                let ast_node_id = mark_node_pool.get(root_mark_node_id).get_ast_node_id();
+
+                if let ASTNodeId::ADefId(_) = ast_node_id {
+                    return Ok(root_mark_node_id);
+                }
+            }
+        }
+
+        NoDefMarkNodeBeforeLineNr { line_nr }.fail()
+    }
+}
+
+impl Default for GridNodeMap {
+    fn default() -> Self {
+        GridNodeMap {
+            lines: vec![Vec::new()],
+        }
     }
 }
 
@@ -282,10 +428,10 @@ impl fmt::Display for GridNodeMap {
                 .collect::<Vec<String>>()
                 .join(", ");
 
-            write!(f, "{}", row_str)?;
+            writeln!(f, "{}", row_str)?;
         }
 
-        write!(f, "      (grid_node_map)")?;
+        writeln!(f, "(grid_node_map, {:?} lines)", self.lines.len())?;
 
         Ok(())
     }

@@ -4,9 +4,16 @@ version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2018"
+links = "app"
 
 [lib]
-crate-type = ["staticlib"]
+name = "host"
+path = "src/lib.rs"
+crate-type = ["staticlib", "rlib"]
+
+[[bin]]
+name = "host"
+path = "src/main.rs"
 
 [dependencies]
 roc_std = { path = "../../../roc_std" }

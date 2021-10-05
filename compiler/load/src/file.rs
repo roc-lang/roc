@@ -1967,7 +1967,7 @@ fn update<'a>(
                 );
             }
 
-            if module_id == state.root_id && state.goal_phase == Phase::SolveTypes {
+            if is_host_exposed && state.goal_phase == Phase::SolveTypes {
                 debug_assert!(work.is_empty());
                 debug_assert!(state.dependencies.solved_all());
 

@@ -7,6 +7,8 @@ id_type! {
     pub TypeId(u32);
 }
 
+// TODO: Add slot information
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TypeData {
     Named { named: NamedTypeId },

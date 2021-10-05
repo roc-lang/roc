@@ -9,9 +9,10 @@ use crate::llvm::build_dict::{
 use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
     self, allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat,
-    list_contains, list_drop, list_get_unsafe, list_join, list_keep_errs, list_keep_if,
-    list_keep_oks, list_len, list_map, list_map2, list_map3, list_map_with_index, list_prepend,
-    list_range, list_repeat, list_reverse, list_set, list_single, list_sort_with, list_swap,
+    list_contains, list_drop, list_drop_at, list_get_unsafe, list_join, list_keep_errs,
+    list_keep_if, list_keep_oks, list_len, list_map, list_map2, list_map3, list_map_with_index,
+    list_prepend, list_range, list_repeat, list_reverse, list_set, list_single, list_sort_with,
+    list_swap,
 };
 use crate::llvm::build_str::{
     empty_str, str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int,
@@ -708,7 +709,7 @@ fn promote_to_main_function<'a, 'ctx, 'env>(
         env,
         main_fn_name,
         roc_main_fn,
-        &[],
+        top_level.arguments,
         top_level.result,
         main_fn_name,
     );
@@ -934,7 +935,9 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
         CallType::LowLevel { op, update_mode } => {
             let bytes = update_mode.to_bytes();
             let update_var = UpdateModeVar(&bytes);
-            let update_mode = func_spec_solutions.update_mode(update_var).ok();
+            let update_mode = func_spec_solutions
+                .update_mode(update_var)
+                .unwrap_or(UpdateMode::Immutable);
 
             run_low_level(
                 env,
@@ -2185,7 +2188,10 @@ fn list_literal<'a, 'ctx, 'env>(
     let list_length = elems.len();
     let list_length_intval = env.ptr_int().const_int(list_length as _, false);
 
-    if element_type.is_int_type() {
+    // TODO re-enable, currently causes morphic segfaults because it tries to update
+    // constants in-place...
+    // if element_type.is_int_type() {
+    if false {
         let element_type = element_type.into_int_type();
         let element_width = elem_layout.stack_size(env.ptr_bytes);
         let size = list_length * element_width as usize;
@@ -2226,17 +2232,18 @@ fn list_literal<'a, 'ctx, 'env>(
                     }
                     ListLiteralElement::Symbol(symbol) => {
                         let val = load_symbol(scope, symbol);
-                        let intval = val.into_int_value();
 
-                        if intval.is_const() {
-                            global_elements.push(intval);
-                        } else {
-                            is_all_constant = false;
+                        // here we'd like to furthermore check for intval.is_const().
+                        // if all elements are const for LLVM, we could make the array a constant.
+                        // BUT morphic does not know about this, and could allow us to modify that
+                        // array in-place. That would cause a segfault. So, we'll have to find
+                        // constants ourselves and cannot lean on LLVM here.
 
-                            runtime_evaluated_elements.push((index, val));
+                        is_all_constant = false;
 
-                            global_elements.push(element_type.get_undef());
-                        }
+                        runtime_evaluated_elements.push((index, val));
+
+                        global_elements.push(element_type.get_undef());
                     }
                 };
             }
@@ -3210,6 +3217,141 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
     c_function
 }
 
+fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    ident_string: &str,
+    roc_function: FunctionValue<'ctx>,
+    arguments: &[Layout<'a>],
+    c_function_name: &str,
+) -> FunctionValue<'ctx> {
+    let context = env.context;
+
+    // a tagged union to indicate to the test loader that a panic occurred.
+    // especially when running 32-bit binaries on a 64-bit machine, there
+    // does not seem to be a smarter solution
+    let wrapper_return_type = context.struct_type(
+        &[
+            context.i64_type().into(),
+            roc_function.get_type().get_return_type().unwrap(),
+        ],
+        false,
+    );
+
+    let mut cc_argument_types = Vec::with_capacity_in(arguments.len(), env.arena);
+    for layout in arguments {
+        cc_argument_types.push(to_cc_type(env, layout));
+    }
+
+    // STEP 1: turn `f : a,b,c -> d` into `f : a,b,c, &d -> {}` if the C abi demands it
+    let mut argument_types = cc_argument_types;
+    let return_type = wrapper_return_type;
+
+    let c_function_type = {
+        let output_type = return_type.ptr_type(AddressSpace::Generic);
+        argument_types.push(output_type.into());
+        env.context.void_type().fn_type(&argument_types, false)
+    };
+
+    let c_function = add_func(
+        env.module,
+        c_function_name,
+        c_function_type,
+        Linkage::External,
+        C_CALL_CONV,
+    );
+
+    let subprogram = env.new_subprogram(c_function_name);
+    c_function.set_subprogram(subprogram);
+
+    // STEP 2: build the exposed function's body
+    let builder = env.builder;
+    let context = env.context;
+
+    let entry = context.append_basic_block(c_function, "entry");
+
+    builder.position_at_end(entry);
+
+    debug_info_init!(env, c_function);
+
+    // drop the final argument, which is the pointer we write the result into
+    let args_vector = c_function.get_params();
+    let mut args = args_vector.as_slice();
+    let args_length = args.len();
+
+    args = &args[..args.len() - 1];
+
+    let mut arguments_for_call = Vec::with_capacity_in(args.len(), env.arena);
+
+    let it = args.iter().zip(roc_function.get_type().get_param_types());
+    for (arg, fastcc_type) in it {
+        let arg_type = arg.get_type();
+        if arg_type == fastcc_type {
+            // the C and Fast calling conventions agree
+            arguments_for_call.push(*arg);
+        } else {
+            let cast = complex_bitcast_check_size(env, *arg, fastcc_type, "to_fastcc_type");
+            arguments_for_call.push(cast);
+        }
+    }
+
+    let arguments_for_call = &arguments_for_call.into_bump_slice();
+
+    let call_result = {
+        let roc_wrapper_function = make_exception_catcher(env, roc_function);
+        debug_assert_eq!(
+            arguments_for_call.len(),
+            roc_wrapper_function.get_params().len()
+        );
+
+        builder.position_at_end(entry);
+
+        let call_wrapped = builder.build_call(
+            roc_wrapper_function,
+            arguments_for_call,
+            "call_wrapped_function",
+        );
+        call_wrapped.set_call_convention(FAST_CALL_CONV);
+
+        call_wrapped.try_as_basic_value().left().unwrap()
+    };
+
+    let output_arg_index = args_length - 1;
+
+    let output_arg = c_function
+        .get_nth_param(output_arg_index as u32)
+        .unwrap()
+        .into_pointer_value();
+
+    builder.build_store(output_arg, call_result);
+    builder.build_return(None);
+
+    // STEP 3: build a {} -> u64 function that gives the size of the return type
+    let size_function_type = env.context.i64_type().fn_type(&[], false);
+    let size_function_name: String = format!("roc__{}_size", ident_string);
+
+    let size_function = add_func(
+        env.module,
+        size_function_name.as_str(),
+        size_function_type,
+        Linkage::External,
+        C_CALL_CONV,
+    );
+
+    let subprogram = env.new_subprogram(&size_function_name);
+    size_function.set_subprogram(subprogram);
+
+    let entry = context.append_basic_block(size_function, "entry");
+
+    builder.position_at_end(entry);
+
+    debug_info_init!(env, size_function);
+
+    let size: BasicValueEnum = return_type.size_of().unwrap().into();
+    builder.build_return(Some(&size));
+
+    c_function
+}
+
 fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     ident_string: &str,
@@ -3220,15 +3362,23 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
 ) -> FunctionValue<'ctx> {
     let context = env.context;
 
-    // a generic version that writes the result into a passed *u8 pointer
-    if !env.is_gen_test {
-        expose_function_to_host_help_c_abi_generic(
+    if env.is_gen_test {
+        return expose_function_to_host_help_c_abi_gen_test(
             env,
+            ident_string,
             roc_function,
             arguments,
-            &format!("{}_generic", c_function_name),
+            c_function_name,
         );
     }
+
+    // a generic version that writes the result into a passed *u8 pointer
+    expose_function_to_host_help_c_abi_generic(
+        env,
+        roc_function,
+        arguments,
+        &format!("{}_generic", c_function_name),
+    );
 
     let wrapper_return_type = if env.is_gen_test {
         context
@@ -3256,11 +3406,9 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
     let cc_return = to_cc_return(env, &return_layout);
 
     let c_function_type = match cc_return {
-        CCReturn::Void if !env.is_gen_test => {
-            env.context.void_type().fn_type(&argument_types, false)
-        }
-        CCReturn::Return if !env.is_gen_test => return_type.fn_type(&argument_types, false),
-        _ => {
+        CCReturn::Void => env.context.void_type().fn_type(&argument_types, false),
+        CCReturn::Return => return_type.fn_type(&argument_types, false),
+        CCReturn::ByPointer => {
             let output_type = return_type.ptr_type(AddressSpace::Generic);
             argument_types.push(output_type.into());
             env.context.void_type().fn_type(&argument_types, false)
@@ -3294,13 +3442,13 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
     let args_length = args.len();
 
     match cc_return {
-        CCReturn::Return if !env.is_gen_test => {
+        CCReturn::Return => {
             debug_assert_eq!(args.len(), roc_function.get_params().len());
         }
-        CCReturn::Void if !env.is_gen_test => {
+        CCReturn::Void => {
             debug_assert_eq!(args.len(), roc_function.get_params().len());
         }
-        _ => {
+        CCReturn::ByPointer => {
             args = &args[..args.len() - 1];
             debug_assert_eq!(args.len(), roc_function.get_params().len());
         }
@@ -3323,44 +3471,25 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
     let arguments_for_call = &arguments_for_call.into_bump_slice();
 
     let call_result = {
-        if env.is_gen_test {
-            let roc_wrapper_function = make_exception_catcher(env, roc_function);
-            debug_assert_eq!(
-                arguments_for_call.len(),
-                roc_wrapper_function.get_params().len()
-            );
+        let call_unwrapped =
+            builder.build_call(roc_function, arguments_for_call, "call_unwrapped_function");
+        call_unwrapped.set_call_convention(FAST_CALL_CONV);
 
-            builder.position_at_end(entry);
+        let call_unwrapped_result = call_unwrapped.try_as_basic_value().left().unwrap();
 
-            let call_wrapped = builder.build_call(
-                roc_wrapper_function,
-                arguments_for_call,
-                "call_wrapped_function",
-            );
-            call_wrapped.set_call_convention(FAST_CALL_CONV);
-
-            call_wrapped.try_as_basic_value().left().unwrap()
-        } else {
-            let call_unwrapped =
-                builder.build_call(roc_function, arguments_for_call, "call_unwrapped_function");
-            call_unwrapped.set_call_convention(FAST_CALL_CONV);
-
-            let call_unwrapped_result = call_unwrapped.try_as_basic_value().left().unwrap();
-
-            // make_good_roc_result(env, call_unwrapped_result)
-            call_unwrapped_result
-        }
+        // make_good_roc_result(env, call_unwrapped_result)
+        call_unwrapped_result
     };
 
     match cc_return {
-        CCReturn::Void if !env.is_gen_test => {
+        CCReturn::Void => {
             // TODO return empty struct here?
             builder.build_return(None);
         }
-        CCReturn::Return if !env.is_gen_test => {
+        CCReturn::Return => {
             builder.build_return(Some(&call_result));
         }
-        _ => {
+        CCReturn::ByPointer => {
             let output_arg_index = args_length - 1;
 
             let output_arg = c_function
@@ -4105,19 +4234,28 @@ pub fn build_proc<'a, 'ctx, 'env>(
                         let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
 
                         let mut it = func_solutions.specs();
-                        let func_spec = it.next().unwrap();
-                        debug_assert!(
-                            it.next().is_none(),
-                            "we expect only one specialization of this symbol"
-                        );
+                        let evaluator = match it.next() {
+                            Some(func_spec) => {
+                                debug_assert!(
+                                    it.next().is_none(),
+                                    "we expect only one specialization of this symbol"
+                                );
 
-                        let evaluator = function_value_by_func_spec(
-                            env,
-                            *func_spec,
-                            symbol,
-                            top_level.arguments,
-                            &top_level.result,
-                        );
+                                function_value_by_func_spec(
+                                    env,
+                                    *func_spec,
+                                    symbol,
+                                    top_level.arguments,
+                                    &top_level.result,
+                                )
+                            }
+                            None => {
+                                // morphic did not generate a specialization for this function,
+                                // therefore it must actually be unused.
+                                // An example is our closure callers
+                                panic!("morphic did not specialize {:?}", symbol);
+                            }
+                        };
 
                         let ident_string = proc.name.as_str(&env.interns);
                         let fn_name: String = format!("{}_1", ident_string);
@@ -4777,7 +4915,7 @@ fn run_low_level<'a, 'ctx, 'env>(
     layout: &Layout<'a>,
     op: LowLevel,
     args: &[Symbol],
-    update_mode: Option<UpdateMode>,
+    update_mode: UpdateMode,
     // expect_failed: *const (),
 ) -> BasicValueEnum<'ctx> {
     use LowLevel::*;
@@ -4833,7 +4971,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
 
-            str_from_utf8(env, parent, original_wrapper)
+            str_from_utf8(env, parent, original_wrapper, update_mode)
         }
         StrFromUtf8Range => {
             debug_assert_eq!(args.len(), 2);
@@ -4915,7 +5053,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            list_reverse(env, list, list_layout)
+            list_reverse(env, list, list_layout, update_mode)
         }
         ListConcat => {
             debug_assert_eq!(args.len(), 2);
@@ -4957,7 +5095,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
             let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            list_append(env, original_wrapper, elem, elem_layout)
+            list_append(env, original_wrapper, elem, elem_layout, update_mode)
         }
         ListSwap => {
             // List.swap : List elem, Nat, Nat -> List elem
@@ -4977,6 +5115,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                     index_1.into_int_value(),
                     index_2.into_int_value(),
                     element_layout,
+                    update_mode,
                 ),
                 _ => unreachable!("Invalid layout {:?} in List.swap", list_layout),
             }
@@ -5000,6 +5139,27 @@ fn run_low_level<'a, 'ctx, 'env>(
                     element_layout,
                 ),
                 _ => unreachable!("Invalid layout {:?} in List.drop", list_layout),
+            }
+        }
+        ListDropAt => {
+            // List.dropAt : List elem, Nat -> List elem
+            debug_assert_eq!(args.len(), 2);
+
+            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let original_wrapper = list.into_struct_value();
+
+            let count = load_symbol(scope, &args[1]);
+
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                Layout::Builtin(Builtin::List(element_layout)) => list_drop_at(
+                    env,
+                    layout_ids,
+                    original_wrapper,
+                    count.into_int_value(),
+                    element_layout,
+                ),
+                _ => unreachable!("Invalid layout {:?} in List.dropAt", list_layout),
             }
         }
         ListPrepend => {
@@ -5304,7 +5464,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                     index.into_int_value(),
                     element,
                     element_layout,
-                    update_mode.unwrap(),
+                    update_mode,
                 ),
                 _ => unreachable!("invalid dict layout"),
             }
@@ -5621,89 +5781,115 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
     let builder = env.builder;
     let context = env.context;
 
-    // Here we build two functions:
-    //
-    // - an C_CALL_CONV extern that will be provided by the host, e.g. `roc_fx_putLine`
-    //      This is just a type signature that we make available to the linker,
-    //      and can use in the wrapper
-    // - a FAST_CALL_CONV wrapper that we make here, e.g. `roc_fx_putLine_fastcc_wrapper`
+    let fastcc_function_name = format!("{}_fastcc_wrapper", foreign.as_str());
 
-    let return_type = basic_type_from_layout(env, ret_layout);
-    let cc_return = to_cc_return(env, ret_layout);
+    let (fastcc_function, arguments) = match env.module.get_function(fastcc_function_name.as_str())
+    {
+        Some(function_value) => {
+            let mut arguments = Vec::with_capacity_in(argument_symbols.len(), env.arena);
 
-    let mut cc_argument_types = Vec::with_capacity_in(argument_symbols.len() + 1, env.arena);
-    let mut fastcc_argument_types = Vec::with_capacity_in(argument_symbols.len(), env.arena);
-    let mut arguments = Vec::with_capacity_in(argument_symbols.len(), env.arena);
+            for symbol in argument_symbols {
+                let (value, _) = load_symbol_and_layout(scope, symbol);
 
-    for symbol in argument_symbols {
-        let (value, layout) = load_symbol_and_layout(scope, symbol);
+                arguments.push(value);
+            }
 
-        cc_argument_types.push(to_cc_type(env, layout));
-
-        let basic_type = basic_type_from_layout(env, layout);
-        fastcc_argument_types.push(basic_type);
-
-        arguments.push(value);
-    }
-
-    let cc_type = match cc_return {
-        CCReturn::Void => env.context.void_type().fn_type(&cc_argument_types, false),
-        CCReturn::ByPointer => {
-            cc_argument_types.push(return_type.ptr_type(AddressSpace::Generic).into());
-            env.context.void_type().fn_type(&cc_argument_types, false)
+            (function_value, arguments)
         }
-        CCReturn::Return => return_type.fn_type(&cc_argument_types, false),
+        None => {
+            // Here we build two functions:
+            //
+            // - an C_CALL_CONV extern that will be provided by the host, e.g. `roc_fx_putLine`
+            //      This is just a type signature that we make available to the linker,
+            //      and can use in the wrapper
+            // - a FAST_CALL_CONV wrapper that we make here, e.g. `roc_fx_putLine_fastcc_wrapper`
+
+            let return_type = basic_type_from_layout(env, ret_layout);
+            let cc_return = to_cc_return(env, ret_layout);
+
+            let mut cc_argument_types =
+                Vec::with_capacity_in(argument_symbols.len() + 1, env.arena);
+            let mut fastcc_argument_types =
+                Vec::with_capacity_in(argument_symbols.len(), env.arena);
+            let mut arguments = Vec::with_capacity_in(argument_symbols.len(), env.arena);
+
+            for symbol in argument_symbols {
+                let (value, layout) = load_symbol_and_layout(scope, symbol);
+
+                cc_argument_types.push(to_cc_type(env, layout));
+
+                let basic_type = basic_type_from_layout(env, layout);
+                fastcc_argument_types.push(basic_type);
+
+                arguments.push(value);
+            }
+
+            let cc_type = match cc_return {
+                CCReturn::Void => env.context.void_type().fn_type(&cc_argument_types, false),
+                CCReturn::ByPointer => {
+                    cc_argument_types.push(return_type.ptr_type(AddressSpace::Generic).into());
+                    env.context.void_type().fn_type(&cc_argument_types, false)
+                }
+                CCReturn::Return => return_type.fn_type(&cc_argument_types, false),
+            };
+
+            let cc_function = get_foreign_symbol(env, foreign.clone(), cc_type);
+
+            let fastcc_type = return_type.fn_type(&fastcc_argument_types, false);
+
+            let fastcc_function = add_func(
+                env.module,
+                &fastcc_function_name,
+                fastcc_type,
+                Linkage::Private,
+                FAST_CALL_CONV,
+            );
+
+            let old = builder.get_insert_block().unwrap();
+
+            let entry = context.append_basic_block(fastcc_function, "entry");
+            {
+                builder.position_at_end(entry);
+                let return_pointer = env.builder.build_alloca(return_type, "return_value");
+
+                let fastcc_parameters = fastcc_function.get_params();
+                let mut cc_arguments =
+                    Vec::with_capacity_in(fastcc_parameters.len() + 1, env.arena);
+
+                for (param, cc_type) in fastcc_parameters.into_iter().zip(cc_argument_types.iter())
+                {
+                    if param.get_type() == *cc_type {
+                        cc_arguments.push(param);
+                    } else {
+                        let as_cc_type =
+                            complex_bitcast(env.builder, param, *cc_type, "to_cc_type");
+                        cc_arguments.push(as_cc_type);
+                    }
+                }
+
+                if let CCReturn::ByPointer = cc_return {
+                    cc_arguments.push(return_pointer.into());
+                }
+
+                let call = env.builder.build_call(cc_function, &cc_arguments, "tmp");
+                call.set_call_convention(C_CALL_CONV);
+
+                let return_value = match cc_return {
+                    CCReturn::Return => call.try_as_basic_value().left().unwrap(),
+
+                    CCReturn::ByPointer => env.builder.build_load(return_pointer, "read_result"),
+                    CCReturn::Void => return_type.const_zero(),
+                };
+
+                builder.build_return(Some(&return_value));
+            }
+
+            builder.position_at_end(old);
+
+            (fastcc_function, arguments)
+        }
     };
 
-    let cc_function = get_foreign_symbol(env, foreign.clone(), cc_type);
-
-    let fastcc_type = return_type.fn_type(&fastcc_argument_types, false);
-
-    let fastcc_function = add_func(
-        env.module,
-        &format!("{}_fastcc_wrapper", foreign.as_str()),
-        fastcc_type,
-        Linkage::Private,
-        FAST_CALL_CONV,
-    );
-
-    let old = builder.get_insert_block().unwrap();
-
-    let entry = context.append_basic_block(fastcc_function, "entry");
-    {
-        builder.position_at_end(entry);
-        let return_pointer = env.builder.build_alloca(return_type, "return_value");
-
-        let fastcc_parameters = fastcc_function.get_params();
-        let mut cc_arguments = Vec::with_capacity_in(fastcc_parameters.len() + 1, env.arena);
-
-        for (param, cc_type) in fastcc_parameters.into_iter().zip(cc_argument_types.iter()) {
-            if param.get_type() == *cc_type {
-                cc_arguments.push(param);
-            } else {
-                let as_cc_type = complex_bitcast(env.builder, param, *cc_type, "to_cc_type");
-                cc_arguments.push(as_cc_type);
-            }
-        }
-
-        if let CCReturn::ByPointer = cc_return {
-            cc_arguments.push(return_pointer.into());
-        }
-
-        let call = env.builder.build_call(cc_function, &cc_arguments, "tmp");
-        call.set_call_convention(C_CALL_CONV);
-
-        let return_value = match cc_return {
-            CCReturn::Return => call.try_as_basic_value().left().unwrap(),
-
-            CCReturn::ByPointer => env.builder.build_load(return_pointer, "read_result"),
-            CCReturn::Void => return_type.const_zero(),
-        };
-
-        builder.build_return(Some(&return_value));
-    }
-
-    builder.position_at_end(old);
     let call = env.builder.build_call(fastcc_function, &arguments, "tmp");
     call.set_call_convention(FAST_CALL_CONV);
     return call.try_as_basic_value().left().unwrap();

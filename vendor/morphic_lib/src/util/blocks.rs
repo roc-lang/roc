@@ -14,6 +14,7 @@ struct BlockFrag<ValId> {
     min_val: ValId,
     /// Exclusive bound
     max_val: ValId,
+    prev: Option<BlockFragId>,
     next: Option<BlockFragId>,
 }
 
@@ -57,6 +58,7 @@ impl<BlockId: Id, ValId: Id, BlockInfo> Blocks<BlockId, ValId, BlockInfo> {
         let frag = BlockFrag {
             min_val: start_hint.clone(),
             max_val: start_hint,
+            prev: None,
             next: None,
         };
         let frag_id = self.frags.push(frag);
@@ -77,6 +79,7 @@ impl<BlockId: Id, ValId: Id, BlockInfo> Blocks<BlockId, ValId, BlockInfo> {
             let new_tail = BlockFrag {
                 min_val: val_id.clone(),
                 max_val: ValId::from_index_or_panic(val_id.to_index() + 1),
+                prev: Some(block.tail),
                 next: None,
             };
             let new_tail_id = self.frags.push(new_tail);
@@ -111,6 +114,26 @@ impl<BlockId: Id, ValId: Id, BlockInfo> Blocks<BlockId, ValId, BlockInfo> {
             let this_val = val.clone();
             val = ValId::from_index_unchecked(val.to_index() + 1);
             Some(this_val)
+        })
+    }
+
+    pub fn block_values_rev(&self, block_id: BlockId) -> impl Iterator<Item = ValId> + '_ {
+        let mut frag = &self.frags[self.blocks[block_id].tail];
+        let mut val = frag.max_val.clone();
+        std::iter::from_fn(move || {
+            while val.to_index() <= frag.min_val.to_index() {
+                match frag.prev {
+                    Some(prev) => {
+                        frag = &self.frags[prev];
+                        val = frag.max_val.clone();
+                    }
+                    None => {
+                        return None;
+                    }
+                }
+            }
+            val = ValId::from_index_unchecked(val.to_index() - 1);
+            Some(val.clone())
         })
     }
 }
