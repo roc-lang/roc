@@ -488,7 +488,7 @@ pub fn to_expr2<'a>(
                     name: symbol,
                     recursive: Recursive::NotRecursive,
                     args: can_args,
-                    body: env.add(body_expr, loc_body_expr.region),
+                    body_id: env.add(body_expr, loc_body_expr.region),
                     extra: env.pool.add(extra),
                 },
                 output,

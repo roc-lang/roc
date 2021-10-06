@@ -109,7 +109,7 @@ pub enum Expr2 {
     Closure {
         args: PoolVec<(Variable, NodeId<Pattern2>)>, // 8B
         name: Symbol,                                // 8B
-        body: ExprId,                                // 4B
+        body_id: ExprId,                                // 4B
         function_type: Variable,                     // 4B
         recursive: Recursive,                        // 1B
         extra: NodeId<ClosureExtra>,                 // 4B

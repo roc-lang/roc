@@ -15,7 +15,7 @@ use roc_ast::lang::core::ast::{ASTNodeId, AST};
 use roc_ast::lang::env::Env;
 use roc_ast::mem_pool::pool_str::PoolStr;
 use roc_ast::parse::parse_ast;
-use roc_code_markup::markup::nodes::ast_to_mark_nodes;
+use roc_code_markup::markup::convert::from_ast::ast_to_mark_nodes;
 use roc_code_markup::slow_pool::{MarkNodeId, SlowPool};
 use roc_load::file::LoadedModule;
 use std::path::Path;

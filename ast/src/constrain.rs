@@ -945,7 +945,7 @@ pub fn constrain_expr<'a>(
         Expr2::Closure {
             args,
             name,
-            body: body_id,
+            body_id,
             function_type: fn_var,
             extra,
             ..
