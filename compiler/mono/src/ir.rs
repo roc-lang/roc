@@ -2693,8 +2693,6 @@ macro_rules! match_on_closure_argument {
         let arg_layouts = top_level.arguments;
         let ret_layout = top_level.result;
 
-
-
         match closure_data_layout {
             RawFunctionLayout::Function(_, lambda_set, _) =>  {
                 lowlevel_match_on_lambda_set(
@@ -2718,7 +2716,7 @@ macro_rules! match_on_closure_argument {
                     $hole,
                 )
             }
-            RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!(),
+            RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!("match_on_closure_argument received a zero-argument thunk"),
         }
     }};
 }
