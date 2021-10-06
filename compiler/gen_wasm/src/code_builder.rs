@@ -133,6 +133,26 @@ impl CodeBuilder {
         VirtualMachineSymbolState::Pushed { pushed_at }
     }
 
+    /// Verify if a sequence of symbols is at the top of the stack
+    pub fn verify_stack_match(&self, symbols: &[Symbol]) -> bool {
+        let n_symbols = symbols.len();
+        let stack_depth = self.vm_stack.len();
+        if n_symbols > stack_depth {
+            return false;
+        }
+        let offset = stack_depth - n_symbols;
+
+        for (i, sym) in symbols.iter().enumerate() {
+            match self.vm_stack[offset + i] {
+                Some(stack_symbol) if stack_symbol == *sym => {}
+                _ => {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     pub fn load_symbol(
         &mut self,
         symbol: Symbol,

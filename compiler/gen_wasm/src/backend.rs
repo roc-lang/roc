@@ -265,62 +265,71 @@ impl<'a> WasmBackend<'a> {
         }
     }
 
-    /// Load a symbol, e.g. for passing to a function call
-    fn load_symbol(&mut self, sym: &Symbol) {
-        let storage = self.get_symbol_storage(sym).to_owned();
-        match storage {
-            SymbolStorage::VirtualMachineStack {
-                vm_state,
-                value_type,
-                size,
-            } => {
-                let next_local_id = self.get_next_local_id();
-                let maybe_next_vm_state =
-                    self.instructions.load_symbol(*sym, vm_state, next_local_id);
-                match maybe_next_vm_state {
-                    // The act of loading the value changed the VM state, so update it
-                    Some(next_vm_state) => {
-                        self.symbol_storage_map.insert(
-                            *sym,
-                            SymbolStorage::VirtualMachineStack {
-                                vm_state: next_vm_state,
-                                value_type,
-                                size,
-                            },
-                        );
-                    }
-                    None => {
-                        // Loading the value required creating a new local, because
-                        // it was not in a convenient position in the VM stack.
-                        self.locals.push(Local::new(1, value_type));
-                        self.symbol_storage_map.insert(
-                            *sym,
-                            SymbolStorage::Local {
-                                local_id: next_local_id,
-                                value_type,
-                                size,
-                            },
-                        );
+    /// Load symbols to the top of the VM stack
+    fn load_symbols(&mut self, symbols: &[Symbol]) {
+        if self.instructions.verify_stack_match(symbols) {
+            // The symbols were already at the top of the stack, do nothing!
+            // This should be quite common due to the structure of the Mono IR
+            return;
+        }
+        for sym in symbols.iter() {
+            let storage = self.get_symbol_storage(sym).to_owned();
+            match storage {
+                SymbolStorage::VirtualMachineStack {
+                    vm_state,
+                    value_type,
+                    size,
+                } => {
+                    let next_local_id = self.get_next_local_id();
+                    let maybe_next_vm_state =
+                        self.instructions.load_symbol(*sym, vm_state, next_local_id);
+                    match maybe_next_vm_state {
+                        // The act of loading the value changed the VM state, so update it
+                        Some(next_vm_state) => {
+                            self.symbol_storage_map.insert(
+                                *sym,
+                                SymbolStorage::VirtualMachineStack {
+                                    vm_state: next_vm_state,
+                                    value_type,
+                                    size,
+                                },
+                            );
+                        }
+                        None => {
+                            // Loading the value required creating a new local, because
+                            // it was not in a convenient position in the VM stack.
+                            self.locals.push(Local::new(1, value_type));
+                            self.symbol_storage_map.insert(
+                                *sym,
+                                SymbolStorage::Local {
+                                    local_id: next_local_id,
+                                    value_type,
+                                    size,
+                                },
+                            );
+                        }
                     }
                 }
-            }
-            SymbolStorage::Local { local_id, .. }
-            | SymbolStorage::StackMemory {
-                location: StackMemoryLocation::PointerArg(local_id),
-                ..
-            } => {
-                self.instructions.push(GetLocal(local_id.0));
-            }
+                SymbolStorage::Local { local_id, .. }
+                | SymbolStorage::StackMemory {
+                    location: StackMemoryLocation::PointerArg(local_id),
+                    ..
+                } => {
+                    self.instructions.push(GetLocal(local_id.0));
+                    self.instructions.set_top_symbol(*sym);
+                }
 
-            SymbolStorage::StackMemory {
-                location: StackMemoryLocation::FrameOffset(offset),
-                ..
-            } => {
-                self.instructions.extend(&[
-                    GetLocal(self.stack_frame_pointer.unwrap().0),
-                    I32Const(offset as i32),
-                    I32Add,
-                ]);
+                SymbolStorage::StackMemory {
+                    location: StackMemoryLocation::FrameOffset(offset),
+                    ..
+                } => {
+                    self.instructions.extend(&[
+                        GetLocal(self.stack_frame_pointer.unwrap().0),
+                        I32Const(offset as i32),
+                        I32Add,
+                    ]);
+                    self.instructions.set_top_symbol(*sym);
+                }
             }
         }
     }
@@ -415,7 +424,7 @@ impl<'a> WasmBackend<'a> {
                     }
 
                     _ => {
-                        self.load_symbol(sym);
+                        self.load_symbols(&[*sym]);
                         self.instructions.push(Br(self.block_depth)); // jump to end of function (for stack frame pop)
                     }
                 }
@@ -541,9 +550,7 @@ impl<'a> WasmBackend<'a> {
                 arguments,
             }) => match call_type {
                 CallType::ByName { name: func_sym, .. } => {
-                    for arg in *arguments {
-                        self.load_symbol(arg);
-                    }
+                    self.load_symbols(*arguments);
                     let function_location = self.proc_symbol_map.get(func_sym).ok_or(format!(
                         "Cannot find function {:?} called from {:?}",
                         func_sym, sym
@@ -691,7 +698,7 @@ impl<'a> WasmBackend<'a> {
                     }
                 };
                 self.instructions.push(GetLocal(to_ptr.0));
-                self.load_symbol(&from_symbol);
+                self.load_symbols(&[from_symbol]);
                 self.instructions.push(store_instruction);
                 size
             }
@@ -704,9 +711,7 @@ impl<'a> WasmBackend<'a> {
         args: &'a [Symbol],
         return_layout: &Layout<'a>,
     ) -> Result<(), String> {
-        for arg in args {
-            self.load_symbol(arg);
-        }
+        self.load_symbols(args);
         let wasm_layout = WasmLayout::new(return_layout);
         self.build_instructions_lowlevel(lowlevel, wasm_layout.value_type())?;
         Ok(())
@@ -723,7 +728,6 @@ impl<'a> WasmBackend<'a> {
         // For those, we'll need to pre-process each argument before the main op,
         // so simple arrays of instructions won't work. But there are common patterns.
         let instructions: &[Instruction] = match lowlevel {
-            // Wasm type might not be enough, may need to sign-extend i8 etc. Maybe in load_symbol?
             LowLevel::NumAdd => match return_value_type {
                 ValueType::I32 => &[I32Add],
                 ValueType::I64 => &[I64Add],
