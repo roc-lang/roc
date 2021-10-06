@@ -1,6 +1,4 @@
-const builtin = @import("builtin");
 const std = @import("std");
-const testing = std.testing;
 
 // Dec Module
 const dec = @import("dec.zig");
@@ -41,6 +39,7 @@ comptime {
     exportListFn(list.listSortWith, "sort_with");
     exportListFn(list.listConcat, "concat");
     exportListFn(list.listDrop, "drop");
+    exportListFn(list.listDropAt, "drop_at");
     exportListFn(list.listSet, "set");
     exportListFn(list.listSetInPlace, "set_in_place");
     exportListFn(list.listSwap, "swap");
@@ -103,12 +102,15 @@ comptime {
     exportStrFn(str.strToUtf8C, "to_utf8");
     exportStrFn(str.fromUtf8C, "from_utf8");
     exportStrFn(str.fromUtf8RangeC, "from_utf8_range");
+    exportStrFn(str.repeat, "repeat");
 }
 
 // Utils
 const utils = @import("utils.zig");
 comptime {
     exportUtilsFn(utils.test_panic, "test_panic");
+    exportUtilsFn(utils.decrefC, "decref");
+    exportUtilsFn(utils.decrefCheckNullC, "decref_check_null");
 
     @export(utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .Weak });
 }
@@ -139,13 +141,21 @@ fn exportUtilsFn(comptime func: anytype, comptime func_name: []const u8) void {
 
 // Custom panic function, as builtin Zig version errors during LLVM verification
 pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace) noreturn {
-    std.debug.print("{s}: {?}", .{ message, stacktrace });
+    if (std.builtin.is_test) {
+        std.debug.print("{s}: {?}", .{ message, stacktrace });
+    } else {
+        _ = message;
+        _ = stacktrace;
+    }
+
     unreachable;
 }
 
 // Run all tests in imported modules
 // https://github.com/ziglang/zig/blob/master/lib/std/std.zig#L94
 test "" {
+    const testing = std.testing;
+
     testing.refAllDecls(@This());
 }
 
@@ -156,8 +166,13 @@ test "" {
 // https://github.com/ziglang/zig/blob/85755c51d529e7d9b406c6bdf69ce0a0f33f3353/lib/std/special/compiler_rt/muloti4.zig
 //
 // Thank you Zig Contributors!
-export fn __muloti4(a: i128, b: i128, overflow: *c_int) callconv(.C) i128 {
-    // @setRuntimeSafety(builtin.is_test);
+
+// Export it as weak incase it is alreadly linked in by something else.
+comptime {
+    @export(__muloti4, .{ .name = "__muloti4", .linkage = .Weak });
+}
+fn __muloti4(a: i128, b: i128, overflow: *c_int) callconv(.C) i128 {
+    // @setRuntimeSafety(std.builtin.is_test);
 
     const min = @bitCast(i128, @as(u128, 1 << (128 - 1)));
     const max = ~min;

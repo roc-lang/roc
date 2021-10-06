@@ -740,7 +740,15 @@ impl<'a> BorrowInfState<'a> {
         use Expr::*;
 
         match e {
-            Tag { arguments: xs, .. } | Struct(xs) | Array { elems: xs, .. } => {
+            Array { elems: xs, .. } => {
+                let xs = Vec::from_iter_in(xs.iter().filter_map(|e| e.to_symbol()), self.arena);
+                self.own_var(z);
+
+                // if the used symbol is an argument to the current function,
+                // the function must take it as an owned parameter
+                self.own_args_if_param(&xs);
+            }
+            Tag { arguments: xs, .. } | Struct(xs) => {
                 self.own_var(z);
 
                 // if the used symbol is an argument to the current function,
@@ -985,6 +993,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         // List.append should own its first argument
         ListAppend => arena.alloc_slice_copy(&[owned, owned]),
         ListDrop => arena.alloc_slice_copy(&[owned, irrelevant]),
+        ListDropAt => arena.alloc_slice_copy(&[owned, irrelevant]),
         ListSwap => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
 
         Eq | NotEq => arena.alloc_slice_copy(&[borrowed, borrowed]),
@@ -1005,6 +1014,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         StrFromUtf8 => arena.alloc_slice_copy(&[owned]),
         StrFromUtf8Range => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrToUtf8 => arena.alloc_slice_copy(&[owned]),
+        StrRepeat => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrFromInt | StrFromFloat => arena.alloc_slice_copy(&[irrelevant]),
         Hash => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         DictSize => arena.alloc_slice_copy(&[borrowed]),

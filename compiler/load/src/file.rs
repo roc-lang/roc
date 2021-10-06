@@ -37,13 +37,13 @@ use roc_types::subs::{Subs, VarStore, Variable};
 use roc_types::types::{Alias, Type};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::{HashMap, HashSet};
-use std::fs;
 use std::io;
 use std::iter;
 use std::path::{Path, PathBuf};
 use std::str::from_utf8_unchecked;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
+use std::{env, fs};
 
 /// Default name for the binary generated for an app, if an invalid one was specified.
 const DEFAULT_APP_OUTPUT_PATH: &str = "app";
@@ -721,6 +721,26 @@ pub struct MonomorphizedModule<'a> {
     pub timings: MutMap<ModuleId, ModuleTiming>,
 }
 
+impl<'a> MonomorphizedModule<'a> {
+    pub fn total_problems(&self) -> usize {
+        let mut total = 0;
+
+        for problems in self.can_problems.values() {
+            total += problems.len();
+        }
+
+        for problems in self.type_problems.values() {
+            total += problems.len();
+        }
+
+        for problems in self.mono_problems.values() {
+            total += problems.len();
+        }
+
+        total
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct VariablySizedLayouts<'a> {
     rigids: MutMap<Lowercase, Layout<'a>>,
@@ -1331,7 +1351,12 @@ where
     // doing .max(1) on the entire expression guards against
     // num_cpus returning 0, while also avoiding wrapping
     // unsigned subtraction overflow.
-    let num_workers = num_cpus::get().max(2) - 1;
+    let default_num_workers = num_cpus::get().max(2) - 1;
+
+    let num_workers = match env::var("ROC_NUM_WORKERS") {
+        Ok(env_str) => env_str.parse::<usize>().unwrap_or(default_num_workers),
+        Err(_) => default_num_workers,
+    };
 
     let worker_arenas = arena.alloc(bumpalo::collections::Vec::with_capacity_in(
         num_workers,
@@ -1942,7 +1967,7 @@ fn update<'a>(
                 );
             }
 
-            if module_id == state.root_id && state.goal_phase == Phase::SolveTypes {
+            if is_host_exposed && state.goal_phase == Phase::SolveTypes {
                 debug_assert!(work.is_empty());
                 debug_assert!(state.dependencies.solved_all());
 
@@ -2093,8 +2118,6 @@ fn update<'a>(
                     &mut state.procedures,
                 );
 
-                Proc::insert_refcount_operations(arena, &mut state.procedures);
-
                 // display the mono IR of the module, for debug purposes
                 if roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS {
                     let procs_string = state
@@ -2107,6 +2130,8 @@ fn update<'a>(
 
                     println!("{}", result);
                 }
+
+                Proc::insert_refcount_operations(arena, &mut state.procedures);
 
                 // This is not safe with the new non-recursive RC updates that we do for tag unions
                 //
@@ -3921,7 +3946,7 @@ fn make_specializations<'a>(
     );
 
     let external_specializations_requested = procs.externals_we_need.clone();
-    let procedures = procs.get_specialized_procs_without_rc(mono_env.arena);
+    let procedures = procs.get_specialized_procs_without_rc(&mut mono_env);
 
     let make_specializations_end = SystemTime::now();
     module_timing.make_specializations = make_specializations_end
@@ -4293,7 +4318,7 @@ where
 }
 
 fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
-    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
+    use roc_reporting::report::{Report, RocDocAllocator, Severity, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
 
     let src_lines: Vec<&str> = Vec::new();
@@ -4324,6 +4349,7 @@ fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
                 filename: "UNKNOWN.roc".into(),
                 doc,
                 title: "FILE NOT FOUND".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
         io::ErrorKind::PermissionDenied => {
@@ -4340,7 +4366,8 @@ fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
             Report {
                 filename: "UNKNOWN.roc".into(),
                 doc,
-                title: "PERMISSION DENIED".to_string(),
+                title: "FILE PERMISSION DENIED".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
         _ => {
@@ -4356,6 +4383,7 @@ fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
                 filename: "UNKNOWN.roc".into(),
                 doc,
                 title: "FILE PROBLEM".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
     };
@@ -4401,7 +4429,7 @@ fn to_parse_problem_report<'a>(
 }
 
 fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> String {
-    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
+    use roc_reporting::report::{Report, RocDocAllocator, Severity, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
     use PlatformPath::*;
 
@@ -4426,6 +4454,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
                     filename: "UNKNOWN.roc".into(),
                     doc,
                     title: "NO PLATFORM".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
             RootIsInterface => {
@@ -4441,6 +4470,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
                     filename: "UNKNOWN.roc".into(),
                     doc,
                     title: "NO PLATFORM".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
             RootIsPkgConfig => {
@@ -4456,6 +4486,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
                     filename: "UNKNOWN.roc".into(),
                     doc,
                     title: "NO PLATFORM".to_string(),
+                    severity: Severity::RuntimeError,
                 }
             }
         }

@@ -1,17 +1,23 @@
+use roc_cli::build::check_file;
 use roc_cli::{
-    build_app, docs, repl, BuildConfig, CMD_BUILD, CMD_DOCS, CMD_EDIT, CMD_REPL, CMD_RUN,
-    DIRECTORY_OR_FILES, ROC_FILE,
+    build_app, docs, repl, BuildConfig, CMD_BUILD, CMD_CHECK, CMD_DOCS, CMD_EDIT, CMD_REPL,
+    CMD_RUN, DIRECTORY_OR_FILES, FLAG_TIME, ROC_FILE,
 };
+use roc_load::file::LoadingProblem;
 use std::fs::{self, FileType};
 use std::io;
 use std::path::{Path, PathBuf};
 
-#[cfg(feature = "llvm")]
-use roc_cli::build;
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use std::ffi::{OsStr, OsString};
 
+#[cfg(feature = "llvm")]
+use roc_cli::build;
+
 #[cfg(not(feature = "llvm"))]
-fn build(_target: &Triple, _matches: &clap::ArgMatches, _config: BuildConfig) -> io::Result<i32> {
+fn build(_matches: &clap::ArgMatches, _config: BuildConfig) -> io::Result<i32> {
     panic!("Building without LLVM is not currently supported.");
 }
 
@@ -28,7 +34,7 @@ fn main() -> io::Result<()> {
                 }
 
                 None => {
-                    launch_editor(&[])?;
+                    launch_editor(None)?;
 
                     Ok(0)
                 }
@@ -49,6 +55,31 @@ If you're building the compiler from source you'll want to do `cargo run [FILE]`
 
             Ok(1)
         }
+        Some(CMD_CHECK) => {
+            let arena = bumpalo::Bump::new();
+
+            let matches = matches.subcommand_matches(CMD_CHECK).unwrap();
+            let emit_timings = matches.is_present(FLAG_TIME);
+            let filename = matches.value_of(ROC_FILE).unwrap();
+            let roc_file_path = PathBuf::from(filename);
+            let src_dir = roc_file_path.parent().unwrap().to_owned();
+
+            match check_file(&arena, src_dir, roc_file_path, emit_timings) {
+                Ok(number_of_errors) => {
+                    let exit_code = if number_of_errors != 0 { 1 } else { 0 };
+                    Ok(exit_code)
+                }
+
+                Err(LoadingProblem::FormattedReport(report)) => {
+                    print!("{}", report);
+
+                    Ok(1)
+                }
+                Err(other) => {
+                    panic!("build_file failed with error:\n{:?}", other);
+                }
+            }
+        }
         Some(CMD_REPL) => {
             repl::main()?;
 
@@ -60,16 +91,13 @@ If you're building the compiler from source you'll want to do `cargo run [FILE]`
                 .subcommand_matches(CMD_EDIT)
                 .unwrap()
                 .values_of_os(DIRECTORY_OR_FILES)
+                .map(|mut values| values.next())
             {
-                None => {
-                    launch_editor(&[])?;
+                Some(Some(os_str)) => {
+                    launch_editor(Some(Path::new(os_str)))?;
                 }
-                Some(values) => {
-                    let paths = values
-                        .map(|os_str| Path::new(os_str))
-                        .collect::<Vec<&Path>>();
-
-                    launch_editor(&paths)?;
+                _ => {
+                    launch_editor(None)?;
                 }
             }
 
@@ -156,8 +184,8 @@ fn roc_files_recursive<P: AsRef<Path>>(
 }
 
 #[cfg(feature = "editor")]
-fn launch_editor(filepaths: &[&Path]) -> io::Result<()> {
-    roc_editor::launch(filepaths)
+fn launch_editor(project_dir_path: Option<&Path>) -> io::Result<()> {
+    roc_editor::launch(project_dir_path)
 }
 
 #[cfg(not(feature = "editor"))]

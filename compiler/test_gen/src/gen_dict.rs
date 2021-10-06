@@ -1,9 +1,8 @@
 #![cfg(test)]
 
 use crate::assert_evals_to;
-use crate::assert_llvm_evals_to;
 use indoc::indoc;
-use roc_std::RocStr;
+use roc_std::{RocList, RocStr};
 
 #[test]
 fn dict_empty_len() {
@@ -158,8 +157,8 @@ fn keys() {
             Dict.keys myDict
             "#
         ),
-        &[0, 1, 2],
-        &[i64]
+        RocList::from_slice(&[0, 1, 2]),
+        RocList<i64>
     );
 }
 
@@ -179,8 +178,8 @@ fn values() {
             Dict.values myDict
             "#
         ),
-        &[100, 200, 300],
-        &[i64]
+        RocList::from_slice(&[100, 200, 300]),
+        RocList<i64>
     );
 }
 
@@ -197,8 +196,8 @@ fn from_list_with_fold() {
             Dict.values myDict
             "#
         ),
-        &[2, 3, 1],
-        &[i64]
+        RocList::from_slice(&[2, 3, 1]),
+        RocList<i64>
     );
 
     assert_evals_to!(
@@ -242,8 +241,8 @@ fn small_str_keys() {
             Dict.keys myDict
             "#
         ),
-        &[RocStr::from("c"), RocStr::from("a"), RocStr::from("b"),],
-        &[RocStr]
+        RocList::from_slice(&[RocStr::from("c"), RocStr::from("a"), RocStr::from("b"),],),
+        RocList<RocStr>
     );
 }
 
@@ -263,12 +262,12 @@ fn big_str_keys() {
             Dict.keys myDict
             "#
         ),
-        &[
+        RocList::from_slice(&[
             RocStr::from("Leverage agile frameworks to provide a robust"),
             RocStr::from("to corporate strategy foster collaborative thinking to"),
             RocStr::from("synopsis for high level overviews. Iterative approaches"),
-        ],
-        &[RocStr]
+        ]),
+        RocList<RocStr>
     );
 }
 
@@ -287,12 +286,12 @@ fn big_str_values() {
             Dict.values myDict
             "#
         ),
-        &[
+        RocList::from_slice(&[
             RocStr::from("Leverage agile frameworks to provide a robust"),
             RocStr::from("to corporate strategy foster collaborative thinking to"),
             RocStr::from("synopsis for high level overviews. Iterative approaches"),
-        ],
-        &[RocStr]
+        ]),
+        RocList<RocStr>
     );
 }
 
@@ -363,8 +362,8 @@ fn union_prefer_first() {
             Dict.values myDict
             "#
         ),
-        &[100],
-        &[i64]
+        RocList::from_slice(&[100]),
+        RocList<i64>
     );
 }
 
@@ -423,8 +422,8 @@ fn intersection_prefer_first() {
                 |> Dict.values 
             "#
         ),
-        &[4, 2],
-        &[i64]
+        RocList::from_slice(&[4, 2]),
+        RocList<i64>
     );
 }
 
@@ -483,8 +482,8 @@ fn difference_prefer_first() {
                 |> Dict.values 
             "#
         ),
-        &[5, 3, 1],
-        &[i64]
+        RocList::from_slice(&[5, 3, 1]),
+        RocList<i64>
     );
 }
 

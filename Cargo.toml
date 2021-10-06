@@ -20,6 +20,7 @@ members = [
     "compiler/load",
     "compiler/gen_llvm",
     "compiler/gen_dev",
+    "compiler/gen_wasm",
     "compiler/build",
     "compiler/arena_pool",
     "compiler/test_gen",
@@ -28,10 +29,14 @@ members = [
     "vendor/pathfinding",
     "vendor/pretty",
     "editor",
+    "ast",
     "cli",
     "cli/cli_utils",
+    "code_markup",
     "roc_std",
+    "utils",
     "docs",
+    "linker",
 ]
 exclude = [ "ci/bench-runner" ]
 # Needed to be able to run `cargo run -p roc_cli --no-default-features` -

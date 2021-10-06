@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::process::Command;
 use target_lexicon::BinaryFormat;
-use target_lexicon::{Architecture, Triple};
+use target_lexicon::{Architecture, OperatingSystem, Triple, X86_32Architecture};
 
 pub mod build;
 pub mod repl;
@@ -26,11 +26,16 @@ pub const CMD_BUILD: &str = "build";
 pub const CMD_REPL: &str = "repl";
 pub const CMD_EDIT: &str = "edit";
 pub const CMD_DOCS: &str = "docs";
+pub const CMD_CHECK: &str = "check";
 
 pub const FLAG_DEBUG: &str = "debug";
+pub const FLAG_DEV: &str = "dev";
 pub const FLAG_OPTIMIZE: &str = "optimize";
 pub const FLAG_LIB: &str = "lib";
 pub const FLAG_BACKEND: &str = "backend";
+pub const FLAG_TIME: &str = "time";
+pub const FLAG_LINK: &str = "roc-linker";
+pub const FLAG_PRECOMPILED: &str = "precompiled-host";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const BACKEND: &str = "BACKEND";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
@@ -54,12 +59,18 @@ pub fn build_app<'a>() -> App<'a> {
                     .required(false),
             )
             .arg(
+                Arg::with_name(FLAG_DEV)
+                    .long(FLAG_DEV)
+                    .help("Make compilation as fast as possible. (Runtime performance may suffer)")
+                    .required(false),
+            )
+            .arg(
                 Arg::with_name(FLAG_BACKEND)
                     .long(FLAG_BACKEND)
                     .help("Choose a different backend")
                     // .requires(BACKEND)
-                    .default_value("llvm")
-                    .possible_values(&["llvm", "wasm", "asm"])
+                .default_value(Backend::default().as_str())
+                    .possible_values(Backend::OPTIONS)
                     .required(false),
             )
             .arg(
@@ -74,6 +85,24 @@ pub fn build_app<'a>() -> App<'a> {
                     .help("Store LLVM debug information in the generated program")
                     .required(false),
             )
+            .arg(
+                Arg::with_name(FLAG_TIME)
+                    .long(FLAG_TIME)
+                    .help("Prints detailed compilation time information.")
+                    .required(false),
+            )
+            .arg(
+                Arg::with_name(FLAG_LINK)
+                    .long(FLAG_LINK)
+                    .help("Uses the roc linker instead of the system linker.")
+                    .required(false),
+            )
+            .arg(
+                Arg::with_name(FLAG_PRECOMPILED)
+                    .long(FLAG_PRECOMPILED)
+                    .help("Assumes the host has been precompiled and skips recompiling the host.")
+                    .required(false),
+            )
         )
         .subcommand(App::new(CMD_RUN)
             .about("DEPRECATED - now use `roc [FILE]` instead of `roc run [FILE]`")
@@ -82,6 +111,12 @@ pub fn build_app<'a>() -> App<'a> {
                 Arg::with_name(FLAG_OPTIMIZE)
                     .long(FLAG_OPTIMIZE)
                     .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
+                    .required(false),
+            )
+            .arg(
+                Arg::with_name(FLAG_DEV)
+                    .long(FLAG_DEV)
+                    .help("Make compilation as fast as possible. (Runtime performance may suffer)")
                     .required(false),
             )
             .arg(
@@ -104,6 +139,20 @@ pub fn build_app<'a>() -> App<'a> {
         .subcommand(App::new(CMD_REPL)
             .about("Launch the interactive Read Eval Print Loop (REPL)")
         )
+        .subcommand(App::new(CMD_CHECK)
+            .about("Build a binary from the given .roc file, but don't run it")
+            .arg(
+                Arg::with_name(FLAG_TIME)
+                    .long(FLAG_TIME)
+                    .help("Prints detailed compilation time information.")
+                    .required(false),
+            )
+            .arg(
+                Arg::with_name(ROC_FILE)
+                    .help("The .roc file of an app to run")
+                    .required(true),
+            )
+            )
         .subcommand(
             App::new(CMD_DOCS)
                 .about("Generate documentation for Roc modules")
@@ -123,6 +172,12 @@ pub fn build_app<'a>() -> App<'a> {
                 .requires(ROC_FILE)
                 .required(false),
         )
+            .arg(
+                Arg::with_name(FLAG_DEV)
+                    .long(FLAG_DEV)
+                    .help("Make compilation as fast as possible. (Runtime performance may suffer)")
+                    .required(false),
+            )
         .arg(
             Arg::with_name(FLAG_DEBUG)
                 .long(FLAG_DEBUG)
@@ -131,12 +186,30 @@ pub fn build_app<'a>() -> App<'a> {
                 .required(false),
         )
         .arg(
+            Arg::with_name(FLAG_TIME)
+                .long(FLAG_TIME)
+                .help("Prints detailed compilation time information.")
+                    .required(false),
+        )
+        .arg(
+            Arg::with_name(FLAG_LINK)
+                .long(FLAG_LINK)
+                .help("Uses the roc linker instead of the system linker.")
+                .required(false),
+        )
+        .arg(
+            Arg::with_name(FLAG_PRECOMPILED)
+                .long(FLAG_PRECOMPILED)
+                .help("Assumes the host has been precompiled and skips recompiling the host.")
+                .required(false),
+        )
+        .arg(
             Arg::with_name(FLAG_BACKEND)
                 .long(FLAG_BACKEND)
                 .help("Choose a different backend")
                 // .requires(BACKEND)
-                .default_value("llvm")
-                .possible_values(&["llvm", "wasm", "asm"])
+                .default_value(Backend::default().as_str())
+                .possible_values(Backend::OPTIONS)
                 .required(false),
         )
         .arg(
@@ -180,41 +253,48 @@ pub enum BuildConfig {
     BuildAndRun { roc_file_arg_index: usize },
 }
 
-fn wasm32_target_tripple() -> Triple {
-    let mut triple = Triple::unknown();
-
-    triple.architecture = Architecture::Wasm32;
-    triple.binary_format = BinaryFormat::Wasm;
-
-    triple
-}
-
 #[cfg(feature = "llvm")]
 pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     use build::build_file;
+    use std::str::FromStr;
     use BuildConfig::*;
 
-    let target = match matches.value_of(FLAG_BACKEND) {
-        Some("wasm") => wasm32_target_tripple(),
-        _ => Triple::host(),
+    let backend = match matches.value_of(FLAG_BACKEND) {
+        Some(name) => Backend::from_str(name).unwrap(),
+        None => Backend::default(),
     };
+
+    let target = backend.to_triple();
 
     let arena = Bump::new();
     let filename = matches.value_of(ROC_FILE).unwrap();
 
     let original_cwd = std::env::current_dir()?;
-    let opt_level = if matches.is_present(FLAG_OPTIMIZE) {
-        OptLevel::Optimize
-    } else {
-        OptLevel::Normal
+    let opt_level = match (
+        matches.is_present(FLAG_OPTIMIZE),
+        matches.is_present(FLAG_DEV),
+    ) {
+        (true, false) => OptLevel::Optimize,
+        (true, true) => panic!("development cannot be optimized!"),
+        (false, true) => OptLevel::Development,
+        (false, false) => OptLevel::Normal,
     };
     let emit_debug_info = matches.is_present(FLAG_DEBUG);
+    let emit_timings = matches.is_present(FLAG_TIME);
 
     let link_type = if matches.is_present(FLAG_LIB) {
         LinkType::Dylib
     } else {
         LinkType::Executable
     };
+    let surgically_link = matches.is_present(FLAG_LINK);
+    let precompiled = matches.is_present(FLAG_PRECOMPILED);
+    if surgically_link && !roc_linker::supported(&link_type, &target) {
+        panic!(
+            "Link type, {:?}, with target, {}, not supported by roc linker",
+            link_type, target
+        );
+    }
 
     let path = Path::new(filename);
 
@@ -245,7 +325,10 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
         path,
         opt_level,
         emit_debug_info,
+        emit_timings,
         link_type,
+        surgically_link,
+        precompiled,
     );
 
     match res_binary_path {
@@ -276,7 +359,23 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
                 }
                 BuildAndRun { roc_file_arg_index } => {
                     let mut cmd = match target.architecture {
-                        Architecture::Wasm32 => Command::new("wasmtime"),
+                        Architecture::Wasm32 => {
+                            // If possible, report the generated executable name relative to the current dir.
+                            let generated_filename = binary_path
+                                .strip_prefix(env::current_dir().unwrap())
+                                .unwrap_or(&binary_path);
+
+                            // No need to waste time freeing this memory,
+                            // since the process is about to exit anyway.
+                            std::mem::forget(arena);
+
+                            let args = std::env::args()
+                                .skip(roc_file_arg_index)
+                                .collect::<Vec<_>>();
+
+                            run_with_wasmer(generated_filename, &args);
+                            return Ok(0);
+                        }
                         _ => Command::new(&binary_path),
                     };
 
@@ -345,6 +444,117 @@ fn roc_run(cmd: &mut Command) -> io::Result<i32> {
         Some(code) => Ok(code),
         None => {
             todo!("TODO gracefully handle the `roc [FILE]` subprocess terminating with a signal.");
+        }
+    }
+}
+
+fn run_with_wasmer(wasm_path: &std::path::Path, args: &[String]) {
+    use wasmer::{Instance, Module, Store};
+
+    let store = Store::default();
+    let module = Module::from_file(&store, &wasm_path).unwrap();
+
+    // First, we create the `WasiEnv`
+    use wasmer_wasi::WasiState;
+    let mut wasi_env = WasiState::new("hello").args(args).finalize().unwrap();
+
+    // Then, we get the import object related to our WASI
+    // and attach it to the Wasm instance.
+    let import_object = wasi_env.import_object(&module).unwrap();
+
+    let instance = Instance::new(&module, &import_object).unwrap();
+
+    let start = instance.exports.get_function("_start").unwrap();
+
+    use wasmer_wasi::WasiError;
+    match start.call(&[]) {
+        Ok(_) => {}
+        Err(e) => match e.downcast::<WasiError>() {
+            Ok(WasiError::Exit(0)) => {
+                // we run the `_start` function, so exit(0) is expected
+            }
+            other => panic!("Wasmer error: {:?}", other),
+        },
+    }
+}
+
+enum Backend {
+    Host,
+    X86_32,
+    X86_64,
+    Wasm32,
+}
+
+impl Default for Backend {
+    fn default() -> Self {
+        Backend::Host
+    }
+}
+
+impl Backend {
+    const fn as_str(&self) -> &'static str {
+        match self {
+            Backend::Host => "host",
+            Backend::X86_32 => "x86_32",
+            Backend::X86_64 => "x86_64",
+            Backend::Wasm32 => "wasm32",
+        }
+    }
+
+    /// NOTE keep up to date!
+    const OPTIONS: &'static [&'static str] = &[
+        Backend::Host.as_str(),
+        Backend::X86_32.as_str(),
+        Backend::X86_64.as_str(),
+        Backend::Wasm32.as_str(),
+    ];
+
+    fn to_triple(&self) -> Triple {
+        let mut triple = Triple::unknown();
+
+        match self {
+            Backend::Host => Triple::host(),
+            Backend::X86_32 => {
+                triple.architecture = Architecture::X86_32(X86_32Architecture::I386);
+                triple.binary_format = BinaryFormat::Elf;
+
+                // TODO make this user-specified?
+                triple.operating_system = OperatingSystem::Linux;
+
+                triple
+            }
+            Backend::X86_64 => {
+                triple.architecture = Architecture::X86_64;
+                triple.binary_format = BinaryFormat::Elf;
+
+                triple
+            }
+            Backend::Wasm32 => {
+                triple.architecture = Architecture::Wasm32;
+                triple.binary_format = BinaryFormat::Wasm;
+
+                triple
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for Backend {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl std::str::FromStr for Backend {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "host" => Ok(Backend::Host),
+            "x86_32" => Ok(Backend::X86_32),
+            "x86_64" => Ok(Backend::X86_64),
+            "wasm32" => Ok(Backend::Wasm32),
+            _ => Err(()),
         }
     }
 }

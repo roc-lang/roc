@@ -59,6 +59,15 @@ fn build_hash_layout<'a, 'ctx, 'env>(
             val.into_struct_value(),
         ),
 
+        Layout::LambdaSet(lambda_set) => build_hash_layout(
+            env,
+            layout_ids,
+            seed,
+            val,
+            &lambda_set.runtime_representation(),
+            when_recursive,
+        ),
+
         Layout::Union(union_layout) => {
             build_hash_tag(env, layout_ids, layout, union_layout, seed, val)
         }
@@ -123,7 +132,6 @@ fn hash_builtin<'a, 'ctx, 'env>(
         | Builtin::Float64
         | Builtin::Float32
         | Builtin::Float128
-        | Builtin::Float16
         | Builtin::Decimal
         | Builtin::Usize => {
             let hash_bytes = store_and_use_as_u8_ptr(env, val, layout);

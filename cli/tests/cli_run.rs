@@ -18,6 +18,13 @@ mod cli_run {
     #[cfg(not(debug_assertions))]
     use roc_collections::all::MutMap;
 
+    #[cfg(target_os = "linux")]
+    const TEST_SURGICAL_LINKER: bool = true;
+
+    // Surgical linker currently only supports linux.
+    #[cfg(not(target_os = "linux"))]
+    const TEST_SURGICAL_LINKER: bool = false;
+
     #[cfg(not(target_os = "macos"))]
     const ALLOW_VALGRIND: bool = true;
 
@@ -108,7 +115,7 @@ mod cli_run {
         assert!(out.status.success());
     }
 
-    #[cfg(feature = "wasm-cli-run")]
+    #[cfg(feature = "wasm32-cli-run")]
     fn check_wasm_output_with_stdin(
         file: &Path,
         stdin: &[&str],
@@ -117,7 +124,7 @@ mod cli_run {
         expected_ending: &str,
     ) {
         let mut flags = flags.to_vec();
-        flags.push("--backend=wasm");
+        flags.push("--backend=wasm32");
 
         let compile_out = run_roc(&[&["build", file.to_str().unwrap()], flags.as_slice()].concat());
         if !compile_out.stderr.is_empty() {
@@ -126,21 +133,16 @@ mod cli_run {
 
         assert!(compile_out.status.success(), "bad status {:?}", compile_out);
 
-        let out = run_cmd(
-            "wasmtime",
-            stdin,
-            &[file.with_file_name(executable_filename).to_str().unwrap()],
-        );
+        let path = file.with_file_name(executable_filename);
+        let stdout = crate::run_with_wasmer(&path, stdin);
 
-        if !&out.stdout.ends_with(expected_ending) {
+        if !stdout.ends_with(expected_ending) {
             panic!(
                 "expected output to end with {:?} but instead got {:#?}",
-                expected_ending, out
+                expected_ending, stdout
             );
         }
-        assert!(out.status.success());
     }
-
     /// This macro does two things.
     ///
     /// First, it generates and runs a separate test for each of the given
@@ -161,6 +163,15 @@ mod cli_run {
                     let example = $example;
                     let file_name = example_file(dir_name, example.filename);
 
+                    match example.executable_filename {
+                        "hello-web" => {
+                            // this is a web webassembly example, but we don't test with JS at the moment
+                            eprintln!("WARNING: skipping testing example {} because the test is broken right now!", example.filename);
+                            return;
+                        }
+                        _ => {}
+                    }
+
                     // Check with and without optimizations
                     check_output_with_stdin(
                         &file_name,
@@ -179,6 +190,19 @@ mod cli_run {
                         example.expected_ending,
                         example.use_valgrind,
                     );
+
+                    // Also check with the surgical linker.
+
+                    if TEST_SURGICAL_LINKER {
+                        check_output_with_stdin(
+                            &file_name,
+                            example.stdin,
+                            example.executable_filename,
+                            &["--roc-linker"],
+                            example.expected_ending,
+                            example.use_valgrind,
+                        );
+                    }
                 }
             )*
 
@@ -223,9 +247,23 @@ mod cli_run {
         },
         hello_rust:"hello-rust" => Example {
             filename: "Hello.roc",
-            executable_filename: "hello-world",
+            executable_filename: "hello-rust",
             stdin: &[],
             expected_ending:"Hello, World!\n",
+            use_valgrind: true,
+        },
+        hello_web:"hello-web" => Example {
+            filename: "Hello.roc",
+            executable_filename: "hello-web",
+            stdin: &[],
+            expected_ending:"Hello, World!\n",
+            use_valgrind: true,
+        },
+        fib:"fib" => Example {
+            filename: "Fib.roc",
+            executable_filename: "fib",
+            stdin: &[],
+            expected_ending:"55\n",
             use_valgrind: true,
         },
         quicksort:"quicksort" => Example {
@@ -246,7 +284,7 @@ mod cli_run {
             filename: "Main.roc",
             executable_filename: "effect-example",
             stdin: &["hi there!"],
-            expected_ending: "hi there!\n",
+            expected_ending: "hi there!\nIt is known\n",
             use_valgrind: true,
         },
         // tea:"tea" => Example {
@@ -319,8 +357,8 @@ mod cli_run {
 
             )*
 
-            #[cfg(feature = "wasm-cli-run")]
-            mod wasm {
+            #[cfg(feature = "wasm32-cli-run")]
+            mod wasm32 {
                 use super::*;
             $(
                 #[test]
@@ -331,7 +369,7 @@ mod cli_run {
 
                     // TODO fix QuicksortApp and then remove this!
                     match benchmark.filename {
-                        "QuicksortApp.roc" | "TestBase64.roc" => {
+                        "QuicksortApp.roc"  => {
                             eprintln!("WARNING: skipping testing benchmark {} because the test is broken right now!", benchmark.filename);
                             return;
                         }
@@ -358,6 +396,47 @@ mod cli_run {
             )*
             }
 
+            #[cfg(feature = "i386-cli-run")]
+            mod i386 {
+                use super::*;
+            $(
+                #[test]
+                #[cfg_attr(not(debug_assertions), serial(benchmark))]
+                fn $test_name() {
+                    let benchmark = $benchmark;
+                    let file_name = examples_dir("benchmarks").join(benchmark.filename);
+
+                    // TODO fix QuicksortApp and then remove this!
+                    match benchmark.filename {
+                        "QuicksortApp.roc" => {
+                            eprintln!("WARNING: skipping testing benchmark {} because the test is broken right now!", benchmark.filename);
+                            return;
+                        }
+                        _ => {}
+                    }
+
+                    // Check with and without optimizations
+                    check_output_with_stdin(
+                        &file_name,
+                        benchmark.stdin,
+                        benchmark.executable_filename,
+                        &["--backend=x86_32"],
+                        benchmark.expected_ending,
+                        benchmark.use_valgrind,
+                    );
+
+                    check_output_with_stdin(
+                        &file_name,
+                        benchmark.stdin,
+                        benchmark.executable_filename,
+                        &["--backend=x86_32", "--optimize"],
+                        benchmark.expected_ending,
+                        benchmark.use_valgrind,
+                    );
+                }
+            )*
+            }
+
             #[test]
             #[cfg(not(debug_assertions))]
             fn all_benchmarks_have_tests() {
@@ -375,77 +454,77 @@ mod cli_run {
     }
 
     benchmarks! {
-        nqueens => Example {
-            filename: "NQueens.roc",
-            executable_filename: "nqueens",
-            stdin: &["6"],
-            expected_ending: "4\n",
-            use_valgrind: true,
-        },
-        cfold => Example {
-            filename: "CFold.roc",
-            executable_filename: "cfold",
-            stdin: &["3"],
-            expected_ending: "11 & 11\n",
-            use_valgrind: true,
-        },
-        deriv => Example {
-            filename: "Deriv.roc",
-            executable_filename: "deriv",
-            stdin: &["2"],
-            expected_ending: "1 count: 6\n2 count: 22\n",
-            use_valgrind: true,
-        },
-        rbtree_ck => Example {
-            filename: "RBTreeCk.roc",
-            executable_filename: "rbtree-ck",
-            stdin: &["100"],
-            expected_ending: "10\n",
-            use_valgrind: true,
-        },
-        rbtree_insert => Example {
-            filename: "RBTreeInsert.roc",
-            executable_filename: "rbtree-insert",
-            stdin: &[],
-            expected_ending: "Node Black 0 {} Empty Empty\n",
-            use_valgrind: true,
-        },
-        rbtree_del => Example {
-            filename: "RBTreeDel.roc",
-            executable_filename: "rbtree-del",
-            stdin: &["420"],
-            expected_ending: "30\n",
-            use_valgrind: true,
-        },
-        astar => Example {
-            filename: "TestAStar.roc",
-            executable_filename: "test-astar",
-            stdin: &[],
-            expected_ending: "True\n",
-            use_valgrind: false,
-        },
-        base64 => Example {
-            filename: "TestBase64.roc",
-            executable_filename: "test-base64",
-            stdin: &[],
-            expected_ending: "encoded: SGVsbG8gV29ybGQ=\ndecoded: Hello World\n",
-            use_valgrind: true,
-        },
-        closure => Example {
-            filename: "Closure.roc",
-            executable_filename: "closure",
-            stdin: &[],
-            expected_ending: "",
-            use_valgrind: true,
-        },
-        quicksort_app => Example {
-            filename: "QuicksortApp.roc",
-            executable_filename: "quicksortapp",
-            stdin: &[],
-            expected_ending: "todo put the correct quicksort answer here",
-            use_valgrind: true,
-        },
-    }
+            nqueens => Example {
+                filename: "NQueens.roc",
+                executable_filename: "nqueens",
+                stdin: &["6"],
+                expected_ending: "4\n",
+                use_valgrind: true,
+            },
+            cfold => Example {
+                filename: "CFold.roc",
+                executable_filename: "cfold",
+                stdin: &["3"],
+                expected_ending: "11 & 11\n",
+                use_valgrind: true,
+            },
+            deriv => Example {
+                filename: "Deriv.roc",
+                executable_filename: "deriv",
+                stdin: &["2"],
+                expected_ending: "1 count: 6\n2 count: 22\n",
+                use_valgrind: true,
+            },
+            rbtree_ck => Example {
+                filename: "RBTreeCk.roc",
+                executable_filename: "rbtree-ck",
+                stdin: &["100"],
+                expected_ending: "10\n",
+                use_valgrind: true,
+            },
+            rbtree_insert => Example {
+                filename: "RBTreeInsert.roc",
+                executable_filename: "rbtree-insert",
+                stdin: &[],
+                expected_ending: "Node Black 0 {} Empty Empty\n",
+                use_valgrind: true,
+            },
+    //        rbtree_del => Example {
+    //            filename: "RBTreeDel.roc",
+    //            executable_filename: "rbtree-del",
+    //            stdin: &["420"],
+    //            expected_ending: "30\n",
+    //            use_valgrind: true,
+    //        },
+            astar => Example {
+                filename: "TestAStar.roc",
+                executable_filename: "test-astar",
+                stdin: &[],
+                expected_ending: "True\n",
+                use_valgrind: false,
+            },
+            base64 => Example {
+                filename: "TestBase64.roc",
+                executable_filename: "test-base64",
+                stdin: &[],
+                expected_ending: "encoded: SGVsbG8gV29ybGQ=\ndecoded: Hello World\n",
+                use_valgrind: true,
+            },
+            closure => Example {
+                filename: "Closure.roc",
+                executable_filename: "closure",
+                stdin: &[],
+                expected_ending: "",
+                use_valgrind: true,
+            },
+            quicksort_app => Example {
+                filename: "QuicksortApp.roc",
+                executable_filename: "quicksortapp",
+                stdin: &[],
+                expected_ending: "todo put the correct quicksort answer here",
+                use_valgrind: true,
+            },
+        }
 
     #[cfg(not(debug_assertions))]
     fn check_for_tests(examples_dir: &str, all_examples: &mut MutMap<&str, Example<'_>>) {
@@ -502,10 +581,10 @@ mod cli_run {
                 file.read_exact(buf).unwrap();
 
                 // Only app modules in this directory are considered benchmarks.
-                if "app".as_bytes() == buf {
+                if "app".as_bytes() == buf && !benchmark_file_name.contains("RBTreeDel") {
                     all_benchmarks.remove(benchmark_file_name.as_str()).unwrap_or_else(|| {
-                    panic!("The benchmark {}/{} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!", benchmarks_dir, benchmark_file_name);
-                });
+                        panic!("The benchmark {}/{} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!", benchmarks_dir, benchmark_file_name);
+                    });
                 }
             }
         }
@@ -563,5 +642,78 @@ mod cli_run {
             "I am Dep2.value2\n",
             true,
         );
+    }
+}
+
+#[allow(dead_code)]
+fn run_with_wasmer(wasm_path: &std::path::Path, stdin: &[&str]) -> String {
+    use std::io::Write;
+    use wasmer::{Instance, Module, Store};
+
+    //    std::process::Command::new("cp")
+    //        .args(&[
+    //            wasm_path.to_str().unwrap(),
+    //            "/home/folkertdev/roc/wasm/nqueens.wasm",
+    //        ])
+    //        .output()
+    //        .unwrap();
+
+    let store = Store::default();
+    let module = Module::from_file(&store, &wasm_path).unwrap();
+
+    let mut fake_stdin = wasmer_wasi::Pipe::new();
+    let fake_stdout = wasmer_wasi::Pipe::new();
+    let fake_stderr = wasmer_wasi::Pipe::new();
+
+    for line in stdin {
+        write!(fake_stdin, "{}", line).unwrap();
+    }
+
+    // First, we create the `WasiEnv`
+    use wasmer_wasi::WasiState;
+    let mut wasi_env = WasiState::new("hello")
+        .stdin(Box::new(fake_stdin))
+        .stdout(Box::new(fake_stdout))
+        .stderr(Box::new(fake_stderr))
+        .finalize()
+        .unwrap();
+
+    // Then, we get the import object related to our WASI
+    // and attach it to the Wasm instance.
+    let import_object = wasi_env
+        .import_object(&module)
+        .unwrap_or_else(|_| wasmer::imports!());
+
+    let instance = Instance::new(&module, &import_object).unwrap();
+
+    let start = instance.exports.get_function("_start").unwrap();
+
+    match start.call(&[]) {
+        Ok(_) => read_wasi_stdout(wasi_env),
+        Err(e) => {
+            use wasmer_wasi::WasiError;
+            match e.downcast::<WasiError>() {
+                Ok(WasiError::Exit(0)) => {
+                    // we run the `_start` function, so exit(0) is expected
+                    read_wasi_stdout(wasi_env)
+                }
+                other => format!("Something went wrong running a wasm test: {:?}", other),
+            }
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn read_wasi_stdout(wasi_env: wasmer_wasi::WasiEnv) -> String {
+    let mut state = wasi_env.state.lock().unwrap();
+
+    match state.fs.stdout_mut() {
+        Ok(Some(stdout)) => {
+            let mut buf = String::new();
+            stdout.read_to_string(&mut buf).unwrap();
+
+            return buf;
+        }
+        _ => todo!(),
     }
 }

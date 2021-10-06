@@ -1,8 +1,8 @@
 #![cfg(test)]
 
 use crate::assert_evals_to;
-use crate::assert_llvm_evals_to;
 use crate::helpers::with_larger_debug_stack;
+//use crate::assert_wasm_evals_to as assert_evals_to;
 use core::ffi::c_void;
 use indoc::indoc;
 use roc_std::{RocList, RocStr};
@@ -196,6 +196,43 @@ fn list_drop() {
     );
     assert_evals_to!("List.drop [] 1", RocList::from_slice(&[]), RocList<i64>);
     assert_evals_to!("List.drop [1,2] 5", RocList::from_slice(&[]), RocList<i64>);
+}
+
+#[test]
+fn list_drop_at() {
+    assert_evals_to!(
+        "List.dropAt [1, 2, 3] 0",
+        RocList::from_slice(&[2, 3]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.dropAt [0, 0, 0] 3",
+        RocList::from_slice(&[0, 0, 0]),
+        RocList<i64>
+    );
+    assert_evals_to!("List.dropAt [] 1", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!("List.dropAt [0] 0", RocList::from_slice(&[]), RocList<i64>);
+}
+
+#[test]
+fn list_drop_at_mutable() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+               list : List I64
+               list = [ if True then 4 else 4, 5, 6 ]
+
+               { newList: List.dropAt list 0, original: list }
+               "#
+        ),
+        (
+            // new_list
+            RocList::from_slice(&[5, 6]),
+            // original
+            RocList::from_slice(&[4, 5, 6]),
+        ),
+        (RocList<i64>, RocList<i64>,)
+    );
 }
 
 #[test]
@@ -865,9 +902,12 @@ fn list_repeat() {
         RocList<i64>
     );
 
-    let empty_lists: &'static [&'static [i64]] = &[&[], &[]];
+    assert_evals_to!(
+        "List.repeat 2 []",
+        RocList::from_slice(&[RocList::default(), RocList::default()]),
+        RocList<RocList<i64>>
+    );
 
-    assert_evals_to!("List.repeat 2 []", empty_lists, &'static [&'static [i64]]);
     assert_evals_to!(
         indoc!(
             r#"
@@ -878,8 +918,8 @@ fn list_repeat() {
                 List.repeat 2 noStrs
             "#
         ),
-        empty_lists,
-        &'static [&'static [i64]]
+        RocList::from_slice(&[RocList::default(), RocList::default()]),
+        RocList<RocList<i64>>
     );
 
     assert_evals_to!(
@@ -1419,10 +1459,8 @@ fn gen_wrap_first() {
                 wrapFirst [ 1, 2 ]
             "#
         ),
-        //            RocList::from_slice(&[1]),
-        //            RocList<i64>
-        &[1],
-        &'static [i64]
+        RocList::from_slice(&[1]),
+        RocList<i64>
     );
 }
 
@@ -1897,34 +1935,54 @@ fn list_product() {
 #[test]
 fn list_keep_oks() {
     assert_evals_to!("List.keepOks [] (\\x -> x)", 0, i64);
-    assert_evals_to!("List.keepOks [1,2] (\\x -> Ok x)", &[1, 2], &[i64]);
-    assert_evals_to!("List.keepOks [1,2] (\\x -> x % 2)", &[1, 0], &[i64]);
-    assert_evals_to!("List.keepOks [Ok 1, Err 2] (\\x -> x)", &[1], &[i64]);
+    assert_evals_to!(
+        "List.keepOks [1,2] (\\x -> Ok x)",
+        RocList::from_slice(&[1, 2]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.keepOks [1,2] (\\x -> x % 2)",
+        RocList::from_slice(&[1, 0]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.keepOks [Ok 1, Err 2] (\\x -> x)",
+        RocList::from_slice(&[1]),
+        RocList<i64>
+    );
 }
 
 #[test]
 fn list_keep_errs() {
     assert_evals_to!("List.keepErrs [] (\\x -> x)", 0, i64);
-    assert_evals_to!("List.keepErrs [1,2] (\\x -> Err x)", &[1, 2], &[i64]);
+    assert_evals_to!(
+        "List.keepErrs [1,2] (\\x -> Err x)",
+        RocList::from_slice(&[1, 2]),
+        RocList<i64>
+    );
     assert_evals_to!(
         indoc!(
             r#"
             List.keepErrs [0,1,2] (\x -> x % 0 |> Result.mapErr (\_ -> 32))
             "#
         ),
-        &[32, 32, 32],
-        &[i64]
+        RocList::from_slice(&[32, 32, 32]),
+        RocList<i64>
     );
 
-    assert_evals_to!("List.keepErrs [Ok 1, Err 2] (\\x -> x)", &[2], &[i64]);
+    assert_evals_to!(
+        "List.keepErrs [Ok 1, Err 2] (\\x -> x)",
+        RocList::from_slice(&[2]),
+        RocList<i64>
+    );
 }
 
 #[test]
 fn list_map_with_index() {
     assert_evals_to!(
-        "List.mapWithIndex [0,0,0] (\\index, x -> index + x)",
-        &[0, 1, 2],
-        &[i64]
+        "List.mapWithIndex [0,0,0] (\\index, x -> Num.intCast index + x)",
+        RocList::from_slice(&[0, 1, 2]),
+        RocList<i64>
     );
 }
 
@@ -1935,11 +1993,15 @@ fn cleanup_because_exception() {
         indoc!(
             r#"
             x = [ 1,2 ]
-            5 + Num.maxInt + 3 + List.len x
+
+            five : I64
+            five = 5
+
+            five + Num.maxInt + 3 + (Num.intCast (List.len x))
                "#
         ),
-        RocList::from_slice(&[false; 1]),
-        RocList<bool>
+        9,
+        i64
     );
 }
 
@@ -1989,6 +2051,48 @@ fn lists_with_incompatible_type_param_in_if() {
             "#
         ),
         RocStr::default(),
+        RocStr
+    );
+}
+
+#[test]
+fn map_with_index_multi_record() {
+    // see https://github.com/rtfeldman/roc/issues/1700
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.mapWithIndex [ { x: {}, y: {} } ] \_, _ -> {}
+            "#
+        ),
+        RocList::from_slice(&[((), ())]),
+        RocList<((), ())>
+    );
+}
+
+#[test]
+fn empty_list_of_function_type() {
+    // see https://github.com/rtfeldman/roc/issues/1732
+    assert_evals_to!(
+        indoc!(
+            r#"
+            myList : List (Str -> Str)
+            myList = []
+
+            myClosure : Str -> Str
+            myClosure = \_ -> "bar"
+
+            choose =
+                if False then
+                    myList
+                else
+                    [ myClosure ]
+
+            when List.get choose 0 is
+                Ok f -> f "foo"
+                Err _ -> "bad!"
+            "#
+        ),
+        RocStr::from_slice(b"bar"),
         RocStr
     );
 }

@@ -3,23 +3,43 @@ use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_parse::parser::{Col, Row};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{BadPattern, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
-use roc_region::all::Region;
+use roc_region::all::{Located, Region};
 use std::path::PathBuf;
 
-use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder};
+use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder, Severity};
 use ven_pretty::DocAllocator;
+
+const SYNTAX_PROBLEM: &str = "SYNTAX PROBLEM";
+const NAMING_PROBLEM: &str = "NAMING PROBLEM";
+const UNRECOGNIZED_NAME: &str = "UNRECOGNIZED NAME";
+const UNUSED_DEF: &str = "UNUSED DEFINITION";
+const UNUSED_IMPORT: &str = "UNUSED IMPORT";
+const UNUSED_ALIAS_PARAM: &str = "UNUSED TYPE ALIAS PARAMETER";
+const UNUSED_ARG: &str = "UNUSED ARGUMENT";
+const MISSING_DEFINITION: &str = "MISSING_DEFINITION";
+const DUPLICATE_FIELD_NAME: &str = "DUPLICATE FIELD NAME";
+const DUPLICATE_TAG_NAME: &str = "DUPLICATE TAG NAME";
+const INVALID_UNICODE: &str = "INVALID UNICODE";
+const CIRCULAR_DEF: &str = "CIRCULAR DEFINITION";
+const DUPLICATE_NAME: &str = "DUPLICATE NAME";
+const VALUE_NOT_EXPOSED: &str = "NOT EXPOSED";
+const MODULE_NOT_IMPORTED: &str = "MODULE NOT IMPORTED";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
     filename: PathBuf,
     problem: Problem,
 ) -> Report<'b> {
-    let doc = match problem {
+    let doc;
+    let title;
+    let severity;
+
+    match problem {
         Problem::UnusedDef(symbol, region) => {
             let line =
                 r#" then remove it so future readers of your code don't wonder why it is there."#;
 
-            alloc.stack(vec![
+            doc = alloc.stack(vec![
                 alloc
                     .symbol_unqualified(symbol)
                     .append(alloc.reflow(" is not used anywhere in your code.")),
@@ -28,36 +48,49 @@ pub fn can_problem<'b>(
                     .reflow("If you didn't intend on using ")
                     .append(alloc.symbol_unqualified(symbol))
                     .append(alloc.reflow(line)),
-            ])
+            ]);
+
+            title = UNUSED_DEF.to_string();
+            severity = Severity::Warning;
         }
-        Problem::UnusedImport(module_id, region) => alloc.stack(vec![
-            alloc.concat(vec![
-                alloc.reflow("Nothing from "),
-                alloc.module(module_id),
-                alloc.reflow(" is used in this module."),
-            ]),
-            alloc.region(region),
-            alloc.concat(vec![
-                alloc.reflow("Since "),
-                alloc.module(module_id),
-                alloc.reflow(" isn't used, you don't need to import it."),
-            ]),
-        ]),
-        Problem::ExposedButNotDefined(symbol) => alloc.stack(vec![
-            alloc.symbol_unqualified(symbol).append(
-                alloc.reflow(" is listed as exposed, but it isn't defined in this module."),
-            ),
-            alloc
-                .reflow("You can fix this by adding a definition for ")
-                .append(alloc.symbol_unqualified(symbol))
-                .append(alloc.reflow(", or by removing it from "))
-                .append(alloc.keyword("exposes"))
-                .append(alloc.reflow(".")),
-        ]),
+        Problem::UnusedImport(module_id, region) => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("Nothing from "),
+                    alloc.module(module_id),
+                    alloc.reflow(" is used in this module."),
+                ]),
+                alloc.region(region),
+                alloc.concat(vec![
+                    alloc.reflow("Since "),
+                    alloc.module(module_id),
+                    alloc.reflow(" isn't used, you don't need to import it."),
+                ]),
+            ]);
+
+            title = UNUSED_IMPORT.to_string();
+            severity = Severity::Warning;
+        }
+        Problem::ExposedButNotDefined(symbol) => {
+            doc = alloc.stack(vec![
+                alloc.symbol_unqualified(symbol).append(
+                    alloc.reflow(" is listed as exposed, but it isn't defined in this module."),
+                ),
+                alloc
+                    .reflow("You can fix this by adding a definition for ")
+                    .append(alloc.symbol_unqualified(symbol))
+                    .append(alloc.reflow(", or by removing it from "))
+                    .append(alloc.keyword("exposes"))
+                    .append(alloc.reflow(".")),
+            ]);
+
+            title = MISSING_DEFINITION.to_string();
+            severity = Severity::RuntimeError;
+        }
         Problem::UnusedArgument(closure_symbol, argument_symbol, region) => {
             let line = "\". Adding an underscore at the start of a variable name is a way of saying that the variable is not used.";
 
-            alloc.stack(vec![
+            doc = alloc.stack(vec![
                 alloc.concat(vec![
                     alloc.symbol_unqualified(closure_symbol),
                     alloc.reflow(" doesn't use "),
@@ -76,10 +109,13 @@ pub fn can_problem<'b>(
                     alloc.symbol_unqualified(argument_symbol),
                     alloc.reflow(line),
                 ]),
-            ])
+            ]);
+
+            title = UNUSED_ARG.to_string();
+            severity = Severity::Warning;
         }
-        Problem::PrecedenceProblem(BothNonAssociative(region, left_bin_op, right_bin_op)) => alloc
-            .stack(vec![
+        Problem::PrecedenceProblem(BothNonAssociative(region, left_bin_op, right_bin_op)) => {
+            doc = alloc.stack(vec![
                 if left_bin_op.value == right_bin_op.value {
                     alloc.concat(vec![
                         alloc.reflow("Using more than one "),
@@ -102,11 +138,20 @@ pub fn can_problem<'b>(
                     ])
                 },
                 alloc.region(region),
-            ]),
-        Problem::UnsupportedPattern(BadPattern::UnderscoreInDef, region) => alloc.stack(vec![
-            alloc.reflow("Underscore patterns are not allowed in definitions"),
-            alloc.region(region),
-        ]),
+            ]);
+
+            title = SYNTAX_PROBLEM.to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::UnsupportedPattern(BadPattern::UnderscoreInDef, region) => {
+            doc = alloc.stack(vec![
+                alloc.reflow("Underscore patterns are not allowed in definitions"),
+                alloc.region(region),
+            ]);
+
+            title = SYNTAX_PROBLEM.to_string();
+            severity = Severity::RuntimeError;
+        }
         Problem::UnsupportedPattern(BadPattern::Unsupported(pattern_type), region) => {
             use roc_parse::pattern::PatternType::*;
 
@@ -127,84 +172,98 @@ pub fn can_problem<'b>(
                 alloc.reflow(" instead."),
             ];
 
-            alloc.stack(vec![
+            doc = alloc.stack(vec![
                 alloc
                     .reflow("This pattern is not allowed in ")
                     .append(alloc.reflow(this_thing)),
                 alloc.region(region),
                 alloc.concat(suggestion),
-            ])
+            ]);
+
+            title = SYNTAX_PROBLEM.to_string();
+            severity = Severity::RuntimeError;
         }
         Problem::ShadowingInAnnotation {
             original_region,
             shadow,
-        } => pretty_runtime_error(
-            alloc,
-            RuntimeError::Shadowing {
-                original_region,
-                shadow,
-            },
-        ),
-        Problem::CyclicAlias(symbol, region, others) => {
-            let (doc, title) = crate::error::r#type::cyclic_alias(alloc, symbol, region, others);
+        } => {
+            doc = report_shadowing(alloc, original_region, shadow);
 
-            return Report {
-                title,
-                filename,
-                doc,
-            };
+            title = DUPLICATE_NAME.to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::CyclicAlias(symbol, region, others) => {
+            let answer = crate::error::r#type::cyclic_alias(alloc, symbol, region, others);
+
+            doc = answer.0;
+            title = answer.1;
+            severity = Severity::RuntimeError;
         }
         Problem::PhantomTypeArgument {
             alias,
             variable_region,
             variable_name,
-        } => alloc.stack(vec![
-            alloc.concat(vec![
-                alloc.reflow("The "),
-                alloc.type_variable(variable_name),
-                alloc.reflow(" type variable is not used in the "),
-                alloc.symbol_unqualified(alias),
-                alloc.reflow(" alias definition:"),
-            ]),
-            alloc.region(variable_region),
-            alloc.reflow("Roc does not allow unused type parameters!"),
-            // TODO add link to this guide section
-            alloc.tip().append(alloc.reflow(
-                "If you want an unused type parameter (a so-called \"phantom type\"), \
-                read the guide section on phantom data.",
-            )),
-        ]),
-        Problem::BadRecursion(entries) => to_circular_def_doc(alloc, &entries),
+        } => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("The "),
+                    alloc.type_variable(variable_name),
+                    alloc.reflow(" type parameter is not used in the "),
+                    alloc.symbol_unqualified(alias),
+                    alloc.reflow(" alias definition:"),
+                ]),
+                alloc.region(variable_region),
+                alloc.reflow("Roc does not allow unused type alias parameters!"),
+                // TODO add link to this guide section
+                alloc.tip().append(alloc.reflow(
+                    "If you want an unused type parameter (a so-called \"phantom type\"), \
+                read the guide section on phantom values.",
+                )),
+            ]);
+
+            title = UNUSED_ALIAS_PARAM.to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::BadRecursion(entries) => {
+            doc = to_circular_def_doc(alloc, &entries);
+            title = CIRCULAR_DEF.to_string();
+            severity = Severity::RuntimeError;
+        }
         Problem::DuplicateRecordFieldValue {
             field_name,
             field_region,
             record_region,
             replaced_region,
-        } => alloc.stack(vec![
-            alloc.concat(vec![
-                alloc.reflow("This record defines the "),
-                alloc.record_field(field_name.clone()),
-                alloc.reflow(" field twice!"),
-            ]),
-            alloc.region_all_the_things(
-                record_region,
-                replaced_region,
-                field_region,
-                Annotation::Error,
-            ),
-            alloc.reflow(r"In the rest of the program, I will only use the latter definition:"),
-            alloc.region_all_the_things(
-                record_region,
-                field_region,
-                field_region,
-                Annotation::TypoSuggestion,
-            ),
-            alloc.concat(vec![
-                alloc.reflow("For clarity, remove the previous "),
-                alloc.record_field(field_name),
-                alloc.reflow(" definitions from this record."),
-            ]),
-        ]),
+        } => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("This record defines the "),
+                    alloc.record_field(field_name.clone()),
+                    alloc.reflow(" field twice!"),
+                ]),
+                alloc.region_all_the_things(
+                    record_region,
+                    replaced_region,
+                    field_region,
+                    Annotation::Error,
+                ),
+                alloc.reflow(r"In the rest of the program, I will only use the latter definition:"),
+                alloc.region_all_the_things(
+                    record_region,
+                    field_region,
+                    field_region,
+                    Annotation::TypoSuggestion,
+                ),
+                alloc.concat(vec![
+                    alloc.reflow("For clarity, remove the previous "),
+                    alloc.record_field(field_name),
+                    alloc.reflow(" definitions from this record."),
+                ]),
+            ]);
+
+            title = DUPLICATE_FIELD_NAME.to_string();
+            severity = Severity::Warning;
+        }
         Problem::InvalidOptionalValue {
             field_name,
             field_region,
@@ -223,120 +282,164 @@ pub fn can_problem<'b>(
             field_region,
             record_region,
             replaced_region,
-        } => alloc.stack(vec![
-            alloc.concat(vec![
-                alloc.reflow("This record type defines the "),
-                alloc.record_field(field_name.clone()),
-                alloc.reflow(" field twice!"),
-            ]),
-            alloc.region_all_the_things(
-                record_region,
-                replaced_region,
-                field_region,
-                Annotation::Error,
-            ),
-            alloc.reflow("In the rest of the program, I will only use the latter definition:"),
-            alloc.region_all_the_things(
-                record_region,
-                field_region,
-                field_region,
-                Annotation::TypoSuggestion,
-            ),
-            alloc.concat(vec![
-                alloc.reflow("For clarity, remove the previous "),
-                alloc.record_field(field_name),
-                alloc.reflow(" definitions from this record type."),
-            ]),
-        ]),
+        } => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("This record type defines the "),
+                    alloc.record_field(field_name.clone()),
+                    alloc.reflow(" field twice!"),
+                ]),
+                alloc.region_all_the_things(
+                    record_region,
+                    replaced_region,
+                    field_region,
+                    Annotation::Error,
+                ),
+                alloc.reflow("In the rest of the program, I will only use the latter definition:"),
+                alloc.region_all_the_things(
+                    record_region,
+                    field_region,
+                    field_region,
+                    Annotation::TypoSuggestion,
+                ),
+                alloc.concat(vec![
+                    alloc.reflow("For clarity, remove the previous "),
+                    alloc.record_field(field_name),
+                    alloc.reflow(" definitions from this record type."),
+                ]),
+            ]);
+
+            title = DUPLICATE_FIELD_NAME.to_string();
+            severity = Severity::Warning;
+        }
         Problem::DuplicateTag {
             tag_name,
             tag_union_region,
             tag_region,
             replaced_region,
-        } => alloc.stack(vec![
-            alloc.concat(vec![
-                alloc.reflow("This tag union type defines the "),
-                alloc.tag_name(tag_name.clone()),
-                alloc.reflow(" tag twice!"),
-            ]),
-            alloc.region_all_the_things(
-                tag_union_region,
-                replaced_region,
-                tag_region,
-                Annotation::Error,
-            ),
-            alloc.reflow("In the rest of the program, I will only use the latter definition:"),
-            alloc.region_all_the_things(
-                tag_union_region,
-                tag_region,
-                tag_region,
-                Annotation::TypoSuggestion,
-            ),
-            alloc.concat(vec![
-                alloc.reflow("For clarity, remove the previous "),
-                alloc.tag_name(tag_name),
-                alloc.reflow(" definitions from this tag union type."),
-            ]),
-        ]),
+        } => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("This tag union type defines the "),
+                    alloc.tag_name(tag_name.clone()),
+                    alloc.reflow(" tag twice!"),
+                ]),
+                alloc.region_all_the_things(
+                    tag_union_region,
+                    replaced_region,
+                    tag_region,
+                    Annotation::Error,
+                ),
+                alloc.reflow("In the rest of the program, I will only use the latter definition:"),
+                alloc.region_all_the_things(
+                    tag_union_region,
+                    tag_region,
+                    tag_region,
+                    Annotation::TypoSuggestion,
+                ),
+                alloc.concat(vec![
+                    alloc.reflow("For clarity, remove the previous "),
+                    alloc.tag_name(tag_name),
+                    alloc.reflow(" definitions from this tag union type."),
+                ]),
+            ]);
+
+            title = DUPLICATE_TAG_NAME.to_string();
+            severity = Severity::Warning;
+        }
         Problem::SignatureDefMismatch {
             ref annotation_pattern,
             ref def_pattern,
-        } => alloc.stack(vec![
-            alloc.reflow("This annotation does not match the definition immediately following it:"),
-            alloc.region(Region::span_across(annotation_pattern, def_pattern)),
-            alloc.reflow("Is it a typo? If not, put either a newline or comment between them."),
-        ]),
-        Problem::InvalidAliasRigid { alias_name, region } => alloc.stack(vec![
-            alloc.concat(vec![
-                alloc.reflow("This pattern in the definition of "),
-                alloc.symbol_unqualified(alias_name),
-                alloc.reflow(" is not what I expect:"),
-            ]),
-            alloc.region(region),
-            alloc.concat(vec![
-                alloc.reflow("Only type variables like "),
-                alloc.type_variable("a".into()),
-                alloc.reflow(" or "),
-                alloc.type_variable("value".into()),
-                alloc.reflow(" can occur in this position."),
-            ]),
-        ]),
-        Problem::InvalidHexadecimal(region) => alloc.stack(vec![
-            alloc.reflow("This unicode code point is invalid:"),
-            alloc.region(region),
-            alloc.concat(vec![
-                alloc.reflow(r"I was expecting a hexadecimal number, like "),
-                alloc.parser_suggestion("\\u(1100)"),
-                alloc.reflow(" or "),
-                alloc.parser_suggestion("\\u(00FF)"),
-                alloc.text("."),
-            ]),
-            alloc.reflow(r"Learn more about working with unicode in roc at TODO"),
-        ]),
-        Problem::InvalidUnicodeCodePt(region) => alloc.stack(vec![
-            alloc.reflow("This unicode code point is invalid:"),
-            alloc.region(region),
-            alloc.reflow("Learn more about working with unicode in roc at TODO"),
-        ]),
-        Problem::InvalidInterpolation(region) => alloc.stack(vec![
-            alloc.reflow("This string interpolation is invalid:"),
-            alloc.region(region),
-            alloc.concat(vec![
-                alloc.reflow(r"I was expecting an identifier, like "),
-                alloc.parser_suggestion("\\u(message)"),
-                alloc.reflow(" or "),
-                alloc.parser_suggestion("\\u(LoremIpsum.text)"),
-                alloc.text("."),
-            ]),
-            alloc.reflow(r"Learn more about string interpolation at TODO"),
-        ]),
-        Problem::RuntimeError(runtime_error) => pretty_runtime_error(alloc, runtime_error),
+        } => {
+            doc = alloc.stack(vec![
+                alloc.reflow(
+                    "This annotation does not match the definition immediately following it:",
+                ),
+                alloc.region(Region::span_across(annotation_pattern, def_pattern)),
+                alloc.reflow("Is it a typo? If not, put either a newline or comment between them."),
+            ]);
+
+            title = NAMING_PROBLEM.to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::InvalidAliasRigid { alias_name, region } => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("This pattern in the definition of "),
+                    alloc.symbol_unqualified(alias_name),
+                    alloc.reflow(" is not what I expect:"),
+                ]),
+                alloc.region(region),
+                alloc.concat(vec![
+                    alloc.reflow("Only type variables like "),
+                    alloc.type_variable("a".into()),
+                    alloc.reflow(" or "),
+                    alloc.type_variable("value".into()),
+                    alloc.reflow(" can occur in this position."),
+                ]),
+            ]);
+
+            title = SYNTAX_PROBLEM.to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::InvalidHexadecimal(region) => {
+            doc = alloc.stack(vec![
+                alloc.reflow("This unicode code point is invalid:"),
+                alloc.region(region),
+                alloc.concat(vec![
+                    alloc.reflow(r"I was expecting a hexadecimal number, like "),
+                    alloc.parser_suggestion("\\u(1100)"),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion("\\u(00FF)"),
+                    alloc.text("."),
+                ]),
+                alloc.reflow(r"Learn more about working with unicode in roc at TODO"),
+            ]);
+
+            title = INVALID_UNICODE.to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::InvalidUnicodeCodePt(region) => {
+            doc = alloc.stack(vec![
+                alloc.reflow("This unicode code point is invalid:"),
+                alloc.region(region),
+                alloc.reflow("Learn more about working with unicode in roc at TODO"),
+            ]);
+
+            title = INVALID_UNICODE.to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::InvalidInterpolation(region) => {
+            doc = alloc.stack(vec![
+                alloc.reflow("This string interpolation is invalid:"),
+                alloc.region(region),
+                alloc.concat(vec![
+                    alloc.reflow(r"I was expecting an identifier, like "),
+                    alloc.parser_suggestion("\\u(message)"),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion("\\u(LoremIpsum.text)"),
+                    alloc.text("."),
+                ]),
+                alloc.reflow(r"Learn more about string interpolation at TODO"),
+            ]);
+
+            title = SYNTAX_PROBLEM.to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::RuntimeError(runtime_error) => {
+            let answer = pretty_runtime_error(alloc, runtime_error);
+
+            doc = answer.0;
+            title = answer.1.to_string();
+            severity = Severity::RuntimeError;
+        }
     };
 
     Report {
-        title: "SYNTAX PROBLEM".to_string(),
+        title,
         filename,
         doc,
+        severity,
     }
 }
 
@@ -353,6 +456,7 @@ fn to_invalid_optional_value_report<'b>(
         title: "BAD OPTIONAL VALUE".to_string(),
         filename,
         doc,
+        severity: Severity::RuntimeError,
     }
 }
 
@@ -666,44 +770,60 @@ where
     chomped
 }
 
+fn report_shadowing<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    original_region: Region,
+    shadow: Located<Ident>,
+) -> RocDocBuilder<'b> {
+    let line = r#"Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#;
+
+    alloc.stack(vec![
+        alloc
+            .text("The ")
+            .append(alloc.ident(shadow.value))
+            .append(alloc.reflow(" name is first defined here:")),
+        alloc.region(original_region),
+        alloc.reflow("But then it's defined a second time here:"),
+        alloc.region(shadow.region),
+        alloc.reflow(line),
+    ])
+}
+
 fn pretty_runtime_error<'b>(
     alloc: &'b RocDocAllocator<'b>,
     runtime_error: RuntimeError,
-) -> RocDocBuilder<'b> {
+) -> (RocDocBuilder<'b>, &'static str) {
+    let doc;
+    let title;
+
     match runtime_error {
         RuntimeError::VoidValue => {
             // is used to communicate to the compiler that
             // a branch is unreachable; this should never reach a user
-            unreachable!("")
+            unreachable!("");
         }
 
         RuntimeError::UnresolvedTypeVar | RuntimeError::ErroneousType => {
             // only generated during layout generation
-            unreachable!("")
+            unreachable!("");
         }
 
         RuntimeError::Shadowing {
             original_region,
             shadow,
         } => {
-            let line = r#"Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#;
-
-            alloc.stack(vec![
-                alloc
-                    .text("The ")
-                    .append(alloc.ident(shadow.value))
-                    .append(alloc.reflow(" name is first defined here:")),
-                alloc.region(original_region),
-                alloc.reflow("But then it's defined a second time here:"),
-                alloc.region(shadow.region),
-                alloc.reflow(line),
-            ])
+            doc = report_shadowing(alloc, original_region, shadow);
+            title = DUPLICATE_NAME;
         }
 
         RuntimeError::LookupNotInScope(loc_name, options) => {
-            not_found(alloc, loc_name.region, &loc_name.value, "value", options)
+            doc = not_found(alloc, loc_name.region, &loc_name.value, "value", options);
+            title = UNRECOGNIZED_NAME;
         }
-        RuntimeError::CircularDef(entries) => to_circular_def_doc(alloc, &entries),
+        RuntimeError::CircularDef(entries) => {
+            doc = to_circular_def_doc(alloc, &entries);
+            title = CIRCULAR_DEF;
+        }
         RuntimeError::MalformedPattern(problem, region) => {
             use roc_parse::ast::Base;
             use roc_problem::can::MalformedPatternProblem::*;
@@ -716,7 +836,10 @@ fn pretty_runtime_error<'b>(
                 MalformedBase(Base::Octal) => " octal integer ",
                 MalformedBase(Base::Decimal) => " integer ",
                 BadIdent(bad_ident) => {
-                    return to_bad_ident_pattern_report(alloc, bad_ident, region)
+                    title = NAMING_PROBLEM;
+                    doc = to_bad_ident_pattern_report(alloc, bad_ident, region);
+
+                    return (doc, title);
                 }
                 Unknown => " ",
                 QualifiedIdentifier => " qualified ",
@@ -732,7 +855,7 @@ fn pretty_runtime_error<'b>(
                 ),
             };
 
-            alloc.stack(vec![
+            doc = alloc.stack(vec![
                 alloc.concat(vec![
                     alloc.reflow("This"),
                     alloc.text(name),
@@ -740,7 +863,9 @@ fn pretty_runtime_error<'b>(
                 ]),
                 alloc.region(region),
                 tip,
-            ])
+            ]);
+
+            title = SYNTAX_PROBLEM;
         }
         RuntimeError::UnsupportedPattern(_) => {
             todo!("unsupported patterns are currently not parsed!")
@@ -749,42 +874,58 @@ fn pretty_runtime_error<'b>(
             module_name,
             ident,
             region,
-        } => alloc.stack(vec![
-            alloc.concat(vec![
-                alloc.reflow("The "),
-                alloc.module_name(module_name),
-                alloc.reflow(" module does not expose a "),
-                alloc.string(ident.to_string()),
-                alloc.reflow(" value:"),
-            ]),
-            alloc.region(region),
-        ]),
+        } => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("The "),
+                    alloc.module_name(module_name),
+                    alloc.reflow(" module does not expose a "),
+                    alloc.string(ident.to_string()),
+                    alloc.reflow(" value:"),
+                ]),
+                alloc.region(region),
+            ]);
+
+            title = VALUE_NOT_EXPOSED;
+        }
 
         RuntimeError::ModuleNotImported {
             module_name,
             imported_modules,
             region,
-        } => module_not_found(alloc, region, &module_name, imported_modules),
+        } => {
+            doc = module_not_found(alloc, region, &module_name, imported_modules);
+
+            title = MODULE_NOT_IMPORTED;
+        }
         RuntimeError::InvalidPrecedence(_, _) => {
             // do nothing, reported with PrecedenceProblem
-            unreachable!()
+            unreachable!();
         }
         RuntimeError::MalformedIdentifier(_box_str, bad_ident, surroundings) => {
-            to_bad_ident_expr_report(alloc, bad_ident, surroundings)
+            doc = to_bad_ident_expr_report(alloc, bad_ident, surroundings);
+
+            title = SYNTAX_PROBLEM;
         }
-        RuntimeError::MalformedTypeName(_box_str, surroundings) => alloc.stack(vec![
-            alloc.reflow(r"I am confused by this type name:"),
-            alloc.region(surroundings),
-            alloc.concat(vec![
-                alloc.reflow("Type names start with an uppercase letter, "),
-                alloc.reflow("and can optionally be qualified by a module name, like "),
-                alloc.parser_suggestion("Bool"),
-                alloc.reflow(" or "),
-                alloc.parser_suggestion("Http.Request.Request"),
-                alloc.reflow("."),
-            ]),
-        ]),
-        RuntimeError::MalformedClosure(_) => todo!(""),
+        RuntimeError::MalformedTypeName(_box_str, surroundings) => {
+            doc = alloc.stack(vec![
+                alloc.reflow(r"I am confused by this type name:"),
+                alloc.region(surroundings),
+                alloc.concat(vec![
+                    alloc.reflow("Type names start with an uppercase letter, "),
+                    alloc.reflow("and can optionally be qualified by a module name, like "),
+                    alloc.parser_suggestion("Bool"),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion("Http.Request.Request"),
+                    alloc.reflow("."),
+                ]),
+            ]);
+
+            title = SYNTAX_PROBLEM;
+        }
+        RuntimeError::MalformedClosure(_) => {
+            todo!("");
+        }
         RuntimeError::InvalidFloat(sign @ FloatErrorKind::PositiveInfinity, region, _raw_str)
         | RuntimeError::InvalidFloat(sign @ FloatErrorKind::NegativeInfinity, region, _raw_str) => {
             let tip = alloc
@@ -797,7 +938,7 @@ fn pretty_runtime_error<'b>(
                 "small"
             };
 
-            alloc.stack(vec![
+            doc = alloc.stack(vec![
                 alloc.concat(vec![
                     alloc.reflow("This float literal is too "),
                     alloc.text(big_or_small),
@@ -812,14 +953,16 @@ fn pretty_runtime_error<'b>(
                     alloc.text(format!("{:e}", f64::MAX)),
                 ]),
                 tip,
-            ])
+            ]);
+
+            title = SYNTAX_PROBLEM;
         }
         RuntimeError::InvalidFloat(FloatErrorKind::Error, region, _raw_str) => {
             let tip = alloc
                 .tip()
                 .append(alloc.reflow("Learn more about number literals at TODO"));
 
-            alloc.stack(vec![
+            doc = alloc.stack(vec![
                 alloc.concat(vec![
                     alloc.reflow("This float literal contains an invalid digit:"),
                 ]),
@@ -828,7 +971,9 @@ fn pretty_runtime_error<'b>(
                     alloc.reflow("Floating point literals can only contain the digits 0-9, or use scientific notation 10e4"),
                 ]),
                 tip,
-            ])
+            ]);
+
+            title = SYNTAX_PROBLEM;
         }
         RuntimeError::InvalidInt(error @ IntErrorKind::InvalidDigit, base, region, _raw_str)
         | RuntimeError::InvalidInt(error @ IntErrorKind::Empty, base, region, _raw_str) => {
@@ -871,7 +1016,7 @@ fn pretty_runtime_error<'b>(
                 .tip()
                 .append(alloc.reflow("Learn more about number literals at TODO"));
 
-            alloc.stack(vec![
+            doc = alloc.stack(vec![
                 alloc.concat(vec![
                     alloc.reflow("This "),
                     alloc.text(name),
@@ -887,7 +1032,9 @@ fn pretty_runtime_error<'b>(
                     alloc.text("."),
                 ]),
                 tip,
-            ])
+            ]);
+
+            title = SYNTAX_PROBLEM;
         }
         RuntimeError::InvalidInt(error_kind @ IntErrorKind::Underflow, _base, region, _raw_str)
         | RuntimeError::InvalidInt(error_kind @ IntErrorKind::Overflow, _base, region, _raw_str) => {
@@ -901,7 +1048,7 @@ fn pretty_runtime_error<'b>(
                 .tip()
                 .append(alloc.reflow("Learn more about number literals at TODO"));
 
-            alloc.stack(vec![
+            doc = alloc.stack(vec![
                 alloc.concat(vec![
                     alloc.reflow("This integer literal is too "),
                     alloc.text(big_or_small),
@@ -910,21 +1057,36 @@ fn pretty_runtime_error<'b>(
                 alloc.region(region),
                 alloc.reflow("Roc uses signed 64-bit integers, allowing values between −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807."),
                 tip,
-            ])
+            ]);
+
+            title = SYNTAX_PROBLEM;
         }
         RuntimeError::InvalidOptionalValue {
             field_name,
             field_region,
             record_region,
-        } => to_invalid_optional_value_report_help(alloc, field_name, field_region, record_region),
-        RuntimeError::InvalidRecordUpdate { region } => alloc.stack(vec![
-            alloc.concat(vec![
-                alloc.reflow("This expression cannot be updated"),
-                alloc.reflow(":"),
-            ]),
-            alloc.region(region),
-            alloc.reflow("Only variables can be updated with record update syntax."),
-        ]),
+        } => {
+            doc = to_invalid_optional_value_report_help(
+                alloc,
+                field_name,
+                field_region,
+                record_region,
+            );
+
+            title = SYNTAX_PROBLEM;
+        }
+        RuntimeError::InvalidRecordUpdate { region } => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("This expression cannot be updated"),
+                    alloc.reflow(":"),
+                ]),
+                alloc.region(region),
+                alloc.reflow("Only variables can be updated with record update syntax."),
+            ]);
+
+            title = SYNTAX_PROBLEM;
+        }
         RuntimeError::InvalidHexadecimal(region) => {
             todo!(
                 "TODO runtime error for an invalid hexadecimal number in a \\u(...) code point at region {:?}",
@@ -949,12 +1111,20 @@ fn pretty_runtime_error<'b>(
         RuntimeError::NonExhaustivePattern => {
             unreachable!("not currently reported (but can blow up at runtime)")
         }
-        RuntimeError::ExposedButNotDefined(symbol) => alloc.stack(vec![alloc
-            .symbol_unqualified(symbol)
-            .append(alloc.reflow(" was listed as exposed in "))
-            .append(alloc.module(symbol.module_id()))
-            .append(alloc.reflow(", but it was not defined anywhere in that module."))]),
+        RuntimeError::ExposedButNotDefined(symbol) => {
+            doc = alloc.stack(vec![alloc
+                .symbol_unqualified(symbol)
+                .append(alloc.reflow(" was listed as exposed in "))
+                .append(alloc.module(symbol.module_id()))
+                .append(
+                    alloc.reflow(", but it was not defined anywhere in that module."),
+                )]);
+
+            title = MISSING_DEFINITION;
+        }
     }
+
+    (doc, title)
 }
 
 fn to_circular_def_doc<'b>(
@@ -1022,7 +1192,7 @@ fn not_found<'b>(
         alloc.reflow(" missing up-top"),
     ]);
 
-    let default_yes = alloc.reflow("these names seem close though:");
+    let default_yes = alloc.reflow("Did you mean one of these?");
 
     let to_details = |no_suggestion_details, yes_suggestion_details| {
         if suggestions.is_empty() {
@@ -1070,7 +1240,7 @@ fn module_not_found<'b>(
     ]);
 
     let default_yes = alloc
-        .reflow("Is there an import missing? Perhaps there is a typo, these names seem close:");
+        .reflow("Is there an import missing? Perhaps there is a typo. Did you mean one of these?");
 
     let to_details = |no_suggestion_details, yes_suggestion_details| {
         if suggestions.is_empty() {

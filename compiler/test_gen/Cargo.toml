@@ -23,6 +23,7 @@ roc_can = { path = "../can" }
 roc_parse = { path = "../parse" }
 roc_build = { path = "../build" }
 roc_std = { path = "../../roc_std" }
+roc_gen_wasm = { path = "../gen_wasm" }
 im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
 bumpalo = { version = "3.6.1", features = ["collections"] }
@@ -32,12 +33,17 @@ libc = "0.2"
 inkwell = { path = "../../vendor/inkwell" }
 target-lexicon = "0.12.2"
 libloading = "0.6"
+wasmer = "2.0.0"
+wasmer-wasi = "2.0.0"
+tempfile = "3.1.0"
 
 [dev-dependencies]
-
-
 maplit = "1.0.1"
 quickcheck = "0.8"
 quickcheck_macros = "0.8"
 tokio = { version = "0.2", features = ["blocking", "fs", "sync", "rt-threaded"] }
 bumpalo = { version = "3.6.1", features = ["collections"] }
+
+[features]
+default = []
+wasm-cli-run = []

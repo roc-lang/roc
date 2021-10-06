@@ -66,6 +66,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_FROM_UTF8_RANGE => str_from_utf8_range,
         STR_TO_UTF8 => str_to_utf8,
         STR_FROM_FLOAT=> str_from_float,
+        STR_REPEAT => str_repeat,
         LIST_LEN => list_len,
         LIST_GET => list_get,
         LIST_SET => list_set,
@@ -86,6 +87,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_MAP2 => list_map2,
         LIST_MAP3 => list_map3,
         LIST_DROP => list_drop,
+        LIST_DROP_AT => list_drop_at,
         LIST_SWAP => list_swap,
         LIST_MAP_WITH_INDEX => list_map_with_index,
         LIST_KEEP_IF => list_keep_if,
@@ -1166,8 +1168,8 @@ fn num_max_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
 fn list_is_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let bool_var = var_store.fresh();
-    let len_var = var_store.fresh();
-    let unbound_zero_var = var_store.fresh();
+    let len_var = Variable::NAT;
+    let unbound_zero_var = Variable::NATURAL;
 
     let body = RunLowLevel {
         op: LowLevel::Eq,
@@ -1230,6 +1232,26 @@ fn str_split(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         ret_list_var,
+    )
+}
+
+/// Str.repeat : Str, Nat -> Str
+fn str_repeat(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let str_var = var_store.fresh();
+    let nat_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::StrRepeat,
+        args: vec![(str_var, Var(Symbol::ARG_1)), (nat_var, Var(Symbol::ARG_2))],
+        ret_var: str_var,
+    };
+
+    defn(
+        symbol,
+        vec![(str_var, Symbol::ARG_1), (nat_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        str_var,
     )
 }
 
@@ -1958,6 +1980,29 @@ fn list_drop(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
+/// List.dropAt : List elem, Nat -> List elem
+fn list_drop_at(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
+    let index_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::ListDropAt,
+        args: vec![
+            (list_var, Var(Symbol::ARG_1)),
+            (index_var, Var(Symbol::ARG_2)),
+        ],
+        ret_var: list_var,
+    };
+
+    defn(
+        symbol,
+        vec![(list_var, Symbol::ARG_1), (index_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        list_var,
+    )
+}
+
 /// List.append : List elem, elem -> List elem
 fn list_append(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
@@ -2198,7 +2243,22 @@ fn dict_hash_test_only(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Dict.len : Dict * * -> Nat
 fn dict_len(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    lowlevel_1(symbol, LowLevel::DictSize, var_store)
+    let arg1_var = var_store.fresh();
+    let ret_var = Variable::NAT;
+
+    let body = RunLowLevel {
+        op: LowLevel::DictSize,
+        args: vec![(arg1_var, Var(Symbol::ARG_1))],
+        ret_var,
+    };
+
+    defn(
+        symbol,
+        vec![(arg1_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        ret_var,
+    )
 }
 
 /// Dict.empty : Dict * *
@@ -2873,9 +2933,9 @@ fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_var = var_store.fresh();
     let bool_var = var_store.fresh();
     let list_var = var_store.fresh();
-    let len_var = var_store.fresh();
-    let num_var = var_store.fresh();
-    let num_precision_var = var_store.fresh();
+    let len_var = Variable::NAT;
+    let num_var = len_var;
+    let num_precision_var = Variable::NATURAL;
     let list_elem_var = var_store.fresh();
     let ret_var = var_store.fresh();
 

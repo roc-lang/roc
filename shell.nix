@@ -46,12 +46,11 @@ let
     python3
     llvmPkgs.llvm.dev
     llvmPkgs.clang
+    libxkbcommon
     pkg-config
     zig
 
     # lib deps
-    llvmPkgs.libcxx
-    llvmPkgs.libcxxabi
     libffi
     libxml2
     ncurses

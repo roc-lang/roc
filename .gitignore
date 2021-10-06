@@ -3,6 +3,8 @@ generated-docs
 zig-cache
 .direnv
 *.rs.bk
+*.o
+*.tmp
 
 # llvm human-readable output 
 *.ll
@@ -24,6 +26,9 @@ editor/benches/resources/100_lines.roc
 editor/benches/resources/25000000_lines.roc
 editor/benches/resources/50000_lines.roc
 editor/benches/resources/500_lines.roc
+
+# file editor creates when no arg is passed
+new-roc-project
 
 # rust cache (sccache folder)
 sccache_dir

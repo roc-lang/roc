@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use crate::assert_evals_to;
-use crate::assert_llvm_evals_to;
+// use crate::assert_wasm_evals_to as assert_evals_to;
 use indoc::indoc;
 
 #[test]
@@ -886,6 +886,29 @@ fn blue_and_absent() {
                 "#
         ),
         3,
+        i64
+    );
+}
+
+#[test]
+fn update_the_only_field() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Model : { foo : I64 }
+
+            model : Model
+            model = { foo: 3 }
+
+            foo = 4
+
+            newModel : Model
+            newModel = { model & foo }
+
+            newModel.foo
+                "#
+        ),
+        4,
         i64
     );
 }

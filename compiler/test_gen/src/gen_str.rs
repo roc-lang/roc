@@ -3,33 +3,7 @@
 use crate::assert_evals_to;
 use crate::assert_llvm_evals_to;
 use indoc::indoc;
-use roc_std::RocStr;
-use std::cmp::min;
-
-const ROC_STR_MEM_SIZE: usize = core::mem::size_of::<RocStr>();
-
-fn small_str(str: &str) -> [u8; ROC_STR_MEM_SIZE] {
-    let mut bytes: [u8; ROC_STR_MEM_SIZE] = Default::default();
-
-    let mut index: usize = 0;
-    while index < ROC_STR_MEM_SIZE {
-        bytes[index] = 0;
-        index += 1;
-    }
-
-    let str_bytes = str.as_bytes();
-
-    let output_len: usize = min(str_bytes.len(), ROC_STR_MEM_SIZE);
-    index = 0;
-    while index < output_len {
-        bytes[index] = str_bytes[index];
-        index += 1;
-    }
-
-    bytes[ROC_STR_MEM_SIZE - 1] = 0b1000_0000 ^ (output_len as u8);
-
-    bytes
-}
+use roc_std::{RocList, RocStr};
 
 #[test]
 fn str_split_bigger_delimiter_small_str() {
@@ -78,8 +52,8 @@ fn str_split_str_concat_repeated() {
 
                 "#
         ),
-        "JJJJJJJJJJJJJJJJJJJJJJJJJ",
-        &'static str
+        RocStr::from_slice(b"JJJJJJJJJJJJJJJJJJJJJJJJJ"),
+        RocStr
     );
 }
 
@@ -96,8 +70,8 @@ fn str_split_small_str_bigger_delimiter() {
                         _ -> ""
                 "#
         ),
-        small_str("JJJ"),
-        [u8; ROC_STR_MEM_SIZE]
+        RocStr::from_slice(b"JJJ"),
+        RocStr
     );
 }
 
@@ -109,8 +83,11 @@ fn str_split_big_str_small_delimiter() {
                     Str.split "01234567789abcdefghi?01234567789abcdefghi" "?"
                 "#
         ),
-        &["01234567789abcdefghi", "01234567789abcdefghi"],
-        &'static [&'static str]
+        RocList::from_slice(&[
+            RocStr::from_slice(b"01234567789abcdefghi"),
+            RocStr::from_slice(b"01234567789abcdefghi")
+        ]),
+        RocList<RocStr>
     );
 
     assert_evals_to!(
@@ -119,8 +96,11 @@ fn str_split_big_str_small_delimiter() {
                     Str.split "01234567789abcdefghi 3ch 01234567789abcdefghi" "3ch"
                 "#
         ),
-        &["01234567789abcdefghi ", " 01234567789abcdefghi"],
-        &'static [&'static str]
+        RocList::from_slice(&[
+            RocStr::from_slice(b"01234567789abcdefghi "),
+            RocStr::from_slice(b" 01234567789abcdefghi")
+        ]),
+        RocList<RocStr>
     );
 }
 
@@ -132,8 +112,12 @@ fn str_split_small_str_small_delimiter() {
                     Str.split "J!J!J" "!"
                 "#
         ),
-        &[small_str("J"), small_str("J"), small_str("J")],
-        &'static [[u8; ROC_STR_MEM_SIZE]]
+        RocList::from_slice(&[
+            RocStr::from_slice(b"J"),
+            RocStr::from_slice(b"J"),
+            RocStr::from_slice(b"J")
+        ]),
+        RocList<RocStr>
     );
 }
 
@@ -147,8 +131,8 @@ fn str_split_bigger_delimiter_big_strs() {
                         "than the delimiter which happens to be very very long"
                 "#
         ),
-        &["string to split is shorter"],
-        &'static [&'static str]
+        RocList::from_slice(&[RocStr::from_slice(b"string to split is shorter")]),
+        RocList<RocStr>
     );
 }
 
@@ -160,9 +144,9 @@ fn str_split_empty_strs() {
                     Str.split "" ""
                 "#
         ),
-        &[small_str("")],
-        &'static [[u8; ROC_STR_MEM_SIZE]]
-    )
+        RocList::from_slice(&[RocStr::from_slice(b"")]),
+        RocList<RocStr>
+    );
 }
 
 #[test]
@@ -173,8 +157,8 @@ fn str_split_minimal_example() {
                     Str.split "a," ","
                 "#
         ),
-        &[small_str("a"), small_str("")],
-        &'static [[u8; ROC_STR_MEM_SIZE]]
+        RocList::from_slice(&[RocStr::from_slice(b"a"), RocStr::from_slice(b"")]),
+        RocList<RocStr>
     )
 }
 
@@ -201,8 +185,12 @@ fn str_split_small_str_big_delimiter() {
                         "---- ---- ---- ---- ----"
                 "#
         ),
-        &[small_str("1"), small_str("2"), small_str("")],
-        &'static [[u8; ROC_STR_MEM_SIZE]]
+        RocList::from_slice(&[
+            RocStr::from_slice(b"1"),
+            RocStr::from_slice(b"2"),
+            RocStr::from_slice(b"")
+        ]),
+        RocList<RocStr>
     );
 }
 
@@ -216,8 +204,12 @@ fn str_split_small_str_20_char_delimiter() {
                         "|-- -- -- -- -- -- |"
                 "#
         ),
-        &[small_str("3"), small_str("4"), small_str("")],
-        &'static [[u8; ROC_STR_MEM_SIZE]]
+        RocList::from_slice(&[
+            RocStr::from_slice(b"3"),
+            RocStr::from_slice(b"4"),
+            RocStr::from_slice(b"")
+        ]),
+        RocList<RocStr>
     );
 }
 
@@ -231,14 +223,14 @@ fn str_concat_big_to_big() {
                         "Second string that is also fairly long. Two long strings test things that might not appear with short strings."
                 "#
             ),
-            "First string that is fairly long. Longer strings make for different errors. Second string that is also fairly long. Two long strings test things that might not appear with short strings.",
-            &'static str
+            RocStr::from_slice(b"First string that is fairly long. Longer strings make for different errors. Second string that is also fairly long. Two long strings test things that might not appear with short strings."),
+            RocStr
         );
 }
 
 #[test]
 fn small_str_literal() {
-    assert_evals_to!(
+    assert_llvm_evals_to!(
         "\"JJJJJJJJJJJJJJJ\"",
         [
             0x4a,
@@ -267,7 +259,7 @@ fn small_str_zeroed_literal() {
     // Verifies that we zero out unused bytes in the string.
     // This is important so that string equality tests don't randomly
     // fail due to unused memory being there!
-    assert_evals_to!(
+    assert_llvm_evals_to!(
         "\"J\"",
         [
             0x4a,
@@ -293,7 +285,7 @@ fn small_str_zeroed_literal() {
 
 #[test]
 fn small_str_concat_empty_first_arg() {
-    assert_evals_to!(
+    assert_llvm_evals_to!(
         r#"Str.concat "" "JJJJJJJJJJJJJJJ""#,
         [
             0x4a,
@@ -319,7 +311,7 @@ fn small_str_concat_empty_first_arg() {
 
 #[test]
 fn small_str_concat_empty_second_arg() {
-    assert_evals_to!(
+    assert_llvm_evals_to!(
         r#"Str.concat "JJJJJJJJJJJJJJJ" """#,
         [
             0x4a,
@@ -347,14 +339,14 @@ fn small_str_concat_empty_second_arg() {
 fn small_str_concat_small_to_big() {
     assert_evals_to!(
         r#"Str.concat "abc" " this is longer than 15 chars""#,
-        "abc this is longer than 15 chars",
-        &'static str
+        RocStr::from_slice(b"abc this is longer than 15 chars"),
+        RocStr
     );
 }
 
 #[test]
 fn small_str_concat_small_to_small_staying_small() {
-    assert_evals_to!(
+    assert_llvm_evals_to!(
         r#"Str.concat "J" "JJJJJJJJJJJJJJ""#,
         [
             0x4a,
@@ -382,14 +374,14 @@ fn small_str_concat_small_to_small_staying_small() {
 fn small_str_concat_small_to_small_overflow_to_big() {
     assert_evals_to!(
         r#"Str.concat "abcdefghijklm" "nopqrstuvwxyz""#,
-        "abcdefghijklmnopqrstuvwxyz",
-        &'static str
+        RocStr::from_slice(b"abcdefghijklmnopqrstuvwxyz"),
+        RocStr
     );
 }
 
 #[test]
 fn str_concat_empty() {
-    assert_evals_to!(r#"Str.concat "" """#, "", &'static str);
+    assert_evals_to!(r#"Str.concat "" """#, RocStr::default(), RocStr);
 }
 
 #[test]
@@ -511,10 +503,18 @@ fn str_from_int() {
     );
 
     let max = format!("{}", i64::MAX);
-    assert_evals_to!(r#"Str.fromInt Num.maxInt"#, &max, &'static str);
+    assert_evals_to!(
+        r#"Str.fromInt Num.maxInt"#,
+        RocStr::from_slice(max.as_bytes()),
+        RocStr
+    );
 
     let min = format!("{}", i64::MIN);
-    assert_evals_to!(r#"Str.fromInt Num.minInt"#, &min, &'static str);
+    assert_evals_to!(
+        r#"Str.fromInt Num.minInt"#,
+        RocStr::from_slice(min.as_bytes()),
+        RocStr
+    );
 }
 
 #[test]
@@ -785,8 +785,8 @@ fn nested_recursive_literal() {
                 printExpr expr
                 "#
         ),
-        "Add (Add (Val 3) (Val 1)) (Add (Val 1) (Var 1))",
-        &'static str
+        RocStr::from_slice(b"Add (Add (Val 3) (Val 1)) (Add (Val 1) (Var 1))"),
+        RocStr
     );
 }
 
@@ -820,14 +820,18 @@ fn str_from_float() {
 
 #[test]
 fn str_to_utf8() {
-    assert_evals_to!(r#"Str.toUtf8 "hello""#, &[104, 101, 108, 108, 111], &[u8]);
+    assert_evals_to!(
+        r#"Str.toUtf8 "hello""#,
+        RocList::from_slice(&[104, 101, 108, 108, 111]),
+        RocList<u8>
+    );
     assert_evals_to!(
         r#"Str.toUtf8 "this is a long string""#,
-        &[
+        RocList::from_slice(&[
             116, 104, 105, 115, 32, 105, 115, 32, 97, 32, 108, 111, 110, 103, 32, 115, 116, 114,
             105, 110, 103
-        ],
-        &[u8]
+        ]),
+        RocList<u8>
     );
 }
 
@@ -944,4 +948,32 @@ fn str_from_utf8_range_count_too_high_for_start() {
         RocStr::from("out of bounds"),
         RocStr
     );
+}
+
+#[test]
+fn str_repeat_small() {
+    assert_evals_to!(
+        indoc!(r#"Str.repeat "Roc" 3"#),
+        RocStr::from("RocRocRoc"),
+        RocStr
+    );
+}
+
+#[test]
+fn str_repeat_big() {
+    assert_evals_to!(
+        indoc!(r#"Str.repeat "more than 16 characters" 2"#),
+        RocStr::from("more than 16 charactersmore than 16 characters"),
+        RocStr
+    );
+}
+
+#[test]
+fn str_repeat_empty_string() {
+    assert_evals_to!(indoc!(r#"Str.repeat "" 3"#), RocStr::from(""), RocStr);
+}
+
+#[test]
+fn str_repeat_zero_times() {
+    assert_evals_to!(indoc!(r#"Str.repeat "Roc" 0"#), RocStr::from(""), RocStr);
 }

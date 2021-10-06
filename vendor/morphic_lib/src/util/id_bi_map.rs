@@ -67,4 +67,8 @@ impl<K: Id, V: Hash + Eq + Clone> IdBiMap<K, V> {
     pub fn get_by_val(&self, val: &V) -> Option<K> {
         self.val_to_key.get(val).cloned()
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = (K, &V)> {
+        self.key_to_val.iter()
+    }
 }

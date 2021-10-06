@@ -43,7 +43,7 @@ pub fn handle_keydown(
             }
         }
 
-        A | Home | End => pass_keydown_to_focused(&modifiers, virtual_keycode, app_model)?,
+        A | S | R | Home | End => pass_keydown_to_focused(&modifiers, virtual_keycode, app_model)?,
 
         F11 => pass_keydown_to_focused(&modifiers, virtual_keycode, app_model)?,
 

@@ -23,6 +23,8 @@ const Align = extern struct { a: usize, b: usize };
 extern fn malloc(size: usize) callconv(.C) ?*align(@alignOf(Align)) c_void;
 extern fn realloc(c_ptr: [*]align(@alignOf(Align)) u8, size: usize) callconv(.C) ?*c_void;
 extern fn free(c_ptr: [*]align(@alignOf(Align)) u8) callconv(.C) void;
+extern fn memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
+extern fn memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void;
 
 export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
     _ = alignment;
@@ -51,12 +53,18 @@ export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
     std.process.exit(0);
 }
 
+export fn roc_memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void{
+    return memcpy(dst, src, size);
+}
+
+export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void{
+    return memset(dst, value, size);
+}
+
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn roc__mainForHost_1_exposed(*RocCallResult) void;
-
-const RocCallResult = extern struct { flag: u64, content: RocStr };
+extern fn roc__mainForHost_1_exposed() RocStr;
 
 const Unit = extern struct {};
 
@@ -64,20 +72,17 @@ pub fn main() u8 {
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
 
-    // make space for the result
-    var callresult = RocCallResult{ .flag = 0, .content = RocStr.empty() };
-
     // start time
     var ts1: std.os.timespec = undefined;
     std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts1) catch unreachable;
 
     // actually call roc to populate the callresult
-    roc__mainForHost_1_exposed(&callresult);
+    var callresult = roc__mainForHost_1_exposed();
 
     // stdout the result
-    stdout.print("{s}\n", .{callresult.content.asSlice()}) catch unreachable;
+    stdout.print("{s}\n", .{callresult.asSlice()}) catch unreachable;
 
-    callresult.content.deinit();
+    callresult.deinit();
 
     // end time
     var ts2: std.os.timespec = undefined;

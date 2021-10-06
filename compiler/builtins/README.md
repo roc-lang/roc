@@ -62,12 +62,6 @@ Its one thing to actually write these functions, its _another_ thing to let the 
 ### builtins/mono/src/borrow.rs
 After we have all of this, we need to specify if the arguments we're passing are owned, borrowed or irrelvant. Towards the bottom of this file, add a new case for you builtin and specify each arg. Be sure to read the comment, as it explains this in more detail.
 
-## Specifying the uniqueness of a function
-### builtins/src/unique.rs
-One of the cool things about Roc is that it evaluates if a value in memory is shared between scopes or if it is used in just one place. If the value is used in one place then it is 'unique', and it therefore can be mutated in place. For a value created by a function, the uniqueness of the output is determined in part by the uniqueness of the input arguments. For example `List.single : elem -> List elem` can return a unique list if the `elem` is also unique.
-
-We have to define the uniqueness constraints of a function just like we have to define a type signature. That is what happens in `unique.rs`. This can be tricky so it would be a good step to ask for help on if it is confusing.
-
 ## Testing it
 ### solve/tests/solve_expr.rs
 To make sure that Roc is properly inferring the type of the new builtin, add a test to this file simlar to:

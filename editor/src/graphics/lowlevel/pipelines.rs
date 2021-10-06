@@ -9,9 +9,9 @@ pub struct RectResources {
 
 pub fn make_rect_pipeline(
     gpu_device: &wgpu::Device,
-    swap_chain_descr: &wgpu::SwapChainDescriptor,
+    surface_config: &wgpu::SurfaceConfiguration,
 ) -> RectResources {
-    let ortho = init_ortho(swap_chain_descr.width, swap_chain_descr.height, gpu_device);
+    let ortho = init_ortho(surface_config.width, surface_config.height, gpu_device);
 
     let pipeline_layout = gpu_device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         bind_group_layouts: &[&ortho.bind_group_layout],
@@ -21,11 +21,10 @@ pub fn make_rect_pipeline(
     let pipeline = create_render_pipeline(
         gpu_device,
         &pipeline_layout,
-        swap_chain_descr.format,
+        surface_config.format,
         &wgpu::ShaderModuleDescriptor {
             label: None,
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("../shaders/shader.wgsl"))),
-            flags: wgpu::ShaderFlags::all(),
         },
     );
 
@@ -61,7 +60,7 @@ pub fn create_render_pipeline(
                     },
                     alpha: wgpu::BlendComponent::REPLACE,
                 }),
-                write_mask: wgpu::ColorWrite::ALL,
+                write_mask: wgpu::ColorWrites::ALL,
             }],
         }),
         primitive: wgpu::PrimitiveState::default(),

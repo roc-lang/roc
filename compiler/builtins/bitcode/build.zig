@@ -1,6 +1,7 @@
 const std = @import("std");
 const mem = std.mem;
 const Builder = std.build.Builder;
+const CrossTarget = std.zig.CrossTarget;
 
 pub fn build(b: *Builder) void {
     // b.setPreferredReleaseMode(builtin.Mode.Debug
@@ -20,7 +21,7 @@ pub fn build(b: *Builder) void {
     test_step.dependOn(&main_tests.step);
 
     // LLVM IR
-    const obj_name = "builtins-64bit";
+    const obj_name = "builtins-host";
     const llvm_obj = b.addObject(obj_name, main_path);
     llvm_obj.setBuildMode(mode);
     llvm_obj.linkSystemLibrary("c");
@@ -30,30 +31,48 @@ pub fn build(b: *Builder) void {
     const ir = b.step("ir", "Build LLVM ir");
     ir.dependOn(&llvm_obj.step);
 
+    // 32-bit x86, useful for debugging
+    var i386_target = CrossTarget.parse(.{}) catch unreachable;
+
+    i386_target.cpu_arch = std.Target.Cpu.Arch.i386;
+    i386_target.os_tag = std.Target.Os.Tag.linux;
+    i386_target.abi = std.Target.Abi.musl;
+
+    const obj_name_i386 = "builtins-i386";
+    const llvm_obj_i386 = b.addObject(obj_name_i386, main_path);
+    llvm_obj_i386.setBuildMode(mode);
+    llvm_obj_i386.strip = true;
+    llvm_obj_i386.emit_llvm_ir = true;
+    llvm_obj_i386.emit_bin = false;
+    llvm_obj_i386.target = i386_target;
+
+    const ir_i386 = b.step("ir-i386", "Build LLVM ir for 32-bit targets (x86)");
+    ir_i386.dependOn(&llvm_obj_i386.step);
+
     // LLVM IR 32-bit (wasm)
-    var target = b.standardTargetOptions(.{});
-    target.os_tag = std.Target.Os.Tag.linux;
-    target.cpu_arch = std.Target.Cpu.Arch.i386;
-    // target.abi = std.Target.Abi.none;
-    target.abi = std.Target.Abi.musl;
+    var wasm32_target = CrossTarget.parse(.{}) catch unreachable;
 
-    const obj_name_32bit = "builtins-32bit";
-    const llvm_obj_32bit = b.addObject(obj_name_32bit, main_path);
-    llvm_obj_32bit.setBuildMode(mode);
-    llvm_obj_32bit.linkSystemLibrary("c");
-    llvm_obj_32bit.strip = true;
-    llvm_obj_32bit.emit_llvm_ir = true;
-    llvm_obj_32bit.emit_bin = false;
-    llvm_obj_32bit.target = target;
+    // 32-bit wasm
+    wasm32_target.cpu_arch = std.Target.Cpu.Arch.wasm32;
+    wasm32_target.os_tag = std.Target.Os.Tag.freestanding;
+    wasm32_target.abi = std.Target.Abi.none;
 
-    const ir32bit = b.step("ir-32bit", "Build LLVM ir for 32-bit targets (wasm)");
-    ir32bit.dependOn(&llvm_obj_32bit.step);
+    const obj_name_wasm32 = "builtins-wasm32";
+    const llvm_obj_wasm32 = b.addObject(obj_name_wasm32, main_path);
+    llvm_obj_wasm32.setBuildMode(mode);
+    llvm_obj_wasm32.strip = true;
+    llvm_obj_wasm32.emit_llvm_ir = true;
+    llvm_obj_wasm32.emit_bin = false;
+    llvm_obj_wasm32.target = wasm32_target;
+
+    const ir_wasm32 = b.step("ir-wasm32", "Build LLVM ir for 32-bit targets (wasm)");
+    ir_wasm32.dependOn(&llvm_obj_wasm32.step);
 
     // Object File
     // TODO: figure out how to get this to emit symbols that are only scoped to linkage (global but hidden).
     // Also, zig has -ffunction-sections, but I am not sure how to add it here.
     // With both of those changes, unused zig functions will be cleaned up by the linker saving around 100k.
-    const obj = b.addObject(obj_name, main_path);
+    const obj = b.addObject("builtins-host", main_path);
     obj.setBuildMode(mode);
     obj.linkSystemLibrary("c");
     obj.setOutputDir(".");

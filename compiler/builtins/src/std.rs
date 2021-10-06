@@ -618,6 +618,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(str_type())
     );
 
+    // repeat : Str, Nat -> Str
+    add_top_level_function_type!(
+        Symbol::STR_REPEAT,
+        vec![str_type(), nat_type()],
+        Box::new(str_type())
+    );
+
     // fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8Problem ]*
     {
         let bad_utf8 = SolvedType::TagUnion(
@@ -913,6 +920,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(list_type(flex(TVAR1))),
     );
 
+    // dropAt : List elem, Nat -> List elem
+    add_top_level_function_type!(
+        Symbol::LIST_DROP_AT,
+        vec![list_type(flex(TVAR1)), nat_type()],
+        Box::new(list_type(flex(TVAR1))),
+    );
+
     // swap : List elem, Nat, Nat -> List elem
     add_top_level_function_type!(
         Symbol::LIST_SWAP,
@@ -985,11 +999,11 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // Dict module
 
-    // Dict.hashTestOnly : Nat, v -> Nat
+    // Dict.hashTestOnly : U64, v -> U64
     add_top_level_function_type!(
         Symbol::DICT_TEST_HASH,
         vec![u64_type(), flex(TVAR2)],
-        Box::new(nat_type())
+        Box::new(u64_type())
     );
 
     // len : Dict * * -> Nat

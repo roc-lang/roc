@@ -1,4 +1,4 @@
-FROM rust:1.54-slim-buster
+FROM rust:1.54-slim-bullseye
 WORKDIR /earthbuild
 
 prep-debian:
@@ -27,20 +27,15 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN ln -s /usr/bin/lld-12 /usr/bin/ld.lld
     ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld -C target-cpu=native"
     # valgrind
-    RUN apt -y install autotools-dev cmake automake libc6-dbg
-    RUN wget https://sourceware.org/pub/valgrind/valgrind-3.16.1.tar.bz2
-    RUN tar -xf valgrind-3.16.1.tar.bz2
-    # need to cd every time, every command starts at WORKDIR
-    RUN cd valgrind-3.16.1 && ./autogen.sh
-    RUN cd valgrind-3.16.1 && ./configure --disable-dependency-tracking
-    RUN cd valgrind-3.16.1 && make -j`nproc`
-    RUN cd valgrind-3.16.1 && make install
+    RUN apt -y install valgrind
     # clippy
     RUN rustup component add clippy
     # rustfmt
     RUN rustup component add rustfmt
     # criterion
     RUN cargo install cargo-criterion
+    # wasm
+    RUN apt -y install libxkbcommon-dev
     # sccache
     RUN apt -y install libssl-dev
     RUN cargo install sccache
@@ -51,7 +46,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
 
 copy-dirs:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
-    COPY --dir cli compiler docs editor roc_std vendor examples Cargo.toml Cargo.lock ./
+    COPY --dir cli compiler docs editor ast code_markup utils roc_std vendor examples linker Cargo.toml Cargo.lock ./
 
 test-zig:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
@@ -70,15 +65,22 @@ check-rustfmt:
     RUN cargo fmt --all -- --check
 
 check-typos:
-    RUN cargo install --version 1.0.11 typos-cli
-    COPY --dir .github ci cli compiler docs editor examples nightly_benches packages roc_std www *.md LEGAL_DETAILS shell.nix ./
+    RUN cargo install typos-cli --version 1.0.11 # version set to prevent confusion if the version is updated automatically
+    COPY --dir .github ci cli compiler docs editor examples ast code_markup utils linker nightly_benches packages roc_std www *.md LEGAL_DETAILS shell.nix ./
     RUN typos
 
 test-rust:
     FROM +copy-dirs
     ENV RUST_BACKTRACE=1
+    # run one of the benchmarks to make sure the host is compiled
+    # not pre-compiling the host can cause race conditions
+    RUN echo "4" | cargo run --release examples/benchmarks/NQueens.roc
     RUN --mount=type=cache,target=$SCCACHE_DIR \
         cargo test --release && sccache --show-stats
+    # run i386 (32-bit linux) cli tests
+    RUN echo "4" | cargo run --release -- --backend=x86_32 examples/benchmarks/NQueens.roc
+    RUN --mount=type=cache,target=$SCCACHE_DIR \
+        cargo test --release --test cli_run i386 --features="i386-cli-run" && sccache --show-stats
 
 verify-no-git-changes:
     FROM +test-rust
@@ -95,11 +97,10 @@ test-all:
     BUILD +test-zig
     BUILD +check-rustfmt
     BUILD +check-clippy
-    BUILD +check-typos
     BUILD +test-rust
     BUILD +verify-no-git-changes
 
-# compile everything needed for benchmarks and output a self-contained folder
+# compile everything needed for benchmarks and output a self-contained dir from which benchmarks can be run.
 prep-bench-folder:
     FROM +copy-dirs
     ARG BENCH_SUFFIX=branch
