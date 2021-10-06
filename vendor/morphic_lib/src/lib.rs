@@ -4,6 +4,7 @@
 #[macro_use]
 mod util;
 
+mod analyze;
 mod api;
 mod bindings;
 mod ir;

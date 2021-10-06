@@ -39,6 +39,7 @@ comptime {
     exportListFn(list.listSortWith, "sort_with");
     exportListFn(list.listConcat, "concat");
     exportListFn(list.listDrop, "drop");
+    exportListFn(list.listDropAt, "drop_at");
     exportListFn(list.listSet, "set");
     exportListFn(list.listSetInPlace, "set_in_place");
     exportListFn(list.listSwap, "swap");
@@ -101,6 +102,7 @@ comptime {
     exportStrFn(str.strToUtf8C, "to_utf8");
     exportStrFn(str.fromUtf8C, "from_utf8");
     exportStrFn(str.fromUtf8RangeC, "from_utf8_range");
+    exportStrFn(str.repeat, "repeat");
 }
 
 // Utils
@@ -164,7 +166,12 @@ test "" {
 // https://github.com/ziglang/zig/blob/85755c51d529e7d9b406c6bdf69ce0a0f33f3353/lib/std/special/compiler_rt/muloti4.zig
 //
 // Thank you Zig Contributors!
-export fn __muloti4(a: i128, b: i128, overflow: *c_int) callconv(.C) i128 {
+
+// Export it as weak incase it is alreadly linked in by something else.
+comptime {
+    @export(__muloti4, .{ .name = "__muloti4", .linkage = .Weak });
+}
+fn __muloti4(a: i128, b: i128, overflow: *c_int) callconv(.C) i128 {
     // @setRuntimeSafety(std.builtin.is_test);
 
     const min = @bitCast(i128, @as(u128, 1 << (128 - 1)));

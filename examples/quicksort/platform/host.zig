@@ -20,12 +20,14 @@ comptime {
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn roc__mainForHost_1_exposed(RocList, *RocCallResult) void;
+extern fn roc__mainForHost_1_exposed(RocList) RocList;
 
 const Align = extern struct { a: usize, b: usize };
 extern fn malloc(size: usize) callconv(.C) ?*align(@alignOf(Align)) c_void;
 extern fn realloc(c_ptr: [*]align(@alignOf(Align)) u8, size: usize) callconv(.C) ?*c_void;
 extern fn free(c_ptr: [*]align(@alignOf(Align)) u8) callconv(.C) void;
+extern fn memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
+extern fn memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void;
 
 const DEBUG: bool = false;
 
@@ -67,12 +69,18 @@ export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
     std.process.exit(0);
 }
 
+export fn roc_memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void{
+    return memcpy(dst, src, size);
+}
+
+export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void{
+    return memset(dst, value, size);
+}
+
 // warning! the array is currently stack-allocated so don't make this too big
 const NUM_NUMS = 100;
 
 const RocList = extern struct { elements: [*]i64, length: usize };
-
-const RocCallResult = extern struct { flag: u64, content: RocList };
 
 const Unit = extern struct {};
 
@@ -93,19 +101,16 @@ pub export fn main() u8 {
 
     const roc_list = RocList{ .elements = numbers, .length = NUM_NUMS };
 
-    // make space for the result
-    var callresult = RocCallResult{ .flag = 0, .content = undefined };
-
     // start time
     var ts1: std.os.timespec = undefined;
     std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts1) catch unreachable;
 
     // actually call roc to populate the callresult
-    roc__mainForHost_1_exposed(roc_list, &callresult);
+    var callresult = roc__mainForHost_1_exposed(roc_list);
 
     // stdout the result
-    const length = std.math.min(20, callresult.content.length);
-    var result = callresult.content.elements[0..length];
+    const length = std.math.min(20, callresult.length);
+    var result = callresult.elements[0..length];
 
     for (result) |x, i| {
         if (i == 0) {

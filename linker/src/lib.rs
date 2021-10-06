@@ -2,13 +2,16 @@ use bincode::{deserialize_from, serialize_into};
 use clap::{App, AppSettings, Arg, ArgMatches};
 use iced_x86::{Decoder, DecoderOptions, Instruction, OpCodeOperandKind, OpKind};
 use memmap2::{Mmap, MmapMut};
+use object::write;
 use object::{elf, endian};
 use object::{
-    Architecture, BinaryFormat, CompressedFileRange, CompressionFormat, LittleEndian, NativeEndian,
-    Object, ObjectSection, ObjectSymbol, RelocationKind, RelocationTarget, Section, SectionIndex,
-    Symbol, SymbolIndex, SymbolSection,
+    Architecture, BinaryFormat, CompressedFileRange, CompressionFormat, Endianness, LittleEndian,
+    NativeEndian, Object, ObjectSection, ObjectSymbol, RelocationKind, RelocationTarget, Section,
+    SectionIndex, Symbol, SymbolFlags, SymbolIndex, SymbolKind, SymbolScope, SymbolSection,
 };
+use roc_build::link::{rebuild_host, LinkType};
 use roc_collections::all::MutMap;
+use roc_mono::ir::OptLevel;
 use std::cmp::Ordering;
 use std::convert::TryFrom;
 use std::ffi::CStr;
@@ -17,10 +20,15 @@ use std::io;
 use std::io::{BufReader, BufWriter};
 use std::mem;
 use std::os::raw::c_char;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::process::Command;
 use std::time::{Duration, SystemTime};
+use target_lexicon::Triple;
+use tempfile::Builder;
 
 mod metadata;
+use metadata::VirtualOffset;
 
 pub const CMD_PREPROCESS: &str = "preprocess";
 pub const CMD_SURGERY: &str = "surgery";
@@ -122,15 +130,149 @@ pub fn build_app<'a>() -> App<'a> {
         )
 }
 
+pub fn supported(link_type: &LinkType, target: &Triple) -> bool {
+    link_type == &LinkType::Executable
+        && target.architecture == target_lexicon::Architecture::X86_64
+        && target.operating_system == target_lexicon::OperatingSystem::Linux
+        && target.binary_format == target_lexicon::BinaryFormat::Elf
+}
+
+pub fn build_and_preprocess_host(
+    opt_level: OptLevel,
+    target: &Triple,
+    host_input_path: &Path,
+    exposed_to_host: Vec<String>,
+) -> io::Result<()> {
+    let dummy_lib = host_input_path.with_file_name("libapp.so");
+    generate_dynamic_lib(target, exposed_to_host, &dummy_lib)?;
+    rebuild_host(opt_level, target, host_input_path, Some(&dummy_lib));
+    let dynhost = host_input_path.with_file_name("dynhost");
+    let metadata = host_input_path.with_file_name("metadata");
+    let prehost = host_input_path.with_file_name("preprocessedhost");
+    if preprocess_impl(
+        dynhost.to_str().unwrap(),
+        metadata.to_str().unwrap(),
+        prehost.to_str().unwrap(),
+        dummy_lib.to_str().unwrap(),
+        false,
+        false,
+    )? != 0
+    {
+        panic!("Failed to preprocess host");
+    }
+    Ok(())
+}
+
+pub fn link_preprocessed_host(
+    _target: &Triple,
+    host_input_path: &Path,
+    roc_app_obj: &Path,
+    binary_path: &Path,
+) -> io::Result<()> {
+    let metadata = host_input_path.with_file_name("metadata");
+    if surgery_impl(
+        roc_app_obj.to_str().unwrap(),
+        metadata.to_str().unwrap(),
+        binary_path.to_str().unwrap(),
+        false,
+        false,
+    )? != 0
+    {
+        panic!("Failed to surgically link host");
+    }
+    Ok(())
+}
+
+fn generate_dynamic_lib(
+    _target: &Triple,
+    exposed_to_host: Vec<String>,
+    dummy_lib_path: &Path,
+) -> io::Result<()> {
+    let dummy_obj_file = Builder::new().prefix("roc_lib").suffix(".o").tempfile()?;
+    let dummy_obj_file = dummy_obj_file.path();
+
+    // TODO deal with other architectures here.
+    let mut out_object =
+        write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+
+    let text_section = out_object.section_id(write::StandardSection::Text);
+    for sym in exposed_to_host {
+        for name in &[
+            format!("roc__{}_1_exposed", sym),
+            format!("roc__{}_1_exposed_generic", sym),
+            format!("roc__{}_1_Fx_caller", sym),
+            format!("roc__{}_1_Fx_size", sym),
+            format!("roc__{}_1_Fx_result_size", sym),
+            format!("roc__{}_size", sym),
+        ] {
+            out_object.add_symbol(write::Symbol {
+                name: name.as_bytes().to_vec(),
+                value: 0,
+                size: 0,
+                kind: SymbolKind::Text,
+                scope: SymbolScope::Dynamic,
+                weak: false,
+                section: write::SymbolSection::Section(text_section),
+                flags: SymbolFlags::None,
+            });
+        }
+    }
+    std::fs::write(
+        &dummy_obj_file,
+        out_object.write().expect("failed to build output object"),
+    )
+    .expect("failed to write object to file");
+
+    let output = Command::new("ld")
+        .args(&[
+            "-shared",
+            "-soname",
+            dummy_lib_path.file_name().unwrap().to_str().unwrap(),
+            dummy_obj_file.to_str().unwrap(),
+            "-o",
+            dummy_lib_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    if !output.status.success() {
+        match std::str::from_utf8(&output.stderr) {
+            Ok(stderr) => panic!(
+                "Failed to link dummy shared library - stderr of the `ld` command was:\n{}",
+                stderr
+            ),
+            Err(utf8_err) => panic!(
+                "Failed to link dummy shared library  - stderr of the `ld` command was invalid utf8 ({:?})",
+                utf8_err
+            ),
+        }
+    }
+    Ok(())
+}
+
+pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
+    preprocess_impl(
+        matches.value_of(EXEC).unwrap(),
+        matches.value_of(METADATA).unwrap(),
+        matches.value_of(OUT).unwrap(),
+        matches.value_of(SHARED_LIB).unwrap(),
+        matches.is_present(FLAG_VERBOSE),
+        matches.is_present(FLAG_TIME),
+    )
+}
 // TODO: Most of this file is a mess of giant functions just to check if things work.
 // Clean it all up and refactor nicely.
-pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
-    let verbose = matches.is_present(FLAG_VERBOSE);
-    let time = matches.is_present(FLAG_TIME);
-
+fn preprocess_impl(
+    exec_filename: &str,
+    metadata_filename: &str,
+    out_filename: &str,
+    shared_lib_filename: &str,
+    verbose: bool,
+    time: bool,
+) -> io::Result<i32> {
     let total_start = SystemTime::now();
     let exec_parsing_start = total_start;
-    let exec_file = fs::File::open(&matches.value_of(EXEC).unwrap())?;
+    let exec_file = fs::File::open(exec_filename)?;
     let exec_mmap = unsafe { Mmap::map(&exec_file)? };
     let exec_data = &*exec_mmap;
     let exec_obj = match object::File::parse(exec_data) {
@@ -175,7 +317,9 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     for sym in exec_obj.symbols().filter(|sym| {
         sym.is_definition() && sym.name().is_ok() && sym.name().unwrap().starts_with("roc_")
     }) {
-        let name = sym.name().unwrap().to_string();
+        // remove potentially trailing "@version".
+        let name = sym.name().unwrap().split('@').next().unwrap().to_string();
+
         // special exceptions for memcpy and memset.
         if &name == "roc_memcpy" {
             md.roc_symbol_vaddresses
@@ -235,7 +379,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         }
     })
     .map(|(_, reloc)| reloc)
-    .filter(|reloc| reloc.kind() == RelocationKind::Elf(7));
+    .filter(|reloc| matches!(reloc.kind(), RelocationKind::Elf(7)));
 
     let app_syms: Vec<Symbol> = exec_obj
         .dynamic_symbols()
@@ -243,6 +387,28 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
             sym.is_undefined() && sym.name().is_ok() && sym.name().unwrap().starts_with("roc_")
         })
         .collect();
+
+    let got_app_syms: Vec<(String, usize)> = (match exec_obj.dynamic_relocations() {
+        Some(relocs) => relocs,
+        None => {
+            println!("Executable never calls any application functions.");
+            println!("No work to do. Probably an invalid input.");
+            return Ok(-1);
+        }
+    })
+    .map(|(_, reloc)| reloc)
+    .filter(|reloc| matches!(reloc.kind(), RelocationKind::Elf(6)))
+    .map(|reloc| {
+        for symbol in app_syms.iter() {
+            if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
+                return Some((symbol.name().unwrap().to_string(), symbol.index().0));
+            }
+        }
+        None
+    })
+    .flatten()
+    .collect();
+
     for sym in app_syms.iter() {
         let name = sym.name().unwrap().to_string();
         md.app_functions.push(name.clone());
@@ -392,7 +558,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
                             .unwrap()
                             .push(metadata::SurgeryEntry {
                                 file_offset: offset,
-                                virtual_offset: inst.next_ip(),
+                                virtual_offset: VirtualOffset::Relative(inst.next_ip()),
                                 size: op_size,
                             });
                     }
@@ -410,6 +576,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
                         || inst.is_jmp_far_indirect()
                         || inst.is_jmp_near_indirect())
                         && !indirect_warning_given
+                        && verbose
                     {
                         indirect_warning_given = true;
                         println!();
@@ -467,7 +634,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         }
     };
 
-    let shared_lib_name = Path::new(matches.value_of(SHARED_LIB).unwrap())
+    let shared_lib_name = Path::new(shared_lib_filename)
         .file_name()
         .unwrap()
         .to_str()
@@ -494,7 +661,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
             ) as usize;
             let c_buf: *const c_char = dynstr_data[dynstr_off..].as_ptr() as *const i8;
             let c_str = unsafe { CStr::from_ptr(c_buf) }.to_str().unwrap();
-            if c_str == shared_lib_name {
+            if Path::new(c_str).file_name().unwrap().to_str().unwrap() == shared_lib_name {
                 shared_lib_index = Some(dyn_lib_index);
                 if verbose {
                     println!(
@@ -601,7 +768,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         .write(true)
         .create(true)
         .truncate(true)
-        .open(&matches.value_of(OUT).unwrap())?;
+        .open(out_filename)?;
     out_file.set_len(md.exec_len)?;
     let mut out_mmap = unsafe { MmapMut::map_mut(&out_file)? };
 
@@ -733,7 +900,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
             sec_offset as usize + md.added_byte_count as usize,
             sec_size as usize / mem::size_of::<elf::Rela64<LittleEndian>>(),
         );
-        for rel in relocations.iter_mut() {
+        for (i, rel) in relocations.iter_mut().enumerate() {
             let r_offset = rel.r_offset.get(NativeEndian);
             if virtual_shift_start <= r_offset {
                 rel.r_offset = endian::U64::new(LittleEndian, r_offset + md.added_byte_count);
@@ -743,6 +910,28 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
                     let r_addend = rel.r_addend.get(LittleEndian);
                     rel.r_addend
                         .set(LittleEndian, r_addend + md.added_byte_count as i64);
+                }
+            }
+            // If the relocation goes to a roc function, we need to surgically link it and change it to relative.
+            let r_type = rel.r_type(NativeEndian, false);
+            if r_type == elf::R_X86_64_GLOB_DAT {
+                let r_sym = rel.r_sym(NativeEndian, false);
+                for (name, index) in got_app_syms.iter() {
+                    if *index as u32 == r_sym {
+                        rel.set_r_info(LittleEndian, false, 0, elf::R_X86_64_RELATIVE);
+                        let addend_addr = sec_offset as usize
+                            + i * mem::size_of::<elf::Rela64<LittleEndian>>()
+                            // This 16 skips the first 2 fields and gets to the addend field.
+                            + 16;
+                        md.surgeries
+                            .get_mut(name)
+                            .unwrap()
+                            .push(metadata::SurgeryEntry {
+                                file_offset: addend_addr as u64,
+                                virtual_offset: VirtualOffset::Absolute,
+                                size: 8,
+                            });
+                    }
                 }
             }
         }
@@ -862,16 +1051,22 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     }
 
     let saving_metadata_start = SystemTime::now();
-    let output = fs::File::create(&matches.value_of(METADATA).unwrap())?;
-    let output = BufWriter::new(output);
-    if let Err(err) = serialize_into(output, &md) {
-        println!("Failed to serialize metadata: {}", err);
-        return Ok(-1);
-    };
+    // This block ensure that the metadata is fully written and timed before continuing.
+    {
+        let output = fs::File::create(metadata_filename)?;
+        let output = BufWriter::new(output);
+        if let Err(err) = serialize_into(output, &md) {
+            println!("Failed to serialize metadata: {}", err);
+            return Ok(-1);
+        };
+    }
     let saving_metadata_duration = saving_metadata_start.elapsed().unwrap();
 
     let flushing_data_start = SystemTime::now();
     out_mmap.flush()?;
+    // Also drop files to to ensure data is fully written here.
+    drop(out_mmap);
+    drop(out_file);
     let flushing_data_duration = flushing_data_start.elapsed().unwrap();
 
     let total_duration = total_start.elapsed().unwrap();
@@ -907,12 +1102,25 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
 }
 
 pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
-    let verbose = matches.is_present(FLAG_VERBOSE);
-    let time = matches.is_present(FLAG_TIME);
+    surgery_impl(
+        matches.value_of(APP).unwrap(),
+        matches.value_of(METADATA).unwrap(),
+        matches.value_of(OUT).unwrap(),
+        matches.is_present(FLAG_VERBOSE),
+        matches.is_present(FLAG_TIME),
+    )
+}
 
+fn surgery_impl(
+    app_filename: &str,
+    metadata_filename: &str,
+    out_filename: &str,
+    verbose: bool,
+    time: bool,
+) -> io::Result<i32> {
     let total_start = SystemTime::now();
     let loading_metadata_start = total_start;
-    let input = fs::File::open(&matches.value_of(METADATA).unwrap())?;
+    let input = fs::File::open(metadata_filename)?;
     let input = BufReader::new(input);
     let md: metadata::Metadata = match deserialize_from(input) {
         Ok(data) => data,
@@ -924,7 +1132,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     let loading_metadata_duration = loading_metadata_start.elapsed().unwrap();
 
     let app_parsing_start = SystemTime::now();
-    let app_file = fs::File::open(&matches.value_of(APP).unwrap())?;
+    let app_file = fs::File::open(app_filename)?;
     let app_mmap = unsafe { Mmap::map(&app_file)? };
     let app_data = &*app_mmap;
     let app_obj = match object::File::parse(app_data) {
@@ -940,7 +1148,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     let exec_file = fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .open(&matches.value_of(OUT).unwrap())?;
+        .open(out_filename)?;
 
     let max_out_len = md.exec_len + app_data.len() as u64 + md.load_align_constraint;
     exec_file.set_len(max_out_len)?;
@@ -1297,7 +1505,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     let dynsym_offset = md.dynamic_symbol_table_section_offset + md.added_byte_count;
 
     for func_name in md.app_functions {
-        let virt_offset = match app_func_vaddr_map.get(&func_name) {
+        let func_virt_offset = match app_func_vaddr_map.get(&func_name) {
             Some(offset) => *offset as u64,
             None => {
                 println!("Function, {}, was not defined by the app", &func_name);
@@ -1307,7 +1515,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         if verbose {
             println!(
                 "Updating calls to {} to the address: {:+x}",
-                &func_name, virt_offset
+                &func_name, func_virt_offset
             );
         }
 
@@ -1315,17 +1523,29 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
             if verbose {
                 println!("\tPerforming surgery: {:+x?}", s);
             }
+            let surgery_virt_offset = match s.virtual_offset {
+                VirtualOffset::Relative(vs) => (vs + md.added_byte_count) as i64,
+                VirtualOffset::Absolute => 0,
+            };
             match s.size {
                 4 => {
-                    let target = (virt_offset as i64
-                        - (s.virtual_offset + md.added_byte_count) as i64)
-                        as i32;
+                    let target = (func_virt_offset as i64 - surgery_virt_offset) as i32;
                     if verbose {
                         println!("\tTarget Jump: {:+x}", target);
                     }
                     let data = target.to_le_bytes();
                     exec_mmap[(s.file_offset + md.added_byte_count) as usize
                         ..(s.file_offset + md.added_byte_count) as usize + 4]
+                        .copy_from_slice(&data);
+                }
+                8 => {
+                    let target = func_virt_offset as i64 - surgery_virt_offset;
+                    if verbose {
+                        println!("\tTarget Jump: {:+x}", target);
+                    }
+                    let data = target.to_le_bytes();
+                    exec_mmap[(s.file_offset + md.added_byte_count) as usize
+                        ..(s.file_offset + md.added_byte_count) as usize + 8]
                         .copy_from_slice(&data);
                 }
                 x => {
@@ -1341,7 +1561,8 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
             let plt_off = (*plt_off + md.added_byte_count) as usize;
             let plt_vaddr = *plt_vaddr + md.added_byte_count;
             let jmp_inst_len = 5;
-            let target = (virt_offset as i64 - (plt_vaddr as i64 + jmp_inst_len as i64)) as i32;
+            let target =
+                (func_virt_offset as i64 - (plt_vaddr as i64 + jmp_inst_len as i64)) as i32;
             if verbose {
                 println!("\tPLT: {:+x}, {:+x}", plt_off, plt_vaddr);
                 println!("\tTarget Jump: {:+x}", target);
@@ -1360,7 +1581,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                 dynsym_offset as usize + *i as usize * mem::size_of::<elf::Sym64<LittleEndian>>(),
             );
             sym.st_shndx = endian::U16::new(LittleEndian, new_text_section_index as u16);
-            sym.st_value = endian::U64::new(LittleEndian, virt_offset as u64);
+            sym.st_value = endian::U64::new(LittleEndian, func_virt_offset as u64);
             sym.st_size = endian::U64::new(
                 LittleEndian,
                 match app_func_size_map.get(&func_name) {
@@ -1378,9 +1599,17 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
 
     let flushing_data_start = SystemTime::now();
     exec_mmap.flush()?;
+    // Also drop files to to ensure data is fully written here.
+    drop(exec_mmap);
+    exec_file.set_len(offset as u64 + 1)?;
+    drop(exec_file);
     let flushing_data_duration = flushing_data_start.elapsed().unwrap();
 
-    exec_file.set_len(offset as u64 + 1)?;
+    // Make sure the final executable has permision to execute.
+    let mut perms = fs::metadata(out_filename)?.permissions();
+    perms.set_mode(perms.mode() | 0o111);
+    fs::set_permissions(out_filename, perms)?;
+
     let total_duration = total_start.elapsed().unwrap();
 
     if verbose || time {

@@ -551,7 +551,53 @@ impl IdentIds {
         }
     }
 
-    /// Generates a unique, new name that's just a stringified integer
+    // necessary when the name of a value is changed in the editor
+    pub fn update_key(
+        &mut self,
+        old_ident_name: &str,
+        new_ident_name: &str,
+    ) -> Result<IdentId, String> {
+        let old_ident: Ident = old_ident_name.into();
+
+        let ident_id_ref_opt = self.by_ident.get(&old_ident);
+
+        match ident_id_ref_opt {
+            Some(ident_id_ref) => {
+                let ident_id = *ident_id_ref;
+
+                self.by_ident.remove(&old_ident);
+                self.by_ident.insert(new_ident_name.into(), ident_id);
+
+                let by_id = &mut self.by_id;
+                let key_index_opt = by_id.iter().position(|x| *x == old_ident);
+
+                if let Some(key_index) = key_index_opt {
+                    if let Some(vec_elt) = by_id.get_mut(key_index) {
+                        *vec_elt = new_ident_name.into();
+                    } else {
+                        // we get the index from by_id
+                        unreachable!()
+                    }
+
+                    Ok(ident_id)
+                } else {
+                    Err(
+                        format!(
+                            "Tried to find position of key {:?} in IdentIds.by_id but I could not find the key. IdentIds.by_id: {:?}",
+                            old_ident_name,
+                            self.by_id
+                        )
+                    )
+                }
+            }
+            None => Err(format!(
+                "Tried to update key in IdentIds ({:?}) but I could not find the key ({}).",
+                self.by_ident, old_ident_name
+            )),
+        }
+    }
+
+    /// Generates a unique, new name that's just a strigified integer
     /// (e.g. "1" or "5"), using an internal counter. Since valid Roc variable
     /// names cannot begin with a number, this has no chance of colliding
     /// with actual user-defined variables.
@@ -927,6 +973,7 @@ define_builtins! {
         16 STR_STARTS_WITH_CODE_PT: "startsWithCodePt"
         17 STR_ALIAS_ANALYSIS_STATIC: "#aliasAnalysisStatic" // string with the static lifetime
         18 STR_FROM_UTF8_RANGE: "fromUtf8Range"
+        19 STR_REPEAT: "repeat"
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
@@ -963,6 +1010,7 @@ define_builtins! {
         31 LIST_SORT_WITH: "sortWith"
         32 LIST_DROP: "drop"
         33 LIST_SWAP: "swap"
+        34 LIST_DROP_AT: "dropAt"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

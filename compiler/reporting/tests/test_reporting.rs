@@ -154,8 +154,9 @@ mod test_reporting {
                 }
 
                 for problem in type_problems {
-                    let report = type_problem(&alloc, filename.clone(), problem.clone());
-                    reports.push(report);
+                    if let Some(report) = type_problem(&alloc, filename.clone(), problem.clone()) {
+                        reports.push(report);
+                    }
                 }
 
                 for problem in mono_problems {
@@ -541,7 +542,7 @@ mod test_reporting {
                 8│          4 -> bar baz "yay"
                                  ^^^
 
-                these names seem close though:
+                Did you mean one of these?
 
                     baz
                     Nat
@@ -739,7 +740,7 @@ mod test_reporting {
                 <cyan>3<reset><cyan>│<reset>  <white>theAdmin<reset>
                     <red>^^^^^^^^<reset>
 
-                these names seem close though:
+                Did you mean one of these?
 
                     Decimal
                     Dec
@@ -1491,7 +1492,7 @@ mod test_reporting {
                 2│      { foo: 2 } -> foo
                                       ^^^
 
-                these names seem close though:
+                Did you mean one of these?
 
                     Bool
                     U8
@@ -1947,7 +1948,7 @@ mod test_reporting {
                 2│  f = \_ -> ok 4
                               ^^
 
-                these names seem close though:
+                Did you mean one of these?
 
                     U8
                     f
@@ -3634,8 +3635,8 @@ mod test_reporting {
                 1│  Foo.test
                     ^^^^^^^^
 
-                Is there an import missing? Perhaps there is a typo, these names seem
-                close:
+                Is there an import missing? Perhaps there is a typo. Did you mean one
+                of these?
 
                     Bool
                     Num
@@ -5797,7 +5798,7 @@ mod test_reporting {
                 1│  [ "foo", bar("") ]
                              ^^^
 
-                these names seem close though:
+                Did you mean one of these?
 
                     Nat
                     Str

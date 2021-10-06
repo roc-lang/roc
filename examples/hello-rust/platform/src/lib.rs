@@ -1,23 +1,22 @@
 #![allow(non_snake_case)]
 
 use core::ffi::c_void;
-use core::mem::MaybeUninit;
 use libc::c_char;
-use roc_std::{RocCallResult, RocStr};
+use roc_std::RocStr;
 use std::ffi::CStr;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed"]
-    fn roc_main(output: *mut RocCallResult<RocStr>) -> ();
+    fn roc_main() -> RocStr;
 }
 
 #[no_mangle]
-pub unsafe fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
+pub unsafe extern "C" fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
     return libc::malloc(size);
 }
 
 #[no_mangle]
-pub unsafe fn roc_realloc(
+pub unsafe extern "C" fn roc_realloc(
     c_ptr: *mut c_void,
     new_size: usize,
     _old_size: usize,
@@ -27,12 +26,12 @@ pub unsafe fn roc_realloc(
 }
 
 #[no_mangle]
-pub unsafe fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
+pub unsafe extern "C" fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
     return libc::free(c_ptr);
 }
 
 #[no_mangle]
-pub unsafe fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
+pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
     match tag_id {
         0 => {
             let slice = CStr::from_ptr(c_ptr as *const c_char);
@@ -45,26 +44,25 @@ pub unsafe fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
 }
 
 #[no_mangle]
-pub fn rust_main() -> isize {
-    let mut call_result: MaybeUninit<RocCallResult<RocStr>> = MaybeUninit::uninit();
+pub unsafe extern "C" fn roc_memcpy(dst: *mut c_void, src: *mut c_void, n: usize) -> *mut c_void {
+    libc::memcpy(dst, src, n)
+}
 
+#[no_mangle]
+pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut c_void {
+    libc::memset(dst, c, n)
+}
+
+#[no_mangle]
+pub extern "C" fn rust_main() -> i32 {
     unsafe {
-        roc_main(call_result.as_mut_ptr());
+        let roc_str = roc_main();
 
-        let output = call_result.assume_init();
+        let len = roc_str.len();
+        let str_bytes = roc_str.get_bytes() as *const libc::c_void;
 
-        match output.into() {
-            Ok(roc_str) => {
-                let len = roc_str.len();
-                let str_bytes = roc_str.get_bytes() as *const libc::c_void;
-
-                if libc::write(1, str_bytes, len) < 0 {
-                    panic!("Writing to stdout failed!");
-                }
-            }
-            Err(msg) => {
-                panic!("Roc failed with message: {}", msg);
-            }
+        if libc::write(1, str_bytes, len) < 0 {
+            panic!("Writing to stdout failed!");
         }
     }
 

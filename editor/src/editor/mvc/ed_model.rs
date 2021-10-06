@@ -1,27 +1,23 @@
 use crate::editor::code_lines::CodeLines;
 use crate::editor::grid_node_map::GridNodeMap;
-use crate::editor::slow_pool::{MarkNodeId, SlowPool};
-use crate::editor::syntax_highlight::HighlightStyle;
 use crate::editor::{
-    ed_error::EdError::ParseError,
-    ed_error::{EdResult, MissingParent, NoNodeAtCaretPosition},
-    markup::attribute::Attributes,
-    markup::nodes::{expr2_to_markup, set_parent_for_all, MarkupNode},
+    ed_error::SrcParseError,
+    ed_error::{EdResult, EmptyCodeString, MissingParent, NoNodeAtCaretPosition},
 };
 use crate::graphics::primitives::rect::Rect;
-use crate::lang::ast::{Expr2, ExprId};
-use crate::lang::expr::{str_to_expr2, Env};
-use crate::lang::pool::PoolStr;
-use crate::lang::scope::Scope;
-use crate::ui::text::caret_w_select::CaretWSelect;
+use crate::ui::text::caret_w_select::{CaretPos, CaretWSelect};
 use crate::ui::text::lines::SelectableLines;
 use crate::ui::text::text_pos::TextPos;
 use crate::ui::ui_error::UIResult;
-use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
 use nonempty::NonEmpty;
-use roc_module::symbol::Interns;
-use roc_region::all::Region;
+use roc_ast::lang::core::ast::{ASTNodeId, AST};
+use roc_ast::lang::env::Env;
+use roc_ast::mem_pool::pool_str::PoolStr;
+use roc_ast::parse::parse_ast;
+use roc_code_markup::markup::nodes::ast_to_mark_nodes;
+use roc_code_markup::slow_pool::{MarkNodeId, SlowPool};
+use roc_load::file::LoadedModule;
 use std::path::Path;
 
 #[derive(Debug)]
@@ -31,83 +27,98 @@ pub struct EdModel<'a> {
     pub code_lines: CodeLines,
     // allows us to map window coordinates to MarkNodeId's
     pub grid_node_map: GridNodeMap,
-    pub markup_root_id: MarkNodeId,
-    pub markup_node_pool: SlowPool,
+    pub markup_ids: Vec<MarkNodeId>, // one root node for every expression
+    pub mark_node_pool: SlowPool,
     // contains single char dimensions, used to calculate line height, column width...
     pub glyph_dim_rect_opt: Option<Rect>,
     pub has_focus: bool,
     pub caret_w_select_vec: NonEmpty<(CaretWSelect, Option<MarkNodeId>)>,
-    pub selected_expr_opt: Option<SelectedExpression>,
-    pub interns: &'a Interns, // this should eventually come from LoadedModule, see #1442
+    pub selected_block_opt: Option<SelectedBlock>,
+    pub loaded_module: LoadedModule,
     pub show_debug_view: bool,
     // EdModel is dirty if it has changed since the previous render.
     pub dirty: bool,
 }
 
 #[derive(Debug, Copy, Clone)]
-pub struct SelectedExpression {
-    pub ast_node_id: ExprId,
+pub struct SelectedBlock {
+    pub ast_node_id: ASTNodeId,
     pub mark_node_id: MarkNodeId,
     pub type_str: PoolStr,
 }
 
 pub fn init_model<'a>(
-    code_str: &'a BumpString,
+    code_str: &'a str,
     file_path: &'a Path,
     env: Env<'a>,
-    interns: &'a Interns,
+    loaded_module: LoadedModule,
     code_arena: &'a Bump,
+    caret_pos: CaretPos, // to set caret position
 ) -> EdResult<EdModel<'a>> {
     let mut module = EdModule::new(code_str, env, code_arena)?;
 
-    let ast_root_id = module.ast_root_id;
-    let mut markup_node_pool = SlowPool::new();
+    let mut mark_node_pool = SlowPool::default();
 
-    let markup_root_id = if code_str.is_empty() {
-        let blank_root = MarkupNode::Blank {
-            ast_node_id: ast_root_id,
-            attributes: Attributes::new(),
-            syn_high_style: HighlightStyle::Blank,
-            parent_id_opt: None,
-        };
-
-        markup_node_pool.add(blank_root)
+    let markup_ids = if code_str.is_empty() {
+        EmptyCodeString {}.fail()
     } else {
-        let ast_root = &module.env.pool.get(ast_root_id);
-
-        let temp_markup_root_id = expr2_to_markup(
+        Ok(ast_to_mark_nodes(
             code_arena,
             &mut module.env,
-            ast_root,
-            ast_root_id,
-            &mut markup_node_pool,
-        );
-        set_parent_for_all(temp_markup_root_id, &mut markup_node_pool);
+            &module.ast,
+            &mut mark_node_pool,
+            &loaded_module.interns,
+        )?)
+    }?;
 
-        temp_markup_root_id
+    let mut code_lines = CodeLines::default();
+    let mut grid_node_map = GridNodeMap::default();
+
+    let mut line_nr = 0;
+    let mut col_nr = 0;
+
+    for mark_node_id in &markup_ids {
+        EdModel::insert_mark_node_between_line(
+            &mut line_nr,
+            &mut col_nr,
+            *mark_node_id,
+            &mut grid_node_map,
+            &mut code_lines,
+            &mark_node_pool,
+        )?
+    }
+
+    let caret = match caret_pos {
+        CaretPos::Start => CaretWSelect::default(),
+        CaretPos::Exact(txt_pos) => CaretWSelect::new(txt_pos, None),
+        CaretPos::End => CaretWSelect::new(code_lines.end_txt_pos(), None),
     };
-
-    let code_lines = EdModel::build_code_lines_from_markup(markup_root_id, &markup_node_pool)?;
-    let grid_node_map = EdModel::build_node_map_from_markup(markup_root_id, &markup_node_pool)?;
 
     Ok(EdModel {
         module,
         file_path,
         code_lines,
         grid_node_map,
-        markup_root_id,
-        markup_node_pool,
+        markup_ids,
+        mark_node_pool,
         glyph_dim_rect_opt: None,
         has_focus: true,
-        caret_w_select_vec: NonEmpty::new((CaretWSelect::default(), None)),
-        selected_expr_opt: None,
-        interns,
+        caret_w_select_vec: NonEmpty::new((caret, None)),
+        selected_block_opt: None,
+        loaded_module,
         show_debug_view: false,
         dirty: true,
     })
 }
 
 impl<'a> EdModel<'a> {
+    pub fn get_carets(&self) -> Vec<TextPos> {
+        self.caret_w_select_vec
+            .iter()
+            .map(|tup| tup.0.caret_pos)
+            .collect()
+    }
+
     pub fn get_curr_mark_node_id(&self) -> UIResult<MarkNodeId> {
         let caret_pos = self.get_caret();
         self.grid_node_map.get_id_at_row_col(caret_pos)
@@ -138,11 +149,11 @@ impl<'a> EdModel<'a> {
     pub fn get_curr_child_indices(&self) -> EdResult<(usize, usize)> {
         if self.node_exists_at_caret() {
             let curr_mark_node_id = self.get_curr_mark_node_id()?;
-            let curr_mark_node = self.markup_node_pool.get(curr_mark_node_id);
+            let curr_mark_node = self.mark_node_pool.get(curr_mark_node_id);
 
             if let Some(parent_id) = curr_mark_node.get_parent_id_opt() {
-                let parent = self.markup_node_pool.get(parent_id);
-                parent.get_child_indices(curr_mark_node_id, &self.markup_node_pool)
+                let parent = self.mark_node_pool.get(parent_id);
+                Ok(parent.get_child_indices(curr_mark_node_id, &self.mark_node_pool)?)
             } else {
                 MissingParent {
                     node_id: curr_mark_node_id,
@@ -161,38 +172,26 @@ impl<'a> EdModel<'a> {
 #[derive(Debug)]
 pub struct EdModule<'a> {
     pub env: Env<'a>,
-    pub ast_root_id: ExprId,
+    pub ast: AST,
 }
 
 // for debugging
-// use crate::lang::ast::expr2_to_string;
+//use crate::lang::ast::expr2_to_string;
 
 impl<'a> EdModule<'a> {
     pub fn new(code_str: &'a str, mut env: Env<'a>, ast_arena: &'a Bump) -> EdResult<EdModule<'a>> {
         if !code_str.is_empty() {
-            let mut scope = Scope::new(env.home, env.pool, env.var_store);
+            let parse_res = parse_ast::parse_from_string(code_str, &mut env, ast_arena);
 
-            let region = Region::new(0, 0, 0, 0);
-
-            let expr2_result = str_to_expr2(ast_arena, code_str, &mut env, &mut scope, region);
-
-            match expr2_result {
-                Ok((expr2, _output)) => {
-                    let ast_root_id = env.pool.add(expr2);
-
-                    // for debugging
-                    // dbg!(expr2_to_string(ast_root_id, env.pool));
-
-                    Ok(EdModule { env, ast_root_id })
-                }
-                Err(err) => Err(ParseError {
+            match parse_res {
+                Ok(ast) => Ok(EdModule { env, ast }),
+                Err(err) => SrcParseError {
                     syntax_err: format!("{:?}", err),
-                }),
+                }
+                .fail(),
             }
         } else {
-            let ast_root_id = env.pool.add(Expr2::Blank);
-
-            Ok(EdModule { env, ast_root_id })
+            EmptyCodeString {}.fail()
         }
     }
 }
@@ -200,40 +199,49 @@ impl<'a> EdModule<'a> {
 #[cfg(test)]
 pub mod test_ed_model {
     use crate::editor::ed_error::EdResult;
+    use crate::editor::main::load_module;
     use crate::editor::mvc::ed_model;
-    use crate::lang::expr::Env;
-    use crate::lang::pool::Pool;
+    use crate::editor::resources::strings::HELLO_WORLD;
     use crate::ui::text::caret_w_select::test_caret_w_select::convert_dsl_to_selection;
     use crate::ui::text::caret_w_select::test_caret_w_select::convert_selection_to_dsl;
+    use crate::ui::text::caret_w_select::CaretPos;
     use crate::ui::text::lines::SelectableLines;
+    use crate::ui::text::text_pos::TextPos;
     use crate::ui::ui_error::UIResult;
-    use bumpalo::collections::String as BumpString;
     use bumpalo::Bump;
     use ed_model::EdModel;
-    use roc_module::symbol::{IdentIds, Interns, ModuleIds};
+    use roc_ast::lang::env::Env;
+    use roc_ast::mem_pool::pool::Pool;
+    use roc_load::file::LoadedModule;
+    use roc_module::symbol::IdentIds;
+    use roc_module::symbol::ModuleIds;
     use roc_types::subs::VarStore;
+    use std::fs::File;
+    use std::io::Write;
     use std::path::Path;
+    use std::path::PathBuf;
+    use tempfile::tempdir;
+    use uuid::Uuid;
 
     pub fn init_dummy_model<'a>(
-        code_str: &'a BumpString,
+        code_str: &'a str,
+        loaded_module: LoadedModule,
+        module_ids: &'a ModuleIds,
         ed_model_refs: &'a mut EdModelRefs,
+        code_arena: &'a Bump,
     ) -> EdResult<EdModel<'a>> {
         let file_path = Path::new("");
 
         let dep_idents = IdentIds::exposed_builtins(8);
         let exposed_ident_ids = IdentIds::default();
-        let mod_id = ed_model_refs
-            .interns
-            .module_ids
-            .get_or_insert(&"ModId123".into());
 
         let env = Env::new(
-            mod_id,
+            loaded_module.module_id,
             &ed_model_refs.env_arena,
             &mut ed_model_refs.env_pool,
             &mut ed_model_refs.var_store,
             dep_idents,
-            &ed_model_refs.interns.module_ids,
+            module_ids,
             exposed_ident_ids,
         );
 
@@ -241,43 +249,69 @@ pub mod test_ed_model {
             code_str,
             file_path,
             env,
-            &ed_model_refs.interns,
-            &ed_model_refs.code_arena,
+            loaded_module,
+            code_arena,
+            CaretPos::End,
         )
     }
 
     pub struct EdModelRefs {
-        code_arena: Bump,
         env_arena: Bump,
         env_pool: Pool,
         var_store: VarStore,
-        interns: Interns,
     }
 
     pub fn init_model_refs() -> EdModelRefs {
         EdModelRefs {
-            code_arena: Bump::new(),
             env_arena: Bump::new(),
             env_pool: Pool::with_capacity(1024),
             var_store: VarStore::default(),
-            interns: Interns {
-                module_ids: ModuleIds::default(),
-                all_ident_ids: IdentIds::exposed_builtins(8),
-            },
         }
     }
 
     pub fn ed_model_from_dsl<'a>(
-        clean_code_str: &'a BumpString,
-        code_lines: &[&str],
+        clean_code_str: &'a mut String,
+        code_lines: Vec<String>,
         ed_model_refs: &'a mut EdModelRefs,
+        module_ids: &'a ModuleIds,
+        code_arena: &'a Bump,
     ) -> Result<EdModel<'a>, String> {
-        let code_lines_vec: Vec<String> = (*code_lines).iter().map(|s| s.to_string()).collect();
-        let caret_w_select = convert_dsl_to_selection(&code_lines_vec)?;
+        let full_code = vec![HELLO_WORLD, clean_code_str.as_str()];
+        *clean_code_str = full_code.join("\n");
 
-        let mut ed_model = init_dummy_model(clean_code_str, ed_model_refs)?;
+        let temp_dir = tempdir().expect("Failed to create temporary directory for test.");
+        let temp_file_path_buf =
+            PathBuf::from([Uuid::new_v4().to_string(), ".roc".to_string()].join(""));
+        let temp_file_full_path = temp_dir.path().join(temp_file_path_buf);
 
-        ed_model.set_caret(caret_w_select.caret_pos);
+        let mut file = File::create(temp_file_full_path.clone()).expect(&format!(
+            "Failed to create temporary file for path {:?}",
+            temp_file_full_path
+        ));
+        writeln!(file, "{}", clean_code_str).expect(&format!(
+            "Failed to write {:?} to file: {:?}",
+            clean_code_str, file
+        ));
+
+        let loaded_module = load_module(&temp_file_full_path);
+
+        let mut ed_model = init_dummy_model(
+            clean_code_str,
+            loaded_module,
+            module_ids,
+            ed_model_refs,
+            code_arena,
+        )?;
+
+        // adjust for header and main function
+        let nr_hello_world_lines = HELLO_WORLD.matches('\n').count() - 2;
+        let caret_w_select = convert_dsl_to_selection(&code_lines)?;
+        let adjusted_caret_pos = TextPos {
+            line: caret_w_select.caret_pos.line + nr_hello_world_lines,
+            column: caret_w_select.caret_pos.column,
+        };
+
+        ed_model.set_caret(adjusted_caret_pos);
 
         Ok(ed_model)
     }
