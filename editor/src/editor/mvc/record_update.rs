@@ -1,23 +1,26 @@
 use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::MissingParent;
 use crate::editor::ed_error::RecordWithoutFields;
-use crate::editor::markup::attribute::Attributes;
-use crate::editor::markup::common_nodes::new_blank_mn;
-use crate::editor::markup::common_nodes::new_left_accolade_mn;
-use crate::editor::markup::common_nodes::new_right_accolade_mn;
-use crate::editor::markup::nodes;
-use crate::editor::markup::nodes::MarkupNode;
 use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::mvc::ed_update::get_node_context;
 use crate::editor::mvc::ed_update::NodeContext;
-use crate::editor::slow_pool::MarkNodeId;
-use crate::editor::syntax_highlight::HighlightStyle;
 use crate::editor::util::index_of;
-use crate::lang::ast::{Expr2, ExprId, RecordField};
-use crate::lang::parse::ASTNodeId;
-use crate::lang::pool::{PoolStr, PoolVec};
 use crate::ui::text::text_pos::TextPos;
+use roc_ast::lang::core::ast::ASTNodeId;
+use roc_ast::lang::core::expr::expr2::Expr2;
+use roc_ast::lang::core::expr::expr2::ExprId;
+use roc_ast::lang::core::expr::record_field::RecordField;
+use roc_ast::mem_pool::pool_str::PoolStr;
+use roc_ast::mem_pool::pool_vec::PoolVec;
+use roc_code_markup::markup::attribute::Attributes;
+use roc_code_markup::markup::common_nodes::new_blank_mn;
+use roc_code_markup::markup::common_nodes::new_left_accolade_mn;
+use roc_code_markup::markup::common_nodes::new_right_accolade_mn;
+use roc_code_markup::markup::nodes;
+use roc_code_markup::markup::nodes::MarkupNode;
+use roc_code_markup::slow_pool::MarkNodeId;
+use roc_code_markup::syntax_highlight::HighlightStyle;
 use snafu::OptionExt;
 
 pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
@@ -123,7 +126,7 @@ pub fn update_empty_record(
                 content: new_input.to_owned(),
                 ast_node_id,
                 syn_high_style: HighlightStyle::RecordField,
-                attributes: Attributes::new(),
+                attributes: Attributes::default(),
                 parent_id_opt,
                 newlines_at_end: 0,
             };
@@ -232,7 +235,7 @@ pub fn update_record_colon(
                                             content: record_colon.to_owned(),
                                             ast_node_id: ASTNodeId::AExprId(record_ast_node_id),
                                             syn_high_style: HighlightStyle::Operator,
-                                            attributes: Attributes::new(),
+                                            attributes: Attributes::default(),
                                             parent_id_opt: Some(parent_id),
                                             newlines_at_end: 0,
                                         };

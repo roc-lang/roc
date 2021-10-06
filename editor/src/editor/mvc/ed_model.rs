@@ -1,21 +1,22 @@
 use crate::editor::code_lines::CodeLines;
 use crate::editor::grid_node_map::GridNodeMap;
-use crate::editor::markup::nodes::ast_to_mark_nodes;
-use crate::editor::slow_pool::{MarkNodeId, SlowPool};
 use crate::editor::{
     ed_error::SrcParseError,
     ed_error::{EdResult, EmptyCodeString, MissingParent, NoNodeAtCaretPosition},
 };
 use crate::graphics::primitives::rect::Rect;
-use crate::lang::expr::Env;
-use crate::lang::parse::{ASTNodeId, AST};
-use crate::lang::pool::PoolStr;
 use crate::ui::text::caret_w_select::{CaretPos, CaretWSelect};
 use crate::ui::text::lines::SelectableLines;
 use crate::ui::text::text_pos::TextPos;
 use crate::ui::ui_error::UIResult;
 use bumpalo::Bump;
 use nonempty::NonEmpty;
+use roc_ast::lang::core::ast::{ASTNodeId, AST};
+use roc_ast::lang::env::Env;
+use roc_ast::mem_pool::pool_str::PoolStr;
+use roc_ast::parse::parse_ast;
+use roc_code_markup::markup::nodes::ast_to_mark_nodes;
+use roc_code_markup::slow_pool::{MarkNodeId, SlowPool};
 use roc_load::file::LoadedModule;
 use std::path::Path;
 
@@ -56,18 +57,18 @@ pub fn init_model<'a>(
 ) -> EdResult<EdModel<'a>> {
     let mut module = EdModule::new(code_str, env, code_arena)?;
 
-    let mut mark_node_pool = SlowPool::new();
+    let mut mark_node_pool = SlowPool::default();
 
     let markup_ids = if code_str.is_empty() {
         EmptyCodeString {}.fail()
     } else {
-        ast_to_mark_nodes(
+        Ok(ast_to_mark_nodes(
             code_arena,
             &mut module.env,
             &module.ast,
             &mut mark_node_pool,
             &loaded_module.interns,
-        )
+        )?)
     }?;
 
     let mut code_lines = CodeLines::default();
@@ -152,7 +153,7 @@ impl<'a> EdModel<'a> {
 
             if let Some(parent_id) = curr_mark_node.get_parent_id_opt() {
                 let parent = self.mark_node_pool.get(parent_id);
-                parent.get_child_indices(curr_mark_node_id, &self.mark_node_pool)
+                Ok(parent.get_child_indices(curr_mark_node_id, &self.mark_node_pool)?)
             } else {
                 MissingParent {
                     node_id: curr_mark_node_id,
@@ -180,7 +181,7 @@ pub struct EdModule<'a> {
 impl<'a> EdModule<'a> {
     pub fn new(code_str: &'a str, mut env: Env<'a>, ast_arena: &'a Bump) -> EdResult<EdModule<'a>> {
         if !code_str.is_empty() {
-            let parse_res = AST::parse_from_string(code_str, &mut env, ast_arena);
+            let parse_res = parse_ast::parse_from_string(code_str, &mut env, ast_arena);
 
             match parse_res {
                 Ok(ast) => Ok(EdModule { env, ast }),
@@ -201,8 +202,6 @@ pub mod test_ed_model {
     use crate::editor::main::load_module;
     use crate::editor::mvc::ed_model;
     use crate::editor::resources::strings::HELLO_WORLD;
-    use crate::lang::expr::Env;
-    use crate::lang::pool::Pool;
     use crate::ui::text::caret_w_select::test_caret_w_select::convert_dsl_to_selection;
     use crate::ui::text::caret_w_select::test_caret_w_select::convert_selection_to_dsl;
     use crate::ui::text::caret_w_select::CaretPos;
@@ -211,6 +210,8 @@ pub mod test_ed_model {
     use crate::ui::ui_error::UIResult;
     use bumpalo::Bump;
     use ed_model::EdModel;
+    use roc_ast::lang::env::Env;
+    use roc_ast::mem_pool::pool::Pool;
     use roc_load::file::LoadedModule;
     use roc_module::symbol::IdentIds;
     use roc_module::symbol::ModuleIds;

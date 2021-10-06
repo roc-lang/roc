@@ -3,14 +3,12 @@
 #![allow(clippy::large_enum_variant, clippy::upper_case_acronyms)]
 
 #[cfg_attr(test, macro_use)]
-extern crate indoc;
 extern crate pest;
 #[cfg_attr(test, macro_use)]
 extern crate pest_derive;
 
 mod editor;
 mod graphics;
-pub mod lang; //TODO remove pub for unused warnings
 mod ui;
 mod window;
 
