@@ -2069,17 +2069,17 @@ fn list_join(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// List.walk : List elem, (elem -> accum -> accum), accum -> accum
+/// List.walk : List elem, state, (state, elem -> state) -> state
 fn list_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_3(symbol, LowLevel::ListWalk, var_store)
 }
 
-/// List.walkBackwards : List elem, (elem -> accum -> accum), accum -> accum
+/// List.walkBackwards : List elem, state, (state, elem -> state) -> state
 fn list_walk_backwards(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_3(symbol, LowLevel::ListWalkBackwards, var_store)
 }
 
-/// List.walkUntil : List elem, (elem, accum -> [ Continue accum, Stop accum ]), accum -> accum
+/// List.walkUntil : List elem, state, (state, elem -> [ Continue state, Stop state ]) -> state
 fn list_walk_until(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_3(symbol, LowLevel::ListWalkUntil, var_store)
 }
