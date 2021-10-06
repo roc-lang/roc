@@ -560,7 +560,7 @@ pub fn listWalk(
         const size = list.len();
         while (i < size) : (i += 1) {
             const element = source_ptr + i * element_width;
-            caller(data, element, b2, b1);
+            caller(data, b2, element, b1);
 
             std.mem.swap([*]u8, &b1, &b2);
         }
@@ -607,7 +607,7 @@ pub fn listWalkBackwards(
         while (i > 0) {
             i -= 1;
             const element = source_ptr + i * element_width;
-            caller(data, element, b2, b1);
+            caller(data, b2, element, b1);
 
             std.mem.swap([*]u8, &b1, &b2);
         }
@@ -658,7 +658,7 @@ pub fn listWalkUntil(
                 inc_n_data(data, 1);
             }
 
-            caller(data, element, bytes_ptr, bytes_ptr);
+            caller(data, bytes_ptr, element, bytes_ptr);
 
             // [ Continue ..., Stop ]
             const tag_id = has_tag_id(0, bytes_ptr);

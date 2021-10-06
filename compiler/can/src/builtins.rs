@@ -2550,7 +2550,7 @@ fn set_contains(symbol: Symbol, var_store: &mut VarStore) -> Def {
     dict_contains(symbol, var_store)
 }
 
-/// Set.walk : Set k,  (k, accum -> accum), accum -> accum
+/// Set.walk : Set k,  (accum, k -> accum), accum -> accum
 fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let dict_var = var_store.fresh();
     let func_var = var_store.fresh();
@@ -2560,7 +2560,7 @@ fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     let user_function = Box::new((
         func_var,
-        no_region(Var(Symbol::ARG_2)),
+        no_region(Var(Symbol::ARG_3)),
         var_store.fresh(),
         accum_var,
     ));
@@ -2568,8 +2568,8 @@ fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let call_func = Call(
         user_function,
         vec![
-            (key_var, no_region(Var(Symbol::ARG_5))),
-            (accum_var, no_region(Var(Symbol::ARG_6))),
+            (accum_var, no_region(Var(Symbol::ARG_5))),
+            (key_var, no_region(Var(Symbol::ARG_6))),
         ],
         CalledVia::Space,
     );
@@ -2581,11 +2581,11 @@ fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
         return_type: accum_var,
         name: Symbol::SET_WALK_USER_FUNCTION,
         recursive: Recursive::NotRecursive,
-        captured_symbols: vec![(Symbol::ARG_2, func_var)],
+        captured_symbols: vec![(Symbol::ARG_3, func_var)],
         arguments: vec![
-            (key_var, no_region(Pattern::Identifier(Symbol::ARG_5))),
+            (accum_var, no_region(Pattern::Identifier(Symbol::ARG_5))),
+            (key_var, no_region(Pattern::Identifier(Symbol::ARG_6))),
             (Variable::EMPTY_RECORD, no_region(Pattern::Underscore)),
-            (accum_var, no_region(Pattern::Identifier(Symbol::ARG_6))),
         ],
         loc_body: Box::new(no_region(call_func)),
     };
@@ -2594,8 +2594,8 @@ fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
         op: LowLevel::DictWalk,
         args: vec![
             (dict_var, Var(Symbol::ARG_1)),
+            (accum_var, Var(Symbol::ARG_2)),
             (wrapper_var, wrapper),
-            (accum_var, Var(Symbol::ARG_3)),
         ],
         ret_var: accum_var,
     };
@@ -2604,8 +2604,8 @@ fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
         symbol,
         vec![
             (dict_var, Symbol::ARG_1),
-            (func_var, Symbol::ARG_2),
-            (accum_var, Symbol::ARG_3),
+            (accum_var, Symbol::ARG_2),
+            (func_var, Symbol::ARG_3),
         ],
         var_store,
         body,

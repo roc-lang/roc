@@ -191,7 +191,7 @@ fn from_list_with_fold() {
             myDict : Dict I64 I64
             myDict =
                 [1,2,3]
-                    |> List.walk (\value, accum -> Dict.insert accum value value) Dict.empty
+                    |> List.walk Dict.empty (\accum, value -> Dict.insert accum value value)
 
             Dict.values myDict
             "#
@@ -214,7 +214,7 @@ fn from_list_with_fold() {
             myDict =
                 # 25 elements (8 + 16 + 1) is guaranteed to overflow/reallocate at least twice
                 range 0 25 []
-                    |> List.walk (\value, accum -> Dict.insert accum value value) Dict.empty
+                    |> List.walk Dict.empty (\accum, value -> Dict.insert accum value value)
 
             Dict.values myDict
                 |> List.len
@@ -373,7 +373,7 @@ fn intersection() {
         indoc!(
             r#"
             dict1 : Dict I64 {}
-            dict1 = 
+            dict1 =
                 Dict.empty
                     |> Dict.insert 1 {}
                     |> Dict.insert 2 {}
@@ -382,14 +382,14 @@ fn intersection() {
                     |> Dict.insert 5 {}
 
             dict2 : Dict I64 {}
-            dict2 = 
+            dict2 =
                 Dict.empty
                     |> Dict.insert 0 {}
                     |> Dict.insert 2 {}
                     |> Dict.insert 4 {}
 
-            Dict.intersection dict1 dict2 
-                |> Dict.len 
+            Dict.intersection dict1 dict2
+                |> Dict.len
             "#
         ),
         2,
@@ -403,7 +403,7 @@ fn intersection_prefer_first() {
         indoc!(
             r#"
             dict1 : Dict I64 I64
-            dict1 = 
+            dict1 =
                 Dict.empty
                     |> Dict.insert 1 1
                     |> Dict.insert 2 2
@@ -412,14 +412,14 @@ fn intersection_prefer_first() {
                     |> Dict.insert 5 5
 
             dict2 : Dict I64 I64
-            dict2 = 
+            dict2 =
                 Dict.empty
                     |> Dict.insert 0 100
                     |> Dict.insert 2 200
                     |> Dict.insert 4 300
 
-            Dict.intersection dict1 dict2 
-                |> Dict.values 
+            Dict.intersection dict1 dict2
+                |> Dict.values
             "#
         ),
         RocList::from_slice(&[4, 2]),
@@ -433,7 +433,7 @@ fn difference() {
         indoc!(
             r#"
             dict1 : Dict I64 {}
-            dict1 = 
+            dict1 =
                 Dict.empty
                     |> Dict.insert 1 {}
                     |> Dict.insert 2 {}
@@ -442,14 +442,14 @@ fn difference() {
                     |> Dict.insert 5 {}
 
             dict2 : Dict I64 {}
-            dict2 = 
+            dict2 =
                 Dict.empty
                     |> Dict.insert 0 {}
                     |> Dict.insert 2 {}
                     |> Dict.insert 4 {}
 
-            Dict.difference dict1 dict2 
-                |> Dict.len 
+            Dict.difference dict1 dict2
+                |> Dict.len
             "#
         ),
         3,
@@ -463,7 +463,7 @@ fn difference_prefer_first() {
         indoc!(
             r#"
             dict1 : Dict I64 I64
-            dict1 = 
+            dict1 =
                 Dict.empty
                     |> Dict.insert 1 1
                     |> Dict.insert 2 2
@@ -472,14 +472,14 @@ fn difference_prefer_first() {
                     |> Dict.insert 5 5
 
             dict2 : Dict I64 I64
-            dict2 = 
+            dict2 =
                 Dict.empty
                     |> Dict.insert 0 100
                     |> Dict.insert 2 200
                     |> Dict.insert 4 300
 
-            Dict.difference dict1 dict2 
-                |> Dict.values 
+            Dict.difference dict1 dict2
+                |> Dict.values
             "#
         ),
         RocList::from_slice(&[5, 3, 1]),
@@ -493,7 +493,7 @@ fn walk_sum_keys() {
         indoc!(
             r#"
             dict1 : Dict I64 I64
-            dict1 = 
+            dict1 =
                 Dict.empty
                     |> Dict.insert 1 1
                     |> Dict.insert 2 2

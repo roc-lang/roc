@@ -641,7 +641,7 @@ fn call_spec(
                 match op {
                     DictWalk => {
                         let dict = env.symbols[&call.arguments[0]];
-                        let default = env.symbols[&call.arguments[1]];
+                        let state = env.symbols[&call.arguments[1]];
                         let closure_env = env.symbols[&call.arguments[3]];
 
                         let bag = builder.add_get_tuple_field(block, dict, DICT_BAG_INDEX)?;
@@ -653,16 +653,16 @@ fn call_spec(
                         let val = builder.add_get_tuple_field(block, first, 1)?;
 
                         let argument = if closure_env_layout.is_none() {
-                            builder.add_make_tuple(block, &[key, val, default])?
+                            builder.add_make_tuple(block, &[state, key, val])?
                         } else {
-                            builder.add_make_tuple(block, &[key, val, default, closure_env])?
+                            builder.add_make_tuple(block, &[state, key, val, closure_env])?
                         };
                         builder.add_call(block, spec_var, module, name, argument)?;
                     }
 
                     ListWalk | ListWalkBackwards | ListWalkUntil => {
                         let list = env.symbols[&call.arguments[0]];
-                        let default = env.symbols[&call.arguments[1]];
+                        let state = env.symbols[&call.arguments[1]];
                         let closure_env = env.symbols[&call.arguments[3]];
 
                         let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
@@ -671,9 +671,9 @@ fn call_spec(
                         let first = builder.add_bag_get(block, bag)?;
 
                         let argument = if closure_env_layout.is_none() {
-                            builder.add_make_tuple(block, &[first, default])?
+                            builder.add_make_tuple(block, &[state, first])?
                         } else {
-                            builder.add_make_tuple(block, &[first, default, closure_env])?
+                            builder.add_make_tuple(block, &[state, first, closure_env])?
                         };
                         builder.add_call(block, spec_var, module, name, argument)?;
                     }

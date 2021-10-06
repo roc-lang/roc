@@ -399,13 +399,13 @@ fn list_walk_backwards_empty_all_inline() {
 fn list_walk_backwards_with_str() {
     assert_evals_to!(
         r#"List.walkBackwards [ "x", "y", "z" ] "<" Str.concat"#,
-        RocStr::from("xyz<"),
+        RocStr::from("<zyx"),
         RocStr
     );
 
     assert_evals_to!(
         r#"List.walkBackwards [ "Second", "Third", "Fourth" ] "First" Str.concat"#,
-        RocStr::from("ThirdSecondFirstFourth"),
+        RocStr::from("FirstFourthThirdSecond"),
         RocStr
     );
 }
@@ -441,7 +441,7 @@ fn list_walk_backwards_with_record() {
 fn list_walk_with_str() {
     assert_evals_to!(
         r#"List.walk [ "x", "y", "z" ] "<" Str.concat"#,
-        RocStr::from("zyx<"),
+        RocStr::from("<xyz"),
         RocStr
     );
 
@@ -454,7 +454,7 @@ fn list_walk_with_str() {
 
 #[test]
 fn list_walk_subtraction() {
-    assert_evals_to!(r#"List.walk [ 1, 2 ] 1 Num.sub"#, 2, i64);
+    assert_evals_to!(r#"List.walk [ 1, 2 ] 1 Num.sub"#, (1 - 1) - 2, i64);
 }
 
 #[test]
@@ -471,11 +471,11 @@ fn list_walk_until_even_prefix_sum() {
     assert_evals_to!(
         r#"
         helper = \a, b ->
-            if Num.isEven a then
+            if Num.isEven b then
                 Continue (a + b)
 
             else
-                Stop b
+                Stop a
 
         List.walkUntil [ 2, 4, 8, 9 ] 0 helper"#,
         2 + 4 + 8,

@@ -768,7 +768,7 @@ pub fn dictWalk(
                 const key = dict.getKey(i, alignment, key_width, value_width);
                 const value = dict.getValue(i, alignment, key_width, value_width);
 
-                caller(data, key, value, b2, b1);
+                caller(data, b2, key, value, b1);
 
                 std.mem.swap([*]u8, &b1, &b2);
             },

@@ -3405,7 +3405,7 @@ mod solve_expr {
                                             else
                                                 Ok { position, cost: 0.0 }
 
-                    Set.walk model.openSet folder (Ok { position: boom {}, cost: 0.0 })
+                    Set.walk model.openSet (Ok { position: boom {}, cost: 0.0 }) folder
                         |> Result.map (\x -> x.position)
 
                 astar : Model position -> Result position [ KeyNotFound ]*
@@ -3689,7 +3689,7 @@ mod solve_expr {
                 List.walkBackwards
                 "#
             ),
-            "List a, (a, b -> b), b -> b",
+            "List a, b, (a, b -> b) -> b",
         );
     }
 
@@ -3702,7 +3702,7 @@ mod solve_expr {
                 empty =
                     []
 
-                List.walkBackwards empty (\a, b -> a + b) 0
+                List.walkBackwards empty 0 (\a, b -> a + b)
                 "#
             ),
             "I64",

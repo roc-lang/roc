@@ -793,7 +793,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
             list_type(flex(TVAR1)),
             flex(TVAR2),
             closure(
-                vec![flex(TVAR1), flex(TVAR2)],
+                vec![flex(TVAR2), flex(TVAR1)],
                 TVAR3,
                 Box::new(until_type(flex(TVAR2))),
             ),
@@ -1173,13 +1173,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(set_type(flex(TVAR1))),
     );
 
-    // Set.walk : Set a, (a, b -> b), b -> b
+    // Set.walk : Set a, (b, a -> b), b -> b
     add_top_level_function_type!(
         Symbol::SET_WALK,
         vec![
             set_type(flex(TVAR1)),
-            closure(vec![flex(TVAR1), flex(TVAR2)], TVAR3, Box::new(flex(TVAR2))),
             flex(TVAR2),
+            closure(vec![flex(TVAR2), flex(TVAR1)], TVAR3, Box::new(flex(TVAR2))),
         ],
         Box::new(flex(TVAR2)),
     );

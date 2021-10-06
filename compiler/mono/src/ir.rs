@@ -4039,9 +4039,12 @@ pub fn with_hole<'a>(
                 ListWalk | ListWalkUntil | ListWalkBackwards | DictWalk => {
                     debug_assert_eq!(arg_symbols.len(), 3);
 
-                    let closure_index = 2;
-                    let closure_data_symbol = arg_symbols[closure_index];
-                    let closure_data_var = args[closure_index].0;
+                    const LIST_INDEX: usize = 0;
+                    const DEFAULT_INDEX: usize = 1;
+                    const CLOSURE_INDEX: usize = 2;
+
+                    let closure_data_symbol = arg_symbols[CLOSURE_INDEX];
+                    let closure_data_var = args[CLOSURE_INDEX].0;
 
                     let stmt = match_on_closure_argument!(
                         env,
@@ -4050,7 +4053,7 @@ pub fn with_hole<'a>(
                         closure_data_symbol,
                         closure_data_var,
                         op,
-                        [arg_symbols[0], arg_symbols[1]],
+                        [arg_symbols[LIST_INDEX], arg_symbols[DEFAULT_INDEX]],
                         layout,
                         assigned,
                         hole
@@ -4062,47 +4065,35 @@ pub fn with_hole<'a>(
                     // actual closure, and the default is either the number 1 or 0
                     // this can be removed when we define builtin modules as proper modules
 
-                    let stmt = {
-                        const ARG_INDEX: usize = 0;
+                    let stmt = assign_to_symbol(
+                        env,
+                        procs,
+                        layout_cache,
+                        args[LIST_INDEX].0,
+                        Located::at_zero(args[LIST_INDEX].1.clone()),
+                        arg_symbols[LIST_INDEX],
+                        stmt,
+                    );
 
-                        assign_to_symbol(
-                            env,
-                            procs,
-                            layout_cache,
-                            args[ARG_INDEX].0,
-                            Located::at_zero(args[ARG_INDEX].1.clone()),
-                            arg_symbols[ARG_INDEX],
-                            stmt,
-                        )
-                    };
+                    let stmt = assign_to_symbol(
+                        env,
+                        procs,
+                        layout_cache,
+                        args[DEFAULT_INDEX].0,
+                        Located::at_zero(args[DEFAULT_INDEX].1.clone()),
+                        arg_symbols[DEFAULT_INDEX],
+                        stmt,
+                    );
 
-                    let stmt = {
-                        const ARG_INDEX: usize = 1;
-
-                        assign_to_symbol(
-                            env,
-                            procs,
-                            layout_cache,
-                            args[ARG_INDEX].0,
-                            Located::at_zero(args[ARG_INDEX].1.clone()),
-                            arg_symbols[ARG_INDEX],
-                            stmt,
-                        )
-                    };
-
-                    {
-                        const ARG_INDEX: usize = 2;
-
-                        assign_to_symbol(
-                            env,
-                            procs,
-                            layout_cache,
-                            args[ARG_INDEX].0,
-                            Located::at_zero(args[ARG_INDEX].1.clone()),
-                            arg_symbols[ARG_INDEX],
-                            stmt,
-                        )
-                    }
+                    assign_to_symbol(
+                        env,
+                        procs,
+                        layout_cache,
+                        args[CLOSURE_INDEX].0,
+                        Located::at_zero(args[CLOSURE_INDEX].1.clone()),
+                        arg_symbols[CLOSURE_INDEX],
+                        stmt,
+                    )
                 }
                 ListMap2 => {
                     debug_assert_eq!(arg_symbols.len(), 3);
