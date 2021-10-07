@@ -334,7 +334,15 @@ fn preprocess_impl(
 
     // Extract PLT related information for app functions.
     let symbol_and_plt_processing_start = SystemTime::now();
-    let (plt_address, plt_offset) = match exec_obj.section_by_name(".plt") {
+    let plt_section_name = match target.binary_format {
+        target_lexicon::BinaryFormat::Elf => ".plt",
+        target_lexicon::BinaryFormat::Macho => "__stubs",
+        _ => {
+            // We should have verified this via supported() before calling this function
+            unreachable!()
+        }
+    };
+    let (plt_address, plt_offset) = match exec_obj.section_by_name(plt_section_name) {
         Some(section) => {
             let file_offset = match section.compressed_file_range() {
                 Ok(
