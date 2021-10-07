@@ -758,7 +758,7 @@ fn preprocess_impl(
         {
             target_lexicon::Endianness::Little => {
                 // TODO little endian
-                gen_elf(
+                gen_elf_le(
                     exec_data,
                     &mut md,
                     out_filename,
@@ -770,17 +770,10 @@ fn preprocess_impl(
                 )?
             }
             target_lexicon::Endianness::Big => {
-                // TODO big endian
-                gen_elf(
-                    exec_data,
-                    &mut md,
-                    out_filename,
-                    &got_app_syms,
-                    &got_sections,
-                    dynamic_lib_count,
-                    shared_lib_index,
-                    verbose,
-                )?
+                // TODO probably need to make gen_elf a macro to get this
+                // to work, which is annoying. A parameterized function
+                // does *not* work.
+                todo!("Roc does not yet support big-endian macOS hosts!");
             }
         },
         target_lexicon::BinaryFormat::Macho => {
@@ -792,7 +785,8 @@ fn preprocess_impl(
                     todo!();
                 }
                 target_lexicon::Endianness::Big => {
-                    // TODO Is big-endian macOS even a thing that exists?
+                    // TODO Is big-endian macOS even a thing that exists anymore?
+                    // Just ancient PowerPC machines maybe?
                     todo!("Roc does not yet support big-endian macOS hosts!");
                 }
             }
@@ -871,7 +865,7 @@ fn preprocess_impl(
     Ok(0)
 }
 
-fn gen_elf(
+fn gen_elf_le(
     exec_data: &[u8],
     md: &mut metadata::Metadata,
     out_filename: &str,
