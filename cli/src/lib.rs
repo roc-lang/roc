@@ -289,7 +289,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     };
     let surgically_link = matches.is_present(FLAG_LINK);
     let precompiled = matches.is_present(FLAG_PRECOMPILED);
-    if surgically_link && !roc_linker::supported(&link_type, &target) {
+    if surgically_link && !roc_linker::supported(link_type, &target) {
         panic!(
             "Link type, {:?}, with target, {}, not supported by roc linker",
             link_type, target

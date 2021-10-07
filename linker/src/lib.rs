@@ -6,10 +6,9 @@ use memmap2::{Mmap, MmapMut};
 use object::write;
 use object::{elf, endian, macho};
 use object::{
-    Architecture, BigEndian, BinaryFormat, CompressedFileRange, CompressionFormat, Endianness,
-    LittleEndian, NativeEndian, Object, ObjectSection, ObjectSymbol, RelocationKind,
-    RelocationTarget, Section, SectionIndex, Symbol, SymbolFlags, SymbolIndex, SymbolKind,
-    SymbolScope, SymbolSection,
+    Architecture, BinaryFormat, CompressedFileRange, CompressionFormat, Endianness, LittleEndian,
+    NativeEndian, Object, ObjectSection, ObjectSymbol, RelocationKind, RelocationTarget, Section,
+    SectionIndex, Symbol, SymbolFlags, SymbolIndex, SymbolKind, SymbolScope, SymbolSection,
 };
 use roc_build::link::{rebuild_host, LinkType};
 use roc_collections::all::MutMap;
@@ -133,11 +132,13 @@ pub fn build_app<'a>() -> App<'a> {
         )
 }
 
-pub fn supported(link_type: &LinkType, target: &Triple) -> bool {
-    link_type == &LinkType::Executable
-        && target.architecture == target_lexicon::Architecture::X86_64
-        && target.operating_system == target_lexicon::OperatingSystem::Linux
-        && target.binary_format == target_lexicon::BinaryFormat::Elf
+pub fn supported(link_type: LinkType, target: &Triple) -> bool {
+    link_type == LinkType::Executable
+        && matches!(target.architecture, target_lexicon::Architecture::X86_64)
+        && matches!(
+            target.binary_format,
+            target_lexicon::BinaryFormat::Elf | target_lexicon::BinaryFormat::Macho
+        )
 }
 
 pub fn build_and_preprocess_host(
