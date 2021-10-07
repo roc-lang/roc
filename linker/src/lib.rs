@@ -294,18 +294,6 @@ fn preprocess_impl(
         }
     };
 
-    // TODO: Deal with other file formats and architectures.
-    let format = exec_obj.format();
-    if format != BinaryFormat::Elf {
-        println!("File Format, {:?}, not supported", format);
-        return Ok(-1);
-    }
-    let arch = exec_obj.architecture();
-    if arch != Architecture::X86_64 {
-        println!("Architecture, {:?}, not supported", arch);
-        return Ok(-1);
-    }
-
     let mut md: metadata::Metadata = Default::default();
 
     for sym in exec_obj.symbols().filter(|sym| {
