@@ -17,7 +17,7 @@ use roc_mono::ir::OptLevel;
 use std::cmp::Ordering;
 use std::convert::TryFrom;
 use std::ffi::CStr;
-use std::fs;
+use std::fs::{self, File};
 use std::io;
 use std::io::{BufReader, BufWriter};
 use std::mem;
@@ -292,74 +292,6 @@ fn preprocess_impl(
             return Ok(-1);
         }
     };
-
-    enum Info<'a> {
-        ElfLE(&'a elf::FileHeader64<LittleEndian>),
-        ElfBE(&'a elf::FileHeader64<BigEndian>),
-        MachoLE(&'a macho::MachHeader64<LittleEndian>),
-    }
-
-    let info = match target.binary_format {
-        target_lexicon::BinaryFormat::Elf => match target
-            .endianness()
-            .unwrap_or(target_lexicon::Endianness::Little)
-        {
-            target_lexicon::Endianness::Little => {
-                let exec_header =
-                    load_struct_inplace::<elf::FileHeader64<LittleEndian>>(exec_data, 0);
-
-                Info::ElfLE(exec_header)
-            }
-            target_lexicon::Endianness::Big => {
-                let exec_header = load_struct_inplace::<elf::FileHeader64<BigEndian>>(exec_data, 0);
-
-                Info::ElfBE(exec_header)
-            }
-        },
-        target_lexicon::BinaryFormat::Macho => {
-            match target
-                .endianness()
-                .unwrap_or(target_lexicon::Endianness::Little)
-            {
-                target_lexicon::Endianness::Little => {
-                    let exec_header =
-                        load_struct_inplace::<macho::MachHeader64<LittleEndian>>(exec_data, 0);
-
-                    Info::MachoLE(exec_header)
-                }
-                target_lexicon::Endianness::Big => {
-                    // TODO Is big-endian macOS even a thing that exists?
-                    todo!("Roc does not yet support big-endian macOS hosts!");
-                }
-            }
-        }
-        target_lexicon::BinaryFormat::Coff => {
-            todo!("Roc does not yet support Windows hosts!");
-        }
-        target_lexicon::BinaryFormat::Wasm => {
-            todo!("Roc does not yet support web assembly hosts!");
-        }
-        target_lexicon::BinaryFormat::Unknown => {
-            // TODO report this more nicely than just a panic
-            panic!("Roc does not support unknown host binary formats!");
-        }
-    };
-
-    let ph_offset = exec_header.e_phoff.get(NativeEndian);
-    let ph_ent_size = exec_header.e_phentsize.get(NativeEndian);
-    let ph_num = exec_header.e_phnum.get(NativeEndian);
-    let sh_offset = exec_header.e_shoff.get(NativeEndian);
-    let sh_ent_size = exec_header.e_shentsize.get(NativeEndian);
-    let sh_num = exec_header.e_shnum.get(NativeEndian);
-    if verbose {
-        println!();
-        println!("PH Offset: {:+x}", ph_offset);
-        println!("PH Entry Size: {}", ph_ent_size);
-        println!("PH Entry Count: {}", ph_num);
-        println!("SH Offset: {:+x}", sh_offset);
-        println!("SH Entry Size: {}", sh_ent_size);
-        println!("SH Entry Count: {}", sh_num);
-    }
 
     // TODO: Deal with other file formats and architectures.
     let format = exec_obj.format();
@@ -817,6 +749,134 @@ fn preprocess_impl(
         }
     }
 
+    let platform_gen_start = SystemTime::now();
+
+    let (out_mmap, out_file) = match target.binary_format {
+        target_lexicon::BinaryFormat::Elf => match target
+            .endianness()
+            .unwrap_or(target_lexicon::Endianness::Little)
+        {
+            target_lexicon::Endianness::Little => {
+                // TODO little endian
+                gen_elf(
+                    exec_data,
+                    &mut md,
+                    out_filename,
+                    &got_app_syms,
+                    &got_sections,
+                    dynamic_lib_count,
+                    shared_lib_index,
+                    verbose,
+                )?
+            }
+            target_lexicon::Endianness::Big => {
+                // TODO big endian
+                gen_elf(
+                    exec_data,
+                    &mut md,
+                    out_filename,
+                    &got_app_syms,
+                    &got_sections,
+                    dynamic_lib_count,
+                    shared_lib_index,
+                    verbose,
+                )?
+            }
+        },
+        target_lexicon::BinaryFormat::Macho => {
+            match target
+                .endianness()
+                .unwrap_or(target_lexicon::Endianness::Little)
+            {
+                target_lexicon::Endianness::Little => {
+                    todo!();
+                }
+                target_lexicon::Endianness::Big => {
+                    // TODO Is big-endian macOS even a thing that exists?
+                    todo!("Roc does not yet support big-endian macOS hosts!");
+                }
+            }
+        }
+        target_lexicon::BinaryFormat::Coff => {
+            todo!("Roc does not yet support Windows hosts!");
+        }
+        target_lexicon::BinaryFormat::Wasm => {
+            todo!("Roc does not yet support web assembly hosts!");
+        }
+        target_lexicon::BinaryFormat::Unknown => {
+            // TODO report this more nicely than just a panic
+            panic!("Roc does not support unknown host binary formats!");
+        }
+    };
+
+    let platform_gen_duration = platform_gen_start.elapsed().unwrap();
+
+    if verbose {
+        println!();
+        println!("{:+x?}", md);
+    }
+
+    let saving_metadata_start = SystemTime::now();
+    // This block ensure that the metadata is fully written and timed before continuing.
+    {
+        let output = fs::File::create(metadata_filename)?;
+        let output = BufWriter::new(output);
+        if let Err(err) = serialize_into(output, &md) {
+            println!("Failed to serialize metadata: {}", err);
+            return Ok(-1);
+        };
+    }
+    let saving_metadata_duration = saving_metadata_start.elapsed().unwrap();
+
+    let flushing_data_start = SystemTime::now();
+    out_mmap.flush()?;
+    // Also drop files to to ensure data is fully written here.
+    drop(out_mmap);
+    drop(out_file);
+    let flushing_data_duration = flushing_data_start.elapsed().unwrap();
+
+    let total_duration = total_start.elapsed().unwrap();
+
+    if verbose || time {
+        println!();
+        println!("Timings");
+        report_timing("Executable Parsing", exec_parsing_duration);
+        report_timing(
+            "Symbol and PLT Processing",
+            symbol_and_plt_processing_duration,
+        );
+        report_timing("Text Disassembly", text_disassembly_duration);
+        report_timing("Scanning Dynamic Deps", scanning_dynamic_deps_duration);
+        report_timing("Generate Modified Platform", platform_gen_duration);
+        report_timing("Saving Metadata", saving_metadata_duration);
+        report_timing("Flushing Data to Disk", flushing_data_duration);
+        report_timing(
+            "Other",
+            total_duration
+                - exec_parsing_duration
+                - symbol_and_plt_processing_duration
+                - text_disassembly_duration
+                - scanning_dynamic_deps_duration
+                - platform_gen_duration
+                - saving_metadata_duration
+                - flushing_data_duration,
+        );
+        report_timing("Total", total_duration);
+    }
+
+    Ok(0)
+}
+
+fn gen_elf(
+    exec_data: &[u8],
+    md: &mut metadata::Metadata,
+    out_filename: &str,
+    got_app_syms: &[(String, usize)],
+    got_sections: &[(usize, usize)],
+    dynamic_lib_count: usize,
+    shared_lib_index: usize,
+    verbose: bool,
+) -> io::Result<(MmapMut, File)> {
     let exec_header = load_struct_inplace::<elf::FileHeader64<LittleEndian>>(exec_data, 0);
     let ph_offset = exec_header.e_phoff.get(NativeEndian);
     let ph_ent_size = exec_header.e_phentsize.get(NativeEndian);
@@ -824,6 +884,7 @@ fn preprocess_impl(
     let sh_offset = exec_header.e_shoff.get(NativeEndian);
     let sh_ent_size = exec_header.e_shentsize.get(NativeEndian);
     let sh_num = exec_header.e_shnum.get(NativeEndian);
+
     if verbose {
         println!();
         println!("PH Offset: {:+x}", ph_offset);
@@ -833,8 +894,6 @@ fn preprocess_impl(
         println!("SH Entry Size: {}", sh_ent_size);
         println!("SH Entry Count: {}", sh_num);
     }
-
-    let platform_gen_start = SystemTime::now();
 
     // Copy header and shift everything to enable more program sections.
     let added_header_count = 2;
@@ -872,9 +931,7 @@ fn preprocess_impl(
         }
     }
     if !first_load_found {
-        println!("Executable does not load any data at 0x00000000");
-        println!("Probably input the wrong file as the executable");
-        return Ok(-1);
+        todo!("Executable does not load any data at 0x00000000\nProbably input the wrong file as the executable");
     }
     if verbose {
         println!(
@@ -1094,7 +1151,7 @@ fn preprocess_impl(
     for (offset, size) in got_sections {
         let global_offsets = load_structs_inplace_mut::<endian::U64<LittleEndian>>(
             &mut out_mmap,
-            offset as usize + md.added_byte_count as usize,
+            *offset + md.added_byte_count as usize,
             size / mem::size_of::<endian::U64<LittleEndian>>(),
         );
         for go in global_offsets.iter_mut() {
@@ -1130,62 +1187,7 @@ fn preprocess_impl(
     }
     file_header.e_phnum = endian::U16::new(LittleEndian, ph_num + added_header_count as u16);
 
-    let platform_gen_duration = platform_gen_start.elapsed().unwrap();
-
-    if verbose {
-        println!();
-        println!("{:+x?}", md);
-    }
-
-    let saving_metadata_start = SystemTime::now();
-    // This block ensure that the metadata is fully written and timed before continuing.
-    {
-        let output = fs::File::create(metadata_filename)?;
-        let output = BufWriter::new(output);
-        if let Err(err) = serialize_into(output, &md) {
-            println!("Failed to serialize metadata: {}", err);
-            return Ok(-1);
-        };
-    }
-    let saving_metadata_duration = saving_metadata_start.elapsed().unwrap();
-
-    let flushing_data_start = SystemTime::now();
-    out_mmap.flush()?;
-    // Also drop files to to ensure data is fully written here.
-    drop(out_mmap);
-    drop(out_file);
-    let flushing_data_duration = flushing_data_start.elapsed().unwrap();
-
-    let total_duration = total_start.elapsed().unwrap();
-
-    if verbose || time {
-        println!();
-        println!("Timings");
-        report_timing("Executable Parsing", exec_parsing_duration);
-        report_timing(
-            "Symbol and PLT Processing",
-            symbol_and_plt_processing_duration,
-        );
-        report_timing("Text Disassembly", text_disassembly_duration);
-        report_timing("Scanning Dynamic Deps", scanning_dynamic_deps_duration);
-        report_timing("Generate Modified Platform", platform_gen_duration);
-        report_timing("Saving Metadata", saving_metadata_duration);
-        report_timing("Flushing Data to Disk", flushing_data_duration);
-        report_timing(
-            "Other",
-            total_duration
-                - exec_parsing_duration
-                - symbol_and_plt_processing_duration
-                - text_disassembly_duration
-                - scanning_dynamic_deps_duration
-                - platform_gen_duration
-                - saving_metadata_duration
-                - flushing_data_duration,
-        );
-        report_timing("Total", total_duration);
-    }
-
-    Ok(0)
+    Ok((out_mmap, out_file))
 }
 
 pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
