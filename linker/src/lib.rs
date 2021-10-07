@@ -817,6 +817,23 @@ fn preprocess_impl(
         }
     }
 
+    let exec_header = load_struct_inplace::<elf::FileHeader64<LittleEndian>>(exec_data, 0);
+    let ph_offset = exec_header.e_phoff.get(NativeEndian);
+    let ph_ent_size = exec_header.e_phentsize.get(NativeEndian);
+    let ph_num = exec_header.e_phnum.get(NativeEndian);
+    let sh_offset = exec_header.e_shoff.get(NativeEndian);
+    let sh_ent_size = exec_header.e_shentsize.get(NativeEndian);
+    let sh_num = exec_header.e_shnum.get(NativeEndian);
+    if verbose {
+        println!();
+        println!("PH Offset: {:+x}", ph_offset);
+        println!("PH Entry Size: {}", ph_ent_size);
+        println!("PH Entry Count: {}", ph_num);
+        println!("SH Offset: {:+x}", sh_offset);
+        println!("SH Entry Size: {}", sh_ent_size);
+        println!("SH Entry Count: {}", sh_num);
+    }
+
     let platform_gen_start = SystemTime::now();
 
     // Copy header and shift everything to enable more program sections.
