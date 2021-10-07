@@ -443,18 +443,35 @@ impl<'a> WasmBackend<'a> {
                 // We may be able to improve this in the future with `Select`
                 // or `BrTable`
 
+                // Ensure the condition value is not stored only in the VM stack
+                // Otherwise we can't reach it from inside the block
+                let cond_storage = self.get_symbol_storage(cond_symbol).to_owned();
+                if let SymbolStorage::VirtualMachineStack {
+                    value_type, size, ..
+                } = cond_storage
+                {
+                    let local_id = self.get_next_local_id();
+                    self.locals.push(Local::new(1, value_type));
+                    self.instructions.push(SetLocal(local_id.0));
+                    self.symbol_storage_map.insert(
+                        *cond_symbol,
+                        SymbolStorage::Local {
+                            local_id,
+                            value_type,
+                            size,
+                        },
+                    );
+                }
+
                 // create (number_of_branches - 1) new blocks.
                 for _ in 0..branches.len() {
                     self.start_block(BlockType::NoResult)
                 }
 
-                // the LocalId of the symbol that we match on
-                let matched_on = self.local_id_from_symbol(cond_symbol);
-
                 // then, we jump whenever the value under scrutiny is equal to the value of a branch
                 for (i, (value, _, _)) in branches.iter().enumerate() {
                     // put the cond_symbol on the top of the stack
-                    self.instructions.push(GetLocal(matched_on.0));
+                    self.load_symbols(&[*cond_symbol]);
 
                     self.instructions.push(I32Const(*value as i32));
 

@@ -43,6 +43,8 @@ pub enum SymbolStorage {
 }
 
 impl SymbolStorage {
+    /// Mostly-deprecated. If you are calling this method, it is likely a bug!
+    /// Gets the local, if any, associated with this symbol. Hopefully there is none.
     pub fn local_id(&self) -> Option<LocalId> {
         use StackMemoryLocation::*;
         match self {
