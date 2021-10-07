@@ -189,7 +189,7 @@ pub fn link_preprocessed_host(
 }
 
 fn generate_dynamic_lib(
-    _target: &Triple,
+    target: &Triple,
     exposed_to_host: Vec<String>,
     dummy_lib_path: &Path,
 ) -> io::Result<()> {
@@ -228,10 +228,20 @@ fn generate_dynamic_lib(
     )
     .expect("failed to write object to file");
 
+    let (ld_flag_shared, ld_flag_soname) = match target.binary_format {
+        target_lexicon::BinaryFormat::Elf => ("-shared", "-soname"),
+        target_lexicon::BinaryFormat::Macho => ("-dylib", "-install_name"),
+        _ => {
+            // The supported() function should have been called earlier
+            // to verify this is a supported platform!
+            unreachable!();
+        }
+    };
+
     let output = Command::new("ld")
         .args(&[
-            "-shared",
-            "-soname",
+            ld_flag_shared,
+            ld_flag_soname,
             dummy_lib_path.file_name().unwrap().to_str().unwrap(),
             dummy_obj_file.to_str().unwrap(),
             "-o",
