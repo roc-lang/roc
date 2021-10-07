@@ -254,7 +254,7 @@ fn generate_dynamic_lib(
     Ok(())
 }
 
-pub fn preprocess(target: &Triple, matches: &ArgMatches) -> io::Result<i32> {
+pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     preprocess_impl(
         &matches
             .value_of(TARGET)
