@@ -807,6 +807,10 @@ fn preprocess_impl(
             // TODO report this more nicely than just a panic
             panic!("Roc does not support unknown host binary formats!");
         }
+        _ => {
+            // TODO report this more nicely than just a panic
+            panic!("This is a new binary format that Roc could potentially support, but doesn't know how yet. Please file a bug report for this, describing what operating system you were targeting!");
+        }
     };
 
     let platform_gen_duration = platform_gen_start.elapsed().unwrap();
