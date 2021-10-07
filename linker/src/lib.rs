@@ -292,7 +292,58 @@ fn preprocess_impl(
             return Ok(-1);
         }
     };
-    let exec_header = load_struct_inplace::<elf::FileHeader64<LittleEndian>>(exec_data, 0);
+
+    enum Info<'a> {
+        ElfLE(&'a elf::FileHeader64<LittleEndian>),
+        ElfBE(&'a elf::FileHeader64<BigEndian>),
+        MachoLE(&'a macho::MachHeader64<LittleEndian>),
+    }
+
+    let info = match target.binary_format {
+        target_lexicon::BinaryFormat::Elf => match target
+            .endianness()
+            .unwrap_or(target_lexicon::Endianness::Little)
+        {
+            target_lexicon::Endianness::Little => {
+                let exec_header =
+                    load_struct_inplace::<elf::FileHeader64<LittleEndian>>(exec_data, 0);
+
+                Info::ElfLE(exec_header)
+            }
+            target_lexicon::Endianness::Big => {
+                let exec_header = load_struct_inplace::<elf::FileHeader64<BigEndian>>(exec_data, 0);
+
+                Info::ElfBE(exec_header)
+            }
+        },
+        target_lexicon::BinaryFormat::Macho => {
+            match target
+                .endianness()
+                .unwrap_or(target_lexicon::Endianness::Little)
+            {
+                target_lexicon::Endianness::Little => {
+                    let exec_header =
+                        load_struct_inplace::<macho::MachHeader64<LittleEndian>>(exec_data, 0);
+
+                    Info::MachoLE(exec_header)
+                }
+                target_lexicon::Endianness::Big => {
+                    // TODO Is big-endian macOS even a thing that exists?
+                    todo!("Roc does not yet support big-endian macOS hosts!");
+                }
+            }
+        }
+        target_lexicon::BinaryFormat::Coff => {
+            todo!("Roc does not yet support Windows hosts!");
+        }
+        target_lexicon::BinaryFormat::Wasm => {
+            todo!("Roc does not yet support web assembly hosts!");
+        }
+        target_lexicon::BinaryFormat::Unknown => {
+            // TODO report this more nicely than just a panic
+            panic!("Roc does not support unknown host binary formats!");
+        }
+    };
 
     let ph_offset = exec_header.e_phoff.get(NativeEndian);
     let ph_ent_size = exec_header.e_phentsize.get(NativeEndian);
