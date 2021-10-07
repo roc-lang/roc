@@ -1,13 +1,15 @@
 use bincode::{deserialize_from, serialize_into};
 use clap::{App, AppSettings, Arg, ArgMatches};
+use core::str::FromStr;
 use iced_x86::{Decoder, DecoderOptions, Instruction, OpCodeOperandKind, OpKind};
 use memmap2::{Mmap, MmapMut};
 use object::write;
-use object::{elf, endian};
+use object::{elf, endian, macho};
 use object::{
-    Architecture, BinaryFormat, CompressedFileRange, CompressionFormat, Endianness, LittleEndian,
-    NativeEndian, Object, ObjectSection, ObjectSymbol, RelocationKind, RelocationTarget, Section,
-    SectionIndex, Symbol, SymbolFlags, SymbolIndex, SymbolKind, SymbolScope, SymbolSection,
+    Architecture, BigEndian, BinaryFormat, CompressedFileRange, CompressionFormat, Endianness,
+    LittleEndian, NativeEndian, Object, ObjectSection, ObjectSymbol, RelocationKind,
+    RelocationTarget, Section, SectionIndex, Symbol, SymbolFlags, SymbolIndex, SymbolKind,
+    SymbolScope, SymbolSection,
 };
 use roc_build::link::{rebuild_host, LinkType};
 use roc_collections::all::MutMap;
@@ -36,6 +38,7 @@ pub const FLAG_VERBOSE: &str = "verbose";
 pub const FLAG_TIME: &str = "time";
 
 pub const EXEC: &str = "EXEC";
+pub const TARGET: &str = "TARGET";
 pub const METADATA: &str = "METADATA";
 pub const SHARED_LIB: &str = "SHARED_LIB";
 pub const APP: &str = "APP";
@@ -150,6 +153,7 @@ pub fn build_and_preprocess_host(
     let metadata = host_input_path.with_file_name("metadata");
     let prehost = host_input_path.with_file_name("preprocessedhost");
     if preprocess_impl(
+        target,
         dynhost.to_str().unwrap(),
         metadata.to_str().unwrap(),
         prehost.to_str().unwrap(),
@@ -250,8 +254,12 @@ fn generate_dynamic_lib(
     Ok(())
 }
 
-pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
+pub fn preprocess(target: &Triple, matches: &ArgMatches) -> io::Result<i32> {
     preprocess_impl(
+        &matches
+            .value_of(TARGET)
+            .and_then(|str| Triple::from_str(str).ok())
+            .unwrap_or_else(|| Triple::host()),
         matches.value_of(EXEC).unwrap(),
         matches.value_of(METADATA).unwrap(),
         matches.value_of(OUT).unwrap(),
@@ -260,9 +268,11 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         matches.is_present(FLAG_TIME),
     )
 }
+
 // TODO: Most of this file is a mess of giant functions just to check if things work.
 // Clean it all up and refactor nicely.
 fn preprocess_impl(
+    target: &Triple,
     exec_filename: &str,
     metadata_filename: &str,
     out_filename: &str,
