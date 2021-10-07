@@ -373,7 +373,7 @@ fn preprocess_impl(
     let plt_relocs = (match exec_obj.dynamic_relocations() {
         Some(relocs) => relocs,
         None => {
-            println!("Executable never calls any application functions.");
+            println!("Executable does not have any dynamic relocations.");
             println!("No work to do. Probably an invalid input.");
             return Ok(-1);
         }
