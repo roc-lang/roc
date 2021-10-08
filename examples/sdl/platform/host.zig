@@ -153,31 +153,37 @@ const c = @cImport({
 
 const SDL_WINDOWPOS_UNDEFINED = @bitCast(c_int, c.SDL_WINDOWPOS_UNDEFINED_MASK);
 
-extern fn SDL_PollEvent(event: *c.SDL_Event) c_int;
-
-export fn roc_fx_createWindow() callconv(.C) void {
-    const stdout = std.io.getStdOut().writer();
-
+export fn rox_fx_init() callconv(.C) void {
     if (c.SDL_Init(c.SDL_INIT_VIDEO) != 0) {
         c.SDL_Log("Unable to initialize SDL: %s", c.SDL_GetError());
         return;
     }
+}
 
-    const screen = c.SDL_CreateWindow("Roc", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 300, 73, c.SDL_WINDOW_OPENGL) orelse
+export fn roc_fx_createWindow() callconv(.C) ?*c.SDL_Window {
+    const window = c.SDL_CreateWindow("Roc", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 300, 73, c.SDL_WINDOW_OPENGL) orelse
         {
         c.SDL_Log("Unable to create window: %s", c.SDL_GetError());
         return;
     };
 
-    const renderer = c.SDL_CreateRenderer(screen, -1, 0) orelse {
+    return window;
+}
+
+export fn rox_fx_createRenderer(window: ?*c.SDL_Window) ?*c.SDL_Renderer {
+    const renderer = c.SDL_CreateRenderer(window, -1, 0) orelse {
         c.SDL_Log("Unable to create renderer: %s", c.SDL_GetError());
         return;
     };
 
+    return renderer;
+}
+
+export fn rox_fx_eventLoop(render: ?*c.SDL_Renderer) void {
     var quit = false;
     while (!quit) {
         var event: c.SDL_Event = undefined;
-        while (SDL_PollEvent(&event) != 0) {
+        while (c.SDL_PollEvent(&event) != 0) {
             switch (event.@"type") {
                 c.SDL_QUIT => {
                     quit = true;

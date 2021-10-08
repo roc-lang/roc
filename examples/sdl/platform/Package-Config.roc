@@ -7,7 +7,10 @@ platform examples/sdl
     effects fx.Effect
         { 
             putLine : Str -> Effect {},
-            createWindow : Effect {}
+            createRenderer : Nat -> Effect Nat,
+            eventLoop : Nat -> Effect {},
+            createWindow : Effect Nat,
+            init : Effect {}
         }
 
 mainForHost : Task {} [] as Fx
