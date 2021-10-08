@@ -25,10 +25,7 @@ use fs_extra::dir::{copy, ls, CopyOptions, DirEntryAttr, DirEntryValue};
 use pipelines::RectResources;
 use roc_ast::lang::env::Env;
 use roc_ast::mem_pool::pool::Pool;
-use roc_can::builtins::builtin_defs_map;
-use roc_collections::all::MutMap;
-use roc_load;
-use roc_load::file::LoadedModule;
+use roc_ast::module::load_module;
 use roc_module::symbol::IdentIds;
 use roc_types::subs::VarStore;
 use std::collections::HashSet;
@@ -554,40 +551,6 @@ fn copy_roc_platform_if_not_exists(
             err
         )
         });
-    }
-}
-
-pub fn load_module(src_file: &Path) -> LoadedModule {
-    let subs_by_module = MutMap::default();
-
-    let arena = Bump::new();
-    let loaded = roc_load::file::load_and_typecheck(
-        &arena,
-        src_file.to_path_buf(),
-        arena.alloc(roc_builtins::std::standard_stdlib()),
-        src_file.parent().unwrap_or_else(|| {
-            panic!(
-                "src_file {:?} did not have a parent directory but I need to have one.",
-                src_file
-            )
-        }),
-        subs_by_module,
-        8,
-        builtin_defs_map,
-    );
-
-    match loaded {
-        Ok(x) => x,
-        Err(roc_load::file::LoadingProblem::FormattedReport(report)) => {
-            panic!(
-                "Failed to load module from src_file {:?}. Report: {:?}",
-                src_file, report
-            );
-        }
-        Err(e) => panic!(
-            "Failed to load module from src_file {:?}: {:?}",
-            src_file, e
-        ),
     }
 }
 
