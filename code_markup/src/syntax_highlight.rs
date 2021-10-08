@@ -8,6 +8,7 @@ pub enum HighlightStyle {
     Operator, // =+-<>...
     String,
     FunctionName,
+    FunctionArgName,
     Type,
     Bracket,
     Number,
@@ -27,6 +28,7 @@ pub fn default_highlight_map() -> HashMap<HighlightStyle, RgbaTup> {
         (Operator, colors::WHITE),
         (String, from_hsb(346, 65, 97)),
         (FunctionName, colors::WHITE),
+        (FunctionArgName, colors::WHITE),
         (Type, colors::WHITE),
         (Bracket, from_hsb(347, 80, 100)),
         (Number, from_hsb(185, 50, 75)),

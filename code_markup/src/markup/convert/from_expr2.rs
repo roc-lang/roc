@@ -1,10 +1,8 @@
 
-use crate::{markup::{attribute::Attributes, common_nodes::{
-        new_blank_mn, new_colon_mn, new_comma_mn, new_equals_mn, new_left_accolade_mn,
-        new_left_square_mn, new_right_accolade_mn, new_right_square_mn,
-    }, nodes::{MarkupNode, get_string, new_markup_node}}, slow_pool::{MarkNodeId, SlowPool}, syntax_highlight::HighlightStyle};
+use crate::{markup::{attribute::Attributes, common_nodes::{new_arg_name_mn, new_blank_mn, new_colon_mn, new_comma_mn, new_equals_mn, new_func_name_mn, new_left_accolade_mn, new_left_square_mn, new_operator_mn, new_right_accolade_mn, new_right_square_mn}, nodes::{MarkupNode, get_string, new_markup_node}}, slow_pool::{MarkNodeId, SlowPool}, syntax_highlight::HighlightStyle};
 
 use bumpalo::Bump;
+use itertools::Itertools;
 use roc_ast::{ast_error::ASTResult, lang::{core::{ast::ASTNodeId, expr::{
                 expr2::{Expr2, ExprId},
                 record_field::RecordField,
@@ -20,6 +18,7 @@ pub fn expr2_to_markup<'a, 'b>(
     mark_node_pool: &mut SlowPool,
     interns: &Interns,
 ) -> ASTResult<MarkNodeId> {
+    dbg!(expr2);
     let ast_node_id = ASTNodeId::AExprId(expr2_node_id);
 
     let mark_node_id = match expr2 {
@@ -214,7 +213,7 @@ pub fn expr2_to_markup<'a, 'b>(
             }
         }
         Expr2::Closure{
-            function_type,
+            function_type:_,
             name,
             recursive:_,
             args,
@@ -223,38 +222,63 @@ pub fn expr2_to_markup<'a, 'b>(
         } => {
             let func_name = name.ident_str(interns).as_str();
 
-            let arg_names: Vec<&str> = 
-                args.iter(env.pool).map(
-                    | (_, arg_node_id) | {
-                        let arg_pattern2 = env.pool.get(*arg_node_id);
+            let func_name_mn =
+                new_func_name_mn(func_name.to_string(), expr2_node_id);
 
-                        match arg_pattern2 {
-                            Pattern2::Identifier(id_symbol) => {
-                                id_symbol.ident_str(interns).as_str()
-                            },
-                            other => {
-                                todo!("TODO: support the following pattern2 as function arg: {:?}", other);
-                            }
+            let func_name_mn_id = mark_node_pool.add(func_name_mn);
+        
+            let backslash_mn = new_operator_mn("\\".to_string(), expr2_node_id, None);
+            let backslash_mn_id = mark_node_pool.add(backslash_mn);
+
+            let arg_names: Vec<&str> = 
+            args.iter(env.pool).map(
+                | (_, arg_node_id) | {
+                    let arg_pattern2 = env.pool.get(*arg_node_id);
+
+                    match arg_pattern2 {
+                        Pattern2::Identifier(id_symbol) => {
+                            id_symbol.ident_str(interns).as_str()
+                        },
+                        other => {
+                            todo!("TODO: support the following pattern2 as function arg: {:?}", other);
                         }
                     }
-                )
-                .collect();
-            
-            for (_, arg_node_id) in args.iter(env.pool) {
-                let arg_pattern2 = env.pool.get(*arg_node_id);
-
-                match arg_pattern2 {
-                    Pattern2::Identifier(id_symbol) => {
-                        dbg!(id_symbol.ident_str(interns).as_str());
-                    },
-                    other => {
-                        todo!("TODO: support the following pattern2 as function arg: {:?}", other);
-                    }
                 }
-            }
+            )
+            .collect();
+
+            let arg_mark_nodes = arg_names.iter().map(
+                |arg_name|
+                new_arg_name_mn(arg_name.to_string(), expr2_node_id)
+            );
+        
+            let commas = 
+                (0..(arg_mark_nodes.len() - 1)).map(
+                    |_|
+                    new_comma_mn(expr2_node_id, None)
+                );
+        
+            let args_with_commas: Vec<MarkupNode> = arg_mark_nodes.interleave(commas).collect_vec();
+
+            let mut args_with_commas_ids: Vec<MarkNodeId> = 
+                args_with_commas.into_iter().map(
+                    |mark_node|
+                    mark_node_pool.add(mark_node)
+                ).collect();
+
+            let mut children_ids = vec![backslash_mn_id];
+            children_ids.append(&mut args_with_commas_ids);
+        
+            let args_mn = MarkupNode::Nested {
+                ast_node_id: ASTNodeId::AExprId(expr2_node_id),
+                children_ids,
+                parent_id_opt: None,
+                newlines_at_end: 0,
+            };
+            let args_mn_id = mark_node_pool.add(args_mn);
 
             let body_expr = env.pool.get(*body_id);
-            let body_mark_node = expr2_to_markup(
+            let body_mn_id = expr2_to_markup(
                 arena,
                 env,
                 body_expr,
@@ -263,7 +287,14 @@ pub fn expr2_to_markup<'a, 'b>(
                 interns,
             )?;
 
-            panic!("TODO")
+            let function_node = MarkupNode::Nested {
+                ast_node_id,
+                children_ids: vec![func_name_mn_id, args_mn_id, body_mn_id],
+                parent_id_opt: None,
+                newlines_at_end: 0,
+            };
+
+            mark_node_pool.add(function_node)
         }
         Expr2::RuntimeError() => new_markup_node(
             "RunTimeError".to_string(),

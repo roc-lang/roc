@@ -81,6 +81,8 @@ impl Symbol {
                 )
             });
 
+        dbg!(ident_ids);
+
         ident_ids
             .get_name(self.ident_id())
             .unwrap_or_else(|| {

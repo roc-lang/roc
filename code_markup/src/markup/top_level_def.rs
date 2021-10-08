@@ -25,6 +25,7 @@ pub fn tld_mark_node<'a>(
     interns: &Interns,
 ) -> ASTResult<MarkupNode> {
     let pattern2 = env.pool.get(identifier_id);
+    dbg!(pattern2);
     let val_name = get_identifier_string(pattern2, interns)?;
 
     let val_name_mn = MarkupNode::Text {
