@@ -1,5 +1,4 @@
 use super::keyboard_input;
-use super::style::CODE_TXT_XY;
 use crate::editor::mvc::ed_view;
 use crate::editor::mvc::ed_view::RenderedWgpu;
 use crate::editor::resources::strings::{HELLO_WORLD, NOTHING_OPENED};
@@ -63,7 +62,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
     let mut event_loop = winit::event_loop::EventLoop::new();
 
     let window = winit::window::WindowBuilder::new()
-        .with_inner_size(PhysicalSize::new(1200.0, 1000.0))
+        .with_inner_size(PhysicalSize::new(1900.0, 1000.0))
         .with_title("The Roc Editor - very alpha")
         .build(&event_loop)
         .unwrap();
@@ -146,6 +145,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
         exposed_ident_ids,
     );
 
+    let config: Config = Config::default(); //confy::load("roc_editor", None)?;
     let ed_model_opt = {
         let ed_model_res = ed_model::init_model(
             &code_str,
@@ -158,7 +158,10 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
 
         match ed_model_res {
             Ok(mut ed_model) => {
-                ed_model.glyph_dim_rect_opt = Some(example_code_glyph_rect(&mut glyph_brush));
+                ed_model.glyph_dim_rect_opt = Some(example_code_glyph_rect(
+                    &mut glyph_brush,
+                    config.code_font_size,
+                ));
 
                 Some(ed_model)
             }
@@ -174,8 +177,6 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
     let mut app_model = AppModel::init(ed_model_opt);
 
     let mut keyboard_modifiers = ModifiersState::empty();
-
-    let config: Config = Config::default(); //confy::load("roc_editor", None)?;
     let ed_theme = EdTheme::default();
 
     // Render loop
@@ -283,8 +284,12 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
 
                 if let Some(ref mut ed_model) = app_model.ed_model_opt {
                     if rendered_wgpu_opt.is_none() || ed_model.dirty {
-                        let rendered_wgpu_res =
-                            ed_view::model_to_wgpu(ed_model, &size, CODE_TXT_XY.into(), &config);
+                        let rendered_wgpu_res = ed_view::model_to_wgpu(
+                            ed_model,
+                            &size,
+                            config.make_code_txt_xy().into(),
+                            &config,
+                        );
 
                         match rendered_wgpu_res {
                             Ok(rendered_wgpu) => rendered_wgpu_opt = Some(rendered_wgpu),
@@ -348,7 +353,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                     queue_no_file_text(
                         &size,
                         NOTHING_OPENED,
-                        CODE_TXT_XY.into(),
+                        config.make_code_txt_xy().into(),
                         &config,
                         &mut glyph_brush,
                     );
