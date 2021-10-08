@@ -55,6 +55,8 @@ nonempty = "0.6.0"
 tempfile = "3.2.0"
 uuid = { version = "0.8", features = ["v4"] }
 fs_extra = "1.2.0"
+rodio = "0.14.0"
+threadpool = "1.8.1"
 
 [dependencies.bytemuck]
 version = "1.4"
