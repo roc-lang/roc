@@ -8,9 +8,9 @@ platform examples/sdl
         { 
             putLine : Str -> Effect {},
             createRenderer : Nat -> Effect Nat,
+            createWindow : {} -> Effect Nat,
             eventLoop : Nat -> Effect {},
-            createWindow : Effect Nat,
-            init : Effect {}
+            init : {} -> Effect {}
         }
 
 mainForHost : Task {} [] as Fx

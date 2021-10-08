@@ -5,7 +5,7 @@ interface Window
 
 init : Task {} *
 init =
-    Effect.init
+    Effect.init {}
     |> Effect.map \_ -> {}
     |> Effect.after Task.succeed
     
@@ -15,7 +15,7 @@ Window : [ @Window Nat ]
 
 createWindow : Task Window *
 createWindow =
-    Effect.createWindow
+    Effect.createWindow {}
     |> Effect.map \ptr -> @Window ptr
     |> Effect.after Task.succeed
 
