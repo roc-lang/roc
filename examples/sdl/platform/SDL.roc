@@ -6,7 +6,7 @@ interface Window
 init : Task {} *
 init =
     Effect.init {}
-    |> Effect.map \_ -> {}
+    |> Effect.map (\_ -> {})
     |> Effect.after Task.succeed
     
 
@@ -16,7 +16,7 @@ Window : [ @Window Nat ]
 createWindow : Task Window *
 createWindow =
     Effect.createWindow {}
-    |> Effect.map \ptr -> @Window ptr
+    |> Effect.map (\ptr -> @Window ptr)
     |> Effect.after Task.succeed
 
 
@@ -26,7 +26,7 @@ Renderer : [ @Renderer Nat ]
 createRenderer : Window -> Task Renderer *
 createRenderer = \@Window window ->
     Effect.createRenderer window
-    |> Effect.map \ptr -> @Renderer ptr
+    |> Effect.map (\ptr -> @Renderer ptr)
     |> Effect.after Task.succeed
     
 
