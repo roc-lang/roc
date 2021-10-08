@@ -8,6 +8,7 @@ install-other-libs:
     FROM +prep-debian
     RUN apt -y install wget git
     RUN apt -y install libxcb-shape0-dev libxcb-xfixes0-dev # for editor clipboard
+    RUN apt -y install libasound2-dev # for editor sounds
     RUN apt -y install libunwind-dev pkg-config libx11-dev zlib1g-dev
 
 install-zig-llvm-valgrind-clippy-rustfmt:
@@ -46,7 +47,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
 
 copy-dirs:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
-    COPY --dir cli compiler docs editor roc_std vendor examples linker Cargo.toml Cargo.lock ./
+    COPY --dir cli compiler docs editor ast code_markup utils roc_std vendor examples linker Cargo.toml Cargo.lock ./
 
 test-zig:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
@@ -66,7 +67,7 @@ check-rustfmt:
 
 check-typos:
     RUN cargo install typos-cli --version 1.0.11 # version set to prevent confusion if the version is updated automatically
-    COPY --dir .github ci cli compiler docs editor examples linker nightly_benches packages roc_std www *.md LEGAL_DETAILS shell.nix ./
+    COPY --dir .github ci cli compiler docs editor examples ast code_markup utils linker nightly_benches packages roc_std www *.md LEGAL_DETAILS shell.nix ./
     RUN typos
 
 test-rust:

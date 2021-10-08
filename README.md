@@ -7,6 +7,11 @@ If you already know [Elm](https://elm-lang.org/), then [Roc for Elm Programmers]
 If you're curious about where the language's name and logo came from,
 [here's an explanation](https://github.com/rtfeldman/roc/blob/trunk/name-and-logo.md).
 
+## State of Roc
+
+Roc is not ready for production yet. You are likely to encounter bugs. Publishing packages or documentation is not yet supported.
+Many programs can however be compiled correctly. Check out [examples](examples) and [examples/benchmarks](examples/benchmarks). There are minimal platforms for Rust, Zig, C and an HTTP server. We are hard at work to make programming in Roc a delightful experience!
+
 ## Getting started
 
 1. [Install Rust](https://rustup.rs/)
@@ -19,7 +24,7 @@ If you're curious about where the language's name and logo came from,
 
 ### Examples
 
-Took a look at the `examples` folder, `examples/benchmarks` contains some larger examples.
+Took a look at the [examples folder](examples), [examples/benchmarks](examples/benchmarks) contains some larger examples.
 
 Run examples as follows:
 1. Navigate to `/examples`

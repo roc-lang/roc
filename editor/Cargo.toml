@@ -5,13 +5,14 @@ authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2018"
 description = "An editor for Roc"
-exclude = ["src/shaders/*.spv"]
 
 [dependencies]
+roc_ast = { path = "../ast" }
 roc_collections = { path = "../compiler/collections" }
 roc_load = { path = "../compiler/load" }
 roc_builtins = { path = "../compiler/builtins" }
 roc_can = { path = "../compiler/can" }
+roc_code_markup = { path = "../code_markup"}
 roc_parse = { path = "../compiler/parse" }
 roc_region = { path = "../compiler/region" }
 roc_module = { path = "../compiler/module" }
@@ -54,6 +55,8 @@ nonempty = "0.6.0"
 tempfile = "3.2.0"
 uuid = { version = "0.8", features = ["v4"] }
 fs_extra = "1.2.0"
+rodio = "0.14.0"
+threadpool = "1.8.1"
 
 [dependencies.bytemuck]
 version = "1.4"

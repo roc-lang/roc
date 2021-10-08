@@ -1,16 +1,17 @@
+use roc_ast::lang::core::expr::expr2::ArrString;
+use roc_ast::lang::core::expr::expr2::Expr2;
+use roc_ast::lang::core::str::update_str_expr;
+use roc_ast::mem_pool::pool_str::PoolStr;
+use roc_code_markup::markup::attribute::Attributes;
+use roc_code_markup::markup::nodes;
+use roc_code_markup::markup::nodes::MarkupNode;
+use roc_code_markup::syntax_highlight::HighlightStyle;
+
 use crate::editor::ed_error::EdResult;
-use crate::editor::markup::attribute::Attributes;
-use crate::editor::markup::nodes;
-use crate::editor::markup::nodes::MarkupNode;
 use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::mvc::ed_update::get_node_context;
 use crate::editor::mvc::ed_update::NodeContext;
-use crate::editor::syntax_highlight::HighlightStyle;
-use crate::lang::ast::update_str_expr;
-use crate::lang::ast::ArrString;
-use crate::lang::ast::Expr2;
-use crate::lang::pool::PoolStr;
 
 pub fn update_small_string(
     new_char: &char,
@@ -149,7 +150,7 @@ pub fn start_new_string(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
             content: nodes::STRING_QUOTES.to_owned(),
             ast_node_id,
             syn_high_style: HighlightStyle::String,
-            attributes: Attributes::new(),
+            attributes: Attributes::default(),
             parent_id_opt,
             newlines_at_end: curr_mark_node_nls,
         };

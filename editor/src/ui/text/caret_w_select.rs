@@ -113,7 +113,7 @@ pub fn make_caret_rect(
     Rect {
         top_left_coords: (caret_x, caret_y).into(),
         height: glyph_dim_rect.height,
-        width: 2.0,
+        width: glyph_dim_rect.width / 6.0,
         color: ui_theme.caret,
     }
 }
