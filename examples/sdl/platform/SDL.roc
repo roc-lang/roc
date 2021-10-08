@@ -1,5 +1,5 @@
-interface Window
-    exposes [ init, Window, createWindow, Renderer, eventLoop ]
+interface SDL
+    exposes [ init, Window, createWindow, Renderer, createRenderer, eventLoop ]
     imports [ fx.Effect, Task.{ Task } ]
     
 
