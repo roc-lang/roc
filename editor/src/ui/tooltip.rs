@@ -36,6 +36,7 @@ impl<'a> ToolTip<'a> {
         y_offset: f32,
         y_margin: f32,
         ui_theme: &UITheme,
+        code_font_size: f32,
     ) -> Text<'b> {
         Text {
             position: (
@@ -45,7 +46,7 @@ impl<'a> ToolTip<'a> {
                 .into(),
             color: ui_theme.tooltip_text,
             text: self.text,
-            size: ui_theme.default_font_size,
+            size: code_font_size,
             ..Default::default()
         }
     }
@@ -54,6 +55,7 @@ impl<'a> ToolTip<'a> {
         &self,
         glyph_dim_rect: &Rect,
         ui_theme: &UITheme,
+        code_font_size: f32,
     ) -> (Rect, glyph_brush::OwnedSection) {
         let width_padding = glyph_dim_rect.height / 1.3;
         let height_padding = width_padding / 1.3;
@@ -63,7 +65,13 @@ impl<'a> ToolTip<'a> {
 
         let y_margin = glyph_dim_rect.height / 4.0;
 
-        let text = self.make_tooltip_text(text_x_offset, text_y_offset, y_margin, ui_theme);
+        let text = self.make_tooltip_text(
+            text_x_offset,
+            text_y_offset,
+            y_margin,
+            ui_theme,
+            code_font_size,
+        );
         let text_section = gr_text::owned_section_from_text(&text);
 
         let rect = self.make_tooltip_rect(
