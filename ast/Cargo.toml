@@ -7,6 +7,7 @@ edition = "2018"
 description = "AST as used by the editor and (soon) docs. In contrast to the compiler, these types do not keep track of a location in a file."
 
 [dependencies]
+roc_builtins = { path = "../compiler/builtins"}
 roc_can = { path = "../compiler/can" }
 roc_collections = { path = "../compiler/collections" }
 roc_region = { path = "../compiler/region" }
@@ -15,6 +16,7 @@ roc_parse = { path = "../compiler/parse" }
 roc_problem = { path = "../compiler/problem" }
 roc_types = { path = "../compiler/types" }
 roc_unify = { path = "../compiler/unify"}
+roc_load = { path = "../compiler/load" }
 arraystring = "0.3.0"
 bumpalo = { version = "3.6.1", features = ["collections"] }
 libc = "0.2"

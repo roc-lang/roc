@@ -41,7 +41,11 @@ pub fn pass_keydown_to_focused(
 ) -> EdResult<()> {
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
         if ed_model.has_focus {
-            ed_model.ed_handle_key_down(modifiers, virtual_keycode)?;
+            ed_model.ed_handle_key_down(
+                modifiers,
+                virtual_keycode,
+                &mut app_model.sound_thread_pool,
+            )?;
         }
     }
 

@@ -6,6 +6,7 @@ use crate::colors::{self, from_hsb, RgbaTup};
 #[derive(Hash, Eq, PartialEq, Copy, Clone, Debug, Deserialize, Serialize)]
 pub enum HighlightStyle {
     Operator, // =+-<>...
+    Comma,
     String,
     FunctionName,
     Type,
@@ -25,6 +26,7 @@ pub fn default_highlight_map() -> HashMap<HighlightStyle, RgbaTup> {
     let mut highlight_map = HashMap::new();
     [
         (Operator, colors::WHITE),
+        (Comma, from_hsb(258, 50, 90)),
         (String, from_hsb(346, 65, 97)),
         (FunctionName, colors::WHITE),
         (Type, colors::WHITE),
