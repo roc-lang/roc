@@ -1,5 +1,4 @@
 use super::keyboard_input;
-use super::style::get_code_txt_xy;
 use crate::editor::mvc::ed_view;
 use crate::editor::mvc::ed_view::RenderedWgpu;
 use crate::editor::resources::strings::{HELLO_WORLD, NOTHING_OPENED};
@@ -66,7 +65,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
     let mut event_loop = winit::event_loop::EventLoop::new();
 
     let window = winit::window::WindowBuilder::new()
-        .with_inner_size(PhysicalSize::new(1200.0, 1000.0))
+        .with_inner_size(PhysicalSize::new(1900.0, 1000.0))
         .build(&event_loop)
         .unwrap();
 
@@ -290,7 +289,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                         let rendered_wgpu_res = ed_view::model_to_wgpu(
                             ed_model,
                             &size,
-                            get_code_txt_xy(&config).into(),
+                            config.make_code_txt_xy().into(),
                             &config,
                         );
 
@@ -356,7 +355,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                     queue_no_file_text(
                         &size,
                         NOTHING_OPENED,
-                        get_code_txt_xy(&config).into(),
+                        config.make_code_txt_xy().into(),
                         &config,
                         &mut glyph_brush,
                     );

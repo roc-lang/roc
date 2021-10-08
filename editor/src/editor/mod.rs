@@ -8,6 +8,5 @@ mod mvc;
 mod render_ast;
 mod render_debug;
 mod resources;
-mod style;
 mod theme;
 mod util;
