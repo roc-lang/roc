@@ -1,5 +1,12 @@
 interface SDL
-    exposes [ init, Window, createWindow, Renderer, createRenderer, eventLoop ]
+    exposes [
+        init,
+        Window,
+        createWindow,
+        Renderer,
+        createRenderer,
+        eventLoop
+    ]
     imports [ fx.Effect, Task.{ Task } ]
     
 
@@ -13,9 +20,9 @@ init =
 Window : [ @Window Nat ]
 
 
-createWindow : Task Window *
-createWindow =
-    Effect.createWindow {}
+createWindow : Str -> Task Window *
+createWindow = \title ->
+    Effect.createWindow title
     |> Effect.map (\ptr -> @Window ptr)
     |> Effect.after Task.succeed
 

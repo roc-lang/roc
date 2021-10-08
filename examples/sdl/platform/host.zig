@@ -160,8 +160,8 @@ export fn roc_fx_init() callconv(.C) void {
     }
 }
 
-export fn roc_fx_createWindow() callconv(.C) ?*c.SDL_Window {
-    const window = c.SDL_CreateWindow("Roc", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 300, 73, c.SDL_WINDOW_OPENGL) orelse unreachable;
+export fn roc_fx_createWindow(title: str.RocStr) callconv(.C) ?*c.SDL_Window {
+    const window = c.SDL_CreateWindow(title.asU8ptr(), SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 300, 73, c.SDL_WINDOW_OPENGL) orelse unreachable;
 
     return window;
 }

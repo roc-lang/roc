@@ -193,7 +193,7 @@ pub fn build_zig_host_native(
         command.args(&["build-obj", "-fPIC"]);
     }
 
-    let mut split_path: Vec<&str> = zig_host_src.split("/").collect();
+    let mut split_path: Vec<&str> = zig_host_src.split('/').collect();
 
     split_path.pop();
 
@@ -733,7 +733,7 @@ fn link_macos(
         String::from("-lSystem")
     };
 
-    let mut split_path: Vec<&str> = output_path.to_str().unwrap().split("/").collect();
+    let mut split_path: Vec<&str> = output_path.to_str().unwrap().split('/').collect();
 
     split_path.pop();
 
