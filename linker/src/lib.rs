@@ -47,6 +47,7 @@ const MIN_SECTION_ALIGNMENT: usize = 0x40;
 
 // TODO: Analyze if this offset is always correct.
 const PLT_ADDRESS_OFFSET: u64 = 0x10;
+const STUB_ADDRESS_OFFSET: u64 = 0x06;
 
 fn report_timing(label: &str, duration: Duration) {
     println!("\t{:9.3} ms   {}", duration.as_secs_f64() * 1000.0, label,);
@@ -379,76 +380,105 @@ fn preprocess_impl(
             unreachable!()
         }
     };
-    let (plt_address, plt_offset) = match exec_obj.section_by_name(plt_section_name) {
-        Some(section) => {
-            let file_offset = match section.compressed_file_range() {
-                Ok(
-                    range
-                    @
-                    CompressedFileRange {
-                        format: CompressionFormat::None,
-                        ..
-                    },
-                ) => range.offset,
-                _ => {
-                    println!("Surgical linking does not work with compressed plt section");
-                    return Ok(-1);
-                }
-            };
-            (section.address(), file_offset)
-        }
-        None => {
-            println!("Failed to find PLT section. Probably an malformed executable.");
-            return Ok(-1);
-        }
-    };
+    let (plt_section_index, plt_address, plt_offset) =
+        match exec_obj.section_by_name(plt_section_name) {
+            Some(section) => {
+                let file_offset = match section.compressed_file_range() {
+                    Ok(
+                        range
+                        @
+                        CompressedFileRange {
+                            format: CompressionFormat::None,
+                            ..
+                        },
+                    ) => range.offset,
+                    _ => {
+                        println!("Surgical linking does not work with compressed plt section");
+                        return Ok(-1);
+                    }
+                };
+                (section.index(), section.address(), file_offset)
+            }
+            None => {
+                println!("Failed to find PLT section. Probably an malformed executable.");
+                return Ok(-1);
+            }
+        };
     if verbose {
         println!("PLT Address: {:+x}", plt_address);
         println!("PLT File Offset: {:+x}", plt_offset);
     }
 
-    let plt_relocs = (match exec_obj.dynamic_relocations() {
-        Some(relocs) => relocs,
-        None => {
-            println!("Executable does not have any dynamic relocations.");
-            println!("No work to do. Probably an invalid input.");
-            return Ok(-1);
+    let app_syms: Vec<Symbol> = match target.binary_format {
+        target_lexicon::BinaryFormat::Elf => exec_obj.dynamic_symbols(),
+        target_lexicon::BinaryFormat::Macho => exec_obj.symbols(),
+        _ => {
+            // We should have verified this via supported() before calling this function
+            unreachable!()
         }
+    }
+    .filter(|sym| {
+        sym.is_undefined()
+            && sym.name().is_ok()
+            && sym
+                .name()
+                .unwrap()
+                .trim_start_matches("_")
+                .starts_with("roc_")
     })
-    .filter_map(|(_, reloc)| {
-        if let RelocationKind::Elf(7) = reloc.kind() {
-            Some(reloc)
-        } else {
-            None
-        }
-    });
+    .collect();
 
-    let app_syms: Vec<Symbol> = exec_obj
-        .dynamic_symbols()
-        .filter(|sym| {
-            sym.is_undefined() && sym.name().is_ok() && sym.name().unwrap().starts_with("roc_")
-        })
-        .collect();
-
-    let got_app_syms: Vec<(String, usize)> = (match exec_obj.dynamic_relocations() {
-        Some(relocs) => relocs,
-        None => {
-            println!("Executable never calls any application functions.");
-            println!("No work to do. Probably an invalid input.");
-            return Ok(-1);
-        }
-    })
-    .filter_map(|(_, reloc)| {
-        if let RelocationKind::Elf(6) = reloc.kind() {
-            for symbol in app_syms.iter() {
-                if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
-                    return Some((symbol.name().unwrap().to_string(), symbol.index().0));
+    let mut app_func_addresses: MutMap<u64, &str> = MutMap::default();
+    match target.binary_format {
+        target_lexicon::BinaryFormat::Elf => {
+            let plt_relocs: Vec<_> = (match exec_obj.dynamic_relocations() {
+                Some(relocs) => relocs,
+                None => {
+                    println!("Executable does not have any dynamic relocations.");
+                    println!("No work to do. Probably an invalid input.");
+                    return Ok(-1);
+                }
+            })
+            .filter_map(|(_, reloc)| {
+                if let RelocationKind::Elf(7) = reloc.kind() {
+                    Some(reloc)
+                } else {
+                    None
+                }
+            })
+            .collect();
+            for (i, reloc) in plt_relocs.into_iter().enumerate() {
+                for symbol in app_syms.iter() {
+                    if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
+                        let func_address = (i as u64 + 1) * PLT_ADDRESS_OFFSET + plt_address;
+                        let func_offset = (i as u64 + 1) * PLT_ADDRESS_OFFSET + plt_offset;
+                        app_func_addresses.insert(func_address, symbol.name().unwrap());
+                        md.plt_addresses.insert(
+                            symbol.name().unwrap().to_string(),
+                            (func_offset, func_address),
+                        );
+                        break;
+                    }
                 }
             }
         }
-        None
-    })
-    .collect();
+        target_lexicon::BinaryFormat::Macho => {
+            // TODO Macho needs to get the address of __stubs symbols.
+            // They are all just jmp instructions.
+            for sym in exec_obj.symbols().filter(|sym| {
+                matches!(
+                    sym.section(),
+                    SymbolSection::Section(SectionIndex(plt_section_index))
+                )
+            }) {
+                println!("{:?}", sym);
+            }
+        }
+        _ => {
+            // We should have verified this via supported() before calling this function
+            unreachable!()
+        }
+    };
 
     for sym in app_syms.iter() {
         let name = sym.name().unwrap().to_string();
@@ -461,22 +491,6 @@ fn preprocess_impl(
         println!("PLT Symbols for App Functions");
         for symbol in app_syms.iter() {
             println!("{}: {:+x?}", symbol.index().0, symbol);
-        }
-    }
-
-    let mut app_func_addresses: MutMap<u64, &str> = MutMap::default();
-    for (i, reloc) in plt_relocs.enumerate() {
-        for symbol in app_syms.iter() {
-            if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
-                let func_address = (i as u64 + 1) * PLT_ADDRESS_OFFSET + plt_address;
-                let func_offset = (i as u64 + 1) * PLT_ADDRESS_OFFSET + plt_offset;
-                app_func_addresses.insert(func_address, symbol.name().unwrap());
-                md.plt_addresses.insert(
-                    symbol.name().unwrap().to_string(),
-                    (func_offset, func_address),
-                );
-                break;
-            }
         }
     }
 
@@ -792,6 +806,26 @@ fn preprocess_impl(
             }
         }
     }
+
+    let got_app_syms: Vec<(String, usize)> = (match exec_obj.dynamic_relocations() {
+        Some(relocs) => relocs,
+        None => {
+            println!("Executable never calls any application functions.");
+            println!("No work to do. Probably an invalid input.");
+            return Ok(-1);
+        }
+    })
+    .filter_map(|(_, reloc)| {
+        if let RelocationKind::Elf(6) = reloc.kind() {
+            for symbol in app_syms.iter() {
+                if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
+                    return Some((symbol.name().unwrap().to_string(), symbol.index().0));
+                }
+            }
+        }
+        None
+    })
+    .collect();
 
     let platform_gen_start = SystemTime::now();
 
