@@ -6,8 +6,11 @@ use roc_module::symbol::Symbol;
 
 use crate::LocalId;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum VirtualMachineSymbolState {
+    /// Value doesn't exist yet
+    NotYetPushed,
+
     /// Value has been pushed onto the VM stack but not yet popped
     /// Remember which instruction pushed it, in case we need it
     Pushed { pushed_at: usize },
@@ -17,6 +20,7 @@ pub enum VirtualMachineSymbolState {
     Popped { pushed_at: usize },
 }
 
+#[derive(Debug)]
 pub struct CodeBuilder {
     /// The main container for the instructions
     code: Vec<Instruction>,
@@ -162,6 +166,8 @@ impl CodeBuilder {
         use VirtualMachineSymbolState::*;
 
         match vm_state {
+            NotYetPushed => panic!("Symbol {:?} has no value yet. Nothing to load.", symbol),
+
             Pushed { pushed_at } => {
                 let &top = self.vm_stack.last().unwrap();
                 match top {

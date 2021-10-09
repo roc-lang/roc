@@ -6,9 +6,9 @@ use crate::{PTR_SIZE, PTR_TYPE};
 // See README for background information on Wasm locals, memory and function calls
 #[derive(Debug, Clone)]
 pub enum WasmLayout {
-    // Primitive number value. Just a Wasm local, without any stack memory.
-    // For example, Roc i8 is represented as Wasm i32. Store the type and the original size.
-    LocalOnly(ValueType, u32),
+    // Primitive number value, without any stack memory.
+    // For example, Roc i8 is represented as Primitive(ValueType::I32, 1)
+    Primitive(ValueType, u32),
 
     // Local pointer to stack memory
     StackMemory { size: u32, alignment_bytes: u32 },
@@ -27,13 +27,13 @@ impl WasmLayout {
         let alignment_bytes = layout.alignment_bytes(PTR_SIZE);
 
         match layout {
-            Layout::Builtin(Int32 | Int16 | Int8 | Int1 | Usize) => Self::LocalOnly(I32, size),
+            Layout::Builtin(Int32 | Int16 | Int8 | Int1 | Usize) => Self::Primitive(I32, size),
 
-            Layout::Builtin(Int64) => Self::LocalOnly(I64, size),
+            Layout::Builtin(Int64) => Self::Primitive(I64, size),
 
-            Layout::Builtin(Float32) => Self::LocalOnly(F32, size),
+            Layout::Builtin(Float32) => Self::Primitive(F32, size),
 
-            Layout::Builtin(Float64) => Self::LocalOnly(F64, size),
+            Layout::Builtin(Float64) => Self::Primitive(F64, size),
 
             Layout::Builtin(
                 Int128
@@ -67,7 +67,7 @@ impl WasmLayout {
 
     pub fn value_type(&self) -> ValueType {
         match self {
-            Self::LocalOnly(type_, _) => *type_,
+            Self::Primitive(type_, _) => *type_,
             _ => PTR_TYPE,
         }
     }
