@@ -8,7 +8,9 @@ interface SDL
         eventLoop
     ]
     imports [ fx.Effect, Task.{ Task } ]
-    
+
+## This module is a wrapper around SDL
+## https://github.com/MasterQ32/SDL.zig/blob/master/src/wrapper/sdl.zig    
 
 init : Task {} *
 init =
@@ -19,10 +21,35 @@ init =
 
 Window : [ @Window Nat ]
 
+WindowPosition : [ Default, Centered, Absolute Nat ]
 
-createWindow : Str -> Task Window *
-createWindow = \title ->
-    Effect.createWindow title
+
+WindowConfig :
+    {
+        title: Str,
+        x ? WindowPosition,
+        y ? WindowPosition,
+        width: Nat,
+        height: Nat
+    }
+
+
+createWindow : WindowConfig -> Task Window *
+createWindow = \{ title, x ? Default, y ? Default, width, height } ->
+    # newX =
+    #     when x is
+    #             Default -> 536805376
+    #             Centered -> 805240832
+    #             Absolute val -> val
+
+    # newY =
+    #     when x is
+    #             Default -> 536805376
+    #             Centered -> 805240832
+    #             Absolute val -> val
+
+     
+    Effect.createWindow title width height
     |> Effect.map (\ptr -> @Window ptr)
     |> Effect.after Task.succeed
 

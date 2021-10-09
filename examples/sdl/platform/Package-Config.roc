@@ -8,7 +8,7 @@ platform examples/sdl
         { 
             putLine : Str -> Effect {},
             createRenderer : Nat -> Effect Nat,
-            createWindow : Str -> Effect Nat,
+            createWindow : Str, Nat, Nat -> Effect Nat,
             eventLoop : Nat -> Effect {},
             init : {} -> Effect {}
         }

@@ -152,7 +152,6 @@ const c = @cImport({
 });
 
 const SDL_WINDOWPOS_UNDEFINED = @bitCast(c_int, c.SDL_WINDOWPOS_UNDEFINED_MASK);
-
 export fn roc_fx_init() callconv(.C) void {
     if (c.SDL_Init(c.SDL_INIT_VIDEO) != 0) {
         c.SDL_Log("Unable to initialize SDL: %s", c.SDL_GetError());
@@ -160,8 +159,15 @@ export fn roc_fx_init() callconv(.C) void {
     }
 }
 
-export fn roc_fx_createWindow(title: str.RocStr) callconv(.C) ?*c.SDL_Window {
-    const window = c.SDL_CreateWindow(title.asU8ptr(), SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 300, 73, c.SDL_WINDOW_OPENGL) orelse unreachable;
+export fn roc_fx_createWindow(title: str.RocStr, width: c_int, height: c_int) callconv(.C) ?*c.SDL_Window {
+    const window = c.SDL_CreateWindow(
+        title.asU8ptr(),
+        SDL_WINDOWPOS_UNDEFINED,
+        SDL_WINDOWPOS_UNDEFINED,
+        width,
+        height,
+        c.SDL_WINDOW_OPENGL,
+    ) orelse unreachable;
 
     return window;
 }
