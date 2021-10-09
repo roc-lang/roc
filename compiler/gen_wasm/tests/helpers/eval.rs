@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
 // use roc_std::{RocDec, RocList, RocOrder, RocStr};
@@ -5,6 +7,10 @@ use crate::helpers::wasm32_test_result::Wasm32TestResult;
 use roc_gen_wasm::from_wasm32_memory::FromWasm32Memory;
 
 const TEST_WRAPPER_NAME: &str = "test_wrapper";
+
+std::thread_local! {
+    static TEST_COUNTER: Cell<u32> = Cell::new(0);
+}
 
 fn promote_expr_to_module(src: &str) -> String {
     let mut buffer = String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
@@ -101,16 +107,27 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     let module_bytes = builder.build().to_bytes().unwrap();
 
     // for debugging (e.g. with wasm2wat)
-    if false {
+    if true {
         use std::io::Write;
-        let path = "/home/brian/Documents/roc/compiler/gen_wasm/debug.wasm";
 
-        match std::fs::File::create(path) {
-            Err(e) => eprintln!("Problem creating wasm debug file: {:?}", e),
-            Ok(mut file) => {
-                file.write_all(&module_bytes).unwrap();
+        TEST_COUNTER.with(|test_count| -> () {
+            let thread_id = std::thread::current().id();
+            let thread_num_string: String = format!("{:?}", thread_id).chars().filter(|c| c.is_digit(10)).collect();
+            let thread_num: i64 = thread_num_string.parse().unwrap();
+            let path = format!(
+                "/home/brian/Documents/roc/compiler/gen_wasm/output/test-{:?}-{:?}.wasm",
+                thread_num,
+                test_count.get()
+            );
+            test_count.set(test_count.get() + 1);
+
+            match std::fs::File::create(path) {
+                Err(e) => eprintln!("Problem creating wasm debug file: {:?}", e),
+                Ok(mut file) => {
+                    file.write_all(&module_bytes).unwrap();
+                }
             }
-        }
+        });
     }
 
     // now, do wasmer stuff
