@@ -497,7 +497,8 @@ fn preprocess_impl(
                         for section_info in sections_info {
                             if &section_info.sectname[0..7] == b"__stubs" {
                                 stubs_symbol_index = Some(section_info.reserved1.get(NativeEndian));
-                                stubs_symbol_count = Some(section_info.reserved2.get(NativeEndian));
+                                stubs_symbol_count =
+                                    Some(section_info.size.get(NativeEndian) / STUB_ADDRESS_OFFSET);
 
                                 break 'cmds;
                             }
@@ -538,78 +539,26 @@ fn preprocess_impl(
 
                     // Find all the lazily-bound roc symbols
                     // (e.g. "_roc__mainForHost_1_exposed")
-                    for symbol in lazy_bind_symbols {
-                        if app_syms
+                    // For Macho, we may need to deal with some GOT stuff here as well.
+                    for (i, symbol) in lazy_bind_symbols
+                        .skip(stubs_symbol_index as usize)
+                        .take(stubs_symbol_count as usize)
+                        .enumerate()
+                    {
+                        for sym in app_syms
                             .iter()
-                            .any(|app_sym| app_sym.name() == Ok(&symbol.name))
+                            .filter(|app_sym| app_sym.name() == Ok(&symbol.name))
                         {
-                            println!("* * * found a roc function: {:?}", symbol);
+                            let func_address = (i as u64 + 1) * STUB_ADDRESS_OFFSET + plt_address;
+                            let func_offset = (i as u64 + 1) * STUB_ADDRESS_OFFSET + plt_offset;
+                            app_func_addresses.insert(func_address, sym.name().unwrap());
+                            md.plt_addresses.insert(
+                                sym.name().unwrap().to_string(),
+                                (func_offset, func_address),
+                            );
+                            break;
                         }
                     }
-
-                    // dbg!(&info.bind_size.get(NativeEndian));
-                    // dbg!(&info.lazy_bind_size.get(NativeEndian));
-
-                    // #[derive(Debug)]
-                    // #[repr(C)]
-                    // struct Info {
-                    //     index: u32,
-                    //     offset: u32,
-                    //     type_: u8,
-                    //     ordinal: u32,
-                    //     name: u32,
-                    //     addend: u32,
-                    // }
-
-                    // println!("NONLAZY");
-                    // let bind_size = info.bind_size.get(NativeEndian);
-                    // let num_binds = bind_size as usize / mem::size_of::<Info>();
-                    // println!(
-                    //     "{:#x?}",
-                    //     load_structs_inplace::<Info>(exec_data, bind_offset as usize, num_binds)
-                    // );
-
-                    // println!("LAZY");
-                    // let lazy_bind_offset = info.lazy_bind_off.get(NativeEndian);
-                    // let lazy_bind_size = info.lazy_bind_size.get(NativeEndian);
-                    // let lazy_num_binds = lazy_bind_size as usize / mem::size_of::<Info>();
-                    // println!(
-                    //     "{:#x?}",
-                    //     load_structs_inplace::<Info>(
-                    //         exec_data,
-                    //         lazy_bind_offset as usize,
-                    //         lazy_num_binds
-                    //     )
-                    // );
-                } else if cmd == macho::LC_DYSYMTAB {
-                    println!("=== DYSYMTAB");
-                    let info = dbg!(load_struct_inplace::<DysymtabCommand<LittleEndian>>(
-                        exec_data, offset
-                    ));
-
-                    let off = info.indirectsymoff.get(NativeEndian) as usize;
-                    let count = info.nindirectsyms.get(NativeEndian) as usize;
-                    let syms = load_structs_inplace::<u32>(exec_data, off, count);
-
-                    dbg!(info.ilocalsym.get(NativeEndian));
-                    dbg!(info.iextdefsym.get(NativeEndian));
-                    dbg!(info.iundefsym.get(NativeEndian));
-
-                    // Find all the lazily-bound roc symbols
-                    // (e.g. "_roc__mainForHost_1_exposed")
-                    for &sym_index in syms {
-                        if let Ok(sym) = exec_obj.symbol_by_index(SymbolIndex(sym_index as usize)) {
-                            println!("* {:#?}", sym);
-
-                            if app_syms
-                                .iter()
-                                .any(|app_sym| app_sym.index() == sym.index())
-                            {
-                                println!("* * * DYSYMTAB found a roc function: {:?}", sym);
-                            }
-                        }
-                    }
-                } else {
                 }
 
                 offset += cmdsize as usize;
