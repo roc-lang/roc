@@ -217,6 +217,7 @@ impl<'a> WasmBackend<'a> {
                     LocalKind::Variable => {
                         if self.stack_frame_pointer.is_none() {
                             self.stack_frame_pointer = Some(next_local_id);
+                            self.locals.push(Local::new(1, PTR_TYPE));
                         }
 
                         let offset =
