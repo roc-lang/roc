@@ -8,7 +8,8 @@ use object::{elf, endian, macho};
 use object::{
     Architecture, BinaryFormat, CompressedFileRange, CompressionFormat, Endianness, LittleEndian,
     NativeEndian, Object, ObjectSection, ObjectSymbol, RelocationKind, RelocationTarget, Section,
-    SectionIndex, Symbol, SymbolFlags, SymbolIndex, SymbolKind, SymbolScope, SymbolSection,
+    SectionIndex, SectionKind, Symbol, SymbolFlags, SymbolIndex, SymbolKind, SymbolScope,
+    SymbolSection,
 };
 use roc_build::link::{rebuild_host, LinkType};
 use roc_collections::all::MutMap;
@@ -465,12 +466,7 @@ fn preprocess_impl(
         target_lexicon::BinaryFormat::Macho => {
             // TODO Macho needs to get the address of __stubs symbols.
             // They are all just jmp instructions.
-            for sym in exec_obj.symbols().filter(|sym| {
-                matches!(
-                    sym.section(),
-                    SymbolSection::Section(SectionIndex(plt_section_index))
-                )
-            }) {
+            for sym in exec_obj.symbols().filter(|sym| sym.is_undefined()) {
                 println!("{:?}", sym);
             }
         }
@@ -503,10 +499,7 @@ fn preprocess_impl(
     let text_disassembly_start = SystemTime::now();
     let text_sections: Vec<Section> = exec_obj
         .sections()
-        .filter(|sec| {
-            let name = sec.name();
-            name.is_ok() && name.unwrap().starts_with(".text")
-        })
+        .filter(|sec| sec.kind() == SectionKind::Text)
         .collect();
     if text_sections.is_empty() {
         println!("No text sections found. This application has no code.");
