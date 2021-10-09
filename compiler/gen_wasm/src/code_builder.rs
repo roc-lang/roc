@@ -6,6 +6,8 @@ use roc_module::symbol::Symbol;
 
 use crate::LocalId;
 
+const DEBUG_LOG: bool = false;
+
 #[derive(Debug, Clone, PartialEq, Copy)]
 pub enum VirtualMachineSymbolState {
     /// Value doesn't exist yet
@@ -56,7 +58,9 @@ impl CodeBuilder {
         if push {
             self.vm_stack.push(None);
         }
-        // println!("{:?} {:?}", inst, self.vm_stack);
+        if DEBUG_LOG {
+            println!("{:?} {:?}", inst, self.vm_stack);
+        }
         self.code.push(inst);
     }
 
@@ -76,7 +80,9 @@ impl CodeBuilder {
         }
         self.vm_stack.truncate(min_len);
         self.vm_stack.resize(len, None);
-        // println!("{:?} {:?}", instructions, self.vm_stack);
+        if DEBUG_LOG {
+            println!("{:?} {:?}", instructions, self.vm_stack);
+        }
         self.code.extend_from_slice(instructions);
     }
 
@@ -95,7 +101,11 @@ impl CodeBuilder {
         if push {
             self.vm_stack.push(None);
         }
-        self.code.push(Call(function_index));
+        let inst = Call(function_index);
+        if DEBUG_LOG {
+            println!("{:?} {:?}", inst, self.vm_stack);
+        }
+        self.code.push(inst);
     }
 
     pub fn finalize_into(&mut self, final_code: &mut Vec<Instruction>) {
@@ -186,7 +196,17 @@ impl CodeBuilder {
                             self.vm_stack.remove(found_index);
 
                             // Insert a GetLocal at the current position
-                            self.code.push(GetLocal(next_local_id.0));
+                            let inst = GetLocal(next_local_id.0);
+                            if DEBUG_LOG {
+                                println!(
+                                    "{:?} {:?} (& insert {:?} at {:?})",
+                                    inst,
+                                    self.vm_stack,
+                                    SetLocal(next_local_id.0),
+                                    pushed_at
+                                );
+                            }
+                            self.code.push(inst);
                             self.vm_stack.push(Some(symbol));
 
                             // This Symbol is no longer stored in the VM stack, but in a local
@@ -208,7 +228,17 @@ impl CodeBuilder {
                 self.insertions.insert(pushed_at, TeeLocal(next_local_id.0));
 
                 // Insert a GetLocal at the current position
-                self.code.push(GetLocal(next_local_id.0));
+                let inst = GetLocal(next_local_id.0);
+                if DEBUG_LOG {
+                    println!(
+                        "{:?} {:?} (& insert {:?} at {:?})",
+                        inst,
+                        self.vm_stack,
+                        TeeLocal(next_local_id.0),
+                        pushed_at
+                    );
+                }
+                self.code.push(inst);
                 self.vm_stack.push(Some(symbol));
 
                 // This symbol has been promoted to a Local
@@ -225,12 +255,12 @@ fn get_pops_and_pushes(inst: &Instruction) -> (u8, bool) {
         Nop => (0, false),
         Block(_) => (0, false),
         Loop(_) => (0, false),
-        If(_) => (0, false),
+        If(_) => (1, false),
         Else => (0, false),
         End => (0, false),
         Br(_) => (0, false),
-        BrIf(_) => (0, false),
-        BrTable(_) => (0, false),
+        BrIf(_) => (1, false),
+        BrTable(_) => (1, false),
         Return => (0, false),
 
         Call(_) | CallIndirect(_, _) => {

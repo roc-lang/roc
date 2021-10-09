@@ -258,6 +258,8 @@ impl<'a> WasmBackend<'a> {
     }
 
     /// Load symbols to the top of the VM stack
+    /// (There is no method for one symbol. This is deliberate, since
+    /// if anyone ever called it in a loop, it would generate inefficient code)
     fn load_symbols(&mut self, symbols: &[Symbol]) {
         if self.instructions.verify_stack_match(symbols) {
             // The symbols were already at the top of the stack, do nothing!
