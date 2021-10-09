@@ -381,30 +381,29 @@ fn preprocess_impl(
             unreachable!()
         }
     };
-    let (plt_section_index, plt_address, plt_offset) =
-        match exec_obj.section_by_name(plt_section_name) {
-            Some(section) => {
-                let file_offset = match section.compressed_file_range() {
-                    Ok(
-                        range
-                        @
-                        CompressedFileRange {
-                            format: CompressionFormat::None,
-                            ..
-                        },
-                    ) => range.offset,
-                    _ => {
-                        println!("Surgical linking does not work with compressed plt section");
-                        return Ok(-1);
-                    }
-                };
-                (section.index(), section.address(), file_offset)
-            }
-            None => {
-                println!("Failed to find PLT section. Probably an malformed executable.");
-                return Ok(-1);
-            }
-        };
+    let (plt_address, plt_offset) = match exec_obj.section_by_name(plt_section_name) {
+        Some(section) => {
+            let file_offset = match section.compressed_file_range() {
+                Ok(
+                    range
+                    @
+                    CompressedFileRange {
+                        format: CompressionFormat::None,
+                        ..
+                    },
+                ) => range.offset,
+                _ => {
+                    println!("Surgical linking does not work with compressed plt section");
+                    return Ok(-1);
+                }
+            };
+            (section.address(), file_offset)
+        }
+        None => {
+            println!("Failed to find PLT section. Probably an malformed executable.");
+            return Ok(-1);
+        }
+    };
     if verbose {
         println!("PLT Address: {:+x}", plt_address);
         println!("PLT File Offset: {:+x}", plt_offset);
