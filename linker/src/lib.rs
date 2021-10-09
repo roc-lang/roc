@@ -331,13 +331,26 @@ fn preprocess_impl(
     let mut md: metadata::Metadata = Default::default();
 
     for sym in exec_obj.symbols().filter(|sym| {
-        sym.is_definition() && sym.name().is_ok() && sym.name().unwrap().starts_with("roc_")
+        sym.is_definition()
+            && sym.name().is_ok()
+            && sym
+                .name()
+                .unwrap()
+                .trim_start_matches("_")
+                .starts_with("roc_")
     }) {
         // remove potentially trailing "@version".
-        let name = sym.name().unwrap().split('@').next().unwrap().to_string();
+        let name = sym
+            .name()
+            .unwrap()
+            .trim_start_matches("_")
+            .split('@')
+            .next()
+            .unwrap()
+            .to_string();
 
         // special exceptions for memcpy and memset.
-        if &name == "roc_memcpy" {
+        if name == "roc_memcpy" {
             md.roc_symbol_vaddresses
                 .insert("memcpy".to_string(), sym.address() as u64);
         } else if name == "roc_memset" {
