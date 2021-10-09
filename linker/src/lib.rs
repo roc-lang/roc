@@ -35,9 +35,9 @@ pub const CMD_PREPROCESS: &str = "preprocess";
 pub const CMD_SURGERY: &str = "surgery";
 pub const FLAG_VERBOSE: &str = "verbose";
 pub const FLAG_TIME: &str = "time";
+pub const FLAG_TARGET: &str = "target";
 
 pub const EXEC: &str = "EXEC";
-pub const TARGET: &str = "TARGET";
 pub const METADATA: &str = "METADATA";
 pub const SHARED_LIB: &str = "SHARED_LIB";
 pub const APP: &str = "APP";
@@ -80,6 +80,13 @@ pub fn build_app<'a>() -> App<'a> {
                         .default_value("libapp.so"),
                 )
                 .arg(
+                    Arg::with_name(FLAG_TARGET)
+                        .long(FLAG_TARGET)
+                        .help("The target triple for linking")
+                        .takes_value(true)
+                        .required(false),
+                )
+                .arg(
                     Arg::with_name(FLAG_VERBOSE)
                         .long(FLAG_VERBOSE)
                         .short('v')
@@ -114,6 +121,13 @@ pub fn build_app<'a>() -> App<'a> {
                                 It will be consumed to make linking faster.",
                         )
                         .required(true),
+                )
+                .arg(
+                    Arg::with_name(FLAG_TARGET)
+                        .long(FLAG_TARGET)
+                        .help("The target triple for linking")
+                        .takes_value(true)
+                        .required(false),
                 )
                 .arg(
                     Arg::with_name(FLAG_VERBOSE)
@@ -266,11 +280,17 @@ fn generate_dynamic_lib(
 }
 
 pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
-    preprocess_impl(
-        &matches
-            .value_of(TARGET)
+    let triple = if matches.is_present(FLAG_TARGET) {
+        matches
+            .value_of(FLAG_TARGET)
             .and_then(|str| Triple::from_str(str).ok())
-            .unwrap_or_else(|| Triple::host()),
+            // TODO give this a nicer err print out.
+            .expect("Failed to parse target triple")
+    } else {
+        Triple::host()
+    };
+    preprocess_impl(
+        &triple,
         matches.value_of(EXEC).unwrap(),
         matches.value_of(METADATA).unwrap(),
         matches.value_of(OUT).unwrap(),
@@ -291,6 +311,10 @@ fn preprocess_impl(
     verbose: bool,
     time: bool,
 ) -> io::Result<i32> {
+    if verbose {
+        println!("Targeting: {}", target.to_string());
+    }
+
     let total_start = SystemTime::now();
     let exec_parsing_start = total_start;
     let exec_file = fs::File::open(exec_filename)?;
