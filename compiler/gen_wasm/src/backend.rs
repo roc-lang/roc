@@ -189,11 +189,14 @@ impl<'a> WasmBackend<'a> {
 
         let storage = match wasm_layout {
             WasmLayout::Primitive(value_type, size) => match kind {
-                LocalKind::Parameter => SymbolStorage::Local {
-                    local_id: next_local_id,
-                    value_type: *value_type,
-                    size: *size,
-                },
+                LocalKind::Parameter => {
+                    self.arg_types.push(*value_type);
+                    SymbolStorage::Local {
+                        local_id: next_local_id,
+                        value_type: *value_type,
+                        size: *size,
+                    }
+                }
                 LocalKind::Variable => SymbolStorage::VirtualMachineStack {
                     vm_state: VirtualMachineSymbolState::NotYetPushed,
                     value_type: *value_type,
@@ -201,18 +204,27 @@ impl<'a> WasmBackend<'a> {
                 },
             },
 
-            WasmLayout::HeapMemory => SymbolStorage::Local {
-                local_id: next_local_id,
-                value_type: PTR_TYPE,
-                size: PTR_SIZE,
-            },
+            WasmLayout::HeapMemory => {
+                match kind {
+                    LocalKind::Parameter => self.arg_types.push(PTR_TYPE),
+                    LocalKind::Variable => self.locals.push(Local::new(1, PTR_TYPE)),
+                }
+                SymbolStorage::Local {
+                    local_id: next_local_id,
+                    value_type: PTR_TYPE,
+                    size: PTR_SIZE,
+                }
+            }
 
             WasmLayout::StackMemory {
                 size,
                 alignment_bytes,
             } => {
                 let location = match kind {
-                    LocalKind::Parameter => StackMemoryLocation::PointerArg(next_local_id),
+                    LocalKind::Parameter => {
+                        self.arg_types.push(PTR_TYPE);
+                        StackMemoryLocation::PointerArg(next_local_id)
+                    }
 
                     LocalKind::Variable => {
                         if self.stack_frame_pointer.is_none() {
@@ -236,13 +248,6 @@ impl<'a> WasmBackend<'a> {
                 }
             }
         };
-
-        let value_type = wasm_layout.value_type();
-        match (kind, wasm_layout) {
-            (LocalKind::Parameter, _) => self.arg_types.push(value_type),
-            (LocalKind::Variable, WasmLayout::StackMemory { .. }) => (),
-            (LocalKind::Variable, _) => self.locals.push(Local::new(1, value_type)),
-        }
 
         self.symbol_storage_map.insert(symbol, storage.clone());
 
