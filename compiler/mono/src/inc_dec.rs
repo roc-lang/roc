@@ -643,8 +643,8 @@ impl<'a> Context<'a> {
                                 // borrow data structure based on first argument of the folded function
                                 // borrow the default based on second argument of the folded function
                                 let borrows = [
-                                    function_ps[0].borrow,
                                     function_ps[1].borrow,
+                                    function_ps[0].borrow,
                                     FUNCTION,
                                     CLOSURE_DATA,
                                 ];
@@ -656,7 +656,7 @@ impl<'a> Context<'a> {
                                     b_live_vars,
                                 );
 
-                                let b = decref_if_owned!(function_ps[0].borrow, arguments[0], b);
+                                let b = decref_if_owned!(function_ps[1].borrow, arguments[0], b);
 
                                 let v = create_call!(function_ps.get(2));
 
