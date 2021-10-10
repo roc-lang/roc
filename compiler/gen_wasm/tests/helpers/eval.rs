@@ -121,6 +121,8 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
             src_hash
         );
 
+        println!("dumping file {:?}", path);
+
         match std::fs::File::create(path) {
             Err(e) => eprintln!("Problem creating wasm debug file: {:?}", e),
             Ok(mut file) => {

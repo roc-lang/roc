@@ -10,8 +10,8 @@ fi
 OVERHEAD_BYTES=114 # total file size minus generated code size (test wrapper + module headers)
 
 
-printf "filename\tLHS\tRHS\tchange\n"
-printf "========\t===\t===\t======\n"
+printf "filename                  \tLHS\tRHS\tchange\n"
+printf "========                  \t===\t===\t======\n"
 
 for f in `ls $1/wasm`
 do
