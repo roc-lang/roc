@@ -51,7 +51,7 @@ impl CodeBuilder {
         self.vm_stack.clear();
     }
 
-    pub fn push(&mut self, inst: Instruction) {
+    pub fn add_one(&mut self, inst: Instruction) {
         let (pops, push) = get_pops_and_pushes(&inst);
         let new_len = self.vm_stack.len() - pops as usize;
         self.vm_stack.truncate(new_len);
@@ -64,7 +64,7 @@ impl CodeBuilder {
         self.code.push(inst);
     }
 
-    pub fn extend(&mut self, instructions: &[Instruction]) {
+    pub fn add_many(&mut self, instructions: &[Instruction]) {
         let old_len = self.vm_stack.len();
         let mut len = old_len;
         let mut min_len = len;
@@ -86,7 +86,7 @@ impl CodeBuilder {
         self.code.extend_from_slice(instructions);
     }
 
-    pub fn call(&mut self, function_index: u32, pops: usize, push: bool) {
+    pub fn add_call(&mut self, function_index: u32, pops: usize, push: bool) {
         let stack_depth = self.vm_stack.len();
         if pops > stack_depth {
             let mut final_code = Vec::with_capacity(self.code.len() + self.insertions.len());
@@ -96,8 +96,7 @@ impl CodeBuilder {
                 function_index, pops, stack_depth, final_code, self.vm_stack
             );
         }
-        let new_stack_depth = stack_depth - pops as usize;
-        self.vm_stack.truncate(new_stack_depth);
+        self.vm_stack.truncate(stack_depth - pops);
         if push {
             self.vm_stack.push(None);
         }
@@ -264,7 +263,7 @@ fn get_pops_and_pushes(inst: &Instruction) -> (u8, bool) {
         Return => (0, false),
 
         Call(_) | CallIndirect(_, _) => {
-            panic!("Unknown number of pushes and pops. Use Codebuilder::call() instead.");
+            panic!("Unknown number of pushes and pops. Use add_call()");
         }
 
         Drop => (1, false),
