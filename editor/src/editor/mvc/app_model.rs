@@ -8,11 +8,12 @@ use crate::editor::ed_error::{
 };
 use copypasta::{ClipboardContext, ClipboardProvider};
 use std::fmt;
+use threadpool::ThreadPool;
 
-#[derive(Debug)]
 pub struct AppModel<'a> {
     pub ed_model_opt: Option<EdModel<'a>>,
     pub clipboard_opt: Option<Clipboard>,
+    pub sound_thread_pool: ThreadPool, // thread is blocked while sound is played, hence the threadpool
 }
 
 impl<'a> AppModel<'a> {
@@ -20,6 +21,7 @@ impl<'a> AppModel<'a> {
         AppModel {
             ed_model_opt,
             clipboard_opt: AppModel::init_clipboard_opt(),
+            sound_thread_pool: ThreadPool::new(7), // can play up to 7 sounds simultaneously
         }
     }
 

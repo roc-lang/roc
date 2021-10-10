@@ -632,6 +632,22 @@ pub struct LoadedModule {
     pub documentation: MutMap<ModuleId, ModuleDocumentation>,
 }
 
+impl LoadedModule {
+    pub fn total_problems(&self) -> usize {
+        let mut total = 0;
+
+        for problems in self.can_problems.values() {
+            total += problems.len();
+        }
+
+        for problems in self.type_problems.values() {
+            total += problems.len();
+        }
+
+        total
+    }
+}
+
 #[derive(Debug)]
 pub enum BuildProblem<'a> {
     FileNotFound(&'a Path),
@@ -1967,7 +1983,7 @@ fn update<'a>(
                 );
             }
 
-            if module_id == state.root_id && state.goal_phase == Phase::SolveTypes {
+            if is_host_exposed && state.goal_phase == Phase::SolveTypes {
                 debug_assert!(work.is_empty());
                 debug_assert!(state.dependencies.solved_all());
 

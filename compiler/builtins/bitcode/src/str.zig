@@ -1,5 +1,6 @@
 const utils = @import("utils.zig");
 const RocList = @import("list.zig").RocList;
+const UpdateMode = utils.UpdateMode;
 const std = @import("std");
 const mem = std.mem;
 const always_inline = std.builtin.CallOptions.Modifier.always_inline;
@@ -1147,10 +1148,10 @@ test "RocStr.joinWith: result is big" {
 
 // Str.toUtf8
 pub fn strToUtf8C(arg: RocStr) callconv(.C) RocList {
-    return @call(.{ .modifier = always_inline }, strToBytes, .{arg});
+    return strToBytes(arg);
 }
 
-fn strToBytes(arg: RocStr) RocList {
+inline fn strToBytes(arg: RocStr) RocList {
     if (arg.isEmpty()) {
         return RocList.empty();
     } else if (arg.isSmallStr()) {
@@ -1177,11 +1178,11 @@ const CountAndStart = extern struct {
     start: usize,
 };
 
-pub fn fromUtf8C(arg: RocList, output: *FromUtf8Result) callconv(.C) void {
-    output.* = @call(.{ .modifier = always_inline }, fromUtf8, .{arg});
+pub fn fromUtf8C(arg: RocList, update_mode: UpdateMode, output: *FromUtf8Result) callconv(.C) void {
+    output.* = fromUtf8(arg, update_mode);
 }
 
-fn fromUtf8(arg: RocList) FromUtf8Result {
+inline fn fromUtf8(arg: RocList, update_mode: UpdateMode) FromUtf8Result {
     const bytes = @ptrCast([*]const u8, arg.bytes)[0..arg.length];
 
     if (unicode.utf8ValidateSlice(bytes)) {
@@ -1194,13 +1195,23 @@ fn fromUtf8(arg: RocList) FromUtf8Result {
             const data_bytes = arg.len();
             utils.decref(arg.bytes, data_bytes, RocStr.alignment);
 
-            return FromUtf8Result{ .is_ok = true, .string = string, .byte_index = 0, .problem_code = Utf8ByteProblem.InvalidStartByte };
+            return FromUtf8Result{
+                .is_ok = true,
+                .string = string,
+                .byte_index = 0,
+                .problem_code = Utf8ByteProblem.InvalidStartByte,
+            };
         } else {
-            const byte_list = arg.makeUnique(RocStr.alignment, @sizeOf(u8));
+            const byte_list = arg.makeUniqueExtra(RocStr.alignment, @sizeOf(u8), update_mode);
 
             const string = RocStr{ .str_bytes = byte_list.bytes, .str_len = byte_list.length };
 
-            return FromUtf8Result{ .is_ok = true, .string = string, .byte_index = 0, .problem_code = Utf8ByteProblem.InvalidStartByte };
+            return FromUtf8Result{
+                .is_ok = true,
+                .string = string,
+                .byte_index = 0,
+                .problem_code = Utf8ByteProblem.InvalidStartByte,
+            };
         }
     } else {
         const temp = errorToProblem(@ptrCast([*]u8, arg.bytes), arg.length);
@@ -1209,7 +1220,12 @@ fn fromUtf8(arg: RocList) FromUtf8Result {
         const data_bytes = arg.len();
         utils.decref(arg.bytes, data_bytes, RocStr.alignment);
 
-        return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = temp.index, .problem_code = temp.problem };
+        return FromUtf8Result{
+            .is_ok = false,
+            .string = RocStr.empty(),
+            .byte_index = temp.index,
+            .problem_code = temp.problem,
+        };
     }
 }
 
@@ -1292,11 +1308,11 @@ pub const Utf8ByteProblem = enum(u8) {
 };
 
 fn validateUtf8Bytes(bytes: [*]u8, length: usize) FromUtf8Result {
-    return fromUtf8(RocList{ .bytes = bytes, .length = length });
+    return fromUtf8(RocList{ .bytes = bytes, .length = length }, .Immutable);
 }
 
 fn validateUtf8BytesX(str: RocList) FromUtf8Result {
-    return fromUtf8(str);
+    return fromUtf8(str, .Immutable);
 }
 
 fn expectOk(result: FromUtf8Result) !void {

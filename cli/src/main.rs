@@ -11,12 +11,13 @@ use std::path::{Path, PathBuf};
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-#[cfg(feature = "llvm")]
-use roc_cli::build;
 use std::ffi::{OsStr, OsString};
 
+#[cfg(feature = "llvm")]
+use roc_cli::build;
+
 #[cfg(not(feature = "llvm"))]
-fn build(_target: &Triple, _matches: &clap::ArgMatches, _config: BuildConfig) -> io::Result<i32> {
+fn build(_matches: &clap::ArgMatches, _config: BuildConfig) -> io::Result<i32> {
     panic!("Building without LLVM is not currently supported.");
 }
 
@@ -33,7 +34,7 @@ fn main() -> io::Result<()> {
                 }
 
                 None => {
-                    launch_editor(&[])?;
+                    launch_editor(None)?;
 
                     Ok(0)
                 }
@@ -90,16 +91,13 @@ If you're building the compiler from source you'll want to do `cargo run [FILE]`
                 .subcommand_matches(CMD_EDIT)
                 .unwrap()
                 .values_of_os(DIRECTORY_OR_FILES)
+                .map(|mut values| values.next())
             {
-                None => {
-                    launch_editor(&[])?;
+                Some(Some(os_str)) => {
+                    launch_editor(Some(Path::new(os_str)))?;
                 }
-                Some(values) => {
-                    let paths = values
-                        .map(|os_str| Path::new(os_str))
-                        .collect::<Vec<&Path>>();
-
-                    launch_editor(&paths)?;
+                _ => {
+                    launch_editor(None)?;
                 }
             }
 
@@ -186,8 +184,8 @@ fn roc_files_recursive<P: AsRef<Path>>(
 }
 
 #[cfg(feature = "editor")]
-fn launch_editor(filepaths: &[&Path]) -> io::Result<()> {
-    roc_editor::launch(filepaths)
+fn launch_editor(project_dir_path: Option<&Path>) -> io::Result<()> {
+    roc_editor::launch(project_dir_path)
 }
 
 #[cfg(not(feature = "editor"))]

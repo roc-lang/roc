@@ -1,6 +1,9 @@
-use crate::ui::ui_error::UIResult;
-use crate::{editor::slow_pool::MarkNodeId, ui::text::text_pos::TextPos};
+use crate::ui::text::text_pos::TextPos;
 use colored::*;
+use roc_ast::ast_error::ASTError;
+use roc_ast::lang::core::ast::ASTNodeId;
+use roc_code_markup::markup_error::MarkError;
+use roc_code_markup::slow_pool::MarkNodeId;
 use snafu::{Backtrace, ErrorCompat, NoneError, ResultExt, Snafu};
 
 //import errors as follows:
@@ -11,6 +14,24 @@ use snafu::{Backtrace, ErrorCompat, NoneError, ResultExt, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub))]
 pub enum EdError {
+    #[snafu(display(
+        "ASTNodeIdWithoutDefId: The expr_id_opt in ASTNode({:?}) was `None` but I was expexting `Some(DefId)` .",
+        ast_node_id
+    ))]
+    ASTNodeIdWithoutDefId {
+        ast_node_id: ASTNodeId,
+        backtrace: Backtrace,
+    },
+
+    #[snafu(display(
+        "ASTNodeIdWithoutExprId: The expr_id_opt in ASTNode({:?}) was `None` but I was expexting `Some(ExprId)` .",
+        ast_node_id
+    ))]
+    ASTNodeIdWithoutExprId {
+        ast_node_id: ASTNodeId,
+        backtrace: Backtrace,
+    },
+
     #[snafu(display(
         "CaretNotFound: No carets were found in the expected node with id {}",
         node_id
@@ -40,6 +61,17 @@ pub enum EdError {
     ExpectedTextNode {
         function_name: String,
         node_type: String,
+        backtrace: Backtrace,
+    },
+
+    #[snafu(display(
+        "EmptyCodeString: I need to have a code string (code_str) that contains either an app, interface or Package-Config header. The code string was empty.",
+    ))]
+    EmptyCodeString { backtrace: Backtrace },
+
+    #[snafu(display("FailedToUpdateIdentIdName: {}", err_str))]
+    FailedToUpdateIdentIdName {
+        err_str: String,
         backtrace: Backtrace,
     },
 
@@ -99,6 +131,12 @@ pub enum EdError {
         backtrace: Backtrace,
     },
 
+    #[snafu(display("NoDefMarkNodeBeforeLineNr: I could not find a MarkupNode whose root parent points to a DefId located before the given line number: {}.", line_nr))]
+    NoDefMarkNodeBeforeLineNr {
+        line_nr: usize,
+        backtrace: Backtrace,
+    },
+
     #[snafu(display("NodeWithoutAttributes: expected to have a node with attributes. This is a Nested MarkupNode, only Text and Blank nodes have attributes."))]
     NodeWithoutAttributes { backtrace: Backtrace },
 
@@ -132,6 +170,17 @@ pub enum EdError {
     },
 
     #[snafu(display(
+        "UnexpectedPattern2Variant: required a {} at this position, Pattern2 was a {}.",
+        required_pattern2,
+        encountered_pattern2,
+    ))]
+    UnexpectedPattern2Variant {
+        required_pattern2: String,
+        encountered_pattern2: String,
+        backtrace: Backtrace,
+    },
+
+    #[snafu(display(
         "UnexpectedEmptyPoolVec: expected PoolVec {} to have at least one element.",
         descriptive_vec_name
     ))]
@@ -154,7 +203,10 @@ pub enum EdError {
     },
 
     #[snafu(display("ParseError: Failed to parse AST: SyntaxError: {}.", syntax_err))]
-    ParseError { syntax_err: String },
+    SrcParseError {
+        syntax_err: String,
+        backtrace: Backtrace,
+    },
 
     #[snafu(display("RecordWithoutFields: expected record to have at least one field because it is not an EmptyRecord."))]
     RecordWithoutFields { backtrace: Backtrace },
@@ -162,21 +214,17 @@ pub enum EdError {
     #[snafu(display("StringParseError: {}", msg))]
     StringParseError { msg: String, backtrace: Backtrace },
 
+    #[snafu(display("ASTError: {}", msg))]
+    ASTErrorBacktrace { msg: String, backtrace: Backtrace },
     #[snafu(display("UIError: {}", msg))]
     UIErrorBacktrace { msg: String, backtrace: Backtrace },
+    #[snafu(display("MarkError: {}", msg))]
+    MarkErrorBacktrace { msg: String, backtrace: Backtrace },
 }
 
 pub type EdResult<T, E = EdError> = std::result::Result<T, E>;
 
 pub fn print_err(err: &EdError) {
-    eprintln!("{}", format!("{}", err).truecolor(255, 0, 0));
-
-    if let Some(backtrace) = ErrorCompat::backtrace(err) {
-        eprintln!("{}", color_backtrace(backtrace));
-    }
-}
-
-pub fn print_ui_err(err: &UIError) {
     eprintln!("{}", format!("{}", err).truecolor(255, 0, 0));
 
     if let Some(backtrace) = ErrorCompat::backtrace(err) {
@@ -243,9 +291,22 @@ impl From<UIError> for EdError {
     }
 }
 
-pub fn from_ui_res<T>(ui_res: UIResult<T>) -> EdResult<T> {
-    match ui_res {
-        Ok(t) => Ok(t),
-        Err(ui_err) => Err(EdError::from(ui_err)),
+impl From<MarkError> for EdError {
+    fn from(mark_err: MarkError) -> Self {
+        let msg = format!("{}", mark_err);
+
+        // hack to handle EdError derive
+        let dummy_res: Result<(), NoneError> = Err(NoneError {});
+        dummy_res.context(MarkErrorBacktrace { msg }).unwrap_err()
+    }
+}
+
+impl From<ASTError> for EdError {
+    fn from(ast_err: ASTError) -> Self {
+        let msg = format!("{}", ast_err);
+
+        // hack to handle EdError derive
+        let dummy_res: Result<(), NoneError> = Err(NoneError {});
+        dummy_res.context(ASTErrorBacktrace { msg }).unwrap_err()
     }
 }

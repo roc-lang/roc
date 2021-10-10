@@ -25,7 +25,7 @@ initialModel = \start ->
 cheapestOpen : (position -> F64), Model position -> Result position [ KeyNotFound ]*
 cheapestOpen = \costFunction, model ->
 
-    folder = \position, resSmallestSoFar ->
+    folder = \resSmallestSoFar, position ->
             when Map.get model.costs position is
                 Err e ->
                     Err e
@@ -42,7 +42,7 @@ cheapestOpen = \costFunction, model ->
                             else
                                 Ok smallestSoFar
 
-    Set.walk model.openSet folder (Err KeyNotFound)
+    Set.walk model.openSet (Err KeyNotFound) folder
         |> Result.map (\x -> x.position)
 
 
@@ -105,7 +105,7 @@ astar = \costFn, moveFn, goal, model ->
 
                modelWithNeighbours = { modelPopped & openSet : Set.union modelPopped.openSet newNeighbours }
 
-               modelWithCosts = Set.walk newNeighbours (\nb, md -> updateCost current nb md) modelWithNeighbours
+               modelWithCosts = Set.walk newNeighbours modelWithNeighbours (\md, nb -> updateCost current nb md)
 
                astar costFn moveFn goal modelWithCosts
 

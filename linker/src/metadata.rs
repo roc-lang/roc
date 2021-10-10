@@ -2,9 +2,15 @@ use roc_collections::all::MutMap;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
+pub enum VirtualOffset {
+    Absolute,
+    Relative(u64),
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct SurgeryEntry {
     pub file_offset: u64,
-    pub virtual_offset: u64,
+    pub virtual_offset: VirtualOffset,
     pub size: u8,
 }
 

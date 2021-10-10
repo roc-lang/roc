@@ -696,14 +696,14 @@ impl<'a> BorrowInfState<'a> {
                     ListWalk | ListWalkUntil | ListWalkBackwards | DictWalk => {
                         match param_map.get_symbol(arguments[2], closure_layout) {
                             Some(function_ps) => {
-                                // own the data structure if the function wants to own the element
+                                // own the default value if the function wants to own it
                                 if !function_ps[0].borrow {
-                                    self.own_var(arguments[0]);
+                                    self.own_var(arguments[1]);
                                 }
 
-                                // own the default value if the function wants to own it
+                                // own the data structure if the function wants to own the element
                                 if !function_ps[1].borrow {
-                                    self.own_var(arguments[1]);
+                                    self.own_var(arguments[0]);
                                 }
 
                                 // own the closure environment if the function needs to own it
@@ -993,6 +993,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         // List.append should own its first argument
         ListAppend => arena.alloc_slice_copy(&[owned, owned]),
         ListDrop => arena.alloc_slice_copy(&[owned, irrelevant]),
+        ListDropAt => arena.alloc_slice_copy(&[owned, irrelevant]),
         ListSwap => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
 
         Eq | NotEq => arena.alloc_slice_copy(&[borrowed, borrowed]),

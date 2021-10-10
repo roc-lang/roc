@@ -12,6 +12,12 @@ pub struct CaretWSelect {
     pub selection_opt: Option<Selection>,
 }
 
+pub enum CaretPos {
+    Start,
+    Exact(TextPos),
+    End,
+}
+
 fn mk_some_sel(start_pos: TextPos, end_pos: TextPos) -> UIResult<Option<Selection>> {
     if start_pos == end_pos {
         Ok(None)
@@ -107,7 +113,7 @@ pub fn make_caret_rect(
     Rect {
         top_left_coords: (caret_x, caret_y).into(),
         height: glyph_dim_rect.height,
-        width: 2.0,
+        width: glyph_dim_rect.width / 6.0,
         color: ui_theme.caret,
     }
 }
@@ -146,7 +152,7 @@ pub mod test_caret_w_select {
 
     // Retrieve selection and position from formatted string
     pub fn convert_dsl_to_selection(lines: &[String]) -> Result<CaretWSelect, String> {
-        let lines_str: String = lines.join("");
+        let lines_str: String = lines.join("\n");
 
         let parsed = LineParser::parse(Rule::linesWithSelect, &lines_str)
             .expect("Selection test DSL parsing failed");

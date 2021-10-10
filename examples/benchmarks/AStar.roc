@@ -101,13 +101,17 @@ astar = \costFn, moveFn, goal, model ->
                 newNeighbors =
                     Set.difference neighbors modelPopped.evaluated
 
+                modelWithNeighbors : Model position
                 modelWithNeighbors =
                     { modelPopped &
                         openSet: Set.union modelPopped.openSet newNeighbors
                     }
 
+                walker : Model position, position -> Model position
+                walker = \amodel, n -> updateCost current n amodel
+
                 modelWithCosts =
-                    Set.walk newNeighbors (\n, m -> updateCost current n m) modelWithNeighbors
+                    Set.walk newNeighbors modelWithNeighbors walker
 
                 astar costFn moveFn goal modelWithCosts
 
@@ -117,17 +121,17 @@ astar = \costFn, moveFn, goal, model ->
 #             openSet: Set.remove model.openSet current,
 #             evaluated: Set.insert model.evaluated current,
 #         }
-# 
+#
 #     neighbors = moveFn current
-# 
+#
 #     newNeighbors = Set.difference neighbors modelPopped.evaluated
-# 
+#
 #     modelWithNeighbors = { modelPopped & openSet: Set.union modelPopped.openSet newNeighbors }
-# 
+#
 #     # a lot goes wrong here
 #     modelWithCosts =
-#         Set.walk newNeighbors (\n, m -> updateCost current n m) modelWithNeighbors
-# 
+#         Set.walk newNeighbors modelWithNeighbors (\n, m -> updateCost current n m)
+#
 #     modelWithCosts
 
 

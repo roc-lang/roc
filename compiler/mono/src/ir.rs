@@ -94,6 +94,12 @@ impl<'a> CapturedSymbols<'a> {
     }
 }
 
+impl<'a> Default for CapturedSymbols<'a> {
+    fn default() -> Self {
+        CapturedSymbols::None
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PendingSpecialization<'a> {
     solved_type: SolvedType,
@@ -2687,8 +2693,6 @@ macro_rules! match_on_closure_argument {
         let arg_layouts = top_level.arguments;
         let ret_layout = top_level.result;
 
-
-
         match closure_data_layout {
             RawFunctionLayout::Function(_, lambda_set, _) =>  {
                 lowlevel_match_on_lambda_set(
@@ -2712,7 +2716,7 @@ macro_rules! match_on_closure_argument {
                     $hole,
                 )
             }
-            RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!(),
+            RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!("match_on_closure_argument received a zero-argument thunk"),
         }
     }};
 }
@@ -4035,9 +4039,12 @@ pub fn with_hole<'a>(
                 ListWalk | ListWalkUntil | ListWalkBackwards | DictWalk => {
                     debug_assert_eq!(arg_symbols.len(), 3);
 
-                    let closure_index = 1;
-                    let closure_data_symbol = arg_symbols[closure_index];
-                    let closure_data_var = args[closure_index].0;
+                    const LIST_INDEX: usize = 0;
+                    const DEFAULT_INDEX: usize = 1;
+                    const CLOSURE_INDEX: usize = 2;
+
+                    let closure_data_symbol = arg_symbols[CLOSURE_INDEX];
+                    let closure_data_var = args[CLOSURE_INDEX].0;
 
                     let stmt = match_on_closure_argument!(
                         env,
@@ -4046,7 +4053,7 @@ pub fn with_hole<'a>(
                         closure_data_symbol,
                         closure_data_var,
                         op,
-                        [arg_symbols[0], arg_symbols[2]],
+                        [arg_symbols[LIST_INDEX], arg_symbols[DEFAULT_INDEX]],
                         layout,
                         assigned,
                         hole
@@ -4062,9 +4069,9 @@ pub fn with_hole<'a>(
                         env,
                         procs,
                         layout_cache,
-                        args[0].0,
-                        Located::at_zero(args[0].1.clone()),
-                        arg_symbols[0],
+                        args[LIST_INDEX].0,
+                        Located::at_zero(args[LIST_INDEX].1.clone()),
+                        arg_symbols[LIST_INDEX],
                         stmt,
                     );
 
@@ -4072,9 +4079,9 @@ pub fn with_hole<'a>(
                         env,
                         procs,
                         layout_cache,
-                        args[2].0,
-                        Located::at_zero(args[2].1.clone()),
-                        arg_symbols[2],
+                        args[DEFAULT_INDEX].0,
+                        Located::at_zero(args[DEFAULT_INDEX].1.clone()),
+                        arg_symbols[DEFAULT_INDEX],
                         stmt,
                     );
 
@@ -4082,9 +4089,9 @@ pub fn with_hole<'a>(
                         env,
                         procs,
                         layout_cache,
-                        args[1].0,
-                        Located::at_zero(args[1].1.clone()),
-                        arg_symbols[1],
+                        args[CLOSURE_INDEX].0,
+                        Located::at_zero(args[CLOSURE_INDEX].1.clone()),
+                        arg_symbols[CLOSURE_INDEX],
                         stmt,
                     )
                 }
@@ -6208,6 +6215,8 @@ fn reuse_function_symbol<'a>(
                             layout_cache,
                         );
 
+                        // even though this function may not itself capture,
+                        // unification may still cause it to have an extra argument
                         construct_closure_data(
                             env,
                             lambda_set,
@@ -6437,8 +6446,6 @@ fn call_by_name<'a>(
                     assign_to_symbols(env, procs, layout_cache, iter, result)
                 }
             } else {
-                let argument_layouts = lambda_set.extend_argument_list(env.arena, arg_layouts);
-
                 call_by_name_help(
                     env,
                     procs,
@@ -6446,7 +6453,7 @@ fn call_by_name<'a>(
                     proc_name,
                     loc_args,
                     lambda_set,
-                    argument_layouts,
+                    arg_layouts,
                     ret_layout,
                     layout_cache,
                     assigned,
@@ -6494,10 +6501,6 @@ fn call_by_name_help<'a>(
     let original_fn_var = fn_var;
     let arena = env.arena;
 
-    // debug_assert!(!procs.module_thunks.contains(&proc_name), "{:?}", proc_name);
-
-    let top_level_layout = ProcLayout::new(env.arena, argument_layouts, *ret_layout);
-
     // the arguments given to the function, stored in symbols
     let mut field_symbols = Vec::with_capacity_in(loc_args.len(), arena);
     field_symbols.extend(
@@ -6506,7 +6509,13 @@ fn call_by_name_help<'a>(
             .map(|(_, arg_expr)| possible_reuse_symbol(env, procs, &arg_expr.value)),
     );
 
-    let field_symbols = field_symbols.into_bump_slice();
+    // If required, add an extra argument to the layout that is the captured environment
+    // afterwards, we MUST make sure the number of arguments in the layout matches the
+    // number of arguments actually passed.
+    let top_level_layout = {
+        let argument_layouts = lambda_set.extend_argument_list(env.arena, argument_layouts);
+        ProcLayout::new(env.arena, argument_layouts, *ret_layout)
+    };
 
     // the variables of the given arguments
     let mut pattern_vars = Vec::with_capacity_in(loc_args.len(), arena);
@@ -6534,6 +6543,8 @@ fn call_by_name_help<'a>(
             "see call_by_name for background (scroll down a bit), function is {:?}",
             proc_name,
         );
+
+        let field_symbols = field_symbols.into_bump_slice();
 
         let call = self::Call {
             call_type: CallType::ByName {
@@ -6573,6 +6584,9 @@ fn call_by_name_help<'a>(
                 "see call_by_name for background (scroll down a bit), function is {:?}",
                 proc_name,
             );
+
+            let field_symbols = field_symbols.into_bump_slice();
+
             let call = self::Call {
                 call_type: CallType::ByName {
                     name: proc_name,
@@ -6625,6 +6639,8 @@ fn call_by_name_help<'a>(
                     proc_name,
                 );
 
+                let field_symbols = field_symbols.into_bump_slice();
+
                 let call = self::Call {
                     call_type: CallType::ByName {
                         name: proc_name,
@@ -6643,6 +6659,19 @@ fn call_by_name_help<'a>(
             None => {
                 let opt_partial_proc = procs.partial_procs.get(&proc_name);
 
+                /*
+                debug_assert_eq!(
+                    argument_layouts.len(),
+                    field_symbols.len(),
+                    "Function {:?} is called with {} arguments, but the layout expects {}",
+                    proc_name,
+                    field_symbols.len(),
+                    argument_layouts.len(),
+                );
+                */
+
+                let field_symbols = field_symbols.into_bump_slice();
+
                 match opt_partial_proc {
                     Some(partial_proc) => {
                         // TODO should pending_procs hold a Rc<Proc> to avoid this .clone()?
@@ -6657,18 +6686,22 @@ fn call_by_name_help<'a>(
 
                         match specialize(env, procs, proc_name, layout_cache, pending, partial_proc)
                         {
-                            Ok((proc, layout)) => call_specialized_proc(
-                                env,
-                                procs,
-                                proc_name,
-                                proc,
-                                layout,
-                                field_symbols,
-                                loc_args,
-                                layout_cache,
-                                assigned,
-                                hole,
-                            ),
+                            Ok((proc, layout)) => {
+                                // now we just call our freshly-specialized function
+                                call_specialized_proc(
+                                    env,
+                                    procs,
+                                    proc_name,
+                                    proc,
+                                    lambda_set,
+                                    layout,
+                                    field_symbols,
+                                    loc_args,
+                                    layout_cache,
+                                    assigned,
+                                    hole,
+                                )
+                            }
                             Err(SpecializeFailure {
                                 attempted_layout,
                                 problem: _,
@@ -6684,6 +6717,7 @@ fn call_by_name_help<'a>(
                                     procs,
                                     proc_name,
                                     proc,
+                                    lambda_set,
                                     attempted_layout,
                                     field_symbols,
                                     loc_args,
@@ -6833,6 +6867,7 @@ fn call_specialized_proc<'a>(
     procs: &mut Procs<'a>,
     proc_name: Symbol,
     proc: Proc<'a>,
+    lambda_set: LambdaSet<'a>,
     layout: RawFunctionLayout<'a>,
     field_symbols: &'a [Symbol],
     loc_args: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)>,
@@ -6871,6 +6906,8 @@ fn call_specialized_proc<'a>(
                     arguments: field_symbols,
                 };
 
+                // the closure argument is already added here (to get the right specialization)
+                // but now we need to remove it because the `match_on_lambda_set` will add it again
                 build_call(env, call, assigned, Layout::LambdaSet(lambda_set), hole)
             }
             RawFunctionLayout::ZeroArgumentThunk(_) => {
@@ -6878,30 +6915,75 @@ fn call_specialized_proc<'a>(
             }
         }
     } else {
-        debug_assert_eq!(
-            function_layout.arguments.len(),
-            field_symbols.len(),
-            "function {:?} with layout {:?} expects {:?} arguments, but is applied to {:?}",
-            proc_name,
-            function_layout,
-            function_layout.arguments.len(),
-            field_symbols.len(),
-        );
-        let call = self::Call {
-            call_type: CallType::ByName {
-                name: proc_name,
-                ret_layout: function_layout.result,
-                arg_layouts: function_layout.arguments,
-                specialization_id: env.next_call_specialization_id(),
-            },
-            arguments: field_symbols,
-        };
-
         let iter = loc_args.into_iter().rev().zip(field_symbols.iter().rev());
 
-        let result = build_call(env, call, assigned, function_layout.result, hole);
+        match procs
+            .partial_procs
+            .get(&proc_name)
+            .map(|pp| &pp.captured_symbols)
+        {
+            Some(&CapturedSymbols::Captured(captured_symbols)) => {
+                let symbols = Vec::from_iter_in(captured_symbols.iter().map(|x| x.0), env.arena)
+                    .into_bump_slice();
 
-        assign_to_symbols(env, procs, layout_cache, iter, result)
+                let closure_data_symbol = env.unique_symbol();
+
+                // the closure argument is already added here (to get the right specialization)
+                // but now we need to remove it because the `match_on_lambda_set` will add it again
+                let mut argument_layouts =
+                    Vec::from_iter_in(function_layout.arguments.iter().copied(), env.arena);
+                argument_layouts.pop().unwrap();
+
+                debug_assert_eq!(argument_layouts.len(), field_symbols.len(),);
+
+                let new_hole = match_on_lambda_set(
+                    env,
+                    lambda_set,
+                    closure_data_symbol,
+                    field_symbols,
+                    argument_layouts.into_bump_slice(),
+                    function_layout.result,
+                    assigned,
+                    hole,
+                );
+
+                let result = construct_closure_data(
+                    env,
+                    lambda_set,
+                    proc_name,
+                    symbols,
+                    closure_data_symbol,
+                    env.arena.alloc(new_hole),
+                );
+
+                assign_to_symbols(env, procs, layout_cache, iter, result)
+            }
+            _ => {
+                debug_assert_eq!(
+                    function_layout.arguments.len(),
+                    field_symbols.len(),
+                    "function {:?} with layout {:#?} expects {:?} arguments, but is applied to {:?}",
+                    proc_name,
+                    function_layout,
+                    function_layout.arguments.len(),
+                    field_symbols.len(),
+                );
+
+                let call = self::Call {
+                    call_type: CallType::ByName {
+                        name: proc_name,
+                        ret_layout: function_layout.result,
+                        arg_layouts: function_layout.arguments,
+                        specialization_id: env.next_call_specialization_id(),
+                    },
+                    arguments: field_symbols,
+                };
+
+                let result = build_call(env, call, assigned, function_layout.result, hole);
+
+                assign_to_symbols(env, procs, layout_cache, iter, result)
+            }
+        }
     }
 }
 
