@@ -14,11 +14,12 @@ pub enum VirtualMachineSymbolState {
     NotYetPushed,
 
     /// Value has been pushed onto the VM stack but not yet popped
-    /// Remember which instruction pushed it, in case we need it
+    /// Remember where it was pushed, in case we need to insert another instruction there later
     Pushed { pushed_at: usize },
 
-    /// Value has been pushed and popped. If we want to use it again, we will
-    /// have to go back and insert an instruction where it was pushed
+    /// Value has been pushed and popped, so it's not on the VM stack any more.
+    /// If we want to use it again later, we will have to create a local for it,
+    /// by going back to insert a local.tee instruction at pushed_at
     Popped { pushed_at: usize },
 }
 
@@ -28,7 +29,7 @@ pub struct CodeBuilder {
     code: Vec<Instruction>,
 
     /// Extra instructions to insert at specific positions during finalisation
-    /// (Mainly to go back and set locals when we realise we need them)
+    /// (Go back and set locals when we realise we need them)
     insertions: BTreeMap<usize, Instruction>,
 
     /// Our simulation model of the Wasm stack machine
@@ -51,6 +52,7 @@ impl CodeBuilder {
         self.vm_stack.clear();
     }
 
+    /// Add an instruction
     pub fn add_one(&mut self, inst: Instruction) {
         let (pops, push) = get_pops_and_pushes(&inst);
         let new_len = self.vm_stack.len() - pops as usize;
@@ -64,6 +66,7 @@ impl CodeBuilder {
         self.code.push(inst);
     }
 
+    /// Add many instructions
     pub fn add_many(&mut self, instructions: &[Instruction]) {
         let old_len = self.vm_stack.len();
         let mut len = old_len;
@@ -86,6 +89,8 @@ impl CodeBuilder {
         self.code.extend_from_slice(instructions);
     }
 
+    /// Special-case method to add a Call instruction
+    /// Specify the number of arguments the function pops from the VM stack, and whether it pushes a return value
     pub fn add_call(&mut self, function_index: u32, pops: usize, push: bool) {
         let stack_depth = self.vm_stack.len();
         if pops > stack_depth {
@@ -107,6 +112,7 @@ impl CodeBuilder {
         self.code.push(inst);
     }
 
+    /// Finalize a function body by copying all instructions into a vector
     pub fn finalize_into(&mut self, final_code: &mut Vec<Instruction>) {
         let mut insertions_iter = self.insertions.iter();
         let mut next_insertion = insertions_iter.next();
@@ -130,6 +136,8 @@ impl CodeBuilder {
         self.code.len() + self.insertions.len()
     }
 
+    /// Set the Symbol that is at the top of the VM stack right now
+    /// We will use this later when we need to load the Symbol
     pub fn set_top_symbol(&mut self, sym: Symbol) -> VirtualMachineSymbolState {
         let len = self.vm_stack.len();
         let pushed_at = self.code.len();
@@ -166,6 +174,13 @@ impl CodeBuilder {
         true
     }
 
+    /// Load a Symbol that is stored in the VM stack
+    /// If it's already at the top of the stack, no code will be generated.
+    /// Otherwise, local.set and local.get instructions will be inserted, using the LocalId provided.
+    ///
+    /// If the return value is `Some(s)`, `s` should be stored by the caller, and provided in the next call.
+    /// If the return value is `None`, the Symbol is no longer stored in the VM stack, but in a local.
+    /// (In this case, the caller must remember to declare the local in the function header.)
     pub fn load_symbol(
         &mut self,
         symbol: Symbol,
@@ -182,7 +197,8 @@ impl CodeBuilder {
                 match top {
                     Some(top_symbol) if top_symbol == symbol => {
                         // We're lucky, the symbol is already on top of the VM stack
-                        // No code to generate, just let the caller know what happened
+                        // No code to generate! (This reduces code size by up to 25% in tests.)
+                        // Just let the caller know what happened
                         Some(Popped { pushed_at })
                     }
                     _ => {
