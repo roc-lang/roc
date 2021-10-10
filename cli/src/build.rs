@@ -176,7 +176,7 @@ pub fn build_file<'a>(
     // This only needs to be mutable for report_problems. This can't be done
     // inside a nested scope without causing a borrow error!
     let mut loaded = loaded;
-    program::report_problems(&mut loaded);
+    program::report_problems_monomorphized(&mut loaded);
     let loaded = loaded;
 
     let code_gen_timing = match opt_level {
@@ -347,7 +347,7 @@ pub fn check_file(
     // Release builds use uniqueness optimizations
     let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
 
-    let mut loaded = roc_load::file::load_and_monomorphize(
+    let mut loaded = roc_load::file::load_and_typecheck(
         arena,
         roc_file_path,
         stdlib,
@@ -410,5 +410,5 @@ pub fn check_file(
         println!("Finished checking in {} ms\n", compilation_end.as_millis(),);
     }
 
-    Ok(program::report_problems(&mut loaded))
+    Ok(program::report_problems_typechecked(&mut loaded))
 }
