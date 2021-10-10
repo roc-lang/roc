@@ -2693,8 +2693,6 @@ macro_rules! match_on_closure_argument {
         let arg_layouts = top_level.arguments;
         let ret_layout = top_level.result;
 
-
-
         match closure_data_layout {
             RawFunctionLayout::Function(_, lambda_set, _) =>  {
                 lowlevel_match_on_lambda_set(
@@ -2718,7 +2716,7 @@ macro_rules! match_on_closure_argument {
                     $hole,
                 )
             }
-            RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!(),
+            RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!("match_on_closure_argument received a zero-argument thunk"),
         }
     }};
 }
@@ -4041,9 +4039,12 @@ pub fn with_hole<'a>(
                 ListWalk | ListWalkUntil | ListWalkBackwards | DictWalk => {
                     debug_assert_eq!(arg_symbols.len(), 3);
 
-                    let closure_index = 1;
-                    let closure_data_symbol = arg_symbols[closure_index];
-                    let closure_data_var = args[closure_index].0;
+                    const LIST_INDEX: usize = 0;
+                    const DEFAULT_INDEX: usize = 1;
+                    const CLOSURE_INDEX: usize = 2;
+
+                    let closure_data_symbol = arg_symbols[CLOSURE_INDEX];
+                    let closure_data_var = args[CLOSURE_INDEX].0;
 
                     let stmt = match_on_closure_argument!(
                         env,
@@ -4052,7 +4053,7 @@ pub fn with_hole<'a>(
                         closure_data_symbol,
                         closure_data_var,
                         op,
-                        [arg_symbols[0], arg_symbols[2]],
+                        [arg_symbols[LIST_INDEX], arg_symbols[DEFAULT_INDEX]],
                         layout,
                         assigned,
                         hole
@@ -4068,9 +4069,9 @@ pub fn with_hole<'a>(
                         env,
                         procs,
                         layout_cache,
-                        args[0].0,
-                        Located::at_zero(args[0].1.clone()),
-                        arg_symbols[0],
+                        args[LIST_INDEX].0,
+                        Located::at_zero(args[LIST_INDEX].1.clone()),
+                        arg_symbols[LIST_INDEX],
                         stmt,
                     );
 
@@ -4078,9 +4079,9 @@ pub fn with_hole<'a>(
                         env,
                         procs,
                         layout_cache,
-                        args[2].0,
-                        Located::at_zero(args[2].1.clone()),
-                        arg_symbols[2],
+                        args[DEFAULT_INDEX].0,
+                        Located::at_zero(args[DEFAULT_INDEX].1.clone()),
+                        arg_symbols[DEFAULT_INDEX],
                         stmt,
                     );
 
@@ -4088,9 +4089,9 @@ pub fn with_hole<'a>(
                         env,
                         procs,
                         layout_cache,
-                        args[1].0,
-                        Located::at_zero(args[1].1.clone()),
-                        arg_symbols[1],
+                        args[CLOSURE_INDEX].0,
+                        Located::at_zero(args[CLOSURE_INDEX].1.clone()),
+                        arg_symbols[CLOSURE_INDEX],
                         stmt,
                     )
                 }

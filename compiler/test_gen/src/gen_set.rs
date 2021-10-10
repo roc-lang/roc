@@ -163,7 +163,7 @@ fn walk_sum() {
     assert_evals_to!(
         indoc!(
             r#"
-            Set.walk (Set.fromList [1,2,3]) (\x, y -> x + y) 0
+            Set.walk (Set.fromList [1,2,3]) 0 (\x, y -> x + y)
             "#
         ),
         6,
