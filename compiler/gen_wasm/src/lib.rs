@@ -132,29 +132,29 @@ pub struct CopyMemoryConfig {
     alignment_bytes: u32,
 }
 
-pub fn copy_memory(instructions: &mut CodeBuilder, config: CopyMemoryConfig) {
+pub fn copy_memory(code_builder: &mut CodeBuilder, config: CopyMemoryConfig) {
     debug_assert!(config.from_ptr != config.to_ptr || config.from_offset != config.to_offset);
     let alignment_flag = encode_alignment(config.alignment_bytes);
     let mut i = 0;
     while config.size - i >= 8 {
-        instructions.push(GetLocal(config.to_ptr.0));
-        instructions.push(GetLocal(config.from_ptr.0));
-        instructions.push(I64Load(alignment_flag, i + config.from_offset));
-        instructions.push(I64Store(alignment_flag, i + config.to_offset));
+        code_builder.push(GetLocal(config.to_ptr.0));
+        code_builder.push(GetLocal(config.from_ptr.0));
+        code_builder.push(I64Load(alignment_flag, i + config.from_offset));
+        code_builder.push(I64Store(alignment_flag, i + config.to_offset));
         i += 8;
     }
     if config.size - i >= 4 {
-        instructions.push(GetLocal(config.to_ptr.0));
-        instructions.push(GetLocal(config.from_ptr.0));
-        instructions.push(I32Load(alignment_flag, i + config.from_offset));
-        instructions.push(I32Store(alignment_flag, i + config.to_offset));
+        code_builder.push(GetLocal(config.to_ptr.0));
+        code_builder.push(GetLocal(config.from_ptr.0));
+        code_builder.push(I32Load(alignment_flag, i + config.from_offset));
+        code_builder.push(I32Store(alignment_flag, i + config.to_offset));
         i += 4;
     }
     while config.size - i > 0 {
-        instructions.push(GetLocal(config.to_ptr.0));
-        instructions.push(GetLocal(config.from_ptr.0));
-        instructions.push(I32Load8U(alignment_flag, i + config.from_offset));
-        instructions.push(I32Store8(alignment_flag, i + config.to_offset));
+        code_builder.push(GetLocal(config.to_ptr.0));
+        code_builder.push(GetLocal(config.from_ptr.0));
+        code_builder.push(I32Load8U(alignment_flag, i + config.from_offset));
+        code_builder.push(I32Store8(alignment_flag, i + config.to_offset));
         i += 1;
     }
 }

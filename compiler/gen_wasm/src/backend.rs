@@ -41,7 +41,7 @@ pub struct WasmBackend<'a> {
     proc_symbol_map: MutMap<Symbol, CodeLocation>,
 
     // Functions: Wasm AST
-    instructions: CodeBuilder,
+    code_builder: CodeBuilder,
     arg_types: std::vec::Vec<ValueType>,
     locals: std::vec::Vec<Local>,
 
@@ -66,7 +66,7 @@ impl<'a> WasmBackend<'a> {
             proc_symbol_map: MutMap::default(),
 
             // Functions: Wasm AST
-            instructions: CodeBuilder::new(),
+            code_builder: CodeBuilder::new(),
             arg_types: std::vec::Vec::with_capacity(8),
             locals: std::vec::Vec::with_capacity(32),
 
@@ -81,7 +81,7 @@ impl<'a> WasmBackend<'a> {
 
     fn reset(&mut self) {
         // Functions: Wasm AST
-        self.instructions.clear();
+        self.code_builder.clear();
         self.arg_types.clear();
         self.locals.clear();
 
@@ -139,7 +139,7 @@ impl<'a> WasmBackend<'a> {
     fn finalize_proc(&mut self, signature_builder: SignatureBuilder) -> FunctionDefinition {
         self.end_block(); // end the block from start_proc, to ensure all paths pop stack memory (if any)
 
-        let mut final_instructions = Vec::with_capacity(self.instructions.len() + 10);
+        let mut final_instructions = Vec::with_capacity(self.code_builder.len() + 10);
 
         if self.stack_memory > 0 {
             push_stack_frame(
@@ -149,7 +149,7 @@ impl<'a> WasmBackend<'a> {
             );
         }
 
-        self.instructions.finalize_into(&mut final_instructions);
+        self.code_builder.finalize_into(&mut final_instructions);
 
         if self.stack_memory > 0 {
             pop_stack_frame(
@@ -267,7 +267,7 @@ impl<'a> WasmBackend<'a> {
     /// (There is no method for one symbol. This is deliberate, since
     /// if anyone ever called it in a loop, it would generate inefficient code)
     fn load_symbols(&mut self, symbols: &[Symbol]) {
-        if self.instructions.verify_stack_match(symbols) {
+        if self.code_builder.verify_stack_match(symbols) {
             // The symbols were already at the top of the stack, do nothing!
             // This should be quite common due to the structure of the Mono IR
             return;
@@ -282,7 +282,7 @@ impl<'a> WasmBackend<'a> {
                 } => {
                     let next_local_id = self.get_next_local_id();
                     let maybe_next_vm_state =
-                        self.instructions.load_symbol(*sym, vm_state, next_local_id);
+                        self.code_builder.load_symbol(*sym, vm_state, next_local_id);
                     match maybe_next_vm_state {
                         // The act of loading the value changed the VM state, so update it
                         Some(next_vm_state) => {
@@ -315,20 +315,20 @@ impl<'a> WasmBackend<'a> {
                     location: StackMemoryLocation::PointerArg(local_id),
                     ..
                 } => {
-                    self.instructions.push(GetLocal(local_id.0));
-                    self.instructions.set_top_symbol(*sym);
+                    self.code_builder.push(GetLocal(local_id.0));
+                    self.code_builder.set_top_symbol(*sym);
                 }
 
                 SymbolStorage::StackMemory {
                     location: StackMemoryLocation::FrameOffset(offset),
                     ..
                 } => {
-                    self.instructions.extend(&[
+                    self.code_builder.extend(&[
                         GetLocal(self.stack_frame_pointer.unwrap().0),
                         I32Const(offset as i32),
                         I32Add,
                     ]);
-                    self.instructions.set_top_symbol(*sym);
+                    self.code_builder.set_top_symbol(*sym);
                 }
             }
         }
@@ -349,7 +349,7 @@ impl<'a> WasmBackend<'a> {
             } => {
                 let (from_ptr, from_offset) = location.local_and_offset(self.stack_frame_pointer);
                 copy_memory(
-                    &mut self.instructions,
+                    &mut self.code_builder,
                     CopyMemoryConfig {
                         from_ptr,
                         from_offset,
@@ -379,9 +379,9 @@ impl<'a> WasmBackend<'a> {
                         panic!("Cannot store {:?} with alignment of {:?}", value_type, size);
                     }
                 };
-                self.instructions.push(GetLocal(to_ptr.0));
+                self.code_builder.push(GetLocal(to_ptr.0));
                 self.load_symbols(&[from_symbol]);
-                self.instructions.push(store_instruction);
+                self.code_builder.push(store_instruction);
                 size
             }
         }
@@ -412,7 +412,7 @@ impl<'a> WasmBackend<'a> {
                 debug_assert!(to_value_type == from_value_type);
                 debug_assert!(to_size == from_size);
                 self.load_symbols(&[from_symbol]);
-                self.instructions.push(SetLocal(to_local_id.0));
+                self.code_builder.push(SetLocal(to_local_id.0));
                 self.symbol_storage_map.insert(from_symbol, to.clone());
             }
 
@@ -430,8 +430,8 @@ impl<'a> WasmBackend<'a> {
             ) => {
                 debug_assert!(to_value_type == from_value_type);
                 debug_assert!(to_size == from_size);
-                self.instructions.push(GetLocal(from_local_id.0));
-                self.instructions.push(SetLocal(to_local_id.0));
+                self.code_builder.push(GetLocal(from_local_id.0));
+                self.code_builder.push(SetLocal(to_local_id.0));
             }
 
             (
@@ -452,7 +452,7 @@ impl<'a> WasmBackend<'a> {
                 debug_assert!(*to_size == *from_size);
                 debug_assert!(*to_alignment_bytes == *from_alignment_bytes);
                 copy_memory(
-                    &mut self.instructions,
+                    &mut self.code_builder,
                     CopyMemoryConfig {
                         from_ptr,
                         from_offset,
@@ -485,8 +485,8 @@ impl<'a> WasmBackend<'a> {
         {
             let local_id = self.get_next_local_id();
             if vm_state != VirtualMachineSymbolState::NotYetPushed {
-                self.instructions.load_symbol(symbol, vm_state, local_id);
-                self.instructions.push(SetLocal(local_id.0));
+                self.code_builder.load_symbol(symbol, vm_state, local_id);
+                self.code_builder.push(SetLocal(local_id.0));
             }
 
             self.locals.push(Local::new(1, value_type));
@@ -512,17 +512,17 @@ impl<'a> WasmBackend<'a> {
     /// start a loop that leaves a value on the stack
     fn start_loop_with_return(&mut self, value_type: ValueType) {
         self.block_depth += 1;
-        self.instructions.push(Loop(BlockType::Value(value_type)));
+        self.code_builder.push(Loop(BlockType::Value(value_type)));
     }
 
     fn start_block(&mut self, block_type: BlockType) {
         self.block_depth += 1;
-        self.instructions.push(Block(block_type));
+        self.code_builder.push(Block(block_type));
     }
 
     fn end_block(&mut self) {
         self.block_depth -= 1;
-        self.instructions.push(End);
+        self.code_builder.push(End);
     }
 
     fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) -> Result<(), String> {
@@ -549,7 +549,7 @@ impl<'a> WasmBackend<'a> {
                 self.build_expr(let_sym, expr, layout)?;
 
                 if let WasmLayout::Primitive(value_type, size) = wasm_layout {
-                    let vm_state = self.instructions.set_top_symbol(*let_sym);
+                    let vm_state = self.code_builder.set_top_symbol(*let_sym);
                     self.symbol_storage_map.insert(
                         *let_sym,
                         SymbolStorage::VirtualMachineStack {
@@ -560,7 +560,7 @@ impl<'a> WasmBackend<'a> {
                     );
                 }
 
-                self.instructions.push(Br(self.block_depth)); // jump to end of function (stack frame pop)
+                self.code_builder.push(Br(self.block_depth)); // jump to end of function (stack frame pop)
                 Ok(())
             }
 
@@ -571,7 +571,7 @@ impl<'a> WasmBackend<'a> {
                 self.build_expr(sym, expr, layout)?;
 
                 if let WasmLayout::Primitive(value_type, size) = wasm_layout {
-                    let vm_state = self.instructions.set_top_symbol(*sym);
+                    let vm_state = self.code_builder.set_top_symbol(*sym);
                     self.symbol_storage_map.insert(
                         *sym,
                         SymbolStorage::VirtualMachineStack {
@@ -600,7 +600,7 @@ impl<'a> WasmBackend<'a> {
                         let (from_ptr, from_offset) =
                             location.local_and_offset(self.stack_frame_pointer);
                         copy_memory(
-                            &mut self.instructions,
+                            &mut self.code_builder,
                             CopyMemoryConfig {
                                 from_ptr,
                                 from_offset,
@@ -614,7 +614,7 @@ impl<'a> WasmBackend<'a> {
 
                     _ => {
                         self.load_symbols(&[*sym]);
-                        self.instructions.push(Br(self.block_depth)); // jump to end of function (for stack frame pop)
+                        self.code_builder.push(Br(self.block_depth)); // jump to end of function (for stack frame pop)
                     }
                 }
 
@@ -647,13 +647,13 @@ impl<'a> WasmBackend<'a> {
                     // put the cond_symbol on the top of the stack
                     self.load_symbols(&[*cond_symbol]);
 
-                    self.instructions.push(I32Const(*value as i32));
+                    self.code_builder.push(I32Const(*value as i32));
 
                     // compare the 2 topmost values
-                    self.instructions.push(I32Eq);
+                    self.code_builder.push(I32Eq);
 
                     // "break" out of `i` surrounding blocks
-                    self.instructions.push(BrIf(i as u32));
+                    self.code_builder.push(BrIf(i as u32));
                 }
 
                 // if we never jumped because a value matched, we're in the default case
@@ -718,7 +718,7 @@ impl<'a> WasmBackend<'a> {
 
                 // jump
                 let levels = self.block_depth - target;
-                self.instructions.push(Br(levels));
+                self.code_builder.push(Br(levels));
 
                 Ok(())
             }
@@ -756,7 +756,7 @@ impl<'a> WasmBackend<'a> {
                     let wasm_layout = WasmLayout::new(layout);
                     let push = wasm_layout.stack_memory() == 0;
                     let pops = arguments.len();
-                    self.instructions.call(function_location.body, pops, push);
+                    self.code_builder.call(function_location.body, pops, push);
                     Ok(())
                 }
 
@@ -800,7 +800,7 @@ impl<'a> WasmBackend<'a> {
                 return Err(format!("loading literal, {:?}, is not yet implemented", x));
             }
         };
-        self.instructions.push(instruction);
+        self.code_builder.push(instruction);
         Ok(())
     }
 
@@ -893,7 +893,7 @@ impl<'a> WasmBackend<'a> {
                 return Err(format!("unsupported low-level op {:?}", lowlevel));
             }
         };
-        self.instructions.extend(instructions);
+        self.code_builder.extend(instructions);
         Ok(())
     }
 }
