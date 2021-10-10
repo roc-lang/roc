@@ -641,18 +641,6 @@ mod wasm_records {
     //     );
     // }
 
-    #[test]
-    fn return_record_2() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    { x: 3, y: 5 }
-                    "#
-            ),
-            [3, 5],
-            [i64; 2]
-        );
-    }
 
     #[test]
     fn return_record_3() {

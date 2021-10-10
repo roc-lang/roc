@@ -109,18 +109,20 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     let module_bytes = builder.build().to_bytes().unwrap();
 
     // for debugging (e.g. with wasm2wat)
-    if true {
+    if false {
         use std::io::Write;
 
         let mut hash_state = DefaultHasher::new();
         src.hash(&mut hash_state);
         let src_hash = hash_state.finish();
 
+        // Filename contains a hash of the Roc test source code. Helpful when comparing across commits.
         let path = format!(
             "/home/brian/Documents/roc/compiler/gen_wasm/output/test-{:016x}.wasm",
             src_hash
         );
 
+        // Print out filename (appears just after test name)
         println!("dumping file {:?}", path);
 
         match std::fs::File::create(path) {
