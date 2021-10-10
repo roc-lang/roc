@@ -1,4 +1,6 @@
 use std::cell::Cell;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
@@ -110,24 +112,21 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     if true {
         use std::io::Write;
 
-        TEST_COUNTER.with(|test_count| -> () {
-            let thread_id = std::thread::current().id();
-            let thread_num_string: String = format!("{:?}", thread_id).chars().filter(|c| c.is_digit(10)).collect();
-            let thread_num: i64 = thread_num_string.parse().unwrap();
-            let path = format!(
-                "/home/brian/Documents/roc/compiler/gen_wasm/output/test-{:?}-{:?}.wasm",
-                thread_num,
-                test_count.get()
-            );
-            test_count.set(test_count.get() + 1);
+        let mut hash_state = DefaultHasher::new();
+        src.hash(&mut hash_state);
+        let src_hash = hash_state.finish();
 
-            match std::fs::File::create(path) {
-                Err(e) => eprintln!("Problem creating wasm debug file: {:?}", e),
-                Ok(mut file) => {
-                    file.write_all(&module_bytes).unwrap();
-                }
+        let path = format!(
+            "/home/brian/Documents/roc/compiler/gen_wasm/output/test-{:016x}.wasm",
+            src_hash
+        );
+
+        match std::fs::File::create(path) {
+            Err(e) => eprintln!("Problem creating wasm debug file: {:?}", e),
+            Ok(mut file) => {
+                file.write_all(&module_bytes).unwrap();
             }
-        });
+        }
     }
 
     // now, do wasmer stuff
