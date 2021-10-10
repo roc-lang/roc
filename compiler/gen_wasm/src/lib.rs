@@ -1,8 +1,8 @@
 mod backend;
+mod code_builder;
 pub mod from_wasm32_memory;
 mod layout;
 mod storage;
-mod code_builder;
 
 use bumpalo::Bump;
 use parity_wasm::builder;
@@ -81,7 +81,7 @@ pub fn build_module_help<'a>(
                 .with_internal(Internal::Function(function_index))
                 .build();
 
-            backend.builder.push_export(export);
+            backend.module_builder.push_export(export);
         }
     }
 
@@ -96,21 +96,21 @@ pub fn build_module_help<'a>(
     let memory = builder::MemoryBuilder::new()
         .with_min(MIN_MEMORY_SIZE_KB / PAGE_SIZE_KB)
         .build();
-    backend.builder.push_memory(memory);
+    backend.module_builder.push_memory(memory);
     let memory_export = builder::export()
         .field("memory")
         .with_internal(Internal::Memory(0))
         .build();
-    backend.builder.push_export(memory_export);
+    backend.module_builder.push_export(memory_export);
 
     let stack_pointer_global = builder::global()
         .with_type(PTR_TYPE)
         .mutable()
         .init_expr(Instruction::I32Const((MIN_MEMORY_SIZE_KB * 1024) as i32))
         .build();
-    backend.builder.push_global(stack_pointer_global);
+    backend.module_builder.push_global(stack_pointer_global);
 
-    Ok((backend.builder, main_function_index))
+    Ok((backend.module_builder, main_function_index))
 }
 
 fn encode_alignment(bytes: u32) -> u32 {

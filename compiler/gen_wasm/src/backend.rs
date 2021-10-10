@@ -33,7 +33,7 @@ enum LocalKind {
 // TODO: use Bumpalo Vec once parity_wasm supports general iterators (>=0.43)
 pub struct WasmBackend<'a> {
     // Module: Wasm AST
-    pub builder: ModuleBuilder,
+    pub module_builder: ModuleBuilder,
 
     // Module: internal state & IR mappings
     _data_offset_map: MutMap<Literal<'a>, u32>,
@@ -58,7 +58,7 @@ impl<'a> WasmBackend<'a> {
     pub fn new() -> Self {
         WasmBackend {
             // Module: Wasm AST
-            builder: builder::module(),
+            module_builder: builder::module(),
 
             // Module: internal state & IR mappings
             _data_offset_map: MutMap::default(),
@@ -107,7 +107,7 @@ impl<'a> WasmBackend<'a> {
         self.build_stmt(&proc.body, &proc.ret_layout)?;
 
         let function_def = self.finalize_proc(signature_builder);
-        let location = self.builder.push_function(function_def);
+        let location = self.module_builder.push_function(function_def);
         let function_index = location.body;
         self.proc_symbol_map.insert(sym, location);
         self.reset();
