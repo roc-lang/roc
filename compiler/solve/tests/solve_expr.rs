@@ -3396,7 +3396,7 @@ mod solve_expr {
                 cheapestOpen : Model position -> Result position [ KeyNotFound ]*
                 cheapestOpen = \model ->
 
-                    folder = \position, resSmallestSoFar ->
+                    folder = \resSmallestSoFar, position ->
                                     when resSmallestSoFar is
                                         Err _ -> resSmallestSoFar
                                         Ok smallestSoFar ->
@@ -3689,7 +3689,7 @@ mod solve_expr {
                 List.walkBackwards
                 "#
             ),
-            "List a, b, (a, b -> b) -> b",
+            "List a, b, (b, a -> b) -> b",
         );
     }
 
