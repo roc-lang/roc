@@ -43,7 +43,7 @@ pub struct WasmBackend<'a> {
     // Functions: Wasm AST
     code_builder: CodeBuilder,
     arg_types: std::vec::Vec<ValueType>,
-    locals: std::vec::Vec<Local>,
+    local_types: std::vec::Vec<ValueType>,
 
     // Functions: internal state & IR mappings
     stack_memory: i32,
@@ -68,7 +68,7 @@ impl<'a> WasmBackend<'a> {
             // Functions: Wasm AST
             code_builder: CodeBuilder::new(),
             arg_types: std::vec::Vec::with_capacity(8),
-            locals: std::vec::Vec::with_capacity(32),
+            local_types: std::vec::Vec::with_capacity(32),
 
             // Functions: internal state & IR mappings
             stack_memory: 0,
@@ -83,7 +83,7 @@ impl<'a> WasmBackend<'a> {
         // Functions: Wasm AST
         self.code_builder.clear();
         self.arg_types.clear();
-        self.locals.clear();
+        self.local_types.clear();
 
         // Functions: internal state & IR mappings
         self.stack_memory = 0;
@@ -160,10 +160,28 @@ impl<'a> WasmBackend<'a> {
         }
         final_instructions.push(End);
 
+        // Declare local variables (in batches of the same type)
+        let num_locals = self.local_types.len();
+        let mut locals = Vec::with_capacity(num_locals);
+        if num_locals > 0 {
+            let mut batch_type = self.local_types[0];
+            let mut batch_size = 0;
+            for t in &self.local_types {
+                if *t == batch_type {
+                    batch_size += 1;
+                } else {
+                    locals.push(Local::new(batch_size, batch_type));
+                    batch_type = *t;
+                    batch_size = 1;
+                }
+            }
+            locals.push(Local::new(batch_size, batch_type));
+        }
+
         builder::function()
             .with_signature(signature_builder.build_sig())
             .body()
-            .with_locals(self.locals.clone())
+            .with_locals(locals)
             .with_instructions(Instructions::new(final_instructions))
             .build() // body
             .build() // function
@@ -176,7 +194,7 @@ impl<'a> WasmBackend<'a> {
     ***********************************************************/
 
     fn get_next_local_id(&self) -> LocalId {
-        LocalId((self.arg_types.len() + self.locals.len()) as u32)
+        LocalId((self.arg_types.len() + self.local_types.len()) as u32)
     }
 
     fn create_storage(
@@ -207,7 +225,7 @@ impl<'a> WasmBackend<'a> {
             WasmLayout::HeapMemory => {
                 match kind {
                     LocalKind::Parameter => self.arg_types.push(PTR_TYPE),
-                    LocalKind::Variable => self.locals.push(Local::new(1, PTR_TYPE)),
+                    LocalKind::Variable => self.local_types.push(PTR_TYPE),
                 }
                 SymbolStorage::Local {
                     local_id: next_local_id,
@@ -229,7 +247,7 @@ impl<'a> WasmBackend<'a> {
                     LocalKind::Variable => {
                         if self.stack_frame_pointer.is_none() {
                             self.stack_frame_pointer = Some(next_local_id);
-                            self.locals.push(Local::new(1, PTR_TYPE));
+                            self.local_types.push(PTR_TYPE);
                         }
 
                         let offset =
@@ -298,7 +316,7 @@ impl<'a> WasmBackend<'a> {
                         None => {
                             // Loading the value required creating a new local, because
                             // it was not in a convenient position in the VM stack.
-                            self.locals.push(Local::new(1, value_type));
+                            self.local_types.push(value_type);
                             self.symbol_storage_map.insert(
                                 *sym,
                                 SymbolStorage::Local {
@@ -489,7 +507,7 @@ impl<'a> WasmBackend<'a> {
                 self.code_builder.add_one(SetLocal(local_id.0));
             }
 
-            self.locals.push(Local::new(1, value_type));
+            self.local_types.push(value_type);
             let new_storage = SymbolStorage::Local {
                 local_id,
                 value_type,
@@ -757,7 +775,8 @@ impl<'a> WasmBackend<'a> {
                     let wasm_layout = WasmLayout::new(layout);
                     let push = wasm_layout.stack_memory() == 0;
                     let pops = arguments.len();
-                    self.code_builder.add_call(function_location.body, pops, push);
+                    self.code_builder
+                        .add_call(function_location.body, pops, push);
                     Ok(())
                 }
 
