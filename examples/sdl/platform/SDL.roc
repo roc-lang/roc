@@ -10,7 +10,7 @@ interface SDL
     imports [ fx.Effect, Task.{ Task } ]
 
 ## This module is a wrapper around SDL
-## https://github.com/MasterQ32/SDL.zig/blob/master/src/wrapper/sdl.zig    
+## https://github.com/MasterQ32/SDL.zig/blob/master/src/wrapper/sdl.zig
 
 init : Task {} *
 init =

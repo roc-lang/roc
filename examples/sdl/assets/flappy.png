@@ -1,0 +1,11 @@
+--2021-10-09 16:05:24--  https://raw.githubusercontent.com/bsansouci/reprocessing-example/livestream-flappybird/assets/flappy.png
+Resolving raw.githubusercontent.com (raw.githubusercontent.com)... 185.199.109.133, 185.199.111.133, 185.199.110.133, ...
+Connecting to raw.githubusercontent.com (raw.githubusercontent.com)|185.199.109.133|:443... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 29296 (29K) [image/png]
+Saving to: ‘flappy.png’
+
+     0K .......... .......... ........                        100% 2.85M=0.01s
+
+2021-10-09 16:05:24 (2.85 MB/s) - ‘flappy.png’ saved [29296/29296]
+
