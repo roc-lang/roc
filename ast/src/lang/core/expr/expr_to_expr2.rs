@@ -485,7 +485,7 @@ pub fn to_expr2<'a>(
             (
                 Expr2::Closure {
                     function_type: env.var_store.fresh(),
-                    name: symbol,
+                    uniq_symbol: symbol,
                     recursive: Recursive::NotRecursive,
                     args: can_args,
                     body_id: env.add(body_expr, loc_body_expr.region),

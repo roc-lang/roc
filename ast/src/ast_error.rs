@@ -1,3 +1,4 @@
+use roc_module::symbol::{IdentId};
 use snafu::{Backtrace, Snafu};
 
 use crate::lang::core::ast::ASTNodeId;
@@ -31,6 +32,16 @@ pub enum ASTError {
     UnexpectedPattern2Variant {
         required_pattern2: String,
         encountered_pattern2: String,
+        backtrace: Backtrace,
+    },
+    #[snafu(display(
+        "IdentIdNotFound: I could not find IdentId {:?} in env.ident_ids {:?}.",
+        ident_id,
+        env_ident_ids_str
+    ))]
+    IdentIdNotFound {
+        ident_id: IdentId,
+        env_ident_ids_str: String,
         backtrace: Backtrace,
     },
 }

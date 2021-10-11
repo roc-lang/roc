@@ -137,6 +137,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
     let dep_idents = IdentIds::exposed_builtins(8);
     let exposed_ident_ids = IdentIds::default();
     let module_ids = loaded_module.interns.module_ids.clone();
+    let all_ident_ids = loaded_module.interns.all_ident_ids.get(&loaded_module.module_id).unwrap().clone(); //TODO remove unwrap
 
     let env = Env::new(
         loaded_module.module_id,
@@ -145,6 +146,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
         &mut var_store,
         dep_idents,
         &module_ids,
+        all_ident_ids,
         exposed_ident_ids,
     );
 

@@ -44,8 +44,7 @@ pub fn def2_to_markup<'a, 'b>(
                 expr_mn_id,
                 ast_node_id,
                 mark_node_pool,
-                env,
-                interns,
+                env
             )?;
 
             mark_node_pool.add(tld_mn)

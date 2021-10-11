@@ -1,5 +1,5 @@
 
-use crate::{markup::{attribute::Attributes, common_nodes::{new_arg_name_mn, new_blank_mn, new_colon_mn, new_comma_mn, new_equals_mn, new_func_name_mn, new_left_accolade_mn, new_left_square_mn, new_operator_mn, new_right_accolade_mn, new_right_square_mn}, nodes::{MarkupNode, get_string, new_markup_node}}, slow_pool::{MarkNodeId, SlowPool}, syntax_highlight::HighlightStyle};
+use crate::{markup::{attribute::Attributes, common_nodes::{new_arg_name_mn, new_blank_mn, new_colon_mn, new_comma_mn, new_equals_mn, new_left_accolade_mn, new_left_square_mn, new_operator_mn, new_right_accolade_mn, new_right_square_mn}, nodes::{MarkupNode, get_string, new_markup_node}}, slow_pool::{MarkNodeId, SlowPool}, syntax_highlight::HighlightStyle};
 
 use bumpalo::Bump;
 use itertools::Itertools;
@@ -18,8 +18,10 @@ pub fn expr2_to_markup<'a, 'b>(
     mark_node_pool: &mut SlowPool,
     interns: &Interns,
 ) -> ASTResult<MarkNodeId> {
-    dbg!(expr2);
+
     let ast_node_id = ASTNodeId::AExprId(expr2_node_id);
+
+    println!("{:?}", expr2);
 
     let mark_node_id = match expr2 {
         Expr2::SmallInt { text, .. }
@@ -214,19 +216,12 @@ pub fn expr2_to_markup<'a, 'b>(
         }
         Expr2::Closure{
             function_type:_,
-            name,
+            uniq_symbol:_,
             recursive:_,
             args,
             body_id,
             extra:_
         } => {
-            let func_name = name.ident_str(interns).as_str();
-
-            let func_name_mn =
-                new_func_name_mn(func_name.to_string(), expr2_node_id);
-
-            let func_name_mn_id = mark_node_pool.add(func_name_mn);
-        
             let backslash_mn = new_operator_mn("\\".to_string(), expr2_node_id, None);
             let backslash_mn_id = mark_node_pool.add(backslash_mn);
 
@@ -289,7 +284,7 @@ pub fn expr2_to_markup<'a, 'b>(
 
             let function_node = MarkupNode::Nested {
                 ast_node_id,
-                children_ids: vec![func_name_mn_id, args_mn_id, body_mn_id],
+                children_ids: vec![args_mn_id, body_mn_id],
                 parent_id_opt: None,
                 newlines_at_end: 0,
             };

@@ -1,14 +1,10 @@
-use roc_ast::{
-    ast_error::ASTResult,
-    lang::{
+use roc_ast::{ast_error::{ASTResult}, lang::{
         core::{
-            ast::ASTNodeId,
-            pattern::{get_identifier_string, PatternId},
+            ast::ASTNodeId
         },
         env::Env,
-    },
-};
-use roc_module::symbol::Interns;
+    }};
+use roc_module::symbol::{IdentId};
 
 use crate::{
     markup::{attribute::Attributes, common_nodes::new_equals_mn, nodes::MarkupNode},
@@ -17,19 +13,17 @@ use crate::{
 };
 
 pub fn tld_mark_node<'a>(
-    identifier_id: PatternId,
+    identifier_id: IdentId,
     expr_mark_node_id: MarkNodeId,
     ast_node_id: ASTNodeId,
     mark_node_pool: &mut SlowPool,
-    env: &Env<'a>,
-    interns: &Interns,
+    env: &Env<'a>
 ) -> ASTResult<MarkupNode> {
-    let pattern2 = env.pool.get(identifier_id);
-    dbg!(pattern2);
-    let val_name = get_identifier_string(pattern2, interns)?;
+    let val_name =
+        env.get_name_for_ident_id(identifier_id)?;
 
     let val_name_mn = MarkupNode::Text {
-        content: val_name,
+        content: val_name.to_owned(),
         ast_node_id,
         syn_high_style: HighlightStyle::Variable,
         attributes: Attributes::default(),

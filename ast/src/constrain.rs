@@ -944,7 +944,7 @@ pub fn constrain_expr<'a>(
         }
         Expr2::Closure {
             args,
-            name,
+            uniq_symbol,
             body_id,
             function_type: fn_var,
             extra,
@@ -992,7 +992,7 @@ pub fn constrain_expr<'a>(
             let closure_constraint = constrain_closure_size(
                 arena,
                 env,
-                *name,
+                *uniq_symbol,
                 region,
                 captured_symbols,
                 *closure_var,
@@ -1835,6 +1835,7 @@ pub mod test_constrain {
             &mut var_store,
             dep_idents,
             &module_ids,
+            exposed_ident_ids.clone(),
             exposed_ident_ids,
         );
 

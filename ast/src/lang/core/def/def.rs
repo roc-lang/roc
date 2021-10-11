@@ -490,7 +490,7 @@ fn canonicalize_pending_def<'a>(
                             args: closure_args,
                             body_id,
                             extra,
-                            name: closure_symbol,
+                            uniq_symbol: closure_symbol,
                             ..
                         } => {
                             let symbol = match env.pool[loc_can_pattern] {
@@ -657,7 +657,7 @@ fn canonicalize_pending_def<'a>(
                     args: closure_args,
                     body_id,
                     extra,
-                    name: closure_symbol,
+                    uniq_symbol: closure_symbol,
                     ..
                 } => {
                     let symbol = match env.pool[loc_can_pattern] {
