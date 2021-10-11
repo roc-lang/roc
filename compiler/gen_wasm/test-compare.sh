@@ -24,6 +24,7 @@ do
     SIZE2=$(stat --format '%s' "$2/wasm/$f")
     CHANGE=$(( $SIZE2 - $SIZE1 ))
     NET_SIZE1=$(( $SIZE1 - $OVERHEAD_BYTES ))
+    NET_SIZE2=$(( $SIZE2 - $OVERHEAD_BYTES ))
     PERCENT_CHANGE=$(( $CHANGE * 100 / $NET_SIZE1 ))
-    printf "%s\t%d\t%d\t%d\t%d%%\n" $f $SIZE1 $SIZE2 $CHANGE $PERCENT_CHANGE
+    printf "%s\t%d\t%d\t%d\t%d%%\n" $f $NET_SIZE1 $NET_SIZE2 $CHANGE $PERCENT_CHANGE
 done
