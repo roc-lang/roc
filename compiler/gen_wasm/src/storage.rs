@@ -18,7 +18,7 @@ impl StackMemoryLocation {
 }
 
 #[derive(Debug, Clone)]
-pub enum SymbolStorage {
+pub enum StoredValue {
     /// Value is stored implicitly in the VM stack
     VirtualMachineStack {
         vm_state: VirtualMachineSymbolState,
