@@ -3,10 +3,10 @@
 app "echo"
     packages { base: "platform" }
     imports [ base.Task.{ Task, await }, base.Stdout, base.Stdin ]
-    provides [ main ] to base
+    provides [ setup ] to base
 
-main : Task {} *
-main =
+setup : Task {} *
+setup =
     {} <- await (Stdout.line "What's your first name?")
 
     firstName <- await Stdin.line

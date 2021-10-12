@@ -3,12 +3,12 @@ platform examples/cli
     exposes []
     packages {}
     imports [ Task.{ Task } ]
-    provides [ mainForHost ]
+    provides [ setupForHost ]
     effects fx.Effect
         {
             putLine : Str -> Effect {},
             getLine : Effect Str
         }
 
-mainForHost : Task {} [] as Fx
-mainForHost = main
+setupForHost : Task {} [] as Fx
+setupForHost = setup
