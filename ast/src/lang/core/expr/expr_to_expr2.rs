@@ -502,7 +502,7 @@ pub fn to_expr2<'a>(
 
             // Canonicalize the function expression and its arguments
             let (fn_expr, mut output) = to_expr2(env, scope, &loc_fn.value, fn_region);
-
+            dbg!(&fn_expr);
             // The function's return type
             let args = PoolVec::with_capacity(loc_args.len() as u32, env.pool);
 

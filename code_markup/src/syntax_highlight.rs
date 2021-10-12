@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::colors::{self, from_hsb, RgbaTup};
+use crate::colors::{from_hsb, RgbaTup};
 
 #[derive(Hash, Eq, PartialEq, Copy, Clone, Debug, Deserialize, Serialize)]
 pub enum HighlightStyle {
@@ -13,7 +13,7 @@ pub enum HighlightStyle {
     Bracket,
     Number,
     PackageRelated, // app, packages, imports, exposes, provides...
-    Variable,
+    Value,
     RecordField,
     Import,
     Provides,
@@ -23,17 +23,19 @@ pub enum HighlightStyle {
 pub fn default_highlight_map() -> HashMap<HighlightStyle, RgbaTup> {
     use HighlightStyle::*;
 
+    let almost_white = from_hsb(258, 5, 95);
+
     let mut highlight_map = HashMap::new();
     [
-        (Operator, colors::WHITE),
+        (Operator, from_hsb(225, 50, 100)),
         (String, from_hsb(346, 65, 97)),
-        (FunctionName, colors::WHITE),
-        (FunctionArgName, colors::WHITE),
-        (Type, colors::WHITE),
+        (FunctionName, almost_white),
+        (FunctionArgName, almost_white),
+        (Type, almost_white),
         (Bracket, from_hsb(347, 80, 100)),
         (Number, from_hsb(185, 50, 75)),
-        (PackageRelated, colors::WHITE),
-        (Variable, colors::WHITE),
+        (PackageRelated, almost_white),
+        (Value, almost_white),
         (RecordField, from_hsb(258, 50, 90)),
         (Import, from_hsb(185, 50, 75)),
         (Provides, from_hsb(185, 50, 75)),

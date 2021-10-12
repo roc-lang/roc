@@ -32,10 +32,14 @@ pub enum MarkupNode {
     Blank {
         ast_node_id: ASTNodeId,
         attributes: Attributes,
-        syn_high_style: HighlightStyle, // TODO remove HighlightStyle, this is always HighlightStyle::Blank
         parent_id_opt: Option<MarkNodeId>,
         newlines_at_end: usize,
     },
+    Indent {
+        ast_node_id: ASTNodeId,
+        indent_level: usize,
+        parent_id_opt: Option<MarkNodeId>,
+    }
 }
 
 impl MarkupNode {
@@ -44,6 +48,7 @@ impl MarkupNode {
             MarkupNode::Nested { ast_node_id, .. } => *ast_node_id,
             MarkupNode::Text { ast_node_id, .. } => *ast_node_id,
             MarkupNode::Blank { ast_node_id, .. } => *ast_node_id,
+            MarkupNode::Indent { ast_node_id, .. } => *ast_node_id,
         }
     }
 
@@ -52,6 +57,7 @@ impl MarkupNode {
             MarkupNode::Nested { parent_id_opt, .. } => *parent_id_opt,
             MarkupNode::Text { parent_id_opt, .. } => *parent_id_opt,
             MarkupNode::Blank { parent_id_opt, .. } => *parent_id_opt,
+            MarkupNode::Indent { parent_id_opt, .. } => *parent_id_opt,
         }
     }
 
@@ -60,6 +66,7 @@ impl MarkupNode {
             MarkupNode::Nested { children_ids, .. } => children_ids.to_vec(),
             MarkupNode::Text { .. } => vec![],
             MarkupNode::Blank { .. } => vec![],
+            MarkupNode::Indent { .. } => vec![],
         }
     }
 
@@ -154,6 +161,7 @@ impl MarkupNode {
             MarkupNode::Nested { .. } => "".to_owned(),
             MarkupNode::Text { content, .. } => content.clone(),
             MarkupNode::Blank { .. } => BLANK_PLACEHOLDER.to_owned(),
+            MarkupNode::Indent { indent_level, .. } => std::iter::repeat( SINGLE_INDENT).take(*indent_level).collect(), 
         }
     }
 
@@ -170,13 +178,8 @@ impl MarkupNode {
 
     pub fn get_content_mut(&mut self) -> MarkResult<&mut String> {
         match self {
-            MarkupNode::Nested { .. } => ExpectedTextNode {
-                function_name: "set_content".to_owned(),
-                node_type: self.node_type_as_string(),
-            }
-            .fail(),
             MarkupNode::Text { content, .. } => Ok(content),
-            MarkupNode::Blank { .. } => ExpectedTextNode {
+            _ => ExpectedTextNode {
                 function_name: "set_content".to_owned(),
                 node_type: self.node_type_as_string(),
             }
@@ -208,6 +211,7 @@ impl MarkupNode {
             MarkupNode::Nested { .. } => "Nested",
             MarkupNode::Text { .. } => "Text",
             MarkupNode::Blank { .. } => "Blank",
+            MarkupNode::Indent { .. } => "Indent",
         };
 
         type_str.to_owned()
@@ -232,6 +236,7 @@ impl MarkupNode {
             MarkupNode::Blank {
                 newlines_at_end, ..
             } => *newlines_at_end,
+            MarkupNode::Indent { .. } => 0,
         }
     }
 
@@ -246,6 +251,7 @@ impl MarkupNode {
             MarkupNode::Blank {
                 newlines_at_end, ..
             } => *newlines_at_end += 1,
+            _ => {}
         }
     }
 }
@@ -263,14 +269,17 @@ pub const COLON: &str = ": ";
 pub const COMMA: &str = ", ";
 pub const STRING_QUOTES: &str = "\"\"";
 pub const EQUALS: &str = " = ";
+pub const ARROW: &str = " -> ";
+pub const SINGLE_INDENT: &str = "    "; // 4 spaces
 
 pub fn new_markup_node(
     text: String,
     node_id: ASTNodeId,
     highlight_style: HighlightStyle,
     mark_node_pool: &mut SlowPool,
+    indent_level: usize,
 ) -> MarkNodeId {
-    let node = MarkupNode::Text {
+    let content_node = MarkupNode::Text {
         content: text,
         ast_node_id: node_id,
         syn_high_style: highlight_style,
@@ -279,7 +288,28 @@ pub fn new_markup_node(
         newlines_at_end: 0,
     };
 
-    mark_node_pool.add(node)
+    let content_node_id = mark_node_pool.add(content_node);
+
+    if indent_level > 0 {
+        let indent_node = MarkupNode::Indent {
+            ast_node_id: node_id,
+            indent_level,
+            parent_id_opt: None
+        };
+
+        let indent_node_id = mark_node_pool.add(indent_node);
+
+        let nested_node = MarkupNode::Nested {
+            ast_node_id: node_id,
+            children_ids: vec![indent_node_id, content_node_id],
+            parent_id_opt: None,
+            newlines_at_end: 0,
+        };
+
+        mark_node_pool.add(nested_node)
+    } else {
+        content_node_id
+    }
 }
 
 pub fn set_parent_for_all(markup_node_id: MarkNodeId, mark_node_pool: &mut SlowPool) {
@@ -325,6 +355,7 @@ pub fn set_parent_for_all_helper(
         }
         MarkupNode::Text { parent_id_opt, .. } => *parent_id_opt = Some(parent_node_id),
         MarkupNode::Blank { parent_id_opt, .. } => *parent_id_opt = Some(parent_node_id),
+        MarkupNode::Indent { parent_id_opt, .. } => *parent_id_opt = Some(parent_node_id),
     }
 }
 

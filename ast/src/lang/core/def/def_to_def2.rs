@@ -42,17 +42,15 @@ pub fn def_to_def2<'a>(
             println!("loc_expr: {:?}", loc_expr);
             // TODO loc_pattern use identifier
             let expr2 = loc_expr_to_expr2(arena, loc_expr, env, scope, region).0;
+            println!("expr2: {:?}", expr2);
             let expr_id = env.pool.add(expr2);
 
             use roc_parse::ast::Pattern::*;
 
-            //dbg!(&loc_pattern.value);
-
             match loc_pattern.value {
                 Identifier(id_str) => {
-                    //dbg!(&env.ident_ids);
                     let identifier_id = env.ident_ids.get_or_insert(&Ident(IdentStr::from(id_str)));
-                    //dbg!(identifier_id);
+
                     // TODO support with annotation
                     Def2::ValueDef {
                         identifier_id,

@@ -25,7 +25,7 @@ pub fn tld_mark_node<'a>(
     let val_name_mn = MarkupNode::Text {
         content: val_name.to_owned(),
         ast_node_id,
-        syn_high_style: HighlightStyle::Variable,
+        syn_high_style: HighlightStyle::Value,
         attributes: Attributes::default(),
         parent_id_opt: None,
         newlines_at_end: 0,

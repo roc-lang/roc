@@ -1,13 +1,14 @@
 
-use crate::{markup::{attribute::Attributes, common_nodes::{new_arg_name_mn, new_blank_mn, new_colon_mn, new_comma_mn, new_equals_mn, new_left_accolade_mn, new_left_square_mn, new_operator_mn, new_right_accolade_mn, new_right_square_mn}, nodes::{MarkupNode, get_string, new_markup_node}}, slow_pool::{MarkNodeId, SlowPool}, syntax_highlight::HighlightStyle};
+use crate::{markup::{attribute::Attributes, common_nodes::{new_arg_name_mn, new_arrow_mn, new_blank_mn, new_colon_mn, new_comma_mn, new_equals_mn, new_left_accolade_mn, new_left_square_mn, new_operator_mn, new_right_accolade_mn, new_right_square_mn}, nodes::{MarkupNode, get_string, new_markup_node}}, slow_pool::{MarkNodeId, SlowPool}, syntax_highlight::HighlightStyle};
 
 use bumpalo::Bump;
 use itertools::Itertools;
-use roc_ast::{ast_error::ASTResult, lang::{core::{ast::ASTNodeId, expr::{
+use roc_ast::{ast_error::{ASTResult, IdentIdNotFound}, lang::{core::{ast::ASTNodeId, expr::{
                 expr2::{Expr2, ExprId},
                 record_field::RecordField,
             }, pattern::{Pattern2, get_identifier_string}, val_def::ValueDef}, env::Env}};
-use roc_module::symbol::Interns;
+use roc_module::{ident::Ident, symbol::Interns};
+use snafu::OptionExt;
 
 // make Markup Nodes: generate String representation, assign Highlighting Style
 pub fn expr2_to_markup<'a, 'b>(
@@ -17,11 +18,12 @@ pub fn expr2_to_markup<'a, 'b>(
     expr2_node_id: ExprId,
     mark_node_pool: &mut SlowPool,
     interns: &Interns,
+    indent_level: usize,
 ) -> ASTResult<MarkNodeId> {
 
     let ast_node_id = ASTNodeId::AExprId(expr2_node_id);
 
-    println!("{:?}", expr2);
+    println!("EXPR2 {:?}", expr2);
 
     let mark_node_id = match expr2 {
         Expr2::SmallInt { text, .. }
@@ -30,28 +32,46 @@ pub fn expr2_to_markup<'a, 'b>(
         | Expr2::Float { text, .. } => {
             let num_str = get_string(env, text);
 
-            new_markup_node(num_str, ast_node_id, HighlightStyle::Number, mark_node_pool)
+            new_markup_node(
+                with_indent(indent_level, &num_str),
+                ast_node_id,
+                HighlightStyle::Number,
+                mark_node_pool,
+                indent_level,
+            )
         }
-        Expr2::Str(text) => new_markup_node(
-            "\"".to_owned() + text.as_str(env.pool) + "\"",
-            ast_node_id,
-            HighlightStyle::String,
-            mark_node_pool,
-        ),
+        Expr2::Str(text) => {
+            let content = format!("\"{}\"", text.as_str(env.pool));
+
+            new_markup_node(
+                with_indent(indent_level, &content),
+                ast_node_id,
+                HighlightStyle::String,
+                mark_node_pool,
+                indent_level,
+            )
+        },
         Expr2::GlobalTag { name, .. } => new_markup_node(
-            get_string(env, name),
+            with_indent(indent_level, &get_string(env, name)),
             ast_node_id,
             HighlightStyle::Type,
             mark_node_pool,
+            indent_level,
         ),
         Expr2::Call { expr: expr_id, .. } => {
             let expr = env.pool.get(*expr_id);
-            expr2_to_markup(arena, env, expr, *expr_id, mark_node_pool, interns)?
+            expr2_to_markup(arena, env, expr, *expr_id, mark_node_pool, interns, indent_level)?
         }
         Expr2::Var(symbol) => {
-            //TODO make bump_format with arena
-            let text = format!("{:?}", symbol);
-            new_markup_node(text, ast_node_id, HighlightStyle::Variable, mark_node_pool)
+            let text = env.get_name_for_ident_id(symbol.ident_id())?;
+
+            new_markup_node(
+                text.to_string(),
+                ast_node_id,
+                HighlightStyle::Value,
+                mark_node_pool,
+                indent_level,
+            )
         }
         Expr2::List { elems, .. } => {
             let mut children_ids =
@@ -70,6 +90,7 @@ pub fn expr2_to_markup<'a, 'b>(
                     *node_id,
                     mark_node_pool,
                     interns,
+                    indent_level
                 )?);
 
                 if idx + 1 < elems.len() {
@@ -116,6 +137,7 @@ pub fn expr2_to_markup<'a, 'b>(
                     ast_node_id,
                     HighlightStyle::RecordField,
                     mark_node_pool,
+                    indent_level,
                 ));
 
                 match record_field {
@@ -132,6 +154,7 @@ pub fn expr2_to_markup<'a, 'b>(
                             *sub_expr2_node_id,
                             mark_node_pool,
                             interns,
+                            indent_level
                         )?);
                     }
                 }
@@ -167,7 +190,7 @@ pub fn expr2_to_markup<'a, 'b>(
             let val_name_mn = MarkupNode::Text {
                 content: val_name,
                 ast_node_id,
-                syn_high_style: HighlightStyle::Variable,
+                syn_high_style: HighlightStyle::Value,
                 attributes: Attributes::default(),
                 parent_id_opt: None,
                 newlines_at_end: 0,
@@ -192,6 +215,7 @@ pub fn expr2_to_markup<'a, 'b>(
                         *expr_id,
                         mark_node_pool,
                         interns,
+                        indent_level
                     )?;
 
                     let body_mn = mark_node_pool.get_mut(body_mn_id);
@@ -225,24 +249,39 @@ pub fn expr2_to_markup<'a, 'b>(
             let backslash_mn = new_operator_mn("\\".to_string(), expr2_node_id, None);
             let backslash_mn_id = mark_node_pool.add(backslash_mn);
 
-            let arg_names: Vec<&str> = 
-            args.iter(env.pool).map(
-                | (_, arg_node_id) | {
-                    let arg_pattern2 = env.pool.get(*arg_node_id);
+            let arg_idents: Vec<&Ident> = 
+                args.iter(env.pool).map(
+                    | (_, arg_node_id) | {
+                        let arg_pattern2 = env.pool.get(*arg_node_id);
 
-                    match arg_pattern2 {
-                        Pattern2::Identifier(id_symbol) => {
-                            id_symbol.ident_str(interns).as_str()
-                        },
-                        other => {
-                            todo!("TODO: support the following pattern2 as function arg: {:?}", other);
+                        match arg_pattern2 {
+                            Pattern2::Identifier(id_symbol) => {
+                                let ident_id = id_symbol.ident_id();
+                                let ident = 
+                                    env
+                                        .ident_ids
+                                        .get_name(ident_id)
+                                        .with_context(|| IdentIdNotFound {
+                                            ident_id,
+                                            env_ident_ids_str: format!("{:?}", env.ident_ids),
+                                        });
+
+                                ident
+                            },
+                            other => {
+                                todo!("TODO: support the following pattern2 as function arg: {:?}", other);
+                            }
                         }
                     }
-                }
-            )
-            .collect();
+                )
+                .collect::<ASTResult<Vec<&Ident>>>()?;
 
-            let arg_mark_nodes = arg_names.iter().map(
+            let arg_names =
+                arg_idents.iter().map(|ident| {
+                    ident.as_inline_str().as_str()
+                });
+
+            let arg_mark_nodes = arg_names.map(
                 |arg_name|
                 new_arg_name_mn(arg_name.to_string(), expr2_node_id)
             );
@@ -261,8 +300,16 @@ pub fn expr2_to_markup<'a, 'b>(
                     mark_node_pool.add(mark_node)
                 ).collect();
 
+            let arrow_mn =
+                new_arrow_mn(
+                    ASTNodeId::AExprId(expr2_node_id),
+                    1
+                );
+            let arrow_mn_id = mark_node_pool.add(arrow_mn);
+
             let mut children_ids = vec![backslash_mn_id];
             children_ids.append(&mut args_with_commas_ids);
+            children_ids.push(arrow_mn_id);
         
             let args_mn = MarkupNode::Nested {
                 ast_node_id: ASTNodeId::AExprId(expr2_node_id),
@@ -280,6 +327,7 @@ pub fn expr2_to_markup<'a, 'b>(
                 *body_id,
                 mark_node_pool,
                 interns,
+                indent_level + 1
             )?;
 
             let function_node = MarkupNode::Nested {
@@ -296,9 +344,19 @@ pub fn expr2_to_markup<'a, 'b>(
             ast_node_id,
             HighlightStyle::Blank,
             mark_node_pool,
+            indent_level,
         ),
         rest => todo!("implement expr2_to_markup for {:?}", rest),
     };
 
     Ok(mark_node_id)
+}
+
+fn with_indent(indent_level: usize, some_str: &str) -> String {
+    let full_indent = std::iter::repeat(" ").take(indent_level * 4);
+    let mut full_string: String = full_indent.collect();
+
+    full_string.push_str(some_str);
+
+    full_string
 }

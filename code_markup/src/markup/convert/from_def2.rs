@@ -37,6 +37,7 @@ pub fn def2_to_markup<'a, 'b>(
                 *expr_id,
                 mark_node_pool,
                 interns,
+                0
             )?;
 
             let tld_mn = tld_mark_node(
