@@ -104,6 +104,16 @@ mod repl_eval {
     }
 
     #[test]
+    fn num_floor_division_success() {
+        expect_success("Num.divFloor 4 3", "Ok 1 : Result (Int *) [ DivByZero ]*");
+    }
+
+    #[test]
+    fn num_floor_division_divby_zero() {
+        expect_success("Num.divFloor 4 0", "Err DivByZero : Result (Int *) [ DivByZero ]*");
+    }
+
+    #[test]
     fn bool_in_record() {
         expect_success("{ x: 1 == 1 }", "{ x: True } : { x : Bool }");
         expect_success(
@@ -307,7 +317,7 @@ mod repl_eval {
         expect_success("Num.addChecked 1 1", "Ok 2 : Result (Num *) [ Overflow ]*");
         expect_success(
             "Num.addChecked Num.maxInt 1",
-            "Err (Overflow) : Result I64 [ Overflow ]*",
+            "Err Overflow : Result I64 [ Overflow ]*",
         );
     }
 
@@ -316,7 +326,7 @@ mod repl_eval {
         expect_success("Num.subChecked 1 1", "Ok 0 : Result (Num *) [ Overflow ]*");
         expect_success(
             "Num.subChecked Num.minInt 1",
-            "Err (Overflow) : Result I64 [ Overflow ]*",
+            "Err Overflow : Result I64 [ Overflow ]*",
         );
     }
 
@@ -328,7 +338,7 @@ mod repl_eval {
         );
         expect_success(
             "Num.mulChecked Num.maxInt 2",
-            "Err (Overflow) : Result I64 [ Overflow ]*",
+            "Err Overflow : Result I64 [ Overflow ]*",
         );
     }
 
@@ -362,7 +372,7 @@ mod repl_eval {
         );
         expect_success(
             "List.first []",
-            "Err (ListWasEmpty) : Result * [ ListWasEmpty ]*",
+            "Err ListWasEmpty : Result * [ ListWasEmpty ]*",
         );
     }
 
@@ -375,7 +385,7 @@ mod repl_eval {
 
         expect_success(
             "List.last []",
-            "Err (ListWasEmpty) : Result * [ ListWasEmpty ]*",
+            "Err ListWasEmpty : Result * [ ListWasEmpty ]*",
         );
     }
 

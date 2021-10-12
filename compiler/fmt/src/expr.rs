@@ -199,7 +199,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 buf.push_str(name);
             }
             Apply(loc_expr, loc_args, _) => {
-                if apply_needs_parens {
+                if apply_needs_parens && !loc_args.is_empty() {
                     buf.push('(');
                 }
 
@@ -221,7 +221,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
                     }
                 }
 
-                if apply_needs_parens {
+                if apply_needs_parens && !loc_args.is_empty() {
                     buf.push(')');
                 }
             }
