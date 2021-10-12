@@ -110,7 +110,10 @@ mod repl_eval {
 
     #[test]
     fn num_floor_division_divby_zero() {
-        expect_success("Num.divFloor 4 0", "Err DivByZero : Result (Int *) [ DivByZero ]*");
+        expect_success(
+            "Num.divFloor 4 0",
+            "Err DivByZero : Result (Int *) [ DivByZero ]*",
+        );
     }
 
     #[test]
