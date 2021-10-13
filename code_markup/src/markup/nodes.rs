@@ -4,15 +4,13 @@ use crate::{
     syntax_highlight::HighlightStyle,
 };
 
-use super::attribute::Attributes;
+use super::{attribute::Attributes, common_nodes::new_comma_mn_ast};
 
 use crate::markup_error::{ExpectedTextNode, NestedNodeMissingChild, NestedNodeRequired};
-use roc_ast::{
-    lang::{core::ast::ASTNodeId, env::Env},
-    mem_pool::pool_str::PoolStr,
-};
+use roc_ast::{lang::{core::ast::ASTNodeId, env::Env}, mem_pool::{pool_str::PoolStr}};
 use roc_utils::{index_of, slice_get};
 use std::fmt;
+use itertools::Itertools;
 
 #[derive(Debug)]
 pub enum MarkupNode {
@@ -421,4 +419,47 @@ pub fn get_root_mark_node_id(mark_node_id: MarkNodeId, mark_node_pool: &SlowPool
     }
 
     curr_mark_node_id
+}
+
+pub fn join_mark_nodes_spaces(mark_nodes_ids: Vec<MarkNodeId>, with_prepend: bool, ast_node_id: ASTNodeId, mark_node_pool: &mut SlowPool) -> Vec<MarkNodeId> {
+    let space_range_max  =
+        if with_prepend {
+            mark_nodes_ids.len()
+        } else {
+            mark_nodes_ids.len() - 1
+        };
+
+    let join_nodes: Vec<MarkNodeId> =
+        (0..space_range_max)
+        .map(|_| {
+            let space_node = MarkupNode::Text {
+                content: " ".to_string(),
+                ast_node_id,
+                syn_high_style: HighlightStyle::Blank,
+                attributes: Attributes::default(),
+                parent_id_opt: None,
+                newlines_at_end: 0,
+            };
+
+            mark_node_pool.add(space_node)
+        })
+        .collect();
+
+    if with_prepend {
+        join_nodes.into_iter().interleave(mark_nodes_ids).collect()
+    } else {
+        mark_nodes_ids.into_iter().interleave(join_nodes).collect()
+    }
+    
+}
+
+pub fn join_mark_nodes_commas(mark_nodes: Vec<MarkupNode>, ast_node_id: ASTNodeId) -> Vec<MarkupNode> {
+    let join_nodes: Vec<MarkupNode> =
+        (0..(mark_nodes.len() - 1))
+        .map(|_| {
+            new_comma_mn_ast(ast_node_id, None)
+        })
+        .collect();
+
+    mark_nodes.into_iter().interleave(join_nodes).collect()
 }

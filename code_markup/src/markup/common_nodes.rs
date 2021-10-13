@@ -16,9 +16,13 @@ pub fn new_equals_mn(ast_node_id: ASTNodeId, parent_id_opt: Option<MarkNodeId>) 
 }
 
 pub fn new_comma_mn(expr_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
+    new_comma_mn_ast(ASTNodeId::AExprId(expr_id), parent_id_opt)
+}
+
+pub fn new_comma_mn_ast(ast_node_id: ASTNodeId, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
     MarkupNode::Text {
         content: nodes::COMMA.to_owned(),
-        ast_node_id: ASTNodeId::AExprId(expr_id),
+        ast_node_id,
         syn_high_style: HighlightStyle::Blank,
         attributes: Attributes::default(),
         parent_id_opt,

@@ -27,18 +27,18 @@ pub fn default_highlight_map() -> HashMap<HighlightStyle, RgbaTup> {
 
     let mut highlight_map = HashMap::new();
     [
-        (Operator, from_hsb(225, 50, 100)),
+        (Operator, from_hsb(185, 50, 75)),
         (String, from_hsb(346, 65, 97)),
         (FunctionName, almost_white),
-        (FunctionArgName, almost_white),
+        (FunctionArgName, from_hsb(225, 50, 100)),
         (Type, almost_white),
         (Bracket, from_hsb(347, 80, 100)),
-        (Number, from_hsb(185, 50, 75)),
+        (Number, from_hsb(225, 50, 100)),
         (PackageRelated, almost_white),
         (Value, almost_white),
         (RecordField, from_hsb(258, 50, 90)),
-        (Import, from_hsb(185, 50, 75)),
-        (Provides, from_hsb(185, 50, 75)),
+        (Import, from_hsb(225, 50, 100)),
+        (Provides, from_hsb(225, 50, 100)),
         (Blank, from_hsb(258, 50, 90)),
         // comment from_hsb(285, 6, 47) or 186, 35, 40
     ]

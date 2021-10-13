@@ -273,7 +273,7 @@ pub fn constrain_expr<'a>(
         Expr2::Call {
             args,
             expr_var,
-            expr: expr_node_id,
+            expr_id: expr_node_id,
             closure_var,
             fn_var,
             ..

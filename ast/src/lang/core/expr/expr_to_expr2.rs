@@ -531,7 +531,7 @@ pub fn to_expr2<'a>(
                     let fn_expr_id = env.add(fn_expr, fn_region);
                     Expr2::Call {
                         args,
-                        expr: fn_expr_id,
+                        expr_id: fn_expr_id,
                         expr_var: env.var_store.fresh(),
                         fn_var: env.var_store.fresh(),
                         closure_var: env.var_store.fresh(),
@@ -569,7 +569,7 @@ pub fn to_expr2<'a>(
                     let fn_expr_id = env.add(fn_expr, fn_region);
                     Expr2::Call {
                         args,
-                        expr: fn_expr_id,
+                        expr_id: fn_expr_id,
                         expr_var: env.var_store.fresh(),
                         fn_var: env.var_store.fresh(),
                         closure_var: env.var_store.fresh(),
@@ -659,7 +659,7 @@ pub fn to_expr2<'a>(
             //            (RuntimeError(problem), Output::default())
             todo!()
         }
-        Var { module_name, ident } => canonicalize_lookup(env, scope, module_name, ident, region),
+        Var { module_name, ident } => canonicalize_lookup(env, scope, "#UserApp", ident, region), // TODO use module_name instead
 
         // Below this point, we shouln't see any of these nodes anymore because
         // operator desugaring should have removed them!

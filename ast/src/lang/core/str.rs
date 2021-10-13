@@ -157,7 +157,7 @@ fn desugar_str_segments(env: &mut Env, segments: Vec<StrSegment>) -> Expr2 {
 
         let new_call = Expr2::Call {
             args,
-            expr: concat_expr_id,
+            expr_id: concat_expr_id,
             expr_var: var_store.fresh(),
             fn_var: var_store.fresh(),
             closure_var: var_store.fresh(),

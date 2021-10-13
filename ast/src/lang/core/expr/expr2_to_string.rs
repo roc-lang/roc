@@ -128,6 +128,22 @@ fn expr2_to_string_helper(
                 pool.get(*body_id)
             ));
         }
+        Expr2::Call {
+            ..
+        } => {
+            out_string.push_str(&format!(
+                "Call({:?})",
+                expr2,
+            ));
+        }
+        Expr2::Closure {
+            ..
+        } => {
+            out_string.push_str(&format!(
+                "Closure({:?})",
+                expr2,
+            ));
+        }
         other => todo!("Implement for {:?}", other),
     }
 

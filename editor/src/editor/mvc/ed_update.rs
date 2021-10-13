@@ -263,6 +263,10 @@ impl<'a> EdModel<'a> {
         mark_node_pool: &SlowPool,
     ) -> UIResult<()> {
         let mark_node = mark_node_pool.get(mark_node_id);
+        dbg!(mark_node.get_content());
+        dbg!(&line_nr);
+        dbg!(&col_nr);
+
         let node_newlines = mark_node.get_newlines_at_end();
 
         if mark_node.is_nested() {
@@ -290,9 +294,8 @@ impl<'a> EdModel<'a> {
                 code_lines,
             )?;
 
-            if node_newlines == 0 {
-                *col_nr += node_content.len();
-            }
+
+            *col_nr += node_content.len();
         }
 
         if node_newlines > 0 {
