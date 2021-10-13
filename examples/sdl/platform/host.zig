@@ -78,28 +78,13 @@ pub export fn main() callconv(.C) u8 {
         allocator.free(raw_output);
     }
 
-    var ts1: std.os.timespec = undefined;
-    std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts1) catch unreachable;
-
     roc__mainForHost_1_exposed_generic(output);
 
     const closure_data_pointer = @ptrCast([*]u8, output);
 
     call_the_closure(closure_data_pointer);
 
-    var ts2: std.os.timespec = undefined;
-    std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts2) catch unreachable;
-
-    const delta = to_seconds(ts2) - to_seconds(ts1);
-
-    const stderr = std.io.getStdErr().writer();
-    stderr.print("runtime: {d:.3}ms\n", .{delta * 1000}) catch unreachable;
-
     return 0;
-}
-
-fn to_seconds(tms: std.os.timespec) f64 {
-    return @intToFloat(f64, tms.tv_sec) + (@intToFloat(f64, tms.tv_nsec) / 1_000_000_000.0);
 }
 
 fn call_the_closure(closure_data_pointer: [*]u8) void {
