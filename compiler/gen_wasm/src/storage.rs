@@ -32,21 +32,21 @@ impl StackMemoryLocation {
 
 #[derive(Debug, Clone)]
 pub enum StoredValue {
-    /// Value is stored implicitly in the VM stack
+    /// A value stored implicitly in the VM stack (primitives only)
     VirtualMachineStack {
         vm_state: VirtualMachineSymbolState,
         value_type: ValueType,
         size: u32,
     },
 
-    /// A local variable in the Wasm function
+    /// A local variable in the Wasm function (primitives only)
     Local {
         local_id: LocalId,
         value_type: ValueType,
         size: u32,
     },
 
-    /// Value is stored in stack memory
+    /// A Struct, or other non-primitive value, stored in stack memory
     StackMemory {
         location: StackMemoryLocation,
         size: u32,
@@ -55,37 +55,50 @@ pub enum StoredValue {
     // TODO: const data storage (fixed address)
 }
 
+/// Helper structure for WasmBackend, to keep track of how values are stored,
+/// including the VM stack, local variables, and linear memory
 pub struct Storage {
     pub arg_types: std::vec::Vec<ValueType>,
     pub local_types: std::vec::Vec<ValueType>,
     pub symbol_storage_map: MutMap<Symbol, StoredValue>,
-    pub stack_memory: i32,
     pub stack_frame_pointer: Option<LocalId>,
+    pub stack_frame_size: i32,
 }
 
 impl Storage {
     pub fn new() -> Self {
         Storage {
-            stack_memory: 0,
             arg_types: std::vec::Vec::with_capacity(8),
             local_types: std::vec::Vec::with_capacity(32),
-            stack_frame_pointer: None,
             symbol_storage_map: MutMap::default(),
+            stack_frame_pointer: None,
+            stack_frame_size: 0,
         }
     }
 
     pub fn clear(&mut self) {
         self.arg_types.clear();
         self.local_types.clear();
-        self.stack_memory = 0;
-        self.stack_frame_pointer = None;
         self.symbol_storage_map.clear();
+        self.stack_frame_pointer = None;
+        self.stack_frame_size = 0;
     }
 
+    /// Internal use only. If you think you want it externally, you really want `allocate`
     fn get_next_local_id(&self) -> LocalId {
         LocalId((self.arg_types.len() + self.local_types.len()) as u32)
     }
 
+    /// Allocate storage for a Roc value
+    ///
+    /// Wasm primitives (i32, i64, f32, f64) are allocated "storage" on the VM stack.
+    /// This is really just a way to model how the stack machine works as a sort of
+    /// temporary storage. It doesn't result in any code generation.
+    /// For some values, this initial storage allocation may need to be upgraded later
+    /// to a Local. See `load_symbols`.
+    ///
+    /// Structs and Tags are stored in memory rather than in Wasm primitives.
+    /// They are allocated a certain offset and size in the stack frame.
     pub fn allocate(
         &mut self,
         wasm_layout: &WasmLayout,
@@ -140,9 +153,9 @@ impl Storage {
                         }
 
                         let offset =
-                            round_up_to_alignment(self.stack_memory, *alignment_bytes as i32);
+                            round_up_to_alignment(self.stack_frame_size, *alignment_bytes as i32);
 
-                        self.stack_memory = offset + (*size as i32);
+                        self.stack_frame_size = offset + (*size as i32);
 
                         StackMemoryLocation::FrameOffset(offset as u32)
                     }
@@ -161,6 +174,7 @@ impl Storage {
         storage
     }
 
+    /// Get storage info for a given symbol
     pub fn get(&self, sym: &Symbol) -> &StoredValue {
         self.symbol_storage_map.get(sym).unwrap_or_else(|| {
             panic!(
@@ -171,8 +185,8 @@ impl Storage {
     }
 
     /// Load symbols to the top of the VM stack
-    /// (There is no method for one symbol. This is deliberate, since
-    /// if anyone ever called it in a loop, it would generate inefficient code)
+    /// Avoid calling this method in a loop with one symbol at a time! It will work,
+    /// but it generates very inefficient Wasm code.
     pub fn load_symbols(&mut self, code_builder: &mut CodeBuilder, symbols: &[Symbol]) {
         if code_builder.verify_stack_match(symbols) {
             // The symbols were already at the top of the stack, do nothing!
@@ -241,7 +255,9 @@ impl Storage {
         }
     }
 
-    pub fn copy_symbol_to_memory(
+    /// Generate code to copy a StoredValue to an arbitrary memory location
+    /// (defined by a pointer and offset).
+    pub fn copy_value_to_memory(
         &mut self,
         code_builder: &mut CodeBuilder,
         to_ptr: LocalId,
@@ -295,8 +311,9 @@ impl Storage {
         }
     }
 
-    /// generate code to copy a value from one SymbolStorage to another
-    pub fn copy_value_by_storage(
+    /// Generate code to copy from one StoredValue to another
+    /// Copies the _entire_ value. For struct fields etc., see `copy_value_to_memory`
+    pub fn clone_value(
         &mut self,
         code_builder: &mut CodeBuilder,
         to: &StoredValue,
@@ -378,9 +395,12 @@ impl Storage {
         }
     }
 
-    /// Ensure SymbolStorage has an associated local.
-    /// (Blocks can't access the VM stack of their parent scope, but they can access locals.)
-    pub fn ensure_symbol_storage_has_local(
+    /// Ensure a StoredValue has an associated local
+    /// This is useful when a value needs to be accessed from a more deeply-nested block.
+    /// In that case we want to make sure it's not just stored in the VM stack, because
+    /// blocks can't access the VM stack from outer blocks, but they can access locals.
+    /// (In the case of structs in stack memory, we just use the stack frame pointer local)
+    pub fn ensure_value_has_local(
         &mut self,
         code_builder: &mut CodeBuilder,
         symbol: Symbol,

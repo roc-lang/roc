@@ -117,20 +117,20 @@ impl<'a> WasmBackend<'a> {
 
         let mut final_instructions = Vec::with_capacity(self.code_builder.len() + 10);
 
-        if self.storage.stack_memory > 0 {
+        if self.storage.stack_frame_size > 0 {
             push_stack_frame(
                 &mut final_instructions,
-                self.storage.stack_memory,
+                self.storage.stack_frame_size,
                 self.storage.stack_frame_pointer.unwrap(),
             );
         }
 
         self.code_builder.finalize_into(&mut final_instructions);
 
-        if self.storage.stack_memory > 0 {
+        if self.storage.stack_frame_size > 0 {
             pop_stack_frame(
                 &mut final_instructions,
-                self.storage.stack_memory,
+                self.storage.stack_frame_size,
                 self.storage.stack_frame_pointer.unwrap(),
             );
         }
@@ -297,7 +297,7 @@ impl<'a> WasmBackend<'a> {
                 // Ensure the condition value is not stored only in the VM stack
                 // Otherwise we can't reach it from inside the block
                 let cond_storage = self.storage.get(cond_symbol).to_owned();
-                self.storage.ensure_symbol_storage_has_local(
+                self.storage.ensure_value_has_local(
                     &mut self.code_builder,
                     *cond_symbol,
                     cond_storage,
@@ -350,7 +350,7 @@ impl<'a> WasmBackend<'a> {
                     let mut param_storage =
                         self.storage
                             .allocate(&wasm_layout, parameter.symbol, LocalKind::Variable);
-                    param_storage = self.storage.ensure_symbol_storage_has_local(
+                    param_storage = self.storage.ensure_value_has_local(
                         &mut self.code_builder,
                         parameter.symbol,
                         param_storage,
@@ -384,7 +384,7 @@ impl<'a> WasmBackend<'a> {
 
                 for (arg_symbol, param_storage) in arguments.iter().zip(param_storages.iter()) {
                     let arg_storage = self.storage.get(arg_symbol).clone();
-                    self.storage.copy_value_by_storage(
+                    self.storage.clone_value(
                         &mut self.code_builder,
                         &param_storage,
                         &arg_storage,
@@ -500,7 +500,7 @@ impl<'a> WasmBackend<'a> {
                             location.local_and_offset(self.storage.stack_frame_pointer);
                         let mut field_offset = struct_offset;
                         for (field, _) in fields.iter().zip(field_layouts.iter()) {
-                            field_offset += self.storage.copy_symbol_to_memory(
+                            field_offset += self.storage.copy_value_to_memory(
                                 &mut self.code_builder,
                                 local_id,
                                 field_offset,
@@ -521,12 +521,8 @@ impl<'a> WasmBackend<'a> {
         } else {
             // Struct expression but not Struct layout => single element. Copy it.
             let field_storage = self.storage.get(&fields[0]).to_owned();
-            self.storage.copy_value_by_storage(
-                &mut self.code_builder,
-                &storage,
-                &field_storage,
-                fields[0],
-            );
+            self.storage
+                .clone_value(&mut self.code_builder, &storage, &field_storage, fields[0]);
         }
         Ok(())
     }
