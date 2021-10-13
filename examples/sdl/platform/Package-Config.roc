@@ -1,17 +1,22 @@
 platform examples/sdl
-    requires {}{ main : Effect {} }
+    requires {}{
+        # handleEventForHost : Effect {}
+        windowProperties : SDL.WindowConfig
+    }
     exposes []
     packages {}
-    imports [ Task.{ Task } ]
-    provides [ mainForHost ]
+    imports [ Task.{ Task }, SDL ]
+    provides [
+        windowPropertiesForHost,
+        handleEventForHost
+    ]
     effects fx.Effect
         { 
-            putLine : Str -> Effect {},
-            createRenderer : Nat -> Effect Nat,
-            createWindow : Str, Nat, Nat -> Effect Nat,
-            eventLoop : Nat -> Effect {},
-            init : {} -> Effect {}
+            putLine : Str -> Effect {}
         }
 
-mainForHost : Task {} [] as Fx
-mainForHost = main
+windowPropertiesForHost : SDL.WindowConfig
+windowPropertiesForHost = windowProperties
+
+handleEventForHost : Task {} [] as Fx
+handleEventForHost = Task.putLine "Got an event"
