@@ -1,13 +1,16 @@
-use crate::{markup::{common_nodes::new_blank_mn_w_nls, top_level_def::tld_mark_node}, slow_pool::{MarkNodeId, SlowPool}};
+use crate::{
+    markup::{common_nodes::new_blank_mn_w_nls, top_level_def::tld_mark_node},
+    slow_pool::{MarkNodeId, SlowPool},
+};
 
-use super::{from_expr2::expr2_to_markup};
+use super::from_expr2::expr2_to_markup;
 
 use bumpalo::Bump;
 use roc_ast::{
     ast_error::ASTResult,
     lang::{
         core::{
-            ast::{ASTNodeId},
+            ast::ASTNodeId,
             def::def2::{Def2, DefId},
         },
         env::Env,
@@ -37,16 +40,11 @@ pub fn def2_to_markup<'a, 'b>(
                 *expr_id,
                 mark_node_pool,
                 interns,
-                0
+                0,
             )?;
 
-            let tld_mn = tld_mark_node(
-                *identifier_id,
-                expr_mn_id,
-                ast_node_id,
-                mark_node_pool,
-                env
-            )?;
+            let tld_mn =
+                tld_mark_node(*identifier_id, expr_mn_id, ast_node_id, mark_node_pool, env)?;
 
             mark_node_pool.add(tld_mn)
         }

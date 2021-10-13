@@ -1,7 +1,17 @@
 use roc_ast::lang::core::{ast::ASTNodeId, expr::expr2::ExprId, header::AppHeader};
 
-use crate::{markup::{attribute::Attributes, common_nodes::{new_comma_mn, new_left_accolade_mn, new_left_square_mn, new_right_accolade_mn, new_right_square_mn}, nodes::{MarkupNode, set_parent_for_all}}, slow_pool::{MarkNodeId, SlowPool}, syntax_highlight::HighlightStyle};
-
+use crate::{
+    markup::{
+        attribute::Attributes,
+        common_nodes::{
+            new_comma_mn, new_left_accolade_mn, new_left_square_mn, new_right_accolade_mn,
+            new_right_square_mn,
+        },
+        nodes::{set_parent_for_all, MarkupNode},
+    },
+    slow_pool::{MarkNodeId, SlowPool},
+    syntax_highlight::HighlightStyle,
+};
 
 pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -> MarkNodeId {
     let expr_id = app_header.ast_node_id;

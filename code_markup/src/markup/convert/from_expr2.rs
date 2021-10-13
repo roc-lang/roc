@@ -1,12 +1,34 @@
-
-use crate::{markup::{attribute::Attributes, common_nodes::{new_arg_name_mn, new_arrow_mn, new_blank_mn, new_colon_mn, new_comma_mn, new_equals_mn, new_left_accolade_mn, new_left_square_mn, new_operator_mn, new_right_accolade_mn, new_right_square_mn}, nodes::{MarkupNode, get_string, new_markup_node}}, slow_pool::{MarkNodeId, SlowPool}, syntax_highlight::HighlightStyle};
+use crate::{
+    markup::{
+        attribute::Attributes,
+        common_nodes::{
+            new_arg_name_mn, new_arrow_mn, new_blank_mn, new_colon_mn, new_comma_mn, new_equals_mn,
+            new_left_accolade_mn, new_left_square_mn, new_operator_mn, new_right_accolade_mn,
+            new_right_square_mn,
+        },
+        nodes::{get_string, new_markup_node, MarkupNode},
+    },
+    slow_pool::{MarkNodeId, SlowPool},
+    syntax_highlight::HighlightStyle,
+};
 
 use bumpalo::Bump;
 use itertools::Itertools;
-use roc_ast::{ast_error::{ASTResult, IdentIdNotFound}, lang::{core::{ast::ASTNodeId, expr::{
+use roc_ast::{
+    ast_error::{ASTResult, IdentIdNotFound},
+    lang::{
+        core::{
+            ast::ASTNodeId,
+            expr::{
                 expr2::{Expr2, ExprId},
                 record_field::RecordField,
-            }, pattern::{Pattern2, get_identifier_string}, val_def::ValueDef}, env::Env}};
+            },
+            pattern::{get_identifier_string, Pattern2},
+            val_def::ValueDef,
+        },
+        env::Env,
+    },
+};
 use roc_module::{ident::Ident, symbol::Interns};
 use snafu::OptionExt;
 
@@ -20,7 +42,6 @@ pub fn expr2_to_markup<'a, 'b>(
     interns: &Interns,
     indent_level: usize,
 ) -> ASTResult<MarkNodeId> {
-
     let ast_node_id = ASTNodeId::AExprId(expr2_node_id);
 
     println!("EXPR2 {:?}", expr2);
@@ -50,7 +71,7 @@ pub fn expr2_to_markup<'a, 'b>(
                 mark_node_pool,
                 indent_level,
             )
-        },
+        }
         Expr2::GlobalTag { name, .. } => new_markup_node(
             with_indent(indent_level, &get_string(env, name)),
             ast_node_id,
@@ -60,7 +81,15 @@ pub fn expr2_to_markup<'a, 'b>(
         ),
         Expr2::Call { expr: expr_id, .. } => {
             let expr = env.pool.get(*expr_id);
-            expr2_to_markup(arena, env, expr, *expr_id, mark_node_pool, interns, indent_level)?
+            expr2_to_markup(
+                arena,
+                env,
+                expr,
+                *expr_id,
+                mark_node_pool,
+                interns,
+                indent_level,
+            )?
         }
         Expr2::Var(symbol) => {
             let text = env.get_name_for_ident_id(symbol.ident_id())?;
@@ -90,7 +119,7 @@ pub fn expr2_to_markup<'a, 'b>(
                     *node_id,
                     mark_node_pool,
                     interns,
-                    indent_level
+                    indent_level,
                 )?);
 
                 if idx + 1 < elems.len() {
@@ -154,7 +183,7 @@ pub fn expr2_to_markup<'a, 'b>(
                             *sub_expr2_node_id,
                             mark_node_pool,
                             interns,
-                            indent_level
+                            indent_level,
                         )?);
                     }
                 }
@@ -215,7 +244,7 @@ pub fn expr2_to_markup<'a, 'b>(
                         *expr_id,
                         mark_node_pool,
                         interns,
-                        indent_level
+                        indent_level,
                     )?;
 
                     let body_mn = mark_node_pool.get_mut(body_mn_id);
@@ -238,79 +267,67 @@ pub fn expr2_to_markup<'a, 'b>(
                 }
             }
         }
-        Expr2::Closure{
-            function_type:_,
-            uniq_symbol:_,
-            recursive:_,
+        Expr2::Closure {
+            function_type: _,
+            uniq_symbol: _,
+            recursive: _,
             args,
             body_id,
-            extra:_
+            extra: _,
         } => {
             let backslash_mn = new_operator_mn("\\".to_string(), expr2_node_id, None);
             let backslash_mn_id = mark_node_pool.add(backslash_mn);
 
-            let arg_idents: Vec<&Ident> = 
-                args.iter(env.pool).map(
-                    | (_, arg_node_id) | {
+            let arg_idents: Vec<&Ident> =
+                args.iter(env.pool)
+                    .map(|(_, arg_node_id)| {
                         let arg_pattern2 = env.pool.get(*arg_node_id);
 
                         match arg_pattern2 {
                             Pattern2::Identifier(id_symbol) => {
                                 let ident_id = id_symbol.ident_id();
-                                let ident = 
-                                    env
-                                        .ident_ids
-                                        .get_name(ident_id)
-                                        .with_context(|| IdentIdNotFound {
-                                            ident_id,
-                                            env_ident_ids_str: format!("{:?}", env.ident_ids),
-                                        });
+                                let ident = env.ident_ids.get_name(ident_id).with_context(|| {
+                                    IdentIdNotFound {
+                                        ident_id,
+                                        env_ident_ids_str: format!("{:?}", env.ident_ids),
+                                    }
+                                });
 
                                 ident
-                            },
+                            }
                             other => {
-                                todo!("TODO: support the following pattern2 as function arg: {:?}", other);
+                                todo!(
+                                    "TODO: support the following pattern2 as function arg: {:?}",
+                                    other
+                                );
                             }
                         }
-                    }
-                )
-                .collect::<ASTResult<Vec<&Ident>>>()?;
+                    })
+                    .collect::<ASTResult<Vec<&Ident>>>()?;
 
-            let arg_names =
-                arg_idents.iter().map(|ident| {
-                    ident.as_inline_str().as_str()
-                });
+            let arg_names = arg_idents
+                .iter()
+                .map(|ident| ident.as_inline_str().as_str());
 
-            let arg_mark_nodes = arg_names.map(
-                |arg_name|
-                new_arg_name_mn(arg_name.to_string(), expr2_node_id)
-            );
-        
-            let commas = 
-                (0..(arg_mark_nodes.len() - 1)).map(
-                    |_|
-                    new_comma_mn(expr2_node_id, None)
-                );
-        
+            let arg_mark_nodes =
+                arg_names.map(|arg_name| new_arg_name_mn(arg_name.to_string(), expr2_node_id));
+
+            let commas = (0..(arg_mark_nodes.len() - 1)).map(|_| new_comma_mn(expr2_node_id, None));
+
             let args_with_commas: Vec<MarkupNode> = arg_mark_nodes.interleave(commas).collect_vec();
 
-            let mut args_with_commas_ids: Vec<MarkNodeId> = 
-                args_with_commas.into_iter().map(
-                    |mark_node|
-                    mark_node_pool.add(mark_node)
-                ).collect();
+            let mut args_with_commas_ids: Vec<MarkNodeId> = args_with_commas
+                .into_iter()
+                .map(|mark_node| mark_node_pool.add(mark_node))
+                .collect();
 
-            let arrow_mn =
-                new_arrow_mn(
-                    ASTNodeId::AExprId(expr2_node_id),
-                    1
-                );
+            let arrow_mn = new_arrow_mn(ASTNodeId::AExprId(expr2_node_id), 1);
             let arrow_mn_id = mark_node_pool.add(arrow_mn);
 
             let mut children_ids = vec![backslash_mn_id];
             children_ids.append(&mut args_with_commas_ids);
             children_ids.push(arrow_mn_id);
-        
+
             let args_mn = MarkupNode::Nested {
                 ast_node_id: ASTNodeId::AExprId(expr2_node_id),
                 children_ids,
@@ -327,7 +344,7 @@ pub fn expr2_to_markup<'a, 'b>(
                 *body_id,
                 mark_node_pool,
                 interns,
-                indent_level + 1
+                indent_level + 1,
             )?;
 
             let function_node = MarkupNode::Nested {

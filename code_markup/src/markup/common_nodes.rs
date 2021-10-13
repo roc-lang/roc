@@ -52,7 +52,11 @@ pub fn new_colon_mn(expr_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> Marku
     new_operator_mn(nodes::COLON.to_owned(), expr_id, parent_id_opt)
 }
 
-pub fn new_operator_mn(content: String, expr_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
+pub fn new_operator_mn(
+    content: String,
+    expr_id: ExprId,
+    parent_id_opt: Option<MarkNodeId>,
+) -> MarkupNode {
     MarkupNode::Text {
         content: content,
         ast_node_id: ASTNodeId::AExprId(expr_id),

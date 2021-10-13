@@ -1,12 +1,6 @@
-use roc_ast::{
-    lang::{
-        core::{
-            ast::ASTNodeId,
-            def::def2::Def2,
-            expr::expr2::Expr2,
-        },
-        env::Env,
-    },
+use roc_ast::lang::{
+    core::{ast::ASTNodeId, def::def2::Def2, expr::expr2::Expr2},
+    env::Env,
 };
 use roc_code_markup::{
     markup::{
@@ -17,7 +11,7 @@ use roc_code_markup::{
     slow_pool::{MarkNodeId, SlowPool},
     syntax_highlight::HighlightStyle,
 };
-use roc_module::symbol::{IdentId};
+use roc_module::symbol::IdentId;
 
 use crate::{
     editor::ed_error::{EdResult, FailedToUpdateIdentIdName, KeyNotFound},
@@ -37,7 +31,7 @@ pub fn tld_mark_node<'a>(
     expr_mark_node_id: MarkNodeId,
     ast_node_id: ASTNodeId,
     mark_node_pool: &mut SlowPool,
-    env: &Env<'a>
+    env: &Env<'a>,
 ) -> EdResult<MarkupNode> {
     let val_name = env.get_name_for_ident_id(identifier_id)?;
 
@@ -108,7 +102,7 @@ pub fn start_new_tld_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
         val_expr_mn_id,
         ast_node_id,
         &mut ed_model.mark_node_pool,
-        &ed_model.module.env
+        &ed_model.module.env,
     )?;
 
     let new_ast_node = Def2::ValueDef {

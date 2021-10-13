@@ -1,9 +1,7 @@
 use roc_module::symbol::IdentId;
 
 use crate::{
-    lang::core::{
-        expr::{expr2::Expr2, expr2_to_string::expr2_to_string},
-    },
+    lang::core::expr::{expr2::Expr2, expr2_to_string::expr2_to_string},
     mem_pool::pool::{NodeId, Pool},
 };
 

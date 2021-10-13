@@ -1,14 +1,10 @@
 use bumpalo::collections::Vec as BumpVec;
 use bumpalo::Bump;
 use roc_module::ident::{Ident, IdentStr};
-use roc_parse::{parser::SyntaxError};
+use roc_parse::parser::SyntaxError;
 use roc_region::all::Region;
 
-use crate::lang::{
-    core::{expr::expr_to_expr2::loc_expr_to_expr2},
-    env::Env,
-    scope::Scope,
-};
+use crate::lang::{core::expr::expr_to_expr2::loc_expr_to_expr2, env::Env, scope::Scope};
 
 use super::def2::Def2;
 

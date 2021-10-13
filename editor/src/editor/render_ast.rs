@@ -3,7 +3,7 @@ use crate::editor::{ed_error::EdResult, theme::EdTheme, util::map_get};
 use crate::graphics::primitives::rect::Rect;
 use crate::graphics::primitives::text as gr_text;
 use cgmath::Vector2;
-use roc_code_markup::markup::nodes::{BLANK_PLACEHOLDER, MarkupNode, SINGLE_INDENT};
+use roc_code_markup::markup::nodes::{MarkupNode, BLANK_PLACEHOLDER, SINGLE_INDENT};
 use roc_code_markup::slow_pool::{MarkNodeId, SlowPool};
 use roc_code_markup::syntax_highlight::HighlightStyle;
 use winit::dpi::PhysicalSize;
@@ -157,7 +157,8 @@ fn markup_to_wgpu_helper<'a>(
                 .with_color(colors::to_slice(colors::WHITE))
                 .with_scale(code_style.font_size);
 
-            let highlight_color = map_get(&code_style.ed_theme.syntax_high_map, &HighlightStyle::Blank)?;
+            let highlight_color =
+                map_get(&code_style.ed_theme.syntax_high_map, &HighlightStyle::Blank)?;
 
             let char_width = code_style.glyph_dim_rect.width;
             let char_height = code_style.glyph_dim_rect.height;
@@ -193,7 +194,7 @@ fn markup_to_wgpu_helper<'a>(
                 .with_color(colors::to_slice(colors::WHITE))
                 .with_scale(code_style.font_size);
 
-            wgpu_texts.push(glyph_text);            
+            wgpu_texts.push(glyph_text);
         }
     };
 

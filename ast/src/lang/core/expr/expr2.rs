@@ -108,11 +108,11 @@ pub enum Expr2 {
     },
     Closure {
         args: PoolVec<(Variable, NodeId<Pattern2>)>, // 8B
-        uniq_symbol: Symbol,                           // 8B This is a globally uniqe symbol for the function, not the name of the function
-        body_id: ExprId,                             // 4B
-        function_type: Variable,                     // 4B
-        recursive: Recursive,                        // 1B
-        extra: NodeId<ClosureExtra>,                 // 4B
+        uniq_symbol: Symbol, // 8B This is a globally uniqe symbol for the function, not the name of the function
+        body_id: ExprId,     // 4B
+        function_type: Variable, // 4B
+        recursive: Recursive, // 1B
+        extra: NodeId<ClosureExtra>, // 4B
     },
     // Product Types
     Record {

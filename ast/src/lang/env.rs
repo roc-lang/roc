@@ -170,15 +170,14 @@ impl<'a> Env<'a> {
     }
 
     pub fn get_name_for_ident_id(&self, ident_id: IdentId) -> ASTResult<&str> {
-        Ok(
-            self.ident_ids.get_name(ident_id).with_context(|| 
-                IdentIdNotFound {
-                    ident_id,
-                    env_ident_ids_str: format!("{:?}", self.ident_ids),
-                }
-            )?
+        Ok(self
+            .ident_ids
+            .get_name(ident_id)
+            .with_context(|| IdentIdNotFound {
+                ident_id,
+                env_ident_ids_str: format!("{:?}", self.ident_ids),
+            })?
             .as_inline_str()
-            .as_str()
-        )
+            .as_str())
     }
 }

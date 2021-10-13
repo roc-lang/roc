@@ -18,13 +18,13 @@ pub enum FunctionDef {
         arguments: PoolVec<(PatternId, Type2)>, // 8B
         rigids: NodeId<Rigids>,                 // 4B
         return_type: TypeId,                    // 4B
-        body_id: ExprId,                           // 4B
+        body_id: ExprId,                        // 4B
     },
     NoAnnotation {
         name: Symbol,                              // 8B
         arguments: PoolVec<(PatternId, Variable)>, // 8B
         return_var: Variable,                      // 4B
-        body_id: ExprId,                              // 4B
+        body_id: ExprId,                           // 4B
     },
 }
 

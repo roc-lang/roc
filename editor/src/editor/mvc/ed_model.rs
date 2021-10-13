@@ -242,8 +242,13 @@ pub mod test_ed_model {
             &mut ed_model_refs.var_store,
             dep_idents,
             module_ids,
-            loaded_module.interns.all_ident_ids.get(&loaded_module.module_id).unwrap().clone(),
-            exposed_ident_ids
+            loaded_module
+                .interns
+                .all_ident_ids
+                .get(&loaded_module.module_id)
+                .unwrap()
+                .clone(),
+            exposed_ident_ids,
         );
 
         ed_model::init_model(

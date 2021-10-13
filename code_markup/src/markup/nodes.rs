@@ -4,12 +4,13 @@ use crate::{
     syntax_highlight::HighlightStyle,
 };
 
-use super::{
-    attribute::Attributes
-};
+use super::attribute::Attributes;
 
 use crate::markup_error::{ExpectedTextNode, NestedNodeMissingChild, NestedNodeRequired};
-use roc_ast::{lang::{core::ast::ASTNodeId, env::Env}, mem_pool::pool_str::PoolStr};
+use roc_ast::{
+    lang::{core::ast::ASTNodeId, env::Env},
+    mem_pool::pool_str::PoolStr,
+};
 use roc_utils::{index_of, slice_get};
 use std::fmt;
 
@@ -39,7 +40,7 @@ pub enum MarkupNode {
         ast_node_id: ASTNodeId,
         indent_level: usize,
         parent_id_opt: Option<MarkNodeId>,
-    }
+    },
 }
 
 impl MarkupNode {
@@ -161,7 +162,9 @@ impl MarkupNode {
             MarkupNode::Nested { .. } => "".to_owned(),
             MarkupNode::Text { content, .. } => content.clone(),
             MarkupNode::Blank { .. } => BLANK_PLACEHOLDER.to_owned(),
-            MarkupNode::Indent { indent_level, .. } => std::iter::repeat( SINGLE_INDENT).take(*indent_level).collect(), 
+            MarkupNode::Indent { indent_level, .. } => std::iter::repeat(SINGLE_INDENT)
+                .take(*indent_level)
+                .collect(),
         }
     }
 
@@ -294,7 +297,7 @@ pub fn new_markup_node(
         let indent_node = MarkupNode::Indent {
             ast_node_id: node_id,
             indent_level,
-            parent_id_opt: None
+            parent_id_opt: None,
         };
 
         let indent_node_id = mark_node_pool.add(indent_node);
@@ -358,7 +361,6 @@ pub fn set_parent_for_all_helper(
         MarkupNode::Indent { parent_id_opt, .. } => *parent_id_opt = Some(parent_node_id),
     }
 }
-
 
 impl fmt::Display for MarkupNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -1,9 +1,17 @@
 use bumpalo::Bump;
-use roc_ast::{ast_error::ASTResult, lang::{core::ast::AST, env::Env}};
+use roc_ast::{
+    ast_error::ASTResult,
+    lang::{core::ast::AST, env::Env},
+};
 use roc_module::symbol::Interns;
 
-use crate::{markup::{convert::{from_def2::def2_to_markup, from_header::header_to_markup}, nodes::set_parent_for_all}, slow_pool::{MarkNodeId, SlowPool}};
-
+use crate::{
+    markup::{
+        convert::{from_def2::def2_to_markup, from_header::header_to_markup},
+        nodes::set_parent_for_all,
+    },
+    slow_pool::{MarkNodeId, SlowPool},
+};
 
 pub fn ast_to_mark_nodes<'a, 'b>(
     arena: &'a Bump,

@@ -1,4 +1,4 @@
-use roc_module::symbol::{IdentId};
+use roc_module::symbol::IdentId;
 use snafu::{Backtrace, Snafu};
 
 use crate::lang::core::ast::ASTNodeId;
