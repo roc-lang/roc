@@ -37,6 +37,7 @@ pub struct CodeBuilder {
     vm_stack: Vec<Option<Symbol>>,
 }
 
+#[allow(clippy::new_without_default)]
 impl CodeBuilder {
     pub fn new() -> Self {
         CodeBuilder {
@@ -72,7 +73,7 @@ impl CodeBuilder {
         let mut len = old_len;
         let mut min_len = len;
         for inst in instructions {
-            let (pops, push) = get_pops_and_pushes(&inst);
+            let (pops, push) = get_pops_and_pushes(inst);
             len -= pops as usize;
             if len < min_len {
                 min_len = len;

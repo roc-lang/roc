@@ -426,7 +426,7 @@ impl Storage {
             };
 
             self.symbol_storage_map.insert(symbol, new_storage.clone());
-            return new_storage;
+            new_storage
         } else {
             storage
         }

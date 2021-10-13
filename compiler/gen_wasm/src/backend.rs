@@ -386,7 +386,7 @@ impl<'a> WasmBackend<'a> {
                     let arg_storage = self.storage.get(arg_symbol).clone();
                     self.storage.clone_value(
                         &mut self.code_builder,
-                        &param_storage,
+                        param_storage,
                         &arg_storage,
                         *arg_symbol,
                     );

@@ -641,7 +641,6 @@ mod wasm_records {
     //     );
     // }
 
-
     #[test]
     fn return_record_3() {
         assert_evals_to!(
