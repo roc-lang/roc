@@ -181,6 +181,11 @@ mod repl_eval {
     }
 
     #[test]
+    fn newtype_of_unit() {
+        expect_success("Foo Bar", "Foo Bar : [ Foo [ Bar ]* ]*");
+    }
+
+    #[test]
     fn tag_with_arguments() {
         expect_success("True 1", "True 1 : [ True (Num *) ]*");
 
