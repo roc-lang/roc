@@ -44,7 +44,7 @@ pub fn build_module<'a>(
     let (builder, _) = build_module_help(env, procedures)?;
     let module = builder.build();
     module
-        .to_bytes()
+        .into_bytes()
         .map_err(|e| -> String { format!("Error serialising Wasm module {:?}", e) })
 }
 
