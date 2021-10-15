@@ -22,7 +22,8 @@ impl CodeLines {
     ) -> UIResult<()> {
         let nr_of_lines = self.lines.len();
 
-        if index == 17 { // TODO remove me
+        if index == 17 {
+            // TODO remove me
             dbg!("breakpoint here");
         }
 

@@ -1,10 +1,19 @@
-use crate::{markup::{attribute::Attributes, common_nodes::{
+use crate::{
+    markup::{
+        attribute::Attributes,
+        common_nodes::{
             new_arg_name_mn, new_arrow_mn, new_blank_mn, new_colon_mn, new_comma_mn, new_equals_mn,
             new_left_accolade_mn, new_left_square_mn, new_operator_mn, new_right_accolade_mn,
             new_right_square_mn,
-        }, nodes::{MarkupNode, get_string, join_mark_nodes_commas, join_mark_nodes_spaces, new_markup_node}}, slow_pool::{MarkNodeId, SlowPool}, syntax_highlight::HighlightStyle};
+        },
+        nodes::{
+            get_string, join_mark_nodes_commas, join_mark_nodes_spaces, new_markup_node, MarkupNode,
+        },
+    },
+    slow_pool::{MarkNodeId, SlowPool},
+    syntax_highlight::HighlightStyle,
+};
 
-use bumpalo::Bump;
 use itertools::Itertools;
 use roc_ast::{
     ast_error::{ASTResult, IdentIdNotFound},
@@ -25,9 +34,8 @@ use roc_module::{ident::Ident, symbol::Interns};
 use snafu::OptionExt;
 
 // make Markup Nodes: generate String representation, assign Highlighting Style
-pub fn expr2_to_markup<'a, 'b>(
-    arena: &'a Bump,
-    env: &mut Env<'b>,
+pub fn expr2_to_markup<'a>(
+    env: &mut Env<'a>,
     expr2: &Expr2,
     expr2_node_id: ExprId,
     mark_node_pool: &mut SlowPool,
@@ -73,37 +81,23 @@ pub fn expr2_to_markup<'a, 'b>(
         ),
         Expr2::Call { args, expr_id, .. } => {
             let expr = env.pool.get(*expr_id);
-            let fun_call_mark_id = expr2_to_markup(
-                arena,
-                env,
-                expr,
-                *expr_id,
-                mark_node_pool,
-                interns,
-                indent_level,
-            )?;
+            let fun_call_mark_id =
+                expr2_to_markup(env, expr, *expr_id, mark_node_pool, interns, indent_level)?;
 
-            let arg_expr_ids: Vec<ExprId> =  args.iter(env.pool).map(|(_, arg_id)| *arg_id).collect();
+            let arg_expr_ids: Vec<ExprId> =
+                args.iter(env.pool).map(|(_, arg_id)| *arg_id).collect();
 
-            let arg_call_mark_ids: Vec<MarkNodeId> =
-                arg_expr_ids.iter().map(
-                    |arg_id|
-                    {
-                        let arg_expr = env.pool.get(*arg_id);
+            let arg_call_mark_ids: Vec<MarkNodeId> = arg_expr_ids
+                .iter()
+                .map(|arg_id| {
+                    let arg_expr = env.pool.get(*arg_id);
 
-                        expr2_to_markup(
-                            arena,
-                            env,
-                            arg_expr,
-                            *arg_id,
-                            mark_node_pool,
-                            interns,
-                            0,
-                        )
-                    }
-                ).collect::<ASTResult<Vec<MarkNodeId>>>()?;
+                    expr2_to_markup(env, arg_expr, *arg_id, mark_node_pool, interns, 0)
+                })
+                .collect::<ASTResult<Vec<MarkNodeId>>>()?;
 
-            let mut args_with_sapces = join_mark_nodes_spaces(arg_call_mark_ids, true, ast_node_id, mark_node_pool);
+            let mut args_with_sapces =
+                join_mark_nodes_spaces(arg_call_mark_ids, true, ast_node_id, mark_node_pool);
 
             let mut children_ids = vec![fun_call_mark_id];
             children_ids.append(&mut args_with_sapces);
@@ -139,7 +133,6 @@ pub fn expr2_to_markup<'a, 'b>(
                 let sub_expr2 = env.pool.get(*node_id);
 
                 children_ids.push(expr2_to_markup(
-                    arena,
                     env,
                     sub_expr2,
                     *node_id,
@@ -203,7 +196,6 @@ pub fn expr2_to_markup<'a, 'b>(
 
                         let sub_expr2 = env.pool.get(*sub_expr2_node_id);
                         children_ids.push(expr2_to_markup(
-                            arena,
                             env,
                             sub_expr2,
                             *sub_expr2_node_id,
@@ -264,7 +256,6 @@ pub fn expr2_to_markup<'a, 'b>(
                     expr_var: _,
                 } => {
                     let body_mn_id = expr2_to_markup(
-                        arena,
                         env,
                         env.pool.get(*expr_id),
                         *expr_id,
@@ -335,10 +326,12 @@ pub fn expr2_to_markup<'a, 'b>(
                 .iter()
                 .map(|ident| ident.as_inline_str().as_str());
 
-            let arg_mark_nodes =
-                arg_names.map(|arg_name| new_arg_name_mn(arg_name.to_string(), expr2_node_id)).collect_vec();
+            let arg_mark_nodes = arg_names
+                .map(|arg_name| new_arg_name_mn(arg_name.to_string(), expr2_node_id))
+                .collect_vec();
 
-            let args_with_commas: Vec<MarkupNode> = join_mark_nodes_commas(arg_mark_nodes, ASTNodeId::AExprId(expr2_node_id));
+            let args_with_commas: Vec<MarkupNode> =
+                join_mark_nodes_commas(arg_mark_nodes, ASTNodeId::AExprId(expr2_node_id));
 
             let mut args_with_commas_ids: Vec<MarkNodeId> = args_with_commas
                 .into_iter()
@@ -362,7 +355,6 @@ pub fn expr2_to_markup<'a, 'b>(
 
             let body_expr = env.pool.get(*body_id);
             let body_mn_id = expr2_to_markup(
-                arena,
                 env,
                 body_expr,
                 *body_id,

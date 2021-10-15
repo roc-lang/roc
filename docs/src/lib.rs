@@ -127,6 +127,7 @@ pub fn syntax_highlight_expr<'a>(
     code_str: &'a str,
     env_module_id: ModuleId,
     env_module_ids: &'a ModuleIds,
+    all_ident_ids: IdentIds,
     interns: &Interns,
 ) -> Result<String, SyntaxError<'a>> {
     let trimmed_code_str = code_str.trim_end().trim();
@@ -134,7 +135,14 @@ pub fn syntax_highlight_expr<'a>(
 
     match roc_parse::expr::test_parse_expr(0, arena, state) {
         Ok(loc_expr) => {
-            expr_to_html(buf, loc_expr.value, env_module_id, env_module_ids, interns);
+            expr_to_html(
+                buf,
+                loc_expr.value,
+                env_module_id,
+                env_module_ids,
+                all_ident_ids,
+                interns,
+            );
 
             Ok(buf.to_string())
         }
@@ -149,6 +157,7 @@ pub fn syntax_highlight_top_level_defs<'a>(
     code_str: &'a str,
     env_module_id: ModuleId,
     env_module_ids: &'a ModuleIds,
+    all_ident_ids: IdentIds,
     interns: &Interns,
 ) -> Result<String, SyntaxError<'a>> {
     let trimmed_code_str = code_str.trim_end().trim();
@@ -157,7 +166,14 @@ pub fn syntax_highlight_top_level_defs<'a>(
         Ok(vec_loc_def) => {
             let vec_def = vec_loc_def.iter().map(|loc| loc.value).collect();
 
-            defs_to_html(buf, vec_def, env_module_id, env_module_ids, interns);
+            defs_to_html(
+                buf,
+                vec_def,
+                env_module_id,
+                env_module_ids,
+                all_ident_ids,
+                interns,
+            );
 
             Ok(buf.to_string())
         }
@@ -972,12 +988,21 @@ fn markdown_to_html(
                 let code_block_arena = Bump::new();
 
                 let mut code_block_buf = BumpString::new_in(&code_block_arena);
+
+                let all_ident_ids = loaded_module
+                    .interns
+                    .all_ident_ids
+                    .get(&loaded_module.module_id)
+                    .unwrap()
+                    .clone(); //TODO remove unwrap
+
                 match syntax_highlight_expr(
                     &code_block_arena,
                     &mut code_block_buf,
                     code_str,
                     loaded_module.module_id,
                     &loaded_module.interns.module_ids,
+                    all_ident_ids,
                     &loaded_module.interns
                 )
                 {

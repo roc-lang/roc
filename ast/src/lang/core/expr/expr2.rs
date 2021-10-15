@@ -95,7 +95,7 @@ pub enum Expr2 {
     },
     Call {
         args: PoolVec<(Variable, ExprId)>, // 8B
-        expr_id: ExprId,                      // 4B
+        expr_id: ExprId,                   // 4B
         expr_var: Variable,                // 4B
         fn_var: Variable,                  // 4B
         closure_var: Variable,             // 4B

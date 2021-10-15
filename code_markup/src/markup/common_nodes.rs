@@ -62,7 +62,7 @@ pub fn new_operator_mn(
     parent_id_opt: Option<MarkNodeId>,
 ) -> MarkupNode {
     MarkupNode::Text {
-        content: content,
+        content,
         ast_node_id: ASTNodeId::AExprId(expr_id),
         syn_high_style: HighlightStyle::Operator,
         attributes: Attributes::default(),

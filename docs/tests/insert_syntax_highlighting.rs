@@ -15,6 +15,13 @@ mod insert_doc_syntax_highlighting {
     fn expect_html(code_str: &str, want: &str, use_expr: bool) {
         let loaded_module = make_mock_module();
 
+        let all_ident_ids = loaded_module
+            .interns
+            .all_ident_ids
+            .get(&loaded_module.module_id)
+            .unwrap()
+            .clone();
+
         let code_block_arena = Bump::new();
         let mut code_block_buf = BumpString::new_in(&code_block_arena);
 
@@ -25,6 +32,7 @@ mod insert_doc_syntax_highlighting {
                 code_str,
                 loaded_module.module_id,
                 &loaded_module.interns.module_ids,
+                all_ident_ids,
                 &loaded_module.interns,
             ) {
                 Ok(highlighted_code_str) => {
@@ -41,6 +49,7 @@ mod insert_doc_syntax_highlighting {
                 code_str,
                 loaded_module.module_id,
                 &loaded_module.interns.module_ids,
+                all_ident_ids,
                 &loaded_module.interns,
             ) {
                 Ok(highlighted_code_str) => {
@@ -144,7 +153,7 @@ main = "Hello, world!"
     fn top_level_def_value() {
         expect_html_def(
             r#"main = "Hello, World!""#,
-            "<span class=\"syntax-variable\">main</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-string\">\"Hello, World!\"</span>\n\n",
+            "<span class=\"syntax-value\">main</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-string\">\"Hello, World!\"</span>\n\n",
         );
     }
 
@@ -152,7 +161,16 @@ main = "Hello, world!"
     fn tld_list() {
         expect_html_def(
             r#"main = [ 1, 2, 3 ]"#,
-            "<span class=\"syntax-variable\">main</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-bracket\">[ </span><span class=\"syntax-number\">1</span><span class=\"syntax-comma\">, </span><span class=\"syntax-number\">2</span><span class=\"syntax-comma\">, </span><span class=\"syntax-number\">3</span><span class=\"syntax-bracket\"> ]</span>\n\n",
+            "<span class=\"syntax-value\">main</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-bracket\">[ </span><span class=\"syntax-number\">1</span><span class=\"syntax-comma\">, </span><span class=\"syntax-number\">2</span><span class=\"syntax-comma\">, </span><span class=\"syntax-number\">3</span><span class=\"syntax-bracket\"> ]</span>\n\n",
+        );
+    }
+
+    #[test]
+    fn function() {
+        expect_html_def(
+            r#"myId = \something ->
+                something"#,
+            "<span class=\"syntax-value\">myId</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-operator\">\\</span><span class=\"syntax-function-arg-name\">something</span><span class=\"syntax-operator\"> -> </span>\n<span class=\"syntax-indent\">    </span><span class=\"syntax-value\">something</span>\n\n",
         );
     }
 }

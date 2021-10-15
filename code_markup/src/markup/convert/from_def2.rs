@@ -5,7 +5,6 @@ use crate::{
 
 use super::from_expr2::expr2_to_markup;
 
-use bumpalo::Bump;
 use roc_ast::{
     ast_error::ASTResult,
     lang::{
@@ -18,9 +17,8 @@ use roc_ast::{
 };
 use roc_module::symbol::Interns;
 
-pub fn def2_to_markup<'a, 'b>(
-    arena: &'a Bump,
-    env: &mut Env<'b>,
+pub fn def2_to_markup<'a>(
+    env: &mut Env<'a>,
     def2: &Def2,
     def2_node_id: DefId,
     mark_node_pool: &mut SlowPool,
@@ -34,7 +32,6 @@ pub fn def2_to_markup<'a, 'b>(
             expr_id,
         } => {
             let expr_mn_id = expr2_to_markup(
-                arena,
                 env,
                 env.pool.get(*expr_id),
                 *expr_id,

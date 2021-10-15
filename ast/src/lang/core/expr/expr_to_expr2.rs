@@ -503,7 +503,7 @@ pub fn expr_to_expr2<'a>(
             let fn_region = loc_fn.region;
 
             // Canonicalize the function expression and its arguments
-            let (fn_expr, mut output) = to_expr2(env, scope, &loc_fn.value, fn_region);
+            let (fn_expr, mut output) = expr_to_expr2(env, scope, &loc_fn.value, fn_region);
             // The function's return type
             let args = PoolVec::with_capacity(loc_args.len() as u32, env.pool);
 
@@ -661,7 +661,10 @@ pub fn expr_to_expr2<'a>(
             //            (RuntimeError(problem), Output::default())
             todo!()
         }
-        Var { module_name, ident } => canonicalize_lookup(env, scope, "#UserApp", ident, region), // TODO use module_name instead
+        Var {
+            module_name: _,
+            ident,
+        } => canonicalize_lookup(env, scope, "#UserApp", ident, region), // TODO use module_name instead
 
         // Below this point, we shouln't see any of these nodes anymore because
         // operator desugaring should have removed them!

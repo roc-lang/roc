@@ -280,7 +280,6 @@ impl<'a> EdModel<'a> {
                 code_lines,
             )?;
 
-
             *col_nr += node_content.len();
         }
 

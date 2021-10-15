@@ -1,4 +1,3 @@
-use bumpalo::Bump;
 use roc_ast::{
     ast_error::ASTResult,
     lang::{core::ast::AST, env::Env},
@@ -13,9 +12,8 @@ use crate::{
     slow_pool::{MarkNodeId, SlowPool},
 };
 
-pub fn ast_to_mark_nodes<'a, 'b>(
-    arena: &'a Bump,
-    env: &mut Env<'b>,
+pub fn ast_to_mark_nodes<'a>(
+    env: &mut Env<'a>,
     ast: &AST,
     mark_node_pool: &mut SlowPool,
     interns: &Interns,
@@ -25,7 +23,7 @@ pub fn ast_to_mark_nodes<'a, 'b>(
     for &def_id in ast.def_ids.iter() {
         let def2 = env.pool.get(def_id);
 
-        let expr2_markup_id = def2_to_markup(arena, env, def2, def_id, mark_node_pool, interns)?;
+        let expr2_markup_id = def2_to_markup(env, def2, def_id, mark_node_pool, interns)?;
 
         set_parent_for_all(expr2_markup_id, mark_node_pool);
 
