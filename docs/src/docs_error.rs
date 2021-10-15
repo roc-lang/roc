@@ -3,8 +3,6 @@ use roc_module::module_err::ModuleError;
 use roc_parse::parser::SyntaxError;
 use snafu::{Backtrace, NoneError, ResultExt, Snafu};
 
-
-
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub))]
 #[allow(clippy::enum_variant_names)]
