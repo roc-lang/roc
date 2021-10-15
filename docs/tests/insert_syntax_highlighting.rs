@@ -15,13 +15,6 @@ mod insert_doc_syntax_highlighting {
     fn expect_html(code_str: &str, want: &str, use_expr: bool) {
         let loaded_module = make_mock_module();
 
-        let all_ident_ids = loaded_module
-            .interns
-            .all_ident_ids
-            .get(&loaded_module.module_id)
-            .unwrap()
-            .clone();
-
         let code_block_arena = Bump::new();
         let mut code_block_buf = BumpString::new_in(&code_block_arena);
 
@@ -32,7 +25,6 @@ mod insert_doc_syntax_highlighting {
                 code_str,
                 loaded_module.module_id,
                 &loaded_module.interns.module_ids,
-                all_ident_ids,
                 &loaded_module.interns,
             ) {
                 Ok(highlighted_code_str) => {
@@ -49,7 +41,6 @@ mod insert_doc_syntax_highlighting {
                 code_str,
                 loaded_module.module_id,
                 &loaded_module.interns.module_ids,
-                all_ident_ids,
                 &loaded_module.interns,
             ) {
                 Ok(highlighted_code_str) => {

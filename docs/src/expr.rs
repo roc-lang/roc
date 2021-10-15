@@ -1,4 +1,4 @@
-use crate::html::mark_node_to_html;
+use crate::{docs_error::DocsResult, html::mark_node_to_html};
 use bumpalo::{collections::String as BumpString, Bump};
 use roc_ast::{
     ast_error::ASTResult,
@@ -17,15 +17,16 @@ pub fn expr_to_html<'a>(
     expr: Expr<'a>,
     env_module_id: ModuleId,
     env_module_ids: &'a ModuleIds,
-    all_ident_ids: IdentIds,
     interns: &Interns,
-) {
+) -> DocsResult<()> {
     let mut env_pool = Pool::with_capacity(1024);
     let env_arena = Bump::new();
 
     let mut var_store = VarStore::default();
     let dep_idents = IdentIds::exposed_builtins(8);
     let exposed_ident_ids = IdentIds::default();
+
+    let all_ident_ids = interns.get_module_ident_ids(&env_module_id)?.clone();
 
     let mut env = lang::env::Env::new(
         env_module_id,
@@ -41,8 +42,9 @@ pub fn expr_to_html<'a>(
     let mut scope = lang::scope::Scope::new(env.home, env.pool, env.var_store);
     let region = Region::new(0, 0, 0, 0);
 
-    // TODO remove unwrap
-    write_expr_to_bump_str_html(&mut env, &mut scope, region, &expr, interns, buf).unwrap();
+    write_expr_to_bump_str_html(&mut env, &mut scope, region, &expr, interns, buf)?;
+
+    Ok(())
 }
 
 fn write_expr_to_bump_str_html<'a, 'b>(

@@ -9,7 +9,7 @@ use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
 use roc_region::all::Region;
 use roc_types::subs::VarStore;
 
-use crate::html::mark_node_to_html;
+use crate::{docs_error::DocsResult, html::mark_node_to_html};
 
 // html is written to buf
 pub fn defs_to_html<'a>(
@@ -17,9 +17,8 @@ pub fn defs_to_html<'a>(
     defs: Vec<roc_parse::ast::Def<'a>>,
     env_module_id: ModuleId,
     env_module_ids: &'a ModuleIds,
-    all_ident_ids: IdentIds,
     interns: &Interns,
-) {
+) -> DocsResult<()> {
     let mut env_pool = Pool::with_capacity(1024);
     let env_arena = Bump::new();
 
@@ -28,6 +27,8 @@ pub fn defs_to_html<'a>(
     let exposed_ident_ids = IdentIds::default();
 
     let def_arena = Bump::new();
+
+    let all_ident_ids = interns.get_module_ident_ids(&env_module_id)?.clone();
 
     let mut env = lang::env::Env::new(
         env_module_id,
@@ -44,10 +45,10 @@ pub fn defs_to_html<'a>(
     let region = Region::new(0, 0, 0, 0);
 
     for def in defs.iter() {
-        // TODO remove unwrap
-        write_def_to_bump_str_html(&def_arena, &mut env, &mut scope, region, def, interns, buf)
-            .unwrap();
+        write_def_to_bump_str_html(&def_arena, &mut env, &mut scope, region, def, interns, buf)?;
     }
+
+    Ok(())
 }
 
 fn write_def_to_bump_str_html<'a, 'b>(

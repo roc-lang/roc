@@ -3774,6 +3774,7 @@ dependencies = [
  "roc_parse",
  "roc_region",
  "roc_types",
+ "snafu",
  "tempfile",
  "uuid",
 ]
@@ -4014,6 +4015,7 @@ dependencies = [
  "roc_collections",
  "roc_ident",
  "roc_region",
+ "snafu",
  "static_assertions",
 ]
 

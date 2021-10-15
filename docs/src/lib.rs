@@ -2,6 +2,7 @@ extern crate pulldown_cmark;
 extern crate roc_load;
 use bumpalo::{collections::String as BumpString, collections::Vec as BumpVec, Bump};
 use def::defs_to_html;
+use docs_error::DocsResult;
 use expr::expr_to_html;
 use roc_builtins::std::StdLib;
 use roc_can::builtins::builtin_defs_map;
@@ -19,6 +20,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 mod def;
+mod docs_error;
 mod expr;
 mod html;
 
@@ -127,26 +129,18 @@ pub fn syntax_highlight_expr<'a>(
     code_str: &'a str,
     env_module_id: ModuleId,
     env_module_ids: &'a ModuleIds,
-    all_ident_ids: IdentIds,
     interns: &Interns,
-) -> Result<String, SyntaxError<'a>> {
+) -> DocsResult<String> {
     let trimmed_code_str = code_str.trim_end().trim();
     let state = State::new(trimmed_code_str.as_bytes());
 
     match roc_parse::expr::test_parse_expr(0, arena, state) {
         Ok(loc_expr) => {
-            expr_to_html(
-                buf,
-                loc_expr.value,
-                env_module_id,
-                env_module_ids,
-                all_ident_ids,
-                interns,
-            );
+            expr_to_html(buf, loc_expr.value, env_module_id, env_module_ids, interns)?;
 
             Ok(buf.to_string())
         }
-        Err(fail) => Err(SyntaxError::Expr(fail)),
+        Err(fail) => Err(SyntaxError::Expr(fail).into()),
     }
 }
 
@@ -157,27 +151,19 @@ pub fn syntax_highlight_top_level_defs<'a>(
     code_str: &'a str,
     env_module_id: ModuleId,
     env_module_ids: &'a ModuleIds,
-    all_ident_ids: IdentIds,
     interns: &Interns,
-) -> Result<String, SyntaxError<'a>> {
+) -> DocsResult<String> {
     let trimmed_code_str = code_str.trim_end().trim();
 
     match roc_parse::test_helpers::parse_defs_with(arena, trimmed_code_str) {
         Ok(vec_loc_def) => {
             let vec_def = vec_loc_def.iter().map(|loc| loc.value).collect();
 
-            defs_to_html(
-                buf,
-                vec_def,
-                env_module_id,
-                env_module_ids,
-                all_ident_ids,
-                interns,
-            );
+            defs_to_html(buf, vec_def, env_module_id, env_module_ids, interns)?;
 
             Ok(buf.to_string())
         }
-        Err(err) => Err(err),
+        Err(err) => Err(err.into()),
     }
 }
 
@@ -989,20 +975,12 @@ fn markdown_to_html(
 
                 let mut code_block_buf = BumpString::new_in(&code_block_arena);
 
-                let all_ident_ids = loaded_module
-                    .interns
-                    .all_ident_ids
-                    .get(&loaded_module.module_id)
-                    .unwrap()
-                    .clone(); //TODO remove unwrap
-
                 match syntax_highlight_expr(
                     &code_block_arena,
                     &mut code_block_buf,
                     code_str,
                     loaded_module.module_id,
                     &loaded_module.interns.module_ids,
-                    all_ident_ids,
                     &loaded_module.interns
                 )
                 {

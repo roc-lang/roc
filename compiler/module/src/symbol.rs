@@ -1,7 +1,9 @@
 use crate::ident::{Ident, ModuleName};
+use crate::module_err::{ModuleIdNotFound, ModuleResult};
 use roc_collections::all::{default_hasher, MutMap, SendMap};
 use roc_ident::IdentStr;
 use roc_region::all::Region;
+use snafu::OptionExt;
 use std::collections::HashMap;
 use std::{fmt, u32};
 
@@ -252,6 +254,15 @@ impl Interns {
 
     pub fn from_index(module_id: ModuleId, ident_id: u32) -> Symbol {
         Symbol::new(module_id, IdentId(ident_id))
+    }
+
+    pub fn get_module_ident_ids(&self, module_id: &ModuleId) -> ModuleResult<&IdentIds> {
+        self.all_ident_ids
+            .get(module_id)
+            .with_context(|| ModuleIdNotFound {
+                module_id: format!("{:?}", module_id),
+                all_ident_ids: format!("{:?}", self.all_ident_ids),
+            })
     }
 }
 
