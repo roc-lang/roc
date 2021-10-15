@@ -9,9 +9,12 @@ edition = "2018"
 
 [dependencies]
 pulldown-cmark = { version = "0.8", default-features = false }
+roc_ast = { path = "../ast" }
 roc_load = { path = "../compiler/load" }
 roc_builtins = { path = "../compiler/builtins" }
 roc_can = { path = "../compiler/can" }
+roc_code_markup = { path = "../code_markup"}
+roc_fmt = { path = "../compiler/fmt" }
 roc_module = { path = "../compiler/module" }
 roc_region = { path = "../compiler/region" }
 roc_types = { path = "../compiler/types" }
@@ -22,3 +25,5 @@ bumpalo = { version = "3.2", features = ["collections"] }
 [dev-dependencies]
 pretty_assertions = "0.5.1"
 maplit = "1.0.1"
+tempfile = "3.2.0"
+uuid = { version = "0.8", features = ["v4"] }

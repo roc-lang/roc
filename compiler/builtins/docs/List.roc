@@ -636,11 +636,11 @@ sublist : List elem, { start : Nat, len : Nat } -> List elem
 ##
 ## Note that in other languages, `walk` is sometimes called `reduce`,
 ## `fold`, `foldLeft`, or `foldl`.
-walk : List elem, { start : state, step : (state, elem -> state) } -> state
+walk : List elem, state, (state, elem -> state) -> state
 
 ## Note that in other languages, `walkBackwards` is sometimes called `reduceRight`,
 ## `fold`, `foldRight`, or `foldr`.
-walkBackwards : List elem, { start : state, step : (state, elem -> state) } -> state
+walkBackwards : List elem, state, (state, elem -> state) -> state
 
 ## Same as [List.walk], except you can stop walking early.
 ##
@@ -653,10 +653,10 @@ walkBackwards : List elem, { start : state, step : (state, elem -> state) } -> s
 ##
 ## As such, it is typically better for performance to use this over [List.walk]
 ## if returning `Done` earlier than the last element is expected to be common.
-walkUntil : List elem, { start : state, step : (state, elem -> [ Continue state, Done state ]) } -> state
+walkUntil : List elem, state, (state, elem -> [ Continue state, Done state ]) -> state
 
 # Same as [List.walk]Backwards, except you can stop walking early.
-walkBackwardsUntil : List elem, { start : state, step : (state, elem -> [ Continue state, Done state ]) } -> state
+walkBackwardsUntil : List elem, state, (state, elem -> [ Continue state, Done state ]) -> state
 
 ## Check
 

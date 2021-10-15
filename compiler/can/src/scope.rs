@@ -83,7 +83,7 @@ impl Scope {
         self.idents.len()
     }
 
-    pub fn lookup(&mut self, ident: &Ident, region: Region) -> Result<Symbol, RuntimeError> {
+    pub fn lookup(&self, ident: &Ident, region: Region) -> Result<Symbol, RuntimeError> {
         match self.idents.get(ident) {
             Some((symbol, _)) => Ok(*symbol),
             None => Err(RuntimeError::LookupNotInScope(

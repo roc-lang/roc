@@ -397,7 +397,15 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
 
             write!(f, "]<{:?}>", new_ext)
         }
-        FlatType::FunctionOrTagUnion(_, _, _) => todo!(),
+        FlatType::FunctionOrTagUnion(tagname_index, symbol, ext) => {
+            let tagname: &TagName = &subs[*tagname_index];
+
+            write!(
+                f,
+                "FunctionOrTagUnion({:?}, {:?}, {:?})",
+                tagname, symbol, ext
+            )
+        }
         FlatType::RecursiveTagUnion(rec, tags, ext) => {
             write!(f, "[ ")?;
 

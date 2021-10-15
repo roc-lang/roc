@@ -2674,7 +2674,7 @@ fn list_walk_until() {
             satisfyA = \_ -> []
 
             oneOfResult =
-                List.walkUntil [ satisfyA ] (\_, _ -> Stop []) []
+                List.walkUntil [ satisfyA ] [] \_, _ -> Stop []
 
             main =
                 when oneOfResult is
@@ -2864,21 +2864,21 @@ fn do_pass_bool_byte_closure_layout() {
             satisfy : (U8 -> Bool) -> Parser U8
             satisfy = \predicate ->
                 \input ->
-                    walker = \(Pair u rest), accum ->
+                    walker = \accum, (Pair u rest) ->
                         if predicate u then
                             Stop [ Pair u rest ]
 
                         else
                             Stop accum
 
-                    List.walkUntil (any input) walker []
+                    List.walkUntil (any input) [] walker
 
 
 
             oneOf : List (Parser a) -> Parser a
             oneOf = \parserList ->
                 \input ->
-                    walker = \p, accum ->
+                    walker = \accum, p ->
                         output = p input
                         if List.len output == 1 then
                             Stop output
@@ -2886,7 +2886,7 @@ fn do_pass_bool_byte_closure_layout() {
                         else
                             Continue accum
 
-                    List.walkUntil parserList walker []
+                    List.walkUntil parserList [] walker
 
 
             satisfyA = satisfy (\u -> u == 97) # recognize 97

@@ -8,6 +8,7 @@ install-other-libs:
     FROM +prep-debian
     RUN apt -y install wget git
     RUN apt -y install libxcb-shape0-dev libxcb-xfixes0-dev # for editor clipboard
+    RUN apt -y install libasound2-dev # for editor sounds
     RUN apt -y install libunwind-dev pkg-config libx11-dev zlib1g-dev
 
 install-zig-llvm-valgrind-clippy-rustfmt:

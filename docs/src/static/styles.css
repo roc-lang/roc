@@ -7,7 +7,6 @@
   --body-bg-color: #fdfdfd;
   --border-color: #e9e9e9;
   --faded-color: #4c4c4c;
-  --monospace-font;
   --font-sans: -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
   --font-mono: SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier, monospace;
   --top-header-height: 67px;
@@ -283,7 +282,6 @@ code {
   font-family: var(--font-mono);
   color: var(--code-color);
   background-color: var(--code-bg-color);
-  padding: 2px 8px;
   display: inline-block;
 }
 
@@ -306,13 +304,32 @@ pre {
   overflow-x: auto;
 }
 
-pre code {
-  padding: 6px 8px;
-}
-
 .hidden {
   /* Use !important to win all specificity fights. */
   display: none !important;
+}
+
+.syntax-number {
+    color: #60B7BF;
+}
+.syntax-string {
+  color:#F7577C;
+}
+
+.syntax-bracket {
+  color:#FF335F;
+}
+.syntax-closure-dash,
+.syntax-closure-arrow,
+.syntax-operator
+{
+    color: #ffffff;
+}
+.syntax-comma {
+  color: #9573E6;
+}
+.syntax-comment {
+  color: #ff0000;
 }
 
 #module-search:placeholder-shown {

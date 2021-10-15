@@ -39,13 +39,13 @@ impl<'a> Default for Text<'a> {
 }
 
 // necessary to get dimensions for caret
-pub fn example_code_glyph_rect(glyph_brush: &mut GlyphBrush<()>) -> Rect {
+pub fn example_code_glyph_rect(glyph_brush: &mut GlyphBrush<()>, font_size: f32) -> Rect {
     let code_text = Text {
         position: (0.0, 0.0).into(),
         area_bounds: (std::f32::INFINITY, std::f32::INFINITY).into(),
         color: colors::WHITE,
         text: "a",
-        size: DEFAULT_FONT_SIZE,
+        size: font_size,
         ..Default::default()
     };
 

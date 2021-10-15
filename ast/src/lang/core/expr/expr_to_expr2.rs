@@ -36,12 +36,12 @@ pub fn loc_expr_to_expr2<'a>(
 ) -> (Expr2, Output) {
     let desugared_loc_expr = desugar_expr(arena, arena.alloc(loc_expr));
 
-    to_expr2(env, scope, arena.alloc(desugared_loc_expr.value), region)
+    expr_to_expr2(env, scope, arena.alloc(desugared_loc_expr.value), region)
 }
 
 const ZERO: Region = Region::zero();
 
-pub fn to_expr2<'a>(
+pub fn expr_to_expr2<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
     parse_expr: &'a roc_parse::ast::Expr<'a>,
@@ -139,7 +139,7 @@ pub fn to_expr2<'a>(
             let elems: PoolVec<ExprId> = PoolVec::with_capacity(items.len() as u32, env.pool);
 
             for (node_id, item) in elems.iter_node_ids().zip(items.iter()) {
-                let (expr, sub_output) = to_expr2(env, scope, &item.value, item.region);
+                let (expr, sub_output) = expr_to_expr2(env, scope, &item.value, item.region);
 
                 output_ref.union(sub_output);
 
@@ -188,7 +188,7 @@ pub fn to_expr2<'a>(
             final_comments: _,
         } => {
             let (can_update, update_out) =
-                to_expr2(env, scope, &loc_update.value, loc_update.region);
+                expr_to_expr2(env, scope, &loc_update.value, loc_update.region);
 
             if let Expr2::Var(symbol) = &can_update {
                 match canonicalize_fields(env, scope, fields) {
@@ -309,10 +309,11 @@ pub fn to_expr2<'a>(
             let mut output = Output::default();
 
             for (condition, then_branch) in branches.iter() {
-                let (cond, cond_output) = to_expr2(env, scope, &condition.value, condition.region);
+                let (cond, cond_output) =
+                    expr_to_expr2(env, scope, &condition.value, condition.region);
 
                 let (then_expr, then_output) =
-                    to_expr2(env, scope, &then_branch.value, then_branch.region);
+                    expr_to_expr2(env, scope, &then_branch.value, then_branch.region);
 
                 output.references.union_mut(cond_output.references);
                 output.references.union_mut(then_output.references);
@@ -321,7 +322,7 @@ pub fn to_expr2<'a>(
             }
 
             let (else_expr, else_output) =
-                to_expr2(env, scope, &final_else.value, final_else.region);
+                expr_to_expr2(env, scope, &final_else.value, final_else.region);
 
             output.references.union_mut(else_output.references);
 
@@ -338,7 +339,8 @@ pub fn to_expr2<'a>(
         When(loc_cond, branches) => {
             // Infer the condition expression's type.
             let cond_var = env.var_store.fresh();
-            let (can_cond, mut output) = to_expr2(env, scope, &loc_cond.value, loc_cond.region);
+            let (can_cond, mut output) =
+                expr_to_expr2(env, scope, &loc_cond.value, loc_cond.region);
 
             // the condition can never be a tail-call
             output.tail_call = None;
@@ -411,7 +413,7 @@ pub fn to_expr2<'a>(
             }
 
             let (body_expr, new_output) =
-                to_expr2(env, &mut scope, &loc_body_expr.value, loc_body_expr.region);
+                expr_to_expr2(env, &mut scope, &loc_body_expr.value, loc_body_expr.region);
 
             let mut captured_symbols: MutSet<Symbol> =
                 new_output.references.lookups.iter().copied().collect();
@@ -502,7 +504,6 @@ pub fn to_expr2<'a>(
 
             // Canonicalize the function expression and its arguments
             let (fn_expr, mut output) = to_expr2(env, scope, &loc_fn.value, fn_region);
-            dbg!(&fn_expr);
             // The function's return type
             let args = PoolVec::with_capacity(loc_args.len() as u32, env.pool);
 
@@ -592,7 +593,8 @@ pub fn to_expr2<'a>(
 
             // The def as a whole is a tail call iff its return expression is a tail call.
             // Use its output as a starting point because its tail_call already has the right answer!
-            let (ret_expr, mut output) = to_expr2(env, &mut scope, &loc_ret.value, loc_ret.region);
+            let (ret_expr, mut output) =
+                expr_to_expr2(env, &mut scope, &loc_ret.value, loc_ret.region);
 
             output
                 .introduced_variables
@@ -704,7 +706,7 @@ pub fn to_expr_id<'a>(
     parse_expr: &'a roc_parse::ast::Expr<'a>,
     region: Region,
 ) -> (ExprId, Output) {
-    let (expr, output) = to_expr2(env, scope, parse_expr, region);
+    let (expr, output) = expr_to_expr2(env, scope, parse_expr, region);
 
     (env.add(expr, region), output)
 }

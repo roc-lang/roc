@@ -23,7 +23,7 @@ pub fn new_comma_mn_ast(ast_node_id: ASTNodeId, parent_id_opt: Option<MarkNodeId
     MarkupNode::Text {
         content: nodes::COMMA.to_owned(),
         ast_node_id,
-        syn_high_style: HighlightStyle::Blank,
+        syn_high_style: HighlightStyle::Comma,
         attributes: Attributes::default(),
         parent_id_opt,
         newlines_at_end: 0,

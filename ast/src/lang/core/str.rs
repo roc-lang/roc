@@ -3,7 +3,7 @@ use roc_parse::ast::StrLiteral;
 
 use crate::{
     ast_error::{ASTResult, UnexpectedASTNode},
-    lang::{core::expr::expr_to_expr2::to_expr2, env::Env, scope::Scope},
+    lang::{core::expr::expr_to_expr2::expr_to_expr2, env::Env, scope::Scope},
     mem_pool::{pool::Pool, pool_str::PoolStr, pool_vec::PoolVec},
 };
 
@@ -94,7 +94,7 @@ fn flatten_str_lines<'a>(
                         }
 
                         let (loc_expr, new_output) =
-                            to_expr2(env, scope, loc_expr.value, loc_expr.region);
+                            expr_to_expr2(env, scope, loc_expr.value, loc_expr.region);
 
                         output.union(new_output);
 

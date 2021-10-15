@@ -2,7 +2,8 @@
 use roc_gen_llvm::llvm::build::module_from_builtins;
 #[cfg(feature = "llvm")]
 pub use roc_gen_llvm::llvm::build::FunctionIterator;
-use roc_load::file::MonomorphizedModule;
+use roc_load::file::{LoadedModule, MonomorphizedModule};
+use roc_module::symbol::{Interns, ModuleId};
 #[cfg(feature = "llvm")]
 use roc_mono::ir::OptLevel;
 use std::path::{Path, PathBuf};
@@ -24,7 +25,39 @@ const LLVM_VERSION: &str = "12";
 // them after type checking (like Elm does) so we can complete the entire
 // `roc check` process without needing to monomorphize.
 /// Returns the number of problems reported.
-pub fn report_problems(loaded: &mut MonomorphizedModule) -> usize {
+pub fn report_problems_monomorphized(loaded: &mut MonomorphizedModule) -> usize {
+    report_problems_help(
+        loaded.total_problems(),
+        &loaded.sources,
+        &loaded.header_sources,
+        &loaded.interns,
+        &mut loaded.can_problems,
+        &mut loaded.type_problems,
+        &mut loaded.mono_problems,
+    )
+}
+
+pub fn report_problems_typechecked(loaded: &mut LoadedModule) -> usize {
+    report_problems_help(
+        loaded.total_problems(),
+        &loaded.sources,
+        &loaded.header_sources,
+        &loaded.interns,
+        &mut loaded.can_problems,
+        &mut loaded.type_problems,
+        &mut Default::default(),
+    )
+}
+
+fn report_problems_help(
+    total_problems: usize,
+    header_sources: &MutMap<ModuleId, (PathBuf, Box<str>)>,
+    sources: &MutMap<ModuleId, (PathBuf, Box<str>)>,
+    interns: &Interns,
+    can_problems: &mut MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
+    type_problems: &mut MutMap<ModuleId, Vec<roc_solve::solve::TypeError>>,
+    mono_problems: &mut MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
+) -> usize {
     use roc_reporting::report::{
         can_problem, mono_problem, type_problem, Report, RocDocAllocator, Severity::*,
         DEFAULT_PALETTE,
@@ -33,14 +66,13 @@ pub fn report_problems(loaded: &mut MonomorphizedModule) -> usize {
 
     // This will often over-allocate total memory, but it means we definitely
     // never need to re-allocate either the warnings or the errors vec!
-    let total_problems = loaded.total_problems();
     let mut warnings = Vec::with_capacity(total_problems);
     let mut errors = Vec::with_capacity(total_problems);
 
-    for (home, (module_path, src)) in loaded.sources.iter() {
+    for (home, (module_path, src)) in sources.iter() {
         let mut src_lines: Vec<&str> = Vec::new();
 
-        if let Some((_, header_src)) = loaded.header_sources.get(home) {
+        if let Some((_, header_src)) = header_sources.get(home) {
             src_lines.extend(header_src.split('\n'));
             src_lines.extend(src.split('\n').skip(1));
         } else {
@@ -48,9 +80,9 @@ pub fn report_problems(loaded: &mut MonomorphizedModule) -> usize {
         }
 
         // Report parsing and canonicalization problems
-        let alloc = RocDocAllocator::new(&src_lines, *home, &loaded.interns);
+        let alloc = RocDocAllocator::new(&src_lines, *home, interns);
 
-        let problems = loaded.can_problems.remove(home).unwrap_or_default();
+        let problems = can_problems.remove(home).unwrap_or_default();
 
         for problem in problems.into_iter() {
             let report = can_problem(&alloc, module_path.clone(), problem);
@@ -69,7 +101,7 @@ pub fn report_problems(loaded: &mut MonomorphizedModule) -> usize {
             }
         }
 
-        let problems = loaded.type_problems.remove(home).unwrap_or_default();
+        let problems = type_problems.remove(home).unwrap_or_default();
 
         for problem in problems {
             if let Some(report) = type_problem(&alloc, module_path.clone(), problem) {
@@ -89,7 +121,7 @@ pub fn report_problems(loaded: &mut MonomorphizedModule) -> usize {
             }
         }
 
-        let problems = loaded.mono_problems.remove(home).unwrap_or_default();
+        let problems = mono_problems.remove(home).unwrap_or_default();
 
         for problem in problems {
             let report = mono_problem(&alloc, module_path.clone(), problem);

@@ -373,7 +373,7 @@ fn list_walk_backwards_empty_all_inline() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.walkBackwards [0x1] (\a, b -> a + b) 0
+            List.walkBackwards [0x1] 0 \state, elem -> state + elem
             "#
         ),
         1,
@@ -387,7 +387,7 @@ fn list_walk_backwards_empty_all_inline() {
             empty =
                 []
 
-            List.walkBackwards empty (\a, b -> a + b) 0
+            List.walkBackwards empty 0 \state, elem -> state + elem
             "#
         ),
         0,
@@ -398,14 +398,14 @@ fn list_walk_backwards_empty_all_inline() {
 #[test]
 fn list_walk_backwards_with_str() {
     assert_evals_to!(
-        r#"List.walkBackwards [ "x", "y", "z" ] Str.concat "<""#,
-        RocStr::from("xyz<"),
+        r#"List.walkBackwards [ "x", "y", "z" ] "<" Str.concat"#,
+        RocStr::from("<zyx"),
         RocStr
     );
 
     assert_evals_to!(
-        r#"List.walkBackwards [ "Third", "Second", "First" ] Str.concat "Fourth""#,
-        RocStr::from("ThirdSecondFirstFourth"),
+        r#"List.walkBackwards [ "Second", "Third", "Fourth" ] "First" Str.concat"#,
+        RocStr::from("FirstFourthThirdSecond"),
         RocStr
     );
 }
@@ -422,12 +422,12 @@ fn list_walk_backwards_with_record() {
 
             initialCounts = { zeroes: 0, ones: 0 }
 
-            acc = \b, r ->
+            acc = \r, b ->
                 when b is
                     Zero -> { r & zeroes: r.zeroes + 1 }
                     One -> { r & ones: r.ones + 1 }
 
-            finalCounts = List.walkBackwards byte acc initialCounts
+            finalCounts = List.walkBackwards byte initialCounts acc
 
             finalCounts.ones * 10 + finalCounts.zeroes
             "#
@@ -440,13 +440,13 @@ fn list_walk_backwards_with_record() {
 #[test]
 fn list_walk_with_str() {
     assert_evals_to!(
-        r#"List.walk [ "x", "y", "z" ] Str.concat "<""#,
-        RocStr::from("zyx<"),
+        r#"List.walk [ "x", "y", "z" ] "<" Str.concat"#,
+        RocStr::from("<xyz"),
         RocStr
     );
 
     assert_evals_to!(
-        r#"List.walk [ "Third", "Second", "First" ] Str.concat "Fourth""#,
+        r#"List.walk [ "Second", "Third", "Fourth" ] "First" Str.concat"#,
         RocStr::from("FirstSecondThirdFourth"),
         RocStr
     );
@@ -454,13 +454,13 @@ fn list_walk_with_str() {
 
 #[test]
 fn list_walk_subtraction() {
-    assert_evals_to!(r#"List.walk [ 1, 2 ] Num.sub 1"#, 2, i64);
+    assert_evals_to!(r#"List.walk [ 1, 2 ] 1 Num.sub"#, (1 - 1) - 2, i64);
 }
 
 #[test]
 fn list_walk_until_sum() {
     assert_evals_to!(
-        r#"List.walkUntil [ 1, 2 ] (\a,b -> Continue (a + b)) 0"#,
+        r#"List.walkUntil [ 1, 2 ] 0 \a,b -> Continue (a + b)"#,
         3,
         i64
     );
@@ -471,13 +471,13 @@ fn list_walk_until_even_prefix_sum() {
     assert_evals_to!(
         r#"
         helper = \a, b ->
-            if Num.isEven a then
+            if Num.isEven b then
                 Continue (a + b)
 
             else
-                Stop b
+                Stop a
 
-        List.walkUntil [ 2, 4, 8, 9 ] helper 0"#,
+        List.walkUntil [ 2, 4, 8, 9 ] 0 helper"#,
         2 + 4 + 8,
         i64
     );
@@ -492,7 +492,7 @@ fn list_keep_if_empty_list_of_int() {
             empty =
                 []
 
-            List.keepIf empty (\_ -> True)
+            List.keepIf empty \_ -> True
             "#
         ),
         RocList::from_slice(&[]),
