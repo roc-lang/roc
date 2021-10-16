@@ -2249,7 +2249,7 @@ mod test_fmt {
     }
 
     #[test]
-    fn precedence_conflict_exponents() {
+    fn binop_parens() {
         expr_formats_same(indoc!(
             r#"
             if 4 == (6 ^ 6 ^ 7 ^ 8) then
@@ -2258,6 +2258,39 @@ mod test_fmt {
                 "Naturally"
             "#
         ));
+
+        expr_formats_same(indoc!(
+            r#"
+            if 5 == 1 ^ 1 ^ 1 ^ 1 then
+                "Not buying it"
+            else
+                "True"
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+            if (1 == 1)
+                && (2 == 1) && (3 == 2) then
+                "true"
+            else
+                "false"
+            "#
+            ),
+            indoc!(
+                r#"
+            if
+                (1 == 1)
+                    && (2 == 1)
+                    && (3 == 2)
+            then
+                "true"
+            else
+                "false"
+            "#
+            ),
+        );
     }
 
     #[test]
