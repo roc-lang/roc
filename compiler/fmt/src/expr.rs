@@ -133,7 +133,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 }
             }
             ParensAround(sub_expr) => {
-                if parens == Parens::NotNeeded && !sub_expr_requests_parens(&sub_expr) {
+                if parens == Parens::NotNeeded && !sub_expr_requests_parens(sub_expr) {
                     sub_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
                 } else {
                     buf.push('(');
