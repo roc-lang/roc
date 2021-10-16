@@ -133,9 +133,13 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 }
             }
             ParensAround(sub_expr) => {
-                buf.push('(');
-                sub_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
-                buf.push(')');
+                if parens == Parens::NotNeeded {
+                    sub_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
+                } else {
+                    buf.push('(');
+                    sub_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
+                    buf.push(')');
+                }
             }
             Str(literal) => {
                 use roc_parse::ast::StrLiteral::*;

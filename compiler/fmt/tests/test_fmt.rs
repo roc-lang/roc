@@ -362,6 +362,31 @@ mod test_fmt {
         );
     }
 
+    #[test]
+    fn excess_parens() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                x = (5)
+    
+    
+                y = ((10))
+    
+                42
+                "#
+            ),
+            indoc!(
+                r#"
+                x = 5
+    
+                y = 10
+    
+                42
+                "#
+            ),
+        );
+    }
+
     // #[test]
     // fn defs_with_defs() {
     //     expr_formats_to(
