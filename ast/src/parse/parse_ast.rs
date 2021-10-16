@@ -1,8 +1,8 @@
 use bumpalo::Bump;
-use roc_parse::parser::SyntaxError;
+use roc_module::symbol::Interns;
 use roc_region::all::Region;
 
-use crate::lang::{
+use crate::{ast_error::ASTResult, lang::{
     core::{
         ast::AST,
         def::{def2::DefId, def_to_def2::str_to_def2},
@@ -10,7 +10,7 @@ use crate::lang::{
     },
     env::Env,
     scope::Scope,
-};
+}};
 
 use super::parse_header;
 
@@ -18,7 +18,8 @@ pub fn parse_from_string<'a>(
     code_str: &'a str,
     env: &mut Env<'a>,
     ast_arena: &'a Bump,
-) -> Result<AST, SyntaxError<'a>> {
+    interns: &mut Interns,
+) -> ASTResult<AST> {
     let blank_line_indx = code_str
         .find("\n\n")
         .expect("I was expecting a double newline to split header and rest of code.");
@@ -27,6 +28,18 @@ pub fn parse_from_string<'a>(
     let tail_str = &code_str[blank_line_indx..];
 
     let mut scope = Scope::new(env.home, env.pool, env.var_store);
+
+    // TODO fill scope with:
+    let ident_ids = interns.get_module_ident_ids(&env.home)?.clone();
+    for (_, ident_ref) in ident_ids.idents() {
+        scope.introduce(
+            ident_ref.0.as_str().into(),
+            &env.exposed_ident_ids,
+            interns.get_module_ident_ids_mut(&env.home)?,
+            Region::zero()
+        )?;
+    }
+
     let region = Region::new(0, 0, 0, 0);
 
     let mut def_ids = Vec::<DefId>::new();

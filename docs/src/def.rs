@@ -28,8 +28,6 @@ pub fn defs_to_html<'a>(
 
     let def_arena = Bump::new();
 
-    let all_ident_ids = interns.get_module_ident_ids(&env_module_id)?.clone();
-
     let mut env = lang::env::Env::new(
         env_module_id,
         &env_arena,
@@ -37,7 +35,6 @@ pub fn defs_to_html<'a>(
         &mut var_store,
         dep_idents,
         env_module_ids,
-        all_ident_ids,
         exposed_ident_ids,
     );
 

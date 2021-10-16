@@ -662,9 +662,9 @@ pub fn expr_to_expr2<'a>(
             todo!()
         }
         Var {
-            module_name: _,
+            module_name, // module_name will only be filled if the original Roc code stated something like `5 + SomeModule.myVar`, module_name will be blank if it was `5 + myVar`
             ident,
-        } => canonicalize_lookup(env, scope, "#UserApp", ident, region), // TODO use module_name instead
+        } => canonicalize_lookup(env, scope, module_name, ident, region),
 
         // Below this point, we shouln't see any of these nodes anymore because
         // operator desugaring should have removed them!

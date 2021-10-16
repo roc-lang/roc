@@ -249,9 +249,6 @@ impl<'a> EdModel<'a> {
         mark_node_pool: &SlowPool,
     ) -> UIResult<()> {
         let mark_node = mark_node_pool.get(mark_node_id);
-        dbg!(mark_node.get_content());
-        dbg!(&line_nr);
-        dbg!(&col_nr);
 
         let node_newlines = mark_node.get_newlines_at_end();
 

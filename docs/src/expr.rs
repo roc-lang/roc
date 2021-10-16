@@ -26,8 +26,6 @@ pub fn expr_to_html<'a>(
     let dep_idents = IdentIds::exposed_builtins(8);
     let exposed_ident_ids = IdentIds::default();
 
-    let all_ident_ids = interns.get_module_ident_ids(&env_module_id)?.clone();
-
     let mut env = lang::env::Env::new(
         env_module_id,
         &env_arena,
@@ -35,7 +33,6 @@ pub fn expr_to_html<'a>(
         &mut var_store,
         dep_idents,
         env_module_ids,
-        all_ident_ids,
         exposed_ident_ids,
     );
 

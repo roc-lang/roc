@@ -1,13 +1,10 @@
 use bumpalo::{collections::Vec as BumpVec, Bump};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Ident, ModuleName};
-use roc_module::symbol::{IdentId, IdentIds, ModuleId, ModuleIds, Symbol};
+use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Located, Region};
 use roc_types::subs::VarStore;
-use snafu::OptionExt;
-
-use crate::ast_error::{ASTResult, IdentIdNotFound};
 use crate::mem_pool::pool::{NodeId, Pool};
 
 use super::core::def::def::References;
@@ -45,7 +42,6 @@ impl<'a> Env<'a> {
         var_store: &'a mut VarStore,
         dep_idents: MutMap<ModuleId, IdentIds>,
         module_ids: &'a ModuleIds,
-        all_ident_ids: IdentIds,
         exposed_ident_ids: IdentIds,
     ) -> Env<'a> {
         Env {
@@ -56,7 +52,7 @@ impl<'a> Env<'a> {
             var_store,
             dep_idents,
             module_ids,
-            ident_ids: all_ident_ids,
+            ident_ids: exposed_ident_ids.clone(), // we start with these, but will add more later using Scope.introduce
             exposed_ident_ids,
             closures: MutMap::default(),
             qualified_lookups: MutSet::default(),
@@ -168,17 +164,5 @@ impl<'a> Env<'a> {
                 region,
             }),
         }
-    }
-
-    pub fn get_name_for_ident_id(&self, ident_id: IdentId) -> ASTResult<&str> {
-        Ok(self
-            .ident_ids
-            .get_name(ident_id)
-            .with_context(|| IdentIdNotFound {
-                ident_id,
-                env_ident_ids_str: format!("{:?}", self.ident_ids),
-            })?
-            .as_inline_str()
-            .as_str())
     }
 }

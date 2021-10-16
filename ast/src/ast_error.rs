@@ -1,5 +1,7 @@
-use roc_module::symbol::IdentId;
-use snafu::{Backtrace, Snafu};
+use roc_module::{ident::Ident, module_err::ModuleError};
+use roc_parse::parser::SyntaxError;
+use roc_region::all::{Located, Region};
+use snafu::{Backtrace, ErrorCompat, Snafu};
 
 use crate::lang::core::ast::ASTNodeId;
 
@@ -34,16 +36,48 @@ pub enum ASTError {
         encountered_pattern2: String,
         backtrace: Backtrace,
     },
-    #[snafu(display(
-        "IdentIdNotFound: I could not find IdentId {:?} in env.ident_ids {:?}.",
-        ident_id,
-        env_ident_ids_str
-    ))]
-    IdentIdNotFound {
-        ident_id: IdentId,
-        env_ident_ids_str: String,
-        backtrace: Backtrace,
-    },
+    #[snafu(display("IdentExistsError: {}", msg))]
+    IdentExistsError { msg: String },
+    #[snafu(display("ModuleError: {}", msg))]
+    ModuleErrorNoBacktrace { msg: String },
+    #[snafu(display("SyntaxError: {}", msg))]
+    SyntaxErrorNoBacktrace { msg: String },
 }
 
 pub type ASTResult<T, E = ASTError> = std::result::Result<T, E>;
+
+impl From<ModuleError> for ASTError {
+    fn from(module_err: ModuleError) -> Self {
+        let msg = format!("{}", module_err);
+
+        if let Some(backtrace_ref) = module_err.backtrace() {
+            todo!("Error:{}\nBacktrace:{:?}", msg, backtrace_ref); //see snafu#313 
+            /*Self::UIErrorBacktrace {
+                msg,
+                backtrace: *backtrace_ref
+            }*/
+        } else {
+            Self::ModuleErrorNoBacktrace {
+                msg
+            }
+        }
+    }
+}
+
+impl From<(Region, Located<Ident>)> for ASTError {
+    fn from(ident_exists_err: (Region, Located<Ident>)) -> Self {
+
+        Self::IdentExistsError {
+            msg: format!("{:?}", ident_exists_err)
+        }
+    }
+}
+
+
+impl<'a> From<SyntaxError<'a>> for ASTError {
+    fn from(syntax_err: SyntaxError) -> Self {
+        Self::SyntaxErrorNoBacktrace {
+            msg: format!("{:?}", syntax_err)
+        }
+    }
+}

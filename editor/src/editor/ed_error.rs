@@ -4,7 +4,8 @@ use roc_ast::ast_error::ASTError;
 use roc_ast::lang::core::ast::ASTNodeId;
 use roc_code_markup::markup_error::MarkError;
 use roc_code_markup::slow_pool::MarkNodeId;
-use snafu::{Backtrace, ErrorCompat, NoneError, ResultExt, Snafu};
+use roc_module::module_err::ModuleError;
+use snafu::{Backtrace, ErrorCompat, Snafu};
 
 //import errors as follows:
 // `use crate::error::OutOfBounds;`
@@ -215,11 +216,13 @@ pub enum EdError {
     StringParseError { msg: String, backtrace: Backtrace },
 
     #[snafu(display("ASTError: {}", msg))]
-    ASTErrorBacktrace { msg: String, backtrace: Backtrace },
+    ASTErrorNoBacktrace { msg: String },
     #[snafu(display("UIError: {}", msg))]
-    UIErrorBacktrace { msg: String, backtrace: Backtrace },
+    UIErrorNoBacktrace { msg: String },
     #[snafu(display("MarkError: {}", msg))]
-    MarkErrorBacktrace { msg: String, backtrace: Backtrace },
+    MarkErrorNoBacktrace { msg: String },
+    #[snafu(display("ModuleError: {}", msg))]
+    ModuleErrorNoBacktrace { msg: String },
 }
 
 pub type EdResult<T, E = EdError> = std::result::Result<T, E>;
@@ -285,9 +288,17 @@ impl From<UIError> for EdError {
     fn from(ui_err: UIError) -> Self {
         let msg = format!("{}", ui_err);
 
-        // hack to handle EdError derive
-        let dummy_res: Result<(), NoneError> = Err(NoneError {});
-        dummy_res.context(UIErrorBacktrace { msg }).unwrap_err()
+        if let Some(backtrace_ref) = ui_err.backtrace() {
+            todo!("Error:{}\nBacktrace:{}", msg, color_backtrace(backtrace_ref)); //see snafu#313 
+            /*Self::UIErrorBacktrace {
+                msg,
+                backtrace: *backtrace_ref
+            }*/
+        } else {
+            Self::UIErrorNoBacktrace {
+                msg
+            }
+        }
     }
 }
 
@@ -295,9 +306,17 @@ impl From<MarkError> for EdError {
     fn from(mark_err: MarkError) -> Self {
         let msg = format!("{}", mark_err);
 
-        // hack to handle EdError derive
-        let dummy_res: Result<(), NoneError> = Err(NoneError {});
-        dummy_res.context(MarkErrorBacktrace { msg }).unwrap_err()
+        if let Some(backtrace_ref) = mark_err.backtrace() {
+            todo!("Error:{}\nBacktrace:{}", msg, color_backtrace(backtrace_ref)); //see snafu#313 
+            /*Self::MarkErrorBacktrace {
+                msg,
+                backtrace: *backtrace_ref
+            }*/
+        } else {
+            Self::MarkErrorNoBacktrace {
+                msg
+            }
+        }
     }
 }
 
@@ -305,8 +324,34 @@ impl From<ASTError> for EdError {
     fn from(ast_err: ASTError) -> Self {
         let msg = format!("{}", ast_err);
 
-        // hack to handle EdError derive
-        let dummy_res: Result<(), NoneError> = Err(NoneError {});
-        dummy_res.context(ASTErrorBacktrace { msg }).unwrap_err()
+        if let Some(backtrace_ref) = ast_err.backtrace() {
+            todo!("Error:{}\nBacktrace:{}", msg, color_backtrace(backtrace_ref)); //see snafu#313 
+            /*Self::ASTErrorBacktrace {
+                msg,
+                backtrace: *backtrace_ref
+            }*/
+        } else {
+            Self::ASTErrorNoBacktrace {
+                msg
+            }
+        }
+    }
+}
+
+impl From<ModuleError> for EdError {
+    fn from(ast_err: ModuleError) -> Self {
+        let msg = format!("{}", ast_err);
+
+        if let Some(backtrace_ref) = ast_err.backtrace() {
+            todo!("Error:{}\nBacktrace:{}", msg, color_backtrace(backtrace_ref)); //see snafu#313 
+            /*Self::ModuleErrorBacktrace {
+                msg,
+                backtrace: *backtrace_ref
+            }*/
+        } else {
+            Self::ModuleErrorNoBacktrace {
+                msg
+            }
+        }
     }
 }

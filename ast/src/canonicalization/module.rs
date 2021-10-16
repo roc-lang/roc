@@ -93,7 +93,6 @@ pub fn canonicalize_module_defs<'a>(
         var_store,
         dep_idents,
         module_ids,
-        exposed_ident_ids.clone(),
         exposed_ident_ids,
     );
     let mut lookups = Vec::with_capacity(num_deps);

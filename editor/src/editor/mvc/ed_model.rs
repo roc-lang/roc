@@ -18,6 +18,7 @@ use roc_ast::parse::parse_ast;
 use roc_code_markup::markup::convert::from_ast::ast_to_mark_nodes;
 use roc_code_markup::slow_pool::{MarkNodeId, SlowPool};
 use roc_load::file::LoadedModule;
+use roc_module::symbol::Interns;
 use std::path::Path;
 
 #[derive(Debug)]
@@ -55,7 +56,9 @@ pub fn init_model<'a>(
     code_arena: &'a Bump,
     caret_pos: CaretPos, // to set caret position
 ) -> EdResult<EdModel<'a>> {
-    let mut module = EdModule::new(code_str, env, code_arena)?;
+
+    let mut owned_loaded_module = loaded_module;
+    let mut module = EdModule::new(code_str, env, &mut owned_loaded_module.interns, code_arena,)?;
 
     let mut mark_node_pool = SlowPool::default();
 
@@ -66,7 +69,7 @@ pub fn init_model<'a>(
             &mut module.env,
             &module.ast,
             &mut mark_node_pool,
-            &loaded_module.interns,
+            &owned_loaded_module.interns,
         )?)
     }?;
 
@@ -104,7 +107,7 @@ pub fn init_model<'a>(
         has_focus: true,
         caret_w_select_vec: NonEmpty::new((caret, None)),
         selected_block_opt: None,
-        loaded_module,
+        loaded_module: owned_loaded_module,
         show_debug_view: false,
         dirty: true,
     })
@@ -178,9 +181,9 @@ pub struct EdModule<'a> {
 //use crate::lang::ast::expr2_to_string;
 
 impl<'a> EdModule<'a> {
-    pub fn new(code_str: &'a str, mut env: Env<'a>, ast_arena: &'a Bump) -> EdResult<EdModule<'a>> {
+    pub fn new(code_str: &'a str, mut env: Env<'a>, interns: &mut Interns, ast_arena: &'a Bump) -> EdResult<EdModule<'a>> {
         if !code_str.is_empty() {
-            let parse_res = parse_ast::parse_from_string(code_str, &mut env, ast_arena);
+            let parse_res = parse_ast::parse_from_string(code_str, &mut env, ast_arena, interns);
 
             match parse_res {
                 Ok(ast) => Ok(EdModule { env, ast }),
@@ -241,12 +244,6 @@ pub mod test_ed_model {
             &mut ed_model_refs.var_store,
             dep_idents,
             module_ids,
-            loaded_module
-                .interns
-                .all_ident_ids
-                .get(&loaded_module.module_id)
-                .unwrap()
-                .clone(),
             exposed_ident_ids,
         );
 

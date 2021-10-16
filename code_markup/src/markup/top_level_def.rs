@@ -1,7 +1,4 @@
-use roc_ast::{
-    ast_error::ASTResult,
-    lang::{core::ast::ASTNodeId, env::Env},
-};
+use roc_ast::{ast_error::ASTResult, lang::{core::ast::ASTNodeId, env::{Env}}};
 use roc_module::symbol::IdentId;
 
 use crate::{
@@ -17,7 +14,7 @@ pub fn tld_mark_node<'a>(
     mark_node_pool: &mut SlowPool,
     env: &Env<'a>,
 ) -> ASTResult<MarkupNode> {
-    let val_name = env.get_name_for_ident_id(identifier_id)?;
+    let val_name = env.ident_ids.get_name_str_res(identifier_id)?;
 
     let val_name_mn = MarkupNode::Text {
         content: val_name.to_owned(),

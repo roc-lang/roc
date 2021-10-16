@@ -1835,7 +1835,6 @@ pub mod test_constrain {
             &mut var_store,
             dep_idents,
             &module_ids,
-            exposed_ident_ids.clone(),
             exposed_ident_ids,
         );
 

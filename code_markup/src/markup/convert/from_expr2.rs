@@ -15,10 +15,7 @@ use crate::{
 };
 
 use itertools::Itertools;
-use roc_ast::{
-    ast_error::{ASTResult, IdentIdNotFound},
-    lang::{
-        core::{
+use roc_ast::{ast_error::{ASTResult}, lang::{core::{
             ast::ASTNodeId,
             expr::{
                 expr2::{Expr2, ExprId},
@@ -26,12 +23,8 @@ use roc_ast::{
             },
             pattern::{get_identifier_string, Pattern2},
             val_def::ValueDef,
-        },
-        env::Env,
-    },
-};
-use roc_module::{ident::Ident, symbol::Interns};
-use snafu::OptionExt;
+        }, env::{Env}}};
+use roc_module::{module_err::ModuleResult, symbol::Interns};
 
 // make Markup Nodes: generate String representation, assign Highlighting Style
 pub fn expr2_to_markup<'a>(
@@ -112,7 +105,10 @@ pub fn expr2_to_markup<'a>(
             mark_node_pool.add(call_node)
         }
         Expr2::Var(symbol) => {
-            let text = env.get_name_for_ident_id(symbol.ident_id())?;
+            let text =
+                interns
+                .get_module_ident_ids(&env.home)?
+                .get_name_str_res(symbol.ident_id())?; 
 
             new_markup_node(
                 text.to_string(),
@@ -295,7 +291,7 @@ pub fn expr2_to_markup<'a>(
             let backslash_mn = new_operator_mn("\\".to_string(), expr2_node_id, None);
             let backslash_mn_id = mark_node_pool.add(backslash_mn);
 
-            let arg_idents: Vec<&Ident> =
+            let arg_names: Vec<&str> =
                 args.iter(env.pool)
                     .map(|(_, arg_node_id)| {
                         let arg_pattern2 = env.pool.get(*arg_node_id);
@@ -303,14 +299,8 @@ pub fn expr2_to_markup<'a>(
                         match arg_pattern2 {
                             Pattern2::Identifier(id_symbol) => {
                                 let ident_id = id_symbol.ident_id();
-                                let ident = env.ident_ids.get_name(ident_id).with_context(|| {
-                                    IdentIdNotFound {
-                                        ident_id,
-                                        env_ident_ids_str: format!("{:?}", env.ident_ids),
-                                    }
-                                });
-
-                                ident
+                                
+                                env.ident_ids.get_name_str_res(ident_id)
                             }
                             other => {
                                 todo!(
@@ -320,13 +310,10 @@ pub fn expr2_to_markup<'a>(
                             }
                         }
                     })
-                    .collect::<ASTResult<Vec<&Ident>>>()?;
-
-            let arg_names = arg_idents
-                .iter()
-                .map(|ident| ident.as_inline_str().as_str());
+                    .collect::<ModuleResult<Vec<&str>>>()?;
 
             let arg_mark_nodes = arg_names
+                .iter()
                 .map(|arg_name| new_arg_name_mn(arg_name.to_string(), expr2_node_id))
                 .collect_vec();
 

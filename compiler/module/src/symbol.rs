@@ -1,5 +1,5 @@
 use crate::ident::{Ident, ModuleName};
-use crate::module_err::{ModuleIdNotFound, ModuleResult};
+use crate::module_err::{ModuleIdNotFound, IdentIdNotFound, ModuleResult};
 use roc_collections::all::{default_hasher, MutMap, SendMap};
 use roc_ident::IdentStr;
 use roc_region::all::Region;
@@ -262,6 +262,15 @@ impl Interns {
             .with_context(|| ModuleIdNotFound {
                 module_id: format!("{:?}", module_id),
                 all_ident_ids: format!("{:?}", self.all_ident_ids),
+            })
+    }
+
+    pub fn get_module_ident_ids_mut(&mut self, module_id: &ModuleId) -> ModuleResult<&mut IdentIds> {
+        self.all_ident_ids
+            .get_mut(module_id)
+            .with_context(|| ModuleIdNotFound {
+                module_id: format!("{:?}", module_id),
+                all_ident_ids: "I could not return all_ident_ids here because of borrowing issues.",
             })
     }
 }
@@ -633,6 +642,18 @@ impl IdentIds {
 
     pub fn get_name(&self, id: IdentId) -> Option<&Ident> {
         self.by_id.get(id.0 as usize)
+    }
+
+    pub fn get_name_str_res(&self, ident_id: IdentId) -> ModuleResult<&str> {
+        Ok(self
+            .get_name(ident_id)
+            .with_context(|| IdentIdNotFound {
+                ident_id,
+                ident_ids_str: format!("{:?}", self),
+            })?
+            .as_inline_str()
+            .as_str()
+        )
     }
 }
 

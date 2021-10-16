@@ -276,6 +276,7 @@ pub(crate) fn canonicalize_lookup(
                 Var(symbol)
             }
             Err(problem) => {
+                dbg!(scope);
                 env.problem(Problem::RuntimeError(problem));
 
                 RuntimeError()
