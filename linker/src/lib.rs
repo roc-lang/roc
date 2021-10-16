@@ -57,6 +57,13 @@ struct ElfDynamicDeps {
     shared_lib_index: usize,
 }
 
+struct MachoDynamicDeps {
+    got_app_syms: Vec<(String, usize)>,
+    got_sections: Vec<(usize, usize)>,
+    dynamic_lib_count: usize,
+    shared_lib_index: usize,
+}
+
 fn report_timing(label: &str, duration: Duration) {
     println!("\t{:9.3} ms   {}", duration.as_secs_f64() * 1000.0, label,);
 }
@@ -181,7 +188,7 @@ pub fn build_and_preprocess_host(
         dynhost.to_str().unwrap(),
         metadata.to_str().unwrap(),
         prehost.to_str().unwrap(),
-        dummy_lib.to_str().unwrap(),
+        &dummy_lib,
         false,
         false,
     )? != 0
@@ -328,7 +335,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         matches.value_of(EXEC).unwrap(),
         matches.value_of(METADATA).unwrap(),
         matches.value_of(OUT).unwrap(),
-        matches.value_of(SHARED_LIB).unwrap(),
+        Path::new(matches.value_of(SHARED_LIB).unwrap()),
         matches.is_present(FLAG_VERBOSE),
         matches.is_present(FLAG_TIME),
     )
@@ -341,10 +348,11 @@ fn preprocess_impl(
     exec_filename: &str,
     metadata_filename: &str,
     out_filename: &str,
-    shared_lib_filename: &str,
+    shared_lib: &Path,
     verbose: bool,
     time: bool,
 ) -> io::Result<i32> {
+    let verbose = true;
     if verbose {
         println!("Targeting: {}", target.to_string());
     }
@@ -461,6 +469,8 @@ fn preprocess_impl(
     .collect();
 
     let mut app_func_addresses: MutMap<u64, &str> = MutMap::default();
+    let mut macho_load_so_offset = None;
+
     match target.binary_format {
         target_lexicon::BinaryFormat::Elf => {
             let plt_relocs: Vec<_> = (match exec_obj.dynamic_relocations() {
@@ -495,7 +505,7 @@ fn preprocess_impl(
             }
         }
         target_lexicon::BinaryFormat::Macho => {
-            use macho::{DyldInfoCommand, DysymtabCommand, Section64, SegmentCommand64};
+            use macho::{DyldInfoCommand, DylibCommand, Section64, SegmentCommand64};
 
             let exec_header =
                 load_struct_inplace::<macho::MachHeader64<LittleEndian>>(exec_data, 0);
@@ -551,6 +561,8 @@ fn preprocess_impl(
             // Reset offset before looping through load commands again
             offset = mem::size_of_val(exec_header);
 
+            let shared_lib_filename = shared_lib.file_name();
+
             for _ in 0..num_load_cmds {
                 let info =
                     load_struct_inplace::<macho::LoadCommand<LittleEndian>>(exec_data, offset);
@@ -589,6 +601,39 @@ fn preprocess_impl(
                             );
                             break;
                         }
+                    }
+                } else if cmd == macho::LC_LOAD_DYLIB {
+                    let info = load_struct_inplace::<DylibCommand<LittleEndian>>(exec_data, offset);
+                    let name_offset = info.dylib.name.offset.get(NativeEndian) as usize;
+                    let str_start_index = offset + name_offset;
+                    let str_end_index = offset + cmdsize as usize;
+                    let str_bytes = &exec_data[str_start_index..str_end_index];
+                    let path = {
+                        if str_bytes[str_bytes.len() - 1] == 0 {
+                            // If it's nul-terminated, it's a C String.
+                            // Use the unchecked version because these are
+                            // padded with 0s at the end, so since we don't
+                            // know the exact length, using the checked version
+                            // of this can fail due to the interior nul bytes.
+                            //
+                            // Also, we have to use from_ptr instead of
+                            // from_bytes_with_nul_unchecked because currenty
+                            // std::ffi::CStr is actually not a char* under
+                            // the hood (!) but rather an array, so to strip
+                            // the trailing null bytes we have to use from_ptr.
+                            let c_str = unsafe { CStr::from_ptr(str_bytes.as_ptr() as *const i8) };
+
+                            Path::new(c_str.to_str().unwrap())
+                        } else {
+                            // It wasn't nul-terminated, so treat all the bytes
+                            // as the string
+
+                            Path::new(std::str::from_utf8(str_bytes).unwrap())
+                        }
+                    };
+
+                    if path.file_name() == shared_lib_filename {
+                        macho_load_so_offset = Some(offset);
                     }
                 }
 
@@ -775,12 +820,7 @@ fn preprocess_impl(
         dynamic_lib_count,
         shared_lib_index,
     } = scan_elf_dynamic_deps(
-        &exec_obj,
-        &mut md,
-        &app_syms,
-        shared_lib_filename,
-        exec_data,
-        verbose,
+        &exec_obj, &mut md, &app_syms, shared_lib, exec_data, verbose,
     )?;
 
     let scanning_dynamic_deps_duration = scanning_dynamic_deps_start.elapsed().unwrap();
@@ -1224,11 +1264,23 @@ fn gen_elf_le(
     Ok((out_mmap, out_file))
 }
 
+fn scan_macho_dynamic_deps(
+    _exec_obj: &object::File,
+    _md: &mut metadata::Metadata,
+    _app_syms: &[Symbol],
+    _shared_lib: &str,
+    _exec_data: &[u8],
+    _verbose: bool,
+) -> io::Result</*MachoDynamicDeps*/ ()> {
+    // TODO
+    Ok(())
+}
+
 fn scan_elf_dynamic_deps(
     exec_obj: &object::File,
     md: &mut metadata::Metadata,
     app_syms: &[Symbol],
-    shared_lib_filename: &str,
+    shared_lib: &Path,
     exec_data: &[u8],
     verbose: bool,
 ) -> io::Result<ElfDynamicDeps> {
@@ -1266,11 +1318,7 @@ fn scan_elf_dynamic_deps(
         }
     };
 
-    let shared_lib_name = Path::new(shared_lib_filename)
-        .file_name()
-        .unwrap()
-        .to_str()
-        .unwrap();
+    let shared_lib_filename = shared_lib.file_name();
 
     let mut dyn_lib_index = 0;
     let mut shared_lib_index = None;
@@ -1293,7 +1341,7 @@ fn scan_elf_dynamic_deps(
             ) as usize;
             let c_buf: *const c_char = dynstr_data[dynstr_off..].as_ptr() as *const i8;
             let c_str = unsafe { CStr::from_ptr(c_buf) }.to_str().unwrap();
-            if Path::new(c_str).file_name().unwrap().to_str().unwrap() == shared_lib_name {
+            if Path::new(c_str).file_name() == shared_lib_filename {
                 shared_lib_index = Some(dyn_lib_index);
                 if verbose {
                     println!(
