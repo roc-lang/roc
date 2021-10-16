@@ -91,6 +91,22 @@ main = "Hello, world!"
     }
 
     #[test]
+    fn closure_expr() {
+        expect_html_expr(
+            r#"
+            g = 
+                f = \x, y ->
+                    a = 3
+                    b = 6
+                    c
+    
+                "string"
+            g
+            "#,
+            r#"asdtds"#,
+        );
+    }
+    #[test]
     fn number_expr() {
         expect_html_expr("2", r#"<span class="syntax-number">2</span>"#);
     }
