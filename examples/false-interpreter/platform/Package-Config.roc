@@ -1,5 +1,5 @@
 platform examples/cli
-    requires {}{ main : List Str -> Task {} [] } # TODO FIXME
+    requires {}{ main : Str -> Task {} [] } # TODO FIXME
     exposes []
     packages {}
     imports [ Task.{ Task } ]
@@ -18,5 +18,5 @@ platform examples/cli
             getChar : Effect U8
         }
 
-mainForHost : List Str -> Task {} [] as Fx
-mainForHost = \list -> main list
+mainForHost : Str -> Task {} [] as Fx
+mainForHost = \file -> main file

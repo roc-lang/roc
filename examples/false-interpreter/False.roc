@@ -21,10 +21,9 @@ app "false"
 
 InterpreterErrors : [ BadUtf8, DivByZero, EmptyStack, InvalidBooleanValue, InvalidChar Str, MaxInputNumber, NoLambdaOnStack, NoNumberOnStack, NoVariableOnStack, NoScope, OutOfBounds, UnexpectedEndOfData ]
 
-main : List Str -> Task {} []
-main = \filenames ->
-    filenames
-        |> List.walk  (\filename, task  -> Task.await task (\_ -> (interpretFile filename))) (Task.succeed {})
+main : Str -> Task {} []
+main = \filename ->
+    interpretFile filename
         |> Task.await (\_ -> Stdout.line "Completed all tasks successfully")
         |> Task.onFail (\StringErr e -> Stdout.line "Ran into problem:\n\(e)\n")
     

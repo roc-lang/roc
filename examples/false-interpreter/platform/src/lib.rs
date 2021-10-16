@@ -13,7 +13,7 @@ use std::os::raw::c_char;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed"]
-    fn roc_main(args: RocList<RocStr>, output: *mut u8) -> ();
+    fn roc_main(args: RocStr, output: *mut u8) -> ();
 
     #[link_name = "roc__mainForHost_size"]
     fn roc_main_size() -> i64;
@@ -64,11 +64,8 @@ pub unsafe fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
 
 #[no_mangle]
 pub fn rust_main() -> i32 {
-    let args: Vec<RocStr> = env::args()
-        .skip(1)
-        .map(|arg| RocStr::from_slice(arg.as_bytes()))
-        .collect();
-    let args = RocList::<RocStr>::from_slice(&args);
+    let arg = env::args().skip(1).next().unwrap();
+    let arg = RocStr::from_slice(arg.as_bytes());
 
     let size = unsafe { roc_main_size() } as usize;
     let layout = Layout::array::<u8>(size).unwrap();
@@ -77,7 +74,7 @@ pub fn rust_main() -> i32 {
         // TODO allocate on the stack if it's under a certain size
         let buffer = std::alloc::alloc(layout);
 
-        roc_main(args, buffer);
+        roc_main(arg, buffer);
 
         let result = call_the_closure(buffer);
 
