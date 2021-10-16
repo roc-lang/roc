@@ -541,12 +541,12 @@ fn preprocess_impl(
                 offset += cmdsize as usize;
             }
 
-            let stubs_symbol_index = dbg!(stubs_symbol_index.unwrap_or_else(|| {
+            let stubs_symbol_index = stubs_symbol_index.unwrap_or_else(|| {
                 panic!("Could not find stubs symbol index.");
-            }));
-            let stubs_symbol_count = dbg!(stubs_symbol_count.unwrap_or_else(|| {
+            });
+            let stubs_symbol_count = stubs_symbol_count.unwrap_or_else(|| {
                 panic!("Could not find stubs symbol count.");
-            }));
+            });
 
             // Reset offset before looping through load commands again
             offset = mem::size_of_val(exec_header);
@@ -554,13 +554,12 @@ fn preprocess_impl(
             for _ in 0..num_load_cmds {
                 let info =
                     load_struct_inplace::<macho::LoadCommand<LittleEndian>>(exec_data, offset);
-                let cmd = dbg!(info.cmd.get(NativeEndian));
-                let cmdsize = dbg!(info.cmdsize.get(NativeEndian));
+                let cmd = info.cmd.get(NativeEndian);
+                let cmdsize = info.cmdsize.get(NativeEndian);
 
                 if cmd == macho::LC_DYLD_INFO_ONLY {
-                    let info = dbg!(load_struct_inplace::<DyldInfoCommand<LittleEndian>>(
-                        exec_data, offset
-                    ));
+                    let info =
+                        load_struct_inplace::<DyldInfoCommand<LittleEndian>>(exec_data, offset);
 
                     let lazy_bind_offset = info.lazy_bind_off.get(NativeEndian) as usize;
 
