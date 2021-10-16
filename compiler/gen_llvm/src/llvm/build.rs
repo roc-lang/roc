@@ -4501,7 +4501,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => default,
                 Layout::Builtin(Builtin::List(element_layout)) => {
-                    let argument_layouts = &[**element_layout, *default_layout];
+                    let argument_layouts = &[*default_layout, **element_layout];
 
                     let roc_function_call = roc_function_call(
                         env,
@@ -4872,7 +4872,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                     panic!("key type unknown")
                 }
                 Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
-                    let argument_layouts = &[**key_layout, **value_layout, *default_layout];
+                    let argument_layouts = &[*default_layout, **key_layout, **value_layout];
 
                     let roc_function_call = roc_function_call(
                         env,

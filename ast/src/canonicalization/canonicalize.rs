@@ -9,7 +9,7 @@ use crate::{
             def::def::References,
             expr::{
                 expr2::{Expr2, ExprId, WhenBranch},
-                expr_to_expr2::to_expr2,
+                expr_to_expr2::expr_to_expr2,
                 output::Output,
                 record_field::RecordField,
             },
@@ -147,7 +147,8 @@ fn canonicalize_field<'a>(
         // Both a label and a value, e.g. `{ name: "blah" }`
         RequiredValue(label, _, loc_expr) => {
             let field_var = env.var_store.fresh();
-            let (loc_can_expr, output) = to_expr2(env, scope, &loc_expr.value, loc_expr.region);
+            let (loc_can_expr, output) =
+                expr_to_expr2(env, scope, &loc_expr.value, loc_expr.region);
 
             Ok(CanonicalField::LabelAndValue {
                 label: label.value,
@@ -211,7 +212,7 @@ pub(crate) fn canonicalize_when_branch<'a>(
     }
 
     let (value, mut branch_output) =
-        to_expr2(env, &mut scope, &branch.value.value, branch.value.region);
+        expr_to_expr2(env, &mut scope, &branch.value.value, branch.value.region);
     let value_id = env.pool.add(value);
     env.set_region(value_id, branch.value.region);
 
@@ -219,7 +220,7 @@ pub(crate) fn canonicalize_when_branch<'a>(
         None => None,
         Some(loc_expr) => {
             let (can_guard, guard_branch_output) =
-                to_expr2(env, &mut scope, &loc_expr.value, loc_expr.region);
+                expr_to_expr2(env, &mut scope, &loc_expr.value, loc_expr.region);
 
             let expr_id = env.pool.add(can_guard);
             env.set_region(expr_id, loc_expr.region);

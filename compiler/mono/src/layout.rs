@@ -1778,7 +1778,6 @@ fn union_sorted_tags_help_new<'a>(
 
             // just one tag in the union (but with arguments) can be a struct
             let mut layouts = Vec::with_capacity_in(tags_vec.len(), arena);
-            let mut contains_zero_sized = false;
 
             // special-case NUM_AT_NUM: if its argument is a FlexVar, make it Int
             match tag_name {
@@ -1791,12 +1790,7 @@ fn union_sorted_tags_help_new<'a>(
                         let var = subs[var_index];
                         match Layout::from_var(&mut env, var) {
                             Ok(layout) => {
-                                // Drop any zero-sized arguments like {}
-                                if !layout.is_dropped_because_empty() {
-                                    layouts.push(layout);
-                                } else {
-                                    contains_zero_sized = true;
-                                }
+                                layouts.push(layout);
                             }
                             Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                                 // If we encounter an unbound type var (e.g. `Ok *`)
@@ -1821,11 +1815,7 @@ fn union_sorted_tags_help_new<'a>(
             });
 
             if layouts.is_empty() {
-                if contains_zero_sized {
-                    UnionVariant::UnitWithArguments
-                } else {
-                    UnionVariant::Unit
-                }
+                UnionVariant::Unit
             } else if opt_rec_var.is_some() {
                 UnionVariant::Wrapped(WrappedVariant::NonNullableUnwrapped {
                     tag_name,

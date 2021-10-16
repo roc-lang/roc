@@ -7,10 +7,6 @@ use crate::editor::code_lines::CodeLines;
 use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::MissingSelection;
 use crate::editor::grid_node_map::GridNodeMap;
-/*use crate::editor::markup::attribute::Attributes;
-use crate::editor::markup::nodes;
-use crate::editor::markup::nodes::MarkupNode;
-use crate::editor::markup::nodes::EQUALS;*/
 use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::mvc::ed_model::SelectedBlock;
@@ -26,18 +22,7 @@ use crate::editor::mvc::string_update::start_new_string;
 use crate::editor::mvc::string_update::update_small_string;
 use crate::editor::mvc::string_update::update_string;
 use crate::editor::mvc::tld_value_update::{start_new_tld_value, update_tld_val_name};
-/*use crate::editor::slow_pool::MarkNodeId;
-use crate::editor::slow_pool::SlowPool;
-use crate::editor::syntax_highlight::HighlightStyle;
-use crate::lang::ast::Def2;
-use crate::lang::ast::DefId;
-use crate::lang::ast::{Expr2, ExprId};
-use crate::lang::constrain::constrain_expr;
-use crate::lang::parse::ASTNodeId;
-use crate::lang::pool::Pool;
-use crate::lang::pool::PoolStr;
-use crate::lang::types::Type2;
-use crate::lang::{constrain::Constraint, solve};*/
+use crate::editor::sound::play_sound;
 use crate::ui::text::caret_w_select::CaretWSelect;
 use crate::ui::text::lines::MoveCaretFun;
 use crate::ui::text::selection::validate_raw_sel;
@@ -77,6 +62,7 @@ use roc_types::solved_types::Solved;
 use roc_types::subs::{Subs, Variable};
 use roc_types::{pretty_print::content_to_string, subs::VarStore};
 use snafu::OptionExt;
+use threadpool::ThreadPool;
 use winit::event::VirtualKeyCode;
 use VirtualKeyCode::*;
 
@@ -537,6 +523,7 @@ impl<'a> EdModel<'a> {
         &mut self,
         modifiers: &Modifiers,
         virtual_keycode: VirtualKeyCode,
+        sound_thread_pool: &mut ThreadPool,
     ) -> EdResult<()> {
         match virtual_keycode {
             Left => self.move_caret_left(modifiers)?,
@@ -572,6 +559,11 @@ impl<'a> EdModel<'a> {
             F11 => {
                 self.show_debug_view = !self.show_debug_view;
                 self.dirty = true;
+            }
+            F12 => {
+                sound_thread_pool.execute(move || {
+                    play_sound("./editor/src/editor/resources/sounds/bell_sound.mp3");
+                });
             }
             _ => (),
         }
@@ -1254,6 +1246,7 @@ pub mod test_ed_update {
     use crate::window::keyboard_input::Modifiers;
     use bumpalo::Bump;
     use roc_module::symbol::ModuleIds;
+    use threadpool::ThreadPool;
     use winit::event::VirtualKeyCode::*;
 
     fn ed_res_to_res<T>(ed_res: EdResult<T>) -> Result<T, String> {
@@ -2663,7 +2656,7 @@ pub mod test_ed_update {
         }
 
         for _ in 0..repeats {
-            ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up)?;
+            ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up, &mut ThreadPool::new(1))?;
         }
 
         let mut post_lines = ui_res_to_res(ed_model_to_dsl(&ed_model))?;
@@ -3240,7 +3233,7 @@ pub mod test_ed_update {
         )?;
 
         for _ in 0..repeats {
-            ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up)?;
+            ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up, &mut ThreadPool::new(1))?;
         }
 
         move_caret_fun(&mut ed_model, &no_mods())?;
@@ -3404,7 +3397,7 @@ pub mod test_ed_update {
         )?;
 
         for _ in 0..repeats {
-            ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up)?;
+            ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up, &mut ThreadPool::new(1))?;
         }
 
         handle_new_char(&'\u{8}', &mut ed_model)?; // \u{8} is the char for backspace on linux
