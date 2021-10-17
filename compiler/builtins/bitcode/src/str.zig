@@ -446,6 +446,7 @@ pub fn strSplitInPlaceC(array: [*]RocStr, string: RocStr, delimiter: RocStr) cal
     return @call(.{ .modifier = always_inline }, strSplitInPlace, .{ array, string, delimiter });
 }
 
+// TODO Giesch read and understand this
 fn strSplitInPlace(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
     var ret_array_index: usize = 0;
     var slice_start_index: usize = 0;
@@ -651,6 +652,7 @@ test "strSplitInPlace: three pieces" {
     try expect(array[2].eq(expected_array[2]));
 }
 
+// TODO Giesch
 // This is used for `Str.split : Str, Str -> Array Str
 // It is used to count how many segments the input `_str`
 // needs to be broken into, so that we can allocate a array
@@ -1472,4 +1474,33 @@ test "validateUtf8Bytes: surrogate halves" {
     const list = sliceHelp(ptr, raw.len);
 
     try expectErr(list, 3, error.Utf8EncodesSurrogateHalf, Utf8ByteProblem.EncodesSurrogateHalf);
+}
+
+const single_whitespaces = &[_][]const u21{'\u{0020}'};
+
+fn isWhitespace(
+    codepoint: u21,
+) bool {
+    // https://www.unicode.org/Public/UCD/latest/ucd/PropList.txt
+    return switch (codepoint) {
+        0x0009...0x000D => true, // ascii control characters
+        0x0020 => true, // space
+        0x0085 => true, // control character
+        0x00A0 => true, // no-break space
+        0x1680 => true, // ogham space
+        0x2000...0x200A => true, // en quad..hair space
+        0x200E...0x200F => true, // left-to-right & right-to-left marks
+        0x2028 => true, // line separator
+        0x2029 => true, // paragraph separator
+        0x202F => true, // narrow no-break space
+        0x205F => true, // medium mathematical space
+        0x3000 => true, // ideographic space
+
+        else => false,
+    };
+}
+
+test "isWhitespace" {
+    try expect(isWhitespace(' '));
+    try expect(isWhitespace('\u{00A0}'));
 }
