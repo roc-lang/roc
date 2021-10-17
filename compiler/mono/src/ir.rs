@@ -4041,24 +4041,128 @@ pub fn with_hole<'a>(
             let layout =
                 return_on_layout_error!(env, layout_cache.from_var(env.arena, ret_var, env.subs));
 
+            let closure_data_symbol = arg_symbols[2];
+
+            macro_rules! new_match_on_closure_argument {
+    ($env:expr, $procs:expr, $layout_cache:expr, $closure_data_symbol:expr, $closure_data_var:expr, $op:expr, $ho:ident, [$($x:ident),* $(,)?], $layout: expr, $assigned:expr, $hole:expr) => {{
+        let closure_data_layout = return_on_layout_error!(
+            $env,
+            $layout_cache.raw_from_var($env.arena, $closure_data_var, $env.subs)
+        );
+
+        let top_level = ProcLayout::from_raw($env.arena, closure_data_layout);
+
+        let arena = $env.arena;
+
+        let arg_layouts = top_level.arguments;
+        let ret_layout = top_level.result;
+
+        match closure_data_layout {
+            RawFunctionLayout::Function(_, lambda_set, _) =>  {
+                lowlevel_match_on_lambda_set(
+                    $env,
+                    lambda_set,
+                    $op,
+                    $closure_data_symbol,
+                    |top_level_function, closure_data, closure_env_layout, specialization_id| self::Call {
+                        call_type: CallType::NewHigherOrderLowLevel {
+                            op: $ho { $($x,)* },
+                            closure_env_layout,
+                            specialization_id,
+                            function_owns_closure_data: false,
+                            function_env: closure_data_symbol,
+                            function_name: top_level_function,
+                            arg_layouts,
+                            ret_layout,
+                        },
+                        arguments: arena.alloc([$($x,)* top_level_function, closure_data]),
+                    },
+                    $layout,
+                    $assigned,
+                    $hole,
+                )
+            }
+            RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!("match_on_closure_argument received a zero-argument thunk"),
+        }
+    }};
+}
+
             use LowLevel::*;
             match op {
-                ListMap | ListMapWithIndex | ListKeepIf | ListKeepOks | ListKeepErrs
-                | ListSortWith => {
+                ListMap => {
+                    debug_assert_eq!(arg_symbols.len(), 2);
+
+                    let closure_index = 1;
+                    let closure_data_symbol = arg_symbols[closure_index];
+                    let closure_data_var = args[closure_index].0;
+                    let xs = arg_symbols[0];
+
+                    let closure_data_layout = return_on_layout_error!(
+                        env,
+                        layout_cache.raw_from_var(env.arena, closure_data_var, env.subs)
+                    );
+
+                    let top_level = ProcLayout::from_raw(env.arena, closure_data_layout);
+
+                    let arena = env.arena;
+
+                    let arg_layouts = top_level.arguments;
+                    let ret_layout = top_level.result;
+
+                    match closure_data_layout {
+                        RawFunctionLayout::Function(_, lambda_set, _) => {
+                            lowlevel_match_on_lambda_set(
+                                env,
+                                lambda_set,
+                                op,
+                                closure_data_symbol,
+                                |top_level_function,
+                                 closure_data,
+                                 closure_env_layout,
+                                 specialization_id| self::Call {
+                                    call_type: CallType::NewHigherOrderLowLevel {
+                                        op: crate::low_level::HigherOrder::ListMap { xs },
+                                        closure_env_layout,
+                                        specialization_id,
+                                        function_owns_closure_data: false,
+                                        function_env: closure_data_symbol,
+                                        function_name: top_level_function,
+                                        arg_layouts,
+                                        ret_layout,
+                                    },
+                                    arguments: arena.alloc([xs, top_level_function, closure_data]),
+                                },
+                                layout,
+                                assigned,
+                                hole,
+                            )
+                        }
+                        RawFunctionLayout::ZeroArgumentThunk(_) => {
+                            unreachable!("match_on_closure_argument received a zero-argument thunk")
+                        }
+                    }
+                }
+
+                ListMapWithIndex | ListKeepIf | ListKeepOks | ListKeepErrs | ListSortWith => {
                     debug_assert_eq!(arg_symbols.len(), 2);
 
                     let closure_index = 1;
                     let closure_data_symbol = arg_symbols[closure_index];
                     let closure_data_var = args[closure_index].0;
 
-                    match_on_closure_argument!(
+                    let xs = arg_symbols[0];
+
+                    use crate::low_level::HigherOrder::ListMapWithIndex;
+
+                    new_match_on_closure_argument!(
                         env,
                         procs,
                         layout_cache,
                         closure_data_symbol,
                         closure_data_var,
                         op,
-                        [arg_symbols[0]],
+                        ListMapWithIndex,
+                        [xs],
                         layout,
                         assigned,
                         hole
