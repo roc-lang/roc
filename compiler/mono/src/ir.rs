@@ -1050,13 +1050,6 @@ impl<'a> Call<'a> {
                     .text(format!("lowlevel {:?} ", lowlevel))
                     .append(alloc.intersperse(it, " "))
             }
-            NewHigherOrderLowLevel { op: lowlevel, .. } => {
-                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
-
-                alloc
-                    .text(format!("lowlevel {:?} ", lowlevel))
-                    .append(alloc.intersperse(it, " "))
-            }
             Foreign {
                 ref foreign_symbol, ..
             } => {
@@ -1109,18 +1102,6 @@ pub enum CallType<'a> {
         update_mode: UpdateModeId,
     },
     HigherOrderLowLevel {
-        op: LowLevel,
-        /// the layout of the closure argument, if any
-        closure_env_layout: Option<Layout<'a>>,
-        /// specialization id of the function argument
-        specialization_id: CallSpecId,
-        /// does the function need to own the closure data
-        function_owns_closure_data: bool,
-        /// function layout
-        arg_layouts: &'a [Layout<'a>],
-        ret_layout: Layout<'a>,
-    },
-    NewHigherOrderLowLevel {
         op: crate::low_level::HigherOrder,
         /// the layout of the closure argument, if any
         closure_env_layout: Option<Layout<'a>>,
@@ -5464,7 +5445,6 @@ fn substitute_in_call<'a>(
         CallType::Foreign { .. } => None,
         CallType::LowLevel { .. } => None,
         CallType::HigherOrderLowLevel { .. } => None,
-        CallType::NewHigherOrderLowLevel { .. } => None,
     };
 
     let mut did_change = false;

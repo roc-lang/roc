@@ -593,7 +593,7 @@ impl<'a> BorrowInfState<'a> {
                 self.own_args_using_bools(arguments, ps);
             }
 
-            NewHigherOrderLowLevel {
+            HigherOrderLowLevel {
                 op,
                 arg_layouts,
                 ret_layout,
@@ -675,138 +675,6 @@ impl<'a> BorrowInfState<'a> {
                 let function_env_position = op.function_arity();
                 if let Some(false) = function_ps.get(function_env_position).map(|p| p.borrow) {
                     self.own_var(*function_env);
-                }
-            }
-
-            HigherOrderLowLevel {
-                op,
-                arg_layouts,
-                ret_layout,
-                ..
-            } => {
-                use roc_module::low_level::LowLevel::*;
-
-                debug_assert!(op.is_higher_order());
-
-                let closure_layout = ProcLayout {
-                    arguments: arg_layouts,
-                    result: *ret_layout,
-                };
-
-                match op {
-                    ListMap | ListKeepIf | ListKeepOks | ListKeepErrs => {
-                        match param_map.get_symbol(arguments[1], closure_layout) {
-                            Some(function_ps) => {
-                                // own the list if the function wants to own the element
-                                if !function_ps[0].borrow {
-                                    self.own_var(arguments[0]);
-                                }
-
-                                // own the closure environment if the function needs to own it
-                                if let Some(false) = function_ps.get(1).map(|p| p.borrow) {
-                                    self.own_var(arguments[2]);
-                                }
-                            }
-                            None => unreachable!(),
-                        }
-                    }
-                    ListMapWithIndex => {
-                        match param_map.get_symbol(arguments[1], closure_layout) {
-                            Some(function_ps) => {
-                                // own the list if the function wants to own the element
-                                if !function_ps[1].borrow {
-                                    self.own_var(arguments[0]);
-                                }
-
-                                // own the closure environment if the function needs to own it
-                                if let Some(false) = function_ps.get(2).map(|p| p.borrow) {
-                                    self.own_var(arguments[2]);
-                                }
-                            }
-                            None => unreachable!(),
-                        }
-                    }
-                    ListMap2 => match param_map.get_symbol(arguments[2], closure_layout) {
-                        Some(function_ps) => {
-                            // own the lists if the function wants to own the element
-                            if !function_ps[0].borrow {
-                                self.own_var(arguments[0]);
-                            }
-
-                            if !function_ps[1].borrow {
-                                self.own_var(arguments[1]);
-                            }
-
-                            // own the closure environment if the function needs to own it
-                            if let Some(false) = function_ps.get(2).map(|p| p.borrow) {
-                                self.own_var(arguments[3]);
-                            }
-                        }
-                        None => unreachable!(),
-                    },
-                    ListMap3 => match param_map.get_symbol(arguments[3], closure_layout) {
-                        Some(function_ps) => {
-                            // own the lists if the function wants to own the element
-                            if !function_ps[0].borrow {
-                                self.own_var(arguments[0]);
-                            }
-                            if !function_ps[1].borrow {
-                                self.own_var(arguments[1]);
-                            }
-                            if !function_ps[2].borrow {
-                                self.own_var(arguments[2]);
-                            }
-
-                            // own the closure environment if the function needs to own it
-                            if let Some(false) = function_ps.get(3).map(|p| p.borrow) {
-                                self.own_var(arguments[4]);
-                            }
-                        }
-                        None => unreachable!(),
-                    },
-                    ListSortWith => {
-                        match param_map.get_symbol(arguments[1], closure_layout) {
-                            Some(function_ps) => {
-                                // always own the input list
-                                self.own_var(arguments[0]);
-
-                                // own the closure environment if the function needs to own it
-                                if let Some(false) = function_ps.get(2).map(|p| p.borrow) {
-                                    self.own_var(arguments[2]);
-                                }
-                            }
-                            None => unreachable!(),
-                        }
-                    }
-                    ListWalk | ListWalkUntil | ListWalkBackwards | DictWalk => {
-                        match param_map.get_symbol(arguments[2], closure_layout) {
-                            Some(function_ps) => {
-                                // own the default value if the function wants to own it
-                                if !function_ps[0].borrow {
-                                    self.own_var(arguments[1]);
-                                }
-
-                                // own the data structure if the function wants to own the element
-                                if !function_ps[1].borrow {
-                                    self.own_var(arguments[0]);
-                                }
-
-                                // own the closure environment if the function needs to own it
-                                if let Some(false) = function_ps.get(2).map(|p| p.borrow) {
-                                    self.own_var(arguments[3]);
-                                }
-                            }
-                            None => unreachable!(),
-                        }
-                    }
-                    _ => {
-                        // very unsure what demand RunLowLevel should place upon its arguments
-                        self.own_var(z);
-
-                        let ps = lowlevel_borrow_signature(self.arena, *op);
-
-                        self.own_args_using_bools(arguments, ps);
-                    }
                 }
             }
 
@@ -1156,7 +1024,6 @@ fn call_info_call<'a>(call: &crate::ir::Call<'a>, info: &mut CallInfo<'a>) {
         Foreign { .. } => {}
         LowLevel { .. } => {}
         HigherOrderLowLevel { .. } => {}
-        NewHigherOrderLowLevel { .. } => {}
     }
 }
 
