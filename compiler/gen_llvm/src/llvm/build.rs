@@ -1003,7 +1003,6 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
                 *function_owns_closure_data,
                 *function_name,
                 function_env,
-                arguments,
             )
         }
 
@@ -4499,7 +4498,6 @@ fn run_new_higher_order_low_level<'a, 'ctx, 'env>(
     function_owns_closure_data: bool,
     function_name: Symbol,
     function_env: &Symbol,
-    args: &[Symbol],
 ) -> BasicValueEnum<'ctx> {
     use roc_mono::low_level::HigherOrder::*;
 
@@ -4894,7 +4892,6 @@ fn run_new_higher_order_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!("invalid dict layout"),
             }
         }
-        _ => unreachable!(),
     }
 }
 
