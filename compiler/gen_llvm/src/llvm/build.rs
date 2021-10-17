@@ -977,6 +977,36 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
             )
         }
 
+        CallType::NewHigherOrderLowLevel {
+            op,
+            function_owns_closure_data,
+            specialization_id,
+            function_name,
+            function_env,
+            arg_layouts,
+            ret_layout,
+            ..
+        } => {
+            let bytes = specialization_id.to_bytes();
+            let callee_var = CalleeSpecVar(&bytes);
+            let func_spec = func_spec_solutions.callee_spec(callee_var).unwrap();
+
+            run_new_higher_order_low_level(
+                env,
+                layout_ids,
+                scope,
+                layout,
+                *op,
+                func_spec,
+                arg_layouts,
+                ret_layout,
+                *function_owns_closure_data,
+                *function_name,
+                function_env,
+                arguments,
+            )
+        }
+
         CallType::Foreign {
             foreign_symbol,
             ret_layout,
@@ -4453,6 +4483,418 @@ fn roc_function_call<'a, 'ctx, 'env>(
         inc_n_data: inc_closure_data,
         data_is_owned: closure_data_is_owned,
         data: closure_data_ptr,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_new_higher_order_low_level<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    scope: &Scope<'a, 'ctx>,
+    return_layout: &Layout<'a>,
+    op: roc_mono::low_level::HigherOrder,
+    func_spec: FuncSpec,
+    argument_layouts: &[Layout<'a>],
+    result_layout: &Layout<'a>,
+    function_owns_closure_data: bool,
+    function_name: Symbol,
+    function_env: &Symbol,
+    args: &[Symbol],
+) -> BasicValueEnum<'ctx> {
+    use roc_mono::low_level::HigherOrder::*;
+
+    // macros because functions cause lifetime issues related to the `env` or `layout_ids`
+    macro_rules! function_details {
+        () => {{
+            let function = function_value_by_func_spec(
+                env,
+                func_spec,
+                function_name,
+                argument_layouts,
+                return_layout,
+            );
+
+            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, function_env);
+
+            (function, closure, closure_layout)
+        }};
+    }
+
+    macro_rules! list_walk {
+        ($variant:expr, $xs:expr, $state:expr) => {{
+            let (list, list_layout) = load_symbol_and_layout(scope, &$xs);
+            let (default, default_layout) = load_symbol_and_layout(scope, &$state);
+
+            let (function, closure, closure_layout) = function_details!();
+
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => default,
+                Layout::Builtin(Builtin::List(element_layout)) => {
+                    let argument_layouts = &[*default_layout, **element_layout];
+
+                    let roc_function_call = roc_function_call(
+                        env,
+                        layout_ids,
+                        function,
+                        closure,
+                        closure_layout,
+                        function_owns_closure_data,
+                        argument_layouts,
+                    );
+
+                    crate::llvm::build_list::list_walk_generic(
+                        env,
+                        layout_ids,
+                        roc_function_call,
+                        result_layout,
+                        list,
+                        element_layout,
+                        default,
+                        default_layout,
+                        $variant,
+                    )
+                }
+                _ => unreachable!("invalid list layout"),
+            }
+        }};
+    }
+    match op {
+        ListMap { xs } => {
+            // List.map : List before, (before -> after) -> List after
+            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
+
+            let (function, closure, closure_layout) = function_details!();
+
+            match (list_layout, return_layout) {
+                (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
+                (
+                    Layout::Builtin(Builtin::List(element_layout)),
+                    Layout::Builtin(Builtin::List(result_layout)),
+                ) => {
+                    let argument_layouts = &[**element_layout];
+
+                    let roc_function_call = roc_function_call(
+                        env,
+                        layout_ids,
+                        function,
+                        closure,
+                        closure_layout,
+                        function_owns_closure_data,
+                        argument_layouts,
+                    );
+
+                    list_map(env, roc_function_call, list, element_layout, result_layout)
+                }
+                _ => unreachable!("invalid list layout"),
+            }
+        }
+        ListMap2 { xs, ys } => {
+            let (list1, list1_layout) = load_symbol_and_layout(scope, &xs);
+            let (list2, list2_layout) = load_symbol_and_layout(scope, &ys);
+
+            let (function, closure, closure_layout) = function_details!();
+
+            match (list1_layout, list2_layout, return_layout) {
+                (
+                    Layout::Builtin(Builtin::List(element1_layout)),
+                    Layout::Builtin(Builtin::List(element2_layout)),
+                    Layout::Builtin(Builtin::List(result_layout)),
+                ) => {
+                    let argument_layouts = &[**element1_layout, **element2_layout];
+
+                    let roc_function_call = roc_function_call(
+                        env,
+                        layout_ids,
+                        function,
+                        closure,
+                        closure_layout,
+                        function_owns_closure_data,
+                        argument_layouts,
+                    );
+
+                    list_map2(
+                        env,
+                        layout_ids,
+                        roc_function_call,
+                        list1,
+                        list2,
+                        element1_layout,
+                        element2_layout,
+                        result_layout,
+                    )
+                }
+                (Layout::Builtin(Builtin::EmptyList), _, _)
+                | (_, Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
+                _ => unreachable!("invalid list layout"),
+            }
+        }
+        ListMap3 { xs, ys, zs } => {
+            let (list1, list1_layout) = load_symbol_and_layout(scope, &xs);
+            let (list2, list2_layout) = load_symbol_and_layout(scope, &ys);
+            let (list3, list3_layout) = load_symbol_and_layout(scope, &zs);
+
+            let (function, closure, closure_layout) = function_details!();
+
+            match (list1_layout, list2_layout, list3_layout, return_layout) {
+                (
+                    Layout::Builtin(Builtin::List(element1_layout)),
+                    Layout::Builtin(Builtin::List(element2_layout)),
+                    Layout::Builtin(Builtin::List(element3_layout)),
+                    Layout::Builtin(Builtin::List(result_layout)),
+                ) => {
+                    let argument_layouts =
+                        &[**element1_layout, **element2_layout, **element3_layout];
+
+                    let roc_function_call = roc_function_call(
+                        env,
+                        layout_ids,
+                        function,
+                        closure,
+                        closure_layout,
+                        function_owns_closure_data,
+                        argument_layouts,
+                    );
+
+                    list_map3(
+                        env,
+                        layout_ids,
+                        roc_function_call,
+                        list1,
+                        list2,
+                        list3,
+                        element1_layout,
+                        element2_layout,
+                        element3_layout,
+                        result_layout,
+                    )
+                }
+                (Layout::Builtin(Builtin::EmptyList), _, _, _)
+                | (_, Layout::Builtin(Builtin::EmptyList), _, _)
+                | (_, _, Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
+                _ => unreachable!("invalid list layout"),
+            }
+        }
+        ListMapWithIndex { xs } => {
+            // List.mapWithIndex : List before, (Nat, before -> after) -> List after
+            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
+
+            let (function, closure, closure_layout) = function_details!();
+
+            match (list_layout, return_layout) {
+                (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
+                (
+                    Layout::Builtin(Builtin::List(element_layout)),
+                    Layout::Builtin(Builtin::List(result_layout)),
+                ) => {
+                    let argument_layouts = &[Layout::Builtin(Builtin::Usize), **element_layout];
+
+                    let roc_function_call = roc_function_call(
+                        env,
+                        layout_ids,
+                        function,
+                        closure,
+                        closure_layout,
+                        function_owns_closure_data,
+                        argument_layouts,
+                    );
+
+                    list_map_with_index(env, roc_function_call, list, element_layout, result_layout)
+                }
+                _ => unreachable!("invalid list layout"),
+            }
+        }
+        ListKeepIf { xs } => {
+            // List.keepIf : List elem, (elem -> Bool) -> List elem
+            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
+
+            let (function, closure, closure_layout) = function_details!();
+
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                Layout::Builtin(Builtin::List(element_layout)) => {
+                    let argument_layouts = &[**element_layout];
+
+                    let roc_function_call = roc_function_call(
+                        env,
+                        layout_ids,
+                        function,
+                        closure,
+                        closure_layout,
+                        function_owns_closure_data,
+                        argument_layouts,
+                    );
+
+                    list_keep_if(env, layout_ids, roc_function_call, list, element_layout)
+                }
+                _ => unreachable!("invalid list layout"),
+            }
+        }
+        ListKeepOks { xs } => {
+            // List.keepOks : List before, (before -> Result after *) -> List after
+            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
+
+            let (function, closure, closure_layout) = function_details!();
+
+            match (list_layout, return_layout) {
+                (_, Layout::Builtin(Builtin::EmptyList))
+                | (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
+                (
+                    Layout::Builtin(Builtin::List(before_layout)),
+                    Layout::Builtin(Builtin::List(after_layout)),
+                ) => {
+                    let argument_layouts = &[**before_layout];
+
+                    let roc_function_call = roc_function_call(
+                        env,
+                        layout_ids,
+                        function,
+                        closure,
+                        closure_layout,
+                        function_owns_closure_data,
+                        argument_layouts,
+                    );
+
+                    list_keep_oks(
+                        env,
+                        layout_ids,
+                        roc_function_call,
+                        result_layout,
+                        list,
+                        before_layout,
+                        after_layout,
+                    )
+                }
+                (other1, other2) => {
+                    unreachable!("invalid list layouts:\n{:?}\n{:?}", other1, other2)
+                }
+            }
+        }
+        ListKeepErrs { xs } => {
+            // List.keepErrs : List before, (before -> Result * after) -> List after
+            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
+
+            let (function, closure, closure_layout) = function_details!();
+
+            match (list_layout, return_layout) {
+                (_, Layout::Builtin(Builtin::EmptyList))
+                | (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
+                (
+                    Layout::Builtin(Builtin::List(before_layout)),
+                    Layout::Builtin(Builtin::List(after_layout)),
+                ) => {
+                    let argument_layouts = &[**before_layout];
+
+                    let roc_function_call = roc_function_call(
+                        env,
+                        layout_ids,
+                        function,
+                        closure,
+                        closure_layout,
+                        function_owns_closure_data,
+                        argument_layouts,
+                    );
+
+                    list_keep_errs(
+                        env,
+                        layout_ids,
+                        roc_function_call,
+                        result_layout,
+                        list,
+                        before_layout,
+                        after_layout,
+                    )
+                }
+                (other1, other2) => {
+                    unreachable!("invalid list layouts:\n{:?}\n{:?}", other1, other2)
+                }
+            }
+        }
+        ListWalk { xs, state } => {
+            list_walk!(crate::llvm::build_list::ListWalk::Walk, xs, state)
+        }
+        ListWalkUntil { xs, state } => {
+            list_walk!(crate::llvm::build_list::ListWalk::WalkUntil, xs, state)
+        }
+        ListWalkBackwards { xs, state } => {
+            list_walk!(crate::llvm::build_list::ListWalk::WalkBackwards, xs, state)
+        }
+        ListSortWith { xs } => {
+            // List.sortWith : List a, (a, a -> Ordering) -> List a
+            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
+
+            let (function, closure, closure_layout) = function_details!();
+
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                Layout::Builtin(Builtin::List(element_layout)) => {
+                    use crate::llvm::bitcode::build_compare_wrapper;
+
+                    let argument_layouts = &[**element_layout, **element_layout];
+
+                    let compare_wrapper =
+                        build_compare_wrapper(env, function, closure_layout, element_layout)
+                            .as_global_value()
+                            .as_pointer_value();
+
+                    let roc_function_call = roc_function_call(
+                        env,
+                        layout_ids,
+                        function,
+                        closure,
+                        closure_layout,
+                        function_owns_closure_data,
+                        argument_layouts,
+                    );
+
+                    list_sort_with(
+                        env,
+                        roc_function_call,
+                        compare_wrapper,
+                        list,
+                        element_layout,
+                    )
+                }
+                _ => unreachable!("invalid list layout"),
+            }
+        }
+        DictWalk { xs, state } => {
+            let (dict, dict_layout) = load_symbol_and_layout(scope, &xs);
+            let (default, default_layout) = load_symbol_and_layout(scope, &state);
+
+            let (function, closure, closure_layout) = function_details!();
+
+            match dict_layout {
+                Layout::Builtin(Builtin::EmptyDict) => {
+                    // no elements, so `key` is not in here
+                    panic!("key type unknown")
+                }
+                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
+                    let argument_layouts = &[*default_layout, **key_layout, **value_layout];
+
+                    let roc_function_call = roc_function_call(
+                        env,
+                        layout_ids,
+                        function,
+                        closure,
+                        closure_layout,
+                        function_owns_closure_data,
+                        argument_layouts,
+                    );
+
+                    dict_walk(
+                        env,
+                        roc_function_call,
+                        dict,
+                        default,
+                        key_layout,
+                        value_layout,
+                        default_layout,
+                    )
+                }
+                _ => unreachable!("invalid dict layout"),
+            }
+        }
+        _ => unreachable!(),
     }
 }
 

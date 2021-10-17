@@ -786,6 +786,7 @@ where
             CallType::ByName { .. } => {}
             CallType::LowLevel { .. } => {}
             CallType::HigherOrderLowLevel { .. } => {}
+            CallType::NewHigherOrderLowLevel { .. } => {}
             CallType::Foreign { .. } => {}
         }
     }

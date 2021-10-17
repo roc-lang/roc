@@ -593,6 +593,91 @@ impl<'a> BorrowInfState<'a> {
                 self.own_args_using_bools(arguments, ps);
             }
 
+            NewHigherOrderLowLevel {
+                op,
+                arg_layouts,
+                ret_layout,
+                function_name,
+                function_env,
+                ..
+            } => {
+                use crate::low_level::HigherOrder::*;
+
+                let closure_layout = ProcLayout {
+                    arguments: arg_layouts,
+                    result: *ret_layout,
+                };
+
+                let function_ps = match param_map.get_symbol(*function_name, closure_layout) {
+                    Some(function_ps) => function_ps,
+                    None => unreachable!(),
+                };
+
+                match op {
+                    ListMap { xs }
+                    | ListKeepIf { xs }
+                    | ListKeepOks { xs }
+                    | ListKeepErrs { xs } => {
+                        // own the list if the function wants to own the element
+                        if !function_ps[0].borrow {
+                            self.own_var(*xs);
+                        }
+                    }
+                    ListMapWithIndex { xs } => {
+                        // own the list if the function wants to own the element
+                        if !function_ps[1].borrow {
+                            self.own_var(*xs);
+                        }
+                    }
+                    ListMap2 { xs, ys } => {
+                        // own the lists if the function wants to own the element
+                        if !function_ps[0].borrow {
+                            self.own_var(*xs);
+                        }
+
+                        if !function_ps[1].borrow {
+                            self.own_var(*ys);
+                        }
+                    }
+                    ListMap3 { xs, ys, zs } => {
+                        // own the lists if the function wants to own the element
+                        if !function_ps[0].borrow {
+                            self.own_var(*xs);
+                        }
+                        if !function_ps[1].borrow {
+                            self.own_var(*ys);
+                        }
+                        if !function_ps[2].borrow {
+                            self.own_var(*zs);
+                        }
+                    }
+                    ListSortWith { xs } => {
+                        // always own the input list
+                        self.own_var(*xs);
+                    }
+                    ListWalk { xs, state }
+                    | ListWalkUntil { xs, state }
+                    | ListWalkBackwards { xs, state }
+                    | DictWalk { xs, state } => {
+                        // own the default value if the function wants to own it
+                        if !function_ps[0].borrow {
+                            self.own_var(*state);
+                        }
+
+                        // own the data structure if the function wants to own the element
+                        if !function_ps[1].borrow {
+                            self.own_var(*xs);
+                        }
+                    }
+                }
+
+                // own the closure environment if the function needs to own it
+                let function_env_position = op.function_arity();
+                if let Some(false) = function_ps.get(function_env_position).map(|p| p.borrow) {
+                    self.own_var(*function_env);
+                }
+            }
+
             HigherOrderLowLevel {
                 op,
                 arg_layouts,
@@ -952,7 +1037,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
     use LowLevel::*;
 
     // TODO is true or false more efficient for non-refcounted layouts?
-    let irrelevant = OWNED;
+    let irrelevant = BORROWED;
     let function = irrelevant;
     let closure_data = irrelevant;
     let owned = OWNED;
@@ -1071,6 +1156,7 @@ fn call_info_call<'a>(call: &crate::ir::Call<'a>, info: &mut CallInfo<'a>) {
         Foreign { .. } => {}
         LowLevel { .. } => {}
         HigherOrderLowLevel { .. } => {}
+        NewHigherOrderLowLevel { .. } => {}
     }
 }
 
