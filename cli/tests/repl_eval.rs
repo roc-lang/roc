@@ -118,10 +118,7 @@ mod repl_eval {
 
     #[test]
     fn num_ceil_division_success() {
-        expect_success(
-            "Num.divCeil 4 3",
-            "Ok 2 : Result (Int *) [ DivByZero ]*"
-        )
+        expect_success("Num.divCeil 4 3", "Ok 2 : Result (Int *) [ DivByZero ]*")
     }
 
     #[test]

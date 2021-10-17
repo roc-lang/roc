@@ -16,7 +16,7 @@ pub fn powInt(base: i64, exp: i64) callconv(.C) i64 {
 }
 
 pub fn divCeil(numerator: i64, denominator: i64) callconv(.C) i64 {
-    return @call(.{ .modifier = always_inline }, math.divCeil, .{ i64, numerator, denominator });
+    return @call(.{ .modifier = always_inline }, math.divCeil, .{ i64, numerator, denominator }) catch unreachable;
 }
 
 pub fn acos(num: f64) callconv(.C) f64 {
