@@ -1476,14 +1476,10 @@ test "validateUtf8Bytes: surrogate halves" {
     try expectErr(list, 3, error.Utf8EncodesSurrogateHalf, Utf8ByteProblem.EncodesSurrogateHalf);
 }
 
-const single_whitespaces = &[_][]const u21{'\u{0020}'};
-
-fn isWhitespace(
-    codepoint: u21,
-) bool {
+fn isWhitespace(codepoint: u21) bool {
     // https://www.unicode.org/Public/UCD/latest/ucd/PropList.txt
     return switch (codepoint) {
-        0x0009...0x000D => true, // ascii control characters
+        0x0009...0x000D => true, // control characters
         0x0020 => true, // space
         0x0085 => true, // control character
         0x00A0 => true, // no-break space
@@ -1503,4 +1499,60 @@ fn isWhitespace(
 test "isWhitespace" {
     try expect(isWhitespace(' '));
     try expect(isWhitespace('\u{00A0}'));
+    try expect(!isWhitespace('x'));
+}
+
+// TODO iterate backwards through codepoints for the trailing whitespace
+// look at how rust does this; mimic zigs utf8 view
+// TODO need to think about unique case
+fn strTrim(string: RocStr) RocStr {
+    if (string.isEmpty()) return RocStr.empty();
+
+    var leading_whitespace_bytes: usize = 0;
+    var trailing_whitespace_bytes: usize = 0;
+    var found_non_whitespace = false;
+
+    const bytes_len = string.len();
+    const bytes_ptr = string.asU8ptr();
+    var bytes = bytes_ptr[0..bytes_len];
+    var iter = (unicode.Utf8View.init(bytes) catch unreachable).iterator();
+    while (iter.nextCodepoint()) |codepoint| {
+        if (isWhitespace(codepoint)) {
+            var byte_count = unicode.utf8CodepointSequenceLength(codepoint) catch unreachable;
+            if (!found_non_whitespace) {
+                leading_whitespace_bytes += byte_count;
+            }
+            trailing_whitespace_bytes += byte_count;
+        } else {
+            trailing_whitespace_bytes = 0;
+            found_non_whitespace = true;
+        }
+    }
+
+    const new_bytes_len = bytes_len - leading_whitespace_bytes - trailing_whitespace_bytes;
+
+    if (new_bytes_len == 0) {
+        return RocStr.empty();
+    }
+
+    return RocStr.init(bytes_ptr + leading_whitespace_bytes, new_bytes_len);
+}
+
+test "strTrim: empty" {
+    const trimmedEmpty = strTrim(RocStr.empty());
+    try expect(trimmedEmpty.eq(RocStr.empty()));
+}
+
+test "strTrim: hello" {
+    const example_bytes = "   hello   ";
+    const example = RocStr.init(example_bytes, example_bytes.len);
+    defer example.deinit();
+
+    const expected_bytes = "hello";
+    const expected = RocStr.init(expected_bytes, expected_bytes.len);
+    defer expected.deinit();
+
+    const trimmed = strTrim(example);
+
+    try expect(trimmed.eq(expected));
 }
