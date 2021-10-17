@@ -4006,7 +4006,7 @@ pub fn with_hole<'a>(
                                 op,
                                 closure_data_symbol,
                                 |top_level_function, closure_data, closure_env_layout, specialization_id| self::Call {
-                                    call_type: CallType::NewHigherOrderLowLevel {
+                                    call_type: CallType::HigherOrderLowLevel {
                                         op: crate::low_level::HigherOrder::$ho { $($x,)* },
                                         closure_env_layout,
                                         specialization_id,

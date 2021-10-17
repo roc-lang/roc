@@ -965,7 +965,7 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
             let callee_var = CalleeSpecVar(&bytes);
             let func_spec = func_spec_solutions.callee_spec(callee_var).unwrap();
 
-            run_new_higher_order_low_level(
+            run_higher_order_low_level(
                 env,
                 layout_ids,
                 scope,
@@ -4460,7 +4460,7 @@ fn roc_function_call<'a, 'ctx, 'env>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_new_higher_order_low_level<'a, 'ctx, 'env>(
+fn run_higher_order_low_level<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,

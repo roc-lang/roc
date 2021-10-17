@@ -480,7 +480,7 @@ impl<'a> Context<'a> {
                     ($borrows:expr) => {
                         Expr::Call(crate::ir::Call {
                             call_type: if let Some(OWNED) = $borrows.map(|p| p.borrow) {
-                                NewHigherOrderLowLevel {
+                                HigherOrderLowLevel {
                                     op: *op,
                                     closure_env_layout: *closure_env_layout,
                                     function_owns_closure_data: true,
