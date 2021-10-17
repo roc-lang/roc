@@ -30,6 +30,10 @@ pub struct CodeBuilder {
 
     /// Extra instructions to insert at specific positions during finalisation
     /// (Go back and set locals when we realise we need them)
+    /// We need BTree rather than Map or Vec, to ensure keys are sorted.
+    /// Entries may not be added in order. They are created when a Symbol
+    /// is used for the second time, or is in an inconvenient VM stack position,
+    /// so it's not a simple predictable order.
     insertions: BTreeMap<usize, Instruction>,
 
     /// Our simulation model of the Wasm stack machine
