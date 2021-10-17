@@ -117,6 +117,14 @@ mod repl_eval {
     }
 
     #[test]
+    fn num_ceil_division_success() {
+        expect_success(
+            "Num.divCeil 4 3",
+            "Ok 2 : Result (Int *) [ DivByZero ]*"
+        )
+    }
+
+    #[test]
     fn bool_in_record() {
         expect_success("{ x: 1 == 1 }", "{ x: True } : { x : Bool }");
         expect_success(

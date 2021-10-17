@@ -3306,6 +3306,18 @@ mod solve_expr {
     }
 
     #[test]
+    fn divCeil() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.divCeil
+                "#
+            ),
+            "Float * -> Int *",
+        );
+    }
+
+    #[test]
     fn pow_int() {
         infer_eq_without_problem(
             indoc!(
