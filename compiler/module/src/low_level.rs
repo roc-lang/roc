@@ -71,6 +71,7 @@ pub enum LowLevel {
     NumLte,
     NumCompare,
     NumDivUnchecked,
+    NumDivCeilUnchecked,
     NumRemUnchecked,
     NumIsMultipleOf,
     NumAbs,
@@ -123,12 +124,13 @@ impl LowLevel {
             | DictGetUnsafe | DictKeys | DictValues | DictUnion | DictIntersection
             | DictDifference | SetFromList | NumAdd | NumAddWrap | NumAddChecked | NumSub
             | NumSubWrap | NumSubChecked | NumMul | NumMulWrap | NumMulChecked | NumGt | NumGte
-            | NumLt | NumLte | NumCompare | NumDivUnchecked | NumRemUnchecked | NumIsMultipleOf
-            | NumAbs | NumNeg | NumSin | NumCos | NumSqrtUnchecked | NumLogUnchecked | NumRound
-            | NumToFloat | NumPow | NumCeiling | NumPowInt | NumFloor | NumIsFinite | NumAtan
-            | NumAcos | NumAsin | NumBitwiseAnd | NumBitwiseXor | NumBitwiseOr | NumShiftLeftBy
-            | NumShiftRightBy | NumBytesToU16 | NumBytesToU32 | NumShiftRightZfBy | NumIntCast
-            | Eq | NotEq | And | Or | Not | Hash | ExpectTrue => false,
+            | NumLt | NumLte | NumCompare | NumDivUnchecked | NumDivCeilUnchecked
+            | NumRemUnchecked | NumIsMultipleOf | NumAbs | NumNeg | NumSin | NumCos
+            | NumSqrtUnchecked | NumLogUnchecked | NumRound | NumToFloat | NumPow | NumCeiling
+            | NumPowInt | NumFloor | NumIsFinite | NumAtan | NumAcos | NumAsin | NumBitwiseAnd
+            | NumBitwiseXor | NumBitwiseOr | NumShiftLeftBy | NumShiftRightBy | NumBytesToU16
+            | NumBytesToU32 | NumShiftRightZfBy | NumIntCast | Eq | NotEq | And | Or | Not
+            | Hash | ExpectTrue => false,
 
             ListMap | ListMap2 | ListMap3 | ListMapWithIndex | ListKeepIf | ListWalk
             | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith
