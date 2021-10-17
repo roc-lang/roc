@@ -2707,48 +2707,6 @@ fn specialize_naked_symbol<'a>(
     )
 }
 
-macro_rules! match_on_closure_argument {
-    ($env:expr, $procs:expr, $layout_cache:expr, $closure_data_symbol:expr, $closure_data_var:expr, $op:expr, [$($x:expr),* $(,)?], $layout: expr, $assigned:expr, $hole:expr) => {{
-        let closure_data_layout = return_on_layout_error!(
-            $env,
-            $layout_cache.raw_from_var($env.arena, $closure_data_var, $env.subs)
-        );
-
-        let top_level = ProcLayout::from_raw($env.arena, closure_data_layout);
-
-        let arena = $env.arena;
-
-        let arg_layouts = top_level.arguments;
-        let ret_layout = top_level.result;
-
-        match closure_data_layout {
-            RawFunctionLayout::Function(_, lambda_set, _) =>  {
-                lowlevel_match_on_lambda_set(
-                    $env,
-                    lambda_set,
-                    $op,
-                    $closure_data_symbol,
-                    |top_level_function, closure_data, closure_env_layout, specialization_id| self::Call {
-                        call_type: CallType::HigherOrderLowLevel {
-                            op: $op,
-                            closure_env_layout,
-                            specialization_id,
-                            function_owns_closure_data: false,
-                            arg_layouts,
-                            ret_layout,
-                        },
-                        arguments: arena.alloc([$($x,)* top_level_function, closure_data]),
-                    },
-                    $layout,
-                    $assigned,
-                    $hole,
-                )
-            }
-            RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!("match_on_closure_argument received a zero-argument thunk"),
-        }
-    }};
-}
-
 fn try_make_literal<'a>(
     env: &mut Env<'a, '_>,
     can_expr: &roc_can::expr::Expr,
@@ -4041,61 +3999,11 @@ pub fn with_hole<'a>(
             let layout =
                 return_on_layout_error!(env, layout_cache.from_var(env.arena, ret_var, env.subs));
 
-            let closure_data_symbol = arg_symbols[2];
-
-            macro_rules! new_match_on_closure_argument {
-    ($env:expr, $procs:expr, $layout_cache:expr, $closure_data_symbol:expr, $closure_data_var:expr, $op:expr, $ho:ident, [$($x:ident),* $(,)?], $layout: expr, $assigned:expr, $hole:expr) => {{
-        let closure_data_layout = return_on_layout_error!(
-            $env,
-            $layout_cache.raw_from_var($env.arena, $closure_data_var, $env.subs)
-        );
-
-        let top_level = ProcLayout::from_raw($env.arena, closure_data_layout);
-
-        let arena = $env.arena;
-
-        let arg_layouts = top_level.arguments;
-        let ret_layout = top_level.result;
-
-        match closure_data_layout {
-            RawFunctionLayout::Function(_, lambda_set, _) =>  {
-                lowlevel_match_on_lambda_set(
-                    $env,
-                    lambda_set,
-                    $op,
-                    $closure_data_symbol,
-                    |top_level_function, closure_data, closure_env_layout, specialization_id| self::Call {
-                        call_type: CallType::NewHigherOrderLowLevel {
-                            op: $ho { $($x,)* },
-                            closure_env_layout,
-                            specialization_id,
-                            function_owns_closure_data: false,
-                            function_env: closure_data_symbol,
-                            function_name: top_level_function,
-                            arg_layouts,
-                            ret_layout,
-                        },
-                        arguments: arena.alloc([$($x,)* top_level_function, closure_data]),
-                    },
-                    $layout,
-                    $assigned,
-                    $hole,
-                )
-            }
-            RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!("match_on_closure_argument received a zero-argument thunk"),
-        }
-    }};
-}
-
-            use LowLevel::*;
-            match op {
-                ListMap => {
-                    debug_assert_eq!(arg_symbols.len(), 2);
-
-                    let closure_index = 1;
+            macro_rules! match_on_closure_argument {
+                ( $ho:ident, [$($x:ident),* $(,)?]) => {{
+                    let closure_index = op.function_argument_position();
                     let closure_data_symbol = arg_symbols[closure_index];
                     let closure_data_var = args[closure_index].0;
-                    let xs = arg_symbols[0];
 
                     let closure_data_layout = return_on_layout_error!(
                         env,
@@ -4110,18 +4018,15 @@ pub fn with_hole<'a>(
                     let ret_layout = top_level.result;
 
                     match closure_data_layout {
-                        RawFunctionLayout::Function(_, lambda_set, _) => {
+                        RawFunctionLayout::Function(_, lambda_set, _) =>  {
                             lowlevel_match_on_lambda_set(
                                 env,
                                 lambda_set,
                                 op,
                                 closure_data_symbol,
-                                |top_level_function,
-                                 closure_data,
-                                 closure_env_layout,
-                                 specialization_id| self::Call {
+                                |top_level_function, closure_data, closure_env_layout, specialization_id| self::Call {
                                     call_type: CallType::NewHigherOrderLowLevel {
-                                        op: crate::low_level::HigherOrder::ListMap { xs },
+                                        op: crate::low_level::HigherOrder::$ho { $($x,)* },
                                         closure_env_layout,
                                         specialization_id,
                                         function_owns_closure_data: false,
@@ -4130,66 +4035,30 @@ pub fn with_hole<'a>(
                                         arg_layouts,
                                         ret_layout,
                                     },
-                                    arguments: arena.alloc([xs, top_level_function, closure_data]),
+                                    arguments: arena.alloc([$($x,)* top_level_function, closure_data]),
                                 },
                                 layout,
                                 assigned,
                                 hole,
                             )
                         }
-                        RawFunctionLayout::ZeroArgumentThunk(_) => {
-                            unreachable!("match_on_closure_argument received a zero-argument thunk")
-                        }
+                        RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!("match_on_closure_argument received a zero-argument thunk"),
                     }
-                }
+                }};
+            }
 
-                ListMapWithIndex | ListKeepIf | ListKeepOks | ListKeepErrs | ListSortWith => {
-                    debug_assert_eq!(arg_symbols.len(), 2);
-
-                    let closure_index = 1;
-                    let closure_data_symbol = arg_symbols[closure_index];
-                    let closure_data_var = args[closure_index].0;
-
-                    let xs = arg_symbols[0];
-
-                    use crate::low_level::HigherOrder::ListMapWithIndex;
-
-                    new_match_on_closure_argument!(
-                        env,
-                        procs,
-                        layout_cache,
-                        closure_data_symbol,
-                        closure_data_var,
-                        op,
-                        ListMapWithIndex,
-                        [xs],
-                        layout,
-                        assigned,
-                        hole
-                    )
-                }
-                ListWalk | ListWalkUntil | ListWalkBackwards | DictWalk => {
+            macro_rules! walk {
+                ($oh:ident) => {{
                     debug_assert_eq!(arg_symbols.len(), 3);
 
                     const LIST_INDEX: usize = 0;
                     const DEFAULT_INDEX: usize = 1;
                     const CLOSURE_INDEX: usize = 2;
 
-                    let closure_data_symbol = arg_symbols[CLOSURE_INDEX];
-                    let closure_data_var = args[CLOSURE_INDEX].0;
+                    let xs = arg_symbols[LIST_INDEX];
+                    let state = arg_symbols[DEFAULT_INDEX];
 
-                    let stmt = match_on_closure_argument!(
-                        env,
-                        procs,
-                        layout_cache,
-                        closure_data_symbol,
-                        closure_data_var,
-                        op,
-                        [arg_symbols[LIST_INDEX], arg_symbols[DEFAULT_INDEX]],
-                        layout,
-                        assigned,
-                        hole
-                    );
+                    let stmt = match_on_closure_argument!($oh, [xs, state]);
 
                     // because of a hack to implement List.product and List.sum, we need to also
                     // assign to symbols here. Normally the arguments to a lowlevel function are
@@ -4226,46 +4095,62 @@ pub fn with_hole<'a>(
                         arg_symbols[CLOSURE_INDEX],
                         stmt,
                     )
+                }};
+            }
+
+            use LowLevel::*;
+            match op {
+                ListMap => {
+                    debug_assert_eq!(arg_symbols.len(), 2);
+                    let xs = arg_symbols[0];
+                    match_on_closure_argument!(ListMap, [xs])
                 }
+
+                ListMapWithIndex => {
+                    debug_assert_eq!(arg_symbols.len(), 2);
+                    let xs = arg_symbols[0];
+                    match_on_closure_argument!(ListMapWithIndex, [xs])
+                }
+                ListKeepIf => {
+                    debug_assert_eq!(arg_symbols.len(), 2);
+                    let xs = arg_symbols[0];
+                    match_on_closure_argument!(ListKeepIf, [xs])
+                }
+                ListKeepOks => {
+                    debug_assert_eq!(arg_symbols.len(), 2);
+                    let xs = arg_symbols[0];
+                    match_on_closure_argument!(ListKeepOks, [xs])
+                }
+                ListKeepErrs => {
+                    debug_assert_eq!(arg_symbols.len(), 2);
+                    let xs = arg_symbols[0];
+                    match_on_closure_argument!(ListKeepErrs, [xs])
+                }
+                ListSortWith => {
+                    debug_assert_eq!(arg_symbols.len(), 2);
+                    let xs = arg_symbols[0];
+                    match_on_closure_argument!(ListSortWith, [xs])
+                }
+                ListWalk => walk!(ListWalk),
+                ListWalkUntil => walk!(ListWalkUntil),
+                ListWalkBackwards => walk!(ListWalkBackwards),
+                DictWalk => walk!(DictWalk),
                 ListMap2 => {
                     debug_assert_eq!(arg_symbols.len(), 3);
 
-                    let closure_index = 2;
-                    let closure_data_symbol = arg_symbols[closure_index];
-                    let closure_data_var = args[closure_index].0;
+                    let xs = arg_symbols[0];
+                    let ys = arg_symbols[1];
 
-                    match_on_closure_argument!(
-                        env,
-                        procs,
-                        layout_cache,
-                        closure_data_symbol,
-                        closure_data_var,
-                        op,
-                        [arg_symbols[0], arg_symbols[1]],
-                        layout,
-                        assigned,
-                        hole
-                    )
+                    match_on_closure_argument!(ListMap2, [xs, ys])
                 }
                 ListMap3 => {
                     debug_assert_eq!(arg_symbols.len(), 4);
 
-                    let closure_index = 3;
-                    let closure_data_symbol = arg_symbols[closure_index];
-                    let closure_data_var = args[closure_index].0;
+                    let xs = arg_symbols[0];
+                    let ys = arg_symbols[1];
+                    let zs = arg_symbols[2];
 
-                    match_on_closure_argument!(
-                        env,
-                        procs,
-                        layout_cache,
-                        closure_data_symbol,
-                        closure_data_var,
-                        op,
-                        [arg_symbols[0], arg_symbols[1], arg_symbols[2]],
-                        layout,
-                        assigned,
-                        hole
-                    )
+                    match_on_closure_argument!(ListMap3, [xs, ys, zs])
                 }
                 _ => {
                     let call = self::Call {
