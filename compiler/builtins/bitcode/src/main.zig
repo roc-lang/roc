@@ -76,6 +76,7 @@ comptime {
     exportNumFn(num.atan, "atan");
     exportNumFn(num.isFinite, "is_finite");
     exportNumFn(num.powInt, "pow_int");
+    exportNumFn(num.divCeil, "div_ceil");
     exportNumFn(num.acos, "acos");
     exportNumFn(num.asin, "asin");
     exportNumFn(num.bytesToU16C, "bytes_to_u16");
