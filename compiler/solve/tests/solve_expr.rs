@@ -3306,14 +3306,14 @@ mod solve_expr {
     }
 
     #[test]
-    fn divCeil() {
+    fn div_ceil() {
         infer_eq_without_problem(
             indoc!(
                 r#"
                 Num.divCeil
                 "#
             ),
-            "Float * -> Int *",
+            "Int a, Int a -> Result (Int a) [ DivByZero ]*",
         );
     }
 
