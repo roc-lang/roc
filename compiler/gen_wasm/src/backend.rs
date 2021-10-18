@@ -115,7 +115,9 @@ impl<'a> WasmBackend<'a> {
     fn finalize_proc(&mut self, signature_builder: SignatureBuilder) -> FunctionDefinition {
         self.end_block(); // end the block from start_proc, to ensure all paths pop stack memory (if any)
 
-        let mut final_instructions = Vec::with_capacity(self.code_builder.len() + 10);
+        const STACK_FRAME_INSTRUCTIONS_LEN: usize = 10;
+        let mut final_instructions =
+            Vec::with_capacity(self.code_builder.len() + STACK_FRAME_INSTRUCTIONS_LEN);
 
         if self.storage.stack_frame_size > 0 {
             push_stack_frame(
