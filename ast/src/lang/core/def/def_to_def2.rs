@@ -34,11 +34,7 @@ pub fn def_to_def2<'a>(
         SpaceBefore(inner_def, _) => def_to_def2(arena, env, scope, inner_def, region),
         SpaceAfter(inner_def, _) => def_to_def2(arena, env, scope, inner_def, region),
         Body(&loc_pattern, &loc_expr) => {
-            println!("loc_pattern: {:?}", loc_pattern);
-            println!("loc_expr: {:?}", loc_expr);
-            // TODO loc_pattern use identifier
             let expr2 = loc_expr_to_expr2(arena, loc_expr, env, scope, region).0;
-            println!("expr2: {:?}", expr2);
             let expr_id = env.pool.add(expr2);
 
             use roc_parse::ast::Pattern::*;

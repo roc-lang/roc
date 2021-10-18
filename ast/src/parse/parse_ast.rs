@@ -28,17 +28,7 @@ pub fn parse_from_string<'a>(
     let tail_str = &code_str[blank_line_indx..];
 
     let mut scope = Scope::new(env.home, env.pool, env.var_store);
-
-    // TODO fill scope with:
-    let ident_ids = interns.get_module_ident_ids(&env.home)?.clone();
-    for (_, ident_ref) in ident_ids.idents() {
-        scope.introduce(
-            ident_ref.0.as_str().into(),
-            &env.exposed_ident_ids,
-            interns.get_module_ident_ids_mut(&env.home)?,
-            Region::zero()
-        )?;
-    }
+    scope.fill_scope(&env, interns)?;
 
     let region = Region::new(0, 0, 0, 0);
 

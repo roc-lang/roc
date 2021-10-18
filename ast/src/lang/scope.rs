@@ -2,13 +2,16 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+use std::fmt;
+
+use crate::ast_error::ASTResult;
 use crate::mem_pool::pool::Pool;
 use crate::mem_pool::pool_str::PoolStr;
 use crate::mem_pool::pool_vec::PoolVec;
 use crate::mem_pool::shallow_clone::ShallowClone;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Ident, Lowercase};
-use roc_module::symbol::{IdentIds, ModuleId, Symbol};
+use roc_module::symbol::{IdentIds, Interns, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_region::all::{Located, Region};
 use roc_types::{
@@ -18,6 +21,7 @@ use roc_types::{
 };
 
 use super::core::types::{Alias, Type2, TypeId};
+use super::env::Env;
 
 fn solved_type_to_type_id(
     pool: &mut Pool,
@@ -311,6 +315,21 @@ impl Scope {
 
     pub fn contains_alias(&mut self, name: Symbol) -> bool {
         self.aliases.contains_key(&name)
+    }
+
+    pub fn fill_scope(&mut self, env: &Env, interns: &mut Interns) -> ASTResult<()> {
+        let ident_ids = interns.get_module_ident_ids(&env.home)?.clone();
+
+        for (_, ident_ref) in ident_ids.idents() {
+            self.introduce(
+                ident_ref.0.as_str().into(),
+                &env.exposed_ident_ids,
+                interns.get_module_ident_ids_mut(&env.home)?,
+                Region::zero()
+            )?;
+        }
+
+        Ok(())
     }
 }
 

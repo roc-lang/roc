@@ -15,15 +15,7 @@ use crate::{
 };
 
 use itertools::Itertools;
-use roc_ast::{ast_error::{ASTResult}, lang::{core::{
-            ast::ASTNodeId,
-            expr::{
-                expr2::{Expr2, ExprId},
-                record_field::RecordField,
-            },
-            pattern::{get_identifier_string, Pattern2},
-            val_def::ValueDef,
-        }, env::{Env}}};
+use roc_ast::{ast_error::{ASTResult}, lang::{core::{ast::ASTNodeId, expr::{expr2::{Expr2, ExprId}, expr2_to_string, record_field::RecordField}, pattern::{get_identifier_string, Pattern2}, val_def::ValueDef}, env::{Env}}};
 use roc_module::{module_err::ModuleResult, symbol::Interns};
 
 // make Markup Nodes: generate String representation, assign Highlighting Style
@@ -35,9 +27,8 @@ pub fn expr2_to_markup<'a>(
     interns: &Interns,
     indent_level: usize,
 ) -> ASTResult<MarkNodeId> {
+    dbg!("EXPR2: {}", roc_ast::lang::core::expr::expr2_to_string::expr2_to_string(expr2_node_id, env.pool));
     let ast_node_id = ASTNodeId::AExprId(expr2_node_id);
-
-    println!("EXPR2 {:?}", expr2);
 
     let mark_node_id = match expr2 {
         Expr2::SmallInt { text, .. }
@@ -302,6 +293,9 @@ pub fn expr2_to_markup<'a>(
                                 
                                 env.ident_ids.get_name_str_res(ident_id)
                             }
+                            Pattern2::Shadowed{ shadowed_ident} => {
+                                Ok(shadowed_ident.as_str(env.pool))
+                            }
                             other => {
                                 todo!(
                                     "TODO: support the following pattern2 as function arg: {:?}",
@@ -341,6 +335,8 @@ pub fn expr2_to_markup<'a>(
             let args_mn_id = mark_node_pool.add(args_mn);
 
             let body_expr = env.pool.get(*body_id);
+            println!("BODY_EXPR: {}", roc_ast::lang::core::expr::expr2_to_string::expr2_to_string(*body_id, env.pool));
+
             let body_mn_id = expr2_to_markup(
                 env,
                 body_expr,

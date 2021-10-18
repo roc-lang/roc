@@ -215,14 +215,22 @@ pub enum EdError {
     #[snafu(display("StringParseError: {}", msg))]
     StringParseError { msg: String, backtrace: Backtrace },
 
-    #[snafu(display("ASTError: {}", msg))]
-    ASTErrorNoBacktrace { msg: String },
-    #[snafu(display("UIError: {}", msg))]
-    UIErrorNoBacktrace { msg: String },
-    #[snafu(display("MarkError: {}", msg))]
-    MarkErrorNoBacktrace { msg: String },
-    #[snafu(display("ModuleError: {}", msg))]
-    ModuleErrorNoBacktrace { msg: String },
+    WrapASTError {
+        #[snafu(backtrace)]
+        source: ASTError
+    },
+    WrapUIError { 
+        #[snafu(backtrace)]
+        source: UIError
+    },
+    WrapMarkError {
+        #[snafu(backtrace)]
+        source: MarkError,
+    },
+    WrapModuleError {
+        #[snafu(backtrace)]
+        source: ModuleError,
+    },
 }
 
 pub type EdResult<T, E = EdError> = std::result::Result<T, E>;
@@ -286,72 +294,32 @@ use crate::ui::ui_error::UIError;
 
 impl From<UIError> for EdError {
     fn from(ui_err: UIError) -> Self {
-        let msg = format!("{}", ui_err);
-
-        if let Some(backtrace_ref) = ui_err.backtrace() {
-            todo!("Error:{}\nBacktrace:{}", msg, color_backtrace(backtrace_ref)); //see snafu#313 
-            /*Self::UIErrorBacktrace {
-                msg,
-                backtrace: *backtrace_ref
-            }*/
-        } else {
-            Self::UIErrorNoBacktrace {
-                msg
-            }
+        Self::WrapUIError {
+            source: ui_err,
         }
     }
 }
 
 impl From<MarkError> for EdError {
     fn from(mark_err: MarkError) -> Self {
-        let msg = format!("{}", mark_err);
-
-        if let Some(backtrace_ref) = mark_err.backtrace() {
-            todo!("Error:{}\nBacktrace:{}", msg, color_backtrace(backtrace_ref)); //see snafu#313 
-            /*Self::MarkErrorBacktrace {
-                msg,
-                backtrace: *backtrace_ref
-            }*/
-        } else {
-            Self::MarkErrorNoBacktrace {
-                msg
-            }
+        Self::WrapMarkError {
+            source: mark_err,
         }
     }
 }
 
 impl From<ASTError> for EdError {
     fn from(ast_err: ASTError) -> Self {
-        let msg = format!("{}", ast_err);
-
-        if let Some(backtrace_ref) = ast_err.backtrace() {
-            todo!("Error:{}\nBacktrace:{}", msg, color_backtrace(backtrace_ref)); //see snafu#313 
-            /*Self::ASTErrorBacktrace {
-                msg,
-                backtrace: *backtrace_ref
-            }*/
-        } else {
-            Self::ASTErrorNoBacktrace {
-                msg
-            }
+        Self::WrapASTError {
+            source: ast_err,
         }
     }
 }
 
 impl From<ModuleError> for EdError {
-    fn from(ast_err: ModuleError) -> Self {
-        let msg = format!("{}", ast_err);
-
-        if let Some(backtrace_ref) = ast_err.backtrace() {
-            todo!("Error:{}\nBacktrace:{}", msg, color_backtrace(backtrace_ref)); //see snafu#313 
-            /*Self::ModuleErrorBacktrace {
-                msg,
-                backtrace: *backtrace_ref
-            }*/
-        } else {
-            Self::ModuleErrorNoBacktrace {
-                msg
-            }
+    fn from(module_err: ModuleError) -> Self {
+        Self::WrapModuleError {
+            source: module_err,
         }
     }
 }

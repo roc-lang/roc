@@ -1,7 +1,7 @@
 use roc_module::{ident::Ident, module_err::ModuleError};
 use roc_parse::parser::SyntaxError;
 use roc_region::all::{Located, Region};
-use snafu::{Backtrace, ErrorCompat, Snafu};
+use snafu::{Backtrace, Snafu};
 
 use crate::lang::core::ast::ASTNodeId;
 
@@ -38,8 +38,12 @@ pub enum ASTError {
     },
     #[snafu(display("IdentExistsError: {}", msg))]
     IdentExistsError { msg: String },
-    #[snafu(display("ModuleError: {}", msg))]
-    ModuleErrorNoBacktrace { msg: String },
+
+    WrapModuleError {
+        #[snafu(backtrace)]
+        source: ModuleError
+    },
+
     #[snafu(display("SyntaxError: {}", msg))]
     SyntaxErrorNoBacktrace { msg: String },
 }
@@ -48,18 +52,8 @@ pub type ASTResult<T, E = ASTError> = std::result::Result<T, E>;
 
 impl From<ModuleError> for ASTError {
     fn from(module_err: ModuleError) -> Self {
-        let msg = format!("{}", module_err);
-
-        if let Some(backtrace_ref) = module_err.backtrace() {
-            todo!("Error:{}\nBacktrace:{:?}", msg, backtrace_ref); //see snafu#313 
-            /*Self::UIErrorBacktrace {
-                msg,
-                backtrace: *backtrace_ref
-            }*/
-        } else {
-            Self::ModuleErrorNoBacktrace {
-                msg
-            }
+        Self::WrapModuleError {
+            source: module_err,
         }
     }
 }

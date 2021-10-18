@@ -131,8 +131,18 @@ fn expr2_to_string_helper(
         Expr2::Call { .. } => {
             out_string.push_str(&format!("Call({:?})", expr2,));
         }
-        Expr2::Closure { .. } => {
-            out_string.push_str(&format!("Closure({:?})", expr2,));
+        Expr2::Closure { args, .. } => {
+            out_string.push_str("Closure:\n");
+            out_string.push_str(&format!("{}args: [\n", get_spacing(indent_level + 1)));
+
+            for (_, pattern_id) in args.iter(pool) {
+                let arg_pattern2 = pool.get(*pattern_id);
+
+                out_string.push_str(&format!("{}{:?}\n", get_spacing(indent_level + 2), arg_pattern2));
+            }
+        }
+        &Expr2::Var { .. } => {
+            out_string.push_str(&format!("{:?}", expr2,));
         }
         other => todo!("Implement for {:?}", other),
     }

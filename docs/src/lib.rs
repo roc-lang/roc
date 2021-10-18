@@ -127,16 +127,14 @@ pub fn syntax_highlight_expr<'a>(
     arena: &'a Bump,
     buf: &mut BumpString<'a>,
     code_str: &'a str,
-    env_module_id: ModuleId,
-    env_module_ids: &'a ModuleIds,
-    interns: &Interns,
+    loaded_module: &mut LoadedModule,
 ) -> DocsResult<String> {
     let trimmed_code_str = code_str.trim_end().trim();
     let state = State::new(trimmed_code_str.as_bytes());
 
     match roc_parse::expr::test_parse_expr(0, arena, state) {
         Ok(loc_expr) => {
-            expr_to_html(buf, loc_expr.value, env_module_id, env_module_ids, interns)?;
+            expr_to_html(buf, loc_expr.value, loaded_module);
 
             Ok(buf.to_string())
         }
@@ -151,7 +149,7 @@ pub fn syntax_highlight_top_level_defs<'a>(
     code_str: &'a str,
     env_module_id: ModuleId,
     env_module_ids: &'a ModuleIds,
-    interns: &Interns,
+    interns: &mut Interns,
 ) -> DocsResult<String> {
     let trimmed_code_str = code_str.trim_end().trim();
 
@@ -170,7 +168,7 @@ pub fn syntax_highlight_top_level_defs<'a>(
 fn render_module_documentation(
     exposed_values: &[&str],
     module: &ModuleDocumentation,
-    loaded_module: &LoadedModule,
+    loaded_module: &mut LoadedModule,
 ) -> String {
     let mut buf = String::new();
 
@@ -815,7 +813,7 @@ fn markdown_to_html(
     exposed_values: &[&str],
     scope: &Scope,
     markdown: String,
-    loaded_module: &LoadedModule,
+    loaded_module: &mut LoadedModule,
 ) -> String {
     use pulldown_cmark::{BrokenLink, CodeBlockKind, CowStr, Event, LinkType, Tag::*};
 
@@ -979,9 +977,7 @@ fn markdown_to_html(
                     &code_block_arena,
                     &mut code_block_buf,
                     code_str,
-                    loaded_module.module_id,
-                    &loaded_module.interns.module_ids,
-                    &loaded_module.interns
+                    &mut loaded_module
                 )
                 {
                     Ok(highlighted_code_str) => {

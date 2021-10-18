@@ -4,7 +4,7 @@ use roc_ast::{
     lang::{self, core::def::def_to_def2::def_to_def2},
     mem_pool::pool::Pool,
 };
-use roc_code_markup::{markup::convert::from_def2::def2_to_markup, slow_pool::SlowPool};
+use roc_code_markup::{markup::{convert::from_def2::def2_to_markup, nodes::tree_as_string}, slow_pool::SlowPool};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
 use roc_region::all::Region;
 use roc_types::subs::VarStore;
@@ -17,7 +17,7 @@ pub fn defs_to_html<'a>(
     defs: Vec<roc_parse::ast::Def<'a>>,
     env_module_id: ModuleId,
     env_module_ids: &'a ModuleIds,
-    interns: &Interns,
+    interns: &mut Interns,
 ) -> DocsResult<()> {
     let mut env_pool = Pool::with_capacity(1024);
     let env_arena = Bump::new();
@@ -39,9 +39,12 @@ pub fn defs_to_html<'a>(
     );
 
     let mut scope = lang::scope::Scope::new(env.home, env.pool, env.var_store);
+    scope.fill_scope(&env, interns)?;
+
     let region = Region::new(0, 0, 0, 0);
 
     for def in defs.iter() {
+        dbg!("defs.iter def: {}", def);
         write_def_to_bump_str_html(&def_arena, &mut env, &mut scope, region, def, interns, buf)?;
     }
 
@@ -70,6 +73,8 @@ fn write_def_to_bump_str_html<'a, 'b>(
         &mut mark_node_pool,
         interns,
     )?;
+
+    println!("MARKUP_TREE {}", tree_as_string(def2_markup_id, &mark_node_pool));
 
     let def2_markup_node = mark_node_pool.get(def2_markup_id);
 
