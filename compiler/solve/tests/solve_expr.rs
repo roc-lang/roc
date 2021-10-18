@@ -3306,6 +3306,18 @@ mod solve_expr {
     }
 
     #[test]
+    fn div_ceil() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.divCeil
+                "#
+            ),
+            "Int a, Int a -> Result (Int a) [ DivByZero ]*",
+        );
+    }
+
+    #[test]
     fn pow_int() {
         infer_eq_without_problem(
             indoc!(

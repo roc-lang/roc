@@ -71,6 +71,7 @@ pub enum LowLevel {
     NumLte,
     NumCompare,
     NumDivUnchecked,
+    NumDivCeilUnchecked,
     NumRemUnchecked,
     NumIsMultipleOf,
     NumAbs,
@@ -165,6 +166,7 @@ macro_rules! first_order {
             | NumLte
             | NumCompare
             | NumDivUnchecked
+            | NumDivCeilUnchecked
             | NumRemUnchecked
             | NumIsMultipleOf
             | NumAbs
