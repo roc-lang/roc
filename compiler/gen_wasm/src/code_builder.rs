@@ -127,14 +127,13 @@ impl CodeBuilder {
             match next_insertion {
                 Some((&insert_pos, insert_inst)) if insert_pos == pos => {
                     final_code.push(insert_inst.to_owned());
-                    final_code.push(instruction);
                     next_insertion = insertions_iter.next();
                 }
-                _ => {
-                    final_code.push(instruction);
-                }
+                _ => {}
             }
+            final_code.push(instruction);
         }
+        debug_assert!(next_insertion == None);
     }
 
     /// Total number of instructions in the final output
