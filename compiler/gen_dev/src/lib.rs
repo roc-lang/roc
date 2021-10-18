@@ -437,7 +437,7 @@ where
             }
             LowLevel::NumPowInt => self.build_fn_call(
                 sym,
-                bitcode::NUM_POW_INT.to_string(),
+                bitcode::NUM_POW_INT_I64.to_string(),
                 args,
                 arg_layouts,
                 ret_layout,

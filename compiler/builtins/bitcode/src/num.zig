@@ -11,8 +11,20 @@ pub fn isFinite(num: f64) callconv(.C) bool {
     return @call(.{ .modifier = always_inline }, math.isFinite, .{num});
 }
 
-pub fn powInt(base: i64, exp: i64) callconv(.C) i64 {
-    return @call(.{ .modifier = always_inline }, math.pow, .{ i64, base, exp });
+comptime {
+    var types = [_]type{ i32, i64, i16 };
+    inline for (types) |T| {
+        exportFunctions(T);
+    }
+}
+fn exportFunctions(comptime T: type) void {
+    comptime var f = struct {
+        fn func(base: T, exp: T) callconv(.C) T {
+            return std.math.pow(T, base, exp);
+        }
+    }.func;
+    const args = .{ .name = "roc_builtins.num.pow_int_" ++ @typeName(T), .linkage = .Strong };
+    @export(f, args);
 }
 
 pub fn acos(num: f64) callconv(.C) f64 {
