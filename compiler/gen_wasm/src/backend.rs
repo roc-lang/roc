@@ -399,19 +399,35 @@ impl<'a> WasmBackend<'a> {
                 arguments,
             }) => match call_type {
                 CallType::ByName { name: func_sym, .. } => {
+                    // TODO: See if we can make this more efficient
+                    // Recreating the same WasmLayout again, rather than passing it down,
+                    // to match signature of Backend::build_expr
+                    let wasm_layout = WasmLayout::new(layout);
+
+                    let mut wasm_args_tmp: Vec<Symbol>;
+                    let (wasm_args, has_return_val) = match wasm_layout {
+                        WasmLayout::StackMemory { .. } => {
+                            wasm_args_tmp = Vec::with_capacity(arguments.len() + 1); // TODO: bumpalo
+                            wasm_args_tmp.push(*sym);
+                            wasm_args_tmp.extend_from_slice(*arguments);
+                            (wasm_args_tmp.as_slice(), false)
+                        }
+                        _ => (*arguments, true),
+                    };
+
                     self.storage
-                        .load_symbols(&mut self.code_builder, *arguments);
+                        .load_symbols(&mut self.code_builder, wasm_args);
+
                     let function_location = self.proc_symbol_map.get(func_sym).ok_or(format!(
                         "Cannot find function {:?} called from {:?}",
                         func_sym, sym
                     ))?;
 
-                    // TODO: Recreating the same WasmLayout as in the Let, for Backend compatibility
-                    let wasm_layout = WasmLayout::new(layout);
-                    let push = wasm_layout.stack_memory() == 0;
-                    let pops = arguments.len();
-                    self.code_builder
-                        .add_call(function_location.body, pops, push);
+                    self.code_builder.add_call(
+                        function_location.body,
+                        wasm_args.len(),
+                        has_return_val,
+                    );
                     Ok(())
                 }
 
