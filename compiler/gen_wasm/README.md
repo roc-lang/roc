@@ -16,7 +16,7 @@
     - [x] Distinguish which variables go in locals, own stack frame, caller stack frame, etc.
     - [x] Ensure early Return statements don't skip stack cleanup
   - [x] Model the stack machine as a storage mechanism, to make generated code "less bad"
-  - [ ] Vendor-in parity_wasm library so that we can use `bumpalo::Vec`
+  - [x] Switch vectors to `bumpalo::Vec` where possible
   - [ ] Implement relocations
     - Requires knowing the _byte_ offset of each call site. This is awkward as the backend builds a `Vec<Instruction>` rather than a `Vec<u8>`. It may be worth serialising each instruction as it is inserted.
 
