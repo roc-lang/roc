@@ -161,9 +161,7 @@ impl Storage {
                         StackMemoryLocation::FrameOffset(offset as u32)
                     }
 
-                    StoredValueKind::ReturnValue => {
-                        StackMemoryLocation::PointerArg(LocalId(0))
-                    }
+                    StoredValueKind::ReturnValue => StackMemoryLocation::PointerArg(LocalId(0)),
                 };
 
                 StoredValue::StackMemory {
@@ -241,7 +239,7 @@ impl Storage {
                     location: StackMemoryLocation::PointerArg(local_id),
                     ..
                 } => {
-                    code_builder.add_one(GetLocal(local_id.0));
+                    code_builder.push(GetLocal(local_id.0));
                     code_builder.set_top_symbol(*sym);
                 }
 
@@ -249,7 +247,7 @@ impl Storage {
                     location: StackMemoryLocation::FrameOffset(offset),
                     ..
                 } => {
-                    code_builder.add_many(&[
+                    code_builder.extend_from_slice(&[
                         GetLocal(self.stack_frame_pointer.unwrap().0),
                         I32Const(offset as i32),
                         I32Add,
@@ -308,9 +306,9 @@ impl Storage {
                         panic!("Cannot store {:?} with alignment of {:?}", value_type, size);
                     }
                 };
-                code_builder.add_one(GetLocal(to_ptr.0));
+                code_builder.push(GetLocal(to_ptr.0));
                 self.load_symbols(code_builder, &[from_symbol]);
-                code_builder.add_one(store_instruction);
+                code_builder.push(store_instruction);
                 size
             }
         }
@@ -343,7 +341,7 @@ impl Storage {
                 debug_assert!(to_value_type == from_value_type);
                 debug_assert!(to_size == from_size);
                 self.load_symbols(code_builder, &[from_symbol]);
-                code_builder.add_one(SetLocal(to_local_id.0));
+                code_builder.push(SetLocal(to_local_id.0));
                 self.symbol_storage_map.insert(from_symbol, to.clone());
             }
 
@@ -361,7 +359,8 @@ impl Storage {
             ) => {
                 debug_assert!(to_value_type == from_value_type);
                 debug_assert!(to_size == from_size);
-                code_builder.add_many(&[GetLocal(from_local_id.0), SetLocal(to_local_id.0)]);
+                code_builder
+                    .extend_from_slice(&[GetLocal(from_local_id.0), SetLocal(to_local_id.0)]);
             }
 
             (
@@ -420,7 +419,7 @@ impl Storage {
             let local_id = self.get_next_local_id();
             if vm_state != VirtualMachineSymbolState::NotYetPushed {
                 code_builder.load_symbol(symbol, vm_state, local_id);
-                code_builder.add_one(SetLocal(local_id.0));
+                code_builder.push(SetLocal(local_id.0));
             }
 
             self.local_types.push(value_type);

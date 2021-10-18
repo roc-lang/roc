@@ -140,7 +140,7 @@ pub fn copy_memory(code_builder: &mut CodeBuilder, config: CopyMemoryConfig) {
     let alignment_flag = encode_alignment(config.alignment_bytes);
     let mut i = 0;
     while config.size - i >= 8 {
-        code_builder.add_many(&[
+        code_builder.extend_from_slice(&[
             GetLocal(config.to_ptr.0),
             GetLocal(config.from_ptr.0),
             I64Load(alignment_flag, i + config.from_offset),
@@ -149,7 +149,7 @@ pub fn copy_memory(code_builder: &mut CodeBuilder, config: CopyMemoryConfig) {
         i += 8;
     }
     if config.size - i >= 4 {
-        code_builder.add_many(&[
+        code_builder.extend_from_slice(&[
             GetLocal(config.to_ptr.0),
             GetLocal(config.from_ptr.0),
             I32Load(alignment_flag, i + config.from_offset),
@@ -158,7 +158,7 @@ pub fn copy_memory(code_builder: &mut CodeBuilder, config: CopyMemoryConfig) {
         i += 4;
     }
     while config.size - i > 0 {
-        code_builder.add_many(&[
+        code_builder.extend_from_slice(&[
             GetLocal(config.to_ptr.0),
             GetLocal(config.from_ptr.0),
             I32Load8U(alignment_flag, i + config.from_offset),

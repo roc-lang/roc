@@ -177,18 +177,17 @@ impl<'a> WasmBackend<'a> {
     /// start a loop that leaves a value on the stack
     fn start_loop_with_return(&mut self, value_type: ValueType) {
         self.block_depth += 1;
-        self.code_builder
-            .add_one(Loop(BlockType::Value(value_type)));
+        self.code_builder.push(Loop(BlockType::Value(value_type)));
     }
 
     fn start_block(&mut self, block_type: BlockType) {
         self.block_depth += 1;
-        self.code_builder.add_one(Block(block_type));
+        self.code_builder.push(Block(block_type));
     }
 
     fn end_block(&mut self) {
         self.block_depth -= 1;
-        self.code_builder.add_one(End);
+        self.code_builder.push(End);
     }
 
     fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) -> Result<(), String> {
@@ -251,7 +250,7 @@ impl<'a> WasmBackend<'a> {
 
                     _ => {
                         self.storage.load_symbols(&mut self.code_builder, &[*sym]);
-                        self.code_builder.add_one(Br(self.block_depth)); // jump to end of function (for stack frame pop)
+                        self.code_builder.push(Br(self.block_depth)); // jump to end of function (for stack frame pop)
                     }
                 }
 
@@ -289,13 +288,13 @@ impl<'a> WasmBackend<'a> {
                     self.storage
                         .load_symbols(&mut self.code_builder, &[*cond_symbol]);
 
-                    self.code_builder.add_one(I32Const(*value as i32));
+                    self.code_builder.push(I32Const(*value as i32));
 
                     // compare the 2 topmost values
-                    self.code_builder.add_one(I32Eq);
+                    self.code_builder.push(I32Eq);
 
                     // "break" out of `i` surrounding blocks
-                    self.code_builder.add_one(BrIf(i as u32));
+                    self.code_builder.push(BrIf(i as u32));
                 }
 
                 // if we never jumped because a value matched, we're in the default case
@@ -371,7 +370,7 @@ impl<'a> WasmBackend<'a> {
 
                 // jump
                 let levels = self.block_depth - target;
-                self.code_builder.add_one(Br(levels));
+                self.code_builder.push(Br(levels));
 
                 Ok(())
             }
@@ -415,15 +414,14 @@ impl<'a> WasmBackend<'a> {
                         _ => (*arguments, true),
                     };
 
-                    self.storage
-                        .load_symbols(&mut self.code_builder, wasm_args);
+                    self.storage.load_symbols(&mut self.code_builder, wasm_args);
 
                     let function_location = self.proc_symbol_map.get(func_sym).ok_or(format!(
                         "Cannot find function {:?} called from {:?}",
                         func_sym, sym
                     ))?;
 
-                    self.code_builder.add_call(
+                    self.code_builder.push_call(
                         function_location.body,
                         wasm_args.len(),
                         has_return_val,
@@ -471,7 +469,7 @@ impl<'a> WasmBackend<'a> {
                 return Err(format!("loading literal, {:?}, is not yet implemented", x));
             }
         };
-        self.code_builder.add_one(instruction);
+        self.code_builder.push(instruction);
         Ok(())
     }
 
@@ -569,7 +567,7 @@ impl<'a> WasmBackend<'a> {
                 return Err(format!("unsupported low-level op {:?}", lowlevel));
             }
         };
-        self.code_builder.add_many(instructions);
+        self.code_builder.extend_from_slice(instructions);
         Ok(())
     }
 }

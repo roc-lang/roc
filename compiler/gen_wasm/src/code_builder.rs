@@ -1,5 +1,6 @@
 use core::panic;
 use std::collections::BTreeMap;
+use std::fmt::Debug;
 
 use parity_wasm::elements::{Instruction, Instruction::*};
 use roc_module::symbol::Symbol;
@@ -58,7 +59,7 @@ impl CodeBuilder {
     }
 
     /// Add an instruction
-    pub fn add_one(&mut self, inst: Instruction) {
+    pub fn push(&mut self, inst: Instruction) {
         let (pops, push) = get_pops_and_pushes(&inst);
         let new_len = self.vm_stack.len() - pops as usize;
         self.vm_stack.truncate(new_len);
@@ -72,7 +73,7 @@ impl CodeBuilder {
     }
 
     /// Add many instructions
-    pub fn add_many(&mut self, instructions: &[Instruction]) {
+    pub fn extend_from_slice(&mut self, instructions: &[Instruction]) {
         let old_len = self.vm_stack.len();
         let mut len = old_len;
         let mut min_len = len;
@@ -97,7 +98,7 @@ impl CodeBuilder {
 
     /// Special-case method to add a Call instruction
     /// Specify the number of arguments the function pops from the VM stack, and whether it pushes a return value
-    pub fn add_call(&mut self, function_index: u32, pops: usize, push: bool) {
+    pub fn push_call(&mut self, function_index: u32, pops: usize, push: bool) {
         let stack_depth = self.vm_stack.len();
         if pops > stack_depth {
             let mut final_code = Vec::with_capacity(self.code.len() + self.insertions.len());
