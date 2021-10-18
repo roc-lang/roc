@@ -38,7 +38,7 @@ pub struct CodeBuilder {
 
     /// Our simulation model of the Wasm stack machine
     /// Keeps track of where Symbol values are in the VM stack
-    vm_stack: Vec<Option<Symbol>>,
+    vm_stack: Vec<Symbol>,
 }
 
 #[allow(clippy::new_without_default)]
@@ -63,7 +63,7 @@ impl CodeBuilder {
         let new_len = self.vm_stack.len() - pops as usize;
         self.vm_stack.truncate(new_len);
         if push {
-            self.vm_stack.push(None);
+            self.vm_stack.push(Symbol::WASM_ANONYMOUS_STACK_VALUE);
         }
         if DEBUG_LOG {
             println!("{:?} {:?}", inst, self.vm_stack);
@@ -87,7 +87,8 @@ impl CodeBuilder {
             }
         }
         self.vm_stack.truncate(min_len);
-        self.vm_stack.resize(len, None);
+        self.vm_stack
+            .resize(len, Symbol::WASM_ANONYMOUS_STACK_VALUE);
         if DEBUG_LOG {
             println!("{:?} {:?}", instructions, self.vm_stack);
         }
@@ -108,7 +109,7 @@ impl CodeBuilder {
         }
         self.vm_stack.truncate(stack_depth - pops);
         if push {
-            self.vm_stack.push(None);
+            self.vm_stack.push(Symbol::WASM_ANONYMOUS_STACK_VALUE);
         }
         let inst = Call(function_index);
         if DEBUG_LOG {
@@ -154,7 +155,7 @@ impl CodeBuilder {
             );
         }
 
-        self.vm_stack[len - 1] = Some(sym);
+        self.vm_stack[len - 1] = sym;
 
         VirtualMachineSymbolState::Pushed { pushed_at }
     }
@@ -169,11 +170,8 @@ impl CodeBuilder {
         let offset = stack_depth - n_symbols;
 
         for (i, sym) in symbols.iter().enumerate() {
-            match self.vm_stack[offset + i] {
-                Some(stack_symbol) if stack_symbol == *sym => {}
-                _ => {
-                    return false;
-                }
+            if self.vm_stack[offset + i] != *sym {
+                return false;
             }
         }
         true
@@ -199,44 +197,39 @@ impl CodeBuilder {
 
             Pushed { pushed_at } => {
                 let &top = self.vm_stack.last().unwrap();
-                match top {
-                    Some(top_symbol) if top_symbol == symbol => {
-                        // We're lucky, the symbol is already on top of the VM stack
-                        // No code to generate! (This reduces code size by up to 25% in tests.)
-                        // Just let the caller know what happened
-                        Some(Popped { pushed_at })
-                    }
-                    _ => {
-                        // Symbol is not on top of the stack. Find it.
-                        if let Some(found_index) =
-                            self.vm_stack.iter().rposition(|&s| s == Some(symbol))
-                        {
-                            // Insert a SetLocal where the value was created (this removes it from the VM stack)
-                            self.insertions.insert(pushed_at, SetLocal(next_local_id.0));
-                            self.vm_stack.remove(found_index);
+                if top == symbol {
+                    // We're lucky, the symbol is already on top of the VM stack
+                    // No code to generate! (This reduces code size by up to 25% in tests.)
+                    // Just let the caller know what happened
+                    Some(Popped { pushed_at })
+                } else {
+                    // Symbol is not on top of the stack. Find it.
+                    if let Some(found_index) = self.vm_stack.iter().rposition(|&s| s == symbol) {
+                        // Insert a SetLocal where the value was created (this removes it from the VM stack)
+                        self.insertions.insert(pushed_at, SetLocal(next_local_id.0));
+                        self.vm_stack.remove(found_index);
 
-                            // Insert a GetLocal at the current position
-                            let inst = GetLocal(next_local_id.0);
-                            if DEBUG_LOG {
-                                println!(
-                                    "{:?} {:?} (& insert {:?} at {:?})",
-                                    inst,
-                                    self.vm_stack,
-                                    SetLocal(next_local_id.0),
-                                    pushed_at
-                                );
-                            }
-                            self.code.push(inst);
-                            self.vm_stack.push(Some(symbol));
-
-                            // This Symbol is no longer stored in the VM stack, but in a local
-                            None
-                        } else {
-                            panic!(
-                                "{:?} has state {:?} but not found in VM stack",
-                                symbol, vm_state
+                        // Insert a GetLocal at the current position
+                        let inst = GetLocal(next_local_id.0);
+                        if DEBUG_LOG {
+                            println!(
+                                "{:?} {:?} (& insert {:?} at {:?})",
+                                inst,
+                                self.vm_stack,
+                                SetLocal(next_local_id.0),
+                                pushed_at
                             );
                         }
+                        self.code.push(inst);
+                        self.vm_stack.push(symbol);
+
+                        // This Symbol is no longer stored in the VM stack, but in a local
+                        None
+                    } else {
+                        panic!(
+                            "{:?} has state {:?} but not found in VM stack",
+                            symbol, vm_state
+                        );
                     }
                 }
             }
@@ -259,7 +252,7 @@ impl CodeBuilder {
                     );
                 }
                 self.code.push(inst);
-                self.vm_stack.push(Some(symbol));
+                self.vm_stack.push(symbol);
 
                 // This symbol has been promoted to a Local
                 // Tell the caller it no longer has a VirtualMachineSymbolState
