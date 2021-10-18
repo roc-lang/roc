@@ -133,7 +133,10 @@ pub struct CopyMemoryConfig {
 }
 
 pub fn copy_memory(code_builder: &mut CodeBuilder, config: CopyMemoryConfig) {
-    debug_assert!(config.from_ptr != config.to_ptr || config.from_offset != config.to_offset);
+    if config.from_ptr == config.to_ptr && config.from_offset == config.to_offset {
+        return;
+    }
+
     let alignment_flag = encode_alignment(config.alignment_bytes);
     let mut i = 0;
     while config.size - i >= 8 {

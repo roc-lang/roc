@@ -12,7 +12,7 @@ use roc_mono::layout::{Builtin, Layout};
 
 use crate::code_builder::CodeBuilder;
 use crate::layout::WasmLayout;
-use crate::storage::{LocalKind, StackMemoryLocation, Storage, StoredValue};
+use crate::storage::{Storage, StoredValue, StoredValueKind};
 use crate::{copy_memory, pop_stack_frame, push_stack_frame, CopyMemoryConfig, LocalId, PTR_TYPE};
 
 // Don't allocate any constant data at address zero or near it. Would be valid, but bug-prone.
@@ -105,8 +105,11 @@ impl<'a> WasmBackend<'a> {
         };
 
         for (layout, symbol) in proc.args {
-            self.storage
-                .allocate(&WasmLayout::new(layout), *symbol, LocalKind::Parameter);
+            self.storage.allocate(
+                &WasmLayout::new(layout),
+                *symbol,
+                StoredValueKind::Parameter,
+            );
         }
 
         signature_builder.with_params(self.storage.arg_types.clone())
@@ -190,50 +193,20 @@ impl<'a> WasmBackend<'a> {
 
     fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) -> Result<(), String> {
         match stmt {
-            // Simple optimisation: if we are just returning the expression, we don't need a local
-            Stmt::Let(let_sym, expr, layout, Stmt::Ret(ret_sym)) if *let_sym == *ret_sym => {
-                let wasm_layout = WasmLayout::new(layout);
-
-                if let WasmLayout::StackMemory {
-                    size,
-                    alignment_bytes,
-                } = wasm_layout
-                {
-                    // Map this symbol to the first argument (pointer into caller's stack)
-                    // Saves us from having to copy it later
-                    let storage = StoredValue::StackMemory {
-                        location: StackMemoryLocation::PointerArg(LocalId(0)),
-                        size,
-                        alignment_bytes,
-                    };
-                    self.storage.symbol_storage_map.insert(*let_sym, storage);
-                }
-
-                self.build_expr(let_sym, expr, layout)?;
-
-                if let WasmLayout::Primitive(value_type, size) = wasm_layout {
-                    let vm_state = self.code_builder.set_top_symbol(*let_sym);
-                    self.storage.symbol_storage_map.insert(
-                        *let_sym,
-                        StoredValue::VirtualMachineStack {
-                            vm_state,
-                            value_type,
-                            size,
-                        },
-                    );
-                }
-
-                self.code_builder.add_one(Br(self.block_depth)); // jump to end of function (stack frame pop)
-                Ok(())
-            }
-
             Stmt::Let(sym, expr, layout, following) => {
                 let wasm_layout = WasmLayout::new(layout);
 
-                self.storage
-                    .allocate(&wasm_layout, *sym, LocalKind::Variable);
+                let kind = match following {
+                    Stmt::Ret(ret_sym) if *sym == *ret_sym => StoredValueKind::ReturnValue,
+                    _ => StoredValueKind::Variable,
+                };
+
+                self.storage.allocate(&wasm_layout, *sym, kind);
+
                 self.build_expr(sym, expr, layout)?;
 
+                // For primitives, we record that this symbol is at the top of the VM stack
+                // (For other values, we wrote to memory and there's nothing on the VM stack)
                 if let WasmLayout::Primitive(value_type, size) = wasm_layout {
                     let vm_state = self.code_builder.set_top_symbol(*sym);
                     self.storage.symbol_storage_map.insert(
@@ -349,9 +322,11 @@ impl<'a> WasmBackend<'a> {
                 let mut jp_param_storages = std::vec::Vec::with_capacity(parameters.len());
                 for parameter in parameters.iter() {
                     let wasm_layout = WasmLayout::new(&parameter.layout);
-                    let mut param_storage =
-                        self.storage
-                            .allocate(&wasm_layout, parameter.symbol, LocalKind::Variable);
+                    let mut param_storage = self.storage.allocate(
+                        &wasm_layout,
+                        parameter.symbol,
+                        StoredValueKind::Variable,
+                    );
                     param_storage = self.storage.ensure_value_has_local(
                         &mut self.code_builder,
                         parameter.symbol,

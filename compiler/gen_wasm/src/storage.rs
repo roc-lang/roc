@@ -10,9 +10,10 @@ use crate::{
     ALIGN_8, PTR_SIZE, PTR_TYPE,
 };
 
-pub enum LocalKind {
+pub enum StoredValueKind {
     Parameter,
     Variable,
+    ReturnValue,
 }
 
 #[derive(Debug, Clone)]
@@ -103,13 +104,13 @@ impl Storage {
         &mut self,
         wasm_layout: &WasmLayout,
         symbol: Symbol,
-        kind: LocalKind,
+        kind: StoredValueKind,
     ) -> StoredValue {
         let next_local_id = self.get_next_local_id();
 
         let storage = match wasm_layout {
             WasmLayout::Primitive(value_type, size) => match kind {
-                LocalKind::Parameter => {
+                StoredValueKind::Parameter => {
                     self.arg_types.push(*value_type);
                     StoredValue::Local {
                         local_id: next_local_id,
@@ -117,7 +118,7 @@ impl Storage {
                         size: *size,
                     }
                 }
-                LocalKind::Variable => StoredValue::VirtualMachineStack {
+                _ => StoredValue::VirtualMachineStack {
                     vm_state: VirtualMachineSymbolState::NotYetPushed,
                     value_type: *value_type,
                     size: *size,
@@ -126,8 +127,8 @@ impl Storage {
 
             WasmLayout::HeapMemory => {
                 match kind {
-                    LocalKind::Parameter => self.arg_types.push(PTR_TYPE),
-                    LocalKind::Variable => self.local_types.push(PTR_TYPE),
+                    StoredValueKind::Parameter => self.arg_types.push(PTR_TYPE),
+                    _ => self.local_types.push(PTR_TYPE),
                 }
                 StoredValue::Local {
                     local_id: next_local_id,
@@ -141,12 +142,12 @@ impl Storage {
                 alignment_bytes,
             } => {
                 let location = match kind {
-                    LocalKind::Parameter => {
+                    StoredValueKind::Parameter => {
                         self.arg_types.push(PTR_TYPE);
                         StackMemoryLocation::PointerArg(next_local_id)
                     }
 
-                    LocalKind::Variable => {
+                    StoredValueKind::Variable => {
                         if self.stack_frame_pointer.is_none() {
                             self.stack_frame_pointer = Some(next_local_id);
                             self.local_types.push(PTR_TYPE);
@@ -158,6 +159,10 @@ impl Storage {
                         self.stack_frame_size = offset + (*size as i32);
 
                         StackMemoryLocation::FrameOffset(offset as u32)
+                    }
+
+                    StoredValueKind::ReturnValue => {
+                        StackMemoryLocation::PointerArg(LocalId(0))
                     }
                 };
 
