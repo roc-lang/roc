@@ -2880,7 +2880,7 @@ fn num_div_ceil(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     vec![
                         // Num.#divUnchecked numerator denominator
                         RunLowLevel {
-                            op: LowLevel::NumDivCeil,
+                            op: LowLevel::NumDivCeilUnchecked,
                             args: vec![
                                 (num_var, Var(Symbol::ARG_1)),
                                 (num_var, Var(Symbol::ARG_2)),
