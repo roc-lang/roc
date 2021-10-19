@@ -4,10 +4,7 @@ use roc_ast::{
     lang::{self, core::def::def_to_def2::def_to_def2},
     mem_pool::pool::Pool,
 };
-use roc_code_markup::{
-    markup::{convert::from_def2::def2_to_markup},
-    slow_pool::SlowPool,
-};
+use roc_code_markup::{markup::convert::from_def2::def2_to_markup, slow_pool::SlowPool};
 use roc_module::symbol::{IdentIds, Interns, ModuleId};
 use roc_region::all::Region;
 use roc_types::subs::VarStore;
