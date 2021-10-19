@@ -63,6 +63,16 @@ pub unsafe fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn roc_memcpy(dst: *mut c_void, src: *mut c_void, n: usize) -> *mut c_void {
+    libc::memcpy(dst, src, n)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut c_void {
+    libc::memset(dst, c, n)
+}
+
+#[no_mangle]
 pub fn rust_main() -> i32 {
     let arg = env::args().skip(1).next().unwrap();
     let arg = RocStr::from_slice(arg.as_bytes());
