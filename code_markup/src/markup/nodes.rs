@@ -422,6 +422,7 @@ pub fn get_root_mark_node_id(mark_node_id: MarkNodeId, mark_node_pool: &SlowPool
     curr_mark_node_id
 }
 
+// put space mark nodes between each node in mark_nodes
 pub fn join_mark_nodes_spaces(
     mark_nodes_ids: Vec<MarkNodeId>,
     with_prepend: bool,
@@ -456,6 +457,7 @@ pub fn join_mark_nodes_spaces(
     }
 }
 
+// put comma mark nodes between each node in mark_nodes
 pub fn join_mark_nodes_commas(
     mark_nodes: Vec<MarkupNode>,
     ast_node_id: ASTNodeId,

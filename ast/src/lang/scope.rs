@@ -328,7 +328,7 @@ impl Scope {
 
         for (_, ident_ref) in ident_ids.idents() {
             self.introduce(
-                ident_ref.0.as_str().into(),
+                ident_ref.as_inline_str().as_str().into(),
                 &env.exposed_ident_ids,
                 get_module_ident_ids_mut(all_ident_ids, &env.home)?,
                 Region::zero(),
