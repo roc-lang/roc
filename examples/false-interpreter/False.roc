@@ -24,18 +24,16 @@ InterpreterErrors : [ BadUtf8, DivByZero, EmptyStack, InvalidBooleanValue, Inval
 main : Str -> Task {} []
 main = \filename ->
     interpretFile filename
-        |> Task.await (\_ -> Stdout.line "Completed all tasks successfully")
         |> Task.onFail (\StringErr e -> Stdout.line "Ran into problem:\n\(e)\n")
     
 
 interpretFile : Str -> Task {} [ StringErr Str ]
 interpretFile = \filename ->
-    {} <- Task.await (Stdout.line "\nInterpreting file: \(filename)\n")
     ctx <- Context.with filename
     result <- Task.attempt (interpretCtx ctx)
     when result is
         Ok _ ->
-            Stdout.line "\n\nDone\n"
+            Task.succeed {}
         Err BadUtf8 ->
             Task.fail (StringErr "Failed to convert string from Utf8 bytes")
         Err DivByZero ->
