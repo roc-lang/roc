@@ -362,32 +362,57 @@ mod test_fmt {
         );
     }
 
-    // #[test]
-    // fn defs_with_defs() {
-    //     expr_formats_to(
-    //         indoc!(
-    //             r#"
-    //             x =
-    //                 y = 4
-    //                 z = 8
-    //                 w
+    #[test]
+    fn excess_parens() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                x = (5)
+    
+    
+                y = ((10))
+    
+                42
+                "#
+            ),
+            indoc!(
+                r#"
+                x = 5
+    
+                y = 10
+    
+                42
+                "#
+            ),
+        );
+    }
 
-    //             x
-    //             "#
-    //         ),
-    //         indoc!(
-    //             r#"
-    //             x =
-    //                 y = 4
-    //                 z = 8
+    #[test]
+    fn defs_with_defs() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                x =
+                    y = 4
+                    z = 8
+                    w
 
-    //                 w
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                x =
+                    y = 4
+                    z = 8
 
-    //             x
-    //             "#
-    //         ),
-    //     );
-    // }
+                    w
+
+                x
+                "#
+            ),
+        );
+    }
 
     #[test]
     fn comment_between_two_defs() {
@@ -548,15 +573,16 @@ mod test_fmt {
         ));
     }
 
-    // #[test]
-    // fn record_field_destructuring() {
-    //     expr_formats_same(indoc!(
-    //         r#"
-    //             when foo is
-    //                 { x: 5 } -> 42
-    //         "#
-    //     ));
-    // }
+    #[test]
+    fn record_field_destructuring() {
+        expr_formats_same(indoc!(
+            r#"
+                when foo is
+                    { x: 5 } ->
+                        42
+            "#
+        ));
+    }
 
     #[test]
     fn record_updating() {
@@ -917,24 +943,43 @@ mod test_fmt {
             "#
         ));
 
-        // expr_formats_to(
-        //     indoc!(
-        //         r#"
-        //             identity = \a
-        //                 -> a
+        expr_formats_to(
+            indoc!(
+                r#"
+                    identity = \a
+                        -> a
 
-        //             identity 41
-        //         "#
-        //     ),
-        //     indoc!(
-        //         r#"
-        //             identity = \a ->
-        //                 a
+                    identity 41
+                "#
+            ),
+            indoc!(
+                r#"
+                    identity = \a -> a
 
-        //             identity 41
-        //         "#
-        //     ),
-        // );
+                    identity 41
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    identity = \a
+                        -> 
+                            a + b
+
+                    identity 4010
+                "#
+            ),
+            indoc!(
+                r#"
+                    identity = \a ->
+                        a + b
+
+                    identity 4010
+                "#
+            ),
+        );
 
         expr_formats_same(indoc!(
             r#"
@@ -944,19 +989,19 @@ mod test_fmt {
             "#
         ));
 
-        //        expr_formats_same(indoc!(
-        //            r#"
-        //            identity =
-        //                \{
-        //                    x,
-        //                    y
-        //                 }
-        //                -> a
+        // expr_formats_same(indoc!(
+        //     r#"
+        //    identity =
+        //        \{
+        //            x,
+        //            y
+        //         }
+        //        -> a
         //
-        //            identity 43
-        //            "#
-        //        ));
-        //
+        //    identity 43
+        //    "#
+        // ));
+
         expr_formats_same(indoc!(
             r#"
             identity = \a,
@@ -1212,17 +1257,17 @@ mod test_fmt {
     }
     #[test]
     fn multi_line_list_def() {
-        // expr_formats_same(indoc!(
-        //     r#"
-        //         l =
-        //             [
-        //                 1,
-        //                 2
-        //             ]
+        expr_formats_same(indoc!(
+            r#"
+                l =
+                    [
+                        1,
+                        2,
+                    ]
 
-        //         l
-        //     "#
-        // ));
+                l
+            "#
+        ));
 
         expr_formats_to(
             indoc!(
@@ -1248,32 +1293,32 @@ mod test_fmt {
             ),
         );
 
-        // expr_formats_to(
-        //     indoc!(
-        //         r#"
-        //             results =
-        //                 # Let's count past 6
-        //                 [
-        //                 Ok 6,
-        //                 Err CountError
-        //                 ]
+        expr_formats_to(
+            indoc!(
+                r#"
+                    results =
+                        # Let's count past 6
+                        [
+                        Ok 6,
+                        Err CountError
+                        ]
 
-        //             allOks results
-        //         "#
-        //     ),
-        //     indoc!(
-        //         r#"
-        //             results =
-        //                 # Let's count past 6
-        //                 [
-        //                     Ok 6,
-        //                     Err CountError
-        //                 ]
+                    allOks results
+                "#
+            ),
+            indoc!(
+                r#"
+                    results =
+                        # Let's count past 6
+                        [
+                            Ok 6,
+                            Err CountError,
+                        ]
 
-        //             allOks results
-        //         "#
-        //     ),
-        // );
+                    allOks results
+                "#
+            ),
+        );
     }
 
     // RECORD LITERALS
@@ -1330,18 +1375,18 @@ mod test_fmt {
 
     #[test]
     fn multi_line_record_def() {
-        // expr_formats_same(indoc!(
-        //     r#"
-        //         pos =
-        //             {
-        //                 x: 4,
-        //                 y: 11,
-        //                 z: 16
-        //             }
+        expr_formats_same(indoc!(
+            r#"
+                pos =
+                    {
+                        x: 4,
+                        y: 11,
+                        z: 16,
+                    }
 
-        //         pos
-        //     "#
-        // ));
+                pos
+            "#
+        ));
 
         expr_formats_to(
             indoc!(
@@ -2204,7 +2249,7 @@ mod test_fmt {
     }
 
     #[test]
-    fn precedence_conflict_exponents() {
+    fn binop_parens() {
         expr_formats_same(indoc!(
             r#"
             if 4 == (6 ^ 6 ^ 7 ^ 8) then
@@ -2213,6 +2258,39 @@ mod test_fmt {
                 "Naturally"
             "#
         ));
+
+        expr_formats_same(indoc!(
+            r#"
+            if 5 == 1 ^ 1 ^ 1 ^ 1 then
+                "Not buying it"
+            else
+                "True"
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+            if (1 == 1)
+                && (2 == 1) && (3 == 2) then
+                "true"
+            else
+                "false"
+            "#
+            ),
+            indoc!(
+                r#"
+            if
+                (1 == 1)
+                    && (2 == 1)
+                    && (3 == 2)
+            then
+                "true"
+            else
+                "false"
+            "#
+            ),
+        );
     }
 
     #[test]

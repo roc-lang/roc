@@ -18,7 +18,7 @@ use roc_region::all::Located;
 ///     Just (Just a)
 ///     List (List a)
 ///     reverse (reverse l)
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Parens {
     NotNeeded,
     InFunctionType,

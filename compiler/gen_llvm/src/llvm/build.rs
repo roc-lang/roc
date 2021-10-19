@@ -955,6 +955,8 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
             op,
             function_owns_closure_data,
             specialization_id,
+            function_name,
+            function_env,
             arg_layouts,
             ret_layout,
             ..
@@ -973,7 +975,8 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
                 arg_layouts,
                 ret_layout,
                 *function_owns_closure_data,
-                arguments,
+                *function_name,
+                function_env,
             )
         }
 
@@ -4462,41 +4465,39 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
     return_layout: &Layout<'a>,
-    op: LowLevel,
+    op: roc_mono::low_level::HigherOrder,
     func_spec: FuncSpec,
     argument_layouts: &[Layout<'a>],
     result_layout: &Layout<'a>,
     function_owns_closure_data: bool,
-    args: &[Symbol],
+    function_name: Symbol,
+    function_env: &Symbol,
 ) -> BasicValueEnum<'ctx> {
-    use LowLevel::*;
-
-    debug_assert!(op.is_higher_order());
+    use roc_mono::low_level::HigherOrder::*;
 
     // macros because functions cause lifetime issues related to the `env` or `layout_ids`
-    macro_rules! passed_function_at_index {
-        ($index:expr) => {{
-            let function_symbol = args[$index];
-
-            function_value_by_func_spec(
+    macro_rules! function_details {
+        () => {{
+            let function = function_value_by_func_spec(
                 env,
                 func_spec,
-                function_symbol,
+                function_name,
                 argument_layouts,
                 return_layout,
-            )
+            );
+
+            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, function_env);
+
+            (function, closure, closure_layout)
         }};
     }
 
     macro_rules! list_walk {
-        ($variant:expr) => {{
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+        ($variant:expr, $xs:expr, $state:expr) => {{
+            let (list, list_layout) = load_symbol_and_layout(scope, &$xs);
+            let (default, default_layout) = load_symbol_and_layout(scope, &$state);
 
-            let (default, default_layout) = load_symbol_and_layout(scope, &args[1]);
-
-            let function = passed_function_at_index!(2);
-
-            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[3]);
+            let (function, closure, closure_layout) = function_details!();
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => default,
@@ -4530,15 +4531,11 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
         }};
     }
     match op {
-        ListMap => {
+        ListMap { xs } => {
             // List.map : List before, (before -> after) -> List after
-            debug_assert_eq!(args.len(), 3);
+            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            let function = passed_function_at_index!(1);
-
-            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[2]);
+            let (function, closure, closure_layout) = function_details!();
 
             match (list_layout, return_layout) {
                 (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
@@ -4563,14 +4560,11 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!("invalid list layout"),
             }
         }
-        ListMap2 => {
-            debug_assert_eq!(args.len(), 4);
+        ListMap2 { xs, ys } => {
+            let (list1, list1_layout) = load_symbol_and_layout(scope, &xs);
+            let (list2, list2_layout) = load_symbol_and_layout(scope, &ys);
 
-            let (list1, list1_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (list2, list2_layout) = load_symbol_and_layout(scope, &args[1]);
-
-            let function = passed_function_at_index!(2);
-            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[3]);
+            let (function, closure, closure_layout) = function_details!();
 
             match (list1_layout, list2_layout, return_layout) {
                 (
@@ -4606,15 +4600,12 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!("invalid list layout"),
             }
         }
-        ListMap3 => {
-            debug_assert_eq!(args.len(), 5);
+        ListMap3 { xs, ys, zs } => {
+            let (list1, list1_layout) = load_symbol_and_layout(scope, &xs);
+            let (list2, list2_layout) = load_symbol_and_layout(scope, &ys);
+            let (list3, list3_layout) = load_symbol_and_layout(scope, &zs);
 
-            let (list1, list1_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (list2, list2_layout) = load_symbol_and_layout(scope, &args[1]);
-            let (list3, list3_layout) = load_symbol_and_layout(scope, &args[2]);
-
-            let function = passed_function_at_index!(3);
-            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[4]);
+            let (function, closure, closure_layout) = function_details!();
 
             match (list1_layout, list2_layout, list3_layout, return_layout) {
                 (
@@ -4655,15 +4646,11 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!("invalid list layout"),
             }
         }
-        ListMapWithIndex => {
+        ListMapWithIndex { xs } => {
             // List.mapWithIndex : List before, (Nat, before -> after) -> List after
-            debug_assert_eq!(args.len(), 3);
+            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            let function = passed_function_at_index!(1);
-
-            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[2]);
+            let (function, closure, closure_layout) = function_details!();
 
             match (list_layout, return_layout) {
                 (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
@@ -4688,15 +4675,11 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!("invalid list layout"),
             }
         }
-        ListKeepIf => {
+        ListKeepIf { xs } => {
             // List.keepIf : List elem, (elem -> Bool) -> List elem
-            debug_assert_eq!(args.len(), 3);
+            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            let function = passed_function_at_index!(1);
-
-            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[2]);
+            let (function, closure, closure_layout) = function_details!();
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
@@ -4718,15 +4701,11 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!("invalid list layout"),
             }
         }
-        ListKeepOks => {
+        ListKeepOks { xs } => {
             // List.keepOks : List before, (before -> Result after *) -> List after
-            debug_assert_eq!(args.len(), 3);
+            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            let function = passed_function_at_index!(1);
-
-            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[2]);
+            let (function, closure, closure_layout) = function_details!();
 
             match (list_layout, return_layout) {
                 (_, Layout::Builtin(Builtin::EmptyList))
@@ -4762,15 +4741,11 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 }
             }
         }
-        ListKeepErrs => {
+        ListKeepErrs { xs } => {
             // List.keepErrs : List before, (before -> Result * after) -> List after
-            debug_assert_eq!(args.len(), 3);
+            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            let function = passed_function_at_index!(1);
-
-            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[2]);
+            let (function, closure, closure_layout) = function_details!();
 
             match (list_layout, return_layout) {
                 (_, Layout::Builtin(Builtin::EmptyList))
@@ -4806,24 +4781,20 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 }
             }
         }
-        ListWalk => {
-            list_walk!(crate::llvm::build_list::ListWalk::Walk)
+        ListWalk { xs, state } => {
+            list_walk!(crate::llvm::build_list::ListWalk::Walk, xs, state)
         }
-        ListWalkUntil => {
-            list_walk!(crate::llvm::build_list::ListWalk::WalkUntil)
+        ListWalkUntil { xs, state } => {
+            list_walk!(crate::llvm::build_list::ListWalk::WalkUntil, xs, state)
         }
-        ListWalkBackwards => {
-            list_walk!(crate::llvm::build_list::ListWalk::WalkBackwards)
+        ListWalkBackwards { xs, state } => {
+            list_walk!(crate::llvm::build_list::ListWalk::WalkBackwards, xs, state)
         }
-        ListSortWith => {
+        ListSortWith { xs } => {
             // List.sortWith : List a, (a, a -> Ordering) -> List a
-            debug_assert_eq!(args.len(), 3);
+            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            let function = passed_function_at_index!(1);
-
-            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[2]);
+            let (function, closure, closure_layout) = function_details!();
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
@@ -4858,13 +4829,11 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!("invalid list layout"),
             }
         }
-        DictWalk => {
-            debug_assert_eq!(args.len(), 4);
+        DictWalk { xs, state } => {
+            let (dict, dict_layout) = load_symbol_and_layout(scope, &xs);
+            let (default, default_layout) = load_symbol_and_layout(scope, &state);
 
-            let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (default, default_layout) = load_symbol_and_layout(scope, &args[1]);
-            let function = passed_function_at_index!(2);
-            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[3]);
+            let (function, closure, closure_layout) = function_details!();
 
             match dict_layout {
                 Layout::Builtin(Builtin::EmptyDict) => {
@@ -4897,7 +4866,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!("invalid dict layout"),
             }
         }
-        _ => unreachable!(),
     }
 }
 
@@ -5333,8 +5301,8 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
 
         NumAdd | NumSub | NumMul | NumLt | NumLte | NumGt | NumGte | NumRemUnchecked
-        | NumIsMultipleOf | NumAddWrap | NumAddChecked | NumDivUnchecked | NumPow | NumPowInt
-        | NumSubWrap | NumSubChecked | NumMulWrap | NumMulChecked => {
+        | NumIsMultipleOf | NumAddWrap | NumAddChecked | NumDivUnchecked | NumDivCeilUnchecked
+        | NumPow | NumPowInt | NumSubWrap | NumSubChecked | NumMulWrap | NumMulChecked => {
             debug_assert_eq!(args.len(), 2);
 
             let (lhs_arg, lhs_layout) = load_symbol_and_layout(scope, &args[0]);
@@ -6079,13 +6047,16 @@ fn build_int_binop<'a, 'ctx, 'env>(
                 phi.as_basic_value()
             }
         }
-        NumDivUnchecked => bd.build_int_signed_div(lhs, rhs, "div_int").into(),
         NumPowInt => call_bitcode_int_fn(
             env,
             bitcode::NUM_POW_INT,
             &[lhs.into(), rhs.into()],
             int_width,
         ),
+        NumDivUnchecked => bd.build_int_signed_div(lhs, rhs, "div_int").into(),
+        NumDivCeilUnchecked => {
+            call_bitcode_fn(env, &[lhs.into(), rhs.into()], bitcode::NUM_DIV_CEIL)
+        }
         NumBitwiseAnd => bd.build_and(lhs, rhs, "int_bitwise_and").into(),
         NumBitwiseXor => bd.build_xor(lhs, rhs, "int_bitwise_xor").into(),
         NumBitwiseOr => bd.build_or(lhs, rhs, "int_bitwise_or").into(),

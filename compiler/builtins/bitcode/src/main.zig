@@ -83,6 +83,7 @@ const FLOATS = [_]type{ f32, f64 };
 const NUMBERS = INTEGERS ++ FLOATS;
 
 comptime {
+    exportNumFn(num.divCeil, "div_ceil");
     exportNumFn(num.bytesToU16C, "bytes_to_u16");
     exportNumFn(num.bytesToU32C, "bytes_to_u32");
 
