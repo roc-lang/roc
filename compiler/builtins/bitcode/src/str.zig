@@ -163,7 +163,7 @@ pub const RocStr = extern struct {
     ) RocStr {
         const element_width = 1;
 
-        if (self.bytes) |source_ptr| {
+        if (self.str_bytes) |source_ptr| {
             if (self.isUnique()) {
                 const new_source = utils.unsafeReallocate(source_ptr, RocStr.alignment, self.len(), new_length, element_width);
 
@@ -171,7 +171,7 @@ pub const RocStr = extern struct {
             }
         }
 
-        return self.reallocateFresh(RocStr.alignment, new_length, element_width);
+        return self.reallocateFresh(new_length);
     }
 
     /// reallocate by explicitly making a new allocation and copying elements over
@@ -294,7 +294,7 @@ pub const RocStr = extern struct {
     }
 
     pub fn isUnique(self: RocStr) bool {
-        // the empty list is unique (in the sense that copying it will not leak memory)
+        // the empty string is unique (in the sense that copying it will not leak memory)
         if (self.isEmpty()) {
             return true;
         }
@@ -305,6 +305,10 @@ pub const RocStr = extern struct {
         }
 
         // otherwise, check if the refcount is one
+        return @call(.{ .modifier = always_inline }, RocStr.isRefcountOne, .{self});
+    }
+
+    fn isRefcountOne(self: RocStr) bool {
         const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, self.str_bytes));
         return (ptr - 1)[0] == utils.REFCOUNT_ONE;
     }
@@ -1504,7 +1508,6 @@ test "isWhitespace" {
 
 // TODO iterate backwards through codepoints for the trailing whitespace
 // look at how rust does this; mimic zigs utf8 view
-// TODO need to think about unique case
 fn strTrim(string: RocStr) RocStr {
     if (string.isEmpty()) return RocStr.empty();
 
@@ -1535,6 +1538,16 @@ fn strTrim(string: RocStr) RocStr {
         return RocStr.empty();
     }
 
+    // TODO should this just use isUnique?
+    // should we rename isUnique to isUnleakable or something?
+    // could also just inline the unsafe reallocate call
+    if (string.isRefcountOne()) {
+        const dest = string.str_bytes orelse unreachable;
+        const source = dest + leading_whitespace_bytes;
+        @memcpy(dest, source, new_bytes_len);
+        return string.reallocate(new_bytes_len);
+    }
+
     return RocStr.init(bytes_ptr + leading_whitespace_bytes, new_bytes_len);
 }
 
@@ -1543,12 +1556,13 @@ test "strTrim: empty" {
     try expect(trimmedEmpty.eq(RocStr.empty()));
 }
 
-test "strTrim: hello" {
-    const example_bytes = "   hello   ";
+// TODO ask how to manually mess with refcount, to unit test shared case
+test "strTrim: unique hello world" {
+    const example_bytes = "   hello world   ";
     const example = RocStr.init(example_bytes, example_bytes.len);
     defer example.deinit();
 
-    const expected_bytes = "hello";
+    const expected_bytes = "hello world";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
     defer expected.deinit();
 
