@@ -835,6 +835,9 @@ define_builtins! {
 
         // used by the dev backend to store the pointer to where to store large return types
         23 RET_POINTER: "#ret_pointer"
+
+        // used in wasm dev backend to mark values in the VM stack that have no other Symbol
+        24 WASM_ANONYMOUS_STACK_VALUE: "#wasm_anonymous_stack_value"
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
