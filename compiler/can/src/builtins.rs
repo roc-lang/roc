@@ -2911,7 +2911,6 @@ fn num_div_ceil(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-
 /// List.first : List elem -> Result elem [ ListWasEmpty ]*
 ///
 /// List.first :
