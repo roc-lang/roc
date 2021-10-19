@@ -450,7 +450,6 @@ pub fn strSplitInPlaceC(array: [*]RocStr, string: RocStr, delimiter: RocStr) cal
     return @call(.{ .modifier = always_inline }, strSplitInPlace, .{ array, string, delimiter });
 }
 
-// TODO Giesch read and understand this
 fn strSplitInPlace(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
     var ret_array_index: usize = 0;
     var slice_start_index: usize = 0;
@@ -656,7 +655,6 @@ test "strSplitInPlace: three pieces" {
     try expect(array[2].eq(expected_array[2]));
 }
 
-// TODO Giesch
 // This is used for `Str.split : Str, Str -> Array Str
 // It is used to count how many segments the input `_str`
 // needs to be broken into, so that we can allocate a array
@@ -1506,49 +1504,120 @@ test "isWhitespace" {
     try expect(!isWhitespace('x'));
 }
 
-// TODO iterate backwards through codepoints for the trailing whitespace
-// look at how rust does this; mimic zigs utf8 view
+// TODO GIESCH
+// ask & read about small & large strings
 fn strTrim(string: RocStr) RocStr {
     if (string.isEmpty()) return RocStr.empty();
 
-    var leading_whitespace_bytes: usize = 0;
-    var trailing_whitespace_bytes: usize = 0;
-    var found_non_whitespace = false;
+    const leading_bytes = countLeadingWhitespaceBytes(string);
+    const trailing_bytes = countTrailingWhitespaceBytes(string);
+    const new_len = string.len() - leading_bytes - trailing_bytes;
 
-    const bytes_len = string.len();
-    const bytes_ptr = string.asU8ptr();
-    var bytes = bytes_ptr[0..bytes_len];
-    var iter = (unicode.Utf8View.init(bytes) catch unreachable).iterator();
-    while (iter.nextCodepoint()) |codepoint| {
-        if (isWhitespace(codepoint)) {
-            var byte_count = unicode.utf8CodepointSequenceLength(codepoint) catch unreachable;
-            if (!found_non_whitespace) {
-                leading_whitespace_bytes += byte_count;
-            }
-            trailing_whitespace_bytes += byte_count;
-        } else {
-            trailing_whitespace_bytes = 0;
-            found_non_whitespace = true;
-        }
-    }
-
-    const new_bytes_len = bytes_len - leading_whitespace_bytes - trailing_whitespace_bytes;
-
-    if (new_bytes_len == 0) {
+    if (new_len == 0) {
         return RocStr.empty();
     }
 
-    // TODO should this just use isUnique?
+    // TODO GIESCH
+    // should this just use isUnique? (are small strings safe for mutation?)
     // should we rename isUnique to isUnleakable or something?
     // could also just inline the unsafe reallocate call
     if (string.isRefcountOne()) {
         const dest = string.str_bytes orelse unreachable;
-        const source = dest + leading_whitespace_bytes;
-        @memcpy(dest, source, new_bytes_len);
-        return string.reallocate(new_bytes_len);
+        const source = dest + leading_bytes;
+        @memcpy(dest, source, new_len);
+        return string.reallocate(new_len);
     }
 
-    return RocStr.init(bytes_ptr + leading_whitespace_bytes, new_bytes_len);
+    return RocStr.init(string.asU8ptr() + leading_bytes, new_len);
+}
+
+fn countLeadingWhitespaceBytes(string: RocStr) usize {
+    var byte_count: usize = 0;
+
+    var bytes = string.asU8ptr()[0..string.len()];
+    var iter = unicode.Utf8View.initUnchecked(bytes).iterator();
+    while (iter.nextCodepoint()) |codepoint| {
+        if (isWhitespace(codepoint)) {
+            byte_count += unicode.utf8CodepointSequenceLength(codepoint) catch unreachable;
+        } else {
+            break;
+        }
+    }
+
+    return byte_count;
+}
+
+fn countTrailingWhitespaceBytes(string: RocStr) usize {
+    var byte_count: usize = 0;
+
+    var bytes = string.asU8ptr()[0..string.len()];
+    var iter = ReverseUtf8View.initUnchecked(bytes).iterator();
+    while (iter.nextCodepoint()) |codepoint| {
+        if (isWhitespace(codepoint)) {
+            byte_count += unicode.utf8CodepointSequenceLength(codepoint) catch unreachable;
+        } else {
+            break;
+        }
+    }
+
+    return byte_count;
+}
+
+/// A backwards version of Utf8View from std.unicode
+const ReverseUtf8View = struct {
+    bytes: []const u8,
+
+    pub fn initUnchecked(s: []const u8) ReverseUtf8View {
+        return ReverseUtf8View{ .bytes = s };
+    }
+
+    pub fn iterator(s: ReverseUtf8View) ReverseUtf8Iterator {
+        return ReverseUtf8Iterator{
+            .bytes = s.bytes,
+            .i = s.bytes.len - 1,
+        };
+    }
+};
+
+/// A backwards version of Utf8Iterator from std.unicode
+const ReverseUtf8Iterator = struct {
+    bytes: []const u8,
+    i: usize,
+
+    pub fn nextCodepointSlice(it: *ReverseUtf8Iterator) ?[]const u8 {
+        if (it.i < 0) {
+            return null;
+        }
+
+        // NOTE this relies on the string being valid utf8 to not run off the end
+        while (!utf8BeginByte(it.bytes[it.i])) {
+            it.i -= 1;
+        }
+
+        const cp_len = unicode.utf8ByteSequenceLength(it.bytes[it.i]) catch unreachable;
+        const slice = it.bytes[it.i .. it.i + cp_len];
+        it.i -= 1;
+        return slice;
+    }
+
+    pub fn nextCodepoint(it: *ReverseUtf8Iterator) ?u21 {
+        const slice = it.nextCodepointSlice() orelse return null;
+
+        return switch (slice.len) {
+            1 => @as(u21, slice[0]),
+            2 => unicode.utf8Decode2(slice) catch unreachable,
+            3 => unicode.utf8Decode3(slice) catch unreachable,
+            4 => unicode.utf8Decode4(slice) catch unreachable,
+            else => unreachable,
+        };
+    }
+};
+
+fn utf8BeginByte(byte: u8) bool {
+    return switch (byte) {
+        0b1000_0000...0b1011_1111 => false,
+        else => true,
+    };
 }
 
 test "strTrim: empty" {
@@ -1556,7 +1625,9 @@ test "strTrim: empty" {
     try expect(trimmedEmpty.eq(RocStr.empty()));
 }
 
-// TODO ask how to manually mess with refcount, to unit test shared case
+// TODO GIESCH
+// ask how to manually mess with refcount,
+// to unit test the shared case
 test "strTrim: unique hello world" {
     const example_bytes = "   hello world   ";
     const example = RocStr.init(example_bytes, example_bytes.len);
@@ -1570,3 +1641,6 @@ test "strTrim: unique hello world" {
 
     try expect(trimmed.eq(expected));
 }
+
+// TODO GIESCH
+// wire up to actual Roc code, add top level tests
