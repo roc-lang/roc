@@ -138,7 +138,11 @@ fn expr2_to_string_helper(
             for (_, pattern_id) in args.iter(pool) {
                 let arg_pattern2 = pool.get(*pattern_id);
 
-                out_string.push_str(&format!("{}{:?}\n", get_spacing(indent_level + 2), arg_pattern2));
+                out_string.push_str(&format!(
+                    "{}{:?}\n",
+                    get_spacing(indent_level + 2),
+                    arg_pattern2
+                ));
             }
         }
         &Expr2::Var { .. } => {

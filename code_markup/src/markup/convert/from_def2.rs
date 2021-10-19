@@ -5,7 +5,16 @@ use crate::{
 
 use super::from_expr2::expr2_to_markup;
 
-use roc_ast::{ast_error::ASTResult, lang::{core::{ast::ASTNodeId, def::def2::{Def2, DefId, def2_to_string}}, env::Env}};
+use roc_ast::{
+    ast_error::ASTResult,
+    lang::{
+        core::{
+            ast::ASTNodeId,
+            def::def2::{Def2, DefId},
+        },
+        env::Env,
+    },
+};
 use roc_module::symbol::Interns;
 
 pub fn def2_to_markup<'a>(
@@ -16,8 +25,6 @@ pub fn def2_to_markup<'a>(
     interns: &Interns,
 ) -> ASTResult<MarkNodeId> {
     let ast_node_id = ASTNodeId::ADefId(def2_node_id);
-
-    dbg!("DEF2: {}", def2_to_string(def2_node_id, env.pool));
 
     let mark_node_id = match def2 {
         Def2::ValueDef {

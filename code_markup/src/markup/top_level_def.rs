@@ -1,4 +1,7 @@
-use roc_ast::{ast_error::ASTResult, lang::{core::ast::ASTNodeId, env::{Env}}};
+use roc_ast::{
+    ast_error::ASTResult,
+    lang::{core::ast::ASTNodeId, env::Env},
+};
 use roc_module::symbol::IdentId;
 
 use crate::{

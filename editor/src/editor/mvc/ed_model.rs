@@ -56,9 +56,8 @@ pub fn init_model<'a>(
     code_arena: &'a Bump,
     caret_pos: CaretPos, // to set caret position
 ) -> EdResult<EdModel<'a>> {
-
     let mut owned_loaded_module = loaded_module;
-    let mut module = EdModule::new(code_str, env, &mut owned_loaded_module.interns, code_arena,)?;
+    let mut module = EdModule::new(code_str, env, &mut owned_loaded_module.interns, code_arena)?;
 
     let mut mark_node_pool = SlowPool::default();
 
@@ -181,7 +180,12 @@ pub struct EdModule<'a> {
 //use crate::lang::ast::expr2_to_string;
 
 impl<'a> EdModule<'a> {
-    pub fn new(code_str: &'a str, mut env: Env<'a>, interns: &mut Interns, ast_arena: &'a Bump) -> EdResult<EdModule<'a>> {
+    pub fn new(
+        code_str: &'a str,
+        mut env: Env<'a>,
+        interns: &mut Interns,
+        ast_arena: &'a Bump,
+    ) -> EdResult<EdModule<'a>> {
         if !code_str.is_empty() {
             let parse_res = parse_ast::parse_from_string(code_str, &mut env, ast_arena, interns);
 

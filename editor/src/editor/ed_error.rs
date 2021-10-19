@@ -217,11 +217,11 @@ pub enum EdError {
 
     WrapASTError {
         #[snafu(backtrace)]
-        source: ASTError
+        source: ASTError,
     },
-    WrapUIError { 
+    WrapUIError {
         #[snafu(backtrace)]
-        source: UIError
+        source: UIError,
     },
     WrapMarkError {
         #[snafu(backtrace)]
@@ -294,32 +294,24 @@ use crate::ui::ui_error::UIError;
 
 impl From<UIError> for EdError {
     fn from(ui_err: UIError) -> Self {
-        Self::WrapUIError {
-            source: ui_err,
-        }
+        Self::WrapUIError { source: ui_err }
     }
 }
 
 impl From<MarkError> for EdError {
     fn from(mark_err: MarkError) -> Self {
-        Self::WrapMarkError {
-            source: mark_err,
-        }
+        Self::WrapMarkError { source: mark_err }
     }
 }
 
 impl From<ASTError> for EdError {
     fn from(ast_err: ASTError) -> Self {
-        Self::WrapASTError {
-            source: ast_err,
-        }
+        Self::WrapASTError { source: ast_err }
     }
 }
 
 impl From<ModuleError> for EdError {
     fn from(module_err: ModuleError) -> Self {
-        Self::WrapModuleError {
-            source: module_err,
-        }
+        Self::WrapModuleError { source: module_err }
     }
 }

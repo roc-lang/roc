@@ -15,19 +15,35 @@ use crate::{
 };
 
 use itertools::Itertools;
-use roc_ast::{ast_error::{ASTResult}, lang::{core::{ast::ASTNodeId, expr::{expr2::{Expr2, ExprId}, expr2_to_string, record_field::RecordField}, pattern::{get_identifier_string, Pattern2}, val_def::ValueDef}, env::{Env}}};
-use roc_module::{module_err::ModuleResult, symbol::Interns};
+use roc_ast::{
+    ast_error::ASTResult,
+    lang::{
+        core::{
+            ast::ASTNodeId,
+            expr::{
+                expr2::{Expr2, ExprId},
+                record_field::RecordField,
+            },
+            pattern::{get_identifier_string, Pattern2},
+            val_def::ValueDef,
+        },
+        env::Env,
+    },
+};
+use roc_module::{
+    module_err::ModuleResult,
+    symbol::{get_module_ident_ids, Interns},
+};
 
 // make Markup Nodes: generate String representation, assign Highlighting Style
 pub fn expr2_to_markup<'a>(
-    env: &mut Env<'a>,
+    env: &Env<'a>,
     expr2: &Expr2,
     expr2_node_id: ExprId,
     mark_node_pool: &mut SlowPool,
     interns: &Interns,
     indent_level: usize,
 ) -> ASTResult<MarkNodeId> {
-    dbg!("EXPR2: {}", roc_ast::lang::core::expr::expr2_to_string::expr2_to_string(expr2_node_id, env.pool));
     let ast_node_id = ASTNodeId::AExprId(expr2_node_id);
 
     let mark_node_id = match expr2 {
@@ -96,10 +112,8 @@ pub fn expr2_to_markup<'a>(
             mark_node_pool.add(call_node)
         }
         Expr2::Var(symbol) => {
-            let text =
-                interns
-                .get_module_ident_ids(&env.home)?
-                .get_name_str_res(symbol.ident_id())?; 
+            let text = get_module_ident_ids(&interns.all_ident_ids, &env.home)?
+                .get_name_str_res(symbol.ident_id())?;
 
             new_markup_node(
                 text.to_string(),
@@ -282,29 +296,29 @@ pub fn expr2_to_markup<'a>(
             let backslash_mn = new_operator_mn("\\".to_string(), expr2_node_id, None);
             let backslash_mn_id = mark_node_pool.add(backslash_mn);
 
-            let arg_names: Vec<&str> =
-                args.iter(env.pool)
-                    .map(|(_, arg_node_id)| {
-                        let arg_pattern2 = env.pool.get(*arg_node_id);
+            let arg_names: Vec<&str> = args
+                .iter(env.pool)
+                .map(|(_, arg_node_id)| {
+                    let arg_pattern2 = env.pool.get(*arg_node_id);
 
-                        match arg_pattern2 {
-                            Pattern2::Identifier(id_symbol) => {
-                                let ident_id = id_symbol.ident_id();
-                                
-                                env.ident_ids.get_name_str_res(ident_id)
-                            }
-                            Pattern2::Shadowed{ shadowed_ident} => {
-                                Ok(shadowed_ident.as_str(env.pool))
-                            }
-                            other => {
-                                todo!(
-                                    "TODO: support the following pattern2 as function arg: {:?}",
-                                    other
-                                );
-                            }
+                    match arg_pattern2 {
+                        Pattern2::Identifier(id_symbol) => {
+                            let ident_id = id_symbol.ident_id();
+
+                            env.ident_ids.get_name_str_res(ident_id)
                         }
-                    })
-                    .collect::<ModuleResult<Vec<&str>>>()?;
+                        Pattern2::Shadowed { shadowed_ident } => {
+                            Ok(shadowed_ident.as_str(env.pool))
+                        }
+                        other => {
+                            todo!(
+                                "TODO: support the following pattern2 as function arg: {:?}",
+                                other
+                            );
+                        }
+                    }
+                })
+                .collect::<ModuleResult<Vec<&str>>>()?;
 
             let arg_mark_nodes = arg_names
                 .iter()
@@ -335,8 +349,6 @@ pub fn expr2_to_markup<'a>(
             let args_mn_id = mark_node_pool.add(args_mn);
 
             let body_expr = env.pool.get(*body_id);
-            println!("BODY_EXPR: {}", roc_ast::lang::core::expr::expr2_to_string::expr2_to_string(*body_id, env.pool));
-
             let body_mn_id = expr2_to_markup(
                 env,
                 body_expr,

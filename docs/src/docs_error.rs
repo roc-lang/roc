@@ -9,13 +9,15 @@ use snafu::{NoneError, ResultExt, Snafu};
 pub enum DocsError {
     WrapASTError {
         #[snafu(backtrace)]
-        source: ASTError
+        source: ASTError,
     },
     WrapModuleError {
         #[snafu(backtrace)]
-        source: ModuleError
+        source: ModuleError,
     },
-    WrapSyntaxError { msg: String },
+    WrapSyntaxError {
+        msg: String,
+    },
 }
 
 pub type DocsResult<T, E = DocsError> = std::result::Result<T, E>;
@@ -32,16 +34,12 @@ impl<'a> From<SyntaxError<'a>> for DocsError {
 
 impl From<ASTError> for DocsError {
     fn from(ast_err: ASTError) -> Self {
-        Self::WrapASTError {
-            source: ast_err,
-        }
+        Self::WrapASTError { source: ast_err }
     }
 }
 
 impl From<ModuleError> for DocsError {
     fn from(module_err: ModuleError) -> Self {
-        Self::WrapModuleError {
-            source: module_err,
-        }
+        Self::WrapModuleError { source: module_err }
     }
 }

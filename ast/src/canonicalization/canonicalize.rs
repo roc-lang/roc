@@ -1,5 +1,4 @@
 use roc_collections::all::MutMap;
-use roc_module::ident::Ident;
 use roc_problem::can::Problem;
 use roc_region::all::{Located, Region};
 use roc_types::subs::Variable;
@@ -265,9 +264,6 @@ pub(crate) fn canonicalize_lookup(
     region: Region,
 ) -> (Expr2, Output) {
     use Expr2::*;
-
-    dbg!(ident);
-    dbg!(scope.idents().map(|tup| tup.0).collect::<Vec<&Ident>>());
 
     let mut output = Output::default();
     let can_expr = if module_name.is_empty() {

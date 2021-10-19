@@ -111,7 +111,7 @@ pub enum Expr<'a> {
 
     // Lookups
     Var {
-        module_name: &'a str,  // module_name will only be filled if the original Roc code stated something like `5 + SomeModule.myVar`, module_name will be blank if it was `5 + myVar`
+        module_name: &'a str, // module_name will only be filled if the original Roc code stated something like `5 + SomeModule.myVar`, module_name will be blank if it was `5 + myVar`
         ident: &'a str,
     },
 

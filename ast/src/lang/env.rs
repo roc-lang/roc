@@ -1,3 +1,4 @@
+use crate::mem_pool::pool::{NodeId, Pool};
 use bumpalo::{collections::Vec as BumpVec, Bump};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Ident, ModuleName};
@@ -5,7 +6,6 @@ use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Located, Region};
 use roc_types::subs::VarStore;
-use crate::mem_pool::pool::{NodeId, Pool};
 
 use super::core::def::def::References;
 

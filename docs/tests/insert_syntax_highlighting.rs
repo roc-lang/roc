@@ -6,28 +6,31 @@ mod insert_doc_syntax_highlighting {
     use std::{fs::File, io::Write, path::PathBuf};
 
     use bumpalo::{collections::String as BumpString, Bump};
-    use roc_ast::{lang, mem_pool::pool::Pool, module::load_module};
+    use roc_ast::module::load_module;
     use roc_docs::{syntax_highlight_expr, syntax_highlight_top_level_defs};
     use roc_load::file::LoadedModule;
-    use roc_module::symbol::IdentIds;
-    use roc_types::subs::VarStore;
     use tempfile::tempdir;
     use uuid::Uuid;
 
     fn expect_html(code_str: &str, want: &str, use_expr: bool) {
-
-        let mut loaded_module =
-            if use_expr {
-                make_mock_module("")
-            } else {
-                make_mock_module(code_str)
-            };
+        let mut loaded_module = if use_expr {
+            make_mock_module("")
+        } else {
+            make_mock_module(code_str)
+        };
 
         let code_block_arena = Bump::new();
         let mut code_block_buf = BumpString::new_in(&code_block_arena);
 
         if use_expr {
-            match syntax_highlight_expr(&code_block_arena, &mut code_block_buf, code_str, &mut loaded_module) {
+            match syntax_highlight_expr(
+                &code_block_arena,
+                &mut code_block_buf,
+                code_str,
+                loaded_module.module_id,
+                &loaded_module.interns.module_ids,
+                &loaded_module.interns,
+            ) {
                 Ok(highlighted_code_str) => {
                     assert_eq!(highlighted_code_str, want);
                 }
@@ -36,12 +39,11 @@ mod insert_doc_syntax_highlighting {
                 }
             };
         } else {
-            /*match syntax_highlight_top_level_defs(
+            match syntax_highlight_top_level_defs(
                 &code_block_arena,
                 &mut code_block_buf,
                 code_str,
                 loaded_module.module_id,
-                &loaded_module.interns.module_ids,
                 &mut loaded_module.interns,
             ) {
                 Ok(highlighted_code_str) => {
@@ -50,7 +52,7 @@ mod insert_doc_syntax_highlighting {
                 Err(syntax_error) => {
                     panic!("Unexpected parse failure when parsing this for rendering in docs:\n\n{}\n\nParse error was:\n\n{:?}\n\n", code_str, syntax_error)
                 }
-            };*/
+            };
         }
     }
 

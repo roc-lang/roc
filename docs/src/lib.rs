@@ -1,6 +1,6 @@
 extern crate pulldown_cmark;
 extern crate roc_load;
-use bumpalo::{collections::String as BumpString, collections::Vec as BumpVec, Bump};
+use bumpalo::{collections::String as BumpString, Bump};
 use def::defs_to_html;
 use docs_error::DocsResult;
 use expr::expr_to_html;
@@ -26,7 +26,6 @@ mod html;
 
 pub fn generate_docs_html(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
     let loaded_modules = load_modules_for_files(filenames, std_lib);
-    let mut arena = Bump::new();
 
     //
     // TODO: get info from a file like "elm.json"
@@ -85,18 +84,6 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &
 
     // Write each package's module docs html file
     for loaded_module in package.modules.iter_mut() {
-        arena.reset();
-
-        let mut exports: BumpVec<&str> =
-            BumpVec::with_capacity_in(loaded_module.exposed_values.len(), &arena);
-
-        // TODO should this also include exposed_aliases?
-        for symbol in loaded_module.exposed_values.iter() {
-            exports.push(symbol.ident_str(&loaded_module.interns));
-        }
-
-        let exports = exports.into_bump_slice();
-
         for module_docs in loaded_module.documentation.values() {
             let module_dir = build_dir.join(module_docs.name.replace(".", "/").as_str());
 
@@ -111,7 +98,7 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &
                 )
                 .replace(
                     "<!-- Module Docs -->",
-                    render_module_documentation(exports, module_docs, loaded_module).as_str(),
+                    render_module_documentation(module_docs, loaded_module).as_str(),
                 );
 
             fs::write(module_dir.join("index.html"), rendered_module)
@@ -127,18 +114,20 @@ pub fn syntax_highlight_expr<'a>(
     arena: &'a Bump,
     buf: &mut BumpString<'a>,
     code_str: &'a str,
-    loaded_module: &mut LoadedModule,
-) -> DocsResult<String> {
+    env_module_id: ModuleId,
+    env_module_ids: &'a ModuleIds,
+    interns: &Interns,
+) -> Result<String, SyntaxError<'a>> {
     let trimmed_code_str = code_str.trim_end().trim();
     let state = State::new(trimmed_code_str.as_bytes());
 
     match roc_parse::expr::test_parse_expr(0, arena, state) {
         Ok(loc_expr) => {
-            expr_to_html(buf, loc_expr.value, loaded_module);
+            expr_to_html(buf, loc_expr.value, env_module_id, env_module_ids, interns);
 
             Ok(buf.to_string())
         }
-        Err(fail) => Err(SyntaxError::Expr(fail).into()),
+        Err(fail) => Err(SyntaxError::Expr(fail)),
     }
 }
 
@@ -148,7 +137,6 @@ pub fn syntax_highlight_top_level_defs<'a>(
     buf: &mut BumpString<'a>,
     code_str: &'a str,
     env_module_id: ModuleId,
-    env_module_ids: &'a ModuleIds,
     interns: &mut Interns,
 ) -> DocsResult<String> {
     let trimmed_code_str = code_str.trim_end().trim();
@@ -157,7 +145,7 @@ pub fn syntax_highlight_top_level_defs<'a>(
         Ok(vec_loc_def) => {
             let vec_def = vec_loc_def.iter().map(|loc| loc.value).collect();
 
-            defs_to_html(buf, vec_def, env_module_id, env_module_ids, interns)?;
+            defs_to_html(buf, vec_def, env_module_id, interns)?;
 
             Ok(buf.to_string())
         }
@@ -166,9 +154,8 @@ pub fn syntax_highlight_top_level_defs<'a>(
 }
 
 fn render_module_documentation(
-    exposed_values: &[&str],
     module: &ModuleDocumentation,
-    loaded_module: &mut LoadedModule,
+    loaded_module: &LoadedModule,
 ) -> String {
     let mut buf = String::new();
 
@@ -180,6 +167,8 @@ fn render_module_documentation(
         )
         .as_str(),
     );
+
+    let exposed_values = loaded_module.exposed_values_str();
 
     for entry in &module.entries {
         let mut should_render_entry = true;
@@ -232,7 +221,7 @@ fn render_module_documentation(
                     if let Some(docs) = &doc_def.docs {
                         buf.push_str(
                             markdown_to_html(
-                                exposed_values,
+                                &exposed_values,
                                 &module.scope,
                                 docs.to_string(),
                                 loaded_module,
@@ -243,7 +232,7 @@ fn render_module_documentation(
                 }
                 DocEntry::DetachedDoc(docs) => {
                     let markdown = markdown_to_html(
-                        exposed_values,
+                        &exposed_values,
                         &module.scope,
                         docs.to_string(),
                         loaded_module,
@@ -813,7 +802,7 @@ fn markdown_to_html(
     exposed_values: &[&str],
     scope: &Scope,
     markdown: String,
-    loaded_module: &mut LoadedModule,
+    loaded_module: &LoadedModule,
 ) -> String {
     use pulldown_cmark::{BrokenLink, CodeBlockKind, CowStr, Event, LinkType, Tag::*};
 
@@ -977,7 +966,9 @@ fn markdown_to_html(
                     &code_block_arena,
                     &mut code_block_buf,
                     code_str,
-                    &mut loaded_module
+                    loaded_module.module_id,
+                    &loaded_module.interns.module_ids,
+                    &loaded_module.interns
                 )
                 {
                     Ok(highlighted_code_str) => {
