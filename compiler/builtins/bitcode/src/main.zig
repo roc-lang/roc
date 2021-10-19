@@ -1,4 +1,9 @@
 const std = @import("std");
+const math = std.math;
+const utils = @import("utils.zig");
+
+const ROC_BUILTINS = "roc_builtins";
+const NUM = "num";
 
 // Dec Module
 const dec = @import("dec.zig");
@@ -72,15 +77,27 @@ comptime {
 
 // Num Module
 const num = @import("num.zig");
+
+const INTEGERS = [_]type{ i8, i16, i32, i64, i128, u8, u16, u32, u64, u128, usize };
+const FLOATS = [_]type{ f32, f64 };
+const NUMBERS = INTEGERS ++ FLOATS;
+
 comptime {
-    exportNumFn(num.atan, "atan");
-    exportNumFn(num.isFinite, "is_finite");
-    // exportNumFn(num.powInt, "pow_int");
-    exportNumFn(num.acos, "acos");
-    exportNumFn(num.asin, "asin");
     exportNumFn(num.bytesToU16C, "bytes_to_u16");
     exportNumFn(num.bytesToU32C, "bytes_to_u32");
-    exportNumFn(num.round, "round");
+
+    inline for (INTEGERS) |T| {
+        num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow_int_");
+    }
+
+    inline for (FLOATS) |T| {
+        num.exportAsin(T, ROC_BUILTINS ++ "." ++ NUM ++ ".acos_");
+        num.exportAcos(T, ROC_BUILTINS ++ "." ++ NUM ++ ".asin_");
+        num.exportAtan(T, ROC_BUILTINS ++ "." ++ NUM ++ ".atan_");
+
+        num.exportIsFinite(T, ROC_BUILTINS ++ "." ++ NUM ++ ".is_finite_");
+        num.exportRound(T, ROC_BUILTINS ++ "." ++ NUM ++ ".round_");
+    }
 }
 
 // Str Module
@@ -106,7 +123,7 @@ comptime {
 }
 
 // Utils
-const utils = @import("utils.zig");
+
 comptime {
     exportUtilsFn(utils.test_panic, "test_panic");
     exportUtilsFn(utils.decrefC, "decref");

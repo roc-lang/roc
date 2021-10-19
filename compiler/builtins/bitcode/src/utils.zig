@@ -261,3 +261,36 @@ pub const UpdateMode = extern enum(u8) {
     Immutable = 0,
     InPlace = 1,
 };
+
+/// Functions of the form `a -> b` 
+pub fn generateAtoB(
+    comptime A: type,
+    comptime B: type,
+    comptime function: fn (A) B,
+    comptime name: []const u8,
+) void {
+    comptime var f = struct {
+        fn func(input: A) callconv(.C) B {
+            return function(input);
+        }
+    }.func;
+    const args = .{ .name = name ++ @typeName(A), .linkage = .Strong };
+    @export(f, args);
+}
+
+/// Functions of the form `a, b -> c` 
+pub fn generateAtoBtoC(
+    comptime A: type,
+    comptime B: type,
+    comptime C: type,
+    comptime function: fn (A, B) C,
+    comptime name: []const u8,
+) void {
+    comptime var f = struct {
+        fn func(input1: A, input2: B) callconv(.C) C {
+            return function(input1, input2);
+        }
+    }.func;
+    const args = .{ .name = name ++ @typeName(A), .linkage = .Strong };
+    @export(f, args);
+}

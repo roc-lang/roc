@@ -204,7 +204,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
 
     pub fn build_intrinsic_call(
         &self,
-        intrinsic_name: &'static str,
+        intrinsic_name: &str,
         args: &[BasicValueEnum<'ctx>],
     ) -> CallSiteValue<'ctx> {
         let fn_val = self
@@ -229,7 +229,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
 
     pub fn call_intrinsic(
         &self,
-        intrinsic_name: &'static str,
+        intrinsic_name: &str,
         args: &[BasicValueEnum<'ctx>],
     ) -> BasicValueEnum<'ctx> {
         let call = self.build_intrinsic_call(intrinsic_name, args);
@@ -487,11 +487,17 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         i64_type.fn_type(&[f64_type.into()], false),
     );
 
-    add_intrinsic(
-        module,
-        LLVM_FABS_F64,
-        f64_type.fn_type(&[f64_type.into()], false),
-    );
+    for width in ["f32", "f64"] {
+        let name = format!("{}.{}", LLVM_FABS, width);
+        add_intrinsic(module, &name, f64_type.fn_type(&[f64_type.into()], false));
+
+        let name = format!("{}.{}", LLVM_POW, width);
+        add_intrinsic(
+            module,
+            &name,
+            f64_type.fn_type(&[f64_type.into(), f64_type.into()], false),
+        );
+    }
 
     add_intrinsic(
         module,
@@ -503,12 +509,6 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         module,
         LLVM_COS_F64,
         f64_type.fn_type(&[f64_type.into()], false),
-    );
-
-    add_intrinsic(
-        module,
-        LLVM_POW_F64,
-        f64_type.fn_type(&[f64_type.into(), f64_type.into()], false),
     );
 
     add_intrinsic(
@@ -577,10 +577,10 @@ static LLVM_MEMSET_I32: &str = "llvm.memset.p0i8.i32";
 static LLVM_SQRT_F64: &str = "llvm.sqrt.f64";
 static LLVM_LOG_F64: &str = "llvm.log.f64";
 static LLVM_LROUND_I64_F64: &str = "llvm.lround.i64.f64";
-static LLVM_FABS_F64: &str = "llvm.fabs.f64";
+static LLVM_FABS: &str = "llvm.fabs";
 static LLVM_SIN_F64: &str = "llvm.sin.f64";
 static LLVM_COS_F64: &str = "llvm.cos.f64";
-static LLVM_POW_F64: &str = "llvm.pow.f64";
+static LLVM_POW: &str = "llvm.pow";
 static LLVM_CEILING_F64: &str = "llvm.ceil.f64";
 static LLVM_FLOOR_F64: &str = "llvm.floor.f64";
 
@@ -607,7 +607,7 @@ pub static LLVM_SMUL_WITH_OVERFLOW_I64: &str = "llvm.smul.with.overflow.i64";
 
 fn add_intrinsic<'ctx>(
     module: &Module<'ctx>,
-    intrinsic_name: &'static str,
+    intrinsic_name: &str,
     fn_type: FunctionType<'ctx>,
 ) -> FunctionValue<'ctx> {
     add_func(
@@ -5193,8 +5193,14 @@ fn run_low_level<'a, 'ctx, 'env>(
                         Usize | Int128 | Int64 | Int32 | Int16 | Int8 => {
                             build_int_unary_op(env, arg.into_int_value(), arg_builtin, op)
                         }
-                        Float128 | Float64 | Float32 => {
-                            build_float_unary_op(env, arg.into_float_value(), op)
+                        Float32 => {
+                            build_float_unary_op(env, arg.into_float_value(), op, FloatWidth::F32)
+                        }
+                        Float64 => {
+                            build_float_unary_op(env, arg.into_float_value(), op, FloatWidth::F64)
+                        }
+                        Float128 => {
+                            build_float_unary_op(env, arg.into_float_value(), op, FloatWidth::F128)
                         }
                         _ => {
                             unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, arg_layout);
@@ -5942,6 +5948,8 @@ fn build_int_binop<'a, 'ctx, 'env>(
 
     let bd = env.builder;
 
+    let int_width = IntWidth::from(*lhs_layout);
+
     match op {
         NumAdd => {
             let intrinsic = match lhs_layout {
@@ -6072,7 +6080,12 @@ fn build_int_binop<'a, 'ctx, 'env>(
             }
         }
         NumDivUnchecked => bd.build_int_signed_div(lhs, rhs, "div_int").into(),
-        NumPowInt => call_bitcode_fn(env, &[lhs.into(), rhs.into()], bitcode::NUM_POW_INT_I64),
+        NumPowInt => call_bitcode_int_fn(
+            env,
+            bitcode::NUM_POW_INT,
+            &[lhs.into(), rhs.into()],
+            int_width,
+        ),
         NumBitwiseAnd => bd.build_and(lhs, rhs, "int_bitwise_and").into(),
         NumBitwiseXor => bd.build_xor(lhs, rhs, "int_bitwise_xor").into(),
         NumBitwiseOr => bd.build_or(lhs, rhs, "int_bitwise_or").into(),
@@ -6114,6 +6127,17 @@ pub fn build_num_binop<'a, 'ctx, 'env>(
         {
             use roc_mono::layout::Builtin::*;
 
+            let float_binop = |float_width| {
+                build_float_binop(
+                    env,
+                    parent,
+                    lhs_arg.into_float_value(),
+                    rhs_arg.into_float_value(),
+                    float_width,
+                    op,
+                )
+            };
+
             match lhs_builtin {
                 Usize | Int128 | Int64 | Int32 | Int16 | Int8 => build_int_binop(
                     env,
@@ -6124,15 +6148,11 @@ pub fn build_num_binop<'a, 'ctx, 'env>(
                     rhs_layout,
                     op,
                 ),
-                Float128 | Float64 | Float32 => build_float_binop(
-                    env,
-                    parent,
-                    lhs_arg.into_float_value(),
-                    lhs_layout,
-                    rhs_arg.into_float_value(),
-                    rhs_layout,
-                    op,
-                ),
+
+                Float32 => float_binop(FloatWidth::F32),
+                Float64 => float_binop(FloatWidth::F64),
+                Float128 => float_binop(FloatWidth::F128),
+
                 Decimal => {
                     build_dec_binop(env, parent, lhs_arg, lhs_layout, rhs_arg, rhs_layout, op)
                 }
@@ -6151,9 +6171,8 @@ fn build_float_binop<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     lhs: FloatValue<'ctx>,
-    _lhs_layout: &Layout<'a>,
     rhs: FloatValue<'ctx>,
-    _rhs_layout: &Layout<'a>,
+    float_width: FloatWidth,
     op: LowLevel,
 ) -> BasicValueEnum<'ctx> {
     use inkwell::FloatPredicate::*;
@@ -6169,7 +6188,8 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_add(lhs, rhs, "add_float");
 
             let is_finite =
-                call_bitcode_fn(env, &[result.into()], bitcode::NUM_IS_FINITE).into_int_value();
+                call_bitcode_float_fn(env, bitcode::NUM_IS_FINITE, &[result.into()], float_width)
+                    .into_int_value();
 
             let then_block = context.append_basic_block(parent, "then_block");
             let throw_block = context.append_basic_block(parent, "throw_block");
@@ -6190,7 +6210,8 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_add(lhs, rhs, "add_float");
 
             let is_finite =
-                call_bitcode_fn(env, &[result.into()], bitcode::NUM_IS_FINITE).into_int_value();
+                call_bitcode_float_fn(env, bitcode::NUM_IS_FINITE, &[result.into()], float_width)
+                    .into_int_value();
             let is_infinite = bd.build_not(is_finite, "negate");
 
             let struct_type = context.struct_type(
@@ -6218,7 +6239,8 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_sub(lhs, rhs, "sub_float");
 
             let is_finite =
-                call_bitcode_fn(env, &[result.into()], bitcode::NUM_IS_FINITE).into_int_value();
+                call_bitcode_float_fn(env, bitcode::NUM_IS_FINITE, &[result.into()], float_width)
+                    .into_int_value();
 
             let then_block = context.append_basic_block(parent, "then_block");
             let throw_block = context.append_basic_block(parent, "throw_block");
@@ -6239,7 +6261,8 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_sub(lhs, rhs, "sub_float");
 
             let is_finite =
-                call_bitcode_fn(env, &[result.into()], bitcode::NUM_IS_FINITE).into_int_value();
+                call_bitcode_float_fn(env, bitcode::NUM_IS_FINITE, &[result.into()], float_width)
+                    .into_int_value();
             let is_infinite = bd.build_not(is_finite, "negate");
 
             let struct_type = context.struct_type(
@@ -6267,7 +6290,8 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_mul(lhs, rhs, "mul_float");
 
             let is_finite =
-                call_bitcode_fn(env, &[result.into()], bitcode::NUM_IS_FINITE).into_int_value();
+                call_bitcode_float_fn(env, bitcode::NUM_IS_FINITE, &[result.into()], float_width)
+                    .into_int_value();
 
             let then_block = context.append_basic_block(parent, "then_block");
             let throw_block = context.append_basic_block(parent, "throw_block");
@@ -6288,7 +6312,8 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_mul(lhs, rhs, "mul_float");
 
             let is_finite =
-                call_bitcode_fn(env, &[result.into()], bitcode::NUM_IS_FINITE).into_int_value();
+                call_bitcode_float_fn(env, bitcode::NUM_IS_FINITE, &[result.into()], float_width)
+                    .into_int_value();
             let is_infinite = bd.build_not(is_finite, "negate");
 
             let struct_type = context.struct_type(
@@ -6315,7 +6340,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
         NumLte => bd.build_float_compare(OLE, lhs, rhs, "float_lte").into(),
         NumRemUnchecked => bd.build_float_rem(lhs, rhs, "rem_float").into(),
         NumDivUnchecked => bd.build_float_div(lhs, rhs, "div_float").into(),
-        NumPow => env.call_intrinsic(LLVM_POW_F64, &[lhs.into(), rhs.into()]),
+        NumPow => call_float_intrinsic(env, LLVM_POW, &[lhs.into(), rhs.into()], float_width),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }
@@ -6553,10 +6578,58 @@ fn int_abs_with_overflow<'a, 'ctx, 'env>(
     ))
 }
 
+#[repr(u8)]
+pub enum FloatWidth {
+    F32,
+    F64,
+    F128,
+}
+
+#[repr(u8)]
+pub enum IntWidth {
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    Usize,
+}
+
+impl From<roc_mono::layout::Builtin<'_>> for IntWidth {
+    fn from(builtin: Builtin) -> Self {
+        use IntWidth::*;
+
+        match builtin {
+            Builtin::Int128 => I128,
+            Builtin::Int64 => I64,
+            Builtin::Int32 => I32,
+            Builtin::Int16 => I16,
+            Builtin::Int8 => I8,
+            Builtin::Usize => Usize,
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl From<roc_mono::layout::Layout<'_>> for IntWidth {
+    fn from(layout: Layout) -> Self {
+        match layout {
+            Layout::Builtin(builtin) => IntWidth::from(builtin),
+            _ => unreachable!(),
+        }
+    }
+}
+
 fn build_float_unary_op<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     arg: FloatValue<'ctx>,
     op: LowLevel,
+    float_width: FloatWidth,
 ) -> BasicValueEnum<'ctx> {
     use roc_module::low_level::LowLevel::*;
 
@@ -6565,12 +6638,9 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
     // TODO: Handle different sized floats
     match op {
         NumNeg => bd.build_float_neg(arg, "negate_float").into(),
-        NumAbs => env.call_intrinsic(LLVM_FABS_F64, &[arg.into()]),
+        NumAbs => call_float_intrinsic(env, LLVM_FABS, &[arg.into()], float_width),
         NumSqrtUnchecked => env.call_intrinsic(LLVM_SQRT_F64, &[arg.into()]),
         NumLogUnchecked => env.call_intrinsic(LLVM_LOG_F64, &[arg.into()]),
-        NumRound => call_bitcode_fn(env, &[arg.into()], bitcode::NUM_ROUND),
-        NumSin => env.call_intrinsic(LLVM_SIN_F64, &[arg.into()]),
-        NumCos => env.call_intrinsic(LLVM_COS_F64, &[arg.into()]),
         NumToFloat => arg.into(), /* Converting from Float to Float is a no-op */
         NumCeiling => env.builder.build_cast(
             InstructionOpcode::FPToSI,
@@ -6584,15 +6654,102 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
             env.context.i64_type(),
             "num_floor",
         ),
-        NumIsFinite => call_bitcode_fn(env, &[arg.into()], bitcode::NUM_IS_FINITE),
-        NumAtan => call_bitcode_fn(env, &[arg.into()], bitcode::NUM_ATAN),
-        NumAcos => call_bitcode_fn(env, &[arg.into()], bitcode::NUM_ACOS),
-        NumAsin => call_bitcode_fn(env, &[arg.into()], bitcode::NUM_ASIN),
+        NumIsFinite => {
+            call_bitcode_float_fn(env, bitcode::NUM_IS_FINITE, &[arg.into()], float_width)
+        }
+
+        NumRound => call_bitcode_float_fn(env, bitcode::NUM_ROUND, &[arg.into()], float_width),
+
+        // trigonometry
+        NumSin => env.call_intrinsic(LLVM_SIN_F64, &[arg.into()]),
+        NumCos => env.call_intrinsic(LLVM_COS_F64, &[arg.into()]),
+
+        NumAtan => call_bitcode_float_fn(env, bitcode::NUM_ATAN, &[arg.into()], float_width),
+        NumAcos => call_bitcode_float_fn(env, bitcode::NUM_ACOS, &[arg.into()], float_width),
+        NumAsin => call_bitcode_float_fn(env, bitcode::NUM_ASIN, &[arg.into()], float_width),
+
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);
         }
     }
 }
+
+pub fn call_bitcode_int_fn<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    fn_name: &str,
+    args: &[BasicValueEnum<'ctx>],
+    int_width: IntWidth,
+) -> BasicValueEnum<'ctx> {
+    match int_width {
+        IntWidth::U8 => call_bitcode_fn(env, args, &format!("{}_u8", fn_name)),
+        IntWidth::U16 => call_bitcode_fn(env, args, &format!("{}_u16", fn_name)),
+        IntWidth::U32 => call_bitcode_fn(env, args, &format!("{}_u32", fn_name)),
+        IntWidth::U64 => call_bitcode_fn(env, args, &format!("{}_u64", fn_name)),
+        IntWidth::U128 => call_bitcode_fn(env, args, &format!("{}_u128", fn_name)),
+        IntWidth::I8 => call_bitcode_fn(env, args, &format!("{}_i8", fn_name)),
+        IntWidth::I16 => call_bitcode_fn(env, args, &format!("{}_i16", fn_name)),
+        IntWidth::I32 => call_bitcode_fn(env, args, &format!("{}_i32", fn_name)),
+        IntWidth::I64 => call_bitcode_fn(env, args, &format!("{}_i64", fn_name)),
+        IntWidth::I128 => call_bitcode_fn(env, args, &format!("{}_i128", fn_name)),
+        IntWidth::Usize => call_bitcode_fn(env, args, &format!("{}_usize", fn_name)),
+    }
+}
+
+pub fn call_bitcode_float_fn<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    fn_name: &str,
+    args: &[BasicValueEnum<'ctx>],
+    float_width: FloatWidth,
+) -> BasicValueEnum<'ctx> {
+    match float_width {
+        FloatWidth::F32 => call_bitcode_fn(env, args, &format!("{}_f32", fn_name)),
+        FloatWidth::F64 => call_bitcode_fn(env, args, &format!("{}_f64", fn_name)),
+        FloatWidth::F128 => todo!("suport 128-bit floats"),
+    }
+}
+
+pub fn call_float_intrinsic<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    fn_name: &str,
+    args: &[BasicValueEnum<'ctx>],
+    float_width: FloatWidth,
+) -> BasicValueEnum<'ctx> {
+    let suffix = match float_width {
+        FloatWidth::F32 => "f32",
+        FloatWidth::F64 => "f64",
+        FloatWidth::F128 => "f128",
+    };
+
+    env.call_intrinsic(&format!("{}.{}", fn_name, suffix), args)
+}
+
+pub fn call_int_intrinsic<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    fn_name: &str,
+    args: &[BasicValueEnum<'ctx>],
+    int_width: IntWidth,
+) -> BasicValueEnum<'ctx> {
+    let suffix = match int_width {
+        IntWidth::I8 => "i8",
+        IntWidth::I16 => "162",
+        IntWidth::I32 => "i32",
+        IntWidth::I64 => "i64",
+        IntWidth::I128 => "i128",
+        IntWidth::U8 => "i8",
+        IntWidth::U16 => "162",
+        IntWidth::U32 => "i32",
+        IntWidth::U64 => "i64",
+        IntWidth::U128 => "i128",
+        IntWidth::Usize => match env.ptr_bytes {
+            4 => "i32",
+            8 => "i64",
+            _ => unreachable!("unsupported pointer size"),
+        },
+    };
+
+    env.call_intrinsic(&format!("{}.{}", fn_name, suffix), args)
+}
+
 fn define_global_str_literal_ptr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     message: &str,

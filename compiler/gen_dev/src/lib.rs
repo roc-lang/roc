@@ -400,21 +400,21 @@ where
             }
             LowLevel::NumAcos => self.build_fn_call(
                 sym,
-                bitcode::NUM_ACOS.to_string(),
+                format!("{}_i64", bitcode::NUM_ACOS),
                 args,
                 arg_layouts,
                 ret_layout,
             ),
             LowLevel::NumAsin => self.build_fn_call(
                 sym,
-                bitcode::NUM_ASIN.to_string(),
+                format!("{}_i64", bitcode::NUM_ASIN),
                 args,
                 arg_layouts,
                 ret_layout,
             ),
             LowLevel::NumAtan => self.build_fn_call(
                 sym,
-                bitcode::NUM_ATAN.to_string(),
+                format!("{}_i64", bitcode::NUM_ATAN),
                 args,
                 arg_layouts,
                 ret_layout,
@@ -437,7 +437,7 @@ where
             }
             LowLevel::NumPowInt => self.build_fn_call(
                 sym,
-                bitcode::NUM_POW_INT_I64.to_string(),
+                format!("{}_i64", bitcode::NUM_POW_INT),
                 args,
                 arg_layouts,
                 ret_layout,
