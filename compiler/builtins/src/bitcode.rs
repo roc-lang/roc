@@ -1,7 +1,97 @@
+use std::ops::Index;
+
 pub const OBJ_PATH: &str = env!(
     "BUILTINS_O",
     "Env var BUILTINS_O not found. Is there a problem with the build script?"
 );
+
+#[derive(Default)]
+pub struct IntrinsicName { 
+    pub options: [ &'static str; 12 ],
+    pub is_float: bool,
+    pub is_int: bool,
+}
+
+impl IntrinsicName { 
+    pub const fn default() -> Self { 
+        Self { 
+            options: [ ""; 12 ],
+            is_float: false,
+            is_int: false,
+        }
+    }
+
+    pub fn intrinsics<'a>(&'a self) -> impl Iterator<Item = &&'a str> { 
+        let start_index = if self.is_float { 0} else { 3 };
+        let end_index = if self.is_int { 12 } else { 3 };
+
+        let slice = &self.options[start_index..end_index];
+
+        slice.iter()
+    }
+}
+
+
+#[repr(u8)]
+pub enum DecWidth {
+    Dec,
+}
+
+#[repr(u8)]
+pub enum FloatWidth {
+    F32,
+    F64,
+    F128,
+}
+
+#[repr(u8)]
+pub enum IntWidth {
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+}
+
+
+impl Index<FloatWidth> for IntrinsicName {
+    type Output = str;
+
+    fn index(&self, index: FloatWidth) -> &Self::Output {
+        match index {
+            FloatWidth::F32 => self.options[0], 
+            FloatWidth::F64 => self.options[1], 
+            FloatWidth::F128 => self.options[2], 
+        }
+    }
+}
+
+impl Index<IntWidth> for IntrinsicName {
+    type Output = str;
+
+    fn index(&self, index: IntWidth) -> &Self::Output {
+        match index {
+            IntWidth::U8 =>     self.options[3],
+            IntWidth::U16 =>    self.options[4],
+            IntWidth::U32 =>    self.options[5],
+            IntWidth::U64 =>    self.options[6],
+            IntWidth::U128 =>   self.options[7],
+            IntWidth::I8 =>     self.options[8],
+            IntWidth::I16 =>    self.options[9],
+            IntWidth::I32 =>    self.options[10],
+            IntWidth::I64 =>    self.options[11],
+            IntWidth::I128 =>   self.options[12],
+        }
+    }
+}
+
+
+
 
 pub const NUM_ASIN: &str = "roc_builtins.num.asin";
 pub const NUM_ACOS: &str = "roc_builtins.num.acos";

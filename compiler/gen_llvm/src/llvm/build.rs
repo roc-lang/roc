@@ -48,7 +48,7 @@ use inkwell::{AddressSpace, IntPredicate};
 use morphic_lib::{
     CalleeSpecVar, FuncName, FuncSpec, FuncSpecSolutions, ModSolutions, UpdateMode, UpdateModeVar,
 };
-use roc_builtins::bitcode;
+use roc_builtins::bitcode::{self, IntrinsicName, IntWidth, FloatWidth, DecWidth};
 use roc_collections::all::{ImMap, MutMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -487,16 +487,19 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         i64_type.fn_type(&[f64_type.into()], false),
     );
 
+
+    for name in LLVM_POW.intrinsics() { 
+        add_intrinsic(
+            module,
+            name,
+            f64_type.fn_type(&[f64_type.into(), f64_type.into()], false),
+        );
+    }
+
     for width in ["f32", "f64"] {
         let name = format!("{}.{}", LLVM_FABS, width);
         add_intrinsic(module, &name, f64_type.fn_type(&[f64_type.into()], false));
 
-        let name = format!("{}.{}", LLVM_POW, width);
-        add_intrinsic(
-            module,
-            &name,
-            f64_type.fn_type(&[f64_type.into(), f64_type.into()], false),
-        );
     }
 
     add_intrinsic(
@@ -572,6 +575,57 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     });
 }
 
+macro_rules! define_float_intrinsic { 
+    ($name:literal, $output:expr) => { 
+        $output.options[0] = concat!($name, ".f32");
+        $output.options[1] = concat!($name, ".f64");
+        $output.options[2] = concat!($name, ".f128");
+    };
+}
+
+macro_rules! define_int_intrinsic { 
+    ($name:literal, $output:expr) => { 
+            $output.options[3] = concat!($name, ".i8");
+            $output.options[4] = concat!($name, ".i16");
+            $output.options[5] = concat!($name, ".i32");
+            $output.options[6] = concat!($name, ".i64");
+            $output.options[7] = concat!($name, ".i128");
+            $output.options[8] = concat!($name, ".i8");
+            $output.options[9] = concat!($name, ".i16");
+            $output.options[10] = concat!($name, ".i32");
+            $output.options[11] = concat!($name, ".i64");
+            $output.options[12] = concat!($name, ".i128");
+    };
+    
+}
+
+macro_rules! float_intrinsic { 
+    ($name:literal) => { {
+        let mut output = IntrinsicName::default(); 
+
+        define_float_intrinsic!($name, output);
+
+        output.is_float = true;
+
+        output
+    }};
+}
+
+macro_rules! int_intrinsic { 
+    ($name:literal) => { {
+        let mut output = IntrinsicName::default(); 
+
+        define_int_intrinsic!($name, output);
+
+        output.is_int = true;
+
+        output
+    }};
+}
+
+// pub const LLVM_FABS: IntrinsicName = float_intrinsic!("llvm.fabs");
+static LLVM_POW: IntrinsicName = float_intrinsic!("llvm.pow");
+
 static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
 static LLVM_MEMSET_I32: &str = "llvm.memset.p0i8.i32";
 static LLVM_SQRT_F64: &str = "llvm.sqrt.f64";
@@ -580,7 +634,6 @@ static LLVM_LROUND_I64_F64: &str = "llvm.lround.i64.f64";
 static LLVM_FABS: &str = "llvm.fabs";
 static LLVM_SIN_F64: &str = "llvm.sin.f64";
 static LLVM_COS_F64: &str = "llvm.cos.f64";
-static LLVM_POW: &str = "llvm.pow";
 static LLVM_CEILING_F64: &str = "llvm.ceil.f64";
 static LLVM_FLOOR_F64: &str = "llvm.floor.f64";
 
@@ -5902,6 +5955,31 @@ fn throw_on_overflow<'a, 'ctx, 'env>(
         .unwrap()
 }
 
+pub fn intwidth_from_builtin(builtin: Builtin<'_>, ptr_bytes: u32) -> IntWidth { 
+        use IntWidth::*;
+
+        match builtin {
+            Builtin::Int128 => I128,
+            Builtin::Int64 => I64,
+            Builtin::Int32 => I32,
+            Builtin::Int16 => I16,
+            Builtin::Int8 => I8,
+            Builtin::Usize => match ptr_bytes { 
+                4 => I32,
+                8 => I64,
+                _ => unreachable!(),
+            }
+            _ => unreachable!(),
+        }
+}
+
+fn intwidth_from_layout(layout: Layout<'_>, ptr_bytes: u32) -> IntWidth { 
+        match layout {
+            Layout::Builtin(builtin) => intwidth_from_builtin(builtin, ptr_bytes),
+            _ => unreachable!(),
+        }
+}
+
 fn build_int_binop<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
@@ -5916,7 +5994,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
 
     let bd = env.builder;
 
-    let int_width = IntWidth::from(*lhs_layout);
+    let int_width = intwidth_from_layout(*lhs_layout, env.ptr_bytes);
 
     match op {
         NumAdd => {
@@ -6311,7 +6389,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
         NumLte => bd.build_float_compare(OLE, lhs, rhs, "float_lte").into(),
         NumRemUnchecked => bd.build_float_rem(lhs, rhs, "rem_float").into(),
         NumDivUnchecked => bd.build_float_div(lhs, rhs, "div_float").into(),
-        NumPow => call_float_intrinsic(env, LLVM_POW, &[lhs.into(), rhs.into()], float_width),
+        NumPow => env.call_intrinsic(&LLVM_POW[float_width], &[lhs.into(), rhs.into()]),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }
@@ -6549,52 +6627,6 @@ fn int_abs_with_overflow<'a, 'ctx, 'env>(
     ))
 }
 
-#[repr(u8)]
-pub enum FloatWidth {
-    F32,
-    F64,
-    F128,
-}
-
-#[repr(u8)]
-pub enum IntWidth {
-    U8,
-    U16,
-    U32,
-    U64,
-    U128,
-    I8,
-    I16,
-    I32,
-    I64,
-    I128,
-    Usize,
-}
-
-impl From<roc_mono::layout::Builtin<'_>> for IntWidth {
-    fn from(builtin: Builtin) -> Self {
-        use IntWidth::*;
-
-        match builtin {
-            Builtin::Int128 => I128,
-            Builtin::Int64 => I64,
-            Builtin::Int32 => I32,
-            Builtin::Int16 => I16,
-            Builtin::Int8 => I8,
-            Builtin::Usize => Usize,
-            _ => unreachable!(),
-        }
-    }
-}
-
-impl From<roc_mono::layout::Layout<'_>> for IntWidth {
-    fn from(layout: Layout) -> Self {
-        match layout {
-            Layout::Builtin(builtin) => IntWidth::from(builtin),
-            _ => unreachable!(),
-        }
-    }
-}
 
 fn build_float_unary_op<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -6662,7 +6694,6 @@ pub fn call_bitcode_int_fn<'a, 'ctx, 'env>(
         IntWidth::I32 => call_bitcode_fn(env, args, &format!("{}_i32", fn_name)),
         IntWidth::I64 => call_bitcode_fn(env, args, &format!("{}_i64", fn_name)),
         IntWidth::I128 => call_bitcode_fn(env, args, &format!("{}_i128", fn_name)),
-        IntWidth::Usize => call_bitcode_fn(env, args, &format!("{}_usize", fn_name)),
     }
 }
 
@@ -6694,32 +6725,6 @@ pub fn call_float_intrinsic<'a, 'ctx, 'env>(
     env.call_intrinsic(&format!("{}.{}", fn_name, suffix), args)
 }
 
-pub fn call_int_intrinsic<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    fn_name: &str,
-    args: &[BasicValueEnum<'ctx>],
-    int_width: IntWidth,
-) -> BasicValueEnum<'ctx> {
-    let suffix = match int_width {
-        IntWidth::I8 => "i8",
-        IntWidth::I16 => "162",
-        IntWidth::I32 => "i32",
-        IntWidth::I64 => "i64",
-        IntWidth::I128 => "i128",
-        IntWidth::U8 => "i8",
-        IntWidth::U16 => "162",
-        IntWidth::U32 => "i32",
-        IntWidth::U64 => "i64",
-        IntWidth::U128 => "i128",
-        IntWidth::Usize => match env.ptr_bytes {
-            4 => "i32",
-            8 => "i64",
-            _ => unreachable!("unsupported pointer size"),
-        },
-    };
-
-    env.call_intrinsic(&format!("{}.{}", fn_name, suffix), args)
-}
 
 fn define_global_str_literal_ptr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
