@@ -1,7 +1,6 @@
 platform examples/sdl
     requires {}{
-        # handleEventForHost : Effect {}
-        windowProperties : SDL.WindowConfig
+        gameContext : SDL.Context
     }
     exposes []
     packages {}
@@ -16,7 +15,7 @@ platform examples/sdl
         }
 
 windowPropertiesForHost : SDL.WindowConfig
-windowPropertiesForHost = windowProperties
+windowPropertiesForHost = gameContext.props
 
 handleEventForHost : Task {} [] as Fx
-handleEventForHost = Task.putLine "Got an event"
+handleEventForHost = gameContext.handler

@@ -1,7 +1,11 @@
 app "flappy-bird"
     packages { base: "platform" }
     imports [ base.SDL, base.Task.{ Task } ]
-    provides [ handleEvent, windowProperties ] to base
+    provides [ gameContext ] to base
+
+gameContext: SDL.Context
+gameContext =
+    { props: windowProperties, handler: handleEvent }
 
 windowProperties : SDL.WindowConfig
 windowProperties =

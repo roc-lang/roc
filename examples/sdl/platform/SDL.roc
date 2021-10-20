@@ -1,5 +1,6 @@
 interface SDL
     exposes [
+        Context,
         Window,
         WindowConfig,
         Renderer
@@ -24,3 +25,8 @@ WindowConfig :
         height: Nat
     }
 
+Context :
+    {
+        props: WindowConfig,
+        handler: Task {} []
+    }
