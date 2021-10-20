@@ -92,8 +92,8 @@ comptime {
     }
 
     inline for (FLOATS) |T| {
-        num.exportAsin(T, ROC_BUILTINS ++ "." ++ NUM ++ ".acos.");
-        num.exportAcos(T, ROC_BUILTINS ++ "." ++ NUM ++ ".asin.");
+        num.exportAsin(T, ROC_BUILTINS ++ "." ++ NUM ++ ".asin.");
+        num.exportAcos(T, ROC_BUILTINS ++ "." ++ NUM ++ ".acos.");
         num.exportAtan(T, ROC_BUILTINS ++ "." ++ NUM ++ ".atan.");
 
         num.exportIsFinite(T, ROC_BUILTINS ++ "." ++ NUM ++ ".is_finite.");
