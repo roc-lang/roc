@@ -204,7 +204,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
 
     pub fn build_intrinsic_call(
         &self,
-        intrinsic_name: &str,
+        intrinsic_name: &'static str,
         args: &[BasicValueEnum<'ctx>],
     ) -> CallSiteValue<'ctx> {
         let fn_val = self
