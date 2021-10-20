@@ -618,8 +618,8 @@ pub fn construct_optimization_passes<'a>(
     mpm.add_always_inliner_pass();
 
     // tail-call elimination is always on
-    fpm.add_instruction_combining_pass();
-    fpm.add_tail_call_elimination_pass();
+    // fpm.add_instruction_combining_pass();
+    // fpm.add_tail_call_elimination_pass();
 
     let pmb = PassManagerBuilder::create();
     match opt_level {
@@ -629,7 +629,7 @@ pub fn construct_optimization_passes<'a>(
         OptLevel::Optimize => {
             pmb.set_optimization_level(OptimizationLevel::Aggressive);
             // this threshold seems to do what we want
-            pmb.set_inliner_with_threshold(275);
+            pmb.set_inliner_with_threshold(0);
 
             // TODO figure out which of these actually help
 
@@ -1241,17 +1241,26 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                     let struct_type = basic_type_from_layout(env, &struct_layout);
 
-                    let struct_value = access_index_struct_value(
-                        builder,
-                        argument.into_struct_value(),
-                        struct_type.into_struct_type(),
+                    let argument_pointer = builder.build_alloca(argument.get_type(), "cast_alloca");
+                    builder.build_store(argument_pointer, argument);
+
+                    let struct_ptr = builder.build_pointer_cast(
+                        argument_pointer,
+                        struct_type.ptr_type(AddressSpace::Generic),
+                        "foobar",
                     );
 
+                    //                    let struct_value = access_index_struct_value(
+                    //                        builder,
+                    //                        argument.into_struct_value(),
+                    //                        struct_type.into_struct_type(),
+                    //                    );
+
                     let result = builder
-                        .build_extract_value(struct_value, *index as u32, "")
+                        .build_struct_gep(struct_ptr, *index as u32, "")
                         .expect("desired field did not decode");
 
-                    result
+                    builder.build_load(result, "foobarbaz")
                 }
                 UnionLayout::Recursive(tag_layouts) => {
                     debug_assert!(argument.is_pointer_value());
@@ -1453,7 +1462,13 @@ pub fn build_tag<'a, 'ctx, 'env>(
         UnionLayout::NonRecursive(tags) => {
             debug_assert!(union_size > 1);
 
-            let ctx = env.context;
+            let internal_type = block_of_memory_slices(env.context, tags, env.ptr_bytes);
+
+            let tag_id_type = basic_type_from_layout(env, &tag_id_layout).into_int_type();
+            let wrapper_type = env
+                .context
+                .struct_type(&[internal_type, tag_id_type.into()], false);
+            let result_alloca = env.builder.build_alloca(wrapper_type, "tag_opaque");
 
             // Determine types
             let num_fields = arguments.len() + 1;
@@ -1484,54 +1499,46 @@ pub fn build_tag<'a, 'ctx, 'env>(
                     }
                 }
             }
-
-            // Create the struct_type
-            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-
-            // Insert field exprs into struct_val
-            let struct_val =
-                struct_from_fields(env, struct_type, field_vals.into_iter().enumerate());
-
-            // How we create tag values
-            //
-            // The memory layout of tags can be different. e.g. in
-            //
-            // [ Ok Int, Err Str ]
-            //
-            // the `Ok` tag stores a 64-bit integer, the `Err` tag stores a struct.
-            // All tags of a union must have the same length, for easy addressing (e.g. array lookups).
-            // So we need to ask for the maximum of all tag's sizes, even if most tags won't use
-            // all that memory, and certainly won't use it in the same way (the tags have fields of
-            // different types/sizes)
-            //
-            // In llvm, we must be explicit about the type of value we're creating: we can't just
-            // make a unspecified block of memory. So what we do is create a byte array of the
-            // desired size. Then when we know which tag we have (which is here, in this function),
-            // we need to cast that down to the array of bytes that llvm expects
-            //
-            // There is the bitcast instruction, but it doesn't work for arrays. So we need to jump
-            // through some hoops using store and load to get this to work: the array is put into a
-            // one-element struct, which can be cast to the desired type.
-            //
-            // This tricks comes from
-            // https://github.com/raviqqe/ssf/blob/bc32aae68940d5bddf5984128e85af75ca4f4686/ssf-llvm/src/expression_compiler.rs#L116
-
-            let internal_type = block_of_memory_slices(env.context, tags, env.ptr_bytes);
-
-            let data = cast_tag_to_block_of_memory(env, struct_val, internal_type);
-            let tag_id_type = basic_type_from_layout(env, &tag_id_layout).into_int_type();
-            let wrapper_type = env
-                .context
-                .struct_type(&[data.get_type(), tag_id_type.into()], false);
+            // store the tag id
+            let tag_id_ptr = env
+                .builder
+                .build_struct_gep(result_alloca, TAG_ID_INDEX, "get_opaque_data")
+                .unwrap();
 
             let tag_id_intval = tag_id_type.const_int(tag_id as u64, false);
+            env.builder.build_store(tag_id_ptr, tag_id_intval);
 
-            let field_vals = [
-                (TAG_DATA_INDEX as usize, data),
-                (TAG_ID_INDEX as usize, tag_id_intval.into()),
-            ];
+            // Create the struct_type
+            let struct_type = env
+                .context
+                .struct_type(field_types.into_bump_slice(), false);
 
-            struct_from_fields(env, wrapper_type, field_vals.iter().copied()).into()
+            let struct_opaque_ptr = env
+                .builder
+                .build_struct_gep(result_alloca, TAG_DATA_INDEX, "get_opaque_data")
+                .unwrap();
+            let struct_ptr = env.builder.build_pointer_cast(
+                struct_opaque_ptr,
+                struct_type.ptr_type(AddressSpace::Generic),
+                "to_specific",
+            );
+
+            // Insert field exprs into struct_val
+            //let struct_val =
+            //struct_from_fields(env, struct_type, field_vals.into_iter().enumerate());
+
+            // Insert field exprs into struct_val
+            for (index, field_val) in field_vals.iter().copied().enumerate() {
+                let index: u32 = index as u32;
+
+                let ptr = env
+                    .builder
+                    .build_struct_gep(struct_ptr, index, "get_tag_field_ptr")
+                    .unwrap();
+                env.builder.build_store(ptr, field_val);
+            }
+
+            env.builder.build_load(result_alloca, "load_result")
         }
         UnionLayout::Recursive(tags) => {
             debug_assert!(union_size > 1);
