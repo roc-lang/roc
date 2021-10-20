@@ -48,7 +48,7 @@ use inkwell::{AddressSpace, IntPredicate};
 use morphic_lib::{
     CalleeSpecVar, FuncName, FuncSpec, FuncSpecSolutions, ModSolutions, UpdateMode, UpdateModeVar,
 };
-use roc_builtins::bitcode::{self, DecWidth, FloatWidth, IntWidth, IntrinsicName};
+use roc_builtins::bitcode::{self, FloatWidth, IntWidth, IntrinsicName};
 use roc_collections::all::{ImMap, MutMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -229,7 +229,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
 
     pub fn call_intrinsic(
         &self,
-        intrinsic_name: &str,
+        intrinsic_name: &'static str,
         args: &[BasicValueEnum<'ctx>],
     ) -> BasicValueEnum<'ctx> {
         let call = self.build_intrinsic_call(intrinsic_name, args);
@@ -6668,21 +6668,6 @@ pub fn call_bitcode_float_fn<'a, 'ctx, 'env>(
         FloatWidth::F64 => call_bitcode_fn(env, args, &format!("{}_f64", fn_name)),
         FloatWidth::F128 => todo!("suport 128-bit floats"),
     }
-}
-
-pub fn call_float_intrinsic<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    fn_name: &str,
-    args: &[BasicValueEnum<'ctx>],
-    float_width: FloatWidth,
-) -> BasicValueEnum<'ctx> {
-    let suffix = match float_width {
-        FloatWidth::F32 => "f32",
-        FloatWidth::F64 => "f64",
-        FloatWidth::F128 => "f128",
-    };
-
-    env.call_intrinsic(&format!("{}.{}", fn_name, suffix), args)
 }
 
 fn define_global_str_literal_ptr<'a, 'ctx, 'env>(
