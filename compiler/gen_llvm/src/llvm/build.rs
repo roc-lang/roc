@@ -49,6 +49,7 @@ use morphic_lib::{
     CalleeSpecVar, FuncName, FuncSpec, FuncSpecSolutions, ModSolutions, UpdateMode, UpdateModeVar,
 };
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth, IntrinsicName};
+use roc_builtins::{float_intrinsic, int_intrinsic};
 use roc_collections::all::{ImMap, MutMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -561,49 +562,6 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         ctx.struct_type(&fields, false)
             .fn_type(&[t.into(), t.into()], false)
     });
-}
-
-macro_rules! define_float_intrinsic {
-    ($name:literal, $output:expr) => {
-        $output.options[1] = concat!($name, ".f32");
-        $output.options[2] = concat!($name, ".f64");
-        $output.options[3] = concat!($name, ".f128");
-    };
-}
-
-macro_rules! define_int_intrinsic {
-    ($name:literal, $output:expr) => {
-        $output.options[4] = concat!($name, ".i8");
-        $output.options[5] = concat!($name, ".i16");
-        $output.options[6] = concat!($name, ".i32");
-        $output.options[7] = concat!($name, ".i64");
-        $output.options[8] = concat!($name, ".i128");
-        $output.options[9] = concat!($name, ".i8");
-        $output.options[10] = concat!($name, ".i16");
-        $output.options[11] = concat!($name, ".i32");
-        $output.options[12] = concat!($name, ".i64");
-        $output.options[13] = concat!($name, ".i128");
-    };
-}
-
-macro_rules! float_intrinsic {
-    ($name:literal) => {{
-        let mut output = IntrinsicName::default();
-
-        define_float_intrinsic!($name, output);
-
-        output
-    }};
-}
-
-macro_rules! int_intrinsic {
-    ($name:literal) => {{
-        let mut output = IntrinsicName::default();
-
-        define_int_intrinsic!($name, output);
-
-        output
-    }};
 }
 
 const LLVM_POW: IntrinsicName = float_intrinsic!("llvm.pow");

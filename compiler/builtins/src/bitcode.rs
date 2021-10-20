@@ -81,6 +81,7 @@ impl Index<IntWidth> for IntrinsicName {
     }
 }
 
+#[macro_export]
 macro_rules! float_intrinsic {
     ($name:literal) => {{
         let mut output = IntrinsicName::default();
@@ -93,6 +94,7 @@ macro_rules! float_intrinsic {
     }};
 }
 
+#[macro_export]
 macro_rules! int_intrinsic {
     ($name:literal) => {{
         let mut output = IntrinsicName::default();
