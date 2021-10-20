@@ -520,7 +520,10 @@ pub fn list_range<'a, 'ctx, 'env>(
     let int_width = env
         .context
         .i8_type()
-        .const_int(crate::llvm::build::intwidth_from_builtin(builtin, env.ptr_bytes) as u64, false)
+        .const_int(
+            crate::llvm::build::intwidth_from_builtin(builtin, env.ptr_bytes) as u64,
+            false,
+        )
         .into();
 
     call_bitcode_fn(
