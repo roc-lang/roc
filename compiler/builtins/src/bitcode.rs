@@ -5,32 +5,33 @@ pub const OBJ_PATH: &str = env!(
     "Env var BUILTINS_O not found. Is there a problem with the build script?"
 );
 
-#[derive(Default)]
-pub struct IntrinsicName { 
-    pub options: [ &'static str; 12 ],
+#[derive(Debug, Default)]
+pub struct IntrinsicName {
+    pub base: &'static str,
+    pub options: [&'static str; 13],
     pub is_float: bool,
     pub is_int: bool,
 }
 
-impl IntrinsicName { 
-    pub const fn default() -> Self { 
-        Self { 
-            options: [ ""; 12 ],
+impl IntrinsicName {
+    pub const fn default() -> Self {
+        Self {
+            base: "",
+            options: [""; 13],
             is_float: false,
             is_int: false,
         }
     }
 
-    pub fn intrinsics<'a>(&'a self) -> impl Iterator<Item = &&'a str> { 
-        let start_index = if self.is_float { 0} else { 3 };
-        let end_index = if self.is_int { 12 } else { 3 };
+    pub fn intrinsics<'a>(&'a self) -> impl Iterator<Item = &&'a str> {
+        let start_index = if self.is_float { 0 } else { 3 };
+        let end_index = if self.is_int { 13 } else { 3 };
 
         let slice = &self.options[start_index..end_index];
 
         slice.iter()
     }
 }
-
 
 #[repr(u8)]
 pub enum DecWidth {
@@ -58,15 +59,14 @@ pub enum IntWidth {
     I128,
 }
 
-
 impl Index<FloatWidth> for IntrinsicName {
     type Output = str;
 
     fn index(&self, index: FloatWidth) -> &Self::Output {
         match index {
-            FloatWidth::F32 => self.options[0], 
-            FloatWidth::F64 => self.options[1], 
-            FloatWidth::F128 => self.options[2], 
+            FloatWidth::F32 => self.options[0],
+            FloatWidth::F64 => self.options[1],
+            FloatWidth::F128 => self.options[2],
         }
     }
 }
@@ -76,22 +76,19 @@ impl Index<IntWidth> for IntrinsicName {
 
     fn index(&self, index: IntWidth) -> &Self::Output {
         match index {
-            IntWidth::U8 =>     self.options[3],
-            IntWidth::U16 =>    self.options[4],
-            IntWidth::U32 =>    self.options[5],
-            IntWidth::U64 =>    self.options[6],
-            IntWidth::U128 =>   self.options[7],
-            IntWidth::I8 =>     self.options[8],
-            IntWidth::I16 =>    self.options[9],
-            IntWidth::I32 =>    self.options[10],
-            IntWidth::I64 =>    self.options[11],
-            IntWidth::I128 =>   self.options[12],
+            IntWidth::U8 => self.options[3],
+            IntWidth::U16 => self.options[4],
+            IntWidth::U32 => self.options[5],
+            IntWidth::U64 => self.options[6],
+            IntWidth::U128 => self.options[7],
+            IntWidth::I8 => self.options[8],
+            IntWidth::I16 => self.options[9],
+            IntWidth::I32 => self.options[10],
+            IntWidth::I64 => self.options[11],
+            IntWidth::I128 => self.options[12],
         }
     }
 }
-
-
-
 
 pub const NUM_ASIN: &str = "roc_builtins.num.asin";
 pub const NUM_ACOS: &str = "roc_builtins.num.acos";

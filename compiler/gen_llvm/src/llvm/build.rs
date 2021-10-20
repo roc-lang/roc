@@ -48,7 +48,7 @@ use inkwell::{AddressSpace, IntPredicate};
 use morphic_lib::{
     CalleeSpecVar, FuncName, FuncSpec, FuncSpecSolutions, ModSolutions, UpdateMode, UpdateModeVar,
 };
-use roc_builtins::bitcode::{self, IntrinsicName, IntWidth, FloatWidth, DecWidth};
+use roc_builtins::bitcode::{self, DecWidth, FloatWidth, IntWidth, IntrinsicName};
 use roc_collections::all::{ImMap, MutMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -430,6 +430,58 @@ pub fn module_from_builtins<'ctx>(
     module
 }
 
+fn add_float_intrinsic<'ctx, F>(
+    ctx: &'ctx Context,
+    module: &Module<'ctx>,
+    name: &IntrinsicName,
+    construct_type: F,
+) where
+    F: Fn(inkwell::types::FloatType<'ctx>) -> inkwell::types::FunctionType<'ctx>,
+{
+    macro_rules! check {
+        ($width:expr, $typ:expr) => {
+            let full_name = &name[$width];
+
+            if let Some(_) = module.get_function(full_name) {
+                // zig defined this function already
+            } else {
+                add_intrinsic(module, full_name, construct_type($typ));
+            }
+        };
+    }
+
+    check!(FloatWidth::F32, ctx.f32_type());
+    check!(FloatWidth::F64, ctx.f64_type());
+    // check!(IntWidth::F128, ctx.i128_type());
+}
+
+fn add_int_intrinsic<'ctx, F>(
+    ctx: &'ctx Context,
+    module: &Module<'ctx>,
+    name: &IntrinsicName,
+    construct_type: F,
+) where
+    F: Fn(inkwell::types::IntType<'ctx>) -> inkwell::types::FunctionType<'ctx>,
+{
+    macro_rules! check {
+        ($width:expr, $typ:expr) => {
+            let full_name = &name[$width];
+
+            if let Some(_) = module.get_function(full_name) {
+                // zig defined this function already
+            } else {
+                add_intrinsic(module, full_name, construct_type($typ));
+            }
+        };
+    }
+
+    check!(IntWidth::I8, ctx.i8_type());
+    check!(IntWidth::I16, ctx.i16_type());
+    check!(IntWidth::I32, ctx.i32_type());
+    check!(IntWidth::I64, ctx.i64_type());
+    check!(IntWidth::I128, ctx.i128_type());
+}
+
 fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     // List of all supported LLVM intrinsics:
     //
@@ -438,7 +490,6 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     let i1_type = ctx.bool_type();
     let i8_type = ctx.i8_type();
     let i8_ptr_type = i8_type.ptr_type(AddressSpace::Generic);
-    let i16_type = ctx.i16_type();
     let i32_type = ctx.i32_type();
     let i64_type = ctx.i64_type();
     let void_type = ctx.void_type();
@@ -477,165 +528,103 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
 
     add_intrinsic(
         module,
-        LLVM_LOG_F64,
-        f64_type.fn_type(&[f64_type.into()], false),
-    );
-
-    add_intrinsic(
-        module,
         LLVM_LROUND_I64_F64,
         i64_type.fn_type(&[f64_type.into()], false),
     );
 
+    add_float_intrinsic(ctx, module, &LLVM_LOG, |t| t.fn_type(&[t.into()], false));
+    add_float_intrinsic(ctx, module, &LLVM_POW, |t| {
+        t.fn_type(&[t.into(), t.into()], false)
+    });
+    add_float_intrinsic(ctx, module, &LLVM_FABS, |t| t.fn_type(&[t.into()], false));
+    add_float_intrinsic(ctx, module, &LLVM_SIN, |t| t.fn_type(&[t.into()], false));
+    add_float_intrinsic(ctx, module, &LLVM_COS, |t| t.fn_type(&[t.into()], false));
+    add_float_intrinsic(ctx, module, &LLVM_CEILING, |t| {
+        t.fn_type(&[t.into()], false)
+    });
+    add_float_intrinsic(ctx, module, &LLVM_FLOOR, |t| t.fn_type(&[t.into()], false));
 
-    for name in LLVM_POW.intrinsics() { 
-        add_intrinsic(
-            module,
-            name,
-            f64_type.fn_type(&[f64_type.into(), f64_type.into()], false),
-        );
-    }
-
-    for width in ["f32", "f64"] {
-        let name = format!("{}.{}", LLVM_FABS, width);
-        add_intrinsic(module, &name, f64_type.fn_type(&[f64_type.into()], false));
-
-    }
-
-    add_intrinsic(
-        module,
-        LLVM_SIN_F64,
-        f64_type.fn_type(&[f64_type.into()], false),
-    );
-
-    add_intrinsic(
-        module,
-        LLVM_COS_F64,
-        f64_type.fn_type(&[f64_type.into()], false),
-    );
-
-    add_intrinsic(
-        module,
-        LLVM_CEILING_F64,
-        f64_type.fn_type(&[f64_type.into()], false),
-    );
-
-    add_intrinsic(
-        module,
-        LLVM_FLOOR_F64,
-        f64_type.fn_type(&[f64_type.into()], false),
-    );
-
-    add_intrinsic(module, LLVM_SADD_WITH_OVERFLOW_I8, {
-        let fields = [i8_type.into(), i1_type.into()];
+    add_int_intrinsic(ctx, module, &LLVM_SADD_WITH_OVERFLOW, |t| {
+        let fields = [t.into(), i1_type.into()];
         ctx.struct_type(&fields, false)
-            .fn_type(&[i8_type.into(), i8_type.into()], false)
+            .fn_type(&[t.into(), t.into()], false)
     });
 
-    add_intrinsic(module, LLVM_SADD_WITH_OVERFLOW_I16, {
-        let fields = [i16_type.into(), i1_type.into()];
+    add_int_intrinsic(ctx, module, &LLVM_SSUB_WITH_OVERFLOW, |t| {
+        let fields = [t.into(), i1_type.into()];
         ctx.struct_type(&fields, false)
-            .fn_type(&[i16_type.into(), i16_type.into()], false)
+            .fn_type(&[t.into(), t.into()], false)
     });
 
-    add_intrinsic(module, LLVM_SADD_WITH_OVERFLOW_I32, {
-        let fields = [i32_type.into(), i1_type.into()];
+    add_int_intrinsic(ctx, module, &LLVM_SMUL_WITH_OVERFLOW, |t| {
+        let fields = [t.into(), i1_type.into()];
         ctx.struct_type(&fields, false)
-            .fn_type(&[i32_type.into(), i32_type.into()], false)
-    });
-
-    add_intrinsic(module, LLVM_SADD_WITH_OVERFLOW_I64, {
-        let fields = [i64_type.into(), i1_type.into()];
-        ctx.struct_type(&fields, false)
-            .fn_type(&[i64_type.into(), i64_type.into()], false)
-    });
-
-    add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I8, {
-        let fields = [i8_type.into(), i1_type.into()];
-        ctx.struct_type(&fields, false)
-            .fn_type(&[i8_type.into(), i8_type.into()], false)
-    });
-
-    add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I16, {
-        let fields = [i16_type.into(), i1_type.into()];
-        ctx.struct_type(&fields, false)
-            .fn_type(&[i16_type.into(), i16_type.into()], false)
-    });
-
-    add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I32, {
-        let fields = [i32_type.into(), i1_type.into()];
-        ctx.struct_type(&fields, false)
-            .fn_type(&[i32_type.into(), i32_type.into()], false)
-    });
-
-    add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I64, {
-        let fields = [i64_type.into(), i1_type.into()];
-        ctx.struct_type(&fields, false)
-            .fn_type(&[i64_type.into(), i64_type.into()], false)
+            .fn_type(&[t.into(), t.into()], false)
     });
 }
 
-macro_rules! define_float_intrinsic { 
-    ($name:literal, $output:expr) => { 
+macro_rules! define_float_intrinsic {
+    ($name:literal, $output:expr) => {
         $output.options[0] = concat!($name, ".f32");
         $output.options[1] = concat!($name, ".f64");
         $output.options[2] = concat!($name, ".f128");
     };
 }
 
-macro_rules! define_int_intrinsic { 
-    ($name:literal, $output:expr) => { 
-            $output.options[3] = concat!($name, ".i8");
-            $output.options[4] = concat!($name, ".i16");
-            $output.options[5] = concat!($name, ".i32");
-            $output.options[6] = concat!($name, ".i64");
-            $output.options[7] = concat!($name, ".i128");
-            $output.options[8] = concat!($name, ".i8");
-            $output.options[9] = concat!($name, ".i16");
-            $output.options[10] = concat!($name, ".i32");
-            $output.options[11] = concat!($name, ".i64");
-            $output.options[12] = concat!($name, ".i128");
+macro_rules! define_int_intrinsic {
+    ($name:literal, $output:expr) => {
+        $output.options[3] = concat!($name, ".i8");
+        $output.options[4] = concat!($name, ".i16");
+        $output.options[5] = concat!($name, ".i32");
+        $output.options[6] = concat!($name, ".i64");
+        $output.options[7] = concat!($name, ".i128");
+        $output.options[8] = concat!($name, ".i8");
+        $output.options[9] = concat!($name, ".i16");
+        $output.options[10] = concat!($name, ".i32");
+        $output.options[11] = concat!($name, ".i64");
+        $output.options[12] = concat!($name, ".i128");
     };
-    
 }
 
-macro_rules! float_intrinsic { 
-    ($name:literal) => { {
-        let mut output = IntrinsicName::default(); 
+macro_rules! float_intrinsic {
+    ($name:literal) => {{
+        let mut output = IntrinsicName::default();
 
         define_float_intrinsic!($name, output);
 
         output.is_float = true;
+        output.base = $name;
 
         output
     }};
 }
 
-macro_rules! int_intrinsic { 
-    ($name:literal) => { {
-        let mut output = IntrinsicName::default(); 
+macro_rules! int_intrinsic {
+    ($name:literal) => {{
+        let mut output = IntrinsicName::default();
 
         define_int_intrinsic!($name, output);
 
         output.is_int = true;
+        output.base = $name;
 
         output
     }};
 }
 
-// pub const LLVM_FABS: IntrinsicName = float_intrinsic!("llvm.fabs");
-static LLVM_POW: IntrinsicName = float_intrinsic!("llvm.pow");
+const LLVM_POW: IntrinsicName = float_intrinsic!("llvm.pow");
+const LLVM_FABS: IntrinsicName = float_intrinsic!("llvm.fabs");
+static LLVM_SQRT: IntrinsicName = float_intrinsic!("llvm.sqrt");
+static LLVM_LOG: IntrinsicName = float_intrinsic!("llvm.log");
+
+static LLVM_SIN: IntrinsicName = float_intrinsic!("llvm.sin");
+static LLVM_COS: IntrinsicName = float_intrinsic!("llvm.cos");
+static LLVM_CEILING: IntrinsicName = float_intrinsic!("llvm.ceil");
+static LLVM_FLOOR: IntrinsicName = float_intrinsic!("llvm.floor");
 
 static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
 static LLVM_MEMSET_I32: &str = "llvm.memset.p0i8.i32";
-static LLVM_SQRT_F64: &str = "llvm.sqrt.f64";
-static LLVM_LOG_F64: &str = "llvm.log.f64";
 static LLVM_LROUND_I64_F64: &str = "llvm.lround.i64.f64";
-static LLVM_FABS: &str = "llvm.fabs";
-static LLVM_SIN_F64: &str = "llvm.sin.f64";
-static LLVM_COS_F64: &str = "llvm.cos.f64";
-static LLVM_CEILING_F64: &str = "llvm.ceil.f64";
-static LLVM_FLOOR_F64: &str = "llvm.floor.f64";
 
 // static LLVM_FRAME_ADDRESS: &str = "llvm.frameaddress";
 static LLVM_FRAME_ADDRESS: &str = "llvm.frameaddress.p0i8";
@@ -644,19 +633,9 @@ static LLVM_STACK_SAVE: &str = "llvm.stacksave";
 static LLVM_SETJMP: &str = "llvm.eh.sjlj.setjmp";
 pub static LLVM_LONGJMP: &str = "llvm.eh.sjlj.longjmp";
 
-pub static LLVM_SADD_WITH_OVERFLOW_I8: &str = "llvm.sadd.with.overflow.i8";
-pub static LLVM_SADD_WITH_OVERFLOW_I16: &str = "llvm.sadd.with.overflow.i16";
-pub static LLVM_SADD_WITH_OVERFLOW_I32: &str = "llvm.sadd.with.overflow.i32";
-pub static LLVM_SADD_WITH_OVERFLOW_I64: &str = "llvm.sadd.with.overflow.i64";
-pub static LLVM_SADD_WITH_OVERFLOW_I128: &str = "llvm.sadd.with.overflow.i128";
-
-pub static LLVM_SSUB_WITH_OVERFLOW_I8: &str = "llvm.ssub.with.overflow.i8";
-pub static LLVM_SSUB_WITH_OVERFLOW_I16: &str = "llvm.ssub.with.overflow.i16";
-pub static LLVM_SSUB_WITH_OVERFLOW_I32: &str = "llvm.ssub.with.overflow.i32";
-pub static LLVM_SSUB_WITH_OVERFLOW_I64: &str = "llvm.ssub.with.overflow.i64";
-pub static LLVM_SSUB_WITH_OVERFLOW_I128: &str = "llvm.ssub.with.overflow.i128";
-
-pub static LLVM_SMUL_WITH_OVERFLOW_I64: &str = "llvm.smul.with.overflow.i64";
+const LLVM_SADD_WITH_OVERFLOW: IntrinsicName = int_intrinsic!("llvm.sadd.with.overflow");
+const LLVM_SSUB_WITH_OVERFLOW: IntrinsicName = int_intrinsic!("llvm.ssub.with.overflow");
+const LLVM_SMUL_WITH_OVERFLOW: IntrinsicName = int_intrinsic!("llvm.smul.with.overflow");
 
 fn add_intrinsic<'ctx>(
     module: &Module<'ctx>,
@@ -5955,29 +5934,29 @@ fn throw_on_overflow<'a, 'ctx, 'env>(
         .unwrap()
 }
 
-pub fn intwidth_from_builtin(builtin: Builtin<'_>, ptr_bytes: u32) -> IntWidth { 
-        use IntWidth::*;
+pub fn intwidth_from_builtin(builtin: Builtin<'_>, ptr_bytes: u32) -> IntWidth {
+    use IntWidth::*;
 
-        match builtin {
-            Builtin::Int128 => I128,
-            Builtin::Int64 => I64,
-            Builtin::Int32 => I32,
-            Builtin::Int16 => I16,
-            Builtin::Int8 => I8,
-            Builtin::Usize => match ptr_bytes { 
-                4 => I32,
-                8 => I64,
-                _ => unreachable!(),
-            }
+    match builtin {
+        Builtin::Int128 => I128,
+        Builtin::Int64 => I64,
+        Builtin::Int32 => I32,
+        Builtin::Int16 => I16,
+        Builtin::Int8 => I8,
+        Builtin::Usize => match ptr_bytes {
+            4 => I32,
+            8 => I64,
             _ => unreachable!(),
-        }
+        },
+        _ => unreachable!(),
+    }
 }
 
-fn intwidth_from_layout(layout: Layout<'_>, ptr_bytes: u32) -> IntWidth { 
-        match layout {
-            Layout::Builtin(builtin) => intwidth_from_builtin(builtin, ptr_bytes),
-            _ => unreachable!(),
-        }
+fn intwidth_from_layout(layout: Layout<'_>, ptr_bytes: u32) -> IntWidth {
+    match layout {
+        Layout::Builtin(builtin) => intwidth_from_builtin(builtin, ptr_bytes),
+        _ => unreachable!(),
+    }
 }
 
 fn build_int_binop<'a, 'ctx, 'env>(
@@ -5998,60 +5977,50 @@ fn build_int_binop<'a, 'ctx, 'env>(
 
     match op {
         NumAdd => {
-            let intrinsic = match lhs_layout {
-                Layout::Builtin(Builtin::Int8) => LLVM_SADD_WITH_OVERFLOW_I8,
-                Layout::Builtin(Builtin::Int16) => LLVM_SADD_WITH_OVERFLOW_I16,
-                Layout::Builtin(Builtin::Int32) => LLVM_SADD_WITH_OVERFLOW_I32,
-                Layout::Builtin(Builtin::Int64) => LLVM_SADD_WITH_OVERFLOW_I64,
-                Layout::Builtin(Builtin::Int128) => LLVM_SADD_WITH_OVERFLOW_I128,
-                Layout::Builtin(Builtin::Usize) => match env.ptr_bytes {
-                    4 => LLVM_SADD_WITH_OVERFLOW_I32,
-                    8 => LLVM_SADD_WITH_OVERFLOW_I64,
-                    other => panic!("invalid ptr_bytes {}", other),
-                },
-                _ => unreachable!(),
-            };
-
             let result = env
-                .call_intrinsic(intrinsic, &[lhs.into(), rhs.into()])
+                .call_intrinsic(
+                    &LLVM_SADD_WITH_OVERFLOW[int_width],
+                    &[lhs.into(), rhs.into()],
+                )
                 .into_struct_value();
 
             throw_on_overflow(env, parent, result, "integer addition overflowed!")
         }
         NumAddWrap => bd.build_int_add(lhs, rhs, "add_int_wrap").into(),
-        NumAddChecked => env.call_intrinsic(LLVM_SADD_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()]),
+        NumAddChecked => env.call_intrinsic(
+            &LLVM_SADD_WITH_OVERFLOW[int_width],
+            &[lhs.into(), rhs.into()],
+        ),
         NumSub => {
-            let intrinsic = match lhs_layout {
-                Layout::Builtin(Builtin::Int8) => LLVM_SSUB_WITH_OVERFLOW_I8,
-                Layout::Builtin(Builtin::Int16) => LLVM_SSUB_WITH_OVERFLOW_I16,
-                Layout::Builtin(Builtin::Int32) => LLVM_SSUB_WITH_OVERFLOW_I32,
-                Layout::Builtin(Builtin::Int64) => LLVM_SSUB_WITH_OVERFLOW_I64,
-                Layout::Builtin(Builtin::Int128) => LLVM_SSUB_WITH_OVERFLOW_I128,
-                Layout::Builtin(Builtin::Usize) => match env.ptr_bytes {
-                    4 => LLVM_SSUB_WITH_OVERFLOW_I32,
-                    8 => LLVM_SSUB_WITH_OVERFLOW_I64,
-                    other => panic!("invalid ptr_bytes {}", other),
-                },
-                _ => unreachable!("invalid layout {:?}", lhs_layout),
-            };
-
             let result = env
-                .call_intrinsic(intrinsic, &[lhs.into(), rhs.into()])
+                .call_intrinsic(
+                    &LLVM_SSUB_WITH_OVERFLOW[int_width],
+                    &[lhs.into(), rhs.into()],
+                )
                 .into_struct_value();
 
             throw_on_overflow(env, parent, result, "integer subtraction overflowed!")
         }
         NumSubWrap => bd.build_int_sub(lhs, rhs, "sub_int").into(),
-        NumSubChecked => env.call_intrinsic(LLVM_SSUB_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()]),
+        NumSubChecked => env.call_intrinsic(
+            &LLVM_SSUB_WITH_OVERFLOW[int_width],
+            &[lhs.into(), rhs.into()],
+        ),
         NumMul => {
             let result = env
-                .call_intrinsic(LLVM_SMUL_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()])
+                .call_intrinsic(
+                    &LLVM_SMUL_WITH_OVERFLOW[int_width],
+                    &[lhs.into(), rhs.into()],
+                )
                 .into_struct_value();
 
             throw_on_overflow(env, parent, result, "integer multiplication overflowed!")
         }
         NumMulWrap => bd.build_int_mul(lhs, rhs, "mul_int").into(),
-        NumMulChecked => env.call_intrinsic(LLVM_SMUL_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()]),
+        NumMulChecked => env.call_intrinsic(
+            &LLVM_SMUL_WITH_OVERFLOW[int_width],
+            &[lhs.into(), rhs.into()],
+        ),
         NumGt => bd.build_int_compare(SGT, lhs, rhs, "int_gt").into(),
         NumGte => bd.build_int_compare(SGE, lhs, rhs, "int_gte").into(),
         NumLt => bd.build_int_compare(SLT, lhs, rhs, "int_lt").into(),
@@ -6627,7 +6596,6 @@ fn int_abs_with_overflow<'a, 'ctx, 'env>(
     ))
 }
 
-
 fn build_float_unary_op<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     arg: FloatValue<'ctx>,
@@ -6641,19 +6609,19 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
     // TODO: Handle different sized floats
     match op {
         NumNeg => bd.build_float_neg(arg, "negate_float").into(),
-        NumAbs => call_float_intrinsic(env, LLVM_FABS, &[arg.into()], float_width),
-        NumSqrtUnchecked => env.call_intrinsic(LLVM_SQRT_F64, &[arg.into()]),
-        NumLogUnchecked => env.call_intrinsic(LLVM_LOG_F64, &[arg.into()]),
+        NumAbs => env.call_intrinsic(&LLVM_FABS[float_width], &[arg.into()]),
+        NumSqrtUnchecked => env.call_intrinsic(&LLVM_SQRT[float_width], &[arg.into()]),
+        NumLogUnchecked => env.call_intrinsic(&LLVM_LOG[float_width], &[arg.into()]),
         NumToFloat => arg.into(), /* Converting from Float to Float is a no-op */
         NumCeiling => env.builder.build_cast(
             InstructionOpcode::FPToSI,
-            env.call_intrinsic(LLVM_CEILING_F64, &[arg.into()]),
+            env.call_intrinsic(&LLVM_CEILING[float_width], &[arg.into()]),
             env.context.i64_type(),
             "num_ceiling",
         ),
         NumFloor => env.builder.build_cast(
             InstructionOpcode::FPToSI,
-            env.call_intrinsic(LLVM_FLOOR_F64, &[arg.into()]),
+            env.call_intrinsic(&LLVM_FLOOR[float_width], &[arg.into()]),
             env.context.i64_type(),
             "num_floor",
         ),
@@ -6664,8 +6632,8 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
         NumRound => call_bitcode_float_fn(env, bitcode::NUM_ROUND, &[arg.into()], float_width),
 
         // trigonometry
-        NumSin => env.call_intrinsic(LLVM_SIN_F64, &[arg.into()]),
-        NumCos => env.call_intrinsic(LLVM_COS_F64, &[arg.into()]),
+        NumSin => env.call_intrinsic(&LLVM_SIN[float_width], &[arg.into()]),
+        NumCos => env.call_intrinsic(&LLVM_COS[float_width], &[arg.into()]),
 
         NumAtan => call_bitcode_float_fn(env, bitcode::NUM_ATAN, &[arg.into()], float_width),
         NumAcos => call_bitcode_float_fn(env, bitcode::NUM_ACOS, &[arg.into()], float_width),
@@ -6724,7 +6692,6 @@ pub fn call_float_intrinsic<'a, 'ctx, 'env>(
 
     env.call_intrinsic(&format!("{}.{}", fn_name, suffix), args)
 }
-
 
 fn define_global_str_literal_ptr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
