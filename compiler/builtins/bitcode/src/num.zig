@@ -57,8 +57,13 @@ pub fn exportRound(comptime T: type, comptime name: []const u8) void {
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
 }
 
-pub fn divCeil(numerator: i64, denominator: i64) callconv(.C) i64 {
-    return @call(.{ .modifier = always_inline }, math.divCeil, .{ i64, numerator, denominator }) catch unreachable;
+pub fn exportDivCeil(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(a: T, b: T) callconv(.C) T {
+            return math.divCeil(T, a, b) catch unreachable;
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
 }
 
 pub fn bytesToU16C(arg: RocList, position: usize) callconv(.C) u16 {

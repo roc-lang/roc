@@ -7,29 +7,12 @@ pub const OBJ_PATH: &str = env!(
 
 #[derive(Debug, Default)]
 pub struct IntrinsicName {
-    pub base: &'static str,
-    pub options: [&'static str; 13],
-    pub is_float: bool,
-    pub is_int: bool,
+    pub options: [&'static str; 14],
 }
 
 impl IntrinsicName {
     pub const fn default() -> Self {
-        Self {
-            base: "",
-            options: [""; 13],
-            is_float: false,
-            is_int: false,
-        }
-    }
-
-    pub fn intrinsics<'a>(&'a self) -> impl Iterator<Item = &&'a str> {
-        let start_index = if self.is_float { 0 } else { 3 };
-        let end_index = if self.is_int { 13 } else { 3 };
-
-        let slice = &self.options[start_index..end_index];
-
-        slice.iter()
+        Self { options: [""; 14] }
     }
 }
 
@@ -59,14 +42,22 @@ pub enum IntWidth {
     I128,
 }
 
+impl Index<DecWidth> for IntrinsicName {
+    type Output = str;
+
+    fn index(&self, _: DecWidth) -> &Self::Output {
+        self.options[0]
+    }
+}
+
 impl Index<FloatWidth> for IntrinsicName {
     type Output = str;
 
     fn index(&self, index: FloatWidth) -> &Self::Output {
         match index {
-            FloatWidth::F32 => self.options[0],
-            FloatWidth::F64 => self.options[1],
-            FloatWidth::F128 => self.options[2],
+            FloatWidth::F32 => self.options[1],
+            FloatWidth::F64 => self.options[2],
+            FloatWidth::F128 => self.options[3],
         }
     }
 }
@@ -76,29 +67,61 @@ impl Index<IntWidth> for IntrinsicName {
 
     fn index(&self, index: IntWidth) -> &Self::Output {
         match index {
-            IntWidth::U8 => self.options[3],
-            IntWidth::U16 => self.options[4],
-            IntWidth::U32 => self.options[5],
-            IntWidth::U64 => self.options[6],
-            IntWidth::U128 => self.options[7],
-            IntWidth::I8 => self.options[8],
-            IntWidth::I16 => self.options[9],
-            IntWidth::I32 => self.options[10],
-            IntWidth::I64 => self.options[11],
-            IntWidth::I128 => self.options[12],
+            IntWidth::U8 => self.options[4],
+            IntWidth::U16 => self.options[5],
+            IntWidth::U32 => self.options[6],
+            IntWidth::U64 => self.options[7],
+            IntWidth::U128 => self.options[8],
+            IntWidth::I8 => self.options[9],
+            IntWidth::I16 => self.options[10],
+            IntWidth::I32 => self.options[11],
+            IntWidth::I64 => self.options[12],
+            IntWidth::I128 => self.options[13],
         }
     }
 }
 
-pub const NUM_ASIN: &str = "roc_builtins.num.asin";
-pub const NUM_ACOS: &str = "roc_builtins.num.acos";
-pub const NUM_ATAN: &str = "roc_builtins.num.atan";
-pub const NUM_IS_FINITE: &str = "roc_builtins.num.is_finite";
-pub const NUM_POW_INT: &str = "roc_builtins.num.pow_int";
-pub const NUM_DIV_CEIL: &str = "roc_builtins.num.div_ceil";
+macro_rules! float_intrinsic {
+    ($name:literal) => {{
+        let mut output = IntrinsicName::default();
+
+        output.options[1] = concat!($name, ".f32");
+        output.options[2] = concat!($name, ".f64");
+        output.options[3] = concat!($name, ".f128");
+
+        output
+    }};
+}
+
+macro_rules! int_intrinsic {
+    ($name:literal) => {{
+        let mut output = IntrinsicName::default();
+
+        output.options[4] = concat!($name, ".i8");
+        output.options[5] = concat!($name, ".i16");
+        output.options[6] = concat!($name, ".i32");
+        output.options[7] = concat!($name, ".i64");
+        output.options[8] = concat!($name, ".i128");
+        output.options[9] = concat!($name, ".i8");
+        output.options[10] = concat!($name, ".i16");
+        output.options[11] = concat!($name, ".i32");
+        output.options[12] = concat!($name, ".i64");
+        output.options[13] = concat!($name, ".i128");
+
+        output
+    }};
+}
+
+pub const NUM_ASIN: IntrinsicName = float_intrinsic!("roc_builtins.num.asin");
+pub const NUM_ACOS: IntrinsicName = float_intrinsic!("roc_builtins.num.acos");
+pub const NUM_ATAN: IntrinsicName = float_intrinsic!("roc_builtins.num.atan");
+pub const NUM_IS_FINITE: IntrinsicName = float_intrinsic!("roc_builtins.num.is_finite");
+pub const NUM_POW_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.pow_int");
+pub const NUM_DIV_CEIL: IntrinsicName = int_intrinsic!("roc_builtins.num.div_ceil");
+pub const NUM_ROUND: IntrinsicName = float_intrinsic!("roc_builtins.num.round");
+
 pub const NUM_BYTES_TO_U16: &str = "roc_builtins.num.bytes_to_u16";
 pub const NUM_BYTES_TO_U32: &str = "roc_builtins.num.bytes_to_u32";
-pub const NUM_ROUND: &str = "roc_builtins.num.round";
 
 pub const STR_INIT: &str = "roc_builtins.str.init";
 pub const STR_COUNT_SEGMENTS: &str = "roc_builtins.str.count_segments";

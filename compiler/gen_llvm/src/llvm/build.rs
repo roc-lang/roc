@@ -565,24 +565,24 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
 
 macro_rules! define_float_intrinsic {
     ($name:literal, $output:expr) => {
-        $output.options[0] = concat!($name, ".f32");
-        $output.options[1] = concat!($name, ".f64");
-        $output.options[2] = concat!($name, ".f128");
+        $output.options[1] = concat!($name, ".f32");
+        $output.options[2] = concat!($name, ".f64");
+        $output.options[3] = concat!($name, ".f128");
     };
 }
 
 macro_rules! define_int_intrinsic {
     ($name:literal, $output:expr) => {
-        $output.options[3] = concat!($name, ".i8");
-        $output.options[4] = concat!($name, ".i16");
-        $output.options[5] = concat!($name, ".i32");
-        $output.options[6] = concat!($name, ".i64");
-        $output.options[7] = concat!($name, ".i128");
-        $output.options[8] = concat!($name, ".i8");
-        $output.options[9] = concat!($name, ".i16");
-        $output.options[10] = concat!($name, ".i32");
-        $output.options[11] = concat!($name, ".i64");
-        $output.options[12] = concat!($name, ".i128");
+        $output.options[4] = concat!($name, ".i8");
+        $output.options[5] = concat!($name, ".i16");
+        $output.options[6] = concat!($name, ".i32");
+        $output.options[7] = concat!($name, ".i64");
+        $output.options[8] = concat!($name, ".i128");
+        $output.options[9] = concat!($name, ".i8");
+        $output.options[10] = concat!($name, ".i16");
+        $output.options[11] = concat!($name, ".i32");
+        $output.options[12] = concat!($name, ".i64");
+        $output.options[13] = concat!($name, ".i128");
     };
 }
 
@@ -591,9 +591,6 @@ macro_rules! float_intrinsic {
         let mut output = IntrinsicName::default();
 
         define_float_intrinsic!($name, output);
-
-        output.is_float = true;
-        output.base = $name;
 
         output
     }};
@@ -604,9 +601,6 @@ macro_rules! int_intrinsic {
         let mut output = IntrinsicName::default();
 
         define_int_intrinsic!($name, output);
-
-        output.is_int = true;
-        output.base = $name;
 
         output
     }};
@@ -6094,16 +6088,17 @@ fn build_int_binop<'a, 'ctx, 'env>(
                 phi.as_basic_value()
             }
         }
-        NumPowInt => call_bitcode_int_fn(
+        NumPowInt => call_bitcode_fn(
             env,
-            bitcode::NUM_POW_INT,
             &[lhs.into(), rhs.into()],
-            int_width,
+            &bitcode::NUM_POW_INT[int_width],
         ),
         NumDivUnchecked => bd.build_int_signed_div(lhs, rhs, "div_int").into(),
-        NumDivCeilUnchecked => {
-            call_bitcode_fn(env, &[lhs.into(), rhs.into()], bitcode::NUM_DIV_CEIL)
-        }
+        NumDivCeilUnchecked => call_bitcode_fn(
+            env,
+            &[lhs.into(), rhs.into()],
+            &bitcode::NUM_DIV_CEIL[int_width],
+        ),
         NumBitwiseAnd => bd.build_and(lhs, rhs, "int_bitwise_and").into(),
         NumBitwiseXor => bd.build_xor(lhs, rhs, "int_bitwise_xor").into(),
         NumBitwiseOr => bd.build_or(lhs, rhs, "int_bitwise_or").into(),
@@ -6206,7 +6201,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_add(lhs, rhs, "add_float");
 
             let is_finite =
-                call_bitcode_float_fn(env, bitcode::NUM_IS_FINITE, &[result.into()], float_width)
+                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE[float_width])
                     .into_int_value();
 
             let then_block = context.append_basic_block(parent, "then_block");
@@ -6228,7 +6223,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_add(lhs, rhs, "add_float");
 
             let is_finite =
-                call_bitcode_float_fn(env, bitcode::NUM_IS_FINITE, &[result.into()], float_width)
+                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE[float_width])
                     .into_int_value();
             let is_infinite = bd.build_not(is_finite, "negate");
 
@@ -6257,7 +6252,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_sub(lhs, rhs, "sub_float");
 
             let is_finite =
-                call_bitcode_float_fn(env, bitcode::NUM_IS_FINITE, &[result.into()], float_width)
+                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE[float_width])
                     .into_int_value();
 
             let then_block = context.append_basic_block(parent, "then_block");
@@ -6279,7 +6274,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_sub(lhs, rhs, "sub_float");
 
             let is_finite =
-                call_bitcode_float_fn(env, bitcode::NUM_IS_FINITE, &[result.into()], float_width)
+                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE[float_width])
                     .into_int_value();
             let is_infinite = bd.build_not(is_finite, "negate");
 
@@ -6308,7 +6303,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_mul(lhs, rhs, "mul_float");
 
             let is_finite =
-                call_bitcode_float_fn(env, bitcode::NUM_IS_FINITE, &[result.into()], float_width)
+                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE[float_width])
                     .into_int_value();
 
             let then_block = context.append_basic_block(parent, "then_block");
@@ -6330,7 +6325,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_mul(lhs, rhs, "mul_float");
 
             let is_finite =
-                call_bitcode_float_fn(env, bitcode::NUM_IS_FINITE, &[result.into()], float_width)
+                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE[float_width])
                     .into_int_value();
             let is_infinite = bd.build_not(is_finite, "negate");
 
@@ -6625,19 +6620,16 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
             env.context.i64_type(),
             "num_floor",
         ),
-        NumIsFinite => {
-            call_bitcode_float_fn(env, bitcode::NUM_IS_FINITE, &[arg.into()], float_width)
-        }
-
-        NumRound => call_bitcode_float_fn(env, bitcode::NUM_ROUND, &[arg.into()], float_width),
+        NumIsFinite => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_IS_FINITE[float_width]),
+        NumRound => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ROUND[float_width]),
 
         // trigonometry
         NumSin => env.call_intrinsic(&LLVM_SIN[float_width], &[arg.into()]),
         NumCos => env.call_intrinsic(&LLVM_COS[float_width], &[arg.into()]),
 
-        NumAtan => call_bitcode_float_fn(env, bitcode::NUM_ATAN, &[arg.into()], float_width),
-        NumAcos => call_bitcode_float_fn(env, bitcode::NUM_ACOS, &[arg.into()], float_width),
-        NumAsin => call_bitcode_float_fn(env, bitcode::NUM_ASIN, &[arg.into()], float_width),
+        NumAtan => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ATAN[float_width]),
+        NumAcos => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ACOS[float_width]),
+        NumAsin => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ASIN[float_width]),
 
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);
