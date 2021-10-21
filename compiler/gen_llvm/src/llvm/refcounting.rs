@@ -741,66 +741,26 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
 
         let (len, ptr) = load_list(env.builder, original_wrapper, ptr_type);
 
-        let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, ptr);
-        let call_mode = mode_to_call_mode(fn_val, mode);
+        let loop_fn = |_index, element| {
+            modify_refcount_layout_help(
+                env,
+                parent,
+                layout_ids,
+                mode.to_call_mode(fn_val),
+                when_recursive,
+                element,
+                element_layout,
+            );
+        };
 
-        match mode {
-            Mode::Inc => {
-                // inc is cheap; we never recurse
-                refcount_ptr.modify(call_mode, layout, env);
-                builder.build_unconditional_branch(cont_block);
-            }
-
-            Mode::Dec => {
-                let do_recurse_block = env.context.append_basic_block(parent, "do_recurse");
-                let no_recurse_block = env.context.append_basic_block(parent, "no_recurse");
-
-                builder.build_conditional_branch(
-                    refcount_ptr.is_1(env),
-                    do_recurse_block,
-                    no_recurse_block,
-                );
-
-                {
-                    env.builder.position_at_end(no_recurse_block);
-
-                    refcount_ptr.modify(call_mode, layout, env);
-                    builder.build_unconditional_branch(cont_block);
-                }
-
-                {
-                    env.builder.position_at_end(do_recurse_block);
-
-                    let loop_fn = |_index, element| {
-                        modify_refcount_layout_help(
-                            env,
-                            parent,
-                            layout_ids,
-                            mode.to_call_mode(fn_val),
-                            when_recursive,
-                            element,
-                            element_layout,
-                        );
-                    };
-
-                    incrementing_elem_loop(env, parent, ptr, len, "modify_rc_index", loop_fn);
-                    builder.build_unconditional_branch(cont_block);
-                }
-            }
-        }
-    } else {
-        // just increment/decrement the list itself, don't touch the elements
-        let ptr_type = basic_type_from_layout(env, element_layout).ptr_type(AddressSpace::Generic);
-
-        let (_, ptr) = load_list(env.builder, original_wrapper, ptr_type);
-
-        let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, ptr);
-        let call_mode = mode_to_call_mode(fn_val, mode);
-
-        refcount_ptr.modify(call_mode, layout, env);
-
-        builder.build_unconditional_branch(cont_block);
+        incrementing_elem_loop(env, parent, ptr, len, "modify_rc_index", loop_fn);
     }
+
+    let refcount_ptr = PointerToRefcount::from_list_wrapper(env, original_wrapper);
+    let call_mode = mode_to_call_mode(fn_val, mode);
+    refcount_ptr.modify(call_mode, layout, env);
+
+    builder.build_unconditional_branch(cont_block);
 
     builder.position_at_end(cont_block);
 
