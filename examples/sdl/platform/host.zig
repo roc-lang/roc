@@ -90,6 +90,8 @@ pub export fn main() callconv(.C) u8 {
     }
     
     const size = @intCast(usize, roc__contextForHost_size());
+    // Note the current size differences when this prints.
+    // Roc is not returning any function. it is just returning the window properties.
     stdout.print("Roc size: {}\n", .{size}) catch unreachable;
     stdout.print("Host size: {}\n", .{@sizeOf(Context)}) catch unreachable;
     const context = roc__contextForHost_1_exposed();
