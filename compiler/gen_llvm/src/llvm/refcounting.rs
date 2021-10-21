@@ -1675,9 +1675,6 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
 
     let before_block = env.builder.get_insert_block().expect("to be in a function");
 
-    let arg_val = env.builder.build_load(arg_ptr, "load_tag_union");
-    let wrapper_struct = arg_val.into_struct_value();
-
     // read the tag_id
     let tag_id_ptr = env
         .builder
@@ -1717,7 +1714,7 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
         debug_assert!(wrapper_type.is_struct_type());
         let opaque_tag_data_ptr = env
             .builder
-            .build_struct_gep(arg_ptr, TAG_DATA_INDEX, "tag_id_ptr")
+            .build_struct_gep(arg_ptr, TAG_DATA_INDEX, "field_ptr")
             .unwrap();
 
         let cast_tag_data_pointer = env.builder.build_pointer_cast(
