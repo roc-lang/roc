@@ -121,6 +121,7 @@ comptime {
     exportStrFn(str.fromUtf8C, "from_utf8");
     exportStrFn(str.fromUtf8RangeC, "from_utf8_range");
     exportStrFn(str.repeat, "repeat");
+    exportStrFn(str.strTrim, "trim");
 }
 
 // Utils

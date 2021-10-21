@@ -4,20 +4,21 @@ Builtins are the functions and modules that are implicitly imported into every m
 
 ### module/src/symbol.rs
 
-Towards the bottom of `symbol.rs` there is a `define_builtins!` macro being used that takes many modules and function names. The first level (`List`, `Int` ..) is the module name, and the second level is the function or value name (`reverse`, `mod` ..). If you wanted to add a `Int` function called `addTwo` go to `2 Int: "Int" => {` and inside that case add to the bottom `38 INT_ADD_TWO: "addTwo"` (assuming there are 37 existing ones). 
+Towards the bottom of `symbol.rs` there is a `define_builtins!` macro being used that takes many modules and function names. The first level (`List`, `Int` ..) is the module name, and the second level is the function or value name (`reverse`, `mod` ..). If you wanted to add a `Int` function called `addTwo` go to `2 Int: "Int" => {` and inside that case add to the bottom `38 INT_ADD_TWO: "addTwo"` (assuming there are 37 existing ones).
 
 Some of these have `#` inside their name (`first#list`, `#lt` ..). This is a trick we are doing to hide implementation details from Roc programmers. To a Roc programmer, a name with `#` in it is invalid, because `#` means everything after it is parsed to a comment. We are constructing these functions manually, so we are circumventing the parsing step and dont have such restrictions. We get to make functions and values with `#` which as a consequence are not accessible to Roc programmers. Roc programmers simply cannot reference them.
 
 But we can use these values and some of these are necessary for implementing builtins. For example, `List.get` returns tags, and it is not easy for us to create tags when composing LLVM. What is easier however, is:
+
 - ..writing `List.#getUnsafe` that has the dangerous signature of `List elem, Nat -> elem` in LLVM
 - ..writing `List elem, Nat -> Result elem [ OutOfBounds ]*` in a type safe way that uses `getUnsafe` internally, only after it checks if the `elem` at `Nat` index exists.
 
-
 ### can/src/builtins.rs
 
-Right at the top of this module is a function called `builtin_defs`. All this is doing is mapping the `Symbol` defined in `module/src/symbol.rs` to its implementation. Some of the builtins are quite complex, such as `list_get`. What makes `list_get` is that it returns tags, and in order to return tags it first has to  defer to lower-level functions via an if statement.
+Right at the top of this module is a function called `builtin_defs`. All this is doing is mapping the `Symbol` defined in `module/src/symbol.rs` to its implementation. Some of the builtins are quite complex, such as `list_get`. What makes `list_get` is that it returns tags, and in order to return tags it first has to defer to lower-level functions via an if statement.
 
 Lets look at `List.repeat : elem, Nat -> List elem`, which is more straight-forward, and points directly to its lower level implementation:
+
 ```
 fn list_repeat(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let elem_var = var_store.fresh();
@@ -42,29 +43,41 @@ fn list_repeat(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 ```
+
 In these builtin definitions you will need to allocate for and list the arguments. For `List.repeat`, the arguments are the `elem_var` and the `len_var`. So in both the `body` and `defn` we list these arguments in a vector, with the `Symobl::ARG_1` and` Symvol::ARG_2` designating which argument is which.
 
 Since `List.repeat` is implemented entirely as low level functions, its `body` is a `RunLowLevel`, and the `op` is `LowLevel::ListRepeat`. Lets talk about `LowLevel` in the next section.
 
 ## Connecting the definition to the implementation
+
 ### module/src/low_level.rs
+
 This `LowLevel` thing connects the builtin defined in this module to its implementation. Its referenced in `can/src/builtins.rs` and it is used in `gen/src/llvm/build.rs`.
 
 ## Bottom level LLVM values and functions
+
 ### gen/src/llvm/build.rs
+
 This is where bottom-level functions that need to be written as LLVM are created. If the function leads to a tag thats a good sign it should not be written here in `build.rs`. If its simple fundamental stuff like `INT_ADD` then it certainly should be written here.
 
 ## Letting the compiler know these functions exist
+
 ### builtins/src/std.rs
+
 Its one thing to actually write these functions, its _another_ thing to let the Roc compiler know they exist as part of the standard library. You have to tell the compiler "Hey, this function exists, and it has this type signature". That happens in `std.rs`.
 
 ## Specifying how we pass args to the function
+
 ### builtins/mono/src/borrow.rs
-After we have all of this, we need to specify if the arguments we're passing are owned, borrowed or irrelvant. Towards the bottom of this file, add a new case for you builtin and specify each arg. Be sure to read the comment, as it explains this in more detail.
+
+After we have all of this, we need to specify if the arguments we're passing are owned, borrowed or irrelvant. Towards the bottom of this file, add a new case for your builtin and specify each arg. Be sure to read the comment, as it explains this in more detail.
 
 ## Testing it
+
 ### solve/tests/solve_expr.rs
+
 To make sure that Roc is properly inferring the type of the new builtin, add a test to this file simlar to:
+
 ```
  #[test]
 fn atan() {
@@ -78,11 +91,14 @@ fn atan() {
     );
 }
 ```
+
 But replace `Num.atan` and the type signature with the new builtin.
 
-### gen/test/*.rs
+### gen/test/\*.rs
+
 In this directory, there are a couple files like `gen_num.rs`, `gen_str.rs`, etc. For the `Str` module builtins, put the test in `gen_str.rs`, etc. Find the one for the new builtin, and add a test like:
-```
+
+````
 #[test]
 fn atan() {
     assert_evals_to!("Num.atan 10", 1.4711276743037347, f64);
@@ -96,3 +112,4 @@ When implementing a new builtin, it is often easy to copy and paste the implemen
 
 - `List.keepIf` did not work for a long time because in builtins its `LowLevel` was `ListMap`. This was because I copy and pasted the `List.map` implementation in `builtins.rs
 - `List.walkBackwards` had mysterious memory bugs for a little while because in `unique.rs` its return type was `list_type(flex(b))` instead of `flex(b)` since it was copy and pasted from `List.keepIf`.
+````
