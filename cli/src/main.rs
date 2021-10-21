@@ -189,6 +189,6 @@ fn launch_editor(project_dir_path: Option<&Path>) -> io::Result<()> {
 }
 
 #[cfg(not(feature = "editor"))]
-fn launch_editor(_filepaths: &[&Path]) -> io::Result<()> {
+fn launch_editor(_project_dir_path: Option<&Path>) -> io::Result<()> {
     panic!("Cannot launch the editor because this build of roc did not include `feature = \"editor\"`!");
 }
