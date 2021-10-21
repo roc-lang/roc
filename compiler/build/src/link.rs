@@ -665,8 +665,8 @@ fn link_linux(
             .args(&[
                 "--gc-sections",
                 "--eh-frame-hdr",
-                "--arch",
-                arch_str(target),
+                // "-arch",
+                // arch_str(target),
                 "-pie",
                 libcrt_path.join("crti.o").to_str().unwrap(),
                 libcrt_path.join("crtn.o").to_str().unwrap(),
@@ -740,8 +740,8 @@ fn link_macos(
             // we'd like to re-enable it on macOS!
             // "--gc-sections",
             link_type_arg,
-            "-arch",
-            &arch,
+            // "-arch",
+            // &arch,
         ])
         .args(input_paths)
         .args(&[
