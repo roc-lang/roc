@@ -971,7 +971,7 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
     }
 }
 
-const TAG_ID_INDEX: u32 = 1;
+pub const TAG_ID_INDEX: u32 = 1;
 pub const TAG_DATA_INDEX: u32 = 0;
 
 pub fn struct_from_fields<'a, 'ctx, 'env, I>(
