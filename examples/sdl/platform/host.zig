@@ -24,18 +24,19 @@ const mem = std.mem;
 const Allocator = mem.Allocator;
 
 const WindowConfig = extern struct {
-    // These need to be in size followed by alphabetical order.
+    // These need to be in alignment followed by alphabetical order.
     height: usize,
     title: RocStr,
     width: usize,
 };
-extern fn roc__windowPropertiesForHost_1_exposed() WindowConfig;
-
-// extern fn roc__handleEventForHost_1_exposed_generic([*]u8) void;
-// extern fn roc__handleEventForHost_size() i64;
-// extern fn roc__handleEventForHost_1_Fx_caller(*const u8, [*]u8, [*]u8) void;
-// extern fn roc__handleEventForHost_1_Fx_size() i64;
-// extern fn roc__handleEventForHost_1_Fx_result_size() i64;
+const Context = extern struct {
+    // These need to be in alignment followed by alphabetical order.
+    props: WindowConfig,
+    handler: [*]u8,
+};
+extern fn roc__contextForHost_1_exposed() Context;
+extern fn roc__contextForHost_1_exposed_generic([*]u8) void;
+extern fn roc__contextForHost_size() i64;
 
 const Align = 2 * @alignOf(usize);
 extern fn malloc(size: usize) callconv(.C) ?*align(Align) c_void;
@@ -88,7 +89,11 @@ pub export fn main() callconv(.C) u8 {
         return 1;
     }
     
-    const window_props = roc__windowPropertiesForHost_1_exposed();
+    const size = @intCast(usize, roc__contextForHost_size());
+    stdout.print("Roc size: {}\n", .{size}) catch unreachable;
+    stdout.print("Host size: {}\n", .{@sizeOf(Context)}) catch unreachable;
+    const context = roc__contextForHost_1_exposed();
+    const window_props = context.props;
 
     stdout.print("{}\n", .{window_props.width}) catch unreachable;
     stdout.print("{}\n", .{window_props.height}) catch unreachable;

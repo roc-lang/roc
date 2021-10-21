@@ -11,8 +11,8 @@ windowProperties : SDL.WindowConfig
 windowProperties =
     { title: "Flappy Bird", width: 300, height: 73 }
 
-handleEvent : Task {} []
-handleEvent =
+handleEvent : {} -> Task {} []
+handleEvent = \_ ->
     _ <- Task.await (Task.putLine "handling an event")
     Task.putLine "done"
 

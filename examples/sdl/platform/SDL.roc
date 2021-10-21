@@ -5,7 +5,7 @@ interface SDL
         WindowConfig,
         Renderer
     ]
-    imports [ fx.Effect, Task.{ Task } ]
+    imports [ Task.{ Task } ]
 
 ## This module is a wrapper around SDL
 ## https://github.com/MasterQ32/SDL.zig/blob/master/src/wrapper/sdl.zig
@@ -25,8 +25,10 @@ WindowConfig :
         height: Nat
     }
 
+# TODO: Change this handler to take an event as input.
+EventHandler : {} -> Task {} []
 Context :
     {
         props: WindowConfig,
-        handler: Task {} []
+        handler: EventHandler
     }

@@ -4,18 +4,14 @@ platform examples/sdl
     }
     exposes []
     packages {}
-    imports [ Task.{ Task }, SDL ]
+    imports [ SDL ]
     provides [
-        windowPropertiesForHost,
-        handleEventForHost
+        contextForHost
     ]
     effects fx.Effect
         { 
             putLine : Str -> Effect {}
         }
 
-windowPropertiesForHost : SDL.WindowConfig
-windowPropertiesForHost = gameContext.props
-
-handleEventForHost : Task {} [] as Fx
-handleEventForHost = gameContext.handler
+contextForHost : SDL.Context
+contextForHost = gameContext
