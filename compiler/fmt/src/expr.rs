@@ -133,9 +133,13 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 }
             }
             ParensAround(sub_expr) => {
-                buf.push('(');
-                sub_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
-                buf.push(')');
+                if parens == Parens::NotNeeded && !sub_expr_requests_parens(sub_expr) {
+                    sub_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
+                } else {
+                    buf.push('(');
+                    sub_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
+                    buf.push(')');
+                }
             }
             Str(literal) => {
                 use roc_parse::ast::StrLiteral::*;
@@ -315,7 +319,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 buf.push_str(key);
             }
             Access(expr, key) => {
-                expr.format_with_options(buf, parens, Newlines::Yes, indent);
+                expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
                 buf.push('.');
                 buf.push_str(key);
             }
@@ -394,6 +398,8 @@ fn fmt_bin_ops<'a>(
         || lefts.iter().any(|(expr, _)| expr.value.is_multiline());
 
     for (loc_left_side, loc_bin_op) in lefts {
+        let bin_op = loc_bin_op.value;
+
         loc_left_side.format_with_options(buf, apply_needs_parens, Newlines::No, indent);
 
         if is_multiline {
@@ -402,7 +408,7 @@ fn fmt_bin_ops<'a>(
             buf.push(' ');
         }
 
-        push_op(buf, loc_bin_op.value);
+        push_op(buf, bin_op);
 
         buf.push(' ');
     }
@@ -1044,5 +1050,34 @@ fn format_field_multiline<'a, T>(
         Malformed(raw) => {
             buf.push_str(raw);
         }
+    }
+}
+
+fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
+    match expr {
+        Expr::BinOps(left_side, _) => {
+            left_side
+                .iter()
+                .any(|(_, loc_bin_op)| match loc_bin_op.value {
+                    BinOp::Caret
+                    | BinOp::Star
+                    | BinOp::Slash
+                    | BinOp::DoubleSlash
+                    | BinOp::Percent
+                    | BinOp::DoublePercent
+                    | BinOp::Plus
+                    | BinOp::Minus
+                    | BinOp::Equals
+                    | BinOp::NotEquals
+                    | BinOp::LessThan
+                    | BinOp::GreaterThan
+                    | BinOp::LessThanOrEq
+                    | BinOp::GreaterThanOrEq
+                    | BinOp::And
+                    | BinOp::Or => true,
+                    BinOp::Pizza | BinOp::Assignment | BinOp::HasType | BinOp::Backpassing => false,
+                })
+        }
+        _ => false,
     }
 }

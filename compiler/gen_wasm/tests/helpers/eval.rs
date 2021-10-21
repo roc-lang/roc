@@ -1,3 +1,7 @@
+use std::cell::Cell;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
 // use roc_std::{RocDec, RocList, RocOrder, RocStr};
@@ -5,6 +9,10 @@ use crate::helpers::wasm32_test_result::Wasm32TestResult;
 use roc_gen_wasm::from_wasm32_memory::FromWasm32Memory;
 
 const TEST_WRAPPER_NAME: &str = "test_wrapper";
+
+std::thread_local! {
+    static TEST_COUNTER: Cell<u32> = Cell::new(0);
+}
 
 fn promote_expr_to_module(src: &str) -> String {
     let mut buffer = String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
@@ -103,7 +111,18 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     // for debugging (e.g. with wasm2wat)
     if false {
         use std::io::Write;
-        let path = "/home/brian/Documents/roc/compiler/gen_wasm/debug.wasm";
+
+        let mut hash_state = DefaultHasher::new();
+        src.hash(&mut hash_state);
+        let src_hash = hash_state.finish();
+
+        // Filename contains a hash of the Roc test source code. Helpful when comparing across commits.
+        let dir = "/tmp/roc/compiler/gen_wasm/output";
+        std::fs::create_dir_all(dir).unwrap();
+        let path = format!("{}/test-{:016x}.wasm", dir, src_hash);
+
+        // Print out filename (appears just after test name)
+        println!("dumping file {:?}", path);
 
         match std::fs::File::create(path) {
             Err(e) => eprintln!("Problem creating wasm debug file: {:?}", e),

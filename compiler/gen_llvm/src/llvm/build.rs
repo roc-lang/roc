@@ -48,7 +48,8 @@ use inkwell::{AddressSpace, IntPredicate};
 use morphic_lib::{
     CalleeSpecVar, FuncName, FuncSpec, FuncSpecSolutions, ModSolutions, UpdateMode, UpdateModeVar,
 };
-use roc_builtins::bitcode;
+use roc_builtins::bitcode::{self, FloatWidth, IntWidth, IntrinsicName};
+use roc_builtins::{float_intrinsic, int_intrinsic};
 use roc_collections::all::{ImMap, MutMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -430,6 +431,58 @@ pub fn module_from_builtins<'ctx>(
     module
 }
 
+fn add_float_intrinsic<'ctx, F>(
+    ctx: &'ctx Context,
+    module: &Module<'ctx>,
+    name: &IntrinsicName,
+    construct_type: F,
+) where
+    F: Fn(inkwell::types::FloatType<'ctx>) -> inkwell::types::FunctionType<'ctx>,
+{
+    macro_rules! check {
+        ($width:expr, $typ:expr) => {
+            let full_name = &name[$width];
+
+            if let Some(_) = module.get_function(full_name) {
+                // zig defined this function already
+            } else {
+                add_intrinsic(module, full_name, construct_type($typ));
+            }
+        };
+    }
+
+    check!(FloatWidth::F32, ctx.f32_type());
+    check!(FloatWidth::F64, ctx.f64_type());
+    // check!(IntWidth::F128, ctx.i128_type());
+}
+
+fn add_int_intrinsic<'ctx, F>(
+    ctx: &'ctx Context,
+    module: &Module<'ctx>,
+    name: &IntrinsicName,
+    construct_type: F,
+) where
+    F: Fn(inkwell::types::IntType<'ctx>) -> inkwell::types::FunctionType<'ctx>,
+{
+    macro_rules! check {
+        ($width:expr, $typ:expr) => {
+            let full_name = &name[$width];
+
+            if let Some(_) = module.get_function(full_name) {
+                // zig defined this function already
+            } else {
+                add_intrinsic(module, full_name, construct_type($typ));
+            }
+        };
+    }
+
+    check!(IntWidth::I8, ctx.i8_type());
+    check!(IntWidth::I16, ctx.i16_type());
+    check!(IntWidth::I32, ctx.i32_type());
+    check!(IntWidth::I64, ctx.i64_type());
+    check!(IntWidth::I128, ctx.i128_type());
+}
+
 fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     // List of all supported LLVM intrinsics:
     //
@@ -438,7 +491,6 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     let i1_type = ctx.bool_type();
     let i8_type = ctx.i8_type();
     let i8_ptr_type = i8_type.ptr_type(AddressSpace::Generic);
-    let i16_type = ctx.i16_type();
     let i32_type = ctx.i32_type();
     let i64_type = ctx.i64_type();
     let void_type = ctx.void_type();
@@ -477,112 +529,54 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
 
     add_intrinsic(
         module,
-        LLVM_LOG_F64,
-        f64_type.fn_type(&[f64_type.into()], false),
-    );
-
-    add_intrinsic(
-        module,
         LLVM_LROUND_I64_F64,
         i64_type.fn_type(&[f64_type.into()], false),
     );
 
-    add_intrinsic(
-        module,
-        LLVM_FABS_F64,
-        f64_type.fn_type(&[f64_type.into()], false),
-    );
+    add_float_intrinsic(ctx, module, &LLVM_LOG, |t| t.fn_type(&[t.into()], false));
+    add_float_intrinsic(ctx, module, &LLVM_POW, |t| {
+        t.fn_type(&[t.into(), t.into()], false)
+    });
+    add_float_intrinsic(ctx, module, &LLVM_FABS, |t| t.fn_type(&[t.into()], false));
+    add_float_intrinsic(ctx, module, &LLVM_SIN, |t| t.fn_type(&[t.into()], false));
+    add_float_intrinsic(ctx, module, &LLVM_COS, |t| t.fn_type(&[t.into()], false));
+    add_float_intrinsic(ctx, module, &LLVM_CEILING, |t| {
+        t.fn_type(&[t.into()], false)
+    });
+    add_float_intrinsic(ctx, module, &LLVM_FLOOR, |t| t.fn_type(&[t.into()], false));
 
-    add_intrinsic(
-        module,
-        LLVM_SIN_F64,
-        f64_type.fn_type(&[f64_type.into()], false),
-    );
-
-    add_intrinsic(
-        module,
-        LLVM_COS_F64,
-        f64_type.fn_type(&[f64_type.into()], false),
-    );
-
-    add_intrinsic(
-        module,
-        LLVM_POW_F64,
-        f64_type.fn_type(&[f64_type.into(), f64_type.into()], false),
-    );
-
-    add_intrinsic(
-        module,
-        LLVM_CEILING_F64,
-        f64_type.fn_type(&[f64_type.into()], false),
-    );
-
-    add_intrinsic(
-        module,
-        LLVM_FLOOR_F64,
-        f64_type.fn_type(&[f64_type.into()], false),
-    );
-
-    add_intrinsic(module, LLVM_SADD_WITH_OVERFLOW_I8, {
-        let fields = [i8_type.into(), i1_type.into()];
+    add_int_intrinsic(ctx, module, &LLVM_SADD_WITH_OVERFLOW, |t| {
+        let fields = [t.into(), i1_type.into()];
         ctx.struct_type(&fields, false)
-            .fn_type(&[i8_type.into(), i8_type.into()], false)
+            .fn_type(&[t.into(), t.into()], false)
     });
 
-    add_intrinsic(module, LLVM_SADD_WITH_OVERFLOW_I16, {
-        let fields = [i16_type.into(), i1_type.into()];
+    add_int_intrinsic(ctx, module, &LLVM_SSUB_WITH_OVERFLOW, |t| {
+        let fields = [t.into(), i1_type.into()];
         ctx.struct_type(&fields, false)
-            .fn_type(&[i16_type.into(), i16_type.into()], false)
+            .fn_type(&[t.into(), t.into()], false)
     });
 
-    add_intrinsic(module, LLVM_SADD_WITH_OVERFLOW_I32, {
-        let fields = [i32_type.into(), i1_type.into()];
+    add_int_intrinsic(ctx, module, &LLVM_SMUL_WITH_OVERFLOW, |t| {
+        let fields = [t.into(), i1_type.into()];
         ctx.struct_type(&fields, false)
-            .fn_type(&[i32_type.into(), i32_type.into()], false)
-    });
-
-    add_intrinsic(module, LLVM_SADD_WITH_OVERFLOW_I64, {
-        let fields = [i64_type.into(), i1_type.into()];
-        ctx.struct_type(&fields, false)
-            .fn_type(&[i64_type.into(), i64_type.into()], false)
-    });
-
-    add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I8, {
-        let fields = [i8_type.into(), i1_type.into()];
-        ctx.struct_type(&fields, false)
-            .fn_type(&[i8_type.into(), i8_type.into()], false)
-    });
-
-    add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I16, {
-        let fields = [i16_type.into(), i1_type.into()];
-        ctx.struct_type(&fields, false)
-            .fn_type(&[i16_type.into(), i16_type.into()], false)
-    });
-
-    add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I32, {
-        let fields = [i32_type.into(), i1_type.into()];
-        ctx.struct_type(&fields, false)
-            .fn_type(&[i32_type.into(), i32_type.into()], false)
-    });
-
-    add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I64, {
-        let fields = [i64_type.into(), i1_type.into()];
-        ctx.struct_type(&fields, false)
-            .fn_type(&[i64_type.into(), i64_type.into()], false)
+            .fn_type(&[t.into(), t.into()], false)
     });
 }
 
+const LLVM_POW: IntrinsicName = float_intrinsic!("llvm.pow");
+const LLVM_FABS: IntrinsicName = float_intrinsic!("llvm.fabs");
+static LLVM_SQRT: IntrinsicName = float_intrinsic!("llvm.sqrt");
+static LLVM_LOG: IntrinsicName = float_intrinsic!("llvm.log");
+
+static LLVM_SIN: IntrinsicName = float_intrinsic!("llvm.sin");
+static LLVM_COS: IntrinsicName = float_intrinsic!("llvm.cos");
+static LLVM_CEILING: IntrinsicName = float_intrinsic!("llvm.ceil");
+static LLVM_FLOOR: IntrinsicName = float_intrinsic!("llvm.floor");
+
 static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
 static LLVM_MEMSET_I32: &str = "llvm.memset.p0i8.i32";
-static LLVM_SQRT_F64: &str = "llvm.sqrt.f64";
-static LLVM_LOG_F64: &str = "llvm.log.f64";
 static LLVM_LROUND_I64_F64: &str = "llvm.lround.i64.f64";
-static LLVM_FABS_F64: &str = "llvm.fabs.f64";
-static LLVM_SIN_F64: &str = "llvm.sin.f64";
-static LLVM_COS_F64: &str = "llvm.cos.f64";
-static LLVM_POW_F64: &str = "llvm.pow.f64";
-static LLVM_CEILING_F64: &str = "llvm.ceil.f64";
-static LLVM_FLOOR_F64: &str = "llvm.floor.f64";
 
 // static LLVM_FRAME_ADDRESS: &str = "llvm.frameaddress";
 static LLVM_FRAME_ADDRESS: &str = "llvm.frameaddress.p0i8";
@@ -591,23 +585,13 @@ static LLVM_STACK_SAVE: &str = "llvm.stacksave";
 static LLVM_SETJMP: &str = "llvm.eh.sjlj.setjmp";
 pub static LLVM_LONGJMP: &str = "llvm.eh.sjlj.longjmp";
 
-pub static LLVM_SADD_WITH_OVERFLOW_I8: &str = "llvm.sadd.with.overflow.i8";
-pub static LLVM_SADD_WITH_OVERFLOW_I16: &str = "llvm.sadd.with.overflow.i16";
-pub static LLVM_SADD_WITH_OVERFLOW_I32: &str = "llvm.sadd.with.overflow.i32";
-pub static LLVM_SADD_WITH_OVERFLOW_I64: &str = "llvm.sadd.with.overflow.i64";
-pub static LLVM_SADD_WITH_OVERFLOW_I128: &str = "llvm.sadd.with.overflow.i128";
-
-pub static LLVM_SSUB_WITH_OVERFLOW_I8: &str = "llvm.ssub.with.overflow.i8";
-pub static LLVM_SSUB_WITH_OVERFLOW_I16: &str = "llvm.ssub.with.overflow.i16";
-pub static LLVM_SSUB_WITH_OVERFLOW_I32: &str = "llvm.ssub.with.overflow.i32";
-pub static LLVM_SSUB_WITH_OVERFLOW_I64: &str = "llvm.ssub.with.overflow.i64";
-pub static LLVM_SSUB_WITH_OVERFLOW_I128: &str = "llvm.ssub.with.overflow.i128";
-
-pub static LLVM_SMUL_WITH_OVERFLOW_I64: &str = "llvm.smul.with.overflow.i64";
+const LLVM_SADD_WITH_OVERFLOW: IntrinsicName = int_intrinsic!("llvm.sadd.with.overflow");
+const LLVM_SSUB_WITH_OVERFLOW: IntrinsicName = int_intrinsic!("llvm.ssub.with.overflow");
+const LLVM_SMUL_WITH_OVERFLOW: IntrinsicName = int_intrinsic!("llvm.smul.with.overflow");
 
 fn add_intrinsic<'ctx>(
     module: &Module<'ctx>,
-    intrinsic_name: &'static str,
+    intrinsic_name: &str,
     fn_type: FunctionType<'ctx>,
 ) -> FunctionValue<'ctx> {
     add_func(
@@ -955,6 +939,8 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
             op,
             function_owns_closure_data,
             specialization_id,
+            function_name,
+            function_env,
             arg_layouts,
             ret_layout,
             ..
@@ -973,7 +959,8 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
                 arg_layouts,
                 ret_layout,
                 *function_owns_closure_data,
-                arguments,
+                *function_name,
+                function_env,
             )
         }
 
@@ -4462,41 +4449,39 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
     return_layout: &Layout<'a>,
-    op: LowLevel,
+    op: roc_mono::low_level::HigherOrder,
     func_spec: FuncSpec,
     argument_layouts: &[Layout<'a>],
     result_layout: &Layout<'a>,
     function_owns_closure_data: bool,
-    args: &[Symbol],
+    function_name: Symbol,
+    function_env: &Symbol,
 ) -> BasicValueEnum<'ctx> {
-    use LowLevel::*;
-
-    debug_assert!(op.is_higher_order());
+    use roc_mono::low_level::HigherOrder::*;
 
     // macros because functions cause lifetime issues related to the `env` or `layout_ids`
-    macro_rules! passed_function_at_index {
-        ($index:expr) => {{
-            let function_symbol = args[$index];
-
-            function_value_by_func_spec(
+    macro_rules! function_details {
+        () => {{
+            let function = function_value_by_func_spec(
                 env,
                 func_spec,
-                function_symbol,
+                function_name,
                 argument_layouts,
                 return_layout,
-            )
+            );
+
+            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, function_env);
+
+            (function, closure, closure_layout)
         }};
     }
 
     macro_rules! list_walk {
-        ($variant:expr) => {{
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+        ($variant:expr, $xs:expr, $state:expr) => {{
+            let (list, list_layout) = load_symbol_and_layout(scope, &$xs);
+            let (default, default_layout) = load_symbol_and_layout(scope, &$state);
 
-            let (default, default_layout) = load_symbol_and_layout(scope, &args[1]);
-
-            let function = passed_function_at_index!(2);
-
-            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[3]);
+            let (function, closure, closure_layout) = function_details!();
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => default,
@@ -4530,15 +4515,11 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
         }};
     }
     match op {
-        ListMap => {
+        ListMap { xs } => {
             // List.map : List before, (before -> after) -> List after
-            debug_assert_eq!(args.len(), 3);
+            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            let function = passed_function_at_index!(1);
-
-            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[2]);
+            let (function, closure, closure_layout) = function_details!();
 
             match (list_layout, return_layout) {
                 (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
@@ -4563,14 +4544,11 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!("invalid list layout"),
             }
         }
-        ListMap2 => {
-            debug_assert_eq!(args.len(), 4);
+        ListMap2 { xs, ys } => {
+            let (list1, list1_layout) = load_symbol_and_layout(scope, &xs);
+            let (list2, list2_layout) = load_symbol_and_layout(scope, &ys);
 
-            let (list1, list1_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (list2, list2_layout) = load_symbol_and_layout(scope, &args[1]);
-
-            let function = passed_function_at_index!(2);
-            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[3]);
+            let (function, closure, closure_layout) = function_details!();
 
             match (list1_layout, list2_layout, return_layout) {
                 (
@@ -4606,15 +4584,12 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!("invalid list layout"),
             }
         }
-        ListMap3 => {
-            debug_assert_eq!(args.len(), 5);
+        ListMap3 { xs, ys, zs } => {
+            let (list1, list1_layout) = load_symbol_and_layout(scope, &xs);
+            let (list2, list2_layout) = load_symbol_and_layout(scope, &ys);
+            let (list3, list3_layout) = load_symbol_and_layout(scope, &zs);
 
-            let (list1, list1_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (list2, list2_layout) = load_symbol_and_layout(scope, &args[1]);
-            let (list3, list3_layout) = load_symbol_and_layout(scope, &args[2]);
-
-            let function = passed_function_at_index!(3);
-            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[4]);
+            let (function, closure, closure_layout) = function_details!();
 
             match (list1_layout, list2_layout, list3_layout, return_layout) {
                 (
@@ -4655,15 +4630,11 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!("invalid list layout"),
             }
         }
-        ListMapWithIndex => {
+        ListMapWithIndex { xs } => {
             // List.mapWithIndex : List before, (Nat, before -> after) -> List after
-            debug_assert_eq!(args.len(), 3);
+            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            let function = passed_function_at_index!(1);
-
-            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[2]);
+            let (function, closure, closure_layout) = function_details!();
 
             match (list_layout, return_layout) {
                 (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
@@ -4688,15 +4659,11 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!("invalid list layout"),
             }
         }
-        ListKeepIf => {
+        ListKeepIf { xs } => {
             // List.keepIf : List elem, (elem -> Bool) -> List elem
-            debug_assert_eq!(args.len(), 3);
+            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            let function = passed_function_at_index!(1);
-
-            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[2]);
+            let (function, closure, closure_layout) = function_details!();
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
@@ -4718,15 +4685,11 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!("invalid list layout"),
             }
         }
-        ListKeepOks => {
+        ListKeepOks { xs } => {
             // List.keepOks : List before, (before -> Result after *) -> List after
-            debug_assert_eq!(args.len(), 3);
+            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            let function = passed_function_at_index!(1);
-
-            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[2]);
+            let (function, closure, closure_layout) = function_details!();
 
             match (list_layout, return_layout) {
                 (_, Layout::Builtin(Builtin::EmptyList))
@@ -4762,15 +4725,11 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 }
             }
         }
-        ListKeepErrs => {
+        ListKeepErrs { xs } => {
             // List.keepErrs : List before, (before -> Result * after) -> List after
-            debug_assert_eq!(args.len(), 3);
+            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            let function = passed_function_at_index!(1);
-
-            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[2]);
+            let (function, closure, closure_layout) = function_details!();
 
             match (list_layout, return_layout) {
                 (_, Layout::Builtin(Builtin::EmptyList))
@@ -4806,24 +4765,20 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 }
             }
         }
-        ListWalk => {
-            list_walk!(crate::llvm::build_list::ListWalk::Walk)
+        ListWalk { xs, state } => {
+            list_walk!(crate::llvm::build_list::ListWalk::Walk, xs, state)
         }
-        ListWalkUntil => {
-            list_walk!(crate::llvm::build_list::ListWalk::WalkUntil)
+        ListWalkUntil { xs, state } => {
+            list_walk!(crate::llvm::build_list::ListWalk::WalkUntil, xs, state)
         }
-        ListWalkBackwards => {
-            list_walk!(crate::llvm::build_list::ListWalk::WalkBackwards)
+        ListWalkBackwards { xs, state } => {
+            list_walk!(crate::llvm::build_list::ListWalk::WalkBackwards, xs, state)
         }
-        ListSortWith => {
+        ListSortWith { xs } => {
             // List.sortWith : List a, (a, a -> Ordering) -> List a
-            debug_assert_eq!(args.len(), 3);
+            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            let function = passed_function_at_index!(1);
-
-            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[2]);
+            let (function, closure, closure_layout) = function_details!();
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
@@ -4858,13 +4813,11 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!("invalid list layout"),
             }
         }
-        DictWalk => {
-            debug_assert_eq!(args.len(), 4);
+        DictWalk { xs, state } => {
+            let (dict, dict_layout) = load_symbol_and_layout(scope, &xs);
+            let (default, default_layout) = load_symbol_and_layout(scope, &state);
 
-            let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (default, default_layout) = load_symbol_and_layout(scope, &args[1]);
-            let function = passed_function_at_index!(2);
-            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, &args[3]);
+            let (function, closure, closure_layout) = function_details!();
 
             match dict_layout {
                 Layout::Builtin(Builtin::EmptyDict) => {
@@ -4897,7 +4850,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!("invalid dict layout"),
             }
         }
-        _ => unreachable!(),
     }
 }
 
@@ -5193,8 +5145,14 @@ fn run_low_level<'a, 'ctx, 'env>(
                         Usize | Int128 | Int64 | Int32 | Int16 | Int8 => {
                             build_int_unary_op(env, arg.into_int_value(), arg_builtin, op)
                         }
-                        Float128 | Float64 | Float32 => {
-                            build_float_unary_op(env, arg.into_float_value(), op)
+                        Float32 => {
+                            build_float_unary_op(env, arg.into_float_value(), op, FloatWidth::F32)
+                        }
+                        Float64 => {
+                            build_float_unary_op(env, arg.into_float_value(), op, FloatWidth::F64)
+                        }
+                        Float128 => {
+                            build_float_unary_op(env, arg.into_float_value(), op, FloatWidth::F128)
                         }
                         _ => {
                             unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, arg_layout);
@@ -5327,8 +5285,8 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
 
         NumAdd | NumSub | NumMul | NumLt | NumLte | NumGt | NumGte | NumRemUnchecked
-        | NumIsMultipleOf | NumAddWrap | NumAddChecked | NumDivUnchecked | NumPow | NumPowInt
-        | NumSubWrap | NumSubChecked | NumMulWrap | NumMulChecked => {
+        | NumIsMultipleOf | NumAddWrap | NumAddChecked | NumDivUnchecked | NumDivCeilUnchecked
+        | NumPow | NumPowInt | NumSubWrap | NumSubChecked | NumMulWrap | NumMulChecked => {
             debug_assert_eq!(args.len(), 2);
 
             let (lhs_arg, lhs_layout) = load_symbol_and_layout(scope, &args[0]);
@@ -5928,6 +5886,31 @@ fn throw_on_overflow<'a, 'ctx, 'env>(
         .unwrap()
 }
 
+pub fn intwidth_from_builtin(builtin: Builtin<'_>, ptr_bytes: u32) -> IntWidth {
+    use IntWidth::*;
+
+    match builtin {
+        Builtin::Int128 => I128,
+        Builtin::Int64 => I64,
+        Builtin::Int32 => I32,
+        Builtin::Int16 => I16,
+        Builtin::Int8 => I8,
+        Builtin::Usize => match ptr_bytes {
+            4 => I32,
+            8 => I64,
+            _ => unreachable!(),
+        },
+        _ => unreachable!(),
+    }
+}
+
+fn intwidth_from_layout(layout: Layout<'_>, ptr_bytes: u32) -> IntWidth {
+    match layout {
+        Layout::Builtin(builtin) => intwidth_from_builtin(builtin, ptr_bytes),
+        _ => unreachable!(),
+    }
+}
+
 fn build_int_binop<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
@@ -5942,62 +5925,54 @@ fn build_int_binop<'a, 'ctx, 'env>(
 
     let bd = env.builder;
 
+    let int_width = intwidth_from_layout(*lhs_layout, env.ptr_bytes);
+
     match op {
         NumAdd => {
-            let intrinsic = match lhs_layout {
-                Layout::Builtin(Builtin::Int8) => LLVM_SADD_WITH_OVERFLOW_I8,
-                Layout::Builtin(Builtin::Int16) => LLVM_SADD_WITH_OVERFLOW_I16,
-                Layout::Builtin(Builtin::Int32) => LLVM_SADD_WITH_OVERFLOW_I32,
-                Layout::Builtin(Builtin::Int64) => LLVM_SADD_WITH_OVERFLOW_I64,
-                Layout::Builtin(Builtin::Int128) => LLVM_SADD_WITH_OVERFLOW_I128,
-                Layout::Builtin(Builtin::Usize) => match env.ptr_bytes {
-                    4 => LLVM_SADD_WITH_OVERFLOW_I32,
-                    8 => LLVM_SADD_WITH_OVERFLOW_I64,
-                    other => panic!("invalid ptr_bytes {}", other),
-                },
-                _ => unreachable!(),
-            };
-
             let result = env
-                .call_intrinsic(intrinsic, &[lhs.into(), rhs.into()])
+                .call_intrinsic(
+                    &LLVM_SADD_WITH_OVERFLOW[int_width],
+                    &[lhs.into(), rhs.into()],
+                )
                 .into_struct_value();
 
             throw_on_overflow(env, parent, result, "integer addition overflowed!")
         }
         NumAddWrap => bd.build_int_add(lhs, rhs, "add_int_wrap").into(),
-        NumAddChecked => env.call_intrinsic(LLVM_SADD_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()]),
+        NumAddChecked => env.call_intrinsic(
+            &LLVM_SADD_WITH_OVERFLOW[int_width],
+            &[lhs.into(), rhs.into()],
+        ),
         NumSub => {
-            let intrinsic = match lhs_layout {
-                Layout::Builtin(Builtin::Int8) => LLVM_SSUB_WITH_OVERFLOW_I8,
-                Layout::Builtin(Builtin::Int16) => LLVM_SSUB_WITH_OVERFLOW_I16,
-                Layout::Builtin(Builtin::Int32) => LLVM_SSUB_WITH_OVERFLOW_I32,
-                Layout::Builtin(Builtin::Int64) => LLVM_SSUB_WITH_OVERFLOW_I64,
-                Layout::Builtin(Builtin::Int128) => LLVM_SSUB_WITH_OVERFLOW_I128,
-                Layout::Builtin(Builtin::Usize) => match env.ptr_bytes {
-                    4 => LLVM_SSUB_WITH_OVERFLOW_I32,
-                    8 => LLVM_SSUB_WITH_OVERFLOW_I64,
-                    other => panic!("invalid ptr_bytes {}", other),
-                },
-                _ => unreachable!("invalid layout {:?}", lhs_layout),
-            };
-
             let result = env
-                .call_intrinsic(intrinsic, &[lhs.into(), rhs.into()])
+                .call_intrinsic(
+                    &LLVM_SSUB_WITH_OVERFLOW[int_width],
+                    &[lhs.into(), rhs.into()],
+                )
                 .into_struct_value();
 
             throw_on_overflow(env, parent, result, "integer subtraction overflowed!")
         }
         NumSubWrap => bd.build_int_sub(lhs, rhs, "sub_int").into(),
-        NumSubChecked => env.call_intrinsic(LLVM_SSUB_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()]),
+        NumSubChecked => env.call_intrinsic(
+            &LLVM_SSUB_WITH_OVERFLOW[int_width],
+            &[lhs.into(), rhs.into()],
+        ),
         NumMul => {
             let result = env
-                .call_intrinsic(LLVM_SMUL_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()])
+                .call_intrinsic(
+                    &LLVM_SMUL_WITH_OVERFLOW[int_width],
+                    &[lhs.into(), rhs.into()],
+                )
                 .into_struct_value();
 
             throw_on_overflow(env, parent, result, "integer multiplication overflowed!")
         }
         NumMulWrap => bd.build_int_mul(lhs, rhs, "mul_int").into(),
-        NumMulChecked => env.call_intrinsic(LLVM_SMUL_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()]),
+        NumMulChecked => env.call_intrinsic(
+            &LLVM_SMUL_WITH_OVERFLOW[int_width],
+            &[lhs.into(), rhs.into()],
+        ),
         NumGt => bd.build_int_compare(SGT, lhs, rhs, "int_gt").into(),
         NumGte => bd.build_int_compare(SGE, lhs, rhs, "int_gte").into(),
         NumLt => bd.build_int_compare(SLT, lhs, rhs, "int_lt").into(),
@@ -6071,8 +6046,17 @@ fn build_int_binop<'a, 'ctx, 'env>(
                 phi.as_basic_value()
             }
         }
+        NumPowInt => call_bitcode_fn(
+            env,
+            &[lhs.into(), rhs.into()],
+            &bitcode::NUM_POW_INT[int_width],
+        ),
         NumDivUnchecked => bd.build_int_signed_div(lhs, rhs, "div_int").into(),
-        NumPowInt => call_bitcode_fn(env, &[lhs.into(), rhs.into()], bitcode::NUM_POW_INT),
+        NumDivCeilUnchecked => call_bitcode_fn(
+            env,
+            &[lhs.into(), rhs.into()],
+            &bitcode::NUM_DIV_CEIL[int_width],
+        ),
         NumBitwiseAnd => bd.build_and(lhs, rhs, "int_bitwise_and").into(),
         NumBitwiseXor => bd.build_xor(lhs, rhs, "int_bitwise_xor").into(),
         NumBitwiseOr => bd.build_or(lhs, rhs, "int_bitwise_or").into(),
@@ -6114,6 +6098,17 @@ pub fn build_num_binop<'a, 'ctx, 'env>(
         {
             use roc_mono::layout::Builtin::*;
 
+            let float_binop = |float_width| {
+                build_float_binop(
+                    env,
+                    parent,
+                    lhs_arg.into_float_value(),
+                    rhs_arg.into_float_value(),
+                    float_width,
+                    op,
+                )
+            };
+
             match lhs_builtin {
                 Usize | Int128 | Int64 | Int32 | Int16 | Int8 => build_int_binop(
                     env,
@@ -6124,15 +6119,11 @@ pub fn build_num_binop<'a, 'ctx, 'env>(
                     rhs_layout,
                     op,
                 ),
-                Float128 | Float64 | Float32 => build_float_binop(
-                    env,
-                    parent,
-                    lhs_arg.into_float_value(),
-                    lhs_layout,
-                    rhs_arg.into_float_value(),
-                    rhs_layout,
-                    op,
-                ),
+
+                Float32 => float_binop(FloatWidth::F32),
+                Float64 => float_binop(FloatWidth::F64),
+                Float128 => float_binop(FloatWidth::F128),
+
                 Decimal => {
                     build_dec_binop(env, parent, lhs_arg, lhs_layout, rhs_arg, rhs_layout, op)
                 }
@@ -6151,9 +6142,8 @@ fn build_float_binop<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     lhs: FloatValue<'ctx>,
-    _lhs_layout: &Layout<'a>,
     rhs: FloatValue<'ctx>,
-    _rhs_layout: &Layout<'a>,
+    float_width: FloatWidth,
     op: LowLevel,
 ) -> BasicValueEnum<'ctx> {
     use inkwell::FloatPredicate::*;
@@ -6169,7 +6159,8 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_add(lhs, rhs, "add_float");
 
             let is_finite =
-                call_bitcode_fn(env, &[result.into()], bitcode::NUM_IS_FINITE).into_int_value();
+                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE[float_width])
+                    .into_int_value();
 
             let then_block = context.append_basic_block(parent, "then_block");
             let throw_block = context.append_basic_block(parent, "throw_block");
@@ -6190,7 +6181,8 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_add(lhs, rhs, "add_float");
 
             let is_finite =
-                call_bitcode_fn(env, &[result.into()], bitcode::NUM_IS_FINITE).into_int_value();
+                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE[float_width])
+                    .into_int_value();
             let is_infinite = bd.build_not(is_finite, "negate");
 
             let struct_type = context.struct_type(
@@ -6218,7 +6210,8 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_sub(lhs, rhs, "sub_float");
 
             let is_finite =
-                call_bitcode_fn(env, &[result.into()], bitcode::NUM_IS_FINITE).into_int_value();
+                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE[float_width])
+                    .into_int_value();
 
             let then_block = context.append_basic_block(parent, "then_block");
             let throw_block = context.append_basic_block(parent, "throw_block");
@@ -6239,7 +6232,8 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_sub(lhs, rhs, "sub_float");
 
             let is_finite =
-                call_bitcode_fn(env, &[result.into()], bitcode::NUM_IS_FINITE).into_int_value();
+                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE[float_width])
+                    .into_int_value();
             let is_infinite = bd.build_not(is_finite, "negate");
 
             let struct_type = context.struct_type(
@@ -6267,7 +6261,8 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_mul(lhs, rhs, "mul_float");
 
             let is_finite =
-                call_bitcode_fn(env, &[result.into()], bitcode::NUM_IS_FINITE).into_int_value();
+                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE[float_width])
+                    .into_int_value();
 
             let then_block = context.append_basic_block(parent, "then_block");
             let throw_block = context.append_basic_block(parent, "throw_block");
@@ -6288,7 +6283,8 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_mul(lhs, rhs, "mul_float");
 
             let is_finite =
-                call_bitcode_fn(env, &[result.into()], bitcode::NUM_IS_FINITE).into_int_value();
+                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE[float_width])
+                    .into_int_value();
             let is_infinite = bd.build_not(is_finite, "negate");
 
             let struct_type = context.struct_type(
@@ -6315,7 +6311,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
         NumLte => bd.build_float_compare(OLE, lhs, rhs, "float_lte").into(),
         NumRemUnchecked => bd.build_float_rem(lhs, rhs, "rem_float").into(),
         NumDivUnchecked => bd.build_float_div(lhs, rhs, "div_float").into(),
-        NumPow => env.call_intrinsic(LLVM_POW_F64, &[lhs.into(), rhs.into()]),
+        NumPow => env.call_intrinsic(&LLVM_POW[float_width], &[lhs.into(), rhs.into()]),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }
@@ -6557,6 +6553,7 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     arg: FloatValue<'ctx>,
     op: LowLevel,
+    float_width: FloatWidth,
 ) -> BasicValueEnum<'ctx> {
     use roc_module::low_level::LowLevel::*;
 
@@ -6565,34 +6562,72 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
     // TODO: Handle different sized floats
     match op {
         NumNeg => bd.build_float_neg(arg, "negate_float").into(),
-        NumAbs => env.call_intrinsic(LLVM_FABS_F64, &[arg.into()]),
-        NumSqrtUnchecked => env.call_intrinsic(LLVM_SQRT_F64, &[arg.into()]),
-        NumLogUnchecked => env.call_intrinsic(LLVM_LOG_F64, &[arg.into()]),
-        NumRound => call_bitcode_fn(env, &[arg.into()], bitcode::NUM_ROUND),
-        NumSin => env.call_intrinsic(LLVM_SIN_F64, &[arg.into()]),
-        NumCos => env.call_intrinsic(LLVM_COS_F64, &[arg.into()]),
+        NumAbs => env.call_intrinsic(&LLVM_FABS[float_width], &[arg.into()]),
+        NumSqrtUnchecked => env.call_intrinsic(&LLVM_SQRT[float_width], &[arg.into()]),
+        NumLogUnchecked => env.call_intrinsic(&LLVM_LOG[float_width], &[arg.into()]),
         NumToFloat => arg.into(), /* Converting from Float to Float is a no-op */
         NumCeiling => env.builder.build_cast(
             InstructionOpcode::FPToSI,
-            env.call_intrinsic(LLVM_CEILING_F64, &[arg.into()]),
+            env.call_intrinsic(&LLVM_CEILING[float_width], &[arg.into()]),
             env.context.i64_type(),
             "num_ceiling",
         ),
         NumFloor => env.builder.build_cast(
             InstructionOpcode::FPToSI,
-            env.call_intrinsic(LLVM_FLOOR_F64, &[arg.into()]),
+            env.call_intrinsic(&LLVM_FLOOR[float_width], &[arg.into()]),
             env.context.i64_type(),
             "num_floor",
         ),
-        NumIsFinite => call_bitcode_fn(env, &[arg.into()], bitcode::NUM_IS_FINITE),
-        NumAtan => call_bitcode_fn(env, &[arg.into()], bitcode::NUM_ATAN),
-        NumAcos => call_bitcode_fn(env, &[arg.into()], bitcode::NUM_ACOS),
-        NumAsin => call_bitcode_fn(env, &[arg.into()], bitcode::NUM_ASIN),
+        NumIsFinite => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_IS_FINITE[float_width]),
+        NumRound => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ROUND[float_width]),
+
+        // trigonometry
+        NumSin => env.call_intrinsic(&LLVM_SIN[float_width], &[arg.into()]),
+        NumCos => env.call_intrinsic(&LLVM_COS[float_width], &[arg.into()]),
+
+        NumAtan => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ATAN[float_width]),
+        NumAcos => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ACOS[float_width]),
+        NumAsin => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ASIN[float_width]),
+
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);
         }
     }
 }
+
+pub fn call_bitcode_int_fn<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    fn_name: &str,
+    args: &[BasicValueEnum<'ctx>],
+    int_width: IntWidth,
+) -> BasicValueEnum<'ctx> {
+    match int_width {
+        IntWidth::U8 => call_bitcode_fn(env, args, &format!("{}_u8", fn_name)),
+        IntWidth::U16 => call_bitcode_fn(env, args, &format!("{}_u16", fn_name)),
+        IntWidth::U32 => call_bitcode_fn(env, args, &format!("{}_u32", fn_name)),
+        IntWidth::U64 => call_bitcode_fn(env, args, &format!("{}_u64", fn_name)),
+        IntWidth::U128 => call_bitcode_fn(env, args, &format!("{}_u128", fn_name)),
+        IntWidth::I8 => call_bitcode_fn(env, args, &format!("{}_i8", fn_name)),
+        IntWidth::I16 => call_bitcode_fn(env, args, &format!("{}_i16", fn_name)),
+        IntWidth::I32 => call_bitcode_fn(env, args, &format!("{}_i32", fn_name)),
+        IntWidth::I64 => call_bitcode_fn(env, args, &format!("{}_i64", fn_name)),
+        IntWidth::I128 => call_bitcode_fn(env, args, &format!("{}_i128", fn_name)),
+    }
+}
+
+pub fn call_bitcode_float_fn<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    fn_name: &str,
+    args: &[BasicValueEnum<'ctx>],
+    float_width: FloatWidth,
+) -> BasicValueEnum<'ctx> {
+    match float_width {
+        FloatWidth::F32 => call_bitcode_fn(env, args, &format!("{}_f32", fn_name)),
+        FloatWidth::F64 => call_bitcode_fn(env, args, &format!("{}_f64", fn_name)),
+        FloatWidth::F128 => todo!("suport 128-bit floats"),
+    }
+}
+
 fn define_global_str_literal_ptr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     message: &str,

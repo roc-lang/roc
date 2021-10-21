@@ -32,6 +32,11 @@ pub fn target_triple_str(target: &Triple) -> &'static str {
             ..
         } => "aarch64-unknown-linux-gnu",
         Triple {
+            architecture: Architecture::Aarch64(_),
+            operating_system: OperatingSystem::Darwin,
+            ..
+        } => "aarch64-apple-darwin",
+        Triple {
             architecture: Architecture::X86_64,
             operating_system: OperatingSystem::Darwin,
             ..
