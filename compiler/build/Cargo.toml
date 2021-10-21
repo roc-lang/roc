@@ -42,7 +42,7 @@ quickcheck = "0.8"
 quickcheck_macros = "0.8"
 
 [features]
-default = ["llvm", "target-webassembly"]
+default = ["llvm", "target-webassembly", "target-aarch64"]
 target-arm = []
 target-aarch64 = []
 target-webassembly = []

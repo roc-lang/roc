@@ -36,7 +36,6 @@ pub fn link(
             ..
         } => link_linux(target, output_path, input_paths, link_type),
         Triple {
-            architecture: Architecture::X86_64,
             operating_system: OperatingSystem::Darwin,
             ..
         } => link_macos(target, output_path, input_paths, link_type),
@@ -724,42 +723,56 @@ fn link_macos(
         String::from("-lSystem")
     };
 
-    Ok((
+    let arch = match target.architecture {
+        Architecture::Aarch64(_) => "arm64".to_string(),
+        _ => target.architecture.to_string(),
+    };
+
+    let mut ld_child = Command::new("ld")
         // NOTE: order of arguments to `ld` matters here!
         // The `-l` flags should go after the `.o` arguments
-        Command::new("ld")
-            // Don't allow LD_ env vars to affect this
-            .env_clear()
-            .args(&[
-                // NOTE: we don't do --gc-sections on macOS because the default
-                // macOS linker doesn't support it, but it's a performance
-                // optimization, so if we ever switch to a different linker,
-                // we'd like to re-enable it on macOS!
-                // "--gc-sections",
-                link_type_arg,
-                "-arch",
-                target.architecture.to_string().as_str(),
-            ])
-            .args(input_paths)
-            .args(&[
-                // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274
-                // for discussion and further references
-                &big_sur_fix,
-                "-lSystem",
-                "-lresolv",
-                "-lpthread",
-                // "-lrt", // TODO shouldn't we need this?
-                // "-lc_nonshared", // TODO shouldn't we need this?
-                // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
-                // "-framework", // Uncomment this line & the following ro run the `rand` crate in examples/cli
-                // "Security",
-                // Output
-                "-o",
-                output_path.to_str().unwrap(), // app
-            ])
-            .spawn()?,
-        output_path,
-    ))
+        // Don't allow LD_ env vars to affect this
+        .env_clear()
+        .args(&[
+            // NOTE: we don't do --gc-sections on macOS because the default
+            // macOS linker doesn't support it, but it's a performance
+            // optimization, so if we ever switch to a different linker,
+            // we'd like to re-enable it on macOS!
+            // "--gc-sections",
+            link_type_arg,
+            "-arch",
+            &arch,
+        ])
+        .args(input_paths)
+        .args(&[
+            // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274
+            // for discussion and further references
+            &big_sur_fix,
+            "-lSystem",
+            "-lresolv",
+            "-lpthread",
+            // "-lrt", // TODO shouldn't we need this?
+            // "-lc_nonshared", // TODO shouldn't we need this?
+            // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
+            // "-framework", // Uncomment this line & the following ro run the `rand` crate in examples/cli
+            // "Security",
+            // Output
+            "-o",
+            output_path.to_str().unwrap(), // app
+        ])
+        .spawn()?;
+
+    match target.architecture {
+        Architecture::Aarch64(_) => {
+            ld_child.wait()?;
+            let child = Command::new("codesign")
+                .args(&["-s", "-", output_path.to_str().unwrap()])
+                .spawn()?;
+
+            Ok((child, output_path))
+        }
+        _ => Ok((ld_child, output_path)),
+    }
 }
 
 fn link_wasm32(
