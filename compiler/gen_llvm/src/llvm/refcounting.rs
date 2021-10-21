@@ -736,8 +736,9 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
 
     builder.position_at_end(modification_block);
 
-    let ptr_type = basic_type_from_layout(env, element_layout).ptr_type(AddressSpace::Generic);
     if element_layout.contains_refcounted() {
+        let ptr_type = basic_type_from_layout(env, element_layout).ptr_type(AddressSpace::Generic);
+
         let (len, ptr) = load_list(env.builder, original_wrapper, ptr_type);
 
         let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, ptr);
@@ -789,6 +790,8 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
         }
     } else {
         // just increment/decrement the list itself, don't touch the elements
+        let ptr_type = basic_type_from_layout(env, element_layout).ptr_type(AddressSpace::Generic);
+
         let (_, ptr) = load_list(env.builder, original_wrapper, ptr_type);
 
         let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, ptr);
