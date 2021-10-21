@@ -28,8 +28,8 @@ const LLVM_VERSION: &str = "12";
 pub fn report_problems_monomorphized(loaded: &mut MonomorphizedModule) -> usize {
     report_problems_help(
         loaded.total_problems(),
-        &loaded.sources,
         &loaded.header_sources,
+        &loaded.sources,
         &loaded.interns,
         &mut loaded.can_problems,
         &mut loaded.type_problems,
@@ -40,8 +40,8 @@ pub fn report_problems_monomorphized(loaded: &mut MonomorphizedModule) -> usize 
 pub fn report_problems_typechecked(loaded: &mut LoadedModule) -> usize {
     report_problems_help(
         loaded.total_problems(),
-        &loaded.sources,
         &loaded.header_sources,
+        &loaded.sources,
         &loaded.interns,
         &mut loaded.can_problems,
         &mut loaded.type_problems,
