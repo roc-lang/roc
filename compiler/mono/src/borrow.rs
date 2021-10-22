@@ -905,7 +905,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
     use LowLevel::*;
 
     // TODO is true or false more efficient for non-refcounted layouts?
-    let irrelevant = BORROWED;
+    let irrelevant = OWNED;
     let function = irrelevant;
     let closure_data = irrelevant;
     let owned = OWNED;
