@@ -42,6 +42,7 @@ pub enum LowLevel {
     ListSortWith,
     ListDrop,
     ListDropAt,
+    ListDropLast,
     ListSwap,
     DictSize,
     DictEmpty,
@@ -129,6 +130,7 @@ macro_rules! first_order {
             | ListSet
             | ListDrop
             | ListDropAt
+            | ListDropLast
             | ListSingle
             | ListRepeat
             | ListReverse
