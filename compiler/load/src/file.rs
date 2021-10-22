@@ -4139,10 +4139,9 @@ fn add_def_to_module<'a>(
                         );
                     }
 
-                    procs.insert_named(
+                    let partial_proc = PartialProc::from_named_function(
                         mono_env,
                         layout_cache,
-                        symbol,
                         annotation,
                         loc_args,
                         *loc_body,
@@ -4150,6 +4149,8 @@ fn add_def_to_module<'a>(
                         is_recursive,
                         ret_var,
                     );
+
+                    procs.partial_procs.insert(symbol, partial_proc);
                 }
                 body => {
                     // mark this symbols as a top-level thunk before any other work on the procs

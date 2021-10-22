@@ -79,6 +79,55 @@ pub struct PartialProc<'a> {
     pub is_self_recursive: bool,
 }
 
+impl<'a> PartialProc<'a> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_named_function(
+        env: &mut Env<'a, '_>,
+        layout_cache: &mut LayoutCache<'a>,
+        annotation: Variable,
+        loc_args: std::vec::Vec<(Variable, Located<roc_can::pattern::Pattern>)>,
+        loc_body: Located<roc_can::expr::Expr>,
+        captured_symbols: CapturedSymbols<'a>,
+        is_self_recursive: bool,
+        ret_var: Variable,
+    ) -> PartialProc<'a> {
+        let number_of_arguments = loc_args.len();
+
+        match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
+            Ok((_, pattern_symbols, body)) => {
+                // a named closure. Since these aren't specialized by the surrounding
+                // context, we can't add pending specializations for them yet.
+                // (If we did, all named polymorphic functions would immediately error
+                // on trying to convert a flex var to a Layout.)
+                let pattern_symbols = pattern_symbols.into_bump_slice();
+                PartialProc {
+                    annotation,
+                    pattern_symbols,
+                    captured_symbols,
+                    body: body.value,
+                    is_self_recursive,
+                }
+            }
+
+            Err(error) => {
+                let mut pattern_symbols = Vec::with_capacity_in(number_of_arguments, env.arena);
+
+                for _ in 0..number_of_arguments {
+                    pattern_symbols.push(env.unique_symbol());
+                }
+
+                PartialProc {
+                    annotation,
+                    pattern_symbols: pattern_symbols.into_bump_slice(),
+                    captured_symbols: CapturedSymbols::None,
+                    body: roc_can::expr::Expr::RuntimeError(error.value),
+                    is_self_recursive: false,
+                }
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum CapturedSymbols<'a> {
     None,
@@ -422,62 +471,6 @@ impl<'a> Procs<'a> {
         }
 
         result
-    }
-
-    // TODO trim down these arguments!
-    #[allow(clippy::too_many_arguments)]
-    pub fn insert_named(
-        &mut self,
-        env: &mut Env<'a, '_>,
-        layout_cache: &mut LayoutCache<'a>,
-        name: Symbol,
-        annotation: Variable,
-        loc_args: std::vec::Vec<(Variable, Located<roc_can::pattern::Pattern>)>,
-        loc_body: Located<roc_can::expr::Expr>,
-        captured_symbols: CapturedSymbols<'a>,
-        is_self_recursive: bool,
-        ret_var: Variable,
-    ) {
-        let number_of_arguments = loc_args.len();
-
-        match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
-            Ok((_, pattern_symbols, body)) => {
-                // a named closure. Since these aren't specialized by the surrounding
-                // context, we can't add pending specializations for them yet.
-                // (If we did, all named polymorphic functions would immediately error
-                // on trying to convert a flex var to a Layout.)
-                let pattern_symbols = pattern_symbols.into_bump_slice();
-                self.partial_procs.insert(
-                    name,
-                    PartialProc {
-                        annotation,
-                        pattern_symbols,
-                        captured_symbols,
-                        body: body.value,
-                        is_self_recursive,
-                    },
-                );
-            }
-
-            Err(error) => {
-                let mut pattern_symbols = Vec::with_capacity_in(number_of_arguments, env.arena);
-
-                for _ in 0..number_of_arguments {
-                    pattern_symbols.push(env.unique_symbol());
-                }
-
-                self.partial_procs.insert(
-                    name,
-                    PartialProc {
-                        annotation,
-                        pattern_symbols: pattern_symbols.into_bump_slice(),
-                        captured_symbols: CapturedSymbols::None,
-                        body: roc_can::expr::Expr::RuntimeError(error.value),
-                        is_self_recursive: false,
-                    },
-                );
-            }
-        }
     }
 
     // TODO trim these down
@@ -2869,13 +2862,12 @@ pub fn with_hole<'a>(
 
                     // this should be a top-level declaration, and hence have no captured symbols
                     // if we ever do hit this (and it's not a bug), we should make sure to put the
-                    // captured symbols into a CapturedSymbols and give it to insert_named
+                    // captured symbols into a CapturedSymbols and give it to PartialProc::from_named_function
                     debug_assert!(captured_symbols.is_empty());
 
-                    procs.insert_named(
+                    let partial_proc = PartialProc::from_named_function(
                         env,
                         layout_cache,
-                        *symbol,
                         function_type,
                         arguments,
                         loc_body,
@@ -2883,6 +2875,8 @@ pub fn with_hole<'a>(
                         is_self_recursive,
                         return_type,
                     );
+
+                    procs.partial_procs.insert(*symbol, partial_proc);
 
                     return with_hole(
                         env,
@@ -3041,10 +3035,9 @@ pub fn with_hole<'a>(
                         let is_self_recursive =
                             !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
 
-                        procs.insert_named(
+                        let partial_proc = PartialProc::from_named_function(
                             env,
                             layout_cache,
-                            *symbol,
                             function_type,
                             arguments,
                             loc_body,
@@ -3052,6 +3045,8 @@ pub fn with_hole<'a>(
                             is_self_recursive,
                             return_type,
                         );
+
+                        procs.partial_procs.insert(*symbol, partial_proc);
 
                         continue;
                     }
@@ -4756,10 +4751,9 @@ pub fn from_can<'a>(
                             let is_self_recursive =
                                 !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
 
-                            procs.insert_named(
+                            let partial_proc = PartialProc::from_named_function(
                                 env,
                                 layout_cache,
-                                *symbol,
                                 function_type,
                                 arguments,
                                 loc_body,
@@ -4767,6 +4761,8 @@ pub fn from_can<'a>(
                                 is_self_recursive,
                                 return_type,
                             );
+
+                            procs.partial_procs.insert(*symbol, partial_proc);
 
                             continue;
                         }
@@ -4844,10 +4840,9 @@ pub fn from_can<'a>(
                                 }
                             };
 
-                            procs.insert_named(
+                            let partial_proc = PartialProc::from_named_function(
                                 env,
                                 layout_cache,
-                                *symbol,
                                 function_type,
                                 arguments,
                                 loc_body,
@@ -4855,6 +4850,8 @@ pub fn from_can<'a>(
                                 is_self_recursive,
                                 return_type,
                             );
+
+                            procs.partial_procs.insert(*symbol, partial_proc);
 
                             return from_can(env, variable, cont.value, procs, layout_cache);
                         }
