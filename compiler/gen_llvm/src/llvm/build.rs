@@ -3995,6 +3995,7 @@ fn build_proc_header<'a, 'ctx, 'env>(
     fn_val
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build_closure_caller<'a, 'ctx, 'env>(
     env: &'a Env<'a, 'ctx, 'env>,
     def_name: &str,
