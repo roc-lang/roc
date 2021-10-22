@@ -8,7 +8,7 @@ use crate::layout::{
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, BumpSet, MutMap, MutSet};
+use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap, MutSet};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
@@ -418,7 +418,7 @@ impl<'a> ExternalSpecializations<'a> {
 pub struct Procs<'a> {
     pub partial_procs: BumpMap<Symbol, PartialProc<'a>>,
     pub imported_module_thunks: &'a [Symbol],
-    pub module_thunks: BumpSet<Symbol>,
+    pub module_thunks: &'a [Symbol],
     pub pending_specializations:
         Option<BumpMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>>,
     pub specialized: BumpMap<(Symbol, ProcLayout<'a>), InProgressProc<'a>>,
@@ -432,7 +432,7 @@ impl<'a> Procs<'a> {
         Self {
             partial_procs: BumpMap::new_in(arena),
             imported_module_thunks: &[],
-            module_thunks: BumpSet::new_in(arena),
+            module_thunks: &[],
             pending_specializations: Some(BumpMap::new_in(arena)),
             specialized: BumpMap::new_in(arena),
             runtime_errors: BumpMap::new_in(arena),

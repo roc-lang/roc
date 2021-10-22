@@ -3952,7 +3952,7 @@ fn make_specializations<'a>(
     let mut procs = Procs::new_in(arena);
 
     procs.partial_procs = procs_base.partial_procs;
-    procs.module_thunks.extend(procs_base.module_thunks);
+    procs.module_thunks = procs_base.module_thunks;
     procs.runtime_errors = procs_base.runtime_errors;
     procs.imported_module_thunks = procs_base.imported_module_thunks;
 
@@ -3990,7 +3990,7 @@ fn make_specializations<'a>(
 #[derive(Clone, Debug)]
 struct ProcsBase<'a> {
     partial_procs: BumpMap<Symbol, PartialProc<'a>>,
-    module_thunks: std::vec::Vec<Symbol>,
+    module_thunks: &'a [Symbol],
     pending_specializations: BumpMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>,
     runtime_errors: BumpMap<Symbol, &'a str>,
     imported_module_thunks: &'a [Symbol],
@@ -4028,9 +4028,11 @@ fn build_pending_specializations<'a>(
 ) -> Msg<'a> {
     let find_specializations_start = SystemTime::now();
 
+    let mut module_thunks = bumpalo::collections::Vec::new_in(arena);
+
     let mut procs_base = ProcsBase {
         partial_procs: BumpMap::default(),
-        module_thunks: std::vec::Vec::new(),
+        module_thunks: &[],
         pending_specializations: BumpMap::default(),
         runtime_errors: BumpMap::default(),
         imported_module_thunks,
@@ -4058,6 +4060,7 @@ fn build_pending_specializations<'a>(
             Declare(def) | Builtin(def) => add_def_to_module(
                 &mut layout_cache,
                 &mut procs_base,
+                &mut module_thunks,
                 &mut mono_env,
                 def,
                 &exposed_to_host,
@@ -4068,6 +4071,7 @@ fn build_pending_specializations<'a>(
                     add_def_to_module(
                         &mut layout_cache,
                         &mut procs_base,
+                        &mut module_thunks,
                         &mut mono_env,
                         def,
                         &exposed_to_host,
@@ -4081,6 +4085,8 @@ fn build_pending_specializations<'a>(
             }
         }
     }
+
+    procs_base.module_thunks = module_thunks.into_bump_slice();
 
     let problems = mono_env.problems.to_vec();
 
@@ -4103,6 +4109,7 @@ fn build_pending_specializations<'a>(
 fn add_def_to_module<'a>(
     layout_cache: &mut LayoutCache<'a>,
     procs: &mut ProcsBase<'a>,
+    module_thunks: &mut bumpalo::collections::Vec<'a, Symbol>,
     mono_env: &mut roc_mono::ir::Env<'a, '_>,
     def: roc_can::def::Def,
     exposed_to_host: &MutMap<Symbol, Variable>,
@@ -4193,7 +4200,7 @@ fn add_def_to_module<'a>(
                 }
                 body => {
                     // mark this symbols as a top-level thunk before any other work on the procs
-                    procs.module_thunks.push(symbol);
+                    module_thunks.push(symbol);
 
                     // If this is an exposed symbol, we need to
                     // register it as such. Otherwise, since it
