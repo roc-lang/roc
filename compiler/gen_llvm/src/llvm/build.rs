@@ -3095,6 +3095,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     roc_function: FunctionValue<'ctx>,
     arguments: &[Layout<'a>],
+    return_layout: Layout<'a>,
     c_function_name: &str,
 ) -> FunctionValue<'ctx> {
     // NOTE we ingore env.is_gen_test here
@@ -3171,23 +3172,11 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
 
             builder.position_at_end(entry);
 
-            let call_wrapped = builder.build_call(
-                roc_wrapper_function,
-                arguments_for_call,
-                "call_wrapped_function",
-            );
-            call_wrapped.set_call_convention(FAST_CALL_CONV);
-
-            call_wrapped.try_as_basic_value().left().unwrap()
+            let elements = [Layout::Builtin(Builtin::Int64), return_layout];
+            let wrapped_layout = Layout::Struct(&elements);
+            call_roc_function(env, roc_function, &wrapped_layout, arguments_for_call)
         } else {
-            let call_unwrapped =
-                builder.build_call(roc_function, arguments_for_call, "call_unwrapped_function");
-            call_unwrapped.set_call_convention(FAST_CALL_CONV);
-
-            let call_unwrapped_result = call_unwrapped.try_as_basic_value().left().unwrap();
-
-            // make_good_roc_result(env, call_unwrapped_result)
-            call_unwrapped_result
+            call_roc_function(env, roc_function, &return_layout, arguments_for_call)
         }
     };
 
@@ -3209,6 +3198,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
     ident_string: &str,
     roc_function: FunctionValue<'ctx>,
     arguments: &[Layout<'a>],
+    return_layout: Layout<'a>,
     c_function_name: &str,
 ) -> FunctionValue<'ctx> {
     let context = env.context;
@@ -3292,14 +3282,12 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
 
         builder.position_at_end(entry);
 
-        let call_wrapped = builder.build_call(
+        call_roc_function(
+            env,
             roc_wrapper_function,
+            &return_layout,
             arguments_for_call,
-            "call_wrapped_function",
-        );
-        call_wrapped.set_call_convention(FAST_CALL_CONV);
-
-        call_wrapped.try_as_basic_value().left().unwrap()
+        )
     };
 
     let output_arg_index = args_length - 1;
@@ -3355,6 +3343,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
             ident_string,
             roc_function,
             arguments,
+            return_layout,
             c_function_name,
         );
     }
@@ -3364,6 +3353,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
         env,
         roc_function,
         arguments,
+        return_layout,
         &format!("{}_generic", c_function_name),
     );
 
@@ -3457,16 +3447,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
 
     let arguments_for_call = &arguments_for_call.into_bump_slice();
 
-    let call_result = {
-        let call_unwrapped =
-            builder.build_call(roc_function, arguments_for_call, "call_unwrapped_function");
-        call_unwrapped.set_call_convention(FAST_CALL_CONV);
-
-        let call_unwrapped_result = call_unwrapped.try_as_basic_value().left().unwrap();
-
-        // make_good_roc_result(env, call_unwrapped_result)
-        call_unwrapped_result
-    };
+    let call_result = call_roc_function(env, roc_function, &return_layout, arguments_for_call);
 
     match cc_return {
         CCReturn::Void => {
@@ -4014,12 +3995,14 @@ fn build_proc_header<'a, 'ctx, 'env>(
     fn_val
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build_closure_caller<'a, 'ctx, 'env>(
     env: &'a Env<'a, 'ctx, 'env>,
     def_name: &str,
     evaluator: FunctionValue<'ctx>,
     alias_symbol: Symbol,
     arguments: &[Layout<'a>],
+    return_layout: &Layout<'a>,
     lambda_set: LambdaSet<'a>,
     result: &Layout<'a>,
 ) {
@@ -4044,10 +4027,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
 
     let result_type = basic_type_from_layout(env, result);
 
-    let roc_call_result_type =
-        context.struct_type(&[context.i64_type().into(), result_type], false);
-
-    let output_type = { roc_call_result_type.ptr_type(AddressSpace::Generic) };
+    let output_type = { result_type.ptr_type(AddressSpace::Generic) };
     argument_types.push(output_type.into());
 
     // STEP 1: build function header
@@ -4098,15 +4078,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
             result_type,
         )
     } else {
-        let call = env
-            .builder
-            .build_call(evaluator, &evaluator_arguments, "call_function");
-
-        call.set_call_convention(evaluator.get_call_conventions());
-
-        let call_result = call.try_as_basic_value().left().unwrap();
-
-        make_good_roc_result(env, call_result)
+        call_roc_function(env, evaluator, return_layout, &evaluator_arguments)
     };
 
     builder.build_store(output, call_result);
@@ -4114,13 +4086,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     builder.build_return(None);
 
     // STEP 3: build a {} -> u64 function that gives the size of the return type
-    build_host_exposed_alias_size_help(
-        env,
-        def_name,
-        alias_symbol,
-        Some("result"),
-        roc_call_result_type.into(),
-    );
+    build_host_exposed_alias_size_help(env, def_name, alias_symbol, Some("result"), result_type);
 
     // STEP 4: build a {} -> u64 function that gives the size of the closure
     build_host_exposed_alias_size(
@@ -4248,7 +4214,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
                         let fn_name: String = format!("{}_1", ident_string);
 
                         build_closure_caller(
-                            env, &fn_name, evaluator, name, arguments, closure, result,
+                            env, &fn_name, evaluator, name, arguments, result, closure, result,
                         )
                     }
 
@@ -4355,7 +4321,6 @@ fn function_value_by_name_help<'a, 'ctx, 'env>(
     })
 }
 
-// #[allow(clippy::cognitive_complexity)]
 #[inline(always)]
 fn roc_call_with_args<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -4363,18 +4328,32 @@ fn roc_call_with_args<'a, 'ctx, 'env>(
     result_layout: &Layout<'a>,
     symbol: Symbol,
     func_spec: FuncSpec,
-    args: &[BasicValueEnum<'ctx>],
+    arguments: &[BasicValueEnum<'ctx>],
 ) -> BasicValueEnum<'ctx> {
     let fn_val =
         function_value_by_func_spec(env, func_spec, symbol, argument_layouts, result_layout);
 
-    let call = env.builder.build_call(fn_val, args, "call");
+    call_roc_function(env, fn_val, result_layout, arguments)
+}
 
-    call.set_call_convention(fn_val.get_call_conventions());
+fn call_roc_function<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    roc_function: FunctionValue<'ctx>,
+    _result_layout: &Layout<'a>,
+    arguments: &[BasicValueEnum<'ctx>],
+) -> BasicValueEnum<'ctx> {
+    let call = env.builder.build_call(roc_function, arguments, "call");
 
-    call.try_as_basic_value()
-        .left()
-        .unwrap_or_else(|| panic!("LLVM error: Invalid call by name for name {:?}", symbol))
+    // roc functions should have the fast calling convention
+    debug_assert_eq!(roc_function.get_call_conventions(), FAST_CALL_CONV);
+    call.set_call_convention(FAST_CALL_CONV);
+
+    call.try_as_basic_value().left().unwrap_or_else(|| {
+        panic!(
+            "LLVM error: Invalid call by name for name {:?}",
+            roc_function.get_name()
+        )
+    })
 }
 
 /// Translates a target_lexicon::Triple to a LLVM calling convention u32
@@ -5848,9 +5827,7 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
         }
     };
 
-    let call = env.builder.build_call(fastcc_function, &arguments, "tmp");
-    call.set_call_convention(FAST_CALL_CONV);
-    return call.try_as_basic_value().left().unwrap();
+    call_roc_function(env, fastcc_function, ret_layout, &arguments)
 }
 
 fn throw_on_overflow<'a, 'ctx, 'env>(
