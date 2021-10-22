@@ -101,6 +101,12 @@ test-all:
     BUILD +test-rust
     BUILD +verify-no-git-changes
 
+build-nightly-release:
+    FROM +test-all
+    RUN cargo build --release
+    RUN tar -czvf roc_linux_x86_64.tar.gz ./target/release/roc
+    SAVE ARTIFACT ./roc_linux_x86_64.tar.gz 
+
 # compile everything needed for benchmarks and output a self-contained dir from which benchmarks can be run.
 prep-bench-folder:
     FROM +copy-dirs
