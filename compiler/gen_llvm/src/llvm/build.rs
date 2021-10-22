@@ -4389,28 +4389,55 @@ fn roc_call_with_args<'a, 'ctx, 'env>(
     let fn_val =
         function_value_by_func_spec(env, func_spec, symbol, argument_layouts, result_layout);
 
-<<<<<<< HEAD
     call_roc_function(env, fn_val, result_layout, arguments)
 }
 
 fn call_roc_function<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     roc_function: FunctionValue<'ctx>,
-    _result_layout: &Layout<'a>,
+    result_layout: &Layout<'a>,
     arguments: &[BasicValueEnum<'ctx>],
 ) -> BasicValueEnum<'ctx> {
-    let call = env.builder.build_call(roc_function, arguments, "call");
+    match RocReturn::from_layout(env, result_layout) {
+        RocReturn::Return => {
+            debug_assert_eq!(
+                roc_function.get_type().get_param_types().len(),
+                arguments.len()
+            );
+            let call = env.builder.build_call(roc_function, arguments, "call");
 
-    // roc functions should have the fast calling convention
-    debug_assert_eq!(roc_function.get_call_conventions(), FAST_CALL_CONV);
-    call.set_call_convention(FAST_CALL_CONV);
+            // roc functions should have the fast calling convention
+            debug_assert_eq!(roc_function.get_call_conventions(), FAST_CALL_CONV);
+            call.set_call_convention(FAST_CALL_CONV);
 
-    call.try_as_basic_value().left().unwrap_or_else(|| {
-        panic!(
-            "LLVM error: Invalid call by name for name {:?}",
-            roc_function.get_name()
-        )
-    })
+            call.try_as_basic_value().left().unwrap_or_else(|| {
+                panic!(
+                    "LLVM error: Invalid call by name for name {:?}",
+                    roc_function.get_name()
+                )
+            })
+        }
+        RocReturn::ByPointer => {
+            let mut arguments = Vec::from_iter_in(arguments.iter().copied(), env.arena);
+
+            let result_type = basic_type_from_layout(env, result_layout);
+            let result_alloca = env.builder.build_alloca(result_type, "result_value");
+
+            arguments.push(result_alloca.into());
+
+            debug_assert_eq!(
+                roc_function.get_type().get_param_types().len(),
+                arguments.len()
+            );
+            let call = env.builder.build_call(roc_function, &arguments, "call");
+
+            // roc functions should have the fast calling convention
+            debug_assert_eq!(roc_function.get_call_conventions(), FAST_CALL_CONV);
+            call.set_call_convention(FAST_CALL_CONV);
+
+            env.builder.build_load(result_alloca, "load_result")
+        }
+    }
 }
 
 /// Translates a target_lexicon::Triple to a LLVM calling convention u32
@@ -5751,10 +5778,7 @@ enum RocReturn {
 impl RocReturn {
     fn roc_return_by_pointer(layout: Layout) -> bool {
         match layout {
-            Layout::Union(union_layout) => match union_layout {
-                UnionLayout::NonRecursive(_) => true,
-                _ => false,
-            },
+            Layout::Union(union_layout) => matches!(union_layout, UnionLayout::NonRecursive(_)),
             Layout::LambdaSet(lambda_set) => {
                 RocReturn::roc_return_by_pointer(lambda_set.runtime_representation())
             }
@@ -5762,7 +5786,7 @@ impl RocReturn {
         }
     }
 
-    fn from_layout<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) -> Self {
+    fn from_layout<'a, 'ctx, 'env>(_env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) -> Self {
         if false && Self::roc_return_by_pointer(*layout) {
             RocReturn::ByPointer
         } else {
