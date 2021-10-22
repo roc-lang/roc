@@ -48,17 +48,17 @@ pub enum Align {
 }
 
 macro_rules! instruction_no_args {
-    ($method_name: ident, $pops: expr, $push: expr, $opcode: expr) => {
+    ($method_name: ident, $opcode: expr, $pops: expr, $push: expr) => {
         pub fn $method_name(&mut self) {
-            self.inst($pops, $push, $opcode);
+            self.inst($opcode, $pops, $push);
         }
     };
 }
 
 macro_rules! instruction_memargs {
-    ($method_name: ident, $pops: expr, $push: expr, $opcode: expr) => {
+    ($method_name: ident, $opcode: expr, $pops: expr, $push: expr) => {
         pub fn $method_name(&mut self, align: Align, offset: u32) {
-            self.inst_mem($pops, $push, $opcode, align, offset);
+            self.inst_mem($opcode, $pops, $push, align, offset);
         }
     };
 }
@@ -228,7 +228,7 @@ impl<'a> FunctionBuilder<'a> {
 
     /// Base method for generating instructions
     /// Emits the opcode and simulates VM stack push/pop
-    fn inst(&mut self, pops: usize, push: bool, opcode: u8) {
+    fn inst(&mut self, opcode: u8, pops: usize, push: bool) {
         let new_len = self.vm_stack.len() - pops as usize;
         self.vm_stack.truncate(new_len);
         if push {
@@ -237,13 +237,13 @@ impl<'a> FunctionBuilder<'a> {
         self.code.push(opcode);
     }
 
-    fn inst_imm8(&mut self, pops: usize, push: bool, opcode: u8, immediate: u8) {
-        self.inst(pops, push, opcode);
+    fn inst_imm8(&mut self, opcode: u8, pops: usize, push: bool, immediate: u8) {
+        self.inst(opcode, pops, push);
         self.code.push(immediate);
     }
 
-    fn inst_imm32(&mut self, pops: usize, push: bool, opcode: u8, immediate: u32) {
-        self.inst(pops, push, opcode);
+    fn inst_imm32(&mut self, opcode: u8, pops: usize, push: bool, immediate: u32) {
+        self.inst(opcode, pops, push);
         let mut value = immediate;
         while value >= 0x80 {
             self.code.push(0x80 | ((value & 0x7f) as u8));
@@ -252,8 +252,8 @@ impl<'a> FunctionBuilder<'a> {
         self.code.push(value as u8);
     }
 
-    fn inst_mem(&mut self, pops: usize, push: bool, opcode: u8, align: Align, offset: u32) {
-        self.inst(pops, push, opcode);
+    fn inst_mem(&mut self, opcode: u8, pops: usize, push: bool, align: Align, offset: u32) {
+        self.inst(opcode, pops, push);
         self.code.push(align as u8);
         let mut value = offset;
         while value >= 0x80 {
@@ -271,80 +271,80 @@ impl<'a> FunctionBuilder<'a> {
     // instruction_no_args! creates a method that takes no arguments
     // instruction_memargs! creates a method that takes alignment and offset arguments
 
-    instruction_no_args!(unreachable_, 0, false, UNREACHABLE);
-    instruction_no_args!(nop, 0, false, NOP);
+    instruction_no_args!(unreachable_, UNREACHABLE, 0, false);
+    instruction_no_args!(nop, NOP, 0, false);
     pub fn block(&mut self, ty: BlockType) {
-        self.inst_imm8(0, false, BLOCK, ty.as_byte());
+        self.inst_imm8(BLOCK, 0, false, ty.as_byte());
     }
     pub fn loop_(&mut self, ty: BlockType) {
-        self.inst_imm8(0, false, LOOP, ty.as_byte());
+        self.inst_imm8(LOOP, 0, false, ty.as_byte());
     }
     pub fn if_(&mut self, ty: BlockType) {
-        self.inst_imm8(1, false, IF, ty.as_byte());
+        self.inst_imm8(IF, 1, false, ty.as_byte());
     }
-    instruction_no_args!(else_, 0, false, ELSE);
-    instruction_no_args!(end, 0, false, END);
+    instruction_no_args!(else_, ELSE, 0, false);
+    instruction_no_args!(end, END, 0, false);
     pub fn br(&mut self, levels: u32) {
-        self.inst_imm32(0, false, BR, levels);
+        self.inst_imm32(BR, 0, false, levels);
     }
     pub fn br_if(&mut self, levels: u32) {
-        self.inst_imm32(1, false, BRIF, levels);
+        self.inst_imm32(BRIF, 1, false, levels);
     }
     // br_table: not implemented
-    instruction_no_args!(return_, 0, false, RETURN);
+    instruction_no_args!(return_, RETURN, 0, false);
     // call: see above
     // call_indirect: not implemented
-    instruction_no_args!(drop, 1, false, DROP);
-    instruction_no_args!(select, 3, true, SELECT);
+    instruction_no_args!(drop, DROP, 1, false);
+    instruction_no_args!(select, SELECT, 3, true);
     pub fn get_local(&mut self, id: LocalId) {
-        self.inst_imm32(0, true, GETLOCAL, id.0);
+        self.inst_imm32(GETLOCAL, 0, true, id.0);
     }
     pub fn set_local(&mut self, id: LocalId) {
-        self.inst_imm32(1, false, SETLOCAL, id.0);
+        self.inst_imm32(SETLOCAL, 1, false, id.0);
     }
     pub fn tee_local(&mut self, id: LocalId) {
-        self.inst_imm32(1, true, TEELOCAL, id.0);
+        self.inst_imm32(TEELOCAL, 1, true, id.0);
     }
     pub fn get_global(&mut self, id: u32) {
-        self.inst_imm32(0, true, GETGLOBAL, id);
+        self.inst_imm32(GETGLOBAL, 0, true, id);
     }
     pub fn set_global(&mut self, id: u32) {
-        self.inst_imm32(1, false, SETGLOBAL, id);
+        self.inst_imm32(SETGLOBAL, 1, false, id);
     }
-    instruction_memargs!(i32_load, 1, true, I32LOAD);
-    instruction_memargs!(i64_load, 1, true, I64LOAD);
-    instruction_memargs!(f32_load, 1, true, F32LOAD);
-    instruction_memargs!(f64_load, 1, true, F64LOAD);
-    instruction_memargs!(i32_load8_s, 1, true, I32LOAD8S);
-    instruction_memargs!(i32_load8_u, 1, true, I32LOAD8U);
-    instruction_memargs!(i32_load16_s, 1, true, I32LOAD16S);
-    instruction_memargs!(i32_load16_u, 1, true, I32LOAD16U);
-    instruction_memargs!(i64_load8_s, 1, true, I64LOAD8S);
-    instruction_memargs!(i64_load8_u, 1, true, I64LOAD8U);
-    instruction_memargs!(i64_load16_s, 1, true, I64LOAD16S);
-    instruction_memargs!(i64_load16_u, 1, true, I64LOAD16U);
-    instruction_memargs!(i64_load32_s, 1, true, I64LOAD32S);
-    instruction_memargs!(i64_load32_u, 1, true, I64LOAD32U);
-    instruction_memargs!(i32_store, 2, false, I32STORE);
-    instruction_memargs!(i64_store, 2, false, I64STORE);
-    instruction_memargs!(f32_store, 2, false, F32STORE);
-    instruction_memargs!(f64_store, 2, false, F64STORE);
-    instruction_memargs!(i32_store8, 2, false, I32STORE8);
-    instruction_memargs!(i32_store16, 2, false, I32STORE16);
-    instruction_memargs!(i64_store8, 2, false, I64STORE8);
-    instruction_memargs!(i64_store16, 2, false, I64STORE16);
-    instruction_memargs!(i64_store32, 2, false, I64STORE32);
+    instruction_memargs!(i32_load, I32LOAD, 1, true);
+    instruction_memargs!(i64_load, I64LOAD, 1, true);
+    instruction_memargs!(f32_load, F32LOAD, 1, true);
+    instruction_memargs!(f64_load, F64LOAD, 1, true);
+    instruction_memargs!(i32_load8_s, I32LOAD8S, 1, true);
+    instruction_memargs!(i32_load8_u, I32LOAD8U, 1, true);
+    instruction_memargs!(i32_load16_s, I32LOAD16S, 1, true);
+    instruction_memargs!(i32_load16_u, I32LOAD16U, 1, true);
+    instruction_memargs!(i64_load8_s, I64LOAD8S, 1, true);
+    instruction_memargs!(i64_load8_u, I64LOAD8U, 1, true);
+    instruction_memargs!(i64_load16_s, I64LOAD16S, 1, true);
+    instruction_memargs!(i64_load16_u, I64LOAD16U, 1, true);
+    instruction_memargs!(i64_load32_s, I64LOAD32S, 1, true);
+    instruction_memargs!(i64_load32_u, I64LOAD32U, 1, true);
+    instruction_memargs!(i32_store, I32STORE, 2, false);
+    instruction_memargs!(i64_store, I64STORE, 2, false);
+    instruction_memargs!(f32_store, F32STORE, 2, false);
+    instruction_memargs!(f64_store, F64STORE, 2, false);
+    instruction_memargs!(i32_store8, I32STORE8, 2, false);
+    instruction_memargs!(i32_store16, I32STORE16, 2, false);
+    instruction_memargs!(i64_store8, I64STORE8, 2, false);
+    instruction_memargs!(i64_store16, I64STORE16, 2, false);
+    instruction_memargs!(i64_store32, I64STORE32, 2, false);
     pub fn memory_size(&mut self) {
-        self.inst_imm8(0, true, CURRENTMEMORY, 0);
+        self.inst_imm8(CURRENTMEMORY, 0, true, 0);
     }
     pub fn memory_grow(&mut self) {
-        self.inst_imm8(1, true, GROWMEMORY, 0);
+        self.inst_imm8(GROWMEMORY, 1, true, 0);
     }
     pub fn i32_const(&mut self, x: i32) {
-        self.inst_imm32(0, true, I32CONST, x as u32);
+        self.inst_imm32(I32CONST, 0, true, x as u32);
     }
     pub fn i64_const(&mut self, x: i64) {
-        self.inst(0, true, I64CONST);
+        self.inst(I64CONST, 0, true);
         let mut value = x as u64;
         while value >= 0x80 {
             self.code.push(0x80 | ((value & 0x7f) as u8));
@@ -353,7 +353,7 @@ impl<'a> FunctionBuilder<'a> {
         self.code.push(value as u8);
     }
     pub fn f32_const(&mut self, x: f32) {
-        self.inst(0, true, F32CONST);
+        self.inst(F32CONST, 0, true);
         // No LEB encoding, and always little-endian regardless of compiler host.
         let mut value: u32 = x.to_bits();
         for _ in 0..4 {
@@ -362,7 +362,7 @@ impl<'a> FunctionBuilder<'a> {
         }
     }
     pub fn f64_const(&mut self, x: f64) {
-        self.inst(0, true, F64CONST);
+        self.inst(F64CONST, 0, true);
         // No LEB encoding, and always little-endian regardless of compiler host.
         let mut value: u64 = x.to_bits();
         for _ in 0..8 {
@@ -370,127 +370,129 @@ impl<'a> FunctionBuilder<'a> {
             value >>= 8;
         }
     }
-    instruction_no_args!(i32_eqz, 1, true, I32EQZ);
-    instruction_no_args!(i32_eq, 2, true, I32EQ);
-    instruction_no_args!(i32_ne, 2, true, I32NE);
-    instruction_no_args!(i32_lt_s, 2, true, I32LTS);
-    instruction_no_args!(i32_lt_u, 2, true, I32LTU);
-    instruction_no_args!(i32_gt_s, 2, true, I32GTS);
-    instruction_no_args!(i32_gt_u, 2, true, I32GTU);
-    instruction_no_args!(i32_le_s, 2, true, I32LES);
-    instruction_no_args!(i32_le_u, 2, true, I32LEU);
-    instruction_no_args!(i32_ge_s, 2, true, I32GES);
-    instruction_no_args!(i32_ge_u, 2, true, I32GEU);
-    instruction_no_args!(i64_eqz, 1, true, I64EQZ);
-    instruction_no_args!(i64_eq, 2, true, I64EQ);
-    instruction_no_args!(i64_ne, 2, true, I64NE);
-    instruction_no_args!(i64_lt_s, 2, true, I64LTS);
-    instruction_no_args!(i64_lt_u, 2, true, I64LTU);
-    instruction_no_args!(i64_gt_s, 2, true, I64GTS);
-    instruction_no_args!(i64_gt_u, 2, true, I64GTU);
-    instruction_no_args!(i64_le_s, 2, true, I64LES);
-    instruction_no_args!(i64_le_u, 2, true, I64LEU);
-    instruction_no_args!(i64_ge_s, 2, true, I64GES);
-    instruction_no_args!(i64_ge_u, 2, true, I64GEU);
-    instruction_no_args!(f32_eq, 2, true, F32EQ);
-    instruction_no_args!(f32_ne, 2, true, F32NE);
-    instruction_no_args!(f32_lt, 2, true, F32LT);
-    instruction_no_args!(f32_gt, 2, true, F32GT);
-    instruction_no_args!(f32_le, 2, true, F32LE);
-    instruction_no_args!(f32_ge, 2, true, F32GE);
-    instruction_no_args!(f64_eq, 2, true, F64EQ);
-    instruction_no_args!(f64_ne, 2, true, F64NE);
-    instruction_no_args!(f64_lt, 2, true, F64LT);
-    instruction_no_args!(f64_gt, 2, true, F64GT);
-    instruction_no_args!(f64_le, 2, true, F64LE);
-    instruction_no_args!(f64_ge, 2, true, F64GE);
-    instruction_no_args!(i32_clz, 1, true, I32CLZ);
-    instruction_no_args!(i32_ctz, 1, true, I32CTZ);
-    instruction_no_args!(i32_popcnt, 1, true, I32POPCNT);
-    instruction_no_args!(i32_add, 2, true, I32ADD);
-    instruction_no_args!(i32_sub, 2, true, I32SUB);
-    instruction_no_args!(i32_mul, 2, true, I32MUL);
-    instruction_no_args!(i32_div_s, 2, true, I32DIVS);
-    instruction_no_args!(i32_div_u, 2, true, I32DIVU);
-    instruction_no_args!(i32_rem_s, 2, true, I32REMS);
-    instruction_no_args!(i32_rem_u, 2, true, I32REMU);
-    instruction_no_args!(i32_and, 2, true, I32AND);
-    instruction_no_args!(i32_or, 2, true, I32OR);
-    instruction_no_args!(i32_xor, 2, true, I32XOR);
-    instruction_no_args!(i32_shl, 2, true, I32SHL);
-    instruction_no_args!(i32_shr_s, 2, true, I32SHRS);
-    instruction_no_args!(i32_shr_u, 2, true, I32SHRU);
-    instruction_no_args!(i32_rotl, 2, true, I32ROTL);
-    instruction_no_args!(i32_rotr, 2, true, I32ROTR);
-    instruction_no_args!(i64_clz, 1, true, I64CLZ);
-    instruction_no_args!(i64_ctz, 1, true, I64CTZ);
-    instruction_no_args!(i64_popcnt, 1, true, I64POPCNT);
-    instruction_no_args!(i64_add, 2, true, I64ADD);
-    instruction_no_args!(i64_sub, 2, true, I64SUB);
-    instruction_no_args!(i64_mul, 2, true, I64MUL);
-    instruction_no_args!(i64_div_s, 2, true, I64DIVS);
-    instruction_no_args!(i64_div_u, 2, true, I64DIVU);
-    instruction_no_args!(i64_rem_s, 2, true, I64REMS);
-    instruction_no_args!(i64_rem_u, 2, true, I64REMU);
-    instruction_no_args!(i64_and, 2, true, I64AND);
-    instruction_no_args!(i64_or, 2, true, I64OR);
-    instruction_no_args!(i64_xor, 2, true, I64XOR);
-    instruction_no_args!(i64_shl, 2, true, I64SHL);
-    instruction_no_args!(i64_shr_s, 2, true, I64SHRS);
-    instruction_no_args!(i64_shr_u, 2, true, I64SHRU);
-    instruction_no_args!(i64_rotl, 2, true, I64ROTL);
-    instruction_no_args!(i64_rotr, 2, true, I64ROTR);
-    instruction_no_args!(f32_abs, 1, true, F32ABS);
-    instruction_no_args!(f32_neg, 1, true, F32NEG);
-    instruction_no_args!(f32_ceil, 1, true, F32CEIL);
-    instruction_no_args!(f32_floor, 1, true, F32FLOOR);
-    instruction_no_args!(f32_trunc, 1, true, F32TRUNC);
-    instruction_no_args!(f32_nearest, 1, true, F32NEAREST);
-    instruction_no_args!(f32_sqrt, 1, true, F32SQRT);
-    instruction_no_args!(f32_add, 2, true, F32ADD);
-    instruction_no_args!(f32_sub, 2, true, F32SUB);
-    instruction_no_args!(f32_mul, 2, true, F32MUL);
-    instruction_no_args!(f32_div, 2, true, F32DIV);
-    instruction_no_args!(f32_min, 2, true, F32MIN);
-    instruction_no_args!(f32_max, 2, true, F32MAX);
-    instruction_no_args!(f32_copysign, 2, true, F32COPYSIGN);
-    instruction_no_args!(f64_abs, 1, true, F64ABS);
-    instruction_no_args!(f64_neg, 1, true, F64NEG);
-    instruction_no_args!(f64_ceil, 1, true, F64CEIL);
-    instruction_no_args!(f64_floor, 1, true, F64FLOOR);
-    instruction_no_args!(f64_trunc, 1, true, F64TRUNC);
-    instruction_no_args!(f64_nearest, 1, true, F64NEAREST);
-    instruction_no_args!(f64_sqrt, 1, true, F64SQRT);
-    instruction_no_args!(f64_add, 2, true, F64ADD);
-    instruction_no_args!(f64_sub, 2, true, F64SUB);
-    instruction_no_args!(f64_mul, 2, true, F64MUL);
-    instruction_no_args!(f64_div, 2, true, F64DIV);
-    instruction_no_args!(f64_min, 2, true, F64MIN);
-    instruction_no_args!(f64_max, 2, true, F64MAX);
-    instruction_no_args!(f64_copysign, 2, true, F64COPYSIGN);
-    instruction_no_args!(i32_wrap_i64, 1, true, I32WRAPI64);
-    instruction_no_args!(i32_trunc_s_f32, 1, true, I32TRUNCSF32);
-    instruction_no_args!(i32_trunc_u_f32, 1, true, I32TRUNCUF32);
-    instruction_no_args!(i32_trunc_s_f64, 1, true, I32TRUNCSF64);
-    instruction_no_args!(i32_trunc_u_f64, 1, true, I32TRUNCUF64);
-    instruction_no_args!(i64_extend_s_i32, 1, true, I64EXTENDSI32);
-    instruction_no_args!(i64_extend_u_i32, 1, true, I64EXTENDUI32);
-    instruction_no_args!(i64_trunc_s_f32, 1, true, I64TRUNCSF32);
-    instruction_no_args!(i64_trunc_u_f32, 1, true, I64TRUNCUF32);
-    instruction_no_args!(i64_trunc_s_f64, 1, true, I64TRUNCSF64);
-    instruction_no_args!(i64_trunc_u_f64, 1, true, I64TRUNCUF64);
-    instruction_no_args!(f32_convert_s_i32, 1, true, F32CONVERTSI32);
-    instruction_no_args!(f32_convert_u_i32, 1, true, F32CONVERTUI32);
-    instruction_no_args!(f32_convert_s_i64, 1, true, F32CONVERTSI64);
-    instruction_no_args!(f32_convert_u_i64, 1, true, F32CONVERTUI64);
-    instruction_no_args!(f32_demote_f64, 1, true, F32DEMOTEF64);
-    instruction_no_args!(f64_convert_s_i32, 1, true, F64CONVERTSI32);
-    instruction_no_args!(f64_convert_u_i32, 1, true, F64CONVERTUI32);
-    instruction_no_args!(f64_convert_s_i64, 1, true, F64CONVERTSI64);
-    instruction_no_args!(f64_convert_u_i64, 1, true, F64CONVERTUI64);
-    instruction_no_args!(f64_promote_f32, 1, true, F64PROMOTEF32);
-    instruction_no_args!(i32_reinterpret_f32, 1, true, I32REINTERPRETF32);
-    instruction_no_args!(i64_reinterpret_f64, 1, true, I64REINTERPRETF64);
-    instruction_no_args!(f32_reinterpret_i32, 1, true, F32REINTERPRETI32);
-    instruction_no_args!(f64_reinterpret_i64, 1, true, F64REINTERPRETI64);
+    // TODO: code gen might for "lowlevel" calls be simplified if the numerical op methods
+    // took a ValueType as an argument and picked the opcode. Unify all 'eq', all 'add', etc.
+    instruction_no_args!(i32_eqz, I32EQZ, 1, true);
+    instruction_no_args!(i32_eq, I32EQ, 2, true);
+    instruction_no_args!(i32_ne, I32NE, 2, true);
+    instruction_no_args!(i32_lt_s, I32LTS, 2, true);
+    instruction_no_args!(i32_lt_u, I32LTU, 2, true);
+    instruction_no_args!(i32_gt_s, I32GTS, 2, true);
+    instruction_no_args!(i32_gt_u, I32GTU, 2, true);
+    instruction_no_args!(i32_le_s, I32LES, 2, true);
+    instruction_no_args!(i32_le_u, I32LEU, 2, true);
+    instruction_no_args!(i32_ge_s, I32GES, 2, true);
+    instruction_no_args!(i32_ge_u, I32GEU, 2, true);
+    instruction_no_args!(i64_eqz, I64EQZ, 1, true);
+    instruction_no_args!(i64_eq, I64EQ, 2, true);
+    instruction_no_args!(i64_ne, I64NE, 2, true);
+    instruction_no_args!(i64_lt_s, I64LTS, 2, true);
+    instruction_no_args!(i64_lt_u, I64LTU, 2, true);
+    instruction_no_args!(i64_gt_s, I64GTS, 2, true);
+    instruction_no_args!(i64_gt_u, I64GTU, 2, true);
+    instruction_no_args!(i64_le_s, I64LES, 2, true);
+    instruction_no_args!(i64_le_u, I64LEU, 2, true);
+    instruction_no_args!(i64_ge_s, I64GES, 2, true);
+    instruction_no_args!(i64_ge_u, I64GEU, 2, true);
+    instruction_no_args!(f32_eq, F32EQ, 2, true);
+    instruction_no_args!(f32_ne, F32NE, 2, true);
+    instruction_no_args!(f32_lt, F32LT, 2, true);
+    instruction_no_args!(f32_gt, F32GT, 2, true);
+    instruction_no_args!(f32_le, F32LE, 2, true);
+    instruction_no_args!(f32_ge, F32GE, 2, true);
+    instruction_no_args!(f64_eq, F64EQ, 2, true);
+    instruction_no_args!(f64_ne, F64NE, 2, true);
+    instruction_no_args!(f64_lt, F64LT, 2, true);
+    instruction_no_args!(f64_gt, F64GT, 2, true);
+    instruction_no_args!(f64_le, F64LE, 2, true);
+    instruction_no_args!(f64_ge, F64GE, 2, true);
+    instruction_no_args!(i32_clz, I32CLZ, 1, true);
+    instruction_no_args!(i32_ctz, I32CTZ, 1, true);
+    instruction_no_args!(i32_popcnt, I32POPCNT, 1, true);
+    instruction_no_args!(i32_add, I32ADD, 2, true);
+    instruction_no_args!(i32_sub, I32SUB, 2, true);
+    instruction_no_args!(i32_mul, I32MUL, 2, true);
+    instruction_no_args!(i32_div_s, I32DIVS, 2, true);
+    instruction_no_args!(i32_div_u, I32DIVU, 2, true);
+    instruction_no_args!(i32_rem_s, I32REMS, 2, true);
+    instruction_no_args!(i32_rem_u, I32REMU, 2, true);
+    instruction_no_args!(i32_and, I32AND, 2, true);
+    instruction_no_args!(i32_or, I32OR, 2, true);
+    instruction_no_args!(i32_xor, I32XOR, 2, true);
+    instruction_no_args!(i32_shl, I32SHL, 2, true);
+    instruction_no_args!(i32_shr_s, I32SHRS, 2, true);
+    instruction_no_args!(i32_shr_u, I32SHRU, 2, true);
+    instruction_no_args!(i32_rotl, I32ROTL, 2, true);
+    instruction_no_args!(i32_rotr, I32ROTR, 2, true);
+    instruction_no_args!(i64_clz, I64CLZ, 1, true);
+    instruction_no_args!(i64_ctz, I64CTZ, 1, true);
+    instruction_no_args!(i64_popcnt, I64POPCNT, 1, true);
+    instruction_no_args!(i64_add, I64ADD, 2, true);
+    instruction_no_args!(i64_sub, I64SUB, 2, true);
+    instruction_no_args!(i64_mul, I64MUL, 2, true);
+    instruction_no_args!(i64_div_s, I64DIVS, 2, true);
+    instruction_no_args!(i64_div_u, I64DIVU, 2, true);
+    instruction_no_args!(i64_rem_s, I64REMS, 2, true);
+    instruction_no_args!(i64_rem_u, I64REMU, 2, true);
+    instruction_no_args!(i64_and, I64AND, 2, true);
+    instruction_no_args!(i64_or, I64OR, 2, true);
+    instruction_no_args!(i64_xor, I64XOR, 2, true);
+    instruction_no_args!(i64_shl, I64SHL, 2, true);
+    instruction_no_args!(i64_shr_s, I64SHRS, 2, true);
+    instruction_no_args!(i64_shr_u, I64SHRU, 2, true);
+    instruction_no_args!(i64_rotl, I64ROTL, 2, true);
+    instruction_no_args!(i64_rotr, I64ROTR, 2, true);
+    instruction_no_args!(f32_abs, F32ABS, 1, true);
+    instruction_no_args!(f32_neg, F32NEG, 1, true);
+    instruction_no_args!(f32_ceil, F32CEIL, 1, true);
+    instruction_no_args!(f32_floor, F32FLOOR, 1, true);
+    instruction_no_args!(f32_trunc, F32TRUNC, 1, true);
+    instruction_no_args!(f32_nearest, F32NEAREST, 1, true);
+    instruction_no_args!(f32_sqrt, F32SQRT, 1, true);
+    instruction_no_args!(f32_add, F32ADD, 2, true);
+    instruction_no_args!(f32_sub, F32SUB, 2, true);
+    instruction_no_args!(f32_mul, F32MUL, 2, true);
+    instruction_no_args!(f32_div, F32DIV, 2, true);
+    instruction_no_args!(f32_min, F32MIN, 2, true);
+    instruction_no_args!(f32_max, F32MAX, 2, true);
+    instruction_no_args!(f32_copysign, F32COPYSIGN, 2, true);
+    instruction_no_args!(f64_abs, F64ABS, 1, true);
+    instruction_no_args!(f64_neg, F64NEG, 1, true);
+    instruction_no_args!(f64_ceil, F64CEIL, 1, true);
+    instruction_no_args!(f64_floor, F64FLOOR, 1, true);
+    instruction_no_args!(f64_trunc, F64TRUNC, 1, true);
+    instruction_no_args!(f64_nearest, F64NEAREST, 1, true);
+    instruction_no_args!(f64_sqrt, F64SQRT, 1, true);
+    instruction_no_args!(f64_add, F64ADD, 2, true);
+    instruction_no_args!(f64_sub, F64SUB, 2, true);
+    instruction_no_args!(f64_mul, F64MUL, 2, true);
+    instruction_no_args!(f64_div, F64DIV, 2, true);
+    instruction_no_args!(f64_min, F64MIN, 2, true);
+    instruction_no_args!(f64_max, F64MAX, 2, true);
+    instruction_no_args!(f64_copysign, F64COPYSIGN, 2, true);
+    instruction_no_args!(i32_wrap_i64, I32WRAPI64, 1, true);
+    instruction_no_args!(i32_trunc_s_f32, I32TRUNCSF32, 1, true);
+    instruction_no_args!(i32_trunc_u_f32, I32TRUNCUF32, 1, true);
+    instruction_no_args!(i32_trunc_s_f64, I32TRUNCSF64, 1, true);
+    instruction_no_args!(i32_trunc_u_f64, I32TRUNCUF64, 1, true);
+    instruction_no_args!(i64_extend_s_i32, I64EXTENDSI32, 1, true);
+    instruction_no_args!(i64_extend_u_i32, I64EXTENDUI32, 1, true);
+    instruction_no_args!(i64_trunc_s_f32, I64TRUNCSF32, 1, true);
+    instruction_no_args!(i64_trunc_u_f32, I64TRUNCUF32, 1, true);
+    instruction_no_args!(i64_trunc_s_f64, I64TRUNCSF64, 1, true);
+    instruction_no_args!(i64_trunc_u_f64, I64TRUNCUF64, 1, true);
+    instruction_no_args!(f32_convert_s_i32, F32CONVERTSI32, 1, true);
+    instruction_no_args!(f32_convert_u_i32, F32CONVERTUI32, 1, true);
+    instruction_no_args!(f32_convert_s_i64, F32CONVERTSI64, 1, true);
+    instruction_no_args!(f32_convert_u_i64, F32CONVERTUI64, 1, true);
+    instruction_no_args!(f32_demote_f64, F32DEMOTEF64, 1, true);
+    instruction_no_args!(f64_convert_s_i32, F64CONVERTSI32, 1, true);
+    instruction_no_args!(f64_convert_u_i32, F64CONVERTUI32, 1, true);
+    instruction_no_args!(f64_convert_s_i64, F64CONVERTSI64, 1, true);
+    instruction_no_args!(f64_convert_u_i64, F64CONVERTUI64, 1, true);
+    instruction_no_args!(f64_promote_f32, F64PROMOTEF32, 1, true);
+    instruction_no_args!(i32_reinterpret_f32, I32REINTERPRETF32, 1, true);
+    instruction_no_args!(i64_reinterpret_f64, I64REINTERPRETF64, 1, true);
+    instruction_no_args!(f32_reinterpret_i32, F32REINTERPRETI32, 1, true);
+    instruction_no_args!(f64_reinterpret_i64, F64REINTERPRETI64, 1, true);
 }
