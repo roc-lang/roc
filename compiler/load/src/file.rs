@@ -593,7 +593,7 @@ fn start_phase<'a>(
                     module_id,
                     ident_ids,
                     subs,
-                    procs,
+                    procs_base,
                     layout_cache,
                     module_timing,
                 } = found_specializations;
@@ -602,7 +602,7 @@ fn start_phase<'a>(
                     module_id,
                     ident_ids,
                     subs,
-                    procs,
+                    procs_base,
                     layout_cache,
                     specializations_we_must_make,
                     module_timing,
@@ -710,13 +710,13 @@ pub struct TypeCheckedModule<'a> {
 }
 
 #[derive(Debug)]
-pub struct FoundSpecializationsModule<'a> {
-    pub module_id: ModuleId,
-    pub ident_ids: IdentIds,
-    pub layout_cache: LayoutCache<'a>,
-    pub procs: Procs<'a>,
-    pub subs: Subs,
-    pub module_timing: ModuleTiming,
+struct FoundSpecializationsModule<'a> {
+    module_id: ModuleId,
+    ident_ids: IdentIds,
+    layout_cache: LayoutCache<'a>,
+    procs_base: ProcsBase<'a>,
+    subs: Subs,
+    module_timing: ModuleTiming,
 }
 
 #[derive(Debug)]
@@ -815,7 +815,7 @@ enum Msg<'a> {
         module_id: ModuleId,
         ident_ids: IdentIds,
         layout_cache: LayoutCache<'a>,
-        procs: Procs<'a>,
+        procs_base: ProcsBase<'a>,
         problems: Vec<roc_mono::ir::MonoProblem>,
         solved_subs: Solved<Subs>,
         module_timing: ModuleTiming,
@@ -1045,7 +1045,7 @@ enum BuildTask<'a> {
         module_id: ModuleId,
         ident_ids: IdentIds,
         subs: Subs,
-        procs: Procs<'a>,
+        procs_base: ProcsBase<'a>,
         layout_cache: LayoutCache<'a>,
         specializations_we_must_make: ExternalSpecializations<'a>,
         module_timing: ModuleTiming,
@@ -2050,7 +2050,7 @@ fn update<'a>(
         }
         FoundSpecializations {
             module_id,
-            procs,
+            procs_base,
             solved_subs,
             ident_ids,
             layout_cache,
@@ -2060,16 +2060,14 @@ fn update<'a>(
             log!("found specializations for {:?}", module_id);
             let subs = solved_subs.into_inner();
 
-            if let Some(pending) = &procs.pending_specializations {
-                for (symbol, specs) in pending {
-                    let existing = match state.all_pending_specializations.entry(*symbol) {
-                        Vacant(entry) => entry.insert(MutMap::default()),
-                        Occupied(entry) => entry.into_mut(),
-                    };
+            for (symbol, specs) in &procs_base.pending_specializations {
+                let existing = match state.all_pending_specializations.entry(*symbol) {
+                    Vacant(entry) => entry.insert(MutMap::default()),
+                    Occupied(entry) => entry.into_mut(),
+                };
 
-                    for (layout, pend) in specs {
-                        existing.insert(*layout, pend.clone());
-                    }
+                for (layout, pend) in specs {
+                    existing.insert(*layout, pend.clone());
                 }
             }
 
@@ -2078,13 +2076,13 @@ fn update<'a>(
                 .top_level_thunks
                 .entry(module_id)
                 .or_default()
-                .extend(procs.module_thunks.iter().copied());
+                .extend(procs_base.module_thunks.iter().copied());
 
             let found_specializations_module = FoundSpecializationsModule {
                 module_id,
                 ident_ids,
                 layout_cache,
-                procs,
+                procs_base,
                 subs,
                 module_timing,
             };
@@ -3930,7 +3928,7 @@ fn make_specializations<'a>(
     home: ModuleId,
     mut ident_ids: IdentIds,
     mut subs: Subs,
-    mut procs: Procs<'a>,
+    procs_base: ProcsBase<'a>,
     mut layout_cache: LayoutCache<'a>,
     specializations_we_must_make: ExternalSpecializations<'a>,
     mut module_timing: ModuleTiming,
@@ -3950,6 +3948,14 @@ fn make_specializations<'a>(
         // call_specialization_counter=0 is reserved
         call_specialization_counter: 1,
     };
+
+    let mut procs = Procs::new_in(arena);
+
+    procs.partial_procs = procs_base.partial_procs;
+    procs.module_thunks.extend(procs_base.module_thunks);
+    procs.pending_specializations = Some(procs_base.pending_specializations);
+    procs.runtime_errors = procs_base.runtime_errors;
+    procs.imported_module_thunks = procs_base.imported_module_thunks;
 
     // TODO: for now this final specialization pass is sequential,
     // with no parallelization at all. We should try to parallelize
@@ -3984,9 +3990,10 @@ fn make_specializations<'a>(
 #[derive(Clone, Debug)]
 struct ProcsBase<'a> {
     partial_procs: BumpMap<Symbol, PartialProc<'a>>,
-    module_thunks: bumpalo::collections::Vec<'a, Symbol>,
+    module_thunks: std::vec::Vec<Symbol>,
     pending_specializations: BumpMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>,
     runtime_errors: BumpMap<Symbol, &'a str>,
+    imported_module_thunks: &'a [Symbol],
 }
 
 impl<'a> ProcsBase<'a> {
@@ -4020,11 +4027,13 @@ fn build_pending_specializations<'a>(
     exposed_to_host: MutMap<Symbol, Variable>,
 ) -> Msg<'a> {
     let find_specializations_start = SystemTime::now();
+
     let mut procs_base = ProcsBase {
         partial_procs: BumpMap::default(),
-        module_thunks: bumpalo::collections::Vec::new_in(arena),
+        module_thunks: std::vec::Vec::new(),
         pending_specializations: BumpMap::default(),
         runtime_errors: BumpMap::default(),
+        imported_module_thunks,
     };
 
     let mut mono_problems = std::vec::Vec::new();
@@ -4080,22 +4089,12 @@ fn build_pending_specializations<'a>(
         .duration_since(find_specializations_start)
         .unwrap();
 
-    let mut procs = Procs::new_in(arena);
-
-    debug_assert!(procs.imported_module_thunks.is_empty());
-    procs.imported_module_thunks = imported_module_thunks;
-
-    procs.partial_procs = procs_base.partial_procs;
-    procs.module_thunks.extend(procs_base.module_thunks);
-    procs.pending_specializations = Some(procs_base.pending_specializations);
-    procs.runtime_errors = procs_base.runtime_errors;
-
     Msg::FoundSpecializations {
         module_id: home,
         solved_subs: roc_types::solved_types::Solved(subs),
         ident_ids,
         layout_cache,
-        procs,
+        procs_base,
         problems,
         module_timing,
     }
@@ -4350,7 +4349,7 @@ where
             module_id,
             ident_ids,
             subs,
-            procs,
+            procs_base,
             layout_cache,
             specializations_we_must_make,
             module_timing,
@@ -4359,7 +4358,7 @@ where
             module_id,
             ident_ids,
             subs,
-            procs,
+            procs_base,
             layout_cache,
             specializations_we_must_make,
             module_timing,

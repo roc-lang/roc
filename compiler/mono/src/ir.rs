@@ -493,7 +493,7 @@ impl<'a> Procs<'a> {
 
     // TODO trim these down
     #[allow(clippy::too_many_arguments)]
-    pub fn insert_anonymous(
+    fn insert_anonymous(
         &mut self,
         env: &mut Env<'a, '_>,
         symbol: Symbol,
