@@ -217,26 +217,32 @@ pub fn debug_panic<E: std::fmt::Debug>(error: E) {
     panic!("{:?}", error);
 }
 
-/// Write a u32 value as LEB-128 encoded bytes, into the provided buffer
+/// Write a u32 value as LEB-128 encoded bytes into the provided buffer, returning byte length
 ///
 /// All integers in Wasm are variable-length encoded, which saves space for small values.
 /// The most significant bit indicates "more bytes are coming", and the other 7 are payload.
-pub fn encode_u32<'a>(buffer: &mut Vec<'a, u8>, mut value: u32) {
+pub fn encode_u32<'a>(buffer: &mut [u8], mut value: u32) -> usize {
+    let mut count = 0;
     while value >= 0x80 {
-        buffer.push(0x80 | ((value & 0x7f) as u8));
+        buffer[count] = 0x80 | ((value & 0x7f) as u8);
         value >>= 7;
+        count += 1;
     }
-    buffer.push(value as u8);
+    buffer[count] = value as u8;
+    count + 1
 }
 
-/// Write a u64 value as LEB-128 encoded bytes, into the provided buffer
+/// Write a u64 value as LEB-128 encoded bytes, into the provided buffer, returning byte length
 ///
 /// All integers in Wasm are variable-length encoded, which saves space for small values.
 /// The most significant bit indicates "more bytes are coming", and the other 7 are payload.
-pub fn encode_u64<'a>(buffer: &mut Vec<'a, u8>, mut value: u64) {
+pub fn encode_u64<'a>(buffer: &mut Vec<'a, u8>, mut value: u64) -> usize {
+    let mut count = 0;
     while value >= 0x80 {
-        buffer.push(0x80 | ((value & 0x7f) as u8));
+        buffer[count] = 0x80 | ((value & 0x7f) as u8);
         value >>= 7;
+        count += 1;
     }
-    buffer.push(value as u8);
+    buffer[count] = value as u8;
+    count + 1
 }

@@ -49,6 +49,14 @@ pub enum Align {
     // ... we can add more if we need them ...
 }
 
+// An instruction (local.set or local.tee) to be inserted into the function code
+#[derive(Debug)]
+struct Insertion {
+    position: usize,
+    length: usize,
+    bytes: [u8; 6],
+}
+
 macro_rules! instruction_no_args {
     ($method_name: ident, $opcode: expr, $pops: expr, $push: expr) => {
         pub fn $method_name(&mut self) {
@@ -72,17 +80,20 @@ pub struct FunctionBuilder<'a> {
 
     /// Extra instructions to insert at specific positions during finalisation
     /// (Go back and set locals when we realise we need them)
-    insertions: Vec<'a, (usize, Vec<'a, u8>)>,
+    insertions: Vec<'a, Insertion>,
 
-    /// Bytes for locals and stack frame setup code
-    /// We can't write this until we've finished the main code,
-    /// but it goes before the main code in the final output.
+    /// Total number of bytes to be written as insertions
+    insertions_byte_len: usize,
+
+    /// Bytes for local variable declarations, and stack frame setup code.
+    /// We can't write this until we've finished the main code. But it goes
+    /// before it in the final output, so we need a separate vector.
     preamble: Vec<'a, u8>,
 
     /// Encoded bytes for the inner length of the function, locals + code.
-    /// ("inner" because it doesn't include the bytes of the length itself!)
-    /// We can't write this until we've finished the code and preamble,
-    /// but it goes before them in the final output.
+    /// ("inner" because it doesn't include its own length!)
+    /// We can't write this until we've finished the code and preamble. But
+    /// it goes before them in the final output, so it's a separate vector.
     inner_length: Vec<'a, u8>,
 
     /// Our simulation model of the Wasm stack machine
@@ -95,7 +106,8 @@ impl<'a> FunctionBuilder<'a> {
     pub fn new(arena: &'a Bump) -> Self {
         FunctionBuilder {
             code: Vec::with_capacity_in(1024, arena),
-            insertions: Vec::with_capacity_in(1024, arena),
+            insertions: Vec::with_capacity_in(32, arena),
+            insertions_byte_len: 0,
             preamble: Vec::with_capacity_in(32, arena),
             inner_length: Vec::with_capacity_in(5, arena),
             vm_stack: Vec::with_capacity_in(32, arena),
@@ -107,6 +119,16 @@ impl<'a> FunctionBuilder<'a> {
         self.insertions.clear();
         self.vm_stack.clear();
     }
+
+    /**********************************************************
+
+        SYMBOLS
+
+        The Wasm VM stores temporary values in its stack machine.
+        We track which stack positions correspond to IR Symbols,
+        because it helps to generate more efficient code.
+
+    ***********************************************************/
 
     /// Set the Symbol that is at the top of the VM stack right now
     /// We will use this later when we need to load the Symbol
@@ -143,7 +165,92 @@ impl<'a> FunctionBuilder<'a> {
         true
     }
 
-    /// Generate bytes to declare a function's local variables
+    /// Load a Symbol that is stored in the VM stack
+    /// If it's already at the top of the stack, no code will be generated.
+    /// Otherwise, local.set and local.get instructions will be inserted, using the LocalId provided.
+    ///
+    /// If the return value is `Some(s)`, `s` should be stored by the caller, and provided in the next call.
+    /// If the return value is `None`, the Symbol is no longer stored in the VM stack, but in a local.
+    /// (In this case, the caller must remember to declare the local in the function header.)
+    pub fn load_symbol(
+        &mut self,
+        symbol: Symbol,
+        vm_state: VirtualMachineSymbolState,
+        next_local_id: LocalId,
+    ) -> Option<VirtualMachineSymbolState> {
+        use VirtualMachineSymbolState::*;
+
+        match vm_state {
+            NotYetPushed => panic!("Symbol {:?} has no value yet. Nothing to load.", symbol),
+
+            Pushed { pushed_at } => {
+                let &top = self.vm_stack.last().unwrap();
+                if top == symbol {
+                    // We're lucky, the symbol is already on top of the VM stack
+                    // No code to generate! (This reduces code size by up to 25% in tests.)
+                    // Just let the caller know what happened
+                    Some(Popped { pushed_at })
+                } else {
+                    // Symbol is not on top of the stack. Find it.
+                    if let Some(found_index) = self.vm_stack.iter().rposition(|&s| s == symbol) {
+                        // Insert a local.set where the value was created
+                        let mut insertion = Insertion {
+                            position: pushed_at,
+                            length: 0,
+                            bytes: [SETLOCAL, 0, 0, 0, 0, 0],
+                        };
+                        insertion.length = 1 + encode_u32(&mut insertion.bytes[1..], next_local_id.0);
+                        self.insertions_byte_len += insertion.length;
+                        self.insertions.push(insertion);
+
+                        // Take the value out of the stack where local.set was inserted
+                        self.vm_stack.remove(found_index);
+
+                        // Insert a local.get at the current position
+                        self.get_local(next_local_id);
+                        self.vm_stack.push(symbol);
+
+                        // This Symbol is no longer stored in the VM stack, but in a local
+                        None
+                    } else {
+                        panic!(
+                            "{:?} has state {:?} but not found in VM stack",
+                            symbol, vm_state
+                        );
+                    }
+                }
+            }
+
+            Popped { pushed_at } => {
+                // This Symbol is being used for a second time
+                // Insert a local.tee where it was pushed, so we don't interfere with the first usage
+                let mut insertion = Insertion {
+                    position: pushed_at,
+                    length: 0,
+                    bytes: [TEELOCAL, 0, 0, 0, 0, 0],
+                };
+                insertion.length = 1 + encode_u32(&mut insertion.bytes[1..], next_local_id.0);
+                self.insertions_byte_len += insertion.length;
+                self.insertions.push(insertion);
+
+                // Insert a local.get at the current position
+                self.get_local(next_local_id);
+                self.vm_stack.push(symbol);
+
+                // This symbol has been promoted to a Local
+                // Tell the caller it no longer has a VirtualMachineSymbolState
+                None
+            }
+        }
+    }
+
+    /**********************************************************
+
+        FINALIZE AND SERIALIZE
+
+    ***********************************************************/
+
+    /// Generate bytes to declare the function's local variables
     fn build_local_declarations(&mut self, local_types: &[ValueType]) {
         let num_locals = local_types.len();
         encode_u32(&mut self.preamble, num_locals as u32);
@@ -190,12 +297,12 @@ impl<'a> FunctionBuilder<'a> {
         self.set_global(STACK_POINTER_GLOBAL_ID);
     }
 
-    /// Finalize a function body
+    /// Finalize the function
     /// Generate all the "extra" bytes: local declarations, stack frame push/pop code, and function length
-    /// After running this, we will know the final byte length of the function. All bytes will have been
-    /// _generated_, but not yet _serialized_, as they are still stored in multiple vectors.
-    pub fn finalize(&mut self, local_types: &[ValueType], frame_size: i32, frame_pointer: LocalId) {
-        self.insertions.sort_by_key(|pair| pair.0);
+    /// After this, bytes will have been _generated_, but not yet _serialized_ into a single stream.
+    /// Returns the final number of bytes the function will occupy in the target binary
+    pub fn finalize(&mut self, local_types: &[ValueType], frame_size: i32, frame_pointer: LocalId) -> usize {
+        self.insertions.sort_by_key(|insertion| insertion.position);
 
         self.build_local_declarations(local_types);
 
@@ -205,28 +312,34 @@ impl<'a> FunctionBuilder<'a> {
             self.build_stack_frame_pop(aligned_size, frame_pointer);
         }
 
-        let inner_length_val = self.preamble.len() + self.code.len() + self.insertions.len();
-        encode_u32(&mut self.inner_length, inner_length_val as u32);
+        // The length of the function is written in front of its body.
+        // But that means the length _itself_ has a byte length, which adds to the total!
+        // We use the terms "inner" and "outer" lengths to distinguish the two.
+        let inner_length_val = self.preamble.len() + self.code.len() + self.insertions_byte_len;
+        let inner_length_len = encode_u32(&mut self.inner_length, inner_length_val as u32);
+        let outer_length = inner_length_len + inner_length_val;
+        outer_length
     }
 
-    /// Write out the function bytes serially
+    /// Write out all the bytes in the right order
     pub fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<usize> {
         writer.write(&self.inner_length)?;
         writer.write(&self.preamble)?;
         let mut pos: usize = 0;
-        for (next_insert_pos, insert_bytes) in self.insertions.iter() {
-            writer.write(&self.code[pos..*next_insert_pos])?;
-            writer.write(insert_bytes)?;
-            pos = *next_insert_pos;
+        for insertion in self.insertions.iter() {
+            writer.write(&self.code[pos..insertion.position])?;
+            writer.write(&insertion.bytes[0..insertion.length])?;
+            pos = insertion.position;
         }
-        let code_len = self.code.len();
-        writer.write(&self.code[pos..code_len])
+        let len = self.code.len();
+        writer.write(&self.code[pos..len])
     }
 
-    /// Total bytes this function will occupy in the code section, including its own inner length
-    pub fn outer_len(&self) -> usize {
-        self.inner_length.len() + self.preamble.len() + self.code.len() + self.insertions.len()
-    }
+    /**********************************************************
+
+        INSTRUCTION HELPER METHODS
+
+    ***********************************************************/
 
     /// Base method for generating instructions
     /// Emits the opcode and simulates VM stack push/pop
@@ -255,13 +368,15 @@ impl<'a> FunctionBuilder<'a> {
         encode_u32(&mut self.code, offset);
     }
 
-    // Instruction methods
-    //
-    // One method for each Wasm instruction (in same order as the spec)
-    // macros are just for compactness and readability for the most common cases
-    // Patterns that don't repeat very much don't have macros
-    // instruction_no_args! creates a method that takes no arguments
-    // instruction_memargs! creates a method that takes alignment and offset arguments
+    /**********************************************************
+
+        INSTRUCTION METHODS
+
+        One method for each Wasm instruction (in same order as the spec)
+        macros are for compactness & readability for the most common cases
+        Patterns that don't repeat very much don't have macros
+
+    ***********************************************************/
 
     instruction_no_args!(unreachable_, UNREACHABLE, 0, false);
     instruction_no_args!(nop, NOP, 0, false);
