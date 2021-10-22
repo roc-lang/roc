@@ -1681,7 +1681,7 @@ pub fn specialize_all<'a>(
     env: &mut Env<'a, '_>,
     mut procs: Procs<'a>,
     externals_others_need: ExternalSpecializations<'a>,
-    mut pending_specializations: BumpMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>,
+    pending_specializations: BumpMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>,
     layout_cache: &mut LayoutCache<'a>,
 ) -> Procs<'a> {
     specialize_all_help(env, &mut procs, externals_others_need, layout_cache);
@@ -1689,10 +1689,15 @@ pub fn specialize_all<'a>(
     // When calling from_can, pending_specializations should be unavailable.
     // This must be a single pass, and we must not add any more entries to it!
 
+    // observation: specialize_all_help does add to pending_specializations, but does not reference
+    // any existing values in it.
     let opt_pending_specializations = std::mem::replace(&mut procs.pending_specializations, None);
-    pending_specializations.extend(opt_pending_specializations.into_iter().flatten());
 
-    for (name, by_layout) in pending_specializations {
+    let it = pending_specializations
+        .into_iter()
+        .chain(opt_pending_specializations.into_iter().flatten());
+
+    for (name, by_layout) in it {
         for (outside_layout, pending) in by_layout.into_iter() {
             // If we've already seen this (Symbol, Layout) combination before,
             // don't try to specialize it again. If we do, we'll loop forever!
