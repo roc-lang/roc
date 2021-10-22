@@ -80,8 +80,87 @@ impl ShallowClone for Type2 {
 }
 
 impl Type2 {
-    fn substitute(_pool: &mut Pool, _subs: &MutMap<Variable, TypeId>, _type_id: TypeId) {
-        todo!()
+    fn substitute(pool: &mut Pool, subs: &MutMap<Variable, TypeId>, type_id: TypeId) {
+        match pool.get(type_id) {
+            Type2::Variable(var) => {
+                if let Some(new_id) = subs.get(var) {
+                    let new = pool.get(*new_id).shallow_clone();
+                    pool.set(type_id, new);
+                }
+            }
+            Type2::Alias(_name, type_arguments, actual_type)
+            | Type2::AsAlias(_name, type_arguments, actual_type) => {
+                for id in type_arguments.iter_node_ids() {
+                    let (_, id) = pool.get(id);
+
+                    Self::substitute(pool, subs, *id);
+                }
+
+                Self::substitute(pool, subs, *actual_type);
+            }
+            Type2::HostExposedAlias {
+                name: _,
+                arguments,
+                actual_var: _,
+                actual,
+            } => {
+                for id in arguments.iter_node_ids() {
+                    let (_, id) = pool.get(id);
+
+                    Self::substitute(pool, subs, *id);
+                }
+
+                Self::substitute(pool, subs, *actual);
+            }
+            Type2::EmptyTagUnion => {}
+            Type2::TagUnion(tags, ext) => {
+                for id in tags.iter_node_ids() {
+                    let (_, fields) = pool.get(id);
+
+                    for id in fields.iter_node_ids() {
+                        Self::substitute(pool, subs, id);
+                    }
+                }
+
+                // NOTE rec_var is not substituted into
+                Self::substitute(pool, subs, *ext);
+            }
+            Type2::RecursiveTagUnion(_rec_var, tags, ext) => {
+                for id in tags.iter_node_ids() {
+                    let (_, fields) = pool.get(id);
+
+                    for id in fields.iter_node_ids() {
+                        Self::substitute(pool, subs, id);
+                    }
+                }
+
+                // NOTE rec_var is not substituted into
+                Self::substitute(pool, subs, *ext);
+            }
+            Type2::EmptyRec => {}
+            Type2::Record(fields, ext) => {
+                for id in fields.iter_node_ids() {
+                    let (_, record_field_id) = pool.get(id);
+                    Self::substitute(pool, subs, *record_field_id.as_inner());
+                }
+
+                Self::substitute(pool, subs, *ext);
+            }
+            Type2::Function(arguments, lambda_set, result) => {
+                for id in arguments.iter_node_ids() {
+                    Self::substitute(pool, subs, id);
+                }
+
+                Self::substitute(pool, subs, *lambda_set);
+                Self::substitute(pool, subs, *result);
+            }
+            Type2::Apply(_, arguments) => {
+                for id in arguments.iter_node_ids() {
+                    Self::substitute(pool, subs, id);
+                }
+            }
+            Type2::Erroneous(_) => {}
+        }
     }
 
     pub fn variables(&self, pool: &mut Pool) -> MutSet<Variable> {
