@@ -19,6 +19,7 @@ pub struct CodeGenTiming {
 
 // TODO: If modules besides this one start needing to know which version of
 // llvm we're using, consider moving me somewhere else.
+#[cfg(feature = "llvm")]
 const LLVM_VERSION: &str = "12";
 
 // TODO instead of finding exhaustiveness problems in monomorphization, find
