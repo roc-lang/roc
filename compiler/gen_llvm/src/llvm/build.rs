@@ -3186,7 +3186,6 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
 
             let call_unwrapped_result = call_unwrapped.try_as_basic_value().left().unwrap();
 
-            // make_good_roc_result(env, call_unwrapped_result)
             call_unwrapped_result
         }
     };
@@ -3464,7 +3463,6 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
 
         let call_unwrapped_result = call_unwrapped.try_as_basic_value().left().unwrap();
 
-        // make_good_roc_result(env, call_unwrapped_result)
         call_unwrapped_result
     };
 
@@ -4044,10 +4042,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
 
     let result_type = basic_type_from_layout(env, result);
 
-    let roc_call_result_type =
-        context.struct_type(&[context.i64_type().into(), result_type], false);
-
-    let output_type = { roc_call_result_type.ptr_type(AddressSpace::Generic) };
+    let output_type = { result_type.ptr_type(AddressSpace::Generic) };
     argument_types.push(output_type.into());
 
     // STEP 1: build function header
@@ -4104,9 +4099,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
 
         call.set_call_convention(evaluator.get_call_conventions());
 
-        let call_result = call.try_as_basic_value().left().unwrap();
-
-        make_good_roc_result(env, call_result)
+        call.try_as_basic_value().left().unwrap()
     };
 
     builder.build_store(output, call_result);
@@ -4114,13 +4107,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     builder.build_return(None);
 
     // STEP 3: build a {} -> u64 function that gives the size of the return type
-    build_host_exposed_alias_size_help(
-        env,
-        def_name,
-        alias_symbol,
-        Some("result"),
-        roc_call_result_type.into(),
-    );
+    build_host_exposed_alias_size_help(env, def_name, alias_symbol, Some("result"), result_type);
 
     // STEP 4: build a {} -> u64 function that gives the size of the closure
     build_host_exposed_alias_size(
