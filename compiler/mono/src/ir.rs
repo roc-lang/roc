@@ -350,7 +350,7 @@ impl<'a> ExternalSpecializations<'a> {
 #[derive(Clone, Debug)]
 pub struct Procs<'a> {
     pub partial_procs: BumpMap<Symbol, PartialProc<'a>>,
-    pub imported_module_thunks: BumpSet<Symbol>,
+    pub imported_module_thunks: &'a [Symbol],
     pub module_thunks: BumpSet<Symbol>,
     pub pending_specializations:
         Option<BumpMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>>,
@@ -364,7 +364,7 @@ impl<'a> Procs<'a> {
     pub fn new_in(arena: &'a Bump) -> Self {
         Self {
             partial_procs: BumpMap::new_in(arena),
-            imported_module_thunks: BumpSet::new_in(arena),
+            imported_module_thunks: &[],
             module_thunks: BumpSet::new_in(arena),
             pending_specializations: Some(BumpMap::new_in(arena)),
             specialized: BumpMap::new_in(arena),
@@ -382,6 +382,10 @@ pub enum InProgressProc<'a> {
 }
 
 impl<'a> Procs<'a> {
+    fn is_imported_module_thunk(&self, symbol: Symbol) -> bool {
+        self.imported_module_thunks.iter().any(|x| *x == symbol)
+    }
+
     pub fn get_specialized_procs_without_rc(
         self,
         env: &mut Env<'a, '_>,
@@ -6091,7 +6095,7 @@ fn reuse_function_symbol<'a>(
                         .raw_from_var(env.arena, arg_var, env.subs)
                         .expect("creating layout does not fail");
 
-                    if procs.imported_module_thunks.contains(&original) {
+                    if procs.is_imported_module_thunk(original) {
                         let layout = match raw {
                             RawFunctionLayout::ZeroArgumentThunk(layout) => layout,
                             RawFunctionLayout::Function(_, lambda_set, _) => {
@@ -6562,7 +6566,7 @@ fn call_by_name_help<'a>(
         add_needed_external(procs, env, original_fn_var, proc_name);
 
         debug_assert_ne!(proc_name.module_id(), ModuleId::ATTR);
-        if procs.imported_module_thunks.contains(&proc_name) {
+        if procs.is_imported_module_thunk(proc_name) {
             force_thunk(
                 env,
                 proc_name,

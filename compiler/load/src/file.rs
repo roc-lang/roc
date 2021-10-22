@@ -8,7 +8,7 @@ use roc_builtins::std::StdLib;
 use roc_can::constraint::Constraint;
 use roc_can::def::{Declaration, Def};
 use roc_can::module::{canonicalize_module_defs, Module};
-use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, BumpSet, MutMap, MutSet};
+use roc_collections::all::{default_hasher, BumpMap, MutMap, MutSet};
 use roc_constrain::module::{
     constrain_imports, pre_constrain_imports, ConstrainableImports, Import,
 };
@@ -553,7 +553,7 @@ fn start_phase<'a>(
                     ident_ids,
                 } = typechecked;
 
-                let mut imported_module_thunks = BumpSet::new_in(arena);
+                let mut imported_module_thunks = bumpalo::collections::Vec::new_in(arena);
 
                 if let Some(imports) = state.module_cache.imports.get(&module_id) {
                     for imported in imports.iter() {
@@ -570,7 +570,7 @@ fn start_phase<'a>(
                     module_id,
                     module_timing,
                     solved_subs,
-                    imported_module_thunks,
+                    imported_module_thunks: imported_module_thunks.into_bump_slice(),
                     decls,
                     ident_ids,
                     exposed_to_host: state.exposed_to_host.clone(),
@@ -1035,7 +1035,7 @@ enum BuildTask<'a> {
         module_timing: ModuleTiming,
         layout_cache: LayoutCache<'a>,
         solved_subs: Solved<Subs>,
-        imported_module_thunks: BumpSet<Symbol>,
+        imported_module_thunks: &'a [Symbol],
         module_id: ModuleId,
         ident_ids: IdentIds,
         decls: Vec<Declaration>,
@@ -3985,7 +3985,7 @@ fn make_specializations<'a>(
 fn build_pending_specializations<'a>(
     arena: &'a Bump,
     solved_subs: Solved<Subs>,
-    imported_module_thunks: BumpSet<Symbol>,
+    imported_module_thunks: &'a [Symbol],
     home: ModuleId,
     mut ident_ids: IdentIds,
     decls: Vec<Declaration>,
