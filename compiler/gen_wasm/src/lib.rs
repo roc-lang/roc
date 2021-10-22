@@ -1,10 +1,14 @@
 mod backend;
 mod code_builder;
 pub mod from_wasm32_memory;
-mod function_builder;
 mod layout;
-mod opcodes;
 mod storage;
+
+#[allow(dead_code)]
+mod function_builder;
+
+#[allow(dead_code)]
+mod opcodes;
 
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
