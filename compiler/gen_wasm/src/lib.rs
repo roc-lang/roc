@@ -33,7 +33,7 @@ pub const ALIGN_4: u32 = 2;
 pub const ALIGN_8: u32 = 3;
 
 pub const STACK_POINTER_GLOBAL_ID: u32 = 0;
-pub const STACK_ALIGNMENT_BYTES: i32 = 16;
+pub const FRAME_ALIGNMENT_BYTES: i32 = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LocalId(pub u32);
@@ -189,7 +189,7 @@ pub fn push_stack_frame(
     size: i32,
     local_frame_pointer: LocalId,
 ) {
-    let aligned_size = round_up_to_alignment(size, STACK_ALIGNMENT_BYTES);
+    let aligned_size = round_up_to_alignment(size, FRAME_ALIGNMENT_BYTES);
     instructions.extend([
         GetGlobal(STACK_POINTER_GLOBAL_ID),
         I32Const(aligned_size),
@@ -204,7 +204,7 @@ pub fn pop_stack_frame(
     size: i32,
     local_frame_pointer: LocalId,
 ) {
-    let aligned_size = round_up_to_alignment(size, STACK_ALIGNMENT_BYTES);
+    let aligned_size = round_up_to_alignment(size, FRAME_ALIGNMENT_BYTES);
     instructions.extend([
         GetLocal(local_frame_pointer.0),
         I32Const(aligned_size),
@@ -215,4 +215,28 @@ pub fn pop_stack_frame(
 
 pub fn debug_panic<E: std::fmt::Debug>(error: E) {
     panic!("{:?}", error);
+}
+
+/// Write a u32 value as LEB-128 encoded bytes, into the provided buffer
+///
+/// All integers in Wasm are variable-length encoded, which saves space for small values.
+/// The most significant bit indicates "more bytes are coming", and the other 7 are payload.
+pub fn encode_u32<'a>(buffer: &mut Vec<'a, u8>, mut value: u32) {
+    while value >= 0x80 {
+        buffer.push(0x80 | ((value & 0x7f) as u8));
+        value >>= 7;
+    }
+    buffer.push(value as u8);
+}
+
+/// Write a u64 value as LEB-128 encoded bytes, into the provided buffer
+///
+/// All integers in Wasm are variable-length encoded, which saves space for small values.
+/// The most significant bit indicates "more bytes are coming", and the other 7 are payload.
+pub fn encode_u64<'a>(buffer: &mut Vec<'a, u8>, mut value: u64) {
+    while value >= 0x80 {
+        buffer.push(0x80 | ((value & 0x7f) as u8));
+        value >>= 7;
+    }
+    buffer.push(value as u8);
 }

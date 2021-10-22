@@ -3,12 +3,14 @@ use bumpalo::Bump;
 use core::panic;
 use std::fmt::Debug;
 
-use parity_wasm::elements::{Instruction, Instruction::*, Local, Serialize, VarUint32};
 use roc_module::symbol::Symbol;
 
 use crate::code_builder::VirtualMachineSymbolState;
 use crate::opcodes::*;
-use crate::{debug_panic, LocalId, STACK_POINTER_GLOBAL_ID};
+use crate::{
+    encode_u32, encode_u64, round_up_to_alignment, LocalId, FRAME_ALIGNMENT_BYTES,
+    STACK_POINTER_GLOBAL_ID,
+};
 
 const DEBUG_LOG: bool = false;
 
@@ -72,11 +74,15 @@ pub struct FunctionBuilder<'a> {
     /// (Go back and set locals when we realise we need them)
     insertions: Vec<'a, (usize, Vec<'a, u8>)>,
 
-    /// Instruction bytes for locals and stack frame setup code
-    locals_and_frame_setup: Vec<'a, u8>,
+    /// Bytes for locals and stack frame setup code
+    /// We can't write this until we've finished the main code,
+    /// but it goes before the main code in the final output.
+    preamble: Vec<'a, u8>,
 
-    /// Encoded bytes for the inner length of the function
-    /// This is the total size of locals + code, as encoded into the module
+    /// Encoded bytes for the inner length of the function, locals + code.
+    /// ("inner" because it doesn't include the bytes of the length itself!)
+    /// We can't write this until we've finished the code and preamble,
+    /// but it goes before them in the final output.
     inner_length: Vec<'a, u8>,
 
     /// Our simulation model of the Wasm stack machine
@@ -90,7 +96,7 @@ impl<'a> FunctionBuilder<'a> {
         FunctionBuilder {
             code: Vec::with_capacity_in(1024, arena),
             insertions: Vec::with_capacity_in(1024, arena),
-            locals_and_frame_setup: Vec::with_capacity_in(32, arena),
+            preamble: Vec::with_capacity_in(32, arena),
             inner_length: Vec::with_capacity_in(5, arena),
             vm_stack: Vec::with_capacity_in(32, arena),
         }
@@ -137,35 +143,12 @@ impl<'a> FunctionBuilder<'a> {
         true
     }
 
-    fn push_stack_frame(frame_size: i32, local_frame_pointer: LocalId) -> [Instruction; 5] {
-        return [
-            GetGlobal(STACK_POINTER_GLOBAL_ID),
-            I32Const(frame_size),
-            I32Sub,
-            TeeLocal(local_frame_pointer.0),
-            SetGlobal(STACK_POINTER_GLOBAL_ID),
-        ];
-    }
-
-    fn pop_stack_frame(frame_size: i32, local_frame_pointer: LocalId) -> [Instruction; 4] {
-        return [
-            GetLocal(local_frame_pointer.0),
-            I32Const(frame_size),
-            I32Add,
-            SetGlobal(STACK_POINTER_GLOBAL_ID),
-        ];
-    }
-
-    fn serialize_locals<W>(writer: &mut W, local_types: &[parity_wasm::elements::ValueType])
-    where
-        W: std::io::Write,
-    {
+    /// Generate bytes to declare a function's local variables
+    fn build_local_declarations(&mut self, local_types: &[ValueType]) {
         let num_locals = local_types.len();
-        VarUint32::from(num_locals)
-            .serialize(writer)
-            .unwrap_or_else(debug_panic);
+        encode_u32(&mut self.preamble, num_locals as u32);
 
-        // write bytes for locals, in batches of the same ValueType
+        // write declarations in batches of the same ValueType
         if num_locals > 0 {
             let mut batch_type = local_types[0];
             let mut batch_size = 0;
@@ -173,57 +156,76 @@ impl<'a> FunctionBuilder<'a> {
                 if *t == batch_type {
                     batch_size += 1;
                 } else {
-                    let local = Local::new(batch_size, batch_type);
-                    local.serialize(writer).unwrap_or_else(debug_panic);
+                    encode_u32(&mut self.preamble, batch_size);
+                    self.preamble.push(batch_type as u8);
                     batch_type = *t;
                     batch_size = 1;
                 }
             }
-            let local = Local::new(batch_size, batch_type);
-            local.serialize(writer).unwrap_or_else(debug_panic);
+            encode_u32(&mut self.preamble, batch_size);
+            self.preamble.push(batch_type as u8);
         }
+    }
+
+    /// Generate instruction bytes to grab a frame of stack memory on entering the function
+    fn build_stack_frame_push(&mut self, frame_size: i32, frame_pointer: LocalId) {
+        // Can't use the usual instruction methods because they push to self.code.
+        // This is the only case where we push instructions somewhere different.
+        self.preamble.push(GETGLOBAL);
+        encode_u32(&mut self.preamble, STACK_POINTER_GLOBAL_ID);
+        self.preamble.push(I32CONST);
+        encode_u32(&mut self.preamble, frame_size as u32);
+        self.preamble.push(I32SUB);
+        self.preamble.push(TEELOCAL);
+        encode_u32(&mut self.preamble, frame_pointer.0);
+        self.preamble.push(SETGLOBAL);
+        encode_u32(&mut self.preamble, STACK_POINTER_GLOBAL_ID);
+    }
+
+    /// Generate instruction bytes to release a frame of stack memory on leaving the function
+    fn build_stack_frame_pop(&mut self, frame_size: i32, frame_pointer: LocalId) {
+        self.get_local(frame_pointer);
+        self.i32_const(frame_size);
+        self.i32_add();
+        self.set_global(STACK_POINTER_GLOBAL_ID);
     }
 
     /// Finalize a function body
-    pub fn finalize(&mut self, _final_code: &mut std::vec::Vec<Instruction>) {
-        // sort insertions
-        // encode local declarations
-        // encode stack frame push
-        // encode stack frame pop
-        // calculate inner length
-        // encode inner length
+    /// Generate all the "extra" bytes: local declarations, stack frame push/pop code, and function length
+    /// After running this, we will know the final byte length of the function. All bytes will have been
+    /// _generated_, but not yet _serialized_, as they are still stored in multiple vectors.
+    pub fn finalize(&mut self, local_types: &[ValueType], frame_size: i32, frame_pointer: LocalId) {
+        self.insertions.sort_by_key(|pair| pair.0);
+
+        self.build_local_declarations(local_types);
+
+        if frame_size > 0 {
+            let aligned_size = round_up_to_alignment(frame_size, FRAME_ALIGNMENT_BYTES);
+            self.build_stack_frame_push(aligned_size, frame_pointer);
+            self.build_stack_frame_pop(aligned_size, frame_pointer);
+        }
+
+        let inner_length_val = self.preamble.len() + self.code.len() + self.insertions.len();
+        encode_u32(&mut self.inner_length, inner_length_val as u32);
     }
 
-    pub fn serialize<W: std::io::Write>(&self, _writer: W) {
-        // write inner length
-        // write locals
-        // write stack frame push
-        // write code+insertions
-        // write stack frame pop
+    /// Write out the function bytes serially
+    pub fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<usize> {
+        writer.write(&self.inner_length)?;
+        writer.write(&self.preamble)?;
+        let mut pos: usize = 0;
+        for (next_insert_pos, insert_bytes) in self.insertions.iter() {
+            writer.write(&self.code[pos..*next_insert_pos])?;
+            writer.write(insert_bytes)?;
+            pos = *next_insert_pos;
+        }
+        let code_len = self.code.len();
+        writer.write(&self.code[pos..code_len])
     }
 
-    /// Total bytes, including inner length
-    /// (to help calculate overall code section length)
+    /// Total bytes this function will occupy in the code section, including its own inner length
     pub fn outer_len(&self) -> usize {
-        self.code.len()
-            + self.insertions.len()
-            + self.locals_and_frame_setup.len()
-            + self.inner_length.len()
-    }
-
-    pub fn call(&mut self, function_index: u32, pops: usize, push: bool) {
-        let stack_depth = self.vm_stack.len();
-        if pops > stack_depth {
-            panic!(
-                "Trying to call to call function {:?} with {:?} values but only {:?} on the VM stack\n{:?}",
-                function_index, pops, stack_depth, self
-            );
-        }
-        self.vm_stack.truncate(stack_depth - pops);
-        if push {
-            self.vm_stack.push(Symbol::WASM_ANONYMOUS_STACK_VALUE);
-        }
-        self.code.push(CALL);
+        self.inner_length.len() + self.preamble.len() + self.code.len() + self.insertions.len()
     }
 
     /// Base method for generating instructions
@@ -244,23 +246,13 @@ impl<'a> FunctionBuilder<'a> {
 
     fn inst_imm32(&mut self, opcode: u8, pops: usize, push: bool, immediate: u32) {
         self.inst(opcode, pops, push);
-        let mut value = immediate;
-        while value >= 0x80 {
-            self.code.push(0x80 | ((value & 0x7f) as u8));
-            value >>= 7;
-        }
-        self.code.push(value as u8);
+        encode_u32(&mut self.code, immediate);
     }
 
     fn inst_mem(&mut self, opcode: u8, pops: usize, push: bool, align: Align, offset: u32) {
         self.inst(opcode, pops, push);
         self.code.push(align as u8);
-        let mut value = offset;
-        while value >= 0x80 {
-            self.code.push(0x80 | ((value & 0x7f) as u8));
-            value >>= 7;
-        }
-        self.code.push(value as u8);
+        encode_u32(&mut self.code, offset);
     }
 
     // Instruction methods
@@ -273,6 +265,7 @@ impl<'a> FunctionBuilder<'a> {
 
     instruction_no_args!(unreachable_, UNREACHABLE, 0, false);
     instruction_no_args!(nop, NOP, 0, false);
+
     pub fn block(&mut self, ty: BlockType) {
         self.inst_imm8(BLOCK, 0, false, ty.as_byte());
     }
@@ -282,20 +275,43 @@ impl<'a> FunctionBuilder<'a> {
     pub fn if_(&mut self, ty: BlockType) {
         self.inst_imm8(IF, 1, false, ty.as_byte());
     }
+
     instruction_no_args!(else_, ELSE, 0, false);
     instruction_no_args!(end, END, 0, false);
+
     pub fn br(&mut self, levels: u32) {
         self.inst_imm32(BR, 0, false, levels);
     }
     pub fn br_if(&mut self, levels: u32) {
         self.inst_imm32(BRIF, 1, false, levels);
     }
-    // br_table: not implemented
+    fn br_table() {
+        panic!("TODO");
+    }
+
     instruction_no_args!(return_, RETURN, 0, false);
-    // call: see above
-    // call_indirect: not implemented
+
+    pub fn call(&mut self, function_index: u32, n_args: usize, has_return_val: bool) {
+        let stack_depth = self.vm_stack.len();
+        if n_args > stack_depth {
+            panic!(
+                "Trying to call to call function {:?} with {:?} values but only {:?} on the VM stack\n{:?}",
+                function_index, n_args, stack_depth, self
+            );
+        }
+        self.vm_stack.truncate(stack_depth - n_args);
+        if has_return_val {
+            self.vm_stack.push(Symbol::WASM_ANONYMOUS_STACK_VALUE);
+        }
+        self.code.push(CALL);
+    }
+    fn call_indirect() {
+        panic!("Not implemented. Roc doesn't use function pointers");
+    }
+
     instruction_no_args!(drop, DROP, 1, false);
     instruction_no_args!(select, SELECT, 3, true);
+
     pub fn get_local(&mut self, id: LocalId) {
         self.inst_imm32(GETLOCAL, 0, true, id.0);
     }
@@ -303,7 +319,7 @@ impl<'a> FunctionBuilder<'a> {
         self.inst_imm32(SETLOCAL, 1, false, id.0);
     }
     pub fn tee_local(&mut self, id: LocalId) {
-        self.inst_imm32(TEELOCAL, 1, true, id.0);
+        self.inst_imm32(TEELOCAL, 0, false, id.0);
     }
     pub fn get_global(&mut self, id: u32) {
         self.inst_imm32(GETGLOBAL, 0, true, id);
@@ -311,6 +327,7 @@ impl<'a> FunctionBuilder<'a> {
     pub fn set_global(&mut self, id: u32) {
         self.inst_imm32(SETGLOBAL, 1, false, id);
     }
+
     instruction_memargs!(i32_load, I32LOAD, 1, true);
     instruction_memargs!(i64_load, I64LOAD, 1, true);
     instruction_memargs!(f32_load, F32LOAD, 1, true);
@@ -334,6 +351,7 @@ impl<'a> FunctionBuilder<'a> {
     instruction_memargs!(i64_store8, I64STORE8, 2, false);
     instruction_memargs!(i64_store16, I64STORE16, 2, false);
     instruction_memargs!(i64_store32, I64STORE32, 2, false);
+
     pub fn memory_size(&mut self) {
         self.inst_imm8(CURRENTMEMORY, 0, true, 0);
     }
@@ -345,12 +363,7 @@ impl<'a> FunctionBuilder<'a> {
     }
     pub fn i64_const(&mut self, x: i64) {
         self.inst(I64CONST, 0, true);
-        let mut value = x as u64;
-        while value >= 0x80 {
-            self.code.push(0x80 | ((value & 0x7f) as u8));
-            value >>= 7;
-        }
-        self.code.push(value as u8);
+        encode_u64(&mut self.code, x as u64);
     }
     pub fn f32_const(&mut self, x: f32) {
         self.inst(F32CONST, 0, true);
@@ -370,8 +383,9 @@ impl<'a> FunctionBuilder<'a> {
             value >>= 8;
         }
     }
-    // TODO: code gen might for "lowlevel" calls be simplified if the numerical op methods
-    // took a ValueType as an argument and picked the opcode. Unify all 'eq', all 'add', etc.
+
+    // TODO: Consider creating unified methods for numerical ops like 'eq' and 'add',
+    // passing the ValueType as an argument. Could simplify lowlevel code gen.
     instruction_no_args!(i32_eqz, I32EQZ, 1, true);
     instruction_no_args!(i32_eq, I32EQ, 2, true);
     instruction_no_args!(i32_ne, I32NE, 2, true);
