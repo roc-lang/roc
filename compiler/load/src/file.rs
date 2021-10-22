@@ -3953,7 +3953,6 @@ fn make_specializations<'a>(
 
     procs.partial_procs = procs_base.partial_procs;
     procs.module_thunks.extend(procs_base.module_thunks);
-    procs.pending_specializations = Some(procs_base.pending_specializations);
     procs.runtime_errors = procs_base.runtime_errors;
     procs.imported_module_thunks = procs_base.imported_module_thunks;
 
@@ -3964,6 +3963,7 @@ fn make_specializations<'a>(
         &mut mono_env,
         procs,
         specializations_we_must_make,
+        procs_base.pending_specializations,
         &mut layout_cache,
     );
 

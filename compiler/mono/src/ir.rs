@@ -453,6 +453,10 @@ impl<'a> Procs<'a> {
         self.imported_module_thunks.iter().any(|x| *x == symbol)
     }
 
+    fn is_module_thunk(&self, symbol: Symbol) -> bool {
+        self.module_thunks.iter().any(|x| *x == symbol)
+    }
+
     pub fn get_specialized_procs_without_rc(
         self,
         env: &mut Env<'a, '_>,
@@ -555,12 +559,13 @@ impl<'a> Procs<'a> {
                         };
                     }
 
+                    if self.is_module_thunk(symbol) {
+                        debug_assert!(layout.arguments.is_empty());
+                    }
+
                     match &mut self.pending_specializations {
                         Some(pending_specializations) => {
                             // register the pending specialization, so this gets code genned later
-                            if self.module_thunks.contains(&symbol) {
-                                debug_assert!(layout.arguments.is_empty());
-                            }
                             add_pending(pending_specializations, symbol, layout, pending);
 
                             self.partial_procs.insert(symbol, partial_proc);
@@ -584,7 +589,7 @@ impl<'a> Procs<'a> {
                                         proc.name
                                     );
 
-                                    if self.module_thunks.contains(&proc.name) {
+                                    if self.is_module_thunk(proc.name) {
                                         debug_assert!(top_level.arguments.is_empty());
                                     }
 
@@ -623,16 +628,17 @@ impl<'a> Procs<'a> {
             return;
         }
 
+        // register the pending specialization, so this gets code genned later
+        if self.module_thunks.contains(&name) {
+            debug_assert!(layout.arguments.is_empty());
+        }
+
         // This should only be called when pending_specializations is Some.
         // Otherwise, it's being called in the wrong pass!
         match &mut self.pending_specializations {
             Some(pending_specializations) => {
                 let pending = PendingSpecialization::from_var(env.arena, env.subs, fn_var);
 
-                // register the pending specialization, so this gets code genned later
-                if self.module_thunks.contains(&name) {
-                    debug_assert!(layout.arguments.is_empty());
-                }
                 add_pending(pending_specializations, name, layout, pending)
             }
             None => {
@@ -1675,15 +1681,18 @@ pub fn specialize_all<'a>(
     env: &mut Env<'a, '_>,
     mut procs: Procs<'a>,
     externals_others_need: ExternalSpecializations<'a>,
+    mut pending_specializations: BumpMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>,
     layout_cache: &mut LayoutCache<'a>,
 ) -> Procs<'a> {
     specialize_all_help(env, &mut procs, externals_others_need, layout_cache);
 
     // When calling from_can, pending_specializations should be unavailable.
     // This must be a single pass, and we must not add any more entries to it!
-    let opt_pending_specializations = std::mem::replace(&mut procs.pending_specializations, None);
 
-    for (name, by_layout) in opt_pending_specializations.into_iter().flatten() {
+    let opt_pending_specializations = std::mem::replace(&mut procs.pending_specializations, None);
+    pending_specializations.extend(opt_pending_specializations.into_iter().flatten());
+
+    for (name, by_layout) in pending_specializations {
         for (outside_layout, pending) in by_layout.into_iter() {
             // If we've already seen this (Symbol, Layout) combination before,
             // don't try to specialize it again. If we do, we'll loop forever!
@@ -1718,7 +1727,7 @@ pub fn specialize_all<'a>(
                         // TODO thiscode is duplicated elsewhere
                         let top_level = ProcLayout::from_raw(env.arena, layout);
 
-                        if procs.module_thunks.contains(&proc.name) {
+                        if procs.is_module_thunk(proc.name) {
                             debug_assert!(
                                 top_level.arguments.is_empty(),
                                 "{:?} from {:?}",
@@ -1798,7 +1807,7 @@ fn specialize_all_help<'a>(
             Ok((proc, layout)) => {
                 let top_level = ProcLayout::from_raw(env.arena, layout);
 
-                if procs.module_thunks.contains(&name) {
+                if procs.is_module_thunk(name) {
                     debug_assert!(top_level.arguments.is_empty());
                 }
 
@@ -2498,7 +2507,7 @@ where
         .raw_from_var(env.arena, fn_var, env.subs)
         .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
 
-    let raw = if procs.module_thunks.contains(&proc_name) {
+    let raw = if procs.is_module_thunk(proc_name) {
         match raw {
             RawFunctionLayout::Function(_, lambda_set, _) => {
                 RawFunctionLayout::ZeroArgumentThunk(Layout::LambdaSet(lambda_set))
@@ -2601,7 +2610,7 @@ fn specialize_naked_symbol<'a>(
     hole: &'a Stmt<'a>,
     symbol: Symbol,
 ) -> Stmt<'a> {
-    if procs.module_thunks.contains(&symbol) {
+    if procs.is_module_thunk(symbol) {
         let partial_proc = procs.partial_procs.get(&symbol).unwrap();
         let fn_var = partial_proc.annotation;
 
@@ -6163,7 +6172,7 @@ fn reuse_function_symbol<'a>(
                             closure_data,
                             env.arena.alloc(result),
                         )
-                    } else if procs.module_thunks.contains(&original) {
+                    } else if procs.is_module_thunk(original) {
                         // this is a 0-argument thunk
 
                         // TODO suspicious
@@ -6359,7 +6368,7 @@ fn call_by_name<'a>(
             evaluate_arguments_then_runtime_error(env, procs, layout_cache, msg, loc_args)
         }
         Ok(RawFunctionLayout::Function(arg_layouts, lambda_set, ret_layout)) => {
-            if procs.module_thunks.contains(&proc_name) {
+            if procs.is_module_thunk(proc_name) {
                 if loc_args.is_empty() {
                     call_by_name_module_thunk(
                         env,
@@ -6436,7 +6445,7 @@ fn call_by_name<'a>(
             }
         }
         Ok(RawFunctionLayout::ZeroArgumentThunk(ret_layout)) => {
-            if procs.module_thunks.contains(&proc_name) {
+            if procs.is_module_thunk(proc_name) {
                 // here we turn a call to a module thunk into  forcing of that thunk
                 call_by_name_module_thunk(
                     env,
@@ -6590,13 +6599,13 @@ fn call_by_name_help<'a>(
         // the same specialization independently), we work through the
         // queue of pending specializations to complete each specialization
         // exactly once.
+        if procs.is_module_thunk(proc_name) {
+            debug_assert!(top_level_layout.arguments.is_empty());
+        }
+
         match &mut procs.pending_specializations {
             Some(pending_specializations) => {
                 debug_assert!(!env.is_imported_symbol(proc_name));
-
-                if procs.module_thunks.contains(&proc_name) {
-                    debug_assert!(top_level_layout.arguments.is_empty());
-                }
 
                 // register the pending specialization, so this gets code genned later
                 add_pending(
@@ -6725,8 +6734,6 @@ fn call_by_name_module_thunk<'a>(
 ) -> Stmt<'a> {
     debug_assert!(!env.is_imported_symbol(proc_name));
 
-    // debug_assert!(!procs.module_thunks.contains(&proc_name), "{:?}", proc_name);
-
     let top_level_layout = ProcLayout::new(env.arena, &[], *ret_layout);
 
     let inner_layout = *ret_layout;
@@ -6751,13 +6758,13 @@ fn call_by_name_module_thunk<'a>(
         // the same specialization independently), we work through the
         // queue of pending specializations to complete each specialization
         // exactly once.
+        if procs.is_module_thunk(proc_name) {
+            debug_assert!(top_level_layout.arguments.is_empty());
+        }
+
         match &mut procs.pending_specializations {
             Some(pending_specializations) => {
                 debug_assert!(!env.is_imported_symbol(proc_name));
-
-                if procs.module_thunks.contains(&proc_name) {
-                    debug_assert!(top_level_layout.arguments.is_empty());
-                }
 
                 // register the pending specialization, so this gets code genned later
                 add_pending(
