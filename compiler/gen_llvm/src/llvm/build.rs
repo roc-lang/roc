@@ -3095,6 +3095,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     roc_function: FunctionValue<'ctx>,
     arguments: &[Layout<'a>],
+    return_layout: Layout<'a>,
     c_function_name: &str,
 ) -> FunctionValue<'ctx> {
     // NOTE we ingore env.is_gen_test here
@@ -3171,22 +3172,11 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
 
             builder.position_at_end(entry);
 
-            let call_wrapped = builder.build_call(
-                roc_wrapper_function,
-                arguments_for_call,
-                "call_wrapped_function",
-            );
-            call_wrapped.set_call_convention(FAST_CALL_CONV);
-
-            call_wrapped.try_as_basic_value().left().unwrap()
+            let elements = [Layout::Builtin(Builtin::Int64), return_layout];
+            let wrapped_layout = Layout::Struct(&elements);
+            call_roc_function(env, roc_function, &wrapped_layout, arguments_for_call)
         } else {
-            let call_unwrapped =
-                builder.build_call(roc_function, arguments_for_call, "call_unwrapped_function");
-            call_unwrapped.set_call_convention(FAST_CALL_CONV);
-
-            let call_unwrapped_result = call_unwrapped.try_as_basic_value().left().unwrap();
-
-            call_unwrapped_result
+            call_roc_function(env, roc_function, &return_layout, arguments_for_call)
         }
     };
 
@@ -3208,6 +3198,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
     ident_string: &str,
     roc_function: FunctionValue<'ctx>,
     arguments: &[Layout<'a>],
+    return_layout: Layout<'a>,
     c_function_name: &str,
 ) -> FunctionValue<'ctx> {
     let context = env.context;
@@ -3291,14 +3282,12 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
 
         builder.position_at_end(entry);
 
-        let call_wrapped = builder.build_call(
+        call_roc_function(
+            env,
             roc_wrapper_function,
+            &return_layout,
             arguments_for_call,
-            "call_wrapped_function",
-        );
-        call_wrapped.set_call_convention(FAST_CALL_CONV);
-
-        call_wrapped.try_as_basic_value().left().unwrap()
+        )
     };
 
     let output_arg_index = args_length - 1;
@@ -3354,6 +3343,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
             ident_string,
             roc_function,
             arguments,
+            return_layout,
             c_function_name,
         );
     }
@@ -3363,6 +3353,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
         env,
         roc_function,
         arguments,
+        return_layout,
         &format!("{}_generic", c_function_name),
     );
 
@@ -3456,15 +3447,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
 
     let arguments_for_call = &arguments_for_call.into_bump_slice();
 
-    let call_result = {
-        let call_unwrapped =
-            builder.build_call(roc_function, arguments_for_call, "call_unwrapped_function");
-        call_unwrapped.set_call_convention(FAST_CALL_CONV);
-
-        let call_unwrapped_result = call_unwrapped.try_as_basic_value().left().unwrap();
-
-        call_unwrapped_result
-    };
+    let call_result = call_roc_function(env, roc_function, &return_layout, arguments_for_call);
 
     match cc_return {
         CCReturn::Void => {
@@ -4018,6 +4001,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     evaluator: FunctionValue<'ctx>,
     alias_symbol: Symbol,
     arguments: &[Layout<'a>],
+    return_layout: &Layout<'a>,
     lambda_set: LambdaSet<'a>,
     result: &Layout<'a>,
 ) {
@@ -4093,13 +4077,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
             result_type,
         )
     } else {
-        let call = env
-            .builder
-            .build_call(evaluator, &evaluator_arguments, "call_function");
-
-        call.set_call_convention(evaluator.get_call_conventions());
-
-        call.try_as_basic_value().left().unwrap()
+        call_roc_function(env, evaluator, return_layout, &evaluator_arguments)
     };
 
     builder.build_store(output, call_result);
@@ -4235,7 +4213,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
                         let fn_name: String = format!("{}_1", ident_string);
 
                         build_closure_caller(
-                            env, &fn_name, evaluator, name, arguments, closure, result,
+                            env, &fn_name, evaluator, name, arguments, result, closure, result,
                         )
                     }
 
@@ -5848,9 +5826,7 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
         }
     };
 
-    let call = env.builder.build_call(fastcc_function, &arguments, "tmp");
-    call.set_call_convention(FAST_CALL_CONV);
-    return call.try_as_basic_value().left().unwrap();
+    call_roc_function(env, fastcc_function, ret_layout, &arguments)
 }
 
 fn throw_on_overflow<'a, 'ctx, 'env>(
