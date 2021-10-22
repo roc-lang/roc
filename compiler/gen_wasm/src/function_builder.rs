@@ -15,12 +15,23 @@ use crate::{
 const DEBUG_LOG: bool = false;
 
 #[repr(u8)]
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum ValueType {
     I32 = 0x7f,
     I64 = 0x7e,
     F32 = 0x7d,
     F64 = 0x7c,
+}
+
+impl ValueType {
+    pub fn to_parity_wasm(&self) -> parity_wasm::elements::ValueType {
+        match self {
+            Self::I32 => parity_wasm::elements::ValueType::I32,
+            Self::I64 => parity_wasm::elements::ValueType::I64,
+            Self::F32 => parity_wasm::elements::ValueType::F32,
+            Self::F64 => parity_wasm::elements::ValueType::F64,
+        }
+    }
 }
 
 pub enum BlockType {
@@ -38,6 +49,7 @@ impl BlockType {
 }
 
 #[repr(u8)]
+#[derive(Clone, Copy, Debug)]
 pub enum Align {
     Bytes1 = 0,
     Bytes2 = 1,
@@ -199,7 +211,8 @@ impl<'a> FunctionBuilder<'a> {
                             length: 0,
                             bytes: [SETLOCAL, 0, 0, 0, 0, 0],
                         };
-                        insertion.length = 1 + encode_u32(&mut insertion.bytes[1..], next_local_id.0);
+                        insertion.length =
+                            1 + encode_u32(&mut insertion.bytes[1..], next_local_id.0);
                         self.insertions_byte_len += insertion.length;
                         self.insertions.push(insertion);
 
@@ -301,16 +314,21 @@ impl<'a> FunctionBuilder<'a> {
     /// Generate all the "extra" bytes: local declarations, stack frame push/pop code, and function length
     /// After this, bytes will have been _generated_, but not yet _serialized_ into a single stream.
     /// Returns the final number of bytes the function will occupy in the target binary
-    pub fn finalize(&mut self, local_types: &[ValueType], frame_size: i32, frame_pointer: LocalId) -> usize {
-        self.insertions.sort_by_key(|insertion| insertion.position);
-
+    pub fn finalize(
+        &mut self,
+        local_types: &[ValueType],
+        frame_size: i32,
+        frame_pointer: Option<LocalId>,
+    ) -> usize {
         self.build_local_declarations(local_types);
 
-        if frame_size > 0 {
+        if let Some(frame_ptr_id) = frame_pointer {
             let aligned_size = round_up_to_alignment(frame_size, FRAME_ALIGNMENT_BYTES);
-            self.build_stack_frame_push(aligned_size, frame_pointer);
-            self.build_stack_frame_pop(aligned_size, frame_pointer);
+            self.build_stack_frame_push(aligned_size, frame_ptr_id);
+            self.build_stack_frame_pop(aligned_size, frame_ptr_id);
         }
+
+        self.code.push(END);
 
         // The length of the function is written in front of its body.
         // But that means the length _itself_ has a byte length, which adds to the total!
@@ -322,15 +340,19 @@ impl<'a> FunctionBuilder<'a> {
     }
 
     /// Write out all the bytes in the right order
-    pub fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<usize> {
+    pub fn serialize<W: std::io::Write>(&mut self, writer: &mut W) -> std::io::Result<usize> {
         writer.write(&self.inner_length)?;
         writer.write(&self.preamble)?;
+
+        self.insertions.sort_by_key(|insertion| insertion.position);
+
         let mut pos: usize = 0;
         for insertion in self.insertions.iter() {
             writer.write(&self.code[pos..insertion.position])?;
             writer.write(&insertion.bytes[0..insertion.length])?;
             pos = insertion.position;
         }
+
         let len = self.code.len();
         writer.write(&self.code[pos..len])
     }

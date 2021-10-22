@@ -5,7 +5,7 @@ mod layout;
 mod storage;
 
 #[allow(dead_code)]
-mod function_builder;
+pub mod function_builder;
 
 #[allow(dead_code)]
 mod opcodes;
@@ -13,24 +13,18 @@ mod opcodes;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use parity_wasm::builder;
-use parity_wasm::elements::{Instruction, Instruction::*, Internal, ValueType};
 
+use parity_wasm::elements::Internal;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::LayoutIds;
 
 use crate::backend::WasmBackend;
-use crate::code_builder::CodeBuilder;
+use crate::function_builder::{Align, FunctionBuilder, ValueType};
 
 const PTR_SIZE: u32 = 4;
 const PTR_TYPE: ValueType = ValueType::I32;
-
-// All usages of these alignment constants take u32, so an enum wouldn't add any safety.
-pub const ALIGN_1: u32 = 0;
-pub const ALIGN_2: u32 = 1;
-pub const ALIGN_4: u32 = 2;
-pub const ALIGN_8: u32 = 3;
 
 pub const STACK_POINTER_GLOBAL_ID: u32 = 0;
 pub const FRAME_ALIGNMENT_BYTES: i32 = 16;
@@ -111,21 +105,23 @@ pub fn build_module_help<'a>(
     backend.module_builder.push_export(memory_export);
 
     let stack_pointer_global = builder::global()
-        .with_type(PTR_TYPE)
+        .with_type(parity_wasm::elements::ValueType::I32)
         .mutable()
-        .init_expr(Instruction::I32Const((MIN_MEMORY_SIZE_KB * 1024) as i32))
+        .init_expr(parity_wasm::elements::Instruction::I32Const(
+            (MIN_MEMORY_SIZE_KB * 1024) as i32,
+        ))
         .build();
     backend.module_builder.push_global(stack_pointer_global);
 
     Ok((backend.module_builder, main_function_index))
 }
 
-fn encode_alignment(bytes: u32) -> u32 {
+fn encode_alignment(bytes: u32) -> Align {
     match bytes {
-        1 => ALIGN_1,
-        2 => ALIGN_2,
-        4 => ALIGN_4,
-        8 => ALIGN_8,
+        1 => Align::Bytes1,
+        2 => Align::Bytes2,
+        4 => Align::Bytes4,
+        8 => Align::Bytes8,
         _ => panic!("{:?}-byte alignment is not supported", bytes),
     }
 }
@@ -139,38 +135,32 @@ pub struct CopyMemoryConfig {
     alignment_bytes: u32,
 }
 
-pub fn copy_memory(code_builder: &mut CodeBuilder, config: CopyMemoryConfig) {
+pub fn copy_memory(code_builder: &mut FunctionBuilder, config: CopyMemoryConfig) {
     if config.from_ptr == config.to_ptr && config.from_offset == config.to_offset {
         return;
     }
 
-    let alignment_flag = encode_alignment(config.alignment_bytes);
+    let alignment = encode_alignment(config.alignment_bytes);
     let mut i = 0;
     while config.size - i >= 8 {
-        code_builder.extend_from_slice(&[
-            GetLocal(config.to_ptr.0),
-            GetLocal(config.from_ptr.0),
-            I64Load(alignment_flag, i + config.from_offset),
-            I64Store(alignment_flag, i + config.to_offset),
-        ]);
+        code_builder.get_local(config.to_ptr);
+        code_builder.get_local(config.from_ptr);
+        code_builder.i64_load(alignment, i + config.from_offset);
+        code_builder.i64_store(alignment, i + config.to_offset);
         i += 8;
     }
     if config.size - i >= 4 {
-        code_builder.extend_from_slice(&[
-            GetLocal(config.to_ptr.0),
-            GetLocal(config.from_ptr.0),
-            I32Load(alignment_flag, i + config.from_offset),
-            I32Store(alignment_flag, i + config.to_offset),
-        ]);
+        code_builder.get_local(config.to_ptr);
+        code_builder.get_local(config.from_ptr);
+        code_builder.i32_load(alignment, i + config.from_offset);
+        code_builder.i32_store(alignment, i + config.to_offset);
         i += 4;
     }
     while config.size - i > 0 {
-        code_builder.extend_from_slice(&[
-            GetLocal(config.to_ptr.0),
-            GetLocal(config.from_ptr.0),
-            I32Load8U(alignment_flag, i + config.from_offset),
-            I32Store8(alignment_flag, i + config.to_offset),
-        ]);
+        code_builder.get_local(config.to_ptr);
+        code_builder.get_local(config.from_ptr);
+        code_builder.i32_load8_u(alignment, i + config.from_offset);
+        code_builder.i32_store8(alignment, i + config.to_offset);
         i += 1;
     }
 }
@@ -182,35 +172,6 @@ pub fn round_up_to_alignment(unaligned: i32, alignment_bytes: i32) -> i32 {
     aligned += alignment_bytes - 1; // if lower bits are non-zero, push it over the next boundary
     aligned &= -alignment_bytes; // mask with a flag that has upper bits 1, lower bits 0
     aligned
-}
-
-pub fn push_stack_frame(
-    instructions: &mut std::vec::Vec<Instruction>,
-    size: i32,
-    local_frame_pointer: LocalId,
-) {
-    let aligned_size = round_up_to_alignment(size, FRAME_ALIGNMENT_BYTES);
-    instructions.extend([
-        GetGlobal(STACK_POINTER_GLOBAL_ID),
-        I32Const(aligned_size),
-        I32Sub,
-        TeeLocal(local_frame_pointer.0),
-        SetGlobal(STACK_POINTER_GLOBAL_ID),
-    ]);
-}
-
-pub fn pop_stack_frame(
-    instructions: &mut std::vec::Vec<Instruction>,
-    size: i32,
-    local_frame_pointer: LocalId,
-) {
-    let aligned_size = round_up_to_alignment(size, FRAME_ALIGNMENT_BYTES);
-    instructions.extend([
-        GetLocal(local_frame_pointer.0),
-        I32Const(aligned_size),
-        I32Add,
-        SetGlobal(STACK_POINTER_GLOBAL_ID),
-    ]);
 }
 
 pub fn debug_panic<E: std::fmt::Debug>(error: E) {

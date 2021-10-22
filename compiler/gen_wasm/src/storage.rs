@@ -1,16 +1,13 @@
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use parity_wasm::elements::{Instruction::*, ValueType};
 
 use roc_collections::all::MutMap;
 use roc_module::symbol::Symbol;
 
-use crate::code_builder::{CodeBuilder, VirtualMachineSymbolState};
+use crate::code_builder::VirtualMachineSymbolState;
+use crate::function_builder::{FunctionBuilder, ValueType};
 use crate::layout::WasmLayout;
-use crate::{
-    copy_memory, round_up_to_alignment, CopyMemoryConfig, LocalId, ALIGN_1, ALIGN_2, ALIGN_4,
-    ALIGN_8, PTR_SIZE, PTR_TYPE,
-};
+use crate::{copy_memory, round_up_to_alignment, CopyMemoryConfig, LocalId, PTR_SIZE, PTR_TYPE};
 
 pub enum StoredValueKind {
     Parameter,
@@ -192,7 +189,7 @@ impl<'a> Storage<'a> {
     /// Load symbols to the top of the VM stack
     /// Avoid calling this method in a loop with one symbol at a time! It will work,
     /// but it generates very inefficient Wasm code.
-    pub fn load_symbols(&mut self, code_builder: &mut CodeBuilder, symbols: &[Symbol]) {
+    pub fn load_symbols(&mut self, code_builder: &mut FunctionBuilder, symbols: &[Symbol]) {
         if code_builder.verify_stack_match(symbols) {
             // The symbols were already at the top of the stack, do nothing!
             // This should be quite common due to the structure of the Mono IR
@@ -241,7 +238,7 @@ impl<'a> Storage<'a> {
                     location: StackMemoryLocation::PointerArg(local_id),
                     ..
                 } => {
-                    code_builder.push(GetLocal(local_id.0));
+                    code_builder.get_local(local_id);
                     code_builder.set_top_symbol(*sym);
                 }
 
@@ -249,11 +246,9 @@ impl<'a> Storage<'a> {
                     location: StackMemoryLocation::FrameOffset(offset),
                     ..
                 } => {
-                    code_builder.extend_from_slice(&[
-                        GetLocal(self.stack_frame_pointer.unwrap().0),
-                        I32Const(offset as i32),
-                        I32Add,
-                    ]);
+                    code_builder.get_local(self.stack_frame_pointer.unwrap());
+                    code_builder.i32_const(offset as i32);
+                    code_builder.i32_add();
                     code_builder.set_top_symbol(*sym);
                 }
             }
@@ -264,7 +259,7 @@ impl<'a> Storage<'a> {
     /// (defined by a pointer and offset).
     pub fn copy_value_to_memory(
         &mut self,
-        code_builder: &mut CodeBuilder,
+        code_builder: &mut FunctionBuilder,
         to_ptr: LocalId,
         to_offset: u32,
         from_symbol: Symbol,
@@ -297,20 +292,20 @@ impl<'a> Storage<'a> {
             | StoredValue::Local {
                 value_type, size, ..
             } => {
-                let store_instruction = match (value_type, size) {
-                    (ValueType::I64, 8) => I64Store(ALIGN_8, to_offset),
-                    (ValueType::I32, 4) => I32Store(ALIGN_4, to_offset),
-                    (ValueType::I32, 2) => I32Store16(ALIGN_2, to_offset),
-                    (ValueType::I32, 1) => I32Store8(ALIGN_1, to_offset),
-                    (ValueType::F32, 4) => F32Store(ALIGN_4, to_offset),
-                    (ValueType::F64, 8) => F64Store(ALIGN_8, to_offset),
+                use crate::function_builder::Align::*;
+                code_builder.get_local(to_ptr);
+                self.load_symbols(code_builder, &[from_symbol]);
+                match (value_type, size) {
+                    (ValueType::I64, 8) => code_builder.i64_store(Bytes8, to_offset),
+                    (ValueType::I32, 4) => code_builder.i32_store(Bytes4, to_offset),
+                    (ValueType::I32, 2) => code_builder.i32_store16(Bytes2, to_offset),
+                    (ValueType::I32, 1) => code_builder.i32_store8(Bytes1, to_offset),
+                    (ValueType::F32, 4) => code_builder.f32_store(Bytes4, to_offset),
+                    (ValueType::F64, 8) => code_builder.f64_store(Bytes8, to_offset),
                     _ => {
                         panic!("Cannot store {:?} with alignment of {:?}", value_type, size);
                     }
                 };
-                code_builder.push(GetLocal(to_ptr.0));
-                self.load_symbols(code_builder, &[from_symbol]);
-                code_builder.push(store_instruction);
                 size
             }
         }
@@ -320,7 +315,7 @@ impl<'a> Storage<'a> {
     /// Copies the _entire_ value. For struct fields etc., see `copy_value_to_memory`
     pub fn clone_value(
         &mut self,
-        code_builder: &mut CodeBuilder,
+        code_builder: &mut FunctionBuilder,
         to: &StoredValue,
         from: &StoredValue,
         from_symbol: Symbol,
@@ -343,7 +338,7 @@ impl<'a> Storage<'a> {
                 debug_assert!(to_value_type == from_value_type);
                 debug_assert!(to_size == from_size);
                 self.load_symbols(code_builder, &[from_symbol]);
-                code_builder.push(SetLocal(to_local_id.0));
+                code_builder.set_local(*to_local_id);
                 self.symbol_storage_map.insert(from_symbol, to.clone());
             }
 
@@ -361,8 +356,8 @@ impl<'a> Storage<'a> {
             ) => {
                 debug_assert!(to_value_type == from_value_type);
                 debug_assert!(to_size == from_size);
-                code_builder
-                    .extend_from_slice(&[GetLocal(from_local_id.0), SetLocal(to_local_id.0)]);
+                code_builder.get_local(*from_local_id);
+                code_builder.set_local(*to_local_id);
             }
 
             (
@@ -408,7 +403,7 @@ impl<'a> Storage<'a> {
     /// (In the case of structs in stack memory, we just use the stack frame pointer local)
     pub fn ensure_value_has_local(
         &mut self,
-        code_builder: &mut CodeBuilder,
+        code_builder: &mut FunctionBuilder,
         symbol: Symbol,
         storage: StoredValue,
     ) -> StoredValue {
@@ -421,7 +416,7 @@ impl<'a> Storage<'a> {
             let local_id = self.get_next_local_id();
             if vm_state != VirtualMachineSymbolState::NotYetPushed {
                 code_builder.load_symbol(symbol, vm_state, local_id);
-                code_builder.push(SetLocal(local_id.0));
+                code_builder.set_local(local_id);
             }
 
             self.local_types.push(value_type);
