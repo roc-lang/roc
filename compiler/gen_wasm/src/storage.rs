@@ -4,8 +4,7 @@ use bumpalo::Bump;
 use roc_collections::all::MutMap;
 use roc_module::symbol::Symbol;
 
-use crate::code_builder::VirtualMachineSymbolState;
-use crate::function_builder::{FunctionBuilder, ValueType};
+use crate::function_builder::{FunctionBuilder, ValueType, VirtualMachineSymbolState};
 use crate::layout::WasmLayout;
 use crate::{copy_memory, round_up_to_alignment, CopyMemoryConfig, LocalId, PTR_SIZE, PTR_TYPE};
 

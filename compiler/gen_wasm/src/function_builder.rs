@@ -5,7 +5,6 @@ use std::fmt::Debug;
 
 use roc_module::symbol::Symbol;
 
-use crate::code_builder::VirtualMachineSymbolState;
 use crate::opcodes::*;
 use crate::{
     encode_u32, encode_u64, round_up_to_alignment, LocalId, FRAME_ALIGNMENT_BYTES,
@@ -59,6 +58,21 @@ pub enum Align {
     Bytes32 = 5,
     Bytes64 = 6,
     // ... we can add more if we need them ...
+}
+
+#[derive(Debug, Clone, PartialEq, Copy)]
+pub enum VirtualMachineSymbolState {
+    /// Value doesn't exist yet
+    NotYetPushed,
+
+    /// Value has been pushed onto the VM stack but not yet popped
+    /// Remember where it was pushed, in case we need to insert another instruction there later
+    Pushed { pushed_at: usize },
+
+    /// Value has been pushed and popped, so it's not on the VM stack any more.
+    /// If we want to use it again later, we will have to create a local for it,
+    /// by going back to insert a local.tee instruction at pushed_at
+    Popped { pushed_at: usize },
 }
 
 // An instruction (local.set or local.tee) to be inserted into the function code
