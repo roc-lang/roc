@@ -3,6 +3,7 @@ mod code_builder;
 pub mod from_wasm32_memory;
 mod function_builder;
 mod layout;
+mod opcodes;
 mod storage;
 
 use bumpalo::collections::Vec;
@@ -206,4 +207,8 @@ pub fn pop_stack_frame(
         I32Add,
         SetGlobal(STACK_POINTER_GLOBAL_ID),
     ]);
+}
+
+pub fn debug_panic<E: std::fmt::Debug>(error: E) {
+    panic!("{:?}", error);
 }

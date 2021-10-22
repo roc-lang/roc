@@ -13,7 +13,7 @@ use roc_mono::layout::{Builtin, Layout};
 
 use crate::code_builder::CodeBuilder;
 use crate::layout::WasmLayout;
-use crate::storage::{StackMemoryLocation, Storage, StoredValue, StoredValueKind};
+use crate::storage::{Storage, StoredValue, StoredValueKind};
 use crate::{
     copy_memory, pop_stack_frame, push_stack_frame, CopyMemoryConfig, Env, LocalId, PTR_TYPE,
 };
