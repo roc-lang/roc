@@ -83,8 +83,15 @@ test-rust:
     RUN --mount=type=cache,target=$SCCACHE_DIR \
         cargo test --release --test cli_run i386 --features="i386-cli-run" && sccache --show-stats
 
-verify-no-git-changes:
+test-docs:
     FROM +test-rust
+    # test docs generation, which will run whenever we deploy roc-lang.org.
+    # This should always be the same command we run on that build.
+    RUN --mount=type=cache,target=$SCCACHE_DIR \
+        cargo run -p roc_cli --no-default-features docs compiler/builtins/docs
+
+verify-no-git-changes:
+    FROM +test-docs
     # If running tests caused anything to be changed or added (without being
     # included in a .gitignore somewhere), fail the build!
     #
@@ -99,6 +106,7 @@ test-all:
     BUILD +check-rustfmt
     BUILD +check-clippy
     BUILD +test-rust
+    BUILD +test-docs
     BUILD +verify-no-git-changes
 
 # compile everything needed for benchmarks and output a self-contained dir from which benchmarks can be run.
