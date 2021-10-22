@@ -4,6 +4,7 @@ pub mod from_wasm32_memory;
 mod layout;
 mod storage;
 
+use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use parity_wasm::builder;
 use parity_wasm::elements::{Instruction, Instruction::*, Internal, ValueType};
@@ -32,7 +33,7 @@ pub const STACK_ALIGNMENT_BYTES: i32 = 16;
 pub struct LocalId(pub u32);
 
 pub struct Env<'a> {
-    pub arena: &'a Bump, // not really using this much, parity_wasm works with std::vec a lot
+    pub arena: &'a Bump,
     pub interns: Interns,
     pub exposed_to_host: MutSet<Symbol>,
 }
@@ -40,11 +41,11 @@ pub struct Env<'a> {
 pub fn build_module<'a>(
     env: &'a Env,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-) -> Result<Vec<u8>, String> {
+) -> Result<std::vec::Vec<u8>, String> {
     let (builder, _) = build_module_help(env, procedures)?;
     let module = builder.build();
     module
-        .to_bytes()
+        .into_bytes()
         .map_err(|e| -> String { format!("Error serialising Wasm module {:?}", e) })
 }
 
@@ -52,7 +53,7 @@ pub fn build_module_help<'a>(
     env: &'a Env,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Result<(builder::ModuleBuilder, u32), String> {
-    let mut backend = WasmBackend::new();
+    let mut backend = WasmBackend::new(env);
     let mut layout_ids = LayoutIds::default();
 
     // Sort procedures by occurrence order
@@ -65,7 +66,7 @@ pub fn build_module_help<'a>(
     //
     // This means that for now other functions in the file have to be ordered "in reverse": if A
     // uses B, then the name of A must first occur after the first occurrence of the name of B
-    let mut procedures: std::vec::Vec<_> = procedures.into_iter().collect();
+    let mut procedures = Vec::from_iter_in(procedures.into_iter(), env.arena);
     procedures.sort_by(|a, b| b.0 .0.cmp(&a.0 .0));
 
     let mut function_index: u32 = 0;
@@ -178,7 +179,7 @@ pub fn round_up_to_alignment(unaligned: i32, alignment_bytes: i32) -> i32 {
 }
 
 pub fn push_stack_frame(
-    instructions: &mut Vec<Instruction>,
+    instructions: &mut std::vec::Vec<Instruction>,
     size: i32,
     local_frame_pointer: LocalId,
 ) {
@@ -193,7 +194,7 @@ pub fn push_stack_frame(
 }
 
 pub fn pop_stack_frame(
-    instructions: &mut Vec<Instruction>,
+    instructions: &mut std::vec::Vec<Instruction>,
     size: i32,
     local_frame_pointer: LocalId,
 ) {
