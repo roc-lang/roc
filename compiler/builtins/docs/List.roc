@@ -52,6 +52,8 @@ interface List
 ## ```
 ## mixedList : List [ IntElem I64, StrElem Str ]*
 ## mixedList = [ IntElem 1, IntElem 2, StrElem "a", StrElem "b" ]
+##
+## mixedList
 ## ```
 ##
 ## The maximum size of a [List] is limited by the amount of heap memory available
