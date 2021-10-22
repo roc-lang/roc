@@ -10,7 +10,8 @@ roc_collections = { path = "../collections" }
 roc_module = { path = "../module" }
 roc_mono = { path = "../mono" }
 bumpalo = { version = "3.6.1", features = ["collections"] }
-parity-wasm = "0.42"
+# TODO: switch to parity-wasm 0.44 once it's out (allows bumpalo vectors in some places)
+parity-wasm = { git = "https://github.com/brian-carroll/parity-wasm", branch = "master" }
 
 roc_std = { path = "../../roc_std" }
 wasmer = "2.0.0"

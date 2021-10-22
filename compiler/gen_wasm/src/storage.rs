@@ -1,3 +1,5 @@
+use bumpalo::collections::Vec;
+use bumpalo::Bump;
 use parity_wasm::elements::{Instruction::*, ValueType};
 
 use roc_collections::all::MutMap;
@@ -58,19 +60,19 @@ pub enum StoredValue {
 
 /// Helper structure for WasmBackend, to keep track of how values are stored,
 /// including the VM stack, local variables, and linear memory
-pub struct Storage {
-    pub arg_types: std::vec::Vec<ValueType>,
-    pub local_types: std::vec::Vec<ValueType>,
+pub struct Storage<'a> {
+    pub arg_types: Vec<'a, ValueType>,
+    pub local_types: Vec<'a, ValueType>,
     pub symbol_storage_map: MutMap<Symbol, StoredValue>,
     pub stack_frame_pointer: Option<LocalId>,
     pub stack_frame_size: i32,
 }
 
-impl Storage {
-    pub fn new() -> Self {
+impl<'a> Storage<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
         Storage {
-            arg_types: std::vec::Vec::with_capacity(8),
-            local_types: std::vec::Vec::with_capacity(32),
+            arg_types: Vec::with_capacity_in(8, arena),
+            local_types: Vec::with_capacity_in(32, arena),
             symbol_storage_map: MutMap::default(),
             stack_frame_pointer: None,
             stack_frame_size: 0,

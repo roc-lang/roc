@@ -1,3 +1,5 @@
+use bumpalo::collections::Vec;
+use bumpalo::Bump;
 use core::panic;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -25,9 +27,9 @@ pub enum VirtualMachineSymbolState {
 }
 
 #[derive(Debug)]
-pub struct CodeBuilder {
+pub struct CodeBuilder<'a> {
     /// The main container for the instructions
-    code: Vec<Instruction>,
+    code: Vec<'a, Instruction>,
 
     /// Extra instructions to insert at specific positions during finalisation
     /// (Go back and set locals when we realise we need them)
@@ -39,16 +41,16 @@ pub struct CodeBuilder {
 
     /// Our simulation model of the Wasm stack machine
     /// Keeps track of where Symbol values are in the VM stack
-    vm_stack: Vec<Symbol>,
+    vm_stack: Vec<'a, Symbol>,
 }
 
 #[allow(clippy::new_without_default)]
-impl CodeBuilder {
-    pub fn new() -> Self {
+impl<'a> CodeBuilder<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
         CodeBuilder {
-            vm_stack: Vec::with_capacity(32),
+            vm_stack: Vec::with_capacity_in(32, arena),
             insertions: BTreeMap::default(),
-            code: Vec::with_capacity(1024),
+            code: Vec::with_capacity_in(1024, arena),
         }
     }
 
@@ -101,7 +103,8 @@ impl CodeBuilder {
     pub fn push_call(&mut self, function_index: u32, pops: usize, push: bool) {
         let stack_depth = self.vm_stack.len();
         if pops > stack_depth {
-            let mut final_code = Vec::with_capacity(self.code.len() + self.insertions.len());
+            let mut final_code =
+                std::vec::Vec::with_capacity(self.code.len() + self.insertions.len());
             self.finalize_into(&mut final_code);
             panic!(
                 "Trying to call to call function {:?} with {:?} values but only {:?} on the VM stack\nfinal_code={:?}\nvm_stack={:?}",
@@ -120,7 +123,7 @@ impl CodeBuilder {
     }
 
     /// Finalize a function body by copying all instructions into a vector
-    pub fn finalize_into(&mut self, final_code: &mut Vec<Instruction>) {
+    pub fn finalize_into(&mut self, final_code: &mut std::vec::Vec<Instruction>) {
         let mut insertions_iter = self.insertions.iter();
         let mut next_insertion = insertions_iter.next();
 

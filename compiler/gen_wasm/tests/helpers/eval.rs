@@ -106,7 +106,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
         roc_gen_wasm::build_module_help(&env, procedures).unwrap();
     T::insert_test_wrapper(&mut builder, TEST_WRAPPER_NAME, main_function_index);
 
-    let module_bytes = builder.build().to_bytes().unwrap();
+    let module_bytes = builder.build().into_bytes().unwrap();
 
     // for debugging (e.g. with wasm2wat)
     if false {
@@ -190,7 +190,6 @@ macro_rules! assert_wasm_evals_to {
         match $crate::helpers::eval::assert_wasm_evals_to_help::<$ty>($src, $expected) {
             Err(msg) => println!("{:?}", msg),
             Ok(actual) => {
-                #[allow(clippy::bool_assert_comparison)]
                 assert_eq!($transform(actual), $expected)
             }
         }
