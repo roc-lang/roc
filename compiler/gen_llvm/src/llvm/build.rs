@@ -4342,7 +4342,6 @@ fn function_value_by_name_help<'a, 'ctx, 'env>(
     })
 }
 
-// #[allow(clippy::cognitive_complexity)]
 #[inline(always)]
 fn roc_call_with_args<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -4350,18 +4349,32 @@ fn roc_call_with_args<'a, 'ctx, 'env>(
     result_layout: &Layout<'a>,
     symbol: Symbol,
     func_spec: FuncSpec,
-    args: &[BasicValueEnum<'ctx>],
+    arguments: &[BasicValueEnum<'ctx>],
 ) -> BasicValueEnum<'ctx> {
     let fn_val =
         function_value_by_func_spec(env, func_spec, symbol, argument_layouts, result_layout);
 
-    let call = env.builder.build_call(fn_val, args, "call");
+    call_roc_function(env, fn_val, result_layout, arguments)
+}
 
-    call.set_call_convention(fn_val.get_call_conventions());
+fn call_roc_function<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    roc_function: FunctionValue<'ctx>,
+    _result_layout: &Layout<'a>,
+    arguments: &[BasicValueEnum<'ctx>],
+) -> BasicValueEnum<'ctx> {
+    let call = env.builder.build_call(roc_function, arguments, "call");
 
-    call.try_as_basic_value()
-        .left()
-        .unwrap_or_else(|| panic!("LLVM error: Invalid call by name for name {:?}", symbol))
+    // roc functions should have the fast calling convention
+    debug_assert_eq!(roc_function.get_call_conventions(), FAST_CALL_CONV);
+    call.set_call_convention(FAST_CALL_CONV);
+
+    call.try_as_basic_value().left().unwrap_or_else(|| {
+        panic!(
+            "LLVM error: Invalid call by name for name {:?}",
+            roc_function.get_name()
+        )
+    })
 }
 
 /// Translates a target_lexicon::Triple to a LLVM calling convention u32
