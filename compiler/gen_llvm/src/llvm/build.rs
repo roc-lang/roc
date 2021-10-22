@@ -629,7 +629,7 @@ pub fn construct_optimization_passes<'a>(
         OptLevel::Optimize => {
             pmb.set_optimization_level(OptimizationLevel::Aggressive);
             // this threshold seems to do what we want
-            pmb.set_inliner_with_threshold(0);
+            pmb.set_inliner_with_threshold(275);
 
             // TODO figure out which of these actually help
 
@@ -2377,15 +2377,42 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             result
         }
         Ret(symbol) => {
-            let value = load_symbol(scope, symbol);
+            let (value, layout) = load_symbol_and_layout(scope, symbol);
 
-            if let Some(block) = env.builder.get_insert_block() {
-                if block.get_terminator().is_none() {
-                    env.builder.build_return(Some(&value));
+            match RocReturn::from_layout(env, layout) {
+                RocReturn::Return => {
+                    if let Some(block) = env.builder.get_insert_block() {
+                        if block.get_terminator().is_none() {
+                            env.builder.build_return(Some(&value));
+                        }
+                    }
+
+                    value
+                }
+                RocReturn::ByPointer => {
+                    // we need to write our value into the final argument of the current function
+                    let parameters = parent.get_params();
+                    let out_parameter = parameters.last().unwrap();
+                    debug_assert!(out_parameter.is_pointer_value());
+
+                    env.builder
+                        .build_store(out_parameter.into_pointer_value(), value);
+
+                    if let Some(block) = env.builder.get_insert_block() {
+                        match block.get_terminator() {
+                            None => {
+                                env.builder.build_return(None);
+                            }
+                            Some(terminator) => {
+                                terminator.remove_from_basic_block();
+                                env.builder.build_return(None);
+                            }
+                        }
+                    }
+
+                    env.context.i8_type().const_zero().into()
                 }
             }
-
-            value
         }
 
         Switch {
@@ -3106,7 +3133,6 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
     c_function_name: &str,
 ) -> FunctionValue<'ctx> {
     // NOTE we ingore env.is_gen_test here
-    let wrapper_return_type = roc_function.get_type().get_return_type().unwrap();
 
     let mut cc_argument_types = Vec::with_capacity_in(arguments.len(), env.arena);
     for layout in arguments {
@@ -3116,12 +3142,19 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
     // STEP 1: turn `f : a,b,c -> d` into `f : a,b,c, &d -> {}`
     // let mut argument_types = roc_function.get_type().get_param_types();
     let mut argument_types = cc_argument_types;
-    let return_type = wrapper_return_type;
 
-    let output_type = return_type.ptr_type(AddressSpace::Generic);
-    argument_types.push(output_type.into());
+    let c_function_type = match roc_function.get_type().get_return_type() {
+        None => {
+            // this function already returns by-pointer
+            roc_function.get_type()
+        }
+        Some(return_type) => {
+            let output_type = return_type.ptr_type(AddressSpace::Generic);
+            argument_types.push(output_type.into());
 
-    let c_function_type = env.context.void_type().fn_type(&argument_types, false);
+            env.context.void_type().fn_type(&argument_types, false)
+        }
+    };
 
     let c_function = add_func(
         env.module,
@@ -3167,10 +3200,10 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
 
     let arguments_for_call = &arguments_for_call.into_bump_slice();
 
-    debug_assert_eq!(args.len(), roc_function.get_params().len());
-
     let call_result = {
         if env.is_gen_test {
+            debug_assert_eq!(args.len(), roc_function.get_params().len());
+
             let roc_wrapper_function = make_exception_catcher(env, roc_function);
             debug_assert_eq!(
                 arguments_for_call.len(),
@@ -3375,7 +3408,8 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
             )
             .into()
     } else {
-        roc_function.get_type().get_return_type().unwrap()
+        // roc_function.get_type().get_return_type().unwrap()
+        basic_type_from_layout(env, &return_layout)
     };
 
     let mut cc_argument_types = Vec::with_capacity_in(arguments.len(), env.arena);
@@ -3432,10 +3466,15 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
         CCReturn::Void => {
             debug_assert_eq!(args.len(), roc_function.get_params().len());
         }
-        CCReturn::ByPointer => {
-            args = &args[..args.len() - 1];
-            debug_assert_eq!(args.len(), roc_function.get_params().len());
-        }
+        CCReturn::ByPointer => match RocReturn::from_layout(env, &return_layout) {
+            RocReturn::ByPointer => {
+                debug_assert_eq!(args.len(), roc_function.get_params().len());
+            }
+            RocReturn::Return => {
+                args = &args[..args.len() - 1];
+                debug_assert_eq!(args.len(), roc_function.get_params().len());
+            }
+        },
     }
 
     let mut arguments_for_call = Vec::with_capacity_in(args.len(), env.arena);
@@ -3975,7 +4014,17 @@ fn build_proc_header<'a, 'ctx, 'env>(
         arg_basic_types.push(arg_type);
     }
 
-    let fn_type = ret_type.fn_type(&arg_basic_types, false);
+    let fn_type = match RocReturn::from_layout(env, &proc.ret_layout) {
+        RocReturn::Return => ret_type.fn_type(&arg_basic_types, false),
+        RocReturn::ByPointer => {
+            println!(
+                "{:?}  will return void instead of {:?}",
+                symbol, proc.ret_layout
+            );
+            arg_basic_types.push(ret_type.ptr_type(AddressSpace::Generic).into());
+            env.context.void_type().fn_type(&arg_basic_types, false)
+        }
+    };
 
     let fn_val = add_func(
         env.module,
@@ -4340,6 +4389,7 @@ fn roc_call_with_args<'a, 'ctx, 'env>(
     let fn_val =
         function_value_by_func_spec(env, func_spec, symbol, argument_layouts, result_layout);
 
+<<<<<<< HEAD
     call_roc_function(env, fn_val, result_layout, arguments)
 }
 
@@ -5686,6 +5736,37 @@ fn to_cc_type_builtin<'a, 'ctx, 'env>(
         Builtin::Dict(_, _) | Builtin::Set(_) | Builtin::EmptyDict | Builtin::EmptySet => {
             // TODO verify this is what actually happens
             basic_type_from_builtin(env, builtin)
+        }
+    }
+}
+
+enum RocReturn {
+    /// Return as normal
+    Return,
+    /// require an extra argument, a pointer
+    /// where the result is written into returns void
+    ByPointer,
+}
+
+impl RocReturn {
+    fn roc_return_by_pointer(layout: Layout) -> bool {
+        match layout {
+            Layout::Union(union_layout) => match union_layout {
+                UnionLayout::NonRecursive(_) => true,
+                _ => false,
+            },
+            Layout::LambdaSet(lambda_set) => {
+                RocReturn::roc_return_by_pointer(lambda_set.runtime_representation())
+            }
+            _ => false,
+        }
+    }
+
+    fn from_layout<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) -> Self {
+        if false && Self::roc_return_by_pointer(*layout) {
+            RocReturn::ByPointer
+        } else {
+            RocReturn::Return
         }
     }
 }
