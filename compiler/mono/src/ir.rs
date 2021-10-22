@@ -188,6 +188,24 @@ impl<'a> PendingSpecialization<'a> {
             _lifetime: std::marker::PhantomData,
         }
     }
+
+    /// Add a named function that will be publicly exposed to the host
+    pub fn from_exposed_function(
+        arena: &'a Bump,
+        subs: &Subs,
+        opt_annotation: Option<roc_can::def::Annotation>,
+        fn_var: Variable,
+    ) -> Self {
+        match opt_annotation {
+            None => PendingSpecialization::from_var(arena, subs, fn_var),
+            Some(annotation) => PendingSpecialization::from_var_host_exposed(
+                arena,
+                subs,
+                fn_var,
+                &annotation.introduced_variables.host_exposed_aliases,
+            ),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -586,50 +604,7 @@ impl<'a> Procs<'a> {
         }
     }
 
-    /// Add a named function that will be publicly exposed to the host
-    pub fn insert_exposed(
-        &mut self,
-        name: Symbol,
-        layout: ProcLayout<'a>,
-        arena: &'a Bump,
-        subs: &Subs,
-        opt_annotation: Option<roc_can::def::Annotation>,
-        fn_var: Variable,
-    ) {
-        let tuple = (name, layout);
-
-        // If we've already specialized this one, no further work is needed.
-        if self.specialized.contains_key(&tuple) {
-            return;
-        }
-
-        // We're done with that tuple, so move layout back out to avoid cloning it.
-        let (name, layout) = tuple;
-        let pending = match opt_annotation {
-            None => PendingSpecialization::from_var(arena, subs, fn_var),
-            Some(annotation) => PendingSpecialization::from_var_host_exposed(
-                arena,
-                subs,
-                fn_var,
-                &annotation.introduced_variables.host_exposed_aliases,
-            ),
-        };
-
-        // This should only be called when pending_specializations is Some.
-        // Otherwise, it's being called in the wrong pass!
-        match &mut self.pending_specializations {
-            Some(pending_specializations) => {
-                // register the pending specialization, so this gets code genned later
-                add_pending(pending_specializations, name, layout, pending)
-            }
-            None => unreachable!(
-                r"insert_exposed was called after the pending specializations phase had already completed!"
-            ),
-        }
-    }
-
-    /// TODO
-    pub fn insert_passed_by_name(
+    fn insert_passed_by_name(
         &mut self,
         env: &mut Env<'a, '_>,
         fn_var: Variable,
