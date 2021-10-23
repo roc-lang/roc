@@ -810,20 +810,8 @@ fn preprocess_impl(
     }
     let text_disassembly_duration = text_disassembly_start.elapsed().unwrap();
 
-    let scanning_dynamic_deps_start = SystemTime::now();
-
-    let ElfDynamicDeps {
-        got_app_syms,
-        got_sections,
-        dynamic_lib_count,
-        shared_lib_index,
-    } = scan_elf_dynamic_deps(
-        &exec_obj, &mut md, &app_syms, shared_lib, exec_data, verbose,
-    )?;
-
-    let scanning_dynamic_deps_duration = scanning_dynamic_deps_start.elapsed().unwrap();
-
-    let platform_gen_start = SystemTime::now();
+    let scanning_dynamic_deps_duration;
+    let platform_gen_start;
 
     let (out_mmap, out_file) = match target.binary_format {
         target_lexicon::BinaryFormat::Elf => match target
@@ -831,6 +819,21 @@ fn preprocess_impl(
             .unwrap_or(target_lexicon::Endianness::Little)
         {
             target_lexicon::Endianness::Little => {
+                let scanning_dynamic_deps_start = SystemTime::now();
+
+                let ElfDynamicDeps {
+                    got_app_syms,
+                    got_sections,
+                    dynamic_lib_count,
+                    shared_lib_index,
+                } = scan_elf_dynamic_deps(
+                    &exec_obj, &mut md, &app_syms, shared_lib, exec_data, verbose,
+                )?;
+
+                scanning_dynamic_deps_duration = scanning_dynamic_deps_start.elapsed().unwrap();
+
+                platform_gen_start = SystemTime::now();
+
                 // TODO little endian
                 gen_elf_le(
                     exec_data,
