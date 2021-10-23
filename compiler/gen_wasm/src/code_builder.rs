@@ -111,15 +111,15 @@ pub struct CodeBuilder<'a> {
     /// Total number of bytes to be written as insertions
     insertions_byte_len: usize,
 
-    /// Bytes for local variable declarations, and stack frame setup code.
+    /// Bytes for local variable declarations and stack-frame setup code.
     /// We can't write this until we've finished the main code. But it goes
     /// before it in the final output, so we need a separate vector.
     preamble: Vec<'a, u8>,
 
     /// Encoded bytes for the inner length of the function, locals + code.
     /// ("inner" because it doesn't include its own length!)
-    /// We can't write this until we've finished the code and preamble. But
-    /// it goes before them in the final output, so it's a separate vector.
+    /// Again, we can't write this until we've finished the code and preamble,
+    /// but it goes before them in the binary, so it's a separate vector.
     inner_length: Vec<'a, u8>,
 
     /// Our simulation model of the Wasm stack machine
