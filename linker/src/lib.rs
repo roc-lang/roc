@@ -658,9 +658,7 @@ fn preprocess_impl(
         for symbol in app_syms.iter() {
             println!("{}: {:+x?}", symbol.index().0, symbol);
         }
-    }
 
-    if verbose {
         println!();
         println!("App Function Address Map: {:+x?}", app_func_addresses);
     }
