@@ -11,7 +11,7 @@ use roc_mono::layout::{Builtin, Layout};
 use crate::code_builder::{BlockType, CodeBuilder, ValueType};
 use crate::layout::WasmLayout;
 use crate::storage::{Storage, StoredValue, StoredValueKind};
-use crate::{copy_memory, CopyMemoryConfig, Env, LocalId, PTR_TYPE};
+use crate::{copy_memory, encode_u32_padded, CopyMemoryConfig, Env, LocalId, PTR_TYPE};
 
 // Don't allocate any constant data at address zero or near it. Would be valid, but bug-prone.
 // Follow Emscripten's example by using 1kB (4 bytes would probably do)
@@ -20,18 +20,17 @@ const UNUSED_DATA_SECTION_BYTES: u32 = 1024;
 #[derive(Clone, Copy, Debug)]
 struct LabelId(u32);
 
-// TODO: use Bumpalo Vec once parity_wasm supports general iterators (>=0.43)
 pub struct WasmBackend<'a> {
-    // Module level: Wasm AST
-    pub module_builder: ModuleBuilder,
     env: &'a Env<'a>,
 
-    // Module level: internal state & IR mappings
+    // Module-level data
+    pub module_builder: ModuleBuilder,
+    pub code_section_bytes: std::vec::Vec<u8>,
     _data_offset_map: MutMap<Literal<'a>, u32>,
     _data_offset_next: u32,
     proc_symbol_map: MutMap<Symbol, CodeLocation>,
 
-    // Function level
+    // Function-level data
     code_builder: CodeBuilder<'a>,
     storage: Storage<'a>,
 
@@ -41,21 +40,29 @@ pub struct WasmBackend<'a> {
 }
 
 impl<'a> WasmBackend<'a> {
-    pub fn new(env: &'a Env<'a>) -> Self {
+    pub fn new(env: &'a Env<'a>, num_procs: usize) -> Self {
+        // Code section is prefixed with the number of Wasm functions
+        // For now, this is the same as the number of IR procedures (until we start inlining!)
+        let mut code_section_bytes = std::vec::Vec::with_capacity(4096);
+
+        // Reserve space for code section header: inner byte length and number of functions
+        // Padded to the maximum 5 bytes each, so we can update later without moving everything
+        code_section_bytes.resize(10, 0);
+        encode_u32_padded(&mut code_section_bytes[5..10], num_procs as u32);
+
         WasmBackend {
-            // Module: Wasm AST
-            module_builder: builder::module(),
             env,
 
-            // Module: internal state & IR mappings
+            // Module-level data
+            module_builder: builder::module(),
+            code_section_bytes,
             _data_offset_map: MutMap::default(),
             _data_offset_next: UNUSED_DATA_SECTION_BYTES,
             proc_symbol_map: MutMap::default(),
 
+            // Function-level data
             block_depth: 0,
             joinpoint_label_map: MutMap::default(),
-
-            // Functions
             code_builder: CodeBuilder::new(env.arena),
             storage: Storage::new(env.arena),
         }
@@ -86,7 +93,7 @@ impl<'a> WasmBackend<'a> {
 
         self.build_stmt(&proc.body, &proc.ret_layout)?;
 
-        self.finalize_proc();
+        self.finalize_proc()?;
         self.reset();
 
         // println!("\nfinished generating {:?}\n", sym);
@@ -123,7 +130,7 @@ impl<'a> WasmBackend<'a> {
         builder::function().with_signature(signature).build()
     }
 
-    fn finalize_proc(&mut self) {
+    fn finalize_proc(&mut self) -> Result<(), String> {
         // end the block from start_proc, to ensure all paths pop stack memory (if any)
         self.end_block();
 
@@ -133,6 +140,11 @@ impl<'a> WasmBackend<'a> {
             self.storage.stack_frame_size,
             self.storage.stack_frame_pointer,
         );
+
+        self.code_builder
+            .serialize(&mut self.code_section_bytes)
+            .map_err(|e| format!("{:?}", e))?;
+        Ok(())
     }
 
     /**********************************************************

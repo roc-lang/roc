@@ -13,20 +13,24 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use parity_wasm::builder;
 
-use parity_wasm::elements::Internal;
+use parity_wasm::elements::{Instruction, Internal, Module, Section};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::LayoutIds;
 
 use crate::backend::WasmBackend;
-use crate::code_builder::{Align, CodeBuilder, ValueType};
+use crate::code_builder::{finalize_code_section, Align, CodeBuilder, ValueType};
 
 const PTR_SIZE: u32 = 4;
 const PTR_TYPE: ValueType = ValueType::I32;
 
 pub const STACK_POINTER_GLOBAL_ID: u32 = 0;
 pub const FRAME_ALIGNMENT_BYTES: i32 = 16;
+
+/// Code section ID from spec
+/// https://webassembly.github.io/spec/core/binary/modules.html#sections
+pub const CODE_SECTION_ID: u8 = 10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LocalId(pub u32);
@@ -41,8 +45,10 @@ pub fn build_module<'a>(
     env: &'a Env,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Result<std::vec::Vec<u8>, String> {
-    let (builder, _) = build_module_help(env, procedures)?;
-    let module = builder.build();
+    let (builder, code_section_bytes, _) = build_module_help(env, procedures)?;
+    let mut module = builder.build();
+    replace_code_section(&mut module, code_section_bytes);
+
     module
         .into_bytes()
         .map_err(|e| -> String { format!("Error serialising Wasm module {:?}", e) })
@@ -51,8 +57,8 @@ pub fn build_module<'a>(
 pub fn build_module_help<'a>(
     env: &'a Env,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-) -> Result<(builder::ModuleBuilder, u32), String> {
-    let mut backend = WasmBackend::new(env);
+) -> Result<(builder::ModuleBuilder, std::vec::Vec<u8>, u32), String> {
+    let mut backend = WasmBackend::new(env, procedures.len());
     let mut layout_ids = LayoutIds::default();
 
     // Sort procedures by occurrence order
@@ -85,6 +91,8 @@ pub fn build_module_help<'a>(
         }
     }
 
+    finalize_code_section(&mut backend.code_section_bytes);
+
     // Because of the sorting above, we know the last function in the `for` is the main function.
     // Here we grab its index and return it, so that the test_wrapper is able to call it.
     // This is a workaround until we implement object files with symbols and relocations.
@@ -106,23 +114,30 @@ pub fn build_module_help<'a>(
     let stack_pointer_global = builder::global()
         .with_type(parity_wasm::elements::ValueType::I32)
         .mutable()
-        .init_expr(parity_wasm::elements::Instruction::I32Const(
-            (MIN_MEMORY_SIZE_KB * 1024) as i32,
-        ))
+        .init_expr(Instruction::I32Const((MIN_MEMORY_SIZE_KB * 1024) as i32))
         .build();
     backend.module_builder.push_global(stack_pointer_global);
 
-    Ok((backend.module_builder, main_function_index))
+    Ok((
+        backend.module_builder,
+        backend.code_section_bytes,
+        main_function_index,
+    ))
 }
 
-fn encode_alignment(bytes: u32) -> Align {
-    match bytes {
-        1 => Align::Bytes1,
-        2 => Align::Bytes2,
-        4 => Align::Bytes4,
-        8 => Align::Bytes8,
-        _ => panic!("{:?}-byte alignment is not supported", bytes),
+/// Replace parity-wasm's code section with our own handmade one
+pub fn replace_code_section(module: &mut Module, code_section_bytes: std::vec::Vec<u8>) {
+    let sections = module.sections_mut();
+    let mut code_section_index = usize::MAX;
+    for (i, s) in sections.iter().enumerate() {
+        if let Section::Code(_) = s {
+            code_section_index = i;
+        }
     }
+    sections[code_section_index] = Section::Unparsed {
+        id: CODE_SECTION_ID,
+        payload: code_section_bytes,
+    };
 }
 
 pub struct CopyMemoryConfig {
@@ -139,7 +154,7 @@ pub fn copy_memory(code_builder: &mut CodeBuilder, config: CopyMemoryConfig) {
         return;
     }
 
-    let alignment = encode_alignment(config.alignment_bytes);
+    let alignment = Align::from(config.alignment_bytes);
     let mut i = 0;
     while config.size - i >= 8 {
         code_builder.get_local(config.to_ptr);
@@ -196,7 +211,7 @@ pub fn encode_u32<'a>(buffer: &mut [u8], mut value: u32) -> usize {
 ///
 /// All integers in Wasm are variable-length encoded, which saves space for small values.
 /// The most significant bit indicates "more bytes are coming", and the other 7 are payload.
-pub fn encode_u64<'a>(buffer: &mut Vec<'a, u8>, mut value: u64) -> usize {
+pub fn encode_u64<'a>(buffer: &mut [u8], mut value: u64) -> usize {
     let mut count = 0;
     while value >= 0x80 {
         buffer[count] = 0x80 | ((value & 0x7f) as u8);
@@ -205,4 +220,20 @@ pub fn encode_u64<'a>(buffer: &mut Vec<'a, u8>, mut value: u64) -> usize {
     }
     buffer[count] = value as u8;
     count + 1
+}
+
+/// Write a u32 value as LEB-128 encoded bytes, but padded to maximum byte length (5)
+///
+/// Sometimes we want a number to have fixed length, so we can update it later (e.g. relocations)
+/// without moving all the following bytes. For those cases we pad it to maximum length.
+/// For example, 3 is encoded as 0x83 0x80 0x80 0x80 0x00.
+///
+/// https://github.com/WebAssembly/tool-conventions/blob/main/Linking.md#relocation-sections
+pub fn encode_u32_padded<'a>(buffer: &mut [u8], mut value: u32) -> usize {
+    for i in 0..4 {
+        buffer[i] = 0x80 | ((value & 0x7f) as u8);
+        value >>= 7;
+    }
+    buffer[4] = value as u8;
+    5
 }

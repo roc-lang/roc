@@ -102,14 +102,21 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
         exposed_to_host,
     };
 
-    let (mut builder, main_function_index) =
+    let (mut builder, mut code_section_bytes, main_function_index) =
         roc_gen_wasm::build_module_help(&env, procedures).unwrap();
-    T::insert_test_wrapper(&mut builder, TEST_WRAPPER_NAME, main_function_index);
+
+    T::insert_test_wrapper(
+        arena,
+        &mut builder,
+        &mut code_section_bytes,
+        TEST_WRAPPER_NAME,
+        main_function_index,
+    );
 
     let module_bytes = builder.build().into_bytes().unwrap();
 
     // for debugging (e.g. with wasm2wat)
-    if false {
+    if true {
         use std::io::Write;
 
         let mut hash_state = DefaultHasher::new();

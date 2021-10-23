@@ -60,6 +60,21 @@ pub enum Align {
     // ... we can add more if we need them ...
 }
 
+impl From<u32> for Align {
+    fn from(x: u32) -> Align {
+        match x {
+            1 => Align::Bytes1,
+            2 => Align::Bytes2,
+            4 => Align::Bytes4,
+            8 => Align::Bytes8,
+            16 => Align::Bytes16,
+            32 => Align::Bytes32,
+            64 => Align::Bytes64,
+            _ => panic!("{:?}-byte alignment not supported", x),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Copy)]
 pub enum VirtualMachineSymbolState {
     /// Value doesn't exist yet
@@ -97,6 +112,13 @@ macro_rules! instruction_memargs {
             self.inst_mem($opcode, $pops, $push, align, offset);
         }
     };
+}
+
+/// Finalize the code section bytes by writing its inner length at the start.
+/// Assumes 5 bytes have been reserved for it (maximally-padded LEB-128)
+pub fn finalize_code_section(code_section_bytes: &mut std::vec::Vec<u8>) {
+    let inner_len = (code_section_bytes.len() - 5) as u32;
+    encode_u32_padded(code_section_bytes[0..5], inner_len);
 }
 
 #[derive(Debug)]
