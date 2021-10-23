@@ -402,7 +402,16 @@ pub fn rebuild_host(
             command.arg("--lib");
             "src/lib.rs"
         };
-        let output = command.output().unwrap();
+
+        let output = command.output().unwrap_or_else(|err| {
+            eprintln!(
+                "Failed to run `cargo build` in {} - error was:\n{}",
+                cargo_dir.display(),
+                err
+            );
+
+            std::process::exit(1);
+        });
 
         validate_output(source_file, "cargo build", output);
 
