@@ -1030,6 +1030,166 @@ fn gen_macho_le(
         .sizeofcmds
         .set(LittleEndian, (size_of_cmds + added_bytes) as u32);
 
+    // Go through every command and shift it by added_bytes if it's absolute, unless it's inside the command header
+    let mut offset = mem::size_of_val(exec_header);
+
+    for _ in 0..num_load_cmds {
+        let info = load_struct_inplace::<macho::LoadCommand<LittleEndian>>(&mut out_mmap, offset);
+
+        match info.cmd.get(NativeEndian) {
+            macho::LC_SEGMENT_64 => {
+                // TODO
+            }
+            macho::LC_SYMTAB => {
+                let cmd = load_struct_inplace_mut::<macho::SymtabCommand<LittleEndian>>(
+                    &mut out_mmap,
+                    offset,
+                );
+
+                let sym_offset = cmd.symoff.get(NativeEndian);
+                let num_syms = cmd.nsyms.get(NativeEndian);
+
+                cmd.symoff
+                    .set(LittleEndian, sym_offset + added_bytes as u32);
+
+                cmd.stroff.set(
+                    LittleEndian,
+                    cmd.stroff.get(NativeEndian) + added_bytes as u32,
+                );
+
+                let table = load_structs_inplace_mut::<macho::Nlist64<LittleEndian>>(
+                    &mut out_mmap,
+                    sym_offset as usize + added_bytes,
+                    num_syms as usize,
+                );
+
+                for entry in table {
+                    if entry.n_type == macho::N_ABS {
+                        entry.n_value.set(
+                            LittleEndian,
+                            entry.n_value.get(NativeEndian) + added_bytes as u64,
+                        );
+                    }
+                }
+            }
+            macho::LC_DYSYMTAB => {
+                // TODO
+            }
+            macho::LC_TWOLEVEL_HINTS => {
+                let cmd = load_struct_inplace_mut::<macho::TwolevelHintsCommand<LittleEndian>>(
+                    &mut out_mmap,
+                    offset,
+                );
+
+                cmd.offset.set(
+                    LittleEndian,
+                    cmd.offset.get(NativeEndian) + added_bytes as u32,
+                );
+            }
+            macho::LC_CODE_SIGNATURE
+            | macho::LC_SEGMENT_SPLIT_INFO
+            | macho::LC_FUNCTION_STARTS
+            | macho::LC_DATA_IN_CODE
+            | macho::LC_DYLIB_CODE_SIGN_DRS
+            | macho::LC_LINKER_OPTIMIZATION_HINT
+            | macho::LC_DYLD_EXPORTS_TRIE
+            | macho::LC_DYLD_CHAINED_FIXUPS => {
+                let cmd = load_struct_inplace_mut::<macho::LinkeditDataCommand<LittleEndian>>(
+                    &mut out_mmap,
+                    offset,
+                );
+
+                cmd.dataoff.set(
+                    LittleEndian,
+                    cmd.dataoff.get(NativeEndian) + added_bytes as u32,
+                );
+            }
+            macho::LC_ENCRYPTION_INFO_64 => {
+                let cmd = load_struct_inplace_mut::<macho::EncryptionInfoCommand64<LittleEndian>>(
+                    &mut out_mmap,
+                    offset,
+                );
+
+                cmd.cryptoff.set(
+                    LittleEndian,
+                    cmd.cryptoff.get(NativeEndian) + added_bytes as u32,
+                );
+            }
+            macho::LC_DYLD_INFO | macho::LC_DYLD_INFO_ONLY => {
+                // TODO
+            }
+            macho::LC_SYMSEG => {
+                let cmd = load_struct_inplace_mut::<macho::SymsegCommand<LittleEndian>>(
+                    &mut out_mmap,
+                    offset,
+                );
+
+                cmd.offset.set(
+                    LittleEndian,
+                    cmd.offset.get(NativeEndian) + added_bytes as u32,
+                );
+            }
+            macho::LC_MAIN => {
+                let cmd = load_struct_inplace_mut::<macho::EntryPointCommand<LittleEndian>>(
+                    &mut out_mmap,
+                    offset,
+                );
+
+                cmd.entryoff.set(
+                    LittleEndian,
+                    cmd.entryoff.get(NativeEndian) + added_bytes as u64,
+                );
+            }
+            macho::LC_ID_DYLIB
+            | macho::LC_LOAD_WEAK_DYLIB
+            | macho::LC_LOAD_DYLIB
+            | macho::LC_REEXPORT_DYLIB
+            | macho::LC_SOURCE_VERSION
+            | macho::LC_IDENT
+            | macho::LC_LINKER_OPTION
+            | macho::LC_BUILD_VERSION
+            | macho::LC_VERSION_MIN_MACOSX
+            | macho::LC_VERSION_MIN_IPHONEOS
+            | macho::LC_VERSION_MIN_WATCHOS
+            | macho::LC_VERSION_MIN_TVOS
+            | macho::LC_UUID
+            | macho::LC_RPATH
+            | macho::LC_ID_DYLINKER
+            | macho::LC_LOAD_DYLINKER
+            | macho::LC_DYLD_ENVIRONMENT
+            | macho::LC_ROUTINES_64
+            | macho::LC_THREAD
+            | macho::LC_UNIXTHREAD
+            | macho::LC_NOTE
+            | macho::LC_PREBOUND_DYLIB
+            | macho::LC_SUB_FRAMEWORK
+            | macho::LC_SUB_CLIENT
+            | macho::LC_SUB_UMBRELLA
+            | macho::LC_SUB_LIBRARY => {
+                // These don't involve file offsets, so no change is needed for these.
+                // Just continue the loop!
+            }
+            macho::LC_PREBIND_CKSUM => {
+                // We don't *think* we need to change this, but
+                // maybe what we're doing will break checksums?
+            }
+            macho::LC_SEGMENT | macho::LC_ROUTINES | macho::LC_ENCRYPTION_INFO => {
+                // These are 32-bit and unsuppoted
+                unreachable!();
+            }
+            macho::LC_FVMFILE | macho::LC_IDFVMLIB | macho::LC_LOADFVMLIB => {
+                // These are obsolete and unsupported
+                unreachable!()
+            }
+            cmd => {
+                panic!(
+                    "Unrecognized Mach-O command during linker preprocessing: {}",
+                    cmd
+                );
+            }
+        }
+    }
+
     Ok((out_mmap, out_file))
 }
 
