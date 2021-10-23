@@ -645,6 +645,14 @@ fn preprocess_impl(
             unreachable!()
         }
     };
+    let macho_load_so_offset = match macho_load_so_offset {
+        Some(offset) => offset,
+        None => {
+            eprintln!("Host does not link library `{}`!", shared_lib.display());
+
+            return Ok(-1);
+        }
+    };
 
     for sym in app_syms.iter() {
         let name = sym.name().unwrap().to_string();
@@ -859,7 +867,29 @@ fn preprocess_impl(
                 .unwrap_or(target_lexicon::Endianness::Little)
             {
                 target_lexicon::Endianness::Little => {
-                    todo!();
+                    let scanning_dynamic_deps_start = SystemTime::now();
+
+                    // let ElfDynamicDeps {
+                    //     got_app_syms,
+                    //     got_sections,
+                    //     dynamic_lib_count,
+                    //     shared_lib_index,
+                    // } = scan_elf_dynamic_deps(
+                    //     &exec_obj, &mut md, &app_syms, shared_lib, exec_data, verbose,
+                    // )?;
+
+                    scanning_dynamic_deps_duration = scanning_dynamic_deps_start.elapsed().unwrap();
+
+                    platform_gen_start = SystemTime::now();
+
+                    // TODO little endian
+                    gen_macho_le(
+                        exec_data,
+                        &mut md,
+                        out_filename,
+                        macho_load_so_offset,
+                        verbose,
+                    )?
                 }
                 target_lexicon::Endianness::Big => {
                     // TODO Is big-endian macOS even a thing that exists anymore?
@@ -940,6 +970,67 @@ fn preprocess_impl(
     }
 
     Ok(0)
+}
+
+fn gen_macho_le(
+    exec_data: &[u8],
+    md: &mut metadata::Metadata,
+    out_filename: &str,
+    macho_load_so_offset: usize,
+    verbose: bool,
+) -> io::Result<(MmapMut, File)> {
+    use macho::{DylibCommand, Section64, SegmentCommand64};
+
+    let exec_header = load_struct_inplace::<macho::MachHeader64<LittleEndian>>(exec_data, 0);
+    let num_load_cmds = exec_header.ncmds.get(NativeEndian);
+    let size_of_cmds = exec_header.sizeofcmds.get(NativeEndian) as usize;
+
+    // Add a new text segment and data segment
+    let segment_cmd_size = mem::size_of::<SegmentCommand64<LittleEndian>>();
+    let section_size = mem::size_of::<Section64<LittleEndian>>();
+    let dylib_cmd_size = mem::size_of::<DylibCommand<LittleEndian>>();
+
+    // Copy header and shift everything to enable more program sections.
+    let added_bytes = (2 * segment_cmd_size) + (2 * section_size) - dylib_cmd_size;
+
+    md.added_byte_count = added_bytes as u64
+        // add some alignment padding
+        + (MIN_SECTION_ALIGNMENT as u64 - md.added_byte_count % MIN_SECTION_ALIGNMENT as u64);
+
+    md.exec_len = exec_data.len() as u64 + md.added_byte_count;
+
+    let out_file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(out_filename)?;
+    out_file.set_len(md.exec_len)?;
+    let mut out_mmap = unsafe { MmapMut::map_mut(&out_file)? };
+    let end_of_cmds = size_of_cmds + mem::size_of_val(exec_header);
+
+    // "Delete" the dylib load command - by copying all the bytes before it
+    // and all the bytes after it, while skipping over its bytes.
+    out_mmap[..macho_load_so_offset].copy_from_slice(&exec_data[..macho_load_so_offset]);
+    out_mmap[macho_load_so_offset..end_of_cmds - dylib_cmd_size]
+        .copy_from_slice(&exec_data[macho_load_so_offset + dylib_cmd_size..end_of_cmds]);
+
+    // Copy the rest of the file, leaving a gap for the surgical linking to add our 2 commands
+    // (which happens after preprocessing), and some zero padding at the end for alignemnt.
+    // (It seems to cause bugs if that padding isn't there!)
+    let rest_of_data = &exec_data[end_of_cmds..];
+    let start_index = end_of_cmds + added_bytes;
+
+    out_mmap[start_index..start_index + rest_of_data.len()].copy_from_slice(rest_of_data);
+
+    let out_header = load_struct_inplace_mut::<macho::MachHeader64<LittleEndian>>(&mut out_mmap, 0);
+
+    out_header.ncmds.set(LittleEndian, num_load_cmds + 2);
+    out_header
+        .sizeofcmds
+        .set(LittleEndian, (size_of_cmds + added_bytes) as u32);
+
+    Ok((out_mmap, out_file))
 }
 
 fn gen_elf_le(
