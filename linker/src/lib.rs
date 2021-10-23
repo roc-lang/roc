@@ -850,7 +850,7 @@ fn preprocess_impl(
                 // TODO probably need to make gen_elf a macro to get this
                 // to work, which is annoying. A parameterized function
                 // does *not* work.
-                todo!("Roc does not yet support big-endian macOS hosts!");
+                todo!("Roc does not yet support big-endian ELF hosts!");
             }
         },
         target_lexicon::BinaryFormat::Macho => {
