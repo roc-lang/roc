@@ -3734,6 +3734,18 @@ mod solve_expr {
     }
 
     #[test]
+    fn str_trim() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Str.trim
+                "#
+            ),
+            "Str -> Str",
+        );
+    }
+
+    #[test]
     fn function_that_captures_nothing_is_not_captured() {
         // we should make sure that a function that doesn't capture anything it not itself captured
         // such functions will be lifted to the top-level, and are thus globally available!

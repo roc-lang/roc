@@ -977,3 +977,31 @@ fn str_repeat_empty_string() {
 fn str_repeat_zero_times() {
     assert_evals_to!(indoc!(r#"Str.repeat "Roc" 0"#), RocStr::from(""), RocStr);
 }
+
+#[test]
+fn str_trim_empty_string() {
+    assert_evals_to!(indoc!(r#"Str.trim """#), RocStr::from(""), RocStr);
+}
+
+#[test]
+fn str_trim_blank_string() {
+    assert_evals_to!(indoc!(r#"Str.trim " ""#), RocStr::from(""), RocStr);
+}
+
+#[test]
+fn str_trim_blank_string_large() {
+    assert_evals_to!(
+        indoc!(r#"Str.trim "                                                      " "#),
+        RocStr::from(""),
+        RocStr
+    );
+}
+
+#[test]
+fn str_trim_hello_world() {
+    assert_evals_to!(
+        indoc!(r#"Str.trim "  hello world  ""#),
+        RocStr::from("hello world"),
+        RocStr
+    );
+}

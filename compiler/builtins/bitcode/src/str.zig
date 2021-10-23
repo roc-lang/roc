@@ -1504,14 +1504,12 @@ test "isWhitespace" {
     try expect(!isWhitespace('x'));
 }
 
-pub fn strTrim(string: RocStr) callconv(.C) RocStr {
-    return @call(.{ .modifier = always_inline }, trim, .{string});
-}
-
 // TODO GIESCH
 // ask & read about small & large strings
-fn trim(string: RocStr) RocStr {
-    if (string.isEmpty()) return RocStr.empty();
+pub fn strTrim(string: RocStr) callconv(.C) RocStr {
+    if (string.isEmpty()) {
+        return RocStr.empty();
+    }
 
     const leading_bytes = countLeadingWhitespaceBytes(string);
     const trailing_bytes = countTrailingWhitespaceBytes(string);
@@ -1525,6 +1523,8 @@ fn trim(string: RocStr) RocStr {
     // should this just use isUnique? (are all small strings safe for mutation?)
     // should we rename isUnique to isUnleakable or something?
     // could also just inline the unsafe reallocate call
+
+    // SIGSEGV is not from this branch
     if (string.isRefcountOne()) {
         const dest = string.str_bytes orelse unreachable;
         const source = dest + leading_bytes;
@@ -1645,6 +1645,3 @@ test "strTrim: unique hello world" {
 
     try expect(trimmed.eq(expected));
 }
-
-// TODO GIESCH
-// add top level roc tests
