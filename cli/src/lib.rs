@@ -1,4 +1,3 @@
-
 #[macro_use]
 extern crate const_format;
 
