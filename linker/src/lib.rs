@@ -1203,7 +1203,30 @@ fn gen_macho_le(
                 );
             }
             macho::LC_DYLD_INFO | macho::LC_DYLD_INFO_ONLY => {
-                // TODO
+                let cmd = load_struct_inplace_mut::<macho::DyldInfoCommand<LittleEndian>>(
+                    &mut out_mmap,
+                    offset,
+                );
+
+                cmd.rebase_off.set(
+                    LittleEndian,
+                    cmd.rebase_off.get(NativeEndian) + added_bytes as u32,
+                );
+
+                cmd.bind_off.set(
+                    LittleEndian,
+                    cmd.bind_off.get(NativeEndian) + added_bytes as u32,
+                );
+
+                cmd.weak_bind_off.set(
+                    LittleEndian,
+                    cmd.weak_bind_off.get(NativeEndian) + added_bytes as u32,
+                );
+
+                cmd.lazy_bind_off.set(
+                    LittleEndian,
+                    cmd.lazy_bind_off.get(NativeEndian) + added_bytes as u32,
+                );
             }
             macho::LC_SYMSEG => {
                 let cmd = load_struct_inplace_mut::<macho::SymsegCommand<LittleEndian>>(
