@@ -2004,6 +2004,45 @@ fn list_drop_at(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
+/// List.dropLast: List elem -> List elem
+fn list_drop_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::ListDropAt,
+        args: vec![
+            (list_var, Var(Symbol::ARG_1)),
+            (index_var,
+                // Num.sub (List.len list) 1
+                RunLowLevel {
+                    op: LowLevel::NumSubWrap,
+                    args: vec![
+                        (
+                            arg_var,
+                            // List.len list
+                            RunLowLevel {
+                                op: LowLevel::ListLen,
+                                args: vec![(list_var, Var(Symbol::ARG_1))],
+                                ret_var: len_var,
+                            },
+                        ),
+                        (arg_var, int(num_var, num_precision_var, 1)),
+                    ],
+                    ret_var: len_var,
+                },
+            ),
+        ],
+        ret_var: list_var,
+    };
+
+    defn(
+        symbol,
+        vec![(list_var, Symbol::ARG_1), (index_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        list_var,
+    )
+}
 /// List.append : List elem, elem -> List elem
 fn list_append(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
