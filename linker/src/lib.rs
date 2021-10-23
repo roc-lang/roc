@@ -888,6 +888,7 @@ fn preprocess_impl(
                         &mut md,
                         out_filename,
                         macho_load_so_offset,
+                        target,
                         verbose,
                     )?
                 }
@@ -977,6 +978,7 @@ fn gen_macho_le(
     md: &mut metadata::Metadata,
     out_filename: &str,
     macho_load_so_offset: usize,
+    target: &Triple,
     verbose: bool,
 ) -> io::Result<(MmapMut, File)> {
     use macho::{DylibCommand, Section64, SegmentCommand64};
@@ -1031,14 +1033,99 @@ fn gen_macho_le(
         .set(LittleEndian, (size_of_cmds + added_bytes) as u32);
 
     // Go through every command and shift it by added_bytes if it's absolute, unless it's inside the command header
-    let mut offset = mem::size_of_val(exec_header);
+    let offset = mem::size_of_val(exec_header);
+
+    let cpu_type = match target.architecture {
+        target_lexicon::Architecture::X86_64 => macho::CPU_TYPE_X86_64,
+        target_lexicon::Architecture::Aarch64(_) => macho::CPU_TYPE_ARM64,
+        _ => {
+            // We should have verified this via supported() before calling this function
+            unreachable!()
+        }
+    };
 
     for _ in 0..num_load_cmds {
         let info = load_struct_inplace::<macho::LoadCommand<LittleEndian>>(&mut out_mmap, offset);
 
         match info.cmd.get(NativeEndian) {
             macho::LC_SEGMENT_64 => {
-                // TODO
+                let cmd = load_struct_inplace_mut::<macho::SegmentCommand64<LittleEndian>>(
+                    &mut out_mmap,
+                    offset,
+                );
+
+                cmd.vmaddr.set(
+                    LittleEndian,
+                    cmd.vmaddr.get(NativeEndian) + added_bytes as u64,
+                );
+
+                cmd.fileoff.set(
+                    LittleEndian,
+                    cmd.fileoff.get(NativeEndian) + added_bytes as u64,
+                );
+
+                let num_sections = cmd.nsects.get(NativeEndian);
+                let size_of_cmd = mem::size_of_val(cmd);
+
+                let sections = load_structs_inplace_mut::<macho::Section64<LittleEndian>>(
+                    &mut out_mmap,
+                    offset + size_of_cmd,
+                    num_sections as usize,
+                );
+                struct Relocation {
+                    offset: u32,
+                    num_relocations: u32,
+                }
+                let mut relocation_offsets = Vec::with_capacity(sections.len());
+
+                for section in sections {
+                    section.addr.set(
+                        LittleEndian,
+                        section.addr.get(NativeEndian) + added_bytes as u64,
+                    );
+
+                    section.offset.set(
+                        LittleEndian,
+                        section.offset.get(NativeEndian) + added_bytes as u32,
+                    );
+
+                    let rel_offset = section.reloff.get(NativeEndian) + added_bytes as u32;
+
+                    section.reloff.set(LittleEndian, rel_offset);
+
+                    relocation_offsets.push(Relocation {
+                        offset: rel_offset,
+                        num_relocations: section.nreloc.get(NativeEndian),
+                    });
+                }
+
+                for Relocation {
+                    offset,
+                    num_relocations,
+                } in relocation_offsets
+                {
+                    let relos = load_structs_inplace_mut::<macho::Relocation<LittleEndian>>(
+                        &mut out_mmap,
+                        offset as usize,
+                        num_relocations as usize,
+                    );
+
+                    // TODO this has never been tested, because scattered relocations only come up on ARM!
+                    for relo in relos.iter_mut() {
+                        if relo.r_scattered(LittleEndian, cpu_type) {
+                            let mut scattered_info = relo.scattered_info(NativeEndian);
+
+                            if !scattered_info.r_pcrel {
+                                scattered_info.r_value += added_bytes as u32;
+
+                                let new_info = scattered_info.relocation(LittleEndian);
+
+                                relo.r_word0 = new_info.r_word0;
+                                relo.r_word1 = new_info.r_word1;
+                            }
+                        }
+                    }
+                }
             }
             macho::LC_SYMTAB => {
                 let cmd = load_struct_inplace_mut::<macho::SymtabCommand<LittleEndian>>(
@@ -1140,6 +1227,17 @@ fn gen_macho_le(
                     cmd.entryoff.get(NativeEndian) + added_bytes as u64,
                 );
             }
+            macho::LC_NOTE => {
+                let cmd = load_struct_inplace_mut::<macho::NoteCommand<LittleEndian>>(
+                    &mut out_mmap,
+                    offset,
+                );
+
+                cmd.offset.set(
+                    LittleEndian,
+                    cmd.offset.get(NativeEndian) + added_bytes as u64,
+                );
+            }
             macho::LC_ID_DYLIB
             | macho::LC_LOAD_WEAK_DYLIB
             | macho::LC_LOAD_DYLIB
@@ -1160,7 +1258,6 @@ fn gen_macho_le(
             | macho::LC_ROUTINES_64
             | macho::LC_THREAD
             | macho::LC_UNIXTHREAD
-            | macho::LC_NOTE
             | macho::LC_PREBOUND_DYLIB
             | macho::LC_SUB_FRAMEWORK
             | macho::LC_SUB_CLIENT
