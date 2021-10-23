@@ -88,6 +88,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_MAP3 => list_map3,
         LIST_DROP => list_drop,
         LIST_DROP_AT => list_drop_at,
+        LIST_DROP_LAST => list_drop_last,
         LIST_SWAP => list_swap,
         LIST_MAP_WITH_INDEX => list_map_with_index,
         LIST_KEEP_IF => list_keep_if,
@@ -2007,6 +2008,11 @@ fn list_drop_at(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// List.dropLast: List elem -> List elem
 fn list_drop_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
+    let index_var = var_store.fresh();
+    let arg_var = var_store.fresh();
+    let len_var = Variable::NAT;
+    let num_var = len_var;
+    let num_precision_var = Variable::NATURAL;
 
     let body = RunLowLevel {
         op: LowLevel::ListDropAt,
