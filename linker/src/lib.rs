@@ -1160,7 +1160,42 @@ fn gen_macho_le(
                 }
             }
             macho::LC_DYSYMTAB => {
-                // TODO
+                let cmd = load_struct_inplace_mut::<macho::DysymtabCommand<LittleEndian>>(
+                    &mut out_mmap,
+                    offset,
+                );
+
+                cmd.tocoff.set(
+                    LittleEndian,
+                    cmd.tocoff.get(NativeEndian) + added_bytes as u32,
+                );
+
+                cmd.modtaboff.set(
+                    LittleEndian,
+                    cmd.modtaboff.get(NativeEndian) + added_bytes as u32,
+                );
+
+                cmd.extrefsymoff.set(
+                    LittleEndian,
+                    cmd.extrefsymoff.get(NativeEndian) + added_bytes as u32,
+                );
+
+                cmd.indirectsymoff.set(
+                    LittleEndian,
+                    cmd.indirectsymoff.get(NativeEndian) + added_bytes as u32,
+                );
+
+                cmd.extreloff.set(
+                    LittleEndian,
+                    cmd.extreloff.get(NativeEndian) + added_bytes as u32,
+                );
+
+                cmd.locreloff.set(
+                    LittleEndian,
+                    cmd.locreloff.get(NativeEndian) + added_bytes as u32,
+                );
+
+                // TODO maybe we need to update something else too - relocations maybe?
             }
             macho::LC_TWOLEVEL_HINTS => {
                 let cmd = load_struct_inplace_mut::<macho::TwolevelHintsCommand<LittleEndian>>(
