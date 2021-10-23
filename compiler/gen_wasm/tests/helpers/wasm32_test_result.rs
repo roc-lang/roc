@@ -2,13 +2,13 @@ use parity_wasm::builder;
 use parity_wasm::builder::ModuleBuilder;
 
 use roc_gen_wasm::from_wasm32_memory::FromWasm32Memory;
-use roc_gen_wasm::function_builder::{Align, FunctionBuilder, ValueType};
+use roc_gen_wasm::code_builder::{Align, CodeBuilder, ValueType};
 use roc_std::{RocDec, RocList, RocOrder, RocStr};
 
 pub trait Wasm32TestResult {
     fn insert_test_wrapper(
         module_builder: &mut ModuleBuilder,
-        code_builder: &mut FunctionBuilder,
+        code_builder: &mut CodeBuilder,
         wrapper_name: &str,
         main_function_index: u32,
     ) {
@@ -26,7 +26,7 @@ pub trait Wasm32TestResult {
         self.build_wrapper_body(code_builder, main_function_index);
     }
 
-    fn build_wrapper_body(code_builder: &mut FunctionBuilder, main_function_index: u32);
+    fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32);
 }
 
 macro_rules! build_wrapper_body_primitive {
@@ -59,7 +59,7 @@ macro_rules! wasm_test_result_primitive {
 }
 
 fn build_wrapper_body_stack_memory(
-    code_builder: &mut FunctionBuilder,
+    code_builder: &mut CodeBuilder,
     main_function_index: u32,
     size: usize,
 ) -> Vec<Instruction> {

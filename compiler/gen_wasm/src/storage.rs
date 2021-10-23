@@ -4,7 +4,7 @@ use bumpalo::Bump;
 use roc_collections::all::MutMap;
 use roc_module::symbol::Symbol;
 
-use crate::function_builder::{FunctionBuilder, ValueType, VirtualMachineSymbolState};
+use crate::code_builder::{CodeBuilder, ValueType, VirtualMachineSymbolState};
 use crate::layout::WasmLayout;
 use crate::{copy_memory, round_up_to_alignment, CopyMemoryConfig, LocalId, PTR_SIZE, PTR_TYPE};
 
@@ -188,7 +188,7 @@ impl<'a> Storage<'a> {
     /// Load symbols to the top of the VM stack
     /// Avoid calling this method in a loop with one symbol at a time! It will work,
     /// but it generates very inefficient Wasm code.
-    pub fn load_symbols(&mut self, code_builder: &mut FunctionBuilder, symbols: &[Symbol]) {
+    pub fn load_symbols(&mut self, code_builder: &mut CodeBuilder, symbols: &[Symbol]) {
         if code_builder.verify_stack_match(symbols) {
             // The symbols were already at the top of the stack, do nothing!
             // This should be quite common due to the structure of the Mono IR
@@ -258,7 +258,7 @@ impl<'a> Storage<'a> {
     /// (defined by a pointer and offset).
     pub fn copy_value_to_memory(
         &mut self,
-        code_builder: &mut FunctionBuilder,
+        code_builder: &mut CodeBuilder,
         to_ptr: LocalId,
         to_offset: u32,
         from_symbol: Symbol,
@@ -291,7 +291,7 @@ impl<'a> Storage<'a> {
             | StoredValue::Local {
                 value_type, size, ..
             } => {
-                use crate::function_builder::Align::*;
+                use crate::code_builder::Align::*;
                 code_builder.get_local(to_ptr);
                 self.load_symbols(code_builder, &[from_symbol]);
                 match (value_type, size) {
@@ -314,7 +314,7 @@ impl<'a> Storage<'a> {
     /// Copies the _entire_ value. For struct fields etc., see `copy_value_to_memory`
     pub fn clone_value(
         &mut self,
-        code_builder: &mut FunctionBuilder,
+        code_builder: &mut CodeBuilder,
         to: &StoredValue,
         from: &StoredValue,
         from_symbol: Symbol,
@@ -402,7 +402,7 @@ impl<'a> Storage<'a> {
     /// (In the case of structs in stack memory, we just use the stack frame pointer local)
     pub fn ensure_value_has_local(
         &mut self,
-        code_builder: &mut FunctionBuilder,
+        code_builder: &mut CodeBuilder,
         symbol: Symbol,
         storage: StoredValue,
     ) -> StoredValue {

@@ -8,7 +8,7 @@ use roc_module::symbol::Symbol;
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
 use roc_mono::layout::{Builtin, Layout};
 
-use crate::function_builder::{BlockType, FunctionBuilder, ValueType};
+use crate::code_builder::{BlockType, CodeBuilder, ValueType};
 use crate::layout::WasmLayout;
 use crate::storage::{Storage, StoredValue, StoredValueKind};
 use crate::{copy_memory, CopyMemoryConfig, Env, LocalId, PTR_TYPE};
@@ -32,7 +32,7 @@ pub struct WasmBackend<'a> {
     proc_symbol_map: MutMap<Symbol, CodeLocation>,
 
     // Function level
-    code_builder: FunctionBuilder<'a>,
+    code_builder: CodeBuilder<'a>,
     storage: Storage<'a>,
 
     /// how many blocks deep are we (used for jumps)
@@ -56,7 +56,7 @@ impl<'a> WasmBackend<'a> {
             joinpoint_label_map: MutMap::default(),
 
             // Functions
-            code_builder: FunctionBuilder::new(env.arena),
+            code_builder: CodeBuilder::new(env.arena),
             storage: Storage::new(env.arena),
         }
     }

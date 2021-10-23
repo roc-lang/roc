@@ -4,7 +4,7 @@ mod layout;
 mod storage;
 
 #[allow(dead_code)]
-pub mod function_builder;
+pub mod code_builder;
 
 #[allow(dead_code)]
 mod opcodes;
@@ -20,7 +20,7 @@ use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::LayoutIds;
 
 use crate::backend::WasmBackend;
-use crate::function_builder::{Align, FunctionBuilder, ValueType};
+use crate::code_builder::{Align, CodeBuilder, ValueType};
 
 const PTR_SIZE: u32 = 4;
 const PTR_TYPE: ValueType = ValueType::I32;
@@ -134,7 +134,7 @@ pub struct CopyMemoryConfig {
     alignment_bytes: u32,
 }
 
-pub fn copy_memory(code_builder: &mut FunctionBuilder, config: CopyMemoryConfig) {
+pub fn copy_memory(code_builder: &mut CodeBuilder, config: CopyMemoryConfig) {
     if config.from_ptr == config.to_ptr && config.from_offset == config.to_offset {
         return;
     }

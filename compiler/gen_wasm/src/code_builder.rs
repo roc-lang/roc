@@ -100,7 +100,7 @@ macro_rules! instruction_memargs {
 }
 
 #[derive(Debug)]
-pub struct FunctionBuilder<'a> {
+pub struct CodeBuilder<'a> {
     /// The main container for the instructions
     code: Vec<'a, u8>,
 
@@ -128,9 +128,9 @@ pub struct FunctionBuilder<'a> {
 }
 
 #[allow(clippy::new_without_default)]
-impl<'a> FunctionBuilder<'a> {
+impl<'a> CodeBuilder<'a> {
     pub fn new(arena: &'a Bump) -> Self {
-        FunctionBuilder {
+        CodeBuilder {
             code: Vec::with_capacity_in(1024, arena),
             insertions: Vec::with_capacity_in(32, arena),
             insertions_byte_len: 0,
