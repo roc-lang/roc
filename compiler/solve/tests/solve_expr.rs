@@ -3306,6 +3306,18 @@ mod solve_expr {
     }
 
     #[test]
+    fn div_ceil() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.divCeil
+                "#
+            ),
+            "Int a, Int a -> Result (Int a) [ DivByZero ]*",
+        );
+    }
+
+    #[test]
     fn pow_int() {
         infer_eq_without_problem(
             indoc!(
@@ -3396,7 +3408,7 @@ mod solve_expr {
                 cheapestOpen : Model position -> Result position [ KeyNotFound ]*
                 cheapestOpen = \model ->
 
-                    folder = \position, resSmallestSoFar ->
+                    folder = \resSmallestSoFar, position ->
                                     when resSmallestSoFar is
                                         Err _ -> resSmallestSoFar
                                         Ok smallestSoFar ->
@@ -3405,7 +3417,7 @@ mod solve_expr {
                                             else
                                                 Ok { position, cost: 0.0 }
 
-                    Set.walk model.openSet folder (Ok { position: boom {}, cost: 0.0 })
+                    Set.walk model.openSet (Ok { position: boom {}, cost: 0.0 }) folder
                         |> Result.map (\x -> x.position)
 
                 astar : Model position -> Result position [ KeyNotFound ]*
@@ -3689,7 +3701,7 @@ mod solve_expr {
                 List.walkBackwards
                 "#
             ),
-            "List a, (a, b -> b), b -> b",
+            "List a, b, (b, a -> b) -> b",
         );
     }
 
@@ -3702,7 +3714,7 @@ mod solve_expr {
                 empty =
                     []
 
-                List.walkBackwards empty (\a, b -> a + b) 0
+                List.walkBackwards empty 0 (\a, b -> a + b)
                 "#
             ),
             "I64",

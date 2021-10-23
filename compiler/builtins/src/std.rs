@@ -293,14 +293,21 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // minInt : Int range
     add_type!(Symbol::NUM_MIN_INT, int_type(flex(TVAR1)));
 
-    // divInt : Int a, Int a -> Result (Int a) [ DivByZero ]*
     let div_by_zero = SolvedType::TagUnion(
         vec![(TagName::Global("DivByZero".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
 
+    // divInt : Int a, Int a -> Result (Int a) [ DivByZero ]*
     add_top_level_function_type!(
         Symbol::NUM_DIV_INT,
+        vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+        Box::new(result_type(int_type(flex(TVAR1)), div_by_zero.clone())),
+    );
+
+    //divCeil: Int a, Int a -> Result (Int a) [ DivByZero ]*
+    add_top_level_function_type!(
+        Symbol::NUM_DIV_CEIL,
         vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
         Box::new(result_type(int_type(flex(TVAR1)), div_by_zero.clone())),
     );
@@ -753,24 +760,24 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(num_type(flex(TVAR1))),
     );
 
-    // walk : List elem, (elem -> accum -> accum), accum -> accum
+    // walk : List elem, state, (state, elem -> state) -> state
     add_top_level_function_type!(
         Symbol::LIST_WALK,
         vec![
             list_type(flex(TVAR1)),
-            closure(vec![flex(TVAR1), flex(TVAR2)], TVAR3, Box::new(flex(TVAR2))),
             flex(TVAR2),
+            closure(vec![flex(TVAR2), flex(TVAR1)], TVAR3, Box::new(flex(TVAR2))),
         ],
         Box::new(flex(TVAR2)),
     );
 
-    // walkBackwards : List elem, (elem -> accum -> accum), accum -> accum
+    // walkBackwards : List elem, state, (state, elem -> state) -> state
     add_top_level_function_type!(
         Symbol::LIST_WALK_BACKWARDS,
         vec![
             list_type(flex(TVAR1)),
-            closure(vec![flex(TVAR1), flex(TVAR2)], TVAR3, Box::new(flex(TVAR2))),
             flex(TVAR2),
+            closure(vec![flex(TVAR2), flex(TVAR1)], TVAR3, Box::new(flex(TVAR2))),
         ],
         Box::new(flex(TVAR2)),
     );
@@ -786,17 +793,17 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     }
 
-    // walkUntil : List elem, (elem -> accum -> [ Continue accum, Stop accum ]), accum -> accum
+    // walkUntil : List elem, state, (state, elem -> [ Continue state, Stop state ]) -> state
     add_top_level_function_type!(
         Symbol::LIST_WALK_UNTIL,
         vec![
             list_type(flex(TVAR1)),
+            flex(TVAR2),
             closure(
-                vec![flex(TVAR1), flex(TVAR2)],
+                vec![flex(TVAR2), flex(TVAR1)],
                 TVAR3,
                 Box::new(until_type(flex(TVAR2))),
             ),
-            flex(TVAR2),
         ],
         Box::new(flex(TVAR2)),
     );
@@ -1104,17 +1111,17 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(dict_type(flex(TVAR1), flex(TVAR2))),
     );
 
-    // Dict.walk : Dict k v, (k, v, accum -> accum), accum -> accum
+    // Dict.walk : Dict k v, state, (state, k, v -> state) -> state
     add_top_level_function_type!(
         Symbol::DICT_WALK,
         vec![
             dict_type(flex(TVAR1), flex(TVAR2)),
+            flex(TVAR3),
             closure(
-                vec![flex(TVAR1), flex(TVAR2), flex(TVAR3)],
+                vec![flex(TVAR3), flex(TVAR1), flex(TVAR2)],
                 TVAR4,
                 Box::new(flex(TVAR3)),
             ),
-            flex(TVAR3),
         ],
         Box::new(flex(TVAR3)),
     );
@@ -1173,13 +1180,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(set_type(flex(TVAR1))),
     );
 
-    // Set.walk : Set a, (a, b -> b), b -> b
+    // Set.walk : Set a, (b, a -> b), b -> b
     add_top_level_function_type!(
         Symbol::SET_WALK,
         vec![
             set_type(flex(TVAR1)),
-            closure(vec![flex(TVAR1), flex(TVAR2)], TVAR3, Box::new(flex(TVAR2))),
             flex(TVAR2),
+            closure(vec![flex(TVAR2), flex(TVAR1)], TVAR3, Box::new(flex(TVAR2))),
         ],
         Box::new(flex(TVAR2)),
     );

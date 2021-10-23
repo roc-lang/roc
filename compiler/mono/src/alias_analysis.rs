@@ -611,200 +611,178 @@ fn call_spec(
             op,
             arg_layouts,
             ret_layout,
+            function_name,
+            function_env,
             ..
         } => {
             let array = specialization_id.to_bytes();
             let spec_var = CalleeSpecVar(&array);
 
-            let symbol = {
-                use roc_module::low_level::LowLevel::*;
-
-                match op {
-                    ListMap | ListMapWithIndex => call.arguments[1],
-                    ListMap2 => call.arguments[2],
-                    ListMap3 => call.arguments[3],
-                    ListWalk | ListWalkUntil | ListWalkBackwards | DictWalk => call.arguments[2],
-                    ListKeepIf | ListKeepOks | ListKeepErrs => call.arguments[1],
-                    ListSortWith => call.arguments[1],
-                    _ => unreachable!(),
-                }
-            };
-
             let it = arg_layouts.iter().copied();
-            let bytes = func_name_bytes_help(symbol, it, *ret_layout);
+            let bytes = func_name_bytes_help(*function_name, it, *ret_layout);
             let name = FuncName(&bytes);
             let module = MOD_APP;
 
-            {
-                use roc_module::low_level::LowLevel::*;
+            use crate::low_level::HigherOrder::*;
 
-                match op {
-                    DictWalk => {
-                        let dict = env.symbols[&call.arguments[0]];
-                        let default = env.symbols[&call.arguments[1]];
-                        let closure_env = env.symbols[&call.arguments[3]];
+            match op {
+                DictWalk { xs, state } => {
+                    let dict = env.symbols[xs];
+                    let state = env.symbols[state];
+                    let closure_env = env.symbols[function_env];
 
-                        let bag = builder.add_get_tuple_field(block, dict, DICT_BAG_INDEX)?;
-                        let _cell = builder.add_get_tuple_field(block, dict, DICT_CELL_INDEX)?;
+                    let bag = builder.add_get_tuple_field(block, dict, DICT_BAG_INDEX)?;
+                    let _cell = builder.add_get_tuple_field(block, dict, DICT_CELL_INDEX)?;
 
-                        let first = builder.add_bag_get(block, bag)?;
+                    let first = builder.add_bag_get(block, bag)?;
 
-                        let key = builder.add_get_tuple_field(block, first, 0)?;
-                        let val = builder.add_get_tuple_field(block, first, 1)?;
+                    let key = builder.add_get_tuple_field(block, first, 0)?;
+                    let val = builder.add_get_tuple_field(block, first, 1)?;
 
-                        let argument = if closure_env_layout.is_none() {
-                            builder.add_make_tuple(block, &[key, val, default])?
-                        } else {
-                            builder.add_make_tuple(block, &[key, val, default, closure_env])?
-                        };
-                        builder.add_call(block, spec_var, module, name, argument)?;
-                    }
+                    let argument = if closure_env_layout.is_none() {
+                        builder.add_make_tuple(block, &[state, key, val])?
+                    } else {
+                        builder.add_make_tuple(block, &[state, key, val, closure_env])?
+                    };
+                    builder.add_call(block, spec_var, module, name, argument)?;
+                }
 
-                    ListWalk | ListWalkBackwards | ListWalkUntil => {
-                        let list = env.symbols[&call.arguments[0]];
-                        let default = env.symbols[&call.arguments[1]];
-                        let closure_env = env.symbols[&call.arguments[3]];
+                ListWalk { xs, state }
+                | ListWalkBackwards { xs, state }
+                | ListWalkUntil { xs, state } => {
+                    let list = env.symbols[xs];
+                    let state = env.symbols[state];
+                    let closure_env = env.symbols[function_env];
 
-                        let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
-                        let _cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
+                    let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
+                    let _cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
 
-                        let first = builder.add_bag_get(block, bag)?;
+                    let first = builder.add_bag_get(block, bag)?;
 
-                        let argument = if closure_env_layout.is_none() {
-                            builder.add_make_tuple(block, &[first, default])?
-                        } else {
-                            builder.add_make_tuple(block, &[first, default, closure_env])?
-                        };
-                        builder.add_call(block, spec_var, module, name, argument)?;
-                    }
+                    let argument = if closure_env_layout.is_none() {
+                        builder.add_make_tuple(block, &[state, first])?
+                    } else {
+                        builder.add_make_tuple(block, &[state, first, closure_env])?
+                    };
+                    builder.add_call(block, spec_var, module, name, argument)?;
+                }
 
-                    ListMapWithIndex => {
-                        let list = env.symbols[&call.arguments[0]];
-                        let closure_env = env.symbols[&call.arguments[2]];
+                ListMapWithIndex { xs } => {
+                    let list = env.symbols[xs];
+                    let closure_env = env.symbols[function_env];
 
-                        let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
-                        let _cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
+                    let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
+                    let _cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
 
-                        let first = builder.add_bag_get(block, bag)?;
-                        let index = builder.add_make_tuple(block, &[])?;
+                    let first = builder.add_bag_get(block, bag)?;
+                    let index = builder.add_make_tuple(block, &[])?;
 
-                        let argument = if closure_env_layout.is_none() {
-                            builder.add_make_tuple(block, &[index, first])?
-                        } else {
-                            builder.add_make_tuple(block, &[index, first, closure_env])?
-                        };
-                        builder.add_call(block, spec_var, module, name, argument)?;
-                    }
+                    let argument = if closure_env_layout.is_none() {
+                        builder.add_make_tuple(block, &[index, first])?
+                    } else {
+                        builder.add_make_tuple(block, &[index, first, closure_env])?
+                    };
+                    builder.add_call(block, spec_var, module, name, argument)?;
+                }
 
-                    ListMap => {
-                        let list1 = env.symbols[&call.arguments[0]];
-                        let closure_env = env.symbols[&call.arguments[2]];
+                ListMap { xs } => {
+                    let list = env.symbols[xs];
+                    let closure_env = env.symbols[function_env];
 
-                        let bag1 = builder.add_get_tuple_field(block, list1, LIST_BAG_INDEX)?;
-                        let _cell1 = builder.add_get_tuple_field(block, list1, LIST_CELL_INDEX)?;
+                    let bag1 = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
+                    let _cell1 = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
 
-                        let elem1 = builder.add_bag_get(block, bag1)?;
+                    let elem1 = builder.add_bag_get(block, bag1)?;
 
-                        let argument = if closure_env_layout.is_none() {
-                            builder.add_make_tuple(block, &[elem1])?
-                        } else {
-                            builder.add_make_tuple(block, &[elem1, closure_env])?
-                        };
-                        builder.add_call(block, spec_var, module, name, argument)?;
-                    }
+                    let argument = if closure_env_layout.is_none() {
+                        builder.add_make_tuple(block, &[elem1])?
+                    } else {
+                        builder.add_make_tuple(block, &[elem1, closure_env])?
+                    };
+                    builder.add_call(block, spec_var, module, name, argument)?;
+                }
 
-                    ListSortWith => {
-                        let list1 = env.symbols[&call.arguments[0]];
-                        let closure_env = env.symbols[&call.arguments[2]];
+                ListSortWith { xs } => {
+                    let list = env.symbols[xs];
+                    let closure_env = env.symbols[function_env];
 
-                        let bag1 = builder.add_get_tuple_field(block, list1, LIST_BAG_INDEX)?;
-                        let _cell1 = builder.add_get_tuple_field(block, list1, LIST_CELL_INDEX)?;
+                    let bag1 = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
+                    let _cell1 = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
 
-                        let elem1 = builder.add_bag_get(block, bag1)?;
+                    let elem1 = builder.add_bag_get(block, bag1)?;
 
-                        let argument = if closure_env_layout.is_none() {
-                            builder.add_make_tuple(block, &[elem1, elem1])?
-                        } else {
-                            builder.add_make_tuple(block, &[elem1, elem1, closure_env])?
-                        };
-                        builder.add_call(block, spec_var, module, name, argument)?;
-                    }
+                    let argument = if closure_env_layout.is_none() {
+                        builder.add_make_tuple(block, &[elem1, elem1])?
+                    } else {
+                        builder.add_make_tuple(block, &[elem1, elem1, closure_env])?
+                    };
+                    builder.add_call(block, spec_var, module, name, argument)?;
+                }
 
-                    ListMap2 => {
-                        let list1 = env.symbols[&call.arguments[0]];
-                        let list2 = env.symbols[&call.arguments[1]];
-                        let closure_env = env.symbols[&call.arguments[3]];
+                ListMap2 { xs, ys } => {
+                    let list1 = env.symbols[xs];
+                    let list2 = env.symbols[ys];
+                    let closure_env = env.symbols[function_env];
 
-                        let bag1 = builder.add_get_tuple_field(block, list1, LIST_BAG_INDEX)?;
-                        let _cell1 = builder.add_get_tuple_field(block, list1, LIST_CELL_INDEX)?;
-                        let elem1 = builder.add_bag_get(block, bag1)?;
+                    let bag1 = builder.add_get_tuple_field(block, list1, LIST_BAG_INDEX)?;
+                    let _cell1 = builder.add_get_tuple_field(block, list1, LIST_CELL_INDEX)?;
+                    let elem1 = builder.add_bag_get(block, bag1)?;
 
-                        let bag2 = builder.add_get_tuple_field(block, list2, LIST_BAG_INDEX)?;
-                        let _cell2 = builder.add_get_tuple_field(block, list2, LIST_CELL_INDEX)?;
-                        let elem2 = builder.add_bag_get(block, bag2)?;
+                    let bag2 = builder.add_get_tuple_field(block, list2, LIST_BAG_INDEX)?;
+                    let _cell2 = builder.add_get_tuple_field(block, list2, LIST_CELL_INDEX)?;
+                    let elem2 = builder.add_bag_get(block, bag2)?;
 
-                        let argument = if closure_env_layout.is_none() {
-                            builder.add_make_tuple(block, &[elem1, elem2])?
-                        } else {
-                            builder.add_make_tuple(block, &[elem1, elem2, closure_env])?
-                        };
-                        builder.add_call(block, spec_var, module, name, argument)?;
-                    }
+                    let argument = if closure_env_layout.is_none() {
+                        builder.add_make_tuple(block, &[elem1, elem2])?
+                    } else {
+                        builder.add_make_tuple(block, &[elem1, elem2, closure_env])?
+                    };
+                    builder.add_call(block, spec_var, module, name, argument)?;
+                }
 
-                    ListMap3 => {
-                        let list1 = env.symbols[&call.arguments[0]];
-                        let list2 = env.symbols[&call.arguments[1]];
-                        let list3 = env.symbols[&call.arguments[2]];
-                        let closure_env = env.symbols[&call.arguments[4]];
+                ListMap3 { xs, ys, zs } => {
+                    let list1 = env.symbols[xs];
+                    let list2 = env.symbols[ys];
+                    let list3 = env.symbols[zs];
+                    let closure_env = env.symbols[function_env];
 
-                        let bag1 = builder.add_get_tuple_field(block, list1, LIST_BAG_INDEX)?;
-                        let _cell1 = builder.add_get_tuple_field(block, list1, LIST_CELL_INDEX)?;
-                        let elem1 = builder.add_bag_get(block, bag1)?;
+                    let bag1 = builder.add_get_tuple_field(block, list1, LIST_BAG_INDEX)?;
+                    let _cell1 = builder.add_get_tuple_field(block, list1, LIST_CELL_INDEX)?;
+                    let elem1 = builder.add_bag_get(block, bag1)?;
 
-                        let bag2 = builder.add_get_tuple_field(block, list2, LIST_BAG_INDEX)?;
-                        let _cell2 = builder.add_get_tuple_field(block, list2, LIST_CELL_INDEX)?;
-                        let elem2 = builder.add_bag_get(block, bag2)?;
+                    let bag2 = builder.add_get_tuple_field(block, list2, LIST_BAG_INDEX)?;
+                    let _cell2 = builder.add_get_tuple_field(block, list2, LIST_CELL_INDEX)?;
+                    let elem2 = builder.add_bag_get(block, bag2)?;
 
-                        let bag3 = builder.add_get_tuple_field(block, list3, LIST_BAG_INDEX)?;
-                        let _cell3 = builder.add_get_tuple_field(block, list3, LIST_CELL_INDEX)?;
-                        let elem3 = builder.add_bag_get(block, bag3)?;
+                    let bag3 = builder.add_get_tuple_field(block, list3, LIST_BAG_INDEX)?;
+                    let _cell3 = builder.add_get_tuple_field(block, list3, LIST_CELL_INDEX)?;
+                    let elem3 = builder.add_bag_get(block, bag3)?;
 
-                        let argument = if closure_env_layout.is_none() {
-                            builder.add_make_tuple(block, &[elem1, elem2, elem3])?
-                        } else {
-                            builder.add_make_tuple(block, &[elem1, elem2, elem3, closure_env])?
-                        };
-                        builder.add_call(block, spec_var, module, name, argument)?;
-                    }
+                    let argument = if closure_env_layout.is_none() {
+                        builder.add_make_tuple(block, &[elem1, elem2, elem3])?
+                    } else {
+                        builder.add_make_tuple(block, &[elem1, elem2, elem3, closure_env])?
+                    };
+                    builder.add_call(block, spec_var, module, name, argument)?;
+                }
 
-                    ListKeepIf | ListKeepOks | ListKeepErrs => {
-                        let list = env.symbols[&call.arguments[0]];
-                        let closure_env = env.symbols[&call.arguments[2]];
+                ListKeepIf { xs } | ListKeepOks { xs } | ListKeepErrs { xs } => {
+                    let list = env.symbols[xs];
+                    let closure_env = env.symbols[function_env];
 
-                        let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
-                        // let _cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
+                    let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
+                    // let _cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
 
-                        let first = builder.add_bag_get(block, bag)?;
+                    let first = builder.add_bag_get(block, bag)?;
 
-                        let argument = if closure_env_layout.is_none() {
-                            builder.add_make_tuple(block, &[first])?
-                        } else {
-                            builder.add_make_tuple(block, &[first, closure_env])?
-                        };
-                        let result = builder.add_call(block, spec_var, module, name, argument)?;
-                        let unit = builder.add_tuple_type(&[])?;
-                        builder.add_unknown_with(block, &[result], unit)?;
-                    }
-
-                    _ => {
-                        // fake a call to the function argument
-                        // to make sure the function is specialized
-
-                        // very invalid
-                        let arg_value_id = build_tuple_value(builder, env, block, &[])?;
-
-                        builder.add_call(block, spec_var, module, name, arg_value_id)?;
-                    }
+                    let argument = if closure_env_layout.is_none() {
+                        builder.add_make_tuple(block, &[first])?
+                    } else {
+                        builder.add_make_tuple(block, &[first, closure_env])?
+                    };
+                    let result = builder.add_call(block, spec_var, module, name, argument)?;
+                    let unit = builder.add_tuple_type(&[])?;
+                    builder.add_unknown_with(block, &[result], unit)?;
                 }
             }
 

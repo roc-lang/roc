@@ -143,6 +143,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_TAN => num_tan,
         NUM_DIV_FLOAT => num_div_float,
         NUM_DIV_INT => num_div_int,
+        NUM_DIV_CEIL => num_div_ceil,
         NUM_ABS => num_abs,
         NUM_NEG => num_neg,
         NUM_REM => num_rem,
@@ -2069,17 +2070,17 @@ fn list_join(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// List.walk : List elem, (elem -> accum -> accum), accum -> accum
+/// List.walk : List elem, state, (state, elem -> state) -> state
 fn list_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_3(symbol, LowLevel::ListWalk, var_store)
 }
 
-/// List.walkBackwards : List elem, (elem -> accum -> accum), accum -> accum
+/// List.walkBackwards : List elem, state, (state, elem -> state) -> state
 fn list_walk_backwards(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_3(symbol, LowLevel::ListWalkBackwards, var_store)
 }
 
-/// List.walkUntil : List elem, (elem, accum -> [ Continue accum, Stop accum ]), accum -> accum
+/// List.walkUntil : List elem, state, (state, elem -> [ Continue state, Stop state ]) -> state
 fn list_walk_until(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_3(symbol, LowLevel::ListWalkUntil, var_store)
 }
@@ -2095,8 +2096,8 @@ fn list_sum(symbol: Symbol, var_store: &mut VarStore) -> Def {
         op: LowLevel::ListWalk,
         args: vec![
             (list_var, Var(Symbol::ARG_1)),
-            (closure_var, list_sum_add(num_var, var_store)),
             (num_var, num(var_store.fresh(), 0)),
+            (closure_var, list_sum_add(num_var, var_store)),
         ],
         ret_var,
     };
@@ -2137,8 +2138,8 @@ fn list_product(symbol: Symbol, var_store: &mut VarStore) -> Def {
         op: LowLevel::ListWalk,
         args: vec![
             (list_var, Var(Symbol::ARG_1)),
-            (closure_var, list_product_mul(num_var, var_store)),
             (num_var, num(var_store.fresh(), 1)),
+            (closure_var, list_product_mul(num_var, var_store)),
         ],
         ret_var,
     };
@@ -2431,7 +2432,7 @@ fn dict_intersection(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::DictIntersection, var_store)
 }
 
-/// Dict.walk : Dict k v, (k, v, accum -> accum), accum -> accum
+/// Dict.walk : Dict k v, state, (state, k, v -> state) -> state
 fn dict_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_3(symbol, LowLevel::DictWalk, var_store)
 }
@@ -2550,7 +2551,7 @@ fn set_contains(symbol: Symbol, var_store: &mut VarStore) -> Def {
     dict_contains(symbol, var_store)
 }
 
-/// Set.walk : Set k,  (k, accum -> accum), accum -> accum
+/// Set.walk : Set k,  (accum, k -> accum), accum -> accum
 fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let dict_var = var_store.fresh();
     let func_var = var_store.fresh();
@@ -2560,7 +2561,7 @@ fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     let user_function = Box::new((
         func_var,
-        no_region(Var(Symbol::ARG_2)),
+        no_region(Var(Symbol::ARG_3)),
         var_store.fresh(),
         accum_var,
     ));
@@ -2568,8 +2569,8 @@ fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let call_func = Call(
         user_function,
         vec![
-            (key_var, no_region(Var(Symbol::ARG_5))),
-            (accum_var, no_region(Var(Symbol::ARG_6))),
+            (accum_var, no_region(Var(Symbol::ARG_5))),
+            (key_var, no_region(Var(Symbol::ARG_6))),
         ],
         CalledVia::Space,
     );
@@ -2581,11 +2582,11 @@ fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
         return_type: accum_var,
         name: Symbol::SET_WALK_USER_FUNCTION,
         recursive: Recursive::NotRecursive,
-        captured_symbols: vec![(Symbol::ARG_2, func_var)],
+        captured_symbols: vec![(Symbol::ARG_3, func_var)],
         arguments: vec![
-            (key_var, no_region(Pattern::Identifier(Symbol::ARG_5))),
+            (accum_var, no_region(Pattern::Identifier(Symbol::ARG_5))),
+            (key_var, no_region(Pattern::Identifier(Symbol::ARG_6))),
             (Variable::EMPTY_RECORD, no_region(Pattern::Underscore)),
-            (accum_var, no_region(Pattern::Identifier(Symbol::ARG_6))),
         ],
         loc_body: Box::new(no_region(call_func)),
     };
@@ -2594,8 +2595,8 @@ fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
         op: LowLevel::DictWalk,
         args: vec![
             (dict_var, Var(Symbol::ARG_1)),
+            (accum_var, Var(Symbol::ARG_2)),
             (wrapper_var, wrapper),
-            (accum_var, Var(Symbol::ARG_3)),
         ],
         ret_var: accum_var,
     };
@@ -2604,8 +2605,8 @@ fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
         symbol,
         vec![
             (dict_var, Symbol::ARG_1),
-            (func_var, Symbol::ARG_2),
-            (accum_var, Symbol::ARG_3),
+            (accum_var, Symbol::ARG_2),
+            (func_var, Symbol::ARG_3),
         ],
         var_store,
         body,
@@ -2814,6 +2815,72 @@ fn num_div_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
                         // Num.#divUnchecked numerator denominator
                         RunLowLevel {
                             op: LowLevel::NumDivUnchecked,
+                            args: vec![
+                                (num_var, Var(Symbol::ARG_1)),
+                                (num_var, Var(Symbol::ARG_2)),
+                            ],
+                            ret_var: num_var,
+                        },
+                    ],
+                    var_store,
+                ),
+            ),
+        )],
+        final_else: Box::new(
+            // denominator was zero
+            no_region(tag(
+                "Err",
+                vec![tag("DivByZero", Vec::new(), var_store)],
+                var_store,
+            )),
+        ),
+    };
+
+    defn(
+        symbol,
+        vec![(num_var, Symbol::ARG_1), (num_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
+/// Num.divCeil : Int a , Int a -> Result (Int a) [ DivByZero ]*
+fn num_div_ceil(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let bool_var = var_store.fresh();
+    let num_var = var_store.fresh();
+    let unbound_zero_var = var_store.fresh();
+    let unbound_zero_precision_var = var_store.fresh();
+    let ret_var = var_store.fresh();
+
+    let body = If {
+        branch_var: ret_var,
+        cond_var: bool_var,
+        branches: vec![(
+            // if-condition
+            no_region(
+                // Num.neq denominator 0
+                RunLowLevel {
+                    op: LowLevel::NotEq,
+                    args: vec![
+                        (num_var, Var(Symbol::ARG_2)),
+                        (
+                            num_var,
+                            int(unbound_zero_var, unbound_zero_precision_var, 0),
+                        ),
+                    ],
+                    ret_var: bool_var,
+                },
+            ),
+            // denominator was not zero
+            no_region(
+                // Ok (Int.#divUnchecked numerator denominator)
+                tag(
+                    "Ok",
+                    vec![
+                        // Num.#divUnchecked numerator denominator
+                        RunLowLevel {
+                            op: LowLevel::NumDivCeilUnchecked,
                             args: vec![
                                 (num_var, Var(Symbol::ARG_1)),
                                 (num_var, Var(Symbol::ARG_2)),

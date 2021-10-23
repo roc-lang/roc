@@ -174,8 +174,11 @@ pub fn build_selection_graphics(
                     text: selected_expr.type_str.as_str(pool),
                 };
 
-                let (tip_rect, tip_text) =
-                    tooltip.render_tooltip(&glyph_dim_rect, &config.ed_theme.ui_theme);
+                let (tip_rect, tip_text) = tooltip.render_tooltip(
+                    &glyph_dim_rect,
+                    &config.ed_theme.ui_theme,
+                    config.code_font_size,
+                );
 
                 all_rendered.add_rect_front(tip_rect);
                 all_rendered.add_text_front(tip_text);

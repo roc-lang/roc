@@ -469,8 +469,13 @@ impl<'a> Context<'a> {
                 specialization_id,
                 arg_layouts,
                 ret_layout,
+                function_name,
+                function_env,
                 ..
             } => {
+                // setup
+                use crate::low_level::HigherOrder::*;
+
                 macro_rules! create_call {
                     ($borrows:expr) => {
                         Expr::Call(crate::ir::Call {
@@ -480,6 +485,8 @@ impl<'a> Context<'a> {
                                     closure_env_layout: *closure_env_layout,
                                     function_owns_closure_data: true,
                                     specialization_id: *specialization_id,
+                                    function_name: *function_name,
+                                    function_env: *function_env,
                                     arg_layouts,
                                     ret_layout: *ret_layout,
                                 }
@@ -512,167 +519,101 @@ impl<'a> Context<'a> {
                     result: *ret_layout,
                 };
 
+                let function_ps = match self.param_map.get_symbol(*function_name, function_layout) {
+                    Some(function_ps) => function_ps,
+                    None => unreachable!(),
+                };
+
                 match op {
-                    roc_module::low_level::LowLevel::ListMap
-                    | roc_module::low_level::LowLevel::ListKeepIf
-                    | roc_module::low_level::LowLevel::ListKeepOks
-                    | roc_module::low_level::LowLevel::ListKeepErrs => {
-                        match self.param_map.get_symbol(arguments[1], function_layout) {
-                            Some(function_ps) => {
-                                let borrows = [function_ps[0].borrow, FUNCTION, CLOSURE_DATA];
+                    ListMap { xs }
+                    | ListKeepIf { xs }
+                    | ListKeepOks { xs }
+                    | ListKeepErrs { xs } => {
+                        let borrows = [function_ps[0].borrow, FUNCTION, CLOSURE_DATA];
 
-                                let b = self.add_dec_after_lowlevel(
-                                    arguments,
-                                    &borrows,
-                                    b,
-                                    b_live_vars,
-                                );
+                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
 
-                                // if the list is owned, then all elements have been consumed, but not the list itself
-                                let b = decref_if_owned!(function_ps[0].borrow, arguments[0], b);
+                        // if the list is owned, then all elements have been consumed, but not the list itself
+                        let b = decref_if_owned!(function_ps[0].borrow, *xs, b);
 
-                                let v = create_call!(function_ps.get(1));
+                        let v = create_call!(function_ps.get(1));
 
-                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
-                            }
-                            None => unreachable!(),
-                        }
+                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
                     }
-                    roc_module::low_level::LowLevel::ListMapWithIndex => {
-                        match self.param_map.get_symbol(arguments[1], function_layout) {
-                            Some(function_ps) => {
-                                let borrows = [function_ps[1].borrow, FUNCTION, CLOSURE_DATA];
+                    ListMap2 { xs, ys } => {
+                        let borrows = [
+                            function_ps[0].borrow,
+                            function_ps[1].borrow,
+                            FUNCTION,
+                            CLOSURE_DATA,
+                        ];
 
-                                let b = self.add_dec_after_lowlevel(
-                                    arguments,
-                                    &borrows,
-                                    b,
-                                    b_live_vars,
-                                );
+                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
 
-                                let b = decref_if_owned!(function_ps[1].borrow, arguments[0], b);
+                        let b = decref_if_owned!(function_ps[0].borrow, *xs, b);
+                        let b = decref_if_owned!(function_ps[1].borrow, *ys, b);
 
-                                let v = create_call!(function_ps.get(2));
+                        let v = create_call!(function_ps.get(2));
 
-                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
-                            }
-                            None => unreachable!(),
-                        }
+                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
                     }
-                    roc_module::low_level::LowLevel::ListMap2 => {
-                        match self.param_map.get_symbol(arguments[2], function_layout) {
-                            Some(function_ps) => {
-                                let borrows = [
-                                    function_ps[0].borrow,
-                                    function_ps[1].borrow,
-                                    FUNCTION,
-                                    CLOSURE_DATA,
-                                ];
+                    ListMap3 { xs, ys, zs } => {
+                        let borrows = [
+                            function_ps[0].borrow,
+                            function_ps[1].borrow,
+                            function_ps[2].borrow,
+                            FUNCTION,
+                            CLOSURE_DATA,
+                        ];
 
-                                let b = self.add_dec_after_lowlevel(
-                                    arguments,
-                                    &borrows,
-                                    b,
-                                    b_live_vars,
-                                );
+                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
 
-                                let b = decref_if_owned!(function_ps[0].borrow, arguments[0], b);
-                                let b = decref_if_owned!(function_ps[1].borrow, arguments[1], b);
+                        let b = decref_if_owned!(function_ps[0].borrow, *xs, b);
+                        let b = decref_if_owned!(function_ps[1].borrow, *ys, b);
+                        let b = decref_if_owned!(function_ps[2].borrow, *zs, b);
 
-                                let v = create_call!(function_ps.get(2));
+                        let v = create_call!(function_ps.get(3));
 
-                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
-                            }
-                            None => unreachable!(),
-                        }
+                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
                     }
-                    roc_module::low_level::LowLevel::ListMap3 => {
-                        match self.param_map.get_symbol(arguments[3], function_layout) {
-                            Some(function_ps) => {
-                                let borrows = [
-                                    function_ps[0].borrow,
-                                    function_ps[1].borrow,
-                                    function_ps[2].borrow,
-                                    FUNCTION,
-                                    CLOSURE_DATA,
-                                ];
+                    ListMapWithIndex { xs } => {
+                        let borrows = [function_ps[1].borrow, FUNCTION, CLOSURE_DATA];
 
-                                let b = self.add_dec_after_lowlevel(
-                                    arguments,
-                                    &borrows,
-                                    b,
-                                    b_live_vars,
-                                );
+                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
 
-                                let b = decref_if_owned!(function_ps[0].borrow, arguments[0], b);
-                                let b = decref_if_owned!(function_ps[1].borrow, arguments[1], b);
-                                let b = decref_if_owned!(function_ps[2].borrow, arguments[2], b);
+                        let b = decref_if_owned!(function_ps[1].borrow, *xs, b);
 
-                                let v = create_call!(function_ps.get(3));
+                        let v = create_call!(function_ps.get(2));
 
-                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
-                            }
-                            None => unreachable!(),
-                        }
+                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
                     }
-                    roc_module::low_level::LowLevel::ListSortWith => {
-                        match self.param_map.get_symbol(arguments[1], function_layout) {
-                            Some(function_ps) => {
-                                let borrows = [OWNED, FUNCTION, CLOSURE_DATA];
+                    ListSortWith { xs: _ } => {
+                        let borrows = [OWNED, FUNCTION, CLOSURE_DATA];
 
-                                let b = self.add_dec_after_lowlevel(
-                                    arguments,
-                                    &borrows,
-                                    b,
-                                    b_live_vars,
-                                );
+                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
 
-                                let v = create_call!(function_ps.get(2));
+                        let v = create_call!(function_ps.get(2));
 
-                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
-                            }
-                            None => unreachable!(),
-                        }
+                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
                     }
-                    roc_module::low_level::LowLevel::ListWalk
-                    | roc_module::low_level::LowLevel::ListWalkUntil
-                    | roc_module::low_level::LowLevel::ListWalkBackwards
-                    | roc_module::low_level::LowLevel::DictWalk => {
-                        match self.param_map.get_symbol(arguments[2], function_layout) {
-                            Some(function_ps) => {
-                                // borrow data structure based on first argument of the folded function
-                                // borrow the default based on second argument of the folded function
-                                let borrows = [
-                                    function_ps[0].borrow,
-                                    function_ps[1].borrow,
-                                    FUNCTION,
-                                    CLOSURE_DATA,
-                                ];
+                    ListWalk { xs, state: _ }
+                    | ListWalkUntil { xs, state: _ }
+                    | ListWalkBackwards { xs, state: _ }
+                    | DictWalk { xs, state: _ } => {
+                        // borrow data structure based on first argument of the folded function
+                        // borrow the default based on second argument of the folded function
+                        let borrows = [
+                            function_ps[1].borrow,
+                            function_ps[0].borrow,
+                            FUNCTION,
+                            CLOSURE_DATA,
+                        ];
 
-                                let b = self.add_dec_after_lowlevel(
-                                    arguments,
-                                    &borrows,
-                                    b,
-                                    b_live_vars,
-                                );
+                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
 
-                                let b = decref_if_owned!(function_ps[0].borrow, arguments[0], b);
+                        let b = decref_if_owned!(function_ps[1].borrow, *xs, b);
 
-                                let v = create_call!(function_ps.get(2));
-
-                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
-                            }
-                            None => unreachable!(),
-                        }
-                    }
-                    _ => {
-                        let ps = crate::borrow::lowlevel_borrow_signature(self.arena, *op);
-                        let b = self.add_dec_after_lowlevel(arguments, ps, b, b_live_vars);
-
-                        let v = Expr::Call(crate::ir::Call {
-                            call_type,
-                            arguments,
-                        });
+                        let v = create_call!(function_ps.get(2));
 
                         &*self.arena.alloc(Stmt::Let(z, v, l, b))
                     }

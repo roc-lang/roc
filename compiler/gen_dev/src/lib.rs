@@ -3,7 +3,7 @@
 #![allow(clippy::large_enum_variant, clippy::upper_case_acronyms)]
 
 use bumpalo::{collections::Vec, Bump};
-use roc_builtins::bitcode;
+use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{ModuleName, TagName};
 use roc_module::low_level::LowLevel;
@@ -400,21 +400,21 @@ where
             }
             LowLevel::NumAcos => self.build_fn_call(
                 sym,
-                bitcode::NUM_ACOS.to_string(),
+                bitcode::NUM_ACOS[FloatWidth::F64].to_string(),
                 args,
                 arg_layouts,
                 ret_layout,
             ),
             LowLevel::NumAsin => self.build_fn_call(
                 sym,
-                bitcode::NUM_ASIN.to_string(),
+                bitcode::NUM_ASIN[FloatWidth::F64].to_string(),
                 args,
                 arg_layouts,
                 ret_layout,
             ),
             LowLevel::NumAtan => self.build_fn_call(
                 sym,
-                bitcode::NUM_ATAN.to_string(),
+                bitcode::NUM_ATAN[FloatWidth::F64].to_string(),
                 args,
                 arg_layouts,
                 ret_layout,
@@ -437,7 +437,7 @@ where
             }
             LowLevel::NumPowInt => self.build_fn_call(
                 sym,
-                bitcode::NUM_POW_INT.to_string(),
+                bitcode::NUM_POW_INT[IntWidth::I64].to_string(),
                 args,
                 arg_layouts,
                 ret_layout,
@@ -473,7 +473,7 @@ where
             }
             LowLevel::NumRound => self.build_fn_call(
                 sym,
-                bitcode::NUM_ROUND.to_string(),
+                bitcode::NUM_ROUND[FloatWidth::F64].to_string(),
                 args,
                 arg_layouts,
                 ret_layout,

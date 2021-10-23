@@ -8,6 +8,7 @@ To build the compiler, you need these installed:
 * Python 2.7 (Windows only), `python-is-python3` (Ubuntu)
 * [Zig](https://ziglang.org/), see below for version
 * `libxkbcommon` - macOS seems to have it already; on Ubuntu or Debian you can get it with `apt-get install libxkbcommon-dev`
+* On Debian/Ubuntu `sudo apt-get install pkg-config`
 * LLVM, see below for version
 
 To run the test suite (via `cargo test`), you additionally need to install:
@@ -52,9 +53,12 @@ For macOS, you can install LLVM 12 using `brew install llvm@12` and then adding
 `/usr/local/opt/llvm/bin` to your `PATH`. You can confirm this worked by
 running `llc --version` - it should mention "LLVM version 12.0.0" at the top.
 
-For Ubuntu and Debian, you can use the `Automatic installation script` at [apt.llvm.org](https://apt.llvm.org):
+For Ubuntu and Debian:
 ```
-sudo bash -c "$(wget -O - https://apt.llvm.org/llvm.sh)"
+sudo apt -y install lsb-release software-properties-common gnupg
+wget https://apt.llvm.org/llvm.sh
+chmod +x llvm.sh
+./llvm.sh 12
 ```
 
 If you use this script, you'll need to add `clang` and `llvm-as` to your `PATH`.
