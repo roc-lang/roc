@@ -1666,10 +1666,18 @@ test "strTrim: empty" {
     try expect(trimmedEmpty.eq(RocStr.empty()));
 }
 
+test "strTrim: blank" {
+    const original_bytes = "   ";
+    const original = RocStr.init(original_bytes, original_bytes.len);
+    defer original.deinit();
+
+    const trimmed = strTrim(original);
+
+    try expect(trimmed.eq(RocStr.empty()));
+}
+
 // TODO GIESCH
 // ask how to manually mess with refcount, to unit test the shared case
-// TODO GIESCH
-// unit tests for small cases
 test "strTrim: large to large" {
     const original_bytes = " hello world world ";
     const original = RocStr.init(original_bytes, original_bytes.len);
@@ -1688,14 +1696,42 @@ test "strTrim: large to large" {
     try expect(trimmed.eq(expected));
 }
 
-test "strTrim: blank" {
-    const original_bytes = "   ";
+// TODO GIESCH
+// is this test correct? would expect still 'large' after
+test "strTrim: large to small" {
+    const original_bytes = "             hello world         ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.deinit();
 
+    try expect(!original.isSmallStr());
+
+    const expected_bytes = "hello world";
+    const expected = RocStr.init(expected_bytes, expected_bytes.len);
+    defer expected.deinit();
+
+    try expect(expected.isSmallStr());
+
     const trimmed = strTrim(original);
 
-    try expect(trimmed.eq(RocStr.empty()));
+    try expect(trimmed.eq(expected));
+}
+
+test "strTrim: small to small" {
+    const original_bytes = " hello world ";
+    const original = RocStr.init(original_bytes, original_bytes.len);
+    defer original.deinit();
+
+    try expect(original.isSmallStr());
+
+    const expected_bytes = "hello world";
+    const expected = RocStr.init(expected_bytes, expected_bytes.len);
+    defer expected.deinit();
+
+    try expect(expected.isSmallStr());
+
+    const trimmed = strTrim(original);
+
+    try expect(trimmed.eq(expected));
 }
 
 test "ReverseUtf8View: hello world" {
