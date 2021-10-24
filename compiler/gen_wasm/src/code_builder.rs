@@ -473,6 +473,7 @@ impl<'a> CodeBuilder<'a> {
             self.vm_stack.push(Symbol::WASM_ANONYMOUS_STACK_VALUE);
         }
         self.code.push(CALL);
+        encode_u32(&mut self.code, function_index);
     }
     fn call_indirect() {
         panic!("Not implemented. Roc doesn't use function pointers");
