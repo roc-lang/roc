@@ -989,16 +989,7 @@ fn str_trim_blank_string() {
 }
 
 #[test]
-fn str_trim_blank_string_large() {
-    assert_evals_to!(
-        indoc!(r#"Str.trim "                                                      " "#),
-        RocStr::from(""),
-        RocStr
-    );
-}
-
-#[test]
-fn str_trim_hello_world() {
+fn str_trim_small_to_small() {
     assert_evals_to!(
         indoc!(r#"Str.trim "  hello world  ""#),
         RocStr::from("hello world"),
@@ -1007,10 +998,20 @@ fn str_trim_hello_world() {
 }
 
 #[test]
-fn str_trim_hello_world_both_large() {
+fn str_trim_large_to_large() {
     assert_evals_to!(
         indoc!(r#"Str.trim "  hello world world  ""#),
         RocStr::from("hello world world"),
+        RocStr
+    );
+}
+
+#[test]
+fn str_trim_large_to_small() {
+    // TODO also check that the 'new' string is correctly small
+    assert_evals_to!(
+        indoc!(r#"Str.trim "  hello world        ""#),
+        RocStr::from("hello world"),
         RocStr
     );
 }

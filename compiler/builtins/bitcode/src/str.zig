@@ -293,6 +293,8 @@ pub const RocStr = extern struct {
         }
     }
 
+    // TODO GIESCH
+    // rename this isCopyable or something
     pub fn isUnique(self: RocStr) bool {
         // the empty string is unique (in the sense that copying it will not leak memory)
         if (self.isEmpty()) {
@@ -1504,37 +1506,66 @@ test "isWhitespace" {
     try expect(!isWhitespace('x'));
 }
 
-// TODO GIESCH
-// ask & read about small & large strings
 pub fn strTrim(string: RocStr) callconv(.C) RocStr {
-    if (string.isEmpty()) {
-        return RocStr.empty();
+    if (string.str_bytes) |bytes_ptr| {
+        const leading_bytes = countLeadingWhitespaceBytes(string);
+        const trailing_bytes = countTrailingWhitespaceBytes(string);
+
+        const orig_len = string.len();
+        if (orig_len == leading_bytes) {
+            return RocStr.empty();
+        }
+
+        const new_len = orig_len - leading_bytes - trailing_bytes;
+        if (new_len == 0) {
+            return RocStr.empty();
+        }
+
+        // Originally Small
+
+        if (string.isSmallStr()) {
+            const small_bytes_ptr = string.asU8ptr();
+
+            // TODO GIESCH
+            // handle unique small case?
+
+            var ret_string = RocStr.allocate(InPlace.Clone, new_len);
+            var ret_string_ptr = ret_string.asU8ptr();
+            var i: usize = 0;
+            while (i < new_len) : (i += 1) {
+                const dest = ret_string_ptr + i;
+                const source = small_bytes_ptr + i + leading_bytes;
+                @memcpy(dest, source, 1);
+            }
+
+            return ret_string;
+        }
+
+        // Originally Large
+
+        if (string.isRefcountOne()) {
+            if (leading_bytes > 0) {
+                var i: usize = 0;
+                while (i < new_len) : (i += 1) {
+                    const dest = bytes_ptr + i;
+                    const source = dest + leading_bytes;
+                    @memcpy(dest, source, 1);
+                }
+            }
+
+            var new_string = string;
+            new_string.str_len = new_len;
+
+            // TODO GIESCH
+            // handle transforming into a small string?
+            return new_string;
+        }
+
+        // Originally Large and Shared
+        return RocStr.init(string.asU8ptr() + leading_bytes, new_len);
     }
 
-    // SIGSEGV is after this
-
-    const leading_bytes = countLeadingWhitespaceBytes(string);
-    const trailing_bytes = countTrailingWhitespaceBytes(string);
-    const new_len = string.len() - leading_bytes - trailing_bytes;
-
-    if (new_len <= 0) {
-        return RocStr.empty();
-    }
-
-    // TODO GIESCH
-    // should this just use isUnique? (are all small strings safe for mutation?)
-    // should we rename isUnique to isUnleakable or something?
-    // could also just inline the unsafe reallocate call
-
-    // SIGSEGV is not from this branch
-    if (string.isRefcountOne() and !string.isSmallStr()) {
-        const dest = string.str_bytes orelse return RocStr.empty();
-        const source = dest + leading_bytes;
-        @memcpy(dest, source, new_len);
-        return string.reallocate(new_len);
-    }
-
-    return RocStr.init(string.asU8ptr() + leading_bytes, new_len);
+    return RocStr.empty();
 }
 
 fn countLeadingWhitespaceBytes(string: RocStr) usize {
@@ -1580,7 +1611,7 @@ const ReverseUtf8View = struct {
     pub fn iterator(s: ReverseUtf8View) ReverseUtf8Iterator {
         return ReverseUtf8Iterator{
             .bytes = s.bytes,
-            .i = s.bytes.len - 1,
+            .i = s.bytes.len,
         };
     }
 };
@@ -1588,26 +1619,25 @@ const ReverseUtf8View = struct {
 /// A backwards version of Utf8Iterator from std.unicode
 const ReverseUtf8Iterator = struct {
     bytes: []const u8,
+    // NOTE i points to one forward from the current begin byte
     i: usize,
 
     pub fn nextCodepointSlice(it: *ReverseUtf8Iterator) ?[]const u8 {
-        if (it.i < 0) {
+        if (it.i == 0) {
             return null;
         }
 
         // NOTE this relies on the string being valid utf8 to not run off the end
-        while (!utf8BeginByte(it.bytes[it.i])) {
+        while (!utf8BeginByte(it.bytes[it.i - 1])) {
             it.i -= 1;
         }
 
-        // TODO this should be unnecessary; it means invalid utf8
-        if (it.i < 0) {
-            return null;
-        }
+        const begin_byte = it.i - 1;
+        const cp_len = unicode.utf8ByteSequenceLength(it.bytes[begin_byte]) catch unreachable;
+        const slice = it.bytes[begin_byte .. begin_byte + cp_len];
 
-        const cp_len = unicode.utf8ByteSequenceLength(it.bytes[it.i]) catch unreachable;
-        const slice = it.bytes[it.i .. it.i + cp_len];
         it.i -= 1;
+
         return slice;
     }
 
@@ -1637,18 +1667,54 @@ test "strTrim: empty" {
 }
 
 // TODO GIESCH
-// ask how to manually mess with refcount,
-// to unit test the shared case
-test "strTrim: unique hello world" {
-    const example_bytes = "   hello world   ";
-    const example = RocStr.init(example_bytes, example_bytes.len);
-    defer example.deinit();
+// ask how to manually mess with refcount, to unit test the shared case
+// TODO GIESCH
+// unit tests for small cases
+test "strTrim: large to large" {
+    const original_bytes = " hello world world ";
+    const original = RocStr.init(original_bytes, original_bytes.len);
+    defer original.deinit();
 
-    const expected_bytes = "hello world";
+    try expect(!original.isSmallStr());
+
+    const expected_bytes = "hello world world";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
     defer expected.deinit();
 
-    const trimmed = strTrim(example);
+    try expect(!expected.isSmallStr());
+
+    const trimmed = strTrim(original);
 
     try expect(trimmed.eq(expected));
+}
+
+test "strTrim: blank" {
+    const original_bytes = "   ";
+    const original = RocStr.init(original_bytes, original_bytes.len);
+    defer original.deinit();
+
+    const trimmed = strTrim(original);
+
+    try expect(trimmed.eq(RocStr.empty()));
+}
+
+test "ReverseUtf8View: hello world" {
+    const original_bytes = "hello world";
+    const expected_bytes = "dlrow olleh";
+
+    var i: usize = 0;
+    var iter = ReverseUtf8View.initUnchecked(original_bytes).iterator();
+    while (iter.nextCodepoint()) |codepoint| {
+        try expect(expected_bytes[i] == codepoint);
+        i += 1;
+    }
+}
+
+test "ReverseUtf8View: empty" {
+    const original_bytes = "";
+
+    var iter = ReverseUtf8View.initUnchecked(original_bytes).iterator();
+    while (iter.nextCodepoint()) |codepoint| {
+        try expect(false);
+    }
 }
