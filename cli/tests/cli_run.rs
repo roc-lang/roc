@@ -129,7 +129,7 @@ mod cli_run {
         if !&out.stdout.ends_with(expected_ending) {
             panic!(
                 "expected output to end with {:?} but instead got {:#?}",
-                expected_ending, out
+                expected_ending, out.stdout
             );
         }
         assert!(out.status.success());
