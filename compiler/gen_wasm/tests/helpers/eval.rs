@@ -4,6 +4,7 @@ use std::hash::{Hash, Hasher};
 
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
+use roc_gen_wasm::replace_code_section;
 // use roc_std::{RocDec, RocList, RocOrder, RocStr};
 use crate::helpers::wasm32_test_result::Wasm32TestResult;
 use roc_gen_wasm::from_wasm32_memory::FromWasm32Memory;
@@ -113,7 +114,9 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
         main_function_index,
     );
 
-    let module_bytes = builder.build().into_bytes().unwrap();
+    let mut parity_module = builder.build();
+    replace_code_section(&mut parity_module, code_section_bytes);
+    let module_bytes = parity_module.into_bytes().unwrap();
 
     // for debugging (e.g. with wasm2wat)
     if true {
@@ -145,7 +148,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
 
     let store = Store::default();
     // let module = Module::from_file(&store, &test_wasm_path).unwrap();
-    let module = Module::from_binary(&store, &module_bytes).unwrap();
+    let wasmer_module = Module::from_binary(&store, &module_bytes).unwrap();
 
     // First, we create the `WasiEnv`
     use wasmer_wasi::WasiState;
@@ -154,10 +157,10 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     // Then, we get the import object related to our WASI
     // and attach it to the Wasm instance.
     let import_object = wasi_env
-        .import_object(&module)
+        .import_object(&wasmer_module)
         .unwrap_or_else(|_| wasmer::imports!());
 
-    Instance::new(&module, &import_object).unwrap()
+    Instance::new(&wasmer_module, &import_object).unwrap()
 }
 
 #[allow(dead_code)]
