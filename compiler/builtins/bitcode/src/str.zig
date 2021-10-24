@@ -1543,6 +1543,8 @@ pub fn strTrim(string: RocStr) callconv(.C) RocStr {
 
         // Originally Large
 
+        // TODO GIESCH
+        // not hitting this branch in Roc tests; only from zig
         if (string.isRefcountOne()) {
             if (leading_bytes > 0) {
                 var i: usize = 0;
