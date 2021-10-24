@@ -295,25 +295,41 @@ impl<'a> CodeBuilder<'a> {
 
     /// Generate bytes to declare the function's local variables
     fn build_local_declarations(&mut self, local_types: &[ValueType]) {
-        let num_locals = local_types.len();
-        encode_u32(&mut self.preamble, num_locals as u32);
+        // reserve one byte for num_batches
+        self.preamble.push(0);
 
-        // write declarations in batches of the same ValueType
-        if num_locals > 0 {
-            let mut batch_type = local_types[0];
-            let mut batch_size = 0;
-            for t in local_types {
-                if *t == batch_type {
-                    batch_size += 1;
-                } else {
-                    encode_u32(&mut self.preamble, batch_size);
-                    self.preamble.push(batch_type as u8);
-                    batch_type = *t;
-                    batch_size = 1;
-                }
+        if local_types.len() == 0 {
+            return;
+        }
+
+        // Write declarations in batches of the same ValueType
+        let mut num_batches: u32 = 0;
+        let mut batch_type = local_types[0];
+        let mut batch_size = 0;
+        for t in local_types {
+            if *t == batch_type {
+                batch_size += 1;
+            } else {
+                encode_u32(&mut self.preamble, batch_size);
+                self.preamble.push(batch_type as u8);
+                batch_type = *t;
+                batch_size = 1;
+                num_batches += 1;
             }
-            encode_u32(&mut self.preamble, batch_size);
-            self.preamble.push(batch_type as u8);
+        }
+        encode_u32(&mut self.preamble, batch_size);
+        self.preamble.push(batch_type as u8);
+        num_batches += 1;
+
+        // Go back and write the number of batches at the start
+        if num_batches < 128 {
+            self.preamble[0] = num_batches as u8;
+        } else {
+            // We have 128+ batches of locals (extremely unlikely!)
+            let tmp = self.preamble.clone();
+            self.preamble.clear();
+            encode_u32(&mut self.preamble, num_batches);
+            self.preamble.extend_from_slice(&tmp);
         }
     }
 
@@ -349,7 +365,7 @@ impl<'a> CodeBuilder<'a> {
         local_types: &[ValueType],
         frame_size: i32,
         frame_pointer: Option<LocalId>,
-    ) -> usize {
+    ) {
         self.build_local_declarations(local_types);
 
         if let Some(frame_ptr_id) = frame_pointer {
@@ -360,13 +376,8 @@ impl<'a> CodeBuilder<'a> {
 
         self.code.push(END);
 
-        // The length of the function is written in front of its body.
-        // But that means the length _itself_ has a byte length, which adds to the total!
-        // We use the terms "inner" and "outer" lengths to distinguish the two.
-        let inner_length_val = self.preamble.len() + self.code.len() + self.insert_bytes.len();
-        let inner_length_len = encode_u32(&mut self.inner_length, inner_length_val as u32);
-        let outer_length = inner_length_len + inner_length_val;
-        outer_length
+        let inner_len = self.preamble.len() + self.code.len() + self.insert_bytes.len();
+        encode_u32(&mut self.inner_length, inner_len as u32);
     }
 
     /// Write out all the bytes in the right order
@@ -376,7 +387,7 @@ impl<'a> CodeBuilder<'a> {
 
         // We created each insertion when a local was used for the _second_ time.
         // But we want them in the order they were first assigned, which may not be the same.
-        self.insert_locations.sort_by_key(|location| location.insert_at);
+        self.insert_locations.sort_by_key(|loc| loc.insert_at);
 
         let mut pos: usize = 0;
         for location in self.insert_locations.iter() {
