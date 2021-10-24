@@ -8,7 +8,7 @@ use roc_builtins::std::StdLib;
 use roc_can::constraint::Constraint;
 use roc_can::def::{Declaration, Def};
 use roc_can::module::{canonicalize_module_defs, Module};
-use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, BumpSet, MutMap, MutSet};
+use roc_collections::all::{default_hasher, BumpMap, MutMap, MutSet};
 use roc_constrain::module::{
     constrain_imports, pre_constrain_imports, ConstrainableImports, Import,
 };
@@ -553,7 +553,7 @@ fn start_phase<'a>(
                     ident_ids,
                 } = typechecked;
 
-                let mut imported_module_thunks = BumpSet::new_in(arena);
+                let mut imported_module_thunks = bumpalo::collections::Vec::new_in(arena);
 
                 if let Some(imports) = state.module_cache.imports.get(&module_id) {
                     for imported in imports.iter() {
@@ -570,7 +570,7 @@ fn start_phase<'a>(
                     module_id,
                     module_timing,
                     solved_subs,
-                    imported_module_thunks,
+                    imported_module_thunks: imported_module_thunks.into_bump_slice(),
                     decls,
                     ident_ids,
                     exposed_to_host: state.exposed_to_host.clone(),
@@ -593,7 +593,7 @@ fn start_phase<'a>(
                     module_id,
                     ident_ids,
                     subs,
-                    procs,
+                    procs_base,
                     layout_cache,
                     module_timing,
                 } = found_specializations;
@@ -602,7 +602,7 @@ fn start_phase<'a>(
                     module_id,
                     ident_ids,
                     subs,
-                    procs,
+                    procs_base,
                     layout_cache,
                     specializations_we_must_make,
                     module_timing,
@@ -710,13 +710,13 @@ pub struct TypeCheckedModule<'a> {
 }
 
 #[derive(Debug)]
-pub struct FoundSpecializationsModule<'a> {
-    pub module_id: ModuleId,
-    pub ident_ids: IdentIds,
-    pub layout_cache: LayoutCache<'a>,
-    pub procs: Procs<'a>,
-    pub subs: Subs,
-    pub module_timing: ModuleTiming,
+struct FoundSpecializationsModule<'a> {
+    module_id: ModuleId,
+    ident_ids: IdentIds,
+    layout_cache: LayoutCache<'a>,
+    procs_base: ProcsBase<'a>,
+    subs: Subs,
+    module_timing: ModuleTiming,
 }
 
 #[derive(Debug)]
@@ -815,7 +815,7 @@ enum Msg<'a> {
         module_id: ModuleId,
         ident_ids: IdentIds,
         layout_cache: LayoutCache<'a>,
-        procs: Procs<'a>,
+        procs_base: ProcsBase<'a>,
         problems: Vec<roc_mono::ir::MonoProblem>,
         solved_subs: Solved<Subs>,
         module_timing: ModuleTiming,
@@ -1035,7 +1035,7 @@ enum BuildTask<'a> {
         module_timing: ModuleTiming,
         layout_cache: LayoutCache<'a>,
         solved_subs: Solved<Subs>,
-        imported_module_thunks: BumpSet<Symbol>,
+        imported_module_thunks: &'a [Symbol],
         module_id: ModuleId,
         ident_ids: IdentIds,
         decls: Vec<Declaration>,
@@ -1045,7 +1045,7 @@ enum BuildTask<'a> {
         module_id: ModuleId,
         ident_ids: IdentIds,
         subs: Subs,
-        procs: Procs<'a>,
+        procs_base: ProcsBase<'a>,
         layout_cache: LayoutCache<'a>,
         specializations_we_must_make: ExternalSpecializations<'a>,
         module_timing: ModuleTiming,
@@ -2050,7 +2050,7 @@ fn update<'a>(
         }
         FoundSpecializations {
             module_id,
-            procs,
+            procs_base,
             solved_subs,
             ident_ids,
             layout_cache,
@@ -2060,16 +2060,14 @@ fn update<'a>(
             log!("found specializations for {:?}", module_id);
             let subs = solved_subs.into_inner();
 
-            if let Some(pending) = &procs.pending_specializations {
-                for (symbol, specs) in pending {
-                    let existing = match state.all_pending_specializations.entry(*symbol) {
-                        Vacant(entry) => entry.insert(MutMap::default()),
-                        Occupied(entry) => entry.into_mut(),
-                    };
+            for (symbol, specs) in &procs_base.pending_specializations {
+                let existing = match state.all_pending_specializations.entry(*symbol) {
+                    Vacant(entry) => entry.insert(MutMap::default()),
+                    Occupied(entry) => entry.into_mut(),
+                };
 
-                    for (layout, pend) in specs {
-                        existing.insert(*layout, pend.clone());
-                    }
+                for (layout, pend) in specs {
+                    existing.insert(*layout, pend.clone());
                 }
             }
 
@@ -2078,13 +2076,13 @@ fn update<'a>(
                 .top_level_thunks
                 .entry(module_id)
                 .or_default()
-                .extend(procs.module_thunks.iter().copied());
+                .extend(procs_base.module_thunks.iter().copied());
 
             let found_specializations_module = FoundSpecializationsModule {
                 module_id,
                 ident_ids,
                 layout_cache,
-                procs,
+                procs_base,
                 subs,
                 module_timing,
             };
@@ -3930,7 +3928,7 @@ fn make_specializations<'a>(
     home: ModuleId,
     mut ident_ids: IdentIds,
     mut subs: Subs,
-    mut procs: Procs<'a>,
+    procs_base: ProcsBase<'a>,
     mut layout_cache: LayoutCache<'a>,
     specializations_we_must_make: ExternalSpecializations<'a>,
     mut module_timing: ModuleTiming,
@@ -3951,6 +3949,13 @@ fn make_specializations<'a>(
         call_specialization_counter: 1,
     };
 
+    let mut procs = Procs::new_in(arena);
+
+    procs.partial_procs = procs_base.partial_procs;
+    procs.module_thunks = procs_base.module_thunks;
+    procs.runtime_errors = procs_base.runtime_errors;
+    procs.imported_module_thunks = procs_base.imported_module_thunks;
+
     // TODO: for now this final specialization pass is sequential,
     // with no parallelization at all. We should try to parallelize
     // this, but doing so will require a redesign of Procs.
@@ -3958,6 +3963,7 @@ fn make_specializations<'a>(
         &mut mono_env,
         procs,
         specializations_we_must_make,
+        procs_base.pending_specializations,
         &mut layout_cache,
     );
 
@@ -3981,11 +3987,36 @@ fn make_specializations<'a>(
     }
 }
 
+#[derive(Clone, Debug)]
+struct ProcsBase<'a> {
+    partial_procs: BumpMap<Symbol, PartialProc<'a>>,
+    module_thunks: &'a [Symbol],
+    pending_specializations: BumpMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>,
+    runtime_errors: BumpMap<Symbol, &'a str>,
+    imported_module_thunks: &'a [Symbol],
+}
+
+impl<'a> ProcsBase<'a> {
+    fn add_pending(
+        &mut self,
+        symbol: Symbol,
+        layout: ProcLayout<'a>,
+        pending: PendingSpecialization<'a>,
+    ) {
+        let all_pending = self
+            .pending_specializations
+            .entry(symbol)
+            .or_insert_with(|| HashMap::with_capacity_and_hasher(1, default_hasher()));
+
+        all_pending.insert(layout, pending);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_pending_specializations<'a>(
     arena: &'a Bump,
     solved_subs: Solved<Subs>,
-    imported_module_thunks: BumpSet<Symbol>,
+    imported_module_thunks: &'a [Symbol],
     home: ModuleId,
     mut ident_ids: IdentIds,
     decls: Vec<Declaration>,
@@ -3996,10 +4027,16 @@ fn build_pending_specializations<'a>(
     exposed_to_host: MutMap<Symbol, Variable>,
 ) -> Msg<'a> {
     let find_specializations_start = SystemTime::now();
-    let mut procs = Procs::new_in(arena);
 
-    debug_assert!(procs.imported_module_thunks.is_empty());
-    procs.imported_module_thunks = imported_module_thunks;
+    let mut module_thunks = bumpalo::collections::Vec::new_in(arena);
+
+    let mut procs_base = ProcsBase {
+        partial_procs: BumpMap::default(),
+        module_thunks: &[],
+        pending_specializations: BumpMap::default(),
+        runtime_errors: BumpMap::default(),
+        imported_module_thunks,
+    };
 
     let mut mono_problems = std::vec::Vec::new();
     let mut subs = solved_subs.into_inner();
@@ -4022,7 +4059,8 @@ fn build_pending_specializations<'a>(
         match decl {
             Declare(def) | Builtin(def) => add_def_to_module(
                 &mut layout_cache,
-                &mut procs,
+                &mut procs_base,
+                &mut module_thunks,
                 &mut mono_env,
                 def,
                 &exposed_to_host,
@@ -4032,7 +4070,8 @@ fn build_pending_specializations<'a>(
                 for def in defs {
                     add_def_to_module(
                         &mut layout_cache,
-                        &mut procs,
+                        &mut procs_base,
+                        &mut module_thunks,
                         &mut mono_env,
                         def,
                         &exposed_to_host,
@@ -4047,6 +4086,8 @@ fn build_pending_specializations<'a>(
         }
     }
 
+    procs_base.module_thunks = module_thunks.into_bump_slice();
+
     let problems = mono_env.problems.to_vec();
 
     let find_specializations_end = SystemTime::now();
@@ -4059,7 +4100,7 @@ fn build_pending_specializations<'a>(
         solved_subs: roc_types::solved_types::Solved(subs),
         ident_ids,
         layout_cache,
-        procs,
+        procs_base,
         problems,
         module_timing,
     }
@@ -4067,7 +4108,8 @@ fn build_pending_specializations<'a>(
 
 fn add_def_to_module<'a>(
     layout_cache: &mut LayoutCache<'a>,
-    procs: &mut Procs<'a>,
+    procs: &mut ProcsBase<'a>,
+    module_thunks: &mut bumpalo::collections::Vec<'a, Symbol>,
     mono_env: &mut roc_mono::ir::Env<'a, '_>,
     def: roc_can::def::Def,
     exposed_to_host: &MutMap<Symbol, Variable>,
@@ -4129,20 +4171,23 @@ fn add_def_to_module<'a>(
                             }
                         };
 
-                        procs.insert_exposed(
-                            symbol,
-                            ProcLayout::from_raw(mono_env.arena, layout),
+                        let pending = PendingSpecialization::from_exposed_function(
                             mono_env.arena,
                             mono_env.subs,
                             def.annotation,
                             annotation,
                         );
+
+                        procs.add_pending(
+                            symbol,
+                            ProcLayout::from_raw(mono_env.arena, layout),
+                            pending,
+                        );
                     }
 
-                    procs.insert_named(
+                    let partial_proc = PartialProc::from_named_function(
                         mono_env,
                         layout_cache,
-                        symbol,
                         annotation,
                         loc_args,
                         *loc_body,
@@ -4150,10 +4195,12 @@ fn add_def_to_module<'a>(
                         is_recursive,
                         ret_var,
                     );
+
+                    procs.partial_procs.insert(symbol, partial_proc);
                 }
                 body => {
                     // mark this symbols as a top-level thunk before any other work on the procs
-                    procs.module_thunks.insert(symbol);
+                    module_thunks.push(symbol);
 
                     // If this is an exposed symbol, we need to
                     // register it as such. Otherwise, since it
@@ -4188,14 +4235,14 @@ fn add_def_to_module<'a>(
                             }
                         };
 
-                        procs.insert_exposed(
-                            symbol,
-                            top_level,
+                        let pending = PendingSpecialization::from_exposed_function(
                             mono_env.arena,
                             mono_env.subs,
                             def.annotation,
                             annotation,
                         );
+
+                        procs.add_pending(symbol, top_level, pending);
                     }
 
                     let proc = PartialProc {
@@ -4309,7 +4356,7 @@ where
             module_id,
             ident_ids,
             subs,
-            procs,
+            procs_base,
             layout_cache,
             specializations_we_must_make,
             module_timing,
@@ -4318,7 +4365,7 @@ where
             module_id,
             ident_ids,
             subs,
-            procs,
+            procs_base,
             layout_cache,
             specializations_we_must_make,
             module_timing,
