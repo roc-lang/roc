@@ -1619,7 +1619,8 @@ const ReverseUtf8View = struct {
 /// A backwards version of Utf8Iterator from std.unicode
 const ReverseUtf8Iterator = struct {
     bytes: []const u8,
-    // NOTE i points to one forward from the current begin byte
+    // NOTE i points to one after the current begin byte,
+    // and 0 signifies 'done'
     i: usize,
 
     pub fn nextCodepointSlice(it: *ReverseUtf8Iterator) ?[]const u8 {
