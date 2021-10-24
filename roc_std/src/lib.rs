@@ -197,7 +197,12 @@ impl<T> RocList<T> {
     where
         T: Clone,
     {
-        Self::from_slice_with_capacity(slice, slice.len())
+        // Avoid allocation with empty list.
+        if slice.len() == 0 {
+            Self::default()
+        } else {
+            Self::from_slice_with_capacity(slice, slice.len())
+        }
     }
 
     pub fn as_slice(&self) -> &[T] {
