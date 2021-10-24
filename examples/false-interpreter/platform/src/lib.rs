@@ -201,6 +201,9 @@ pub fn roc_fx_openFile(name: RocStr) -> *mut BufReader<File> {
     let f = File::open(name.as_str()).expect("Unable to open file");
     let br = BufReader::new(f);
 
+    // don't mess with the refcount!
+    core::mem::forget(name);
+
     Box::into_raw(Box::new(br))
 }
 
