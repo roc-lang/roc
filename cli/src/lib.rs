@@ -352,10 +352,10 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
                     //
                     // roc app.roc foo bar baz
                     //
-                    // ...and have it so that app.roc will receive only `foo`,
+                    // ...and have it so that app.roc will receive only `app.roc`, `foo`,
                     // `bar`, and `baz` as its arguments.
                     for (index, arg) in std::env::args().enumerate() {
-                        if index > roc_file_arg_index {
+                        if index > roc_file_arg_index - 1 {
                             cmd.arg(arg);
                         }
                     }
