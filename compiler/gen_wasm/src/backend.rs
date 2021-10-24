@@ -1,3 +1,4 @@
+use bumpalo::collections::Vec;
 use parity_wasm::builder;
 use parity_wasm::builder::{CodeLocation, FunctionDefinition, ModuleBuilder, SignatureBuilder};
 use parity_wasm::elements::{
@@ -13,7 +14,9 @@ use roc_mono::layout::{Builtin, Layout};
 use crate::code_builder::CodeBuilder;
 use crate::layout::WasmLayout;
 use crate::storage::{Storage, StoredValue, StoredValueKind};
-use crate::{copy_memory, pop_stack_frame, push_stack_frame, CopyMemoryConfig, LocalId, PTR_TYPE};
+use crate::{
+    copy_memory, pop_stack_frame, push_stack_frame, CopyMemoryConfig, Env, LocalId, PTR_TYPE,
+};
 
 // Don't allocate any constant data at address zero or near it. Would be valid, but bug-prone.
 // Follow Emscripten's example by using 1kB (4 bytes would probably do)
@@ -26,6 +29,7 @@ struct LabelId(u32);
 pub struct WasmBackend<'a> {
     // Module level: Wasm AST
     pub module_builder: ModuleBuilder,
+    env: &'a Env<'a>,
 
     // Module level: internal state & IR mappings
     _data_offset_map: MutMap<Literal<'a>, u32>,
@@ -33,19 +37,20 @@ pub struct WasmBackend<'a> {
     proc_symbol_map: MutMap<Symbol, CodeLocation>,
 
     // Function level
-    code_builder: CodeBuilder,
-    storage: Storage,
+    code_builder: CodeBuilder<'a>,
+    storage: Storage<'a>,
 
     /// how many blocks deep are we (used for jumps)
     block_depth: u32,
-    joinpoint_label_map: MutMap<JoinPointId, (u32, std::vec::Vec<StoredValue>)>,
+    joinpoint_label_map: MutMap<JoinPointId, (u32, Vec<'a, StoredValue>)>,
 }
 
 impl<'a> WasmBackend<'a> {
-    pub fn new() -> Self {
+    pub fn new(env: &'a Env<'a>) -> Self {
         WasmBackend {
             // Module: Wasm AST
             module_builder: builder::module(),
+            env,
 
             // Module: internal state & IR mappings
             _data_offset_map: MutMap::default(),
@@ -56,8 +61,8 @@ impl<'a> WasmBackend<'a> {
             joinpoint_label_map: MutMap::default(),
 
             // Functions
-            code_builder: CodeBuilder::new(),
-            storage: Storage::new(),
+            code_builder: CodeBuilder::new(env.arena),
+            storage: Storage::new(env.arena),
         }
     }
 
@@ -120,7 +125,7 @@ impl<'a> WasmBackend<'a> {
 
         const STACK_FRAME_INSTRUCTIONS_LEN: usize = 10;
         let mut final_instructions =
-            Vec::with_capacity(self.code_builder.len() + STACK_FRAME_INSTRUCTIONS_LEN);
+            std::vec::Vec::with_capacity(self.code_builder.len() + STACK_FRAME_INSTRUCTIONS_LEN);
 
         if self.storage.stack_frame_size > 0 {
             push_stack_frame(
@@ -143,7 +148,7 @@ impl<'a> WasmBackend<'a> {
 
         // Declare local variables (in batches of the same type)
         let num_locals = self.storage.local_types.len();
-        let mut locals = Vec::with_capacity(num_locals);
+        let mut locals = Vec::with_capacity_in(num_locals, self.env.arena);
         if num_locals > 0 {
             let mut batch_type = self.storage.local_types[0];
             let mut batch_size = 0;
@@ -318,7 +323,7 @@ impl<'a> WasmBackend<'a> {
                 remainder,
             } => {
                 // make locals for join pointer parameters
-                let mut jp_param_storages = std::vec::Vec::with_capacity(parameters.len());
+                let mut jp_param_storages = Vec::with_capacity_in(parameters.len(), self.env.arena);
                 for parameter in parameters.iter() {
                     let wasm_layout = WasmLayout::new(&parameter.layout);
                     let mut param_storage = self.storage.allocate(
@@ -406,7 +411,8 @@ impl<'a> WasmBackend<'a> {
                     let mut wasm_args_tmp: Vec<Symbol>;
                     let (wasm_args, has_return_val) = match wasm_layout {
                         WasmLayout::StackMemory { .. } => {
-                            wasm_args_tmp = Vec::with_capacity(arguments.len() + 1); // TODO: bumpalo
+                            wasm_args_tmp =
+                                Vec::with_capacity_in(arguments.len() + 1, self.env.arena);
                             wasm_args_tmp.push(*sym);
                             wasm_args_tmp.extend_from_slice(*arguments);
                             (wasm_args_tmp.as_slice(), false)
