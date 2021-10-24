@@ -38,3 +38,6 @@ bench-folder*
 
 # earthly
 earthly_log.txt
+
+# created to test release
+roc_linux_x86_64.tar.gz
