@@ -1511,11 +1511,13 @@ pub fn strTrim(string: RocStr) callconv(.C) RocStr {
         return RocStr.empty();
     }
 
+    // SIGSEGV is after this
+
     const leading_bytes = countLeadingWhitespaceBytes(string);
     const trailing_bytes = countTrailingWhitespaceBytes(string);
     const new_len = string.len() - leading_bytes - trailing_bytes;
 
-    if (new_len == 0) {
+    if (new_len <= 0) {
         return RocStr.empty();
     }
 
@@ -1525,8 +1527,8 @@ pub fn strTrim(string: RocStr) callconv(.C) RocStr {
     // could also just inline the unsafe reallocate call
 
     // SIGSEGV is not from this branch
-    if (string.isRefcountOne()) {
-        const dest = string.str_bytes orelse unreachable;
+    if (string.isRefcountOne() and !string.isSmallStr()) {
+        const dest = string.str_bytes orelse return RocStr.empty();
         const source = dest + leading_bytes;
         @memcpy(dest, source, new_len);
         return string.reallocate(new_len);
@@ -1542,7 +1544,7 @@ fn countLeadingWhitespaceBytes(string: RocStr) usize {
     var iter = unicode.Utf8View.initUnchecked(bytes).iterator();
     while (iter.nextCodepoint()) |codepoint| {
         if (isWhitespace(codepoint)) {
-            byte_count += unicode.utf8CodepointSequenceLength(codepoint) catch unreachable;
+            byte_count += unicode.utf8CodepointSequenceLength(codepoint) catch break;
         } else {
             break;
         }
@@ -1558,7 +1560,7 @@ fn countTrailingWhitespaceBytes(string: RocStr) usize {
     var iter = ReverseUtf8View.initUnchecked(bytes).iterator();
     while (iter.nextCodepoint()) |codepoint| {
         if (isWhitespace(codepoint)) {
-            byte_count += unicode.utf8CodepointSequenceLength(codepoint) catch unreachable;
+            byte_count += unicode.utf8CodepointSequenceLength(codepoint) catch break;
         } else {
             break;
         }
@@ -1596,6 +1598,11 @@ const ReverseUtf8Iterator = struct {
         // NOTE this relies on the string being valid utf8 to not run off the end
         while (!utf8BeginByte(it.bytes[it.i])) {
             it.i -= 1;
+        }
+
+        // TODO this should be unnecessary; it means invalid utf8
+        if (it.i < 0) {
+            return null;
         }
 
         const cp_len = unicode.utf8ByteSequenceLength(it.bytes[it.i]) catch unreachable;

@@ -1005,3 +1005,12 @@ fn str_trim_hello_world() {
         RocStr
     );
 }
+
+#[test]
+fn str_trim_hello_world_both_large() {
+    assert_evals_to!(
+        indoc!(r#"Str.trim "  hello world world  ""#),
+        RocStr::from("hello world world"),
+        RocStr
+    );
+}
