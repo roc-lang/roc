@@ -1,7 +1,4 @@
 #[macro_use]
-extern crate clap;
-
-#[macro_use]
 extern crate const_format;
 
 use build::{BuildOutcome, BuiltFile};
@@ -21,7 +18,6 @@ use target_lexicon::{Architecture, OperatingSystem, Triple, X86_32Architecture};
 pub mod build;
 pub mod repl;
 
-pub const CMD_RUN: &str = "run";
 pub const CMD_BUILD: &str = "build";
 pub const CMD_REPL: &str = "repl";
 pub const CMD_EDIT: &str = "edit";
@@ -43,7 +39,7 @@ pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 
 pub fn build_app<'a>() -> App<'a> {
     let app = App::new("roc")
-        .version(concatcp!(crate_version!(), "\n"))
+        .version(concatcp!(include_str!("../../version.txt"), "\n"))
         .about("Runs the given .roc file. Use one of the SUBCOMMANDS below to do something else!")
         .subcommand(App::new(CMD_BUILD)
             .about("Build a binary from the given .roc file, but don't run it")
@@ -102,38 +98,6 @@ pub fn build_app<'a>() -> App<'a> {
                     .long(FLAG_PRECOMPILED)
                     .help("Assumes the host has been precompiled and skips recompiling the host.")
                     .required(false),
-            )
-        )
-        .subcommand(App::new(CMD_RUN)
-            .about("DEPRECATED - now use `roc [FILE]` instead of `roc run [FILE]`")
-            .setting(AppSettings::TrailingVarArg)
-            .arg(
-                Arg::with_name(FLAG_OPTIMIZE)
-                    .long(FLAG_OPTIMIZE)
-                    .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
-                    .required(false),
-            )
-            .arg(
-                Arg::with_name(FLAG_DEV)
-                    .long(FLAG_DEV)
-                    .help("Make compilation as fast as possible. (Runtime performance may suffer)")
-                    .required(false),
-            )
-            .arg(
-                Arg::with_name(FLAG_DEBUG)
-                    .long(FLAG_DEBUG)
-                    .help("Store LLVM debug information in the generated program")
-                    .required(false),
-            )
-            .arg(
-                Arg::with_name(ROC_FILE)
-                    .help("The .roc file of an app to run")
-                    .required(true),
-            )
-            .arg(
-                Arg::with_name(ARGS_FOR_APP)
-                    .help("Arguments to pass into the app being run")
-                    .multiple(true),
             )
         )
         .subcommand(App::new(CMD_REPL)
