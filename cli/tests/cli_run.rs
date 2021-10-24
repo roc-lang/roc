@@ -359,7 +359,7 @@ mod cli_run {
                 stdin: &[],
                 input_file: Some("examples/hello.false"),
                 expected_ending:"Hello, World!\n",
-                use_valgrind: false,
+                use_valgrind: true,
             }
         },
     }
