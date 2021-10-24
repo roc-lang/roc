@@ -1619,7 +1619,8 @@ const ReverseUtf8View = struct {
 /// A backwards version of Utf8Iterator from std.unicode
 const ReverseUtf8Iterator = struct {
     bytes: []const u8,
-    // NOTE i points to one after the current begin byte,
+    // NOTE
+    // i points to one after the current begin byte,
     // and 0 signifies 'done'
     i: usize,
 
@@ -1677,16 +1678,14 @@ test "strTrim: blank" {
     try expect(trimmed.eq(RocStr.empty()));
 }
 
-// TODO GIESCH
-// ask how to manually mess with refcount, to unit test the shared case
 test "strTrim: large to large" {
-    const original_bytes = " hello world world ";
+    const original_bytes = " hello giant world ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.deinit();
 
     try expect(!original.isSmallStr());
 
-    const expected_bytes = "hello world world";
+    const expected_bytes = "hello giant world";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
     defer expected.deinit();
 
@@ -1755,3 +1754,6 @@ test "ReverseUtf8View: empty" {
         try expect(false);
     }
 }
+
+// TODO GIESCH
+// ask how to manually mess with refcount, to unit test the shared case

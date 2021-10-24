@@ -1000,18 +1000,73 @@ fn str_trim_small_to_small() {
 #[test]
 fn str_trim_large_to_large() {
     assert_evals_to!(
-        indoc!(r#"Str.trim "  hello world world  ""#),
-        RocStr::from("hello world world"),
+        indoc!(r#"Str.trim "  hello giant world  ""#),
+        RocStr::from("hello giant world"),
         RocStr
     );
 }
 
 #[test]
 fn str_trim_large_to_small() {
-    // TODO also check that the 'new' string is correctly small
+    // TODO GIESCH
+    // also check that the 'new' string is correctly small
     assert_evals_to!(
         indoc!(r#"Str.trim "  hello world        ""#),
         RocStr::from("hello world"),
         RocStr
+    );
+}
+
+#[test]
+fn str_trim_large_to_large_shared() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+               original : Str
+               original = " hello world world "
+
+               { trimmed: Str.trim original, original: original }
+               "#
+        ),
+        (
+            RocStr::from(" hello world world "),
+            RocStr::from("hello world world"),
+        ),
+        (RocStr, RocStr)
+    );
+}
+
+#[test]
+fn str_trim_large_to_small_shared() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+               original : Str
+               original = " hello world             "
+
+               { trimmed: Str.trim original, original: original }
+               "#
+        ),
+        (
+            RocStr::from(" hello world             "),
+            RocStr::from("hello world"),
+        ),
+        (RocStr, RocStr)
+    );
+}
+
+#[test]
+fn str_trim_small_to_small_shared() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+               original : Str
+               original = " hello world "
+
+               { trimmed: Str.trim original, original: original }
+               "#
+        ),
+        (RocStr::from(" hello world "), RocStr::from("hello world"),),
+        (RocStr, RocStr)
     );
 }
