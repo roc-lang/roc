@@ -20,7 +20,7 @@ use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::LayoutIds;
 
 use crate::backend::WasmBackend;
-use crate::code_builder::{finalize_code_section, Align, CodeBuilder, ValueType};
+use crate::code_builder::{Align, CodeBuilder, ValueType};
 
 const PTR_SIZE: u32 = 4;
 const PTR_TYPE: ValueType = ValueType::I32;
@@ -91,7 +91,9 @@ pub fn build_module_help<'a>(
         }
     }
 
-    finalize_code_section(&mut backend.code_section_bytes);
+    // Update code section length
+    let inner_length = (backend.code_section_bytes.len() - 5) as u32;
+    overwrite_padded_u32(&mut backend.code_section_bytes[0..5], inner_length);
 
     // Because of the sorting above, we know the last function in the `for` is the main function.
     // Here we grab its index and return it, so that the test_wrapper is able to call it.
@@ -196,44 +198,45 @@ pub fn debug_panic<E: std::fmt::Debug>(error: E) {
 ///
 /// All integers in Wasm are variable-length encoded, which saves space for small values.
 /// The most significant bit indicates "more bytes are coming", and the other 7 are payload.
-pub fn encode_u32<'a>(buffer: &mut [u8], mut value: u32) -> usize {
-    let mut count = 0;
-    while value >= 0x80 {
-        buffer[count] = 0x80 | ((value & 0x7f) as u8);
-        value >>= 7;
-        count += 1;
+pub fn encode_u32<'a>(buffer: &mut Vec<'a, u8>, value: u32) -> usize {
+    let mut x = value;
+    let start_len = buffer.len();
+    while x >= 0x80 {
+        buffer.push(0x80 | ((x & 0x7f) as u8));
+        x >>= 7;
     }
-    buffer[count] = value as u8;
-    count + 1
+    buffer.push(x as u8);
+    buffer.len() - start_len
 }
 
 /// Write a u64 value as LEB-128 encoded bytes, into the provided buffer, returning byte length
 ///
 /// All integers in Wasm are variable-length encoded, which saves space for small values.
 /// The most significant bit indicates "more bytes are coming", and the other 7 are payload.
-pub fn encode_u64<'a>(buffer: &mut [u8], mut value: u64) -> usize {
-    let mut count = 0;
-    while value >= 0x80 {
-        buffer[count] = 0x80 | ((value & 0x7f) as u8);
-        value >>= 7;
-        count += 1;
+pub fn encode_u64<'a>(buffer: &mut Vec<'a, u8>, value: u64) -> usize {
+    let mut x = value;
+    let start_len = buffer.len();
+    while x >= 0x80 {
+        buffer.push(0x80 | ((x & 0x7f) as u8));
+        x >>= 7;
     }
-    buffer[count] = value as u8;
-    count + 1
+    buffer.push(x as u8);
+    buffer.len() - start_len
 }
 
-/// Write a u32 value as LEB-128 encoded bytes, but padded to maximum byte length (5)
+/// Overwrite a LEB-128 encoded u32 value that has been padded to maximum length (5 bytes)
 ///
-/// Sometimes we want a number to have fixed length, so we can update it later (e.g. relocations)
-/// without moving all the following bytes. For those cases we pad it to maximum length.
-/// For example, 3 is encoded as 0x83 0x80 0x80 0x80 0x00.
+/// We need some fixed length values so we can overwrite them without moving all following bytes.
+/// For example, the code section is prefixed with its length, which we only know at the end.
+/// And relocation values get updated during linking.
 ///
+/// The value 3 is encoded as 0x83 0x80 0x80 0x80 0x00.
 /// https://github.com/WebAssembly/tool-conventions/blob/main/Linking.md#relocation-sections
-pub fn encode_u32_padded<'a>(buffer: &mut [u8], mut value: u32) -> usize {
+pub fn overwrite_padded_u32<'a>(buffer: &mut [u8], value: u32) {
+    let mut x = value;
     for i in 0..4 {
-        buffer[i] = 0x80 | ((value & 0x7f) as u8);
-        value >>= 7;
+        buffer[i] = 0x80 | ((x & 0x7f) as u8);
+        x >>= 7;
     }
-    buffer[4] = value as u8;
-    5
+    buffer[4] = x as u8;
 }

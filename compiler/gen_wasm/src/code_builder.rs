@@ -92,10 +92,10 @@ pub enum VirtualMachineSymbolState {
 
 // An instruction (local.set or local.tee) to be inserted into the function code
 #[derive(Debug)]
-struct Insertion {
-    position: usize,
-    length: usize,
-    bytes: [u8; 6],
+struct InsertLocation {
+    insert_at: usize,
+    start: usize,
+    end: usize,
 }
 
 macro_rules! instruction_no_args {
@@ -114,24 +114,17 @@ macro_rules! instruction_memargs {
     };
 }
 
-/// Finalize the code section bytes by writing its inner length at the start.
-/// Assumes 5 bytes have been reserved for it (maximally-padded LEB-128)
-pub fn finalize_code_section(code_section_bytes: &mut std::vec::Vec<u8>) {
-    let inner_len = (code_section_bytes.len() - 5) as u32;
-    encode_u32_padded(code_section_bytes[0..5], inner_len);
-}
-
 #[derive(Debug)]
 pub struct CodeBuilder<'a> {
     /// The main container for the instructions
     code: Vec<'a, u8>,
 
-    /// Extra instructions to insert at specific positions during finalisation
-    /// (Go back and set locals when we realise we need them)
-    insertions: Vec<'a, Insertion>,
+    /// Instruction bytes to be inserted into the code when finalizing the function
+    /// (Used for setting locals when we realise they are used multiple times)
+    insert_bytes: Vec<'a, u8>,
 
-    /// Total number of bytes to be written as insertions
-    insertions_byte_len: usize,
+    /// Code locations where the insert_bytes should go
+    insert_locations: Vec<'a, InsertLocation>,
 
     /// Bytes for local variable declarations and stack-frame setup code.
     /// We can't write this until we've finished the main code. But it goes
@@ -154,8 +147,8 @@ impl<'a> CodeBuilder<'a> {
     pub fn new(arena: &'a Bump) -> Self {
         CodeBuilder {
             code: Vec::with_capacity_in(1024, arena),
-            insertions: Vec::with_capacity_in(32, arena),
-            insertions_byte_len: 0,
+            insert_locations: Vec::with_capacity_in(32, arena),
+            insert_bytes: Vec::with_capacity_in(64, arena),
             preamble: Vec::with_capacity_in(32, arena),
             inner_length: Vec::with_capacity_in(5, arena),
             vm_stack: Vec::with_capacity_in(32, arena),
@@ -164,7 +157,10 @@ impl<'a> CodeBuilder<'a> {
 
     pub fn clear(&mut self) {
         self.code.clear();
-        self.insertions.clear();
+        self.insert_locations.clear();
+        self.insert_bytes.clear();
+        self.preamble.clear();
+        self.inner_length.clear();
         self.vm_stack.clear();
     }
 
@@ -213,6 +209,19 @@ impl<'a> CodeBuilder<'a> {
         true
     }
 
+    fn add_insertion(&mut self, insert_at: usize, opcode: u8, immediate: u32) {
+        let start = self.insert_bytes.len();
+
+        self.insert_bytes.push(opcode);
+        encode_u32(&mut self.insert_bytes, immediate);
+
+        self.insert_locations.push(InsertLocation {
+            insert_at,
+            start,
+            end: self.insert_bytes.len(),
+        });
+    }
+
     /// Load a Symbol that is stored in the VM stack
     /// If it's already at the top of the stack, no code will be generated.
     /// Otherwise, local.set and local.get instructions will be inserted, using the LocalId provided.
@@ -242,15 +251,7 @@ impl<'a> CodeBuilder<'a> {
                     // Symbol is not on top of the stack. Find it.
                     if let Some(found_index) = self.vm_stack.iter().rposition(|&s| s == symbol) {
                         // Insert a local.set where the value was created
-                        let mut insertion = Insertion {
-                            position: pushed_at,
-                            length: 0,
-                            bytes: [SETLOCAL, 0, 0, 0, 0, 0],
-                        };
-                        insertion.length =
-                            1 + encode_u32(&mut insertion.bytes[1..], next_local_id.0);
-                        self.insertions_byte_len += insertion.length;
-                        self.insertions.push(insertion);
+                        self.add_insertion(pushed_at, SETLOCAL, next_local_id.0);
 
                         // Take the value out of the stack where local.set was inserted
                         self.vm_stack.remove(found_index);
@@ -273,14 +274,7 @@ impl<'a> CodeBuilder<'a> {
             Popped { pushed_at } => {
                 // This Symbol is being used for a second time
                 // Insert a local.tee where it was pushed, so we don't interfere with the first usage
-                let mut insertion = Insertion {
-                    position: pushed_at,
-                    length: 0,
-                    bytes: [TEELOCAL, 0, 0, 0, 0, 0],
-                };
-                insertion.length = 1 + encode_u32(&mut insertion.bytes[1..], next_local_id.0);
-                self.insertions_byte_len += insertion.length;
-                self.insertions.push(insertion);
+                self.add_insertion(pushed_at, TEELOCAL, next_local_id.0);
 
                 // Insert a local.get at the current position
                 self.get_local(next_local_id);
@@ -369,7 +363,7 @@ impl<'a> CodeBuilder<'a> {
         // The length of the function is written in front of its body.
         // But that means the length _itself_ has a byte length, which adds to the total!
         // We use the terms "inner" and "outer" lengths to distinguish the two.
-        let inner_length_val = self.preamble.len() + self.code.len() + self.insertions_byte_len;
+        let inner_length_val = self.preamble.len() + self.code.len() + self.insert_bytes.len();
         let inner_length_len = encode_u32(&mut self.inner_length, inner_length_val as u32);
         let outer_length = inner_length_len + inner_length_val;
         outer_length
@@ -380,13 +374,15 @@ impl<'a> CodeBuilder<'a> {
         writer.write(&self.inner_length)?;
         writer.write(&self.preamble)?;
 
-        self.insertions.sort_by_key(|insertion| insertion.position);
+        // We created each insertion when a local was used for the _second_ time.
+        // But we want them in the order they were first assigned, which may not be the same.
+        self.insert_locations.sort_by_key(|location| location.insert_at);
 
         let mut pos: usize = 0;
-        for insertion in self.insertions.iter() {
-            writer.write(&self.code[pos..insertion.position])?;
-            writer.write(&insertion.bytes[0..insertion.length])?;
-            pos = insertion.position;
+        for location in self.insert_locations.iter() {
+            writer.write(&self.code[pos..location.insert_at])?;
+            writer.write(&self.insert_bytes[location.start..location.end])?;
+            pos = location.insert_at;
         }
 
         let len = self.code.len();

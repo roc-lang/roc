@@ -11,7 +11,7 @@ use roc_mono::layout::{Builtin, Layout};
 use crate::code_builder::{BlockType, CodeBuilder, ValueType};
 use crate::layout::WasmLayout;
 use crate::storage::{Storage, StoredValue, StoredValueKind};
-use crate::{copy_memory, encode_u32_padded, CopyMemoryConfig, Env, LocalId, PTR_TYPE};
+use crate::{copy_memory, overwrite_padded_u32, CopyMemoryConfig, Env, LocalId, PTR_TYPE};
 
 // Don't allocate any constant data at address zero or near it. Would be valid, but bug-prone.
 // Follow Emscripten's example by using 1kB (4 bytes would probably do)
@@ -48,7 +48,7 @@ impl<'a> WasmBackend<'a> {
         // Reserve space for code section header: inner byte length and number of functions
         // Padded to the maximum 5 bytes each, so we can update later without moving everything
         code_section_bytes.resize(10, 0);
-        encode_u32_padded(&mut code_section_bytes[5..10], num_procs as u32);
+        overwrite_padded_u32(&mut code_section_bytes[5..10], num_procs as u32); // gets modified in unit tests
 
         WasmBackend {
             env,
