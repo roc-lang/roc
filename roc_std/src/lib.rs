@@ -136,6 +136,7 @@ impl<T> RocList<T> {
     where
         T: Clone,
     {
+        assert!(capacity >= 0);
         assert!(slice.len() <= capacity);
 
         let ptr = slice.as_ptr();
