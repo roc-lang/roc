@@ -8,7 +8,7 @@ use crate::layout::{
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, BumpSet, MutMap, MutSet};
+use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap, MutSet};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
@@ -79,6 +79,55 @@ pub struct PartialProc<'a> {
     pub is_self_recursive: bool,
 }
 
+impl<'a> PartialProc<'a> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_named_function(
+        env: &mut Env<'a, '_>,
+        layout_cache: &mut LayoutCache<'a>,
+        annotation: Variable,
+        loc_args: std::vec::Vec<(Variable, Located<roc_can::pattern::Pattern>)>,
+        loc_body: Located<roc_can::expr::Expr>,
+        captured_symbols: CapturedSymbols<'a>,
+        is_self_recursive: bool,
+        ret_var: Variable,
+    ) -> PartialProc<'a> {
+        let number_of_arguments = loc_args.len();
+
+        match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
+            Ok((_, pattern_symbols, body)) => {
+                // a named closure. Since these aren't specialized by the surrounding
+                // context, we can't add pending specializations for them yet.
+                // (If we did, all named polymorphic functions would immediately error
+                // on trying to convert a flex var to a Layout.)
+                let pattern_symbols = pattern_symbols.into_bump_slice();
+                PartialProc {
+                    annotation,
+                    pattern_symbols,
+                    captured_symbols,
+                    body: body.value,
+                    is_self_recursive,
+                }
+            }
+
+            Err(error) => {
+                let mut pattern_symbols = Vec::with_capacity_in(number_of_arguments, env.arena);
+
+                for _ in 0..number_of_arguments {
+                    pattern_symbols.push(env.unique_symbol());
+                }
+
+                PartialProc {
+                    annotation,
+                    pattern_symbols: pattern_symbols.into_bump_slice(),
+                    captured_symbols: CapturedSymbols::None,
+                    body: roc_can::expr::Expr::RuntimeError(error.value),
+                    is_self_recursive: false,
+                }
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum CapturedSymbols<'a> {
     None,
@@ -137,6 +186,24 @@ impl<'a> PendingSpecialization<'a> {
             solved_type,
             host_exposed_aliases,
             _lifetime: std::marker::PhantomData,
+        }
+    }
+
+    /// Add a named function that will be publicly exposed to the host
+    pub fn from_exposed_function(
+        arena: &'a Bump,
+        subs: &Subs,
+        opt_annotation: Option<roc_can::def::Annotation>,
+        fn_var: Variable,
+    ) -> Self {
+        match opt_annotation {
+            None => PendingSpecialization::from_var(arena, subs, fn_var),
+            Some(annotation) => PendingSpecialization::from_var_host_exposed(
+                arena,
+                subs,
+                fn_var,
+                &annotation.introduced_variables.host_exposed_aliases,
+            ),
         }
     }
 }
@@ -350,8 +417,8 @@ impl<'a> ExternalSpecializations<'a> {
 #[derive(Clone, Debug)]
 pub struct Procs<'a> {
     pub partial_procs: BumpMap<Symbol, PartialProc<'a>>,
-    pub imported_module_thunks: BumpSet<Symbol>,
-    pub module_thunks: BumpSet<Symbol>,
+    pub imported_module_thunks: &'a [Symbol],
+    pub module_thunks: &'a [Symbol],
     pub pending_specializations:
         Option<BumpMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>>,
     pub specialized: BumpMap<(Symbol, ProcLayout<'a>), InProgressProc<'a>>,
@@ -364,8 +431,8 @@ impl<'a> Procs<'a> {
     pub fn new_in(arena: &'a Bump) -> Self {
         Self {
             partial_procs: BumpMap::new_in(arena),
-            imported_module_thunks: BumpSet::new_in(arena),
-            module_thunks: BumpSet::new_in(arena),
+            imported_module_thunks: &[],
+            module_thunks: &[],
             pending_specializations: Some(BumpMap::new_in(arena)),
             specialized: BumpMap::new_in(arena),
             runtime_errors: BumpMap::new_in(arena),
@@ -382,6 +449,14 @@ pub enum InProgressProc<'a> {
 }
 
 impl<'a> Procs<'a> {
+    fn is_imported_module_thunk(&self, symbol: Symbol) -> bool {
+        self.imported_module_thunks.iter().any(|x| *x == symbol)
+    }
+
+    fn is_module_thunk(&self, symbol: Symbol) -> bool {
+        self.module_thunks.iter().any(|x| *x == symbol)
+    }
+
     pub fn get_specialized_procs_without_rc(
         self,
         env: &mut Env<'a, '_>,
@@ -420,65 +495,9 @@ impl<'a> Procs<'a> {
         result
     }
 
-    // TODO trim down these arguments!
-    #[allow(clippy::too_many_arguments)]
-    pub fn insert_named(
-        &mut self,
-        env: &mut Env<'a, '_>,
-        layout_cache: &mut LayoutCache<'a>,
-        name: Symbol,
-        annotation: Variable,
-        loc_args: std::vec::Vec<(Variable, Located<roc_can::pattern::Pattern>)>,
-        loc_body: Located<roc_can::expr::Expr>,
-        captured_symbols: CapturedSymbols<'a>,
-        is_self_recursive: bool,
-        ret_var: Variable,
-    ) {
-        let number_of_arguments = loc_args.len();
-
-        match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
-            Ok((_, pattern_symbols, body)) => {
-                // a named closure. Since these aren't specialized by the surrounding
-                // context, we can't add pending specializations for them yet.
-                // (If we did, all named polymorphic functions would immediately error
-                // on trying to convert a flex var to a Layout.)
-                let pattern_symbols = pattern_symbols.into_bump_slice();
-                self.partial_procs.insert(
-                    name,
-                    PartialProc {
-                        annotation,
-                        pattern_symbols,
-                        captured_symbols,
-                        body: body.value,
-                        is_self_recursive,
-                    },
-                );
-            }
-
-            Err(error) => {
-                let mut pattern_symbols = Vec::with_capacity_in(number_of_arguments, env.arena);
-
-                for _ in 0..number_of_arguments {
-                    pattern_symbols.push(env.unique_symbol());
-                }
-
-                self.partial_procs.insert(
-                    name,
-                    PartialProc {
-                        annotation,
-                        pattern_symbols: pattern_symbols.into_bump_slice(),
-                        captured_symbols: CapturedSymbols::None,
-                        body: roc_can::expr::Expr::RuntimeError(error.value),
-                        is_self_recursive: false,
-                    },
-                );
-            }
-        }
-    }
-
     // TODO trim these down
     #[allow(clippy::too_many_arguments)]
-    pub fn insert_anonymous(
+    fn insert_anonymous(
         &mut self,
         env: &mut Env<'a, '_>,
         symbol: Symbol,
@@ -540,12 +559,13 @@ impl<'a> Procs<'a> {
                         };
                     }
 
+                    if self.is_module_thunk(symbol) {
+                        debug_assert!(layout.arguments.is_empty());
+                    }
+
                     match &mut self.pending_specializations {
                         Some(pending_specializations) => {
                             // register the pending specialization, so this gets code genned later
-                            if self.module_thunks.contains(&symbol) {
-                                debug_assert!(layout.arguments.is_empty());
-                            }
                             add_pending(pending_specializations, symbol, layout, pending);
 
                             self.partial_procs.insert(symbol, partial_proc);
@@ -569,7 +589,7 @@ impl<'a> Procs<'a> {
                                         proc.name
                                     );
 
-                                    if self.module_thunks.contains(&proc.name) {
+                                    if self.is_module_thunk(proc.name) {
                                         debug_assert!(top_level.arguments.is_empty());
                                     }
 
@@ -589,50 +609,7 @@ impl<'a> Procs<'a> {
         }
     }
 
-    /// Add a named function that will be publicly exposed to the host
-    pub fn insert_exposed(
-        &mut self,
-        name: Symbol,
-        layout: ProcLayout<'a>,
-        arena: &'a Bump,
-        subs: &Subs,
-        opt_annotation: Option<roc_can::def::Annotation>,
-        fn_var: Variable,
-    ) {
-        let tuple = (name, layout);
-
-        // If we've already specialized this one, no further work is needed.
-        if self.specialized.contains_key(&tuple) {
-            return;
-        }
-
-        // We're done with that tuple, so move layout back out to avoid cloning it.
-        let (name, layout) = tuple;
-        let pending = match opt_annotation {
-            None => PendingSpecialization::from_var(arena, subs, fn_var),
-            Some(annotation) => PendingSpecialization::from_var_host_exposed(
-                arena,
-                subs,
-                fn_var,
-                &annotation.introduced_variables.host_exposed_aliases,
-            ),
-        };
-
-        // This should only be called when pending_specializations is Some.
-        // Otherwise, it's being called in the wrong pass!
-        match &mut self.pending_specializations {
-            Some(pending_specializations) => {
-                // register the pending specialization, so this gets code genned later
-                add_pending(pending_specializations, name, layout, pending)
-            }
-            None => unreachable!(
-                r"insert_exposed was called after the pending specializations phase had already completed!"
-            ),
-        }
-    }
-
-    /// TODO
-    pub fn insert_passed_by_name(
+    fn insert_passed_by_name(
         &mut self,
         env: &mut Env<'a, '_>,
         fn_var: Variable,
@@ -651,16 +628,17 @@ impl<'a> Procs<'a> {
             return;
         }
 
+        // register the pending specialization, so this gets code genned later
+        if self.module_thunks.contains(&name) {
+            debug_assert!(layout.arguments.is_empty());
+        }
+
         // This should only be called when pending_specializations is Some.
         // Otherwise, it's being called in the wrong pass!
         match &mut self.pending_specializations {
             Some(pending_specializations) => {
                 let pending = PendingSpecialization::from_var(env.arena, env.subs, fn_var);
 
-                // register the pending specialization, so this gets code genned later
-                if self.module_thunks.contains(&name) {
-                    debug_assert!(layout.arguments.is_empty());
-                }
                 add_pending(pending_specializations, name, layout, pending)
             }
             None => {
@@ -1703,15 +1681,23 @@ pub fn specialize_all<'a>(
     env: &mut Env<'a, '_>,
     mut procs: Procs<'a>,
     externals_others_need: ExternalSpecializations<'a>,
+    pending_specializations: BumpMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>,
     layout_cache: &mut LayoutCache<'a>,
 ) -> Procs<'a> {
     specialize_all_help(env, &mut procs, externals_others_need, layout_cache);
 
     // When calling from_can, pending_specializations should be unavailable.
     // This must be a single pass, and we must not add any more entries to it!
+
+    // observation: specialize_all_help does add to pending_specializations, but does not reference
+    // any existing values in it.
     let opt_pending_specializations = std::mem::replace(&mut procs.pending_specializations, None);
 
-    for (name, by_layout) in opt_pending_specializations.into_iter().flatten() {
+    let it = pending_specializations
+        .into_iter()
+        .chain(opt_pending_specializations.into_iter().flatten());
+
+    for (name, by_layout) in it {
         for (outside_layout, pending) in by_layout.into_iter() {
             // If we've already seen this (Symbol, Layout) combination before,
             // don't try to specialize it again. If we do, we'll loop forever!
@@ -1746,7 +1732,7 @@ pub fn specialize_all<'a>(
                         // TODO thiscode is duplicated elsewhere
                         let top_level = ProcLayout::from_raw(env.arena, layout);
 
-                        if procs.module_thunks.contains(&proc.name) {
+                        if procs.is_module_thunk(proc.name) {
                             debug_assert!(
                                 top_level.arguments.is_empty(),
                                 "{:?} from {:?}",
@@ -1826,7 +1812,7 @@ fn specialize_all_help<'a>(
             Ok((proc, layout)) => {
                 let top_level = ProcLayout::from_raw(env.arena, layout);
 
-                if procs.module_thunks.contains(&name) {
+                if procs.is_module_thunk(name) {
                     debug_assert!(top_level.arguments.is_empty());
                 }
 
@@ -2526,7 +2512,7 @@ where
         .raw_from_var(env.arena, fn_var, env.subs)
         .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
 
-    let raw = if procs.module_thunks.contains(&proc_name) {
+    let raw = if procs.is_module_thunk(proc_name) {
         match raw {
             RawFunctionLayout::Function(_, lambda_set, _) => {
                 RawFunctionLayout::ZeroArgumentThunk(Layout::LambdaSet(lambda_set))
@@ -2629,7 +2615,7 @@ fn specialize_naked_symbol<'a>(
     hole: &'a Stmt<'a>,
     symbol: Symbol,
 ) -> Stmt<'a> {
-    if procs.module_thunks.contains(&symbol) {
+    if procs.is_module_thunk(symbol) {
         let partial_proc = procs.partial_procs.get(&symbol).unwrap();
         let fn_var = partial_proc.annotation;
 
@@ -2865,13 +2851,12 @@ pub fn with_hole<'a>(
 
                     // this should be a top-level declaration, and hence have no captured symbols
                     // if we ever do hit this (and it's not a bug), we should make sure to put the
-                    // captured symbols into a CapturedSymbols and give it to insert_named
+                    // captured symbols into a CapturedSymbols and give it to PartialProc::from_named_function
                     debug_assert!(captured_symbols.is_empty());
 
-                    procs.insert_named(
+                    let partial_proc = PartialProc::from_named_function(
                         env,
                         layout_cache,
-                        *symbol,
                         function_type,
                         arguments,
                         loc_body,
@@ -2879,6 +2864,8 @@ pub fn with_hole<'a>(
                         is_self_recursive,
                         return_type,
                     );
+
+                    procs.partial_procs.insert(*symbol, partial_proc);
 
                     return with_hole(
                         env,
@@ -3037,10 +3024,9 @@ pub fn with_hole<'a>(
                         let is_self_recursive =
                             !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
 
-                        procs.insert_named(
+                        let partial_proc = PartialProc::from_named_function(
                             env,
                             layout_cache,
-                            *symbol,
                             function_type,
                             arguments,
                             loc_body,
@@ -3048,6 +3034,8 @@ pub fn with_hole<'a>(
                             is_self_recursive,
                             return_type,
                         );
+
+                        procs.partial_procs.insert(*symbol, partial_proc);
 
                         continue;
                     }
@@ -4752,10 +4740,9 @@ pub fn from_can<'a>(
                             let is_self_recursive =
                                 !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
 
-                            procs.insert_named(
+                            let partial_proc = PartialProc::from_named_function(
                                 env,
                                 layout_cache,
-                                *symbol,
                                 function_type,
                                 arguments,
                                 loc_body,
@@ -4763,6 +4750,8 @@ pub fn from_can<'a>(
                                 is_self_recursive,
                                 return_type,
                             );
+
+                            procs.partial_procs.insert(*symbol, partial_proc);
 
                             continue;
                         }
@@ -4840,10 +4829,9 @@ pub fn from_can<'a>(
                                 }
                             };
 
-                            procs.insert_named(
+                            let partial_proc = PartialProc::from_named_function(
                                 env,
                                 layout_cache,
-                                *symbol,
                                 function_type,
                                 arguments,
                                 loc_body,
@@ -4851,6 +4839,8 @@ pub fn from_can<'a>(
                                 is_self_recursive,
                                 return_type,
                             );
+
+                            procs.partial_procs.insert(*symbol, partial_proc);
 
                             return from_can(env, variable, cont.value, procs, layout_cache);
                         }
@@ -6091,7 +6081,7 @@ fn reuse_function_symbol<'a>(
                         .raw_from_var(env.arena, arg_var, env.subs)
                         .expect("creating layout does not fail");
 
-                    if procs.imported_module_thunks.contains(&original) {
+                    if procs.is_imported_module_thunk(original) {
                         let layout = match raw {
                             RawFunctionLayout::ZeroArgumentThunk(layout) => layout,
                             RawFunctionLayout::Function(_, lambda_set, _) => {
@@ -6187,7 +6177,7 @@ fn reuse_function_symbol<'a>(
                             closure_data,
                             env.arena.alloc(result),
                         )
-                    } else if procs.module_thunks.contains(&original) {
+                    } else if procs.is_module_thunk(original) {
                         // this is a 0-argument thunk
 
                         // TODO suspicious
@@ -6383,7 +6373,7 @@ fn call_by_name<'a>(
             evaluate_arguments_then_runtime_error(env, procs, layout_cache, msg, loc_args)
         }
         Ok(RawFunctionLayout::Function(arg_layouts, lambda_set, ret_layout)) => {
-            if procs.module_thunks.contains(&proc_name) {
+            if procs.is_module_thunk(proc_name) {
                 if loc_args.is_empty() {
                     call_by_name_module_thunk(
                         env,
@@ -6460,7 +6450,7 @@ fn call_by_name<'a>(
             }
         }
         Ok(RawFunctionLayout::ZeroArgumentThunk(ret_layout)) => {
-            if procs.module_thunks.contains(&proc_name) {
+            if procs.is_module_thunk(proc_name) {
                 // here we turn a call to a module thunk into  forcing of that thunk
                 call_by_name_module_thunk(
                     env,
@@ -6562,7 +6552,7 @@ fn call_by_name_help<'a>(
         add_needed_external(procs, env, original_fn_var, proc_name);
 
         debug_assert_ne!(proc_name.module_id(), ModuleId::ATTR);
-        if procs.imported_module_thunks.contains(&proc_name) {
+        if procs.is_imported_module_thunk(proc_name) {
             force_thunk(
                 env,
                 proc_name,
@@ -6614,13 +6604,13 @@ fn call_by_name_help<'a>(
         // the same specialization independently), we work through the
         // queue of pending specializations to complete each specialization
         // exactly once.
+        if procs.is_module_thunk(proc_name) {
+            debug_assert!(top_level_layout.arguments.is_empty());
+        }
+
         match &mut procs.pending_specializations {
             Some(pending_specializations) => {
                 debug_assert!(!env.is_imported_symbol(proc_name));
-
-                if procs.module_thunks.contains(&proc_name) {
-                    debug_assert!(top_level_layout.arguments.is_empty());
-                }
 
                 // register the pending specialization, so this gets code genned later
                 add_pending(
@@ -6749,8 +6739,6 @@ fn call_by_name_module_thunk<'a>(
 ) -> Stmt<'a> {
     debug_assert!(!env.is_imported_symbol(proc_name));
 
-    // debug_assert!(!procs.module_thunks.contains(&proc_name), "{:?}", proc_name);
-
     let top_level_layout = ProcLayout::new(env.arena, &[], *ret_layout);
 
     let inner_layout = *ret_layout;
@@ -6775,13 +6763,13 @@ fn call_by_name_module_thunk<'a>(
         // the same specialization independently), we work through the
         // queue of pending specializations to complete each specialization
         // exactly once.
+        if procs.is_module_thunk(proc_name) {
+            debug_assert!(top_level_layout.arguments.is_empty());
+        }
+
         match &mut procs.pending_specializations {
             Some(pending_specializations) => {
                 debug_assert!(!env.is_imported_symbol(proc_name));
-
-                if procs.module_thunks.contains(&proc_name) {
-                    debug_assert!(top_level_layout.arguments.is_empty());
-                }
 
                 // register the pending specialization, so this gets code genned later
                 add_pending(

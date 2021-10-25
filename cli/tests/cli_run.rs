@@ -13,7 +13,7 @@ mod cli_run {
         run_with_valgrind, ValgrindError, ValgrindErrorXWhat,
     };
     use serial_test::serial;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     #[cfg(not(debug_assertions))]
     use roc_collections::all::MutMap;
@@ -39,6 +39,7 @@ mod cli_run {
         filename: &'a str,
         executable_filename: &'a str,
         stdin: &'a [&'a str],
+        input_file: Option<&'a str>,
         expected_ending: &'a str,
         use_valgrind: bool,
     }
@@ -48,6 +49,7 @@ mod cli_run {
         stdin: &[&str],
         executable_filename: &str,
         flags: &[&str],
+        input_file: Option<PathBuf>,
         expected_ending: &str,
         use_valgrind: bool,
     ) {
@@ -59,10 +61,20 @@ mod cli_run {
         assert!(compile_out.status.success(), "bad status {:?}", compile_out);
 
         let out = if use_valgrind && ALLOW_VALGRIND {
-            let (valgrind_out, raw_xml) = run_with_valgrind(
-                stdin,
-                &[file.with_file_name(executable_filename).to_str().unwrap()],
-            );
+            let (valgrind_out, raw_xml) = if let Some(input_file) = input_file {
+                run_with_valgrind(
+                    stdin,
+                    &[
+                        file.with_file_name(executable_filename).to_str().unwrap(),
+                        input_file.to_str().unwrap(),
+                    ],
+                )
+            } else {
+                run_with_valgrind(
+                    stdin,
+                    &[file.with_file_name(executable_filename).to_str().unwrap()],
+                )
+            };
 
             if valgrind_out.status.success() {
                 let memory_errors = extract_valgrind_errors(&raw_xml).unwrap_or_else(|err| {
@@ -100,16 +112,24 @@ mod cli_run {
 
             valgrind_out
         } else {
-            run_cmd(
-                file.with_file_name(executable_filename).to_str().unwrap(),
-                stdin,
-                &[],
-            )
+            if let Some(input_file) = input_file {
+                run_cmd(
+                    file.with_file_name(executable_filename).to_str().unwrap(),
+                    stdin,
+                    &[input_file.to_str().unwrap()],
+                )
+            } else {
+                run_cmd(
+                    file.with_file_name(executable_filename).to_str().unwrap(),
+                    stdin,
+                    &[],
+                )
+            }
         };
         if !&out.stdout.ends_with(expected_ending) {
             panic!(
                 "expected output to end with {:?} but instead got {:#?}",
-                expected_ending, out
+                expected_ending, out.stdout
             );
         }
         assert!(out.status.success());
@@ -121,8 +141,10 @@ mod cli_run {
         stdin: &[&str],
         executable_filename: &str,
         flags: &[&str],
+        input_file: Option<PathBuf>,
         expected_ending: &str,
     ) {
+        assert_eq!(input_file, None, "Wasm does not support input files");
         let mut flags = flags.to_vec();
         flags.push("--backend=wasm32");
 
@@ -178,6 +200,7 @@ mod cli_run {
                         example.stdin,
                         example.executable_filename,
                         &[],
+                        example.input_file.and_then(|file| Some(example_file(dir_name, file))),
                         example.expected_ending,
                         example.use_valgrind,
                     );
@@ -187,6 +210,7 @@ mod cli_run {
                         example.stdin,
                         example.executable_filename,
                         &["--optimize"],
+                        example.input_file.and_then(|file| Some(example_file(dir_name, file))),
                         example.expected_ending,
                         example.use_valgrind,
                     );
@@ -199,6 +223,7 @@ mod cli_run {
                             example.stdin,
                             example.executable_filename,
                             &["--roc-linker"],
+                            example.input_file.and_then(|file| Some(example_file(dir_name, file))),
                             example.expected_ending,
                             example.use_valgrind,
                         );
@@ -235,6 +260,7 @@ mod cli_run {
             filename: "Hello.roc",
             executable_filename: "hello-world",
             stdin: &[],
+            input_file: None,
             expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
@@ -242,6 +268,7 @@ mod cli_run {
             filename: "Hello.roc",
             executable_filename: "hello-world",
             stdin: &[],
+            input_file: None,
             expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
@@ -249,6 +276,7 @@ mod cli_run {
             filename: "Hello.roc",
             executable_filename: "hello-rust",
             stdin: &[],
+            input_file: None,
             expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
@@ -256,6 +284,7 @@ mod cli_run {
             filename: "Hello.roc",
             executable_filename: "hello-web",
             stdin: &[],
+            input_file: None,
             expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
@@ -263,6 +292,7 @@ mod cli_run {
             filename: "Fib.roc",
             executable_filename: "fib",
             stdin: &[],
+            input_file: None,
             expected_ending:"55\n",
             use_valgrind: true,
         },
@@ -270,6 +300,7 @@ mod cli_run {
             filename: "Quicksort.roc",
             executable_filename: "quicksort",
             stdin: &[],
+            input_file: None,
             expected_ending: "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
             use_valgrind: true,
         },
@@ -277,6 +308,7 @@ mod cli_run {
         //     filename: "Quicksort.roc",
         //     executable_filename: "quicksort",
         //     stdin: &[],
+        //     input_file: None,
         //     expected_ending: "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
         //     use_valgrind: true,
         // },
@@ -284,6 +316,7 @@ mod cli_run {
             filename: "Main.roc",
             executable_filename: "effect-example",
             stdin: &["hi there!"],
+            input_file: None,
             expected_ending: "hi there!\nIt is known\n",
             use_valgrind: true,
         },
@@ -291,6 +324,7 @@ mod cli_run {
         //     filename: "Main.roc",
         //     executable_filename: "tea-example",
         //     stdin: &[],
+        //     input_file: None,
         //     expected_ending: "",
         //     use_valgrind: true,
         // },
@@ -298,6 +332,7 @@ mod cli_run {
             filename: "Echo.roc",
             executable_filename: "echo",
             stdin: &["Giovanni\n", "Giorgio\n"],
+            input_file: None,
             expected_ending: "Hi, Giovanni Giorgio!\n",
             use_valgrind: true,
         },
@@ -305,6 +340,7 @@ mod cli_run {
         //     filename: "Main.roc",
         //     executable_filename: "custom-malloc-example",
         //     stdin: &[],
+        //     input_file: None,
         //     expected_ending: "ms!\nThe list was small!\n",
         //     use_valgrind: true,
         // },
@@ -312,9 +348,20 @@ mod cli_run {
         //     filename: "Main.roc",
         //     executable_filename: "task-example",
         //     stdin: &[],
+        //     input_file: None,
         //     expected_ending: "successfully wrote to file\n",
         //     use_valgrind: true,
         // },
+        false_interpreter:"false-interpreter" => {
+            Example {
+                filename: "False.roc",
+                executable_filename: "false",
+                stdin: &[],
+                input_file: Some("examples/hello.false"),
+                expected_ending:"Hello, World!\n",
+                use_valgrind: false,
+            }
+        },
     }
 
     macro_rules! benchmarks {
@@ -341,6 +388,7 @@ mod cli_run {
                         benchmark.stdin,
                         benchmark.executable_filename,
                         &[],
+                        benchmark.input_file.and_then(|file| Some(examples_dir("benchmarks").join(file))),
                         benchmark.expected_ending,
                         benchmark.use_valgrind,
                     );
@@ -350,6 +398,7 @@ mod cli_run {
                         benchmark.stdin,
                         benchmark.executable_filename,
                         &["--optimize"],
+                        benchmark.input_file.and_then(|file| Some(examples_dir("benchmarks").join(file))),
                         benchmark.expected_ending,
                         benchmark.use_valgrind,
                     );
@@ -382,6 +431,7 @@ mod cli_run {
                         benchmark.stdin,
                         benchmark.executable_filename,
                         &[],
+                        benchmark.input_file.and_then(|file| Some(examples_dir("benchmarks").join(file))),
                         benchmark.expected_ending,
                     );
 
@@ -390,6 +440,7 @@ mod cli_run {
                         benchmark.stdin,
                         benchmark.executable_filename,
                         &["--optimize"],
+                        benchmark.input_file.and_then(|file| Some(examples_dir("benchmarks").join(file))),
                         benchmark.expected_ending,
                     );
                 }
@@ -421,6 +472,7 @@ mod cli_run {
                         benchmark.stdin,
                         benchmark.executable_filename,
                         &["--backend=x86_32"],
+                        benchmark.input_file.and_then(|file| Some(examples_dir("benchmarks").join(file))),
                         benchmark.expected_ending,
                         benchmark.use_valgrind,
                     );
@@ -430,6 +482,7 @@ mod cli_run {
                         benchmark.stdin,
                         benchmark.executable_filename,
                         &["--backend=x86_32", "--optimize"],
+                        benchmark.input_file.and_then(|file| Some(examples_dir("benchmarks").join(file))),
                         benchmark.expected_ending,
                         benchmark.use_valgrind,
                     );
@@ -458,6 +511,7 @@ mod cli_run {
                 filename: "NQueens.roc",
                 executable_filename: "nqueens",
                 stdin: &["6"],
+                input_file: None,
                 expected_ending: "4\n",
                 use_valgrind: true,
             },
@@ -465,6 +519,7 @@ mod cli_run {
                 filename: "CFold.roc",
                 executable_filename: "cfold",
                 stdin: &["3"],
+                input_file: None,
                 expected_ending: "11 & 11\n",
                 use_valgrind: true,
             },
@@ -472,6 +527,7 @@ mod cli_run {
                 filename: "Deriv.roc",
                 executable_filename: "deriv",
                 stdin: &["2"],
+                input_file: None,
                 expected_ending: "1 count: 6\n2 count: 22\n",
                 use_valgrind: true,
             },
@@ -479,6 +535,7 @@ mod cli_run {
                 filename: "RBTreeCk.roc",
                 executable_filename: "rbtree-ck",
                 stdin: &["100"],
+                input_file: None,
                 expected_ending: "10\n",
                 use_valgrind: true,
             },
@@ -486,6 +543,7 @@ mod cli_run {
                 filename: "RBTreeInsert.roc",
                 executable_filename: "rbtree-insert",
                 stdin: &[],
+                input_file: None,
                 expected_ending: "Node Black 0 {} Empty Empty\n",
                 use_valgrind: true,
             },
@@ -493,6 +551,7 @@ mod cli_run {
     //            filename: "RBTreeDel.roc",
     //            executable_filename: "rbtree-del",
     //            stdin: &["420"],
+    //            input_file: None,
     //            expected_ending: "30\n",
     //            use_valgrind: true,
     //        },
@@ -500,6 +559,7 @@ mod cli_run {
                 filename: "TestAStar.roc",
                 executable_filename: "test-astar",
                 stdin: &[],
+                input_file: None,
                 expected_ending: "True\n",
                 use_valgrind: false,
             },
@@ -507,6 +567,7 @@ mod cli_run {
                 filename: "TestBase64.roc",
                 executable_filename: "test-base64",
                 stdin: &[],
+                input_file: None,
                 expected_ending: "encoded: SGVsbG8gV29ybGQ=\ndecoded: Hello World\n",
                 use_valgrind: true,
             },
@@ -514,6 +575,7 @@ mod cli_run {
                 filename: "Closure.roc",
                 executable_filename: "closure",
                 stdin: &[],
+                input_file: None,
                 expected_ending: "",
                 use_valgrind: true,
             },
@@ -521,6 +583,7 @@ mod cli_run {
                 filename: "QuicksortApp.roc",
                 executable_filename: "quicksortapp",
                 stdin: &[],
+                input_file: None,
                 expected_ending: "todo put the correct quicksort answer here",
                 use_valgrind: true,
             },
@@ -600,6 +663,7 @@ mod cli_run {
             &[],
             "multi-dep-str",
             &[],
+            None,
             "I am Dep2.str2\n",
             true,
         );
@@ -613,6 +677,7 @@ mod cli_run {
             &[],
             "multi-dep-str",
             &["--optimize"],
+            None,
             "I am Dep2.str2\n",
             true,
         );
@@ -626,6 +691,7 @@ mod cli_run {
             &[],
             "multi-dep-thunk",
             &[],
+            None,
             "I am Dep2.value2\n",
             true,
         );
@@ -639,6 +705,7 @@ mod cli_run {
             &[],
             "multi-dep-thunk",
             &["--optimize"],
+            None,
             "I am Dep2.value2\n",
             true,
         );
