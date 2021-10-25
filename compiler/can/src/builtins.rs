@@ -2043,7 +2043,7 @@ fn list_drop_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     defn(
         symbol,
-        vec![(list_var, Symbol::ARG_1), (index_var, Symbol::ARG_2)],
+        vec![(list_var, Symbol::ARG_1)],
         var_store,
         body,
         list_var,
