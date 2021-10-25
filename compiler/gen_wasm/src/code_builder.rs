@@ -301,7 +301,7 @@ impl<'a> CodeBuilder<'a> {
         // reserve one byte for num_batches
         self.preamble.push(0);
 
-        if local_types.len() == 0 {
+        if local_types.is_empty() {
             return;
         }
 
@@ -384,9 +384,9 @@ impl<'a> CodeBuilder<'a> {
     }
 
     /// Write out all the bytes in the right order
-    pub fn serialize<W: std::io::Write>(&mut self, writer: &mut W) -> std::io::Result<usize> {
-        writer.write(&self.inner_length)?;
-        writer.write(&self.preamble)?;
+    pub fn serialize<W: std::io::Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        writer.write_all(&self.inner_length)?;
+        writer.write_all(&self.preamble)?;
 
         // We created each insertion when a local was used for the _second_ time.
         // But we want them in the order they were first assigned, which may not be the same.
@@ -394,13 +394,13 @@ impl<'a> CodeBuilder<'a> {
 
         let mut pos: usize = 0;
         for location in self.insert_locations.iter() {
-            writer.write(&self.code[pos..location.insert_at])?;
-            writer.write(&self.insert_bytes[location.start..location.end])?;
+            writer.write_all(&self.code[pos..location.insert_at])?;
+            writer.write_all(&self.insert_bytes[location.start..location.end])?;
             pos = location.insert_at;
         }
 
         let len = self.code.len();
-        writer.write(&self.code[pos..len])
+        writer.write_all(&self.code[pos..len])
     }
 
     /**********************************************************
@@ -493,7 +493,7 @@ impl<'a> CodeBuilder<'a> {
         panic!("Not implemented. Roc doesn't use function pointers");
     }
 
-    instruction_no_args!(drop, DROP, 1, false);
+    instruction_no_args!(drop_, DROP, 1, false);
     instruction_no_args!(select, SELECT, 3, true);
 
     pub fn get_local(&mut self, id: LocalId) {

@@ -266,10 +266,10 @@ encode_float!(encode_f64, f64);
 ///
 /// The value 3 is encoded as 0x83 0x80 0x80 0x80 0x00.
 /// https://github.com/WebAssembly/tool-conventions/blob/main/Linking.md#relocation-sections
-pub fn overwrite_padded_u32<'a>(buffer: &mut [u8], value: u32) {
+pub fn overwrite_padded_u32(buffer: &mut [u8], value: u32) {
     let mut x = value;
-    for i in 0..4 {
-        buffer[i] = 0x80 | ((x & 0x7f) as u8);
+    for byte in buffer.iter_mut().take(4) {
+        *byte = 0x80 | ((x & 0x7f) as u8);
         x >>= 7;
     }
     buffer[4] = x as u8;
