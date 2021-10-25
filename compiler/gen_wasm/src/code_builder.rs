@@ -343,7 +343,7 @@ impl<'a> CodeBuilder<'a> {
         self.preamble.push(GETGLOBAL);
         encode_u32(&mut self.preamble, STACK_POINTER_GLOBAL_ID);
         self.preamble.push(I32CONST);
-        encode_u32(&mut self.preamble, frame_size as u32);
+        encode_i32(&mut self.preamble, frame_size);
         self.preamble.push(I32SUB);
         self.preamble.push(TEELOCAL);
         encode_u32(&mut self.preamble, frame_pointer.0);

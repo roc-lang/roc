@@ -198,7 +198,7 @@ where
 macro_rules! assert_wasm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
         match $crate::helpers::eval::assert_wasm_evals_to_help::<$ty>($src, $expected) {
-            Err(msg) => println!("{:?}", msg),
+            Err(msg) => panic!("{:?}", msg),
             Ok(actual) => {
                 assert_eq!($transform(actual), $expected)
             }
