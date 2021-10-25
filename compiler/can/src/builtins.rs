@@ -2018,7 +2018,8 @@ fn list_drop_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
         op: LowLevel::ListDropAt,
         args: vec![
             (list_var, Var(Symbol::ARG_1)),
-            (index_var,
+            (
+                index_var,
                 // Num.sub (List.len list) 1
                 RunLowLevel {
                     op: LowLevel::NumSubWrap,
