@@ -1008,8 +1008,6 @@ fn str_trim_large_to_large() {
 
 #[test]
 fn str_trim_large_to_small() {
-    // TODO GIESCH
-    // also check that the 'new' string is correctly small
     assert_evals_to!(
         indoc!(r#"Str.trim "  hello world        ""#),
         RocStr::from("hello world"),

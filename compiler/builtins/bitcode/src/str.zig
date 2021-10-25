@@ -293,8 +293,6 @@ pub const RocStr = extern struct {
         }
     }
 
-    // TODO GIESCH
-    // rename this isCopyable or something
     pub fn isUnique(self: RocStr) bool {
         // the empty string is unique (in the sense that copying it will not leak memory)
         if (self.isEmpty()) {
@@ -1526,9 +1524,6 @@ pub fn strTrim(string: RocStr) callconv(.C) RocStr {
         if (string.isSmallStr()) {
             const small_bytes_ptr = string.asU8ptr();
 
-            // TODO GIESCH
-            // handle unique small case?
-
             var ret_string = RocStr.allocate(InPlace.Clone, new_len);
             var ret_string_ptr = ret_string.asU8ptr();
             var i: usize = 0;
@@ -1543,8 +1538,6 @@ pub fn strTrim(string: RocStr) callconv(.C) RocStr {
 
         // Originally Large
 
-        // TODO GIESCH
-        // not hitting this branch in Roc tests; only from zig
         if (string.isRefcountOne()) {
             if (leading_bytes > 0) {
                 var i: usize = 0;
@@ -1557,9 +1550,6 @@ pub fn strTrim(string: RocStr) callconv(.C) RocStr {
 
             var new_string = string;
             new_string.str_len = new_len;
-
-            // TODO GIESCH
-            // handle transforming into a small string?
             return new_string;
         }
 
@@ -1698,8 +1688,6 @@ test "strTrim: large to large" {
     try expect(trimmed.eq(expected));
 }
 
-// TODO GIESCH
-// is this test correct? would expect still 'large' after
 test "strTrim: large to small" {
     const original_bytes = "             hello world         ";
     const original = RocStr.init(original_bytes, original_bytes.len);
@@ -1756,6 +1744,3 @@ test "ReverseUtf8View: empty" {
         try expect(false);
     }
 }
-
-// TODO GIESCH
-// ask how to manually mess with refcount, to unit test the shared case

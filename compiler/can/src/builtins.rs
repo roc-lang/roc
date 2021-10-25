@@ -1239,7 +1239,6 @@ fn str_split(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Str.trim : Str -> Str
 fn str_trim(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    // TODO GIESCH understand when/why this can be reused
     let str_var = var_store.fresh();
 
     let body = RunLowLevel {
