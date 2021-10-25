@@ -7,12 +7,13 @@ use roc_module::symbol::Symbol;
 
 use crate::opcodes::*;
 use crate::{
-    encode_u32, encode_u64, round_up_to_alignment, LocalId, FRAME_ALIGNMENT_BYTES,
-    STACK_POINTER_GLOBAL_ID,
+    encode_f32, encode_f64, encode_i32, encode_i64, encode_u32, round_up_to_alignment, LocalId,
+    FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID,
 };
 
 const DEBUG_LOG: bool = false;
 
+/// Wasm value type. (Rust representation matches Wasm encoding)
 #[repr(u8)]
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum ValueType {
@@ -22,6 +23,7 @@ pub enum ValueType {
     F64 = 0x7c,
 }
 
+// This is a bit unfortunate. Will go away if we generate our own Types section.
 impl ValueType {
     pub fn to_parity_wasm(&self) -> parity_wasm::elements::ValueType {
         match self {
@@ -47,6 +49,7 @@ impl BlockType {
     }
 }
 
+/// Wasm memory alignment. (Rust representation matches Wasm encoding)
 #[repr(u8)]
 #[derive(Clone, Copy, Debug)]
 pub enum Align {
@@ -540,29 +543,20 @@ impl<'a> CodeBuilder<'a> {
         self.inst_imm8(GROWMEMORY, 1, true, 0);
     }
     pub fn i32_const(&mut self, x: i32) {
-        self.inst_imm32(I32CONST, 0, true, x as u32);
+        self.inst(I32CONST, 0, true);
+        encode_i32(&mut self.code, x);
     }
     pub fn i64_const(&mut self, x: i64) {
         self.inst(I64CONST, 0, true);
-        encode_u64(&mut self.code, x as u64);
+        encode_i64(&mut self.code, x);
     }
     pub fn f32_const(&mut self, x: f32) {
         self.inst(F32CONST, 0, true);
-        // No LEB encoding, and always little-endian regardless of compiler host.
-        let mut value: u32 = x.to_bits();
-        for _ in 0..4 {
-            self.code.push((value & 0xff) as u8);
-            value >>= 8;
-        }
+        encode_f32(&mut self.code, x);
     }
     pub fn f64_const(&mut self, x: f64) {
         self.inst(F64CONST, 0, true);
-        // No LEB encoding, and always little-endian regardless of compiler host.
-        let mut value: u64 = x.to_bits();
-        for _ in 0..8 {
-            self.code.push((value & 0xff) as u8);
-            value >>= 8;
-        }
+        encode_f64(&mut self.code, x);
     }
 
     // TODO: Consider creating unified methods for numerical ops like 'eq' and 'add',

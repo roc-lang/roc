@@ -194,41 +194,75 @@ pub fn debug_panic<E: std::fmt::Debug>(error: E) {
     panic!("{:?}", error);
 }
 
-/// Write a u32 value as LEB-128 encoded bytes into the provided buffer, returning byte length
+/// Write an unsigned value into the provided buffer in LEB-128 format, returning byte length
 ///
 /// All integers in Wasm are variable-length encoded, which saves space for small values.
 /// The most significant bit indicates "more bytes are coming", and the other 7 are payload.
-pub fn encode_u32<'a>(buffer: &mut Vec<'a, u8>, value: u32) -> usize {
-    let mut x = value;
-    let start_len = buffer.len();
-    while x >= 0x80 {
-        buffer.push(0x80 | ((x & 0x7f) as u8));
-        x >>= 7;
-    }
-    buffer.push(x as u8);
-    buffer.len() - start_len
+macro_rules! encode_uleb128 {
+    ($name: ident, $ty: ty) => {
+        pub fn $name<'a>(buffer: &mut Vec<'a, u8>, value: $ty) -> usize {
+            let mut x = value;
+            let start_len = buffer.len();
+            while x >= 0x80 {
+                buffer.push(0x80 | ((x & 0x7f) as u8));
+                x >>= 7;
+            }
+            buffer.push(x as u8);
+            buffer.len() - start_len
+        }
+    };
 }
 
-/// Write a u64 value as LEB-128 encoded bytes, into the provided buffer, returning byte length
-///
-/// All integers in Wasm are variable-length encoded, which saves space for small values.
-/// The most significant bit indicates "more bytes are coming", and the other 7 are payload.
-pub fn encode_u64<'a>(buffer: &mut Vec<'a, u8>, value: u64) -> usize {
-    let mut x = value;
-    let start_len = buffer.len();
-    while x >= 0x80 {
-        buffer.push(0x80 | ((x & 0x7f) as u8));
-        x >>= 7;
-    }
-    buffer.push(x as u8);
-    buffer.len() - start_len
+encode_uleb128!(encode_u32, u32);
+encode_uleb128!(encode_u64, u64);
+
+/// Write a *signed* value into the provided buffer in LEB-128 format, returning byte length
+macro_rules! encode_sleb128 {
+    ($name: ident, $ty: ty) => {
+        pub fn $name<'a>(buffer: &mut Vec<'a, u8>, value: $ty) -> usize {
+            let mut x = value;
+            let start_len = buffer.len();
+            loop {
+                let byte = (x & 0x7f) as u8;
+                x >>= 7;
+                let byte_is_negative = (byte & 0x40) != 0;
+                if ((x == 0 && !byte_is_negative) || (x == -1 && byte_is_negative)) {
+                    buffer.push(byte);
+                    break;
+                }
+                buffer.push(byte | 0x80);
+            }
+            buffer.len() - start_len
+        }
+    };
 }
 
-/// Overwrite a LEB-128 encoded u32 value that has been padded to maximum length (5 bytes)
+encode_sleb128!(encode_i32, i32);
+encode_sleb128!(encode_i64, i64);
+
+/// No LEB encoding, and always little-endian regardless of compiler host.
+macro_rules! encode_float {
+    ($name: ident, $ty: ty) => {
+        pub fn $name<'a>(buffer: &mut Vec<'a, u8>, value: $ty) {
+            let mut x = value.to_bits();
+            let size = std::mem::size_of::<$ty>();
+            for _ in 0..size {
+                buffer.push((x & 0xff) as u8);
+                x >>= 8;
+            }
+        }
+    };
+}
+
+encode_float!(encode_f32, f32);
+encode_float!(encode_f64, f64);
+
+/// Overwrite a LEB-128 encoded u32 value, padded to maximum length (5 bytes)
 ///
-/// We need some fixed length values so we can overwrite them without moving all following bytes.
-/// For example, the code section is prefixed with its length, which we only know at the end.
+/// We need some fixed-length values so we can overwrite them without moving all following bytes.
+/// Many parts of the binary format are prefixed with their length, which we only know at the end.
 /// And relocation values get updated during linking.
+/// This can help us to avoid copies, which is good for speed, but there's a tradeoff with output size.
 ///
 /// The value 3 is encoded as 0x83 0x80 0x80 0x80 0x00.
 /// https://github.com/WebAssembly/tool-conventions/blob/main/Linking.md#relocation-sections
