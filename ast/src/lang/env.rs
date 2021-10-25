@@ -1,3 +1,4 @@
+use crate::mem_pool::pool::{NodeId, Pool};
 use bumpalo::{collections::Vec as BumpVec, Bump};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Ident, ModuleName};
@@ -5,8 +6,6 @@ use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Located, Region};
 use roc_types::subs::VarStore;
-
-use crate::mem_pool::pool::{NodeId, Pool};
 
 use super::core::def::def::References;
 
@@ -35,6 +34,7 @@ pub struct Env<'a> {
 }
 
 impl<'a> Env<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         home: ModuleId,
         arena: &'a Bump,
@@ -52,7 +52,7 @@ impl<'a> Env<'a> {
             var_store,
             dep_idents,
             module_ids,
-            ident_ids: exposed_ident_ids.clone(), // we start with these, but will add more later
+            ident_ids: exposed_ident_ids.clone(), // we start with these, but will add more later using Scope.introduce
             exposed_ident_ids,
             closures: MutMap::default(),
             qualified_lookups: MutSet::default(),

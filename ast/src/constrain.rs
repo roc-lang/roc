@@ -273,7 +273,7 @@ pub fn constrain_expr<'a>(
         Expr2::Call {
             args,
             expr_var,
-            expr: expr_node_id,
+            expr_id: expr_node_id,
             closure_var,
             fn_var,
             ..
@@ -944,8 +944,8 @@ pub fn constrain_expr<'a>(
         }
         Expr2::Closure {
             args,
-            name,
-            body: body_id,
+            uniq_symbol,
+            body_id,
             function_type: fn_var,
             extra,
             ..
@@ -992,7 +992,7 @@ pub fn constrain_expr<'a>(
             let closure_constraint = constrain_closure_size(
                 arena,
                 env,
-                *name,
+                *uniq_symbol,
                 region,
                 captured_symbols,
                 *closure_var,

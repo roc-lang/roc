@@ -2,6 +2,7 @@ target
 generated-docs
 zig-cache
 .direnv
+.envrc
 *.rs.bk
 *.o
 *.tmp

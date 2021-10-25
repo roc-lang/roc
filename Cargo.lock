@@ -3716,6 +3716,7 @@ name = "roc_code_markup"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
+ "itertools 0.10.1",
  "palette",
  "roc_ast",
  "roc_module",
@@ -3772,6 +3773,7 @@ dependencies = [
  "roc_parse",
  "roc_region",
  "roc_types",
+ "snafu",
  "tempfile",
  "uuid",
 ]
@@ -4012,6 +4014,7 @@ dependencies = [
  "roc_collections",
  "roc_ident",
  "roc_region",
+ "snafu",
  "static_assertions",
 ]
 

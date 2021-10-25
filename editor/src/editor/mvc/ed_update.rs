@@ -53,7 +53,6 @@ use roc_code_markup::markup::nodes::MarkupNode;
 use roc_code_markup::markup::nodes::EQUALS;
 use roc_code_markup::slow_pool::MarkNodeId;
 use roc_code_markup::slow_pool::SlowPool;
-use roc_code_markup::syntax_highlight::HighlightStyle;
 use roc_collections::all::MutMap;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
@@ -250,6 +249,7 @@ impl<'a> EdModel<'a> {
         mark_node_pool: &SlowPool,
     ) -> UIResult<()> {
         let mark_node = mark_node_pool.get(mark_node_id);
+
         let node_newlines = mark_node.get_newlines_at_end();
 
         if mark_node.is_nested() {
@@ -277,9 +277,7 @@ impl<'a> EdModel<'a> {
                 code_lines,
             )?;
 
-            if node_newlines == 0 {
-                *col_nr += node_content.len();
-            }
+            *col_nr += node_content.len();
         }
 
         if node_newlines > 0 {
@@ -582,7 +580,6 @@ impl<'a> EdModel<'a> {
             let blank_replacement = MarkupNode::Blank {
                 ast_node_id: sel_block.ast_node_id,
                 attributes: Attributes::default(),
-                syn_high_style: HighlightStyle::Blank,
                 parent_id_opt: expr2_level_mark_node.get_parent_id_opt(),
                 newlines_at_end,
             };
