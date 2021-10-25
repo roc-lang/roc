@@ -7,7 +7,7 @@ pub fn mark_node_to_html<'a>(
     mark_node_pool: &SlowPool,
     buf: &mut BumpString<'a>,
 ) {
-    let additional_newlines: usize;
+    let mut additional_newlines = 0;
 
     match mark_node {
         MarkupNode::Nested {
@@ -33,12 +33,13 @@ pub fn mark_node_to_html<'a>(
                 Operator => "operator",
                 Comma => "comma",
                 String => "string",
-                FunctionName => "function_name",
+                FunctionName => "function-name",
+                FunctionArgName => "function-arg-name",
                 Type => "type",
                 Bracket => "bracket",
                 Number => "number",
                 PackageRelated => "package-related",
-                Variable => "variable",
+                Value => "value",
                 RecordField => "recordfield",
                 Import => "import",
                 Provides => "provides",
@@ -61,6 +62,11 @@ pub fn mark_node_to_html<'a>(
             write_html_to_buf(&content_str, "blank", buf);
 
             additional_newlines = *newlines_at_end;
+        }
+        MarkupNode::Indent { .. } => {
+            let content_str = mark_node.get_content();
+
+            write_html_to_buf(&content_str, "indent", buf);
         }
     }
 

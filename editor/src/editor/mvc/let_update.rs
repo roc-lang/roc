@@ -66,7 +66,7 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
     let val_name_mark_node = MarkupNode::Text {
         content: val_name_string,
         ast_node_id,
-        syn_high_style: HighlightStyle::Variable,
+        syn_high_style: HighlightStyle::Value,
         attributes: Attributes::default(),
         parent_id_opt: Some(curr_mark_node_id),
         newlines_at_end: curr_mark_node_nls,

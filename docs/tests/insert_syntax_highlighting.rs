@@ -13,7 +13,11 @@ mod insert_doc_syntax_highlighting {
     use uuid::Uuid;
 
     fn expect_html(code_str: &str, want: &str, use_expr: bool) {
-        let loaded_module = make_mock_module();
+        let mut loaded_module = if use_expr {
+            make_mock_module("")
+        } else {
+            make_mock_module(code_str)
+        };
 
         let code_block_arena = Bump::new();
         let mut code_block_buf = BumpString::new_in(&code_block_arena);
@@ -40,8 +44,7 @@ mod insert_doc_syntax_highlighting {
                 &mut code_block_buf,
                 code_str,
                 loaded_module.module_id,
-                &loaded_module.interns.module_ids,
-                &loaded_module.interns,
+                &mut loaded_module.interns,
             ) {
                 Ok(highlighted_code_str) => {
                     assert_eq!(highlighted_code_str, want);
@@ -64,7 +67,7 @@ main = "Hello, world!"
 
 "#;
 
-    fn make_mock_module() -> LoadedModule {
+    fn make_mock_module(code_str: &str) -> LoadedModule {
         let temp_dir = tempdir().expect("Failed to create temporary directory for test.");
         let temp_file_path_buf =
             PathBuf::from([Uuid::new_v4().to_string(), ".roc".to_string()].join(""));
@@ -74,7 +77,12 @@ main = "Hello, world!"
             "Failed to create temporary file for path {:?}",
             temp_file_full_path
         ));
-        writeln!(file, "{}", HELLO_WORLD).expect(&format!(
+
+        let mut full_code_str = HELLO_WORLD.to_owned();
+        full_code_str.push_str("\n\n");
+        full_code_str.push_str(code_str);
+
+        writeln!(file, "{}", full_code_str).expect(&format!(
             "Failed to write {:?} to file: {:?}",
             HELLO_WORLD, file
         ));
@@ -143,16 +151,25 @@ main = "Hello, world!"
     #[test]
     fn top_level_def_value() {
         expect_html_def(
-            r#"main = "Hello, World!""#,
-            "<span class=\"syntax-variable\">main</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-string\">\"Hello, World!\"</span>\n\n",
+            r#"myFunction = "Hello, World!""#,
+            "<span class=\"syntax-value\">myFunction</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-string\">\"Hello, World!\"</span>\n\n",
         );
     }
 
     #[test]
     fn tld_list() {
         expect_html_def(
-            r#"main = [ 1, 2, 3 ]"#,
-            "<span class=\"syntax-variable\">main</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-bracket\">[ </span><span class=\"syntax-number\">1</span><span class=\"syntax-comma\">, </span><span class=\"syntax-number\">2</span><span class=\"syntax-comma\">, </span><span class=\"syntax-number\">3</span><span class=\"syntax-bracket\"> ]</span>\n\n",
+            r#"myFunction = [ 1, 2, 3 ]"#,
+            "<span class=\"syntax-value\">myFunction</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-bracket\">[ </span><span class=\"syntax-number\">1</span><span class=\"syntax-comma\">, </span><span class=\"syntax-number\">2</span><span class=\"syntax-comma\">, </span><span class=\"syntax-number\">3</span><span class=\"syntax-bracket\"> ]</span>\n\n",
+        );
+    }
+
+    #[test]
+    fn function() {
+        expect_html_def(
+            r#"myId = \something ->
+                something"#,
+            "<span class=\"syntax-value\">myId</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-operator\">\\</span><span class=\"syntax-function-arg-name\">something</span><span class=\"syntax-operator\"> -> </span>\n<span class=\"syntax-indent\">    </span><span class=\"syntax-value\">something</span>\n\n",
         );
     }
 }
