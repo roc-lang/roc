@@ -1704,6 +1704,7 @@ test "strTrim: large to small" {
     const trimmed = strTrim(original);
 
     try expect(trimmed.eq(expected));
+    try expect(trimmed.isSmallStr());
 }
 
 test "strTrim: small to small" {
