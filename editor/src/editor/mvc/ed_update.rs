@@ -5,7 +5,7 @@ use std::process::Stdio;
 
 use crate::editor::code_lines::CodeLines;
 use crate::editor::ed_error::EdResult;
-use crate::editor::ed_error::MissingSelection;
+use crate::editor::ed_error::{MissingSelection, RocCheckFailed};
 use crate::editor::grid_node_map::GridNodeMap;
 use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::mvc::ed_model::EdModel;
@@ -547,6 +547,7 @@ impl<'a> EdModel<'a> {
             }
             R => {
                 if modifiers.cmd_or_ctrl() {
+                    self.check_file()?;
                     self.run_file()?
                 }
             }
@@ -631,8 +632,27 @@ impl<'a> EdModel<'a> {
         Ok(())
     }
 
-    fn run_file(&mut self) -> UIResult<()> {
-        println!("Executing file...");
+    fn check_file(&mut self) -> EdResult<()> {
+        println!("Checking file (cargo run check <file>)...");
+
+        let roc_file_str = path_to_string(self.file_path);
+
+        let cmd_out = Command::new("cargo")
+            .arg("run")
+            .arg("check")
+            .arg(roc_file_str)
+            .stdout(Stdio::inherit())
+            .output()?;
+
+        if !cmd_out.status.success() {
+            RocCheckFailed.fail()?
+        }
+
+        Ok(())
+    }
+
+    fn run_file(&mut self) -> EdResult<()> {
+        println!("Executing file (cargo run <file>)...");
 
         let roc_file_str = path_to_string(self.file_path);
 
@@ -641,8 +661,7 @@ impl<'a> EdModel<'a> {
             .arg(roc_file_str)
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
-            .output()
-            .expect("Failed to run file");
+            .output()?;
 
         Ok(())
     }

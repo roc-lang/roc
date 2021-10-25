@@ -1,8 +1,10 @@
 mod backend;
+mod code_builder;
 pub mod from_wasm32_memory;
 mod layout;
 mod storage;
 
+use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use parity_wasm::builder;
 use parity_wasm::elements::{Instruction, Instruction::*, Internal, ValueType};
@@ -13,6 +15,7 @@ use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::LayoutIds;
 
 use crate::backend::WasmBackend;
+use crate::code_builder::CodeBuilder;
 
 const PTR_SIZE: u32 = 4;
 const PTR_TYPE: ValueType = ValueType::I32;
@@ -30,7 +33,7 @@ pub const STACK_ALIGNMENT_BYTES: i32 = 16;
 pub struct LocalId(pub u32);
 
 pub struct Env<'a> {
-    pub arena: &'a Bump, // not really using this much, parity_wasm works with std::vec a lot
+    pub arena: &'a Bump,
     pub interns: Interns,
     pub exposed_to_host: MutSet<Symbol>,
 }
@@ -38,11 +41,11 @@ pub struct Env<'a> {
 pub fn build_module<'a>(
     env: &'a Env,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-) -> Result<Vec<u8>, String> {
+) -> Result<std::vec::Vec<u8>, String> {
     let (builder, _) = build_module_help(env, procedures)?;
     let module = builder.build();
     module
-        .to_bytes()
+        .into_bytes()
         .map_err(|e| -> String { format!("Error serialising Wasm module {:?}", e) })
 }
 
@@ -50,7 +53,7 @@ pub fn build_module_help<'a>(
     env: &'a Env,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Result<(builder::ModuleBuilder, u32), String> {
-    let mut backend = WasmBackend::new();
+    let mut backend = WasmBackend::new(env);
     let mut layout_ids = LayoutIds::default();
 
     // Sort procedures by occurrence order
@@ -63,7 +66,7 @@ pub fn build_module_help<'a>(
     //
     // This means that for now other functions in the file have to be ordered "in reverse": if A
     // uses B, then the name of A must first occur after the first occurrence of the name of B
-    let mut procedures: std::vec::Vec<_> = procedures.into_iter().collect();
+    let mut procedures = Vec::from_iter_in(procedures.into_iter(), env.arena);
     procedures.sort_by(|a, b| b.0 .0.cmp(&a.0 .0));
 
     let mut function_index: u32 = 0;
@@ -79,7 +82,7 @@ pub fn build_module_help<'a>(
                 .with_internal(Internal::Function(function_index))
                 .build();
 
-            backend.builder.push_export(export);
+            backend.module_builder.push_export(export);
         }
     }
 
@@ -94,21 +97,21 @@ pub fn build_module_help<'a>(
     let memory = builder::MemoryBuilder::new()
         .with_min(MIN_MEMORY_SIZE_KB / PAGE_SIZE_KB)
         .build();
-    backend.builder.push_memory(memory);
+    backend.module_builder.push_memory(memory);
     let memory_export = builder::export()
         .field("memory")
         .with_internal(Internal::Memory(0))
         .build();
-    backend.builder.push_export(memory_export);
+    backend.module_builder.push_export(memory_export);
 
     let stack_pointer_global = builder::global()
         .with_type(PTR_TYPE)
         .mutable()
         .init_expr(Instruction::I32Const((MIN_MEMORY_SIZE_KB * 1024) as i32))
         .build();
-    backend.builder.push_global(stack_pointer_global);
+    backend.module_builder.push_global(stack_pointer_global);
 
-    Ok((backend.builder, main_function_index))
+    Ok((backend.module_builder, main_function_index))
 }
 
 fn encode_alignment(bytes: u32) -> u32 {
@@ -130,34 +133,45 @@ pub struct CopyMemoryConfig {
     alignment_bytes: u32,
 }
 
-pub fn copy_memory(instructions: &mut Vec<Instruction>, config: CopyMemoryConfig) {
+pub fn copy_memory(code_builder: &mut CodeBuilder, config: CopyMemoryConfig) {
+    if config.from_ptr == config.to_ptr && config.from_offset == config.to_offset {
+        return;
+    }
+
     let alignment_flag = encode_alignment(config.alignment_bytes);
     let mut i = 0;
     while config.size - i >= 8 {
-        instructions.push(GetLocal(config.to_ptr.0));
-        instructions.push(GetLocal(config.from_ptr.0));
-        instructions.push(I64Load(alignment_flag, i + config.from_offset));
-        instructions.push(I64Store(alignment_flag, i + config.to_offset));
+        code_builder.extend_from_slice(&[
+            GetLocal(config.to_ptr.0),
+            GetLocal(config.from_ptr.0),
+            I64Load(alignment_flag, i + config.from_offset),
+            I64Store(alignment_flag, i + config.to_offset),
+        ]);
         i += 8;
     }
     if config.size - i >= 4 {
-        instructions.push(GetLocal(config.to_ptr.0));
-        instructions.push(GetLocal(config.from_ptr.0));
-        instructions.push(I32Load(alignment_flag, i + config.from_offset));
-        instructions.push(I32Store(alignment_flag, i + config.to_offset));
+        code_builder.extend_from_slice(&[
+            GetLocal(config.to_ptr.0),
+            GetLocal(config.from_ptr.0),
+            I32Load(alignment_flag, i + config.from_offset),
+            I32Store(alignment_flag, i + config.to_offset),
+        ]);
         i += 4;
     }
     while config.size - i > 0 {
-        instructions.push(GetLocal(config.to_ptr.0));
-        instructions.push(GetLocal(config.from_ptr.0));
-        instructions.push(I32Load8U(alignment_flag, i + config.from_offset));
-        instructions.push(I32Store8(alignment_flag, i + config.to_offset));
+        code_builder.extend_from_slice(&[
+            GetLocal(config.to_ptr.0),
+            GetLocal(config.from_ptr.0),
+            I32Load8U(alignment_flag, i + config.from_offset),
+            I32Store8(alignment_flag, i + config.to_offset),
+        ]);
         i += 1;
     }
 }
 
-/// Round up to alignment_bytes (assumed to be a power of 2)
+/// Round up to alignment_bytes (which must be a power of 2)
 pub fn round_up_to_alignment(unaligned: i32, alignment_bytes: i32) -> i32 {
+    debug_assert!(alignment_bytes.count_ones() == 1);
     let mut aligned = unaligned;
     aligned += alignment_bytes - 1; // if lower bits are non-zero, push it over the next boundary
     aligned &= -alignment_bytes; // mask with a flag that has upper bits 1, lower bits 0
@@ -165,7 +179,7 @@ pub fn round_up_to_alignment(unaligned: i32, alignment_bytes: i32) -> i32 {
 }
 
 pub fn push_stack_frame(
-    instructions: &mut Vec<Instruction>,
+    instructions: &mut std::vec::Vec<Instruction>,
     size: i32,
     local_frame_pointer: LocalId,
 ) {
@@ -180,7 +194,7 @@ pub fn push_stack_frame(
 }
 
 pub fn pop_stack_frame(
-    instructions: &mut Vec<Instruction>,
+    instructions: &mut std::vec::Vec<Instruction>,
     size: i32,
     local_frame_pointer: LocalId,
 ) {

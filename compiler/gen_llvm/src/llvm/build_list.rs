@@ -502,38 +502,6 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
     env.builder.build_load(result_ptr, "load_result")
 }
 
-#[allow(dead_code)]
-#[repr(u8)]
-enum IntWidth {
-    U8,
-    U16,
-    U32,
-    U64,
-    U128,
-    I8,
-    I16,
-    I32,
-    I64,
-    I128,
-    Usize,
-}
-
-impl From<roc_mono::layout::Builtin<'_>> for IntWidth {
-    fn from(builtin: Builtin) -> Self {
-        use IntWidth::*;
-
-        match builtin {
-            Builtin::Int128 => I128,
-            Builtin::Int64 => I64,
-            Builtin::Int32 => I32,
-            Builtin::Int16 => I16,
-            Builtin::Int8 => I8,
-            Builtin::Usize => Usize,
-            _ => unreachable!(),
-        }
-    }
-}
-
 /// List.range : Int a, Int a -> List (Int a)
 pub fn list_range<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -552,7 +520,10 @@ pub fn list_range<'a, 'ctx, 'env>(
     let int_width = env
         .context
         .i8_type()
-        .const_int(IntWidth::from(builtin) as u64, false)
+        .const_int(
+            crate::llvm::build::intwidth_from_builtin(builtin, env.ptr_bytes) as u64,
+            false,
+        )
         .into();
 
     call_bitcode_fn(
