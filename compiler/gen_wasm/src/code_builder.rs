@@ -5,11 +5,11 @@ use std::fmt::Debug;
 
 use roc_module::symbol::Symbol;
 
-use crate::opcodes::*;
 use crate::{
     encode_f32, encode_f64, encode_i32, encode_i64, encode_u32, round_up_to_alignment, LocalId,
     FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID,
 };
+use crate::{opcodes::*, overwrite_padded_u32};
 
 const DEBUG_LOG: bool = false;
 
@@ -328,11 +328,12 @@ impl<'a> CodeBuilder<'a> {
         if num_batches < 128 {
             self.preamble[0] = num_batches as u8;
         } else {
-            // We have 128+ batches of locals (extremely unlikely!)
-            let tmp = self.preamble.clone();
-            self.preamble.clear();
-            encode_u32(&mut self.preamble, num_batches);
-            self.preamble.extend_from_slice(&tmp);
+            // We need more than 1 byte to encode num_batches!
+            // This is a ridiculous edge case, so just pad to 5 bytes for simplicity
+            let old_len = self.preamble.len();
+            self.preamble.resize(old_len + 4, 0);
+            self.preamble.copy_within(1..old_len, 5);
+            overwrite_padded_u32(&mut self.preamble[0..5], num_batches);
         }
     }
 
