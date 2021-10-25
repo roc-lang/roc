@@ -3734,7 +3734,7 @@ mod solve_expr {
     }
 
     #[test]
-    fn list_drop_at() {
+    fn list_drop_last() {
         infer_eq_without_problem(
             indoc!(
                 r#"
