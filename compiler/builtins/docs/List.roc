@@ -34,6 +34,7 @@ interface List
             sortWith,
             drop,
             dropAt,
+            dropLast,
             swap
         ]
     imports []
@@ -438,6 +439,9 @@ drop : List elem, Nat -> List elem
 ##
 ## To replace the element at a given index, instead of dropping it, see [List.set].
 dropAt : List elem, Nat -> List elem
+
+## Drops the last element in a List.
+dropLast : List elem -> List elem
 
 ## Adds a new element to the end of the list.
 ##
