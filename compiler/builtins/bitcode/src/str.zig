@@ -1507,54 +1507,33 @@ test "isWhitespace" {
 pub fn strTrim(string: RocStr) callconv(.C) RocStr {
     if (string.str_bytes) |bytes_ptr| {
         const leading_bytes = countLeadingWhitespaceBytes(string);
+        const original_len = string.len();
+
+        if (original_len == leading_bytes) {
+            return RocStr.empty();
+        }
+
         const trailing_bytes = countTrailingWhitespaceBytes(string);
+        const new_len = original_len - leading_bytes - trailing_bytes;
 
-        const orig_len = string.len();
-        if (orig_len == leading_bytes) {
-            return RocStr.empty();
+        const small_or_shared = new_len <= SMALL_STR_MAX_LENGTH or !string.isRefcountOne();
+        if (small_or_shared) {
+            return RocStr.init(string.asU8ptr() + leading_bytes, new_len);
         }
 
-        const new_len = orig_len - leading_bytes - trailing_bytes;
-        if (new_len == 0) {
-            return RocStr.empty();
-        }
-
-        // Originally Small
-
-        if (string.isSmallStr()) {
-            const small_bytes_ptr = string.asU8ptr();
-
-            var ret_string = RocStr.allocate(InPlace.Clone, new_len);
-            var ret_string_ptr = ret_string.asU8ptr();
+        if (leading_bytes > 0) {
             var i: usize = 0;
             while (i < new_len) : (i += 1) {
-                const dest = ret_string_ptr + i;
-                const source = small_bytes_ptr + i + leading_bytes;
+                const dest = bytes_ptr + i;
+                const source = dest + leading_bytes;
                 @memcpy(dest, source, 1);
             }
-
-            return ret_string;
         }
 
-        // Originally Large
+        var new_string = string;
+        new_string.str_len = new_len;
 
-        if (string.isRefcountOne()) {
-            if (leading_bytes > 0) {
-                var i: usize = 0;
-                while (i < new_len) : (i += 1) {
-                    const dest = bytes_ptr + i;
-                    const source = dest + leading_bytes;
-                    @memcpy(dest, source, 1);
-                }
-            }
-
-            var new_string = string;
-            new_string.str_len = new_len;
-            return new_string;
-        }
-
-        // Originally Large and Shared
-        return RocStr.init(string.asU8ptr() + leading_bytes, new_len);
+        return new_string;
     }
 
     return RocStr.empty();
@@ -1723,6 +1702,7 @@ test "strTrim: small to small" {
     const trimmed = strTrim(original);
 
     try expect(trimmed.eq(expected));
+    try expect(trimmed.isSmallStr());
 }
 
 test "ReverseUtf8View: hello world" {
