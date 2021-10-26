@@ -9,8 +9,7 @@ pub mod code_builder;
 #[allow(dead_code)]
 mod opcodes;
 
-use bumpalo::collections::Vec;
-use bumpalo::Bump;
+use bumpalo::{self, collections::Vec, Bump};
 use parity_wasm::builder;
 
 use parity_wasm::elements::{Instruction, Internal, Module, Section};
@@ -273,4 +272,112 @@ pub fn overwrite_padded_u32(buffer: &mut [u8], value: u32) {
         x >>= 7;
     }
     buffer[4] = x as u8;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bumpalo::{self, collections::Vec, Bump};
+
+    fn help_u32<'a>(arena: &'a Bump, value: u32) -> Vec<'a, u8> {
+        let mut buffer = Vec::with_capacity_in(5, arena);
+        encode_u32(&mut buffer, value);
+        buffer
+    }
+
+    #[test]
+    fn test_encode_u32() {
+        let a = &Bump::new();
+        assert_eq!(help_u32(a, 0), &[0]);
+        assert_eq!(help_u32(a, 64), &[64]);
+        assert_eq!(help_u32(a, 0x7f), &[0x7f]);
+        assert_eq!(help_u32(a, 0x80), &[0x80, 0x01]);
+        assert_eq!(help_u32(a, 0x3fff), &[0xff, 0x7f]);
+        assert_eq!(help_u32(a, 0x4000), &[0x80, 0x80, 0x01]);
+        assert_eq!(help_u32(a, u32::MAX), &[0xff, 0xff, 0xff, 0xff, 0x0f]);
+    }
+
+    fn help_u64<'a>(arena: &'a Bump, value: u64) -> Vec<'a, u8> {
+        let mut buffer = Vec::with_capacity_in(10, arena);
+        encode_u64(&mut buffer, value);
+        buffer
+    }
+
+    #[test]
+    fn test_encode_u64() {
+        let a = &Bump::new();
+        assert_eq!(help_u64(a, 0), &[0]);
+        assert_eq!(help_u64(a, 64), &[64]);
+        assert_eq!(help_u64(a, 0x7f), &[0x7f]);
+        assert_eq!(help_u64(a, 0x80), &[0x80, 0x01]);
+        assert_eq!(help_u64(a, 0x3fff), &[0xff, 0x7f]);
+        assert_eq!(help_u64(a, 0x4000), &[0x80, 0x80, 0x01]);
+        assert_eq!(
+            help_u64(a, u64::MAX),
+            &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01],
+        );
+    }
+
+    fn help_i32<'a>(arena: &'a Bump, value: i32) -> Vec<'a, u8> {
+        let mut buffer = Vec::with_capacity_in(5, arena);
+        encode_i32(&mut buffer, value);
+        buffer
+    }
+
+    #[test]
+    fn test_encode_i32() {
+        let a = &Bump::new();
+        assert_eq!(help_i32(a, 0), &[0]);
+        assert_eq!(help_i32(a, 1), &[1]);
+        assert_eq!(help_i32(a, -1), &[0x7f]);
+        assert_eq!(help_i32(a, 63), &[63]);
+        assert_eq!(help_i32(a, 64), &[0xc0, 0x0]);
+        assert_eq!(help_i32(a, -64), &[0x40]);
+        assert_eq!(help_i32(a, -65), &[0xbf, 0x7f]);
+        assert_eq!(help_i32(a, i32::MAX), &[0xff, 0xff, 0xff, 0xff, 0x07]);
+        assert_eq!(help_i32(a, i32::MIN), &[0x80, 0x80, 0x80, 0x80, 0x78]);
+    }
+
+    fn help_i64<'a>(arena: &'a Bump, value: i64) -> Vec<'a, u8> {
+        let mut buffer = Vec::with_capacity_in(10, arena);
+        encode_i64(&mut buffer, value);
+        buffer
+    }
+
+    #[test]
+    fn test_encode_i64() {
+        let a = &Bump::new();
+        assert_eq!(help_i64(a, 0), &[0]);
+        assert_eq!(help_i64(a, 1), &[1]);
+        assert_eq!(help_i64(a, -1), &[0x7f]);
+        assert_eq!(help_i64(a, 63), &[63]);
+        assert_eq!(help_i64(a, 64), &[0xc0, 0x0]);
+        assert_eq!(help_i64(a, -64), &[0x40]);
+        assert_eq!(help_i64(a, -65), &[0xbf, 0x7f]);
+        assert_eq!(
+            help_i64(a, i64::MAX),
+            &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00],
+        );
+        assert_eq!(
+            help_i64(a, i64::MIN),
+            &[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x7f],
+        );
+    }
+
+    #[test]
+    fn test_overwrite_u32_padded() {
+        let mut buffer = [0, 0, 0, 0, 0];
+
+        overwrite_padded_u32(&mut buffer, u32::MAX);
+        assert_eq!(buffer, [0xff, 0xff, 0xff, 0xff, 0x0f]);
+
+        overwrite_padded_u32(&mut buffer, 0);
+        assert_eq!(buffer, [0x80, 0x80, 0x80, 0x80, 0x00]);
+
+        overwrite_padded_u32(&mut buffer, 127);
+        assert_eq!(buffer, [0xff, 0x80, 0x80, 0x80, 0x00]);
+
+        overwrite_padded_u32(&mut buffer, 128);
+        assert_eq!(buffer, [0x80, 0x81, 0x80, 0x80, 0x00]);
+    }
 }
