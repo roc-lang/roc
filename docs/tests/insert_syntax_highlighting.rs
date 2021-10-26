@@ -157,6 +157,14 @@ main = "Hello, world!"
     }
 
     #[test]
+    fn tld_newline_in_str() {
+        expect_html_def(
+            r#"myVal = "Hello, Newline!\n""#,
+            "<span class=\"syntax-value\">myVal</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-string\">\"Hello, Newline!\n\"</span>\n\n",
+        );
+    }
+
+    #[test]
     fn tld_list() {
         expect_html_def(
             r#"myVal = [ 1, 2, 3 ]"#,
