@@ -3742,7 +3742,7 @@ mod solve_expr {
                 "#
             ),
             "Str -> Str",
-            );
+        );
     }
 
     #[test]
