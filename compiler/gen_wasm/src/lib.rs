@@ -1,33 +1,36 @@
 mod backend;
-mod code_builder;
 pub mod from_wasm32_memory;
 mod layout;
 mod storage;
 
+#[allow(dead_code)]
+pub mod code_builder;
+
+#[allow(dead_code)]
+mod opcodes;
+
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use parity_wasm::builder;
-use parity_wasm::elements::{Instruction, Instruction::*, Internal, ValueType};
 
+use parity_wasm::elements::{Instruction, Internal, Module, Section};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::LayoutIds;
 
 use crate::backend::WasmBackend;
-use crate::code_builder::CodeBuilder;
+use crate::code_builder::{Align, CodeBuilder, ValueType};
 
 const PTR_SIZE: u32 = 4;
 const PTR_TYPE: ValueType = ValueType::I32;
 
-// All usages of these alignment constants take u32, so an enum wouldn't add any safety.
-pub const ALIGN_1: u32 = 0;
-pub const ALIGN_2: u32 = 1;
-pub const ALIGN_4: u32 = 2;
-pub const ALIGN_8: u32 = 3;
-
 pub const STACK_POINTER_GLOBAL_ID: u32 = 0;
-pub const STACK_ALIGNMENT_BYTES: i32 = 16;
+pub const FRAME_ALIGNMENT_BYTES: i32 = 16;
+
+/// Code section ID from spec
+/// https://webassembly.github.io/spec/core/binary/modules.html#sections
+pub const CODE_SECTION_ID: u8 = 10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LocalId(pub u32);
@@ -42,8 +45,10 @@ pub fn build_module<'a>(
     env: &'a Env,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Result<std::vec::Vec<u8>, String> {
-    let (builder, _) = build_module_help(env, procedures)?;
-    let module = builder.build();
+    let (builder, code_section_bytes, _) = build_module_help(env, procedures)?;
+    let mut module = builder.build();
+    replace_code_section(&mut module, code_section_bytes);
+
     module
         .into_bytes()
         .map_err(|e| -> String { format!("Error serialising Wasm module {:?}", e) })
@@ -52,8 +57,8 @@ pub fn build_module<'a>(
 pub fn build_module_help<'a>(
     env: &'a Env,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-) -> Result<(builder::ModuleBuilder, u32), String> {
-    let mut backend = WasmBackend::new(env);
+) -> Result<(builder::ModuleBuilder, std::vec::Vec<u8>, u32), String> {
+    let mut backend = WasmBackend::new(env, procedures.len());
     let mut layout_ids = LayoutIds::default();
 
     // Sort procedures by occurrence order
@@ -86,6 +91,10 @@ pub fn build_module_help<'a>(
         }
     }
 
+    // Update code section length
+    let inner_length = (backend.code_section_bytes.len() - 5) as u32;
+    overwrite_padded_u32(&mut backend.code_section_bytes[0..5], inner_length);
+
     // Because of the sorting above, we know the last function in the `for` is the main function.
     // Here we grab its index and return it, so that the test_wrapper is able to call it.
     // This is a workaround until we implement object files with symbols and relocations.
@@ -105,23 +114,32 @@ pub fn build_module_help<'a>(
     backend.module_builder.push_export(memory_export);
 
     let stack_pointer_global = builder::global()
-        .with_type(PTR_TYPE)
+        .with_type(parity_wasm::elements::ValueType::I32)
         .mutable()
         .init_expr(Instruction::I32Const((MIN_MEMORY_SIZE_KB * 1024) as i32))
         .build();
     backend.module_builder.push_global(stack_pointer_global);
 
-    Ok((backend.module_builder, main_function_index))
+    Ok((
+        backend.module_builder,
+        backend.code_section_bytes,
+        main_function_index,
+    ))
 }
 
-fn encode_alignment(bytes: u32) -> u32 {
-    match bytes {
-        1 => ALIGN_1,
-        2 => ALIGN_2,
-        4 => ALIGN_4,
-        8 => ALIGN_8,
-        _ => panic!("{:?}-byte alignment is not supported", bytes),
+/// Replace parity-wasm's code section with our own handmade one
+pub fn replace_code_section(module: &mut Module, code_section_bytes: std::vec::Vec<u8>) {
+    let sections = module.sections_mut();
+    let mut code_section_index = usize::MAX;
+    for (i, s) in sections.iter().enumerate() {
+        if let Section::Code(_) = s {
+            code_section_index = i;
+        }
     }
+    sections[code_section_index] = Section::Unparsed {
+        id: CODE_SECTION_ID,
+        payload: code_section_bytes,
+    };
 }
 
 pub struct CopyMemoryConfig {
@@ -138,33 +156,27 @@ pub fn copy_memory(code_builder: &mut CodeBuilder, config: CopyMemoryConfig) {
         return;
     }
 
-    let alignment_flag = encode_alignment(config.alignment_bytes);
+    let alignment = Align::from(config.alignment_bytes);
     let mut i = 0;
     while config.size - i >= 8 {
-        code_builder.extend_from_slice(&[
-            GetLocal(config.to_ptr.0),
-            GetLocal(config.from_ptr.0),
-            I64Load(alignment_flag, i + config.from_offset),
-            I64Store(alignment_flag, i + config.to_offset),
-        ]);
+        code_builder.get_local(config.to_ptr);
+        code_builder.get_local(config.from_ptr);
+        code_builder.i64_load(alignment, i + config.from_offset);
+        code_builder.i64_store(alignment, i + config.to_offset);
         i += 8;
     }
     if config.size - i >= 4 {
-        code_builder.extend_from_slice(&[
-            GetLocal(config.to_ptr.0),
-            GetLocal(config.from_ptr.0),
-            I32Load(alignment_flag, i + config.from_offset),
-            I32Store(alignment_flag, i + config.to_offset),
-        ]);
+        code_builder.get_local(config.to_ptr);
+        code_builder.get_local(config.from_ptr);
+        code_builder.i32_load(alignment, i + config.from_offset);
+        code_builder.i32_store(alignment, i + config.to_offset);
         i += 4;
     }
     while config.size - i > 0 {
-        code_builder.extend_from_slice(&[
-            GetLocal(config.to_ptr.0),
-            GetLocal(config.from_ptr.0),
-            I32Load8U(alignment_flag, i + config.from_offset),
-            I32Store8(alignment_flag, i + config.to_offset),
-        ]);
+        code_builder.get_local(config.to_ptr);
+        code_builder.get_local(config.from_ptr);
+        code_builder.i32_load8_u(alignment, i + config.from_offset);
+        code_builder.i32_store8(alignment, i + config.to_offset);
         i += 1;
     }
 }
@@ -178,31 +190,87 @@ pub fn round_up_to_alignment(unaligned: i32, alignment_bytes: i32) -> i32 {
     aligned
 }
 
-pub fn push_stack_frame(
-    instructions: &mut std::vec::Vec<Instruction>,
-    size: i32,
-    local_frame_pointer: LocalId,
-) {
-    let aligned_size = round_up_to_alignment(size, STACK_ALIGNMENT_BYTES);
-    instructions.extend([
-        GetGlobal(STACK_POINTER_GLOBAL_ID),
-        I32Const(aligned_size),
-        I32Sub,
-        TeeLocal(local_frame_pointer.0),
-        SetGlobal(STACK_POINTER_GLOBAL_ID),
-    ]);
+pub fn debug_panic<E: std::fmt::Debug>(error: E) {
+    panic!("{:?}", error);
 }
 
-pub fn pop_stack_frame(
-    instructions: &mut std::vec::Vec<Instruction>,
-    size: i32,
-    local_frame_pointer: LocalId,
-) {
-    let aligned_size = round_up_to_alignment(size, STACK_ALIGNMENT_BYTES);
-    instructions.extend([
-        GetLocal(local_frame_pointer.0),
-        I32Const(aligned_size),
-        I32Add,
-        SetGlobal(STACK_POINTER_GLOBAL_ID),
-    ]);
+/// Write an unsigned value into the provided buffer in LEB-128 format, returning byte length
+///
+/// All integers in Wasm are variable-length encoded, which saves space for small values.
+/// The most significant bit indicates "more bytes are coming", and the other 7 are payload.
+macro_rules! encode_uleb128 {
+    ($name: ident, $ty: ty) => {
+        pub fn $name<'a>(buffer: &mut Vec<'a, u8>, value: $ty) -> usize {
+            let mut x = value;
+            let start_len = buffer.len();
+            while x >= 0x80 {
+                buffer.push(0x80 | ((x & 0x7f) as u8));
+                x >>= 7;
+            }
+            buffer.push(x as u8);
+            buffer.len() - start_len
+        }
+    };
+}
+
+encode_uleb128!(encode_u32, u32);
+encode_uleb128!(encode_u64, u64);
+
+/// Write a *signed* value into the provided buffer in LEB-128 format, returning byte length
+macro_rules! encode_sleb128 {
+    ($name: ident, $ty: ty) => {
+        pub fn $name<'a>(buffer: &mut Vec<'a, u8>, value: $ty) -> usize {
+            let mut x = value;
+            let start_len = buffer.len();
+            loop {
+                let byte = (x & 0x7f) as u8;
+                x >>= 7;
+                let byte_is_negative = (byte & 0x40) != 0;
+                if ((x == 0 && !byte_is_negative) || (x == -1 && byte_is_negative)) {
+                    buffer.push(byte);
+                    break;
+                }
+                buffer.push(byte | 0x80);
+            }
+            buffer.len() - start_len
+        }
+    };
+}
+
+encode_sleb128!(encode_i32, i32);
+encode_sleb128!(encode_i64, i64);
+
+/// No LEB encoding, and always little-endian regardless of compiler host.
+macro_rules! encode_float {
+    ($name: ident, $ty: ty) => {
+        pub fn $name<'a>(buffer: &mut Vec<'a, u8>, value: $ty) {
+            let mut x = value.to_bits();
+            let size = std::mem::size_of::<$ty>();
+            for _ in 0..size {
+                buffer.push((x & 0xff) as u8);
+                x >>= 8;
+            }
+        }
+    };
+}
+
+encode_float!(encode_f32, f32);
+encode_float!(encode_f64, f64);
+
+/// Overwrite a LEB-128 encoded u32 value, padded to maximum length (5 bytes)
+///
+/// We need some fixed-length values so we can overwrite them without moving all following bytes.
+/// Many parts of the binary format are prefixed with their length, which we only know at the end.
+/// And relocation values get updated during linking.
+/// This can help us to avoid copies, which is good for speed, but there's a tradeoff with output size.
+///
+/// The value 3 is encoded as 0x83 0x80 0x80 0x80 0x00.
+/// https://github.com/WebAssembly/tool-conventions/blob/main/Linking.md#relocation-sections
+pub fn overwrite_padded_u32(buffer: &mut [u8], value: u32) {
+    let mut x = value;
+    for byte in buffer.iter_mut().take(4) {
+        *byte = 0x80 | ((x & 0x7f) as u8);
+        x >>= 7;
+    }
+    buffer[4] = x as u8;
 }

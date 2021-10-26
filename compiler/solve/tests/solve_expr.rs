@@ -3742,6 +3742,18 @@ mod solve_expr {
                 "#
             ),
             "Str -> Str",
+            );
+    }
+
+    #[test]
+    fn list_drop_last() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                List.dropLast
+                "#
+            ),
+            "List a -> List a",
         );
     }
 
