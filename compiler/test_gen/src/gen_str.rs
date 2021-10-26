@@ -984,7 +984,7 @@ fn str_trim_empty_string() {
 }
 
 #[test]
-fn str_trim_blank_string() {
+fn str_trim_small_blank_string() {
     assert_evals_to!(indoc!(r#"Str.trim " ""#), RocStr::from(""), RocStr);
 }
 
@@ -998,18 +998,18 @@ fn str_trim_small_to_small() {
 }
 
 #[test]
-fn str_trim_large_to_large() {
+fn str_trim_large_to_large_unique() {
     assert_evals_to!(
-        indoc!(r#"Str.trim "  hello giant world  ""#),
-        RocStr::from("hello giant world"),
+        indoc!(r#"Str.trim (Str.concat "  " "hello world from a large string ")"#),
+        RocStr::from("hello world from a large string"),
         RocStr
     );
 }
 
 #[test]
-fn str_trim_large_to_small() {
+fn str_trim_large_to_small_unique() {
     assert_evals_to!(
-        indoc!(r#"Str.trim "  hello world        ""#),
+        indoc!(r#"Str.trim (Str.concat "  " "hello world        ")"#),
         RocStr::from("hello world"),
         RocStr
     );

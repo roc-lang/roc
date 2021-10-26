@@ -1521,6 +1521,8 @@ pub fn strTrim(string: RocStr) callconv(.C) RocStr {
             return RocStr.init(string.asU8ptr() + leading_bytes, new_len);
         }
 
+        // nonempty, large, and unique:
+
         if (leading_bytes > 0) {
             var i: usize = 0;
             while (i < new_len) : (i += 1) {
@@ -1605,11 +1607,7 @@ const ReverseUtf8Iterator = struct {
             const cp_len = unicode.utf8ByteSequenceLength(it.bytes[i]) catch unreachable;
             const slice = it.bytes[i .. i + cp_len];
 
-            if (i == 0) {
-                it.i = null;
-            } else {
-                it.i = i - 1;
-            }
+            it.i = if (i == 0) null else i - 1;
 
             return slice;
         } else {
