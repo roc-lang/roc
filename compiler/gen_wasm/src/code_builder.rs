@@ -6,8 +6,8 @@ use std::fmt::Debug;
 use roc_module::symbol::Symbol;
 
 use crate::{
-    encode_f32, encode_f64, encode_i32, encode_i64, encode_u32, round_up_to_alignment, LocalId,
-    FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID,
+    encode_f32, encode_f64, encode_i32, encode_i64, encode_padded_u32, encode_u32,
+    round_up_to_alignment, LocalId, FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID,
 };
 use crate::{opcodes::*, overwrite_padded_u32};
 
@@ -475,7 +475,7 @@ impl<'a> CodeBuilder<'a> {
 
     instruction_no_args!(return_, RETURN, 0, false);
 
-    pub fn call(&mut self, function_index: u32, n_args: usize, has_return_val: bool) {
+    pub fn call(&mut self, function_index: u32, n_args: usize, has_return_val: bool) -> usize {
         let stack_depth = self.vm_stack.len();
         if n_args > stack_depth {
             panic!(
@@ -488,7 +488,10 @@ impl<'a> CodeBuilder<'a> {
             self.vm_stack.push(Symbol::WASM_ANONYMOUS_STACK_VALUE);
         }
         self.code.push(CALL);
-        encode_u32(&mut self.code, function_index);
+
+        let reloc_offset = self.code.len();
+        encode_padded_u32(&mut self.code, function_index);
+        reloc_offset
     }
     fn call_indirect() {
         panic!("Not implemented. Roc doesn't use function pointers");

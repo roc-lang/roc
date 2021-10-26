@@ -261,6 +261,13 @@ pub fn overwrite_padded_u32(buffer: &mut [u8], value: u32) {
     buffer[4] = x as u8;
 }
 
+pub fn encode_padded_u32<'a>(buffer: &mut Vec<'a, u8>, value: u32) {
+    let old_len = buffer.len();
+    let new_len = old_len + 5;
+    buffer.resize(new_len, 0);
+    overwrite_padded_u32(&mut buffer[old_len..new_len], value);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

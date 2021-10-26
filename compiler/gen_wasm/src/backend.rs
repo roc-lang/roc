@@ -29,6 +29,7 @@ pub struct WasmBackend<'a> {
     _data_offset_map: MutMap<Literal<'a>, u32>,
     _data_offset_next: u32,
     proc_symbols: Vec<'a, Symbol>,
+    relocations: Vec<'a, (usize, Symbol)>,
 
     // Function-level data
     code_builder: CodeBuilder<'a>,
@@ -59,6 +60,7 @@ impl<'a> WasmBackend<'a> {
             _data_offset_map: MutMap::default(),
             _data_offset_next: UNUSED_DATA_SECTION_BYTES,
             proc_symbols,
+            relocations: Vec::with_capacity_in(32, env.arena),
 
             // Function-level data
             block_depth: 0,
@@ -399,13 +401,15 @@ impl<'a> WasmBackend<'a> {
                         .proc_symbols
                         .iter()
                         .position(|s| s == func_sym)
-                        .ok_or(format!(
-                            "Cannot find function {:?} called from {:?}",
-                            func_sym, sym
-                        ))?;
+                        .map(|i| i as u32)
+                        .unwrap_or(u32::MAX); // foreign symbol, updated at link time
 
-                    self.code_builder
-                        .call(function_index as u32, wasm_args.len(), has_return_val);
+                    let reloc_offset =
+                        self.code_builder
+                            .call(function_index, wasm_args.len(), has_return_val);
+
+                    self.relocations.push((reloc_offset, *func_sym));
+
                     Ok(())
                 }
 
