@@ -41,7 +41,15 @@ check-rustfmt:
     RUN cargo fmt --version
     RUN cargo fmt --all -- --check
 
+install-rust:
+    FROM +prep-debian
+    COPY install_rust.sh ./
+    RUN ./install_rust.sh
+    # make sure cargo and rustup commands are available
+    ENV PATH="/root/.cargo/bin:$PATH"
+
 check-typos:
+    FROM +install-rust
     RUN cargo install typos-cli --version 1.0.11 # version set to prevent confusion if the version is updated automatically
     COPY --dir .github ci cli compiler docs editor examples ast code_markup utils linker nightly_benches packages roc_std www *.md LEGAL_DETAILS shell.nix version.txt ./
     RUN typos

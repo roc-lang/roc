@@ -9,16 +9,11 @@ apt -y install wget curl build-essential pkg-config libasound2-dev zlib1g-dev li
 # libasound2-dev for editor sounds
 # libxcb-shape0-dev libxcb-xfixes0-dev for editor clipboard
 # libxkbcommon-dev for editor, not sure what exactly :p
-# build-essential for cc (for rust)
+# build-essential for cc (for cargo build)
 # zlib1g-dev for inkwell
 
 # rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > rustup.sh
-chmod +x rustup.sh
-./rustup.sh -y
-source $HOME/.cargo/env
-rustup install 1.54
-# TODO actually use this toolchain
+./install_rust.sh
 rustup component add clippy
 rustup component add rustfmt
 # zig
