@@ -205,6 +205,7 @@ mod cli_run {
                         example.use_valgrind,
                     );
 
+                    #[cfg(not(debug_assertions))]
                     check_output_with_stdin(
                         &file_name,
                         example.stdin,
