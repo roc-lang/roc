@@ -1582,7 +1582,7 @@ const ReverseUtf8View = struct {
     pub fn iterator(s: ReverseUtf8View) ReverseUtf8Iterator {
         return ReverseUtf8Iterator{
             .bytes = s.bytes,
-            .i = s.bytes.len,
+            .i = if (s.bytes.len > 0) s.bytes.len - 1 else null,
         };
     }
 };
@@ -1590,28 +1590,31 @@ const ReverseUtf8View = struct {
 /// A backwards version of Utf8Iterator from std.unicode
 const ReverseUtf8Iterator = struct {
     bytes: []const u8,
-    // NOTE
-    // i points to one after the current begin byte,
-    // and 0 signifies 'done'
-    i: usize,
+    // NOTE null signifies complete/empty
+    i: ?usize,
 
     pub fn nextCodepointSlice(it: *ReverseUtf8Iterator) ?[]const u8 {
-        if (it.i == 0) {
+        if (it.i) |index| {
+            var i = index;
+
+            // NOTE this relies on the string being valid utf8 to not run off the end
+            while (!utf8BeginByte(it.bytes[i])) {
+                i -= 1;
+            }
+
+            const cp_len = unicode.utf8ByteSequenceLength(it.bytes[i]) catch unreachable;
+            const slice = it.bytes[i .. i + cp_len];
+
+            if (i == 0) {
+                it.i = null;
+            } else {
+                it.i = i - 1;
+            }
+
+            return slice;
+        } else {
             return null;
         }
-
-        // NOTE this relies on the string being valid utf8 to not run off the end
-        while (!utf8BeginByte(it.bytes[it.i - 1])) {
-            it.i -= 1;
-        }
-
-        const begin_byte = it.i - 1;
-        const cp_len = unicode.utf8ByteSequenceLength(it.bytes[begin_byte]) catch unreachable;
-        const slice = it.bytes[begin_byte .. begin_byte + cp_len];
-
-        it.i -= 1;
-
-        return slice;
     }
 
     pub fn nextCodepoint(it: *ReverseUtf8Iterator) ?u21 {
