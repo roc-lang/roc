@@ -1,8 +1,7 @@
+use roc_module::symbol::IdentId;
+
 use crate::{
-    lang::core::{
-        expr::{expr2::Expr2, expr2_to_string::expr2_to_string},
-        pattern::Pattern2,
-    },
+    lang::core::expr::{expr2::Expr2, expr2_to_string::expr2_to_string},
     mem_pool::pool::{NodeId, Pool},
 };
 
@@ -11,7 +10,7 @@ use crate::{
 pub enum Def2 {
     // ValueDef example: `main = "Hello, world!"`. identifier -> `main`, expr -> "Hello, world!"
     ValueDef {
-        identifier_id: NodeId<Pattern2>,
+        identifier_id: IdentId,
         expr_id: NodeId<Expr2>,
     },
     Blank,
@@ -30,7 +29,7 @@ pub fn def2_to_string(node_id: DefId, pool: &Pool) -> String {
         } => {
             full_string.push_str(&format!(
                 "Def2::ValueDef(identifier_id: >>{:?}), expr_id: >>{:?})",
-                pool.get(*identifier_id),
+                identifier_id,
                 expr2_to_string(*expr_id, pool)
             ));
         }

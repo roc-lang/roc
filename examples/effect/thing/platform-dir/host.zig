@@ -54,11 +54,11 @@ export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
     std.process.exit(0);
 }
 
-export fn roc_memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void{
+export fn roc_memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void {
     return memcpy(dst, src, size);
 }
 
-export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void{
+export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void {
     return memset(dst, value, size);
 }
 
@@ -104,6 +104,18 @@ fn call_the_closure(closure_data_pointer: [*]u8) void {
     const allocator = std.heap.page_allocator;
 
     const size = roc__mainForHost_1_Fx_result_size();
+
+    if (size == 0) {
+        // the function call returns an empty record
+        // allocating 0 bytes causes issues because the allocator will return a NULL pointer
+        // So it's special-cased
+        const flags: u8 = 0;
+        var result: [1]u8 = .{0};
+        roc__mainForHost_1_Fx_caller(&flags, closure_data_pointer, &result);
+
+        return;
+    }
+
     const raw_output = allocator.allocAdvanced(u8, @alignOf(u64), @intCast(usize, size), .at_least) catch unreachable;
     var output = @ptrCast([*]u8, raw_output);
 

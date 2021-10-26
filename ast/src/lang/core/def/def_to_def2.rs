@@ -1,13 +1,10 @@
 use bumpalo::collections::Vec as BumpVec;
 use bumpalo::Bump;
-use roc_parse::{parser::SyntaxError, pattern::PatternType};
+use roc_module::ident::{Ident, IdentStr};
+use roc_parse::parser::SyntaxError;
 use roc_region::all::Region;
 
-use crate::lang::{
-    core::{expr::expr_to_expr2::loc_expr_to_expr2, pattern::to_pattern2},
-    env::Env,
-    scope::Scope,
-};
+use crate::lang::{core::expr::expr_to_expr2::loc_expr_to_expr2, env::Env, scope::Scope};
 
 use super::def2::Def2;
 
@@ -37,26 +34,18 @@ pub fn def_to_def2<'a>(
         SpaceBefore(inner_def, _) => def_to_def2(arena, env, scope, inner_def, region),
         SpaceAfter(inner_def, _) => def_to_def2(arena, env, scope, inner_def, region),
         Body(&loc_pattern, &loc_expr) => {
-            // TODO loc_pattern use identifier
             let expr2 = loc_expr_to_expr2(arena, loc_expr, env, scope, region).0;
             let expr_id = env.pool.add(expr2);
 
             use roc_parse::ast::Pattern::*;
 
             match loc_pattern.value {
-                Identifier(_) => {
-                    let (_, pattern2) = to_pattern2(
-                        env,
-                        scope,
-                        PatternType::TopLevelDef,
-                        &loc_pattern.value,
-                        region,
-                    );
-                    let pattern_id = env.pool.add(pattern2);
+                Identifier(id_str) => {
+                    let identifier_id = env.ident_ids.get_or_insert(&Ident(IdentStr::from(id_str)));
 
                     // TODO support with annotation
                     Def2::ValueDef {
-                        identifier_id: pattern_id,
+                        identifier_id,
                         expr_id,
                     }
                 }

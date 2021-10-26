@@ -488,9 +488,9 @@ fn canonicalize_pending_def<'a>(
                     match loc_can_expr {
                         Expr2::Closure {
                             args: closure_args,
-                            body,
+                            body_id,
                             extra,
-                            name: closure_symbol,
+                            uniq_symbol: closure_symbol,
                             ..
                         } => {
                             let symbol = match env.pool[loc_can_pattern] {
@@ -570,7 +570,7 @@ fn canonicalize_pending_def<'a>(
                                 arguments,
                                 rigids: env.pool.add(rigids),
                                 return_type,
-                                body,
+                                body_id,
                             };
 
                             let def = Def::Function(function_def);
@@ -656,9 +656,9 @@ fn canonicalize_pending_def<'a>(
             match loc_can_expr {
                 Expr2::Closure {
                     args: closure_args,
-                    body,
+                    body_id,
                     extra,
-                    name: closure_symbol,
+                    uniq_symbol: closure_symbol,
                     ..
                 } => {
                     let symbol = match env.pool[loc_can_pattern] {
@@ -703,7 +703,7 @@ fn canonicalize_pending_def<'a>(
                         name: symbol,
                         arguments,
                         return_var: env.var_store.fresh(),
-                        body,
+                        body_id,
                     };
 
                     let def = Def::Function(function_def);

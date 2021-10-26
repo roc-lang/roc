@@ -1,0 +1,11 @@
+{ This is a comment}
+
+
+		{ White space doesn't matter}
+
+
+
+{ Strings in False just automatically print...So, "Hello, World!", I guess }
+"Hello, World!
+"
+{ Note the new line created by the white space that matters in strings }
