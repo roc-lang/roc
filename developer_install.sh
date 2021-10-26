@@ -18,6 +18,7 @@ chmod +x rustup.sh
 ./rustup.sh -y
 source $HOME/.cargo/env
 rustup install 1.54
+# TODO actually use this toolchain
 rustup component add clippy
 rustup component add rustfmt
 # zig
@@ -40,4 +41,4 @@ echo "Done installing."
 echo ""
 echo "Add the following to your ~/.bashrc file or equivalent: RUSTFLAGS=\"-C link-arg=-fuse-ld=lld -C target-cpu=native\"."
 echo ""
-echo "Test your installation by running `cargo test --release`."
+echo "Test your installation by running: cargo test --release."
