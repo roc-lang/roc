@@ -57,25 +57,14 @@ pub fn build_module_help<'a>(
     env: &'a Env,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Result<(builder::ModuleBuilder, std::vec::Vec<u8>, u32), String> {
-    let mut backend = WasmBackend::new(env, procedures.len());
+    let proc_symbols = Vec::from_iter_in(procedures.keys().map(|(sym, _)| *sym), env.arena);
+    let mut backend = WasmBackend::new(env, proc_symbols);
     let mut layout_ids = LayoutIds::default();
 
-    // Sort procedures by occurrence order
-    //
-    // We sort by the "name", but those are interned strings, and the name that is
-    // interned first will have a lower number.
-    //
-    // But, the name that occurs first is always `main` because it is in the (implicit)
-    // file header. Therefore sorting high to low will put other functions before main
-    //
-    // This means that for now other functions in the file have to be ordered "in reverse": if A
-    // uses B, then the name of A must first occur after the first occurrence of the name of B
-    let mut procedures = Vec::from_iter_in(procedures.into_iter(), env.arena);
-    procedures.sort_by(|a, b| b.0 .0.cmp(&a.0 .0));
+    let mut main_function_index = None;
 
-    let mut function_index: u32 = 0;
-    for ((sym, layout), proc) in procedures {
-        function_index = backend.build_proc(proc, sym)?;
+    for ((sym, layout), proc) in procedures.into_iter() {
+        let function_index = backend.build_proc(proc, sym)?;
         if env.exposed_to_host.contains(&sym) {
             let fn_name = layout_ids
                 .get_toplevel(sym, &layout)
@@ -87,17 +76,15 @@ pub fn build_module_help<'a>(
                 .build();
 
             backend.module_builder.push_export(export);
+            main_function_index = Some(function_index);
         }
     }
+
+    main_function_index.ok_or(format!("No functions exposed to host"))?;
 
     // Update code section length
     let inner_length = (backend.code_section_bytes.len() - 5) as u32;
     overwrite_padded_u32(&mut backend.code_section_bytes[0..5], inner_length);
-
-    // Because of the sorting above, we know the last function in the `for` is the main function.
-    // Here we grab its index and return it, so that the test_wrapper is able to call it.
-    // This is a workaround until we implement object files with symbols and relocations.
-    let main_function_index = function_index;
 
     const MIN_MEMORY_SIZE_KB: u32 = 1024;
     const PAGE_SIZE_KB: u32 = 64;
@@ -122,7 +109,7 @@ pub fn build_module_help<'a>(
     Ok((
         backend.module_builder,
         backend.code_section_bytes,
-        main_function_index,
+        main_function_index.unwrap(),
     ))
 }
 
