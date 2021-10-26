@@ -1239,21 +1239,7 @@ fn str_split(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Str.trim : Str -> Str
 fn str_trim(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let str_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::StrTrim,
-        args: vec![(str_var, Var(Symbol::ARG_1))],
-        ret_var: str_var,
-    };
-
-    defn(
-        symbol,
-        vec![(str_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        str_var,
-    )
+    lowlevel_1(symbol, LowLevel::StrTrim, var_store)
 }
 
 /// Str.repeat : Str, Nat -> Str
