@@ -341,36 +341,6 @@ pub fn list_drop_at<'a, 'ctx, 'env>(
     )
 }
 
-/// List.dropLast : List elem -> List elem
-pub fn list_drop_last<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    list: BasicValueEnum<'ctx>,
-    list_layout: &Layout<'a>,
-    update_mode: UpdateMode,
-) -> BasicValueEnum<'ctx> {
-    let element_layout = match *list_layout {
-        Layout::Builtin(Builtin::EmptyList) => {
-            // this pointer will never actually be dereferenced
-            Layout::Builtin(Builtin::Int64)
-        }
-
-        Layout::Builtin(Builtin::List(elem_layout)) => *elem_layout,
-
-        _ => unreachable!("Invalid layout {:?} in List.dropLast", list_layout),
-    };
-
-    call_bitcode_fn_returns_list(
-        env,
-        &[
-            pass_list_cc(env, list),
-            env.alignment_intvalue(&element_layout),
-            layout_width(env, &element_layout),
-            pass_update_mode(env, update_mode),
-        ],
-        bitcode::LIST_DROP_LAST,
-    )
-}
-
 /// List.set : List elem, Nat, elem -> List elem
 pub fn list_set<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
