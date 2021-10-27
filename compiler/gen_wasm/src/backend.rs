@@ -29,7 +29,7 @@ pub struct WasmBackend<'a> {
     _data_offset_map: MutMap<Literal<'a>, u32>,
     _data_offset_next: u32,
     proc_symbols: Vec<'a, Symbol>,
-    relocations: Vec<'a, (usize, Symbol)>,
+    code_relocations: Vec<'a, (usize, Symbol)>,
 
     // Function-level data
     code_builder: CodeBuilder<'a>,
@@ -60,7 +60,7 @@ impl<'a> WasmBackend<'a> {
             _data_offset_map: MutMap::default(),
             _data_offset_next: UNUSED_DATA_SECTION_BYTES,
             proc_symbols,
-            relocations: Vec::with_capacity_in(32, env.arena),
+            code_relocations: Vec::with_capacity_in(256, env.arena),
 
             // Function-level data
             block_depth: 0,
@@ -142,9 +142,8 @@ impl<'a> WasmBackend<'a> {
             self.storage.stack_frame_pointer,
         );
 
-        self.code_builder
-            .serialize(&mut self.code_section_bytes)
-            .map_err(|e| format!("{:?}", e))?;
+        let relocs = self.code_builder.serialize(&mut self.code_section_bytes);
+        self.code_relocations.extend(relocs);
         Ok(())
     }
 
@@ -397,18 +396,15 @@ impl<'a> WasmBackend<'a> {
 
                     self.storage.load_symbols(&mut self.code_builder, wasm_args);
 
-                    let function_index = self
+                    let func_index = self
                         .proc_symbols
                         .iter()
                         .position(|s| s == func_sym)
                         .map(|i| i as u32)
                         .unwrap_or(u32::MAX); // foreign symbol, updated at link time
 
-                    let reloc_offset =
-                        self.code_builder
-                            .call(function_index, wasm_args.len(), has_return_val);
-
-                    self.relocations.push((reloc_offset, *func_sym));
+                    self.code_builder
+                        .call(func_index, *func_sym, wasm_args.len(), has_return_val);
 
                     Ok(())
                 }

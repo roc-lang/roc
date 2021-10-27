@@ -4,6 +4,7 @@ use parity_wasm::elements::Internal;
 use roc_gen_wasm::code_builder::{Align, CodeBuilder, ValueType};
 use roc_gen_wasm::from_wasm32_memory::FromWasm32Memory;
 use roc_gen_wasm::{overwrite_padded_u32, LocalId};
+use roc_module::symbol::Symbol;
 use roc_std::{RocDec, RocList, RocOrder, RocStr};
 
 pub trait Wasm32TestResult {
@@ -12,7 +13,8 @@ pub trait Wasm32TestResult {
         module_builder: &mut builder::ModuleBuilder,
         code_section_bytes: &mut std::vec::Vec<u8>,
         wrapper_name: &str,
-        main_function_index: u32,
+        main_fn_index: u32,
+        main_fn_symbol: Symbol,
     ) {
         let signature = builder::signature()
             .with_result(parity_wasm::elements::ValueType::I32)
@@ -28,9 +30,9 @@ pub trait Wasm32TestResult {
         module_builder.push_export(export);
 
         let mut code_builder = CodeBuilder::new(arena);
-        Self::build_wrapper_body(&mut code_builder, main_function_index);
+        Self::build_wrapper_body(&mut code_builder, main_fn_index, main_fn_symbol);
 
-        code_builder.serialize(code_section_bytes).unwrap();
+        code_builder.serialize(code_section_bytes);
 
         let mut num_procs = 0;
         for (i, byte) in code_section_bytes[5..10].iter().enumerate() {
@@ -41,19 +43,27 @@ pub trait Wasm32TestResult {
         overwrite_padded_u32(&mut code_section_bytes[5..10], num_procs + 1);
     }
 
-    fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32);
+    fn build_wrapper_body(
+        code_builder: &mut CodeBuilder,
+        main_fn_index: u32,
+        main_fn_symbol: Symbol,
+    );
 }
 
 macro_rules! build_wrapper_body_primitive {
     ($store_instruction: ident, $align: expr) => {
-        fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
+        fn build_wrapper_body(
+            code_builder: &mut CodeBuilder,
+            main_fn_index: u32,
+            main_fn_symbol: Symbol,
+        ) {
             let frame_pointer_id = LocalId(0);
             let frame_pointer = Some(frame_pointer_id);
             let local_types = &[ValueType::I32];
             let frame_size = 8;
 
             code_builder.get_local(frame_pointer_id);
-            code_builder.call(main_function_index, 0, true);
+            code_builder.call(main_fn_index, main_fn_symbol, 0, true);
             code_builder.$store_instruction($align, 0);
             code_builder.get_local(frame_pointer_id);
 
@@ -72,7 +82,8 @@ macro_rules! wasm_test_result_primitive {
 
 fn build_wrapper_body_stack_memory(
     code_builder: &mut CodeBuilder,
-    main_function_index: u32,
+    main_fn_index: u32,
+    main_fn_symbol: Symbol,
     size: usize,
 ) {
     let local_id = LocalId(0);
@@ -80,7 +91,7 @@ fn build_wrapper_body_stack_memory(
     let frame_pointer = Some(local_id);
 
     code_builder.get_local(local_id);
-    code_builder.call(main_function_index, 0, true);
+    code_builder.call(main_fn_index, main_fn_symbol, 0, true);
     code_builder.get_local(local_id);
     code_builder.finalize(local_types, size as i32, frame_pointer);
 }
@@ -88,10 +99,15 @@ fn build_wrapper_body_stack_memory(
 macro_rules! wasm_test_result_stack_memory {
     ($type_name: ident) => {
         impl Wasm32TestResult for $type_name {
-            fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
+            fn build_wrapper_body(
+                code_builder: &mut CodeBuilder,
+                main_fn_index: u32,
+                main_fn_symbol: Symbol,
+            ) {
                 build_wrapper_body_stack_memory(
                     code_builder,
-                    main_function_index,
+                    main_fn_index,
+                    main_fn_symbol,
                     $type_name::ACTUAL_WIDTH,
                 )
             }
@@ -120,8 +136,12 @@ wasm_test_result_stack_memory!(RocDec);
 wasm_test_result_stack_memory!(RocStr);
 
 impl<T: Wasm32TestResult> Wasm32TestResult for RocList<T> {
-    fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
-        build_wrapper_body_stack_memory(code_builder, main_function_index, 12)
+    fn build_wrapper_body(
+        code_builder: &mut CodeBuilder,
+        main_fn_index: u32,
+        main_fn_symbol: Symbol,
+    ) {
+        build_wrapper_body_stack_memory(code_builder, main_fn_index, main_fn_symbol, 12)
     }
 }
 
@@ -133,8 +153,17 @@ impl<T, const N: usize> Wasm32TestResult for [T; N]
 where
     T: Wasm32TestResult + FromWasm32Memory,
 {
-    fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
-        build_wrapper_body_stack_memory(code_builder, main_function_index, N * T::ACTUAL_WIDTH)
+    fn build_wrapper_body(
+        code_builder: &mut CodeBuilder,
+        main_fn_index: u32,
+        main_fn_symbol: Symbol,
+    ) {
+        build_wrapper_body_stack_memory(
+            code_builder,
+            main_fn_index,
+            main_fn_symbol,
+            N * T::ACTUAL_WIDTH,
+        )
     }
 }
 
@@ -143,10 +172,15 @@ where
     T: Wasm32TestResult + FromWasm32Memory,
     U: Wasm32TestResult + FromWasm32Memory,
 {
-    fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
+    fn build_wrapper_body(
+        code_builder: &mut CodeBuilder,
+        main_fn_index: u32,
+        main_fn_symbol: Symbol,
+    ) {
         build_wrapper_body_stack_memory(
             code_builder,
-            main_function_index,
+            main_fn_index,
+            main_fn_symbol,
             T::ACTUAL_WIDTH + U::ACTUAL_WIDTH,
         )
     }
@@ -158,10 +192,15 @@ where
     U: Wasm32TestResult + FromWasm32Memory,
     V: Wasm32TestResult + FromWasm32Memory,
 {
-    fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
+    fn build_wrapper_body(
+        code_builder: &mut CodeBuilder,
+        main_fn_index: u32,
+        main_fn_symbol: Symbol,
+    ) {
         build_wrapper_body_stack_memory(
             code_builder,
-            main_function_index,
+            main_fn_index,
+            main_fn_symbol,
             T::ACTUAL_WIDTH + U::ACTUAL_WIDTH + V::ACTUAL_WIDTH,
         )
     }
@@ -174,10 +213,15 @@ where
     V: Wasm32TestResult + FromWasm32Memory,
     W: Wasm32TestResult + FromWasm32Memory,
 {
-    fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
+    fn build_wrapper_body(
+        code_builder: &mut CodeBuilder,
+        main_fn_index: u32,
+        main_fn_symbol: Symbol,
+    ) {
         build_wrapper_body_stack_memory(
             code_builder,
-            main_function_index,
+            main_fn_index,
+            main_fn_symbol,
             T::ACTUAL_WIDTH + U::ACTUAL_WIDTH + V::ACTUAL_WIDTH + W::ACTUAL_WIDTH,
         )
     }
@@ -191,10 +235,15 @@ where
     W: Wasm32TestResult + FromWasm32Memory,
     X: Wasm32TestResult + FromWasm32Memory,
 {
-    fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
+    fn build_wrapper_body(
+        code_builder: &mut CodeBuilder,
+        main_fn_index: u32,
+        main_fn_symbol: Symbol,
+    ) {
         build_wrapper_body_stack_memory(
             code_builder,
-            main_function_index,
+            main_fn_index,
+            main_fn_symbol,
             T::ACTUAL_WIDTH + U::ACTUAL_WIDTH + V::ACTUAL_WIDTH + W::ACTUAL_WIDTH + X::ACTUAL_WIDTH,
         )
     }
@@ -209,10 +258,15 @@ where
     X: Wasm32TestResult + FromWasm32Memory,
     Y: Wasm32TestResult + FromWasm32Memory,
 {
-    fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
+    fn build_wrapper_body(
+        code_builder: &mut CodeBuilder,
+        main_fn_index: u32,
+        main_fn_symbol: Symbol,
+    ) {
         build_wrapper_body_stack_memory(
             code_builder,
-            main_function_index,
+            main_fn_index,
+            main_fn_symbol,
             T::ACTUAL_WIDTH
                 + U::ACTUAL_WIDTH
                 + V::ACTUAL_WIDTH
@@ -233,10 +287,15 @@ where
     Y: Wasm32TestResult + FromWasm32Memory,
     Z: Wasm32TestResult + FromWasm32Memory,
 {
-    fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
+    fn build_wrapper_body(
+        code_builder: &mut CodeBuilder,
+        main_fn_index: u32,
+        main_fn_symbol: Symbol,
+    ) {
         build_wrapper_body_stack_memory(
             code_builder,
-            main_function_index,
+            main_fn_index,
+            main_fn_symbol,
             T::ACTUAL_WIDTH
                 + U::ACTUAL_WIDTH
                 + V::ACTUAL_WIDTH
@@ -259,10 +318,15 @@ where
     Z: Wasm32TestResult + FromWasm32Memory,
     A: Wasm32TestResult + FromWasm32Memory,
 {
-    fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
+    fn build_wrapper_body(
+        code_builder: &mut CodeBuilder,
+        main_fn_index: u32,
+        main_fn_symbol: Symbol,
+    ) {
         build_wrapper_body_stack_memory(
             code_builder,
-            main_function_index,
+            main_fn_index,
+            main_fn_symbol,
             T::ACTUAL_WIDTH
                 + U::ACTUAL_WIDTH
                 + V::ACTUAL_WIDTH

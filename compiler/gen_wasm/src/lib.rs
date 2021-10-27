@@ -44,7 +44,7 @@ pub fn build_module<'a>(
     env: &'a Env,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Result<std::vec::Vec<u8>, String> {
-    let (builder, code_section_bytes, _) = build_module_help(env, procedures)?;
+    let (builder, code_section_bytes) = build_module_help(env, procedures)?;
     let mut module = builder.build();
     replace_code_section(&mut module, code_section_bytes);
 
@@ -56,12 +56,10 @@ pub fn build_module<'a>(
 pub fn build_module_help<'a>(
     env: &'a Env,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-) -> Result<(builder::ModuleBuilder, std::vec::Vec<u8>, u32), String> {
+) -> Result<(builder::ModuleBuilder, std::vec::Vec<u8>), String> {
     let proc_symbols = Vec::from_iter_in(procedures.keys().map(|(sym, _)| *sym), env.arena);
     let mut backend = WasmBackend::new(env, proc_symbols);
     let mut layout_ids = LayoutIds::default();
-
-    let mut main_function_index = None;
 
     for ((sym, layout), proc) in procedures.into_iter() {
         let function_index = backend.build_proc(proc, sym)?;
@@ -76,11 +74,8 @@ pub fn build_module_help<'a>(
                 .build();
 
             backend.module_builder.push_export(export);
-            main_function_index = Some(function_index);
         }
     }
-
-    main_function_index.ok_or(format!("No functions exposed to host"))?;
 
     // Update code section length
     let inner_length = (backend.code_section_bytes.len() - 5) as u32;
@@ -106,11 +101,7 @@ pub fn build_module_help<'a>(
         .build();
     backend.module_builder.push_global(stack_pointer_global);
 
-    Ok((
-        backend.module_builder,
-        backend.code_section_bytes,
-        main_function_index.unwrap(),
-    ))
+    Ok((backend.module_builder, backend.code_section_bytes))
 }
 
 /// Replace parity-wasm's code section with our own handmade one

@@ -67,17 +67,11 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
 
     use roc_load::file::MonomorphizedModule;
     let MonomorphizedModule {
-        procedures: top_procedures,
+        procedures,
         interns,
         exposed_to_host,
         ..
     } = loaded;
-
-    let mut procedures = MutMap::default();
-
-    for (key, proc) in top_procedures {
-        procedures.insert(key, proc);
-    }
 
     // You can comment and uncomment this block out to get more useful information
     // while you're working on the wasm backend!
@@ -95,6 +89,10 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     //     println!("=================================\n");
     // }
 
+    debug_assert_eq!(exposed_to_host.len(), 1);
+    let main_fn_symbol = loaded.entry_point.symbol;
+    let main_fn_index = procedures.keys().position(|(s, _)| *s == main_fn_symbol).unwrap();
+
     let exposed_to_host = exposed_to_host.keys().copied().collect::<MutSet<_>>();
 
     let env = roc_gen_wasm::Env {
@@ -103,7 +101,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
         exposed_to_host,
     };
 
-    let (mut builder, mut code_section_bytes, main_function_index) =
+    let (mut builder, mut code_section_bytes) =
         roc_gen_wasm::build_module_help(&env, procedures).unwrap();
 
     T::insert_test_wrapper(
@@ -111,7 +109,8 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
         &mut builder,
         &mut code_section_bytes,
         TEST_WRAPPER_NAME,
-        main_function_index,
+        main_fn_index as u32,
+        main_fn_symbol
     );
 
     let mut parity_module = builder.build();

@@ -1,4 +1,4 @@
-use bumpalo::collections::Vec;
+use bumpalo::collections::vec::{Drain, Vec};
 use bumpalo::Bump;
 use core::panic;
 use std::fmt::Debug;
@@ -143,6 +143,10 @@ pub struct CodeBuilder<'a> {
     /// Our simulation model of the Wasm stack machine
     /// Keeps track of where Symbol values are in the VM stack
     vm_stack: Vec<'a, Symbol>,
+
+    /// Which byte offsets in the code section correspond to which symbols.
+    /// e.g. Function indices that may change when we link Roc + Zig modules
+    relocations: Vec<'a, (usize, Symbol)>,
 }
 
 #[allow(clippy::new_without_default)]
@@ -155,6 +159,7 @@ impl<'a> CodeBuilder<'a> {
             preamble: Vec::with_capacity_in(32, arena),
             inner_length: Vec::with_capacity_in(5, arena),
             vm_stack: Vec::with_capacity_in(32, arena),
+            relocations: Vec::with_capacity_in(32, arena),
         }
     }
 
@@ -385,9 +390,13 @@ impl<'a> CodeBuilder<'a> {
     }
 
     /// Write out all the bytes in the right order
-    pub fn serialize<W: std::io::Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
-        writer.write_all(&self.inner_length)?;
-        writer.write_all(&self.preamble)?;
+    pub fn serialize(
+        &mut self,
+        code_section_bytes: &mut std::vec::Vec<u8>,
+    ) -> Drain<(usize, Symbol)> {
+        let function_offset = code_section_bytes.len();
+        code_section_bytes.extend_from_slice(&self.inner_length);
+        code_section_bytes.extend_from_slice(&self.preamble);
 
         // We created each insertion when a local was used for the _second_ time.
         // But we want them in the order they were first assigned, which may not be the same.
@@ -395,13 +404,19 @@ impl<'a> CodeBuilder<'a> {
 
         let mut pos: usize = 0;
         for location in self.insert_locations.iter() {
-            writer.write_all(&self.code[pos..location.insert_at])?;
-            writer.write_all(&self.insert_bytes[location.start..location.end])?;
+            code_section_bytes.extend_from_slice(&self.code[pos..location.insert_at]);
+            code_section_bytes.extend_from_slice(&self.insert_bytes[location.start..location.end]);
             pos = location.insert_at;
         }
 
         let len = self.code.len();
-        writer.write_all(&self.code[pos..len])
+        code_section_bytes.extend_from_slice(&self.code[pos..len]);
+
+        let extra_offset = function_offset + self.inner_length.len() + self.preamble.len();
+        for (offset, _) in self.relocations.iter_mut() {
+            *offset += extra_offset;
+        }
+        self.relocations.drain(0..)
     }
 
     /**********************************************************
@@ -475,7 +490,13 @@ impl<'a> CodeBuilder<'a> {
 
     instruction_no_args!(return_, RETURN, 0, false);
 
-    pub fn call(&mut self, function_index: u32, n_args: usize, has_return_val: bool) -> usize {
+    pub fn call(
+        &mut self,
+        function_index: u32,
+        function_sym: Symbol,
+        n_args: usize,
+        has_return_val: bool,
+    ) {
         let stack_depth = self.vm_stack.len();
         if n_args > stack_depth {
             panic!(
@@ -489,9 +510,9 @@ impl<'a> CodeBuilder<'a> {
         }
         self.code.push(CALL);
 
-        let reloc_offset = self.code.len();
+        let call_offset = self.code.len() + self.insert_bytes.len();
         encode_padded_u32(&mut self.code, function_index);
-        reloc_offset
+        self.relocations.push((call_offset, function_sym));
     }
     fn call_indirect() {
         panic!("Not implemented. Roc doesn't use function pointers");
