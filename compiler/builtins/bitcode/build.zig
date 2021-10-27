@@ -86,8 +86,8 @@ pub fn build(b: *Builder) void {
 
 fn removeInstallSteps(b: *Builder) void {
     for (b.top_level_steps.items) |top_level_step, i| {
-        if (mem.eql(u8, top_level_step.step.name, "install") or mem.eql(u8, top_level_step.step.name, "uninstall")) {
-            const name = top_level_step.step.name;
+        const name = top_level_step.step.name;
+        if (mem.eql(u8, name, "install") or mem.eql(u8, name, "uninstall")) {
             _ = b.top_level_steps.swapRemove(i);
         }
     }
