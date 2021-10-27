@@ -463,8 +463,6 @@ impl<'a> Procs<'a> {
     ) -> MutMap<(Symbol, ProcLayout<'a>), Proc<'a>> {
         let mut result = MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
 
-        let cloned = self.specialized.clone();
-
         for (key, in_prog_proc) in self.specialized.into_iter() {
             match in_prog_proc {
                 InProgress => {
@@ -473,14 +471,6 @@ impl<'a> Procs<'a> {
                         "The procedure {:?} should have be done by now:\n\n    {:?}",
                         symbol, layout
                     );
-
-                    eprintln!("other pending specializatons for this symbol:");
-
-                    for ((bsymbol, layout), _) in cloned {
-                        if bsymbol == symbol {
-                            eprintln!("{:?}: {:?}", symbol, layout);
-                        }
-                    }
 
                     panic!();
                 }
