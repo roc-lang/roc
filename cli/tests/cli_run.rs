@@ -205,6 +205,8 @@ mod cli_run {
                         example.use_valgrind,
                     );
 
+                    // This is mostly because the false interpreter is still very slow -
+                    // 25s for the cli tests is just not acceptable during development!
                     #[cfg(not(debug_assertions))]
                     check_output_with_stdin(
                         &file_name,
