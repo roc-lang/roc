@@ -35,7 +35,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN rustup component add rustfmt
     # criterion
     RUN cargo install cargo-criterion
-    # wasm
+    # editor
     RUN apt -y install libxkbcommon-dev
     # sccache
     RUN apt -y install libssl-dev
@@ -106,7 +106,7 @@ test-all:
 build-nightly-release:
     FROM +test-rust
     COPY --dir .git ./
-    # version.txt is used by the CLI: roc version
+    # version.txt is used by the CLI: roc --version
     RUN printf "nightly pre-release, built from commit " > version.txt
     RUN git log --pretty=format:'%h' -n 1 >> version.txt
     RUN cargo build --release
