@@ -30,10 +30,7 @@ use roc_ast::{
         env::Env,
     },
 };
-use roc_module::{
-    module_err::ModuleResult,
-    symbol::{get_module_ident_ids, Interns},
-};
+use roc_module::{module_err::ModuleResult, symbol::Interns};
 
 // make Markup Nodes: generate String representation, assign Highlighting Style
 pub fn expr2_to_markup<'a>(
@@ -45,6 +42,9 @@ pub fn expr2_to_markup<'a>(
     indent_level: usize,
 ) -> ASTResult<MarkNodeId> {
     let ast_node_id = ASTNodeId::AExprId(expr2_node_id);
+
+    // for debugging
+    //println!("EXPR2 {:?}", expr2);
 
     let mark_node_id = match expr2 {
         Expr2::SmallInt { text, .. }
@@ -112,8 +112,7 @@ pub fn expr2_to_markup<'a>(
             mark_node_pool.add(call_node)
         }
         Expr2::Var(symbol) => {
-            let text = get_module_ident_ids(&interns.all_ident_ids, &env.home)?
-                .get_name_str_res(symbol.ident_id())?;
+            let text = symbol.fully_qualified(interns, env.home);
 
             new_markup_node(
                 text.to_string(),
