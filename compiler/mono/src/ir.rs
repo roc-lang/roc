@@ -525,6 +525,10 @@ impl<'a> Procs<'a> {
                 if !already_specialized {
                     let pending = PendingSpecialization::from_var(env.arena, env.subs, annotation);
 
+                    if self.is_module_thunk(symbol) {
+                        debug_assert!(layout.arguments.is_empty());
+                    }
+
                     let partial_proc;
                     if let Some(existing) = self.partial_procs.get(&symbol) {
                         // if we're adding the same partial proc twice, they must be the actual same!
@@ -547,10 +551,6 @@ impl<'a> Procs<'a> {
                             body: body.value,
                             is_self_recursive,
                         };
-                    }
-
-                    if self.is_module_thunk(symbol) {
-                        debug_assert!(layout.arguments.is_empty());
                     }
 
                     match &mut self.pending_specializations {
