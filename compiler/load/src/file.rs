@@ -4531,8 +4531,8 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
                 let doc = alloc.stack(vec![
                                 alloc.reflow(r"The input file is a interface file, but only app modules can be ran."),
                                 alloc.concat(vec![
-                                alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
-                                alloc.reflow(r"but won't output any executable."),
+                                    alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
+                                    alloc.reflow(r"but won't output any executable."),
                                 ])
                             ]);
 
@@ -4547,8 +4547,8 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
                 let doc = alloc.stack(vec![
                                 alloc.reflow(r"The input file is a package config file, but only app modules can be ran."),
                                 alloc.concat(vec![
-                                alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
-                                alloc.reflow(r"but won't output any executable."),
+                                    alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
+                                    alloc.reflow(r"but won't output any executable."),
                                 ])
                             ]);
 
