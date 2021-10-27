@@ -107,12 +107,15 @@ pub fn build_module_help<'a>(
 /// Replace parity-wasm's code section with our own handmade one
 pub fn replace_code_section(module: &mut Module, code_section_bytes: std::vec::Vec<u8>) {
     let sections = module.sections_mut();
-    let mut code_section_index = usize::MAX;
-    for (i, s) in sections.iter().enumerate() {
-        if let Section::Code(_) = s {
-            code_section_index = i;
-        }
-    }
+
+    let code_section_index = sections
+        .iter()
+        .position(|s| match s {
+            Section::Code(_) => true,
+            _ => false,
+        })
+        .unwrap();
+
     sections[code_section_index] = Section::Unparsed {
         id: CODE_SECTION_ID,
         payload: code_section_bytes,
