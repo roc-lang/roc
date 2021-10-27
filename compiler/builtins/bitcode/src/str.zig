@@ -1510,6 +1510,7 @@ pub fn strTrim(string: RocStr) callconv(.C) RocStr {
         const original_len = string.len();
 
         if (original_len == leading_bytes) {
+            string.deinit();
             return RocStr.empty();
         }
 
