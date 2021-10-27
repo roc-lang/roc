@@ -665,7 +665,7 @@ fn link_linux(
             .args(&[
                 "--gc-sections",
                 "--eh-frame-hdr",
-                "-arch",
+                "--arch",
                 arch_str(target),
                 "-pie",
                 libcrt_path.join("crti.o").to_str().unwrap(),
@@ -674,7 +674,7 @@ fn link_linux(
             .args(&base_args)
             .args(&["-dynamic-linker", ld_linux])
             .args(input_paths)
-            // ld.lld requires this argument, and does not accept -arch
+            // ld.lld requires this argument, and does not accept --arch
             // .args(&["-L/usr/lib/x86_64-linux-gnu"])
             .args(&[
                 // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496365925

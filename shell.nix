@@ -28,6 +28,7 @@ let
       xorg.libXrandr
       xorg.libXi
       xorg.libxcb
+      alsa-lib
     ];
 
   llvmPkgs = pkgs.llvmPackages_12;
