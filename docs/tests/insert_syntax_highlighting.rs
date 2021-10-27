@@ -151,16 +151,32 @@ main = "Hello, world!"
     #[test]
     fn top_level_def_value() {
         expect_html_def(
-            r#"myFunction = "Hello, World!""#,
-            "<span class=\"syntax-value\">myFunction</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-string\">\"Hello, World!\"</span>\n\n",
+            r#"myVal = "Hello, World!""#,
+            "<span class=\"syntax-value\">myVal</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-string\">\"Hello, World!\"</span>\n\n",
+        );
+    }
+
+    #[test]
+    fn tld_newline_in_str() {
+        expect_html_def(
+            r#"myVal = "Hello, Newline!\n""#,
+            "<span class=\"syntax-value\">myVal</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-string\">\"Hello, Newline!\n\"</span>\n\n",
         );
     }
 
     #[test]
     fn tld_list() {
         expect_html_def(
-            r#"myFunction = [ 1, 2, 3 ]"#,
-            "<span class=\"syntax-value\">myFunction</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-bracket\">[ </span><span class=\"syntax-number\">1</span><span class=\"syntax-comma\">, </span><span class=\"syntax-number\">2</span><span class=\"syntax-comma\">, </span><span class=\"syntax-number\">3</span><span class=\"syntax-bracket\"> ]</span>\n\n",
+            r#"myVal = [ 1, 2, 3 ]"#,
+            "<span class=\"syntax-value\">myVal</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-bracket\">[ </span><span class=\"syntax-number\">1</span><span class=\"syntax-comma\">, </span><span class=\"syntax-number\">2</span><span class=\"syntax-comma\">, </span><span class=\"syntax-number\">3</span><span class=\"syntax-bracket\"> ]</span>\n\n",
+        );
+    }
+
+    #[test]
+    fn call_builtin() {
+        expect_html_def(
+            r#"myVal = Str.fromInt 1234"#,
+            "<span class=\"syntax-value\">myVal</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-value\">Str.fromInt</span><span class=\"syntax-blank\"> </span><span class=\"syntax-number\">1234</span>\n\n",
         );
     }
 
