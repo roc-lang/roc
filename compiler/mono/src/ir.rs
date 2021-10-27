@@ -1767,13 +1767,9 @@ fn specialize_all_help<'a>(
     externals_others_need: ExternalSpecializations<'a>,
     layout_cache: &mut LayoutCache<'a>,
 ) {
-    let mut symbol_solved_type = Vec::new_in(env.arena);
-
     for (symbol, solved_types) in externals_others_need.specs.iter() {
         // for some unclear reason, the MutSet does not deduplicate according to the hash
         // instance. So we do it manually here
-        let mut as_vec: std::vec::Vec<_> = solved_types.iter().collect();
-
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
 
@@ -1783,50 +1779,53 @@ fn specialize_all_help<'a>(
             hasher.finish()
         };
 
-        as_vec.sort_by_key(|x| hash_the_thing(x));
-        as_vec.dedup_by_key(|x| hash_the_thing(x));
+        let mut as_vec = Vec::from_iter_in(
+            solved_types.iter().map(|x| (hash_the_thing(x), x)),
+            env.arena,
+        );
 
-        for s in as_vec {
-            symbol_solved_type.push((*symbol, s.clone()));
-        }
-    }
+        as_vec.sort_by_key(|(k, _)| *k);
+        as_vec.dedup_by_key(|(k, _)| *k);
 
-    for (name, solved_type) in symbol_solved_type.into_iter() {
-        let partial_proc = match procs.partial_procs.get(&name) {
-            Some(v) => v.clone(),
-            None => {
-                panic!("Cannot find a partial proc for {:?}", name);
-            }
-        };
+        for (_, solved_type) in as_vec {
+            let name = *symbol;
 
-        // TODO I believe this sis also duplicated
-        match specialize_solved_type(
-            env,
-            procs,
-            name,
-            layout_cache,
-            solved_type,
-            BumpMap::new_in(env.arena),
-            partial_proc,
-        ) {
-            Ok((proc, layout)) => {
-                let top_level = ProcLayout::from_raw(env.arena, layout);
-
-                if procs.is_module_thunk(name) {
-                    debug_assert!(top_level.arguments.is_empty());
+            let partial_proc = match procs.partial_procs.get(&name) {
+                Some(v) => v.clone(),
+                None => {
+                    panic!("Cannot find a partial proc for {:?}", name);
                 }
+            };
 
-                procs.specialized.insert((name, top_level), Done(proc));
-            }
-            Err(SpecializeFailure {
-                problem: _,
-                attempted_layout,
-            }) => {
-                let proc = generate_runtime_error_function(env, name, attempted_layout);
+            // TODO I believe this sis also duplicated
+            match specialize_solved_type(
+                env,
+                procs,
+                name,
+                layout_cache,
+                solved_type,
+                BumpMap::new_in(env.arena),
+                partial_proc,
+            ) {
+                Ok((proc, layout)) => {
+                    let top_level = ProcLayout::from_raw(env.arena, layout);
 
-                let top_level = ProcLayout::from_raw(env.arena, attempted_layout);
+                    if procs.is_module_thunk(name) {
+                        debug_assert!(top_level.arguments.is_empty());
+                    }
 
-                procs.specialized.insert((name, top_level), Done(proc));
+                    procs.specialized.insert((name, top_level), Done(proc));
+                }
+                Err(SpecializeFailure {
+                    problem: _,
+                    attempted_layout,
+                }) => {
+                    let proc = generate_runtime_error_function(env, name, attempted_layout);
+
+                    let top_level = ProcLayout::from_raw(env.arena, attempted_layout);
+
+                    procs.specialized.insert((name, top_level), Done(proc));
+                }
             }
         }
     }
@@ -2421,7 +2420,7 @@ fn specialize<'a>(
         procs,
         proc_name,
         layout_cache,
-        solved_type,
+        &solved_type,
         host_exposed_aliases,
         partial_proc,
     )
@@ -2451,7 +2450,7 @@ fn specialize_solved_type<'a>(
     procs: &mut Procs<'a>,
     proc_name: Symbol,
     layout_cache: &mut LayoutCache<'a>,
-    solved_type: SolvedType,
+    solved_type: &SolvedType,
     host_exposed_aliases: BumpMap<Symbol, SolvedType>,
     partial_proc: PartialProc<'a>,
 ) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
@@ -2460,7 +2459,7 @@ fn specialize_solved_type<'a>(
         procs,
         proc_name,
         layout_cache,
-        |env| introduce_solved_type_to_subs(env, &solved_type),
+        |env| introduce_solved_type_to_subs(env, solved_type),
         host_exposed_aliases,
         partial_proc,
     )

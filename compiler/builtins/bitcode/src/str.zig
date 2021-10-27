@@ -93,7 +93,7 @@ pub const RocStr = extern struct {
         if (length < roc_str_size) {
             return RocStr.empty();
         } else {
-            var new_bytes: []T = utils.alloc(length, RocStr.alignment) catch unreachable;
+            var new_bytes = utils.alloc(length, RocStr.alignment) catch unreachable;
 
             var new_bytes_ptr: [*]u8 = @ptrCast([*]u8, &new_bytes);
 
