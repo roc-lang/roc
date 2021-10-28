@@ -1,31 +1,5 @@
 use bumpalo::collections::vec::Vec;
 
-pub trait SerialBuffer {
-    fn append_byte(&mut self, b: u8);
-    fn append_slice(&mut self, b: &[u8]);
-    fn size(&self) -> usize;
-    fn encode_u32(&mut self, value: u32) -> usize;
-    fn encode_u64(&mut self, value: u64) -> usize;
-    fn encode_i32(&mut self, value: i32) -> usize;
-    fn encode_i64(&mut self, value: i64) -> usize;
-    fn encode_f32(&mut self, value: f32);
-    fn encode_f64(&mut self, value: f64);
-
-    /// Write a LEB-128 encoded u32 value, padded to maximum length (5 bytes)
-    /// so that it can be overwritten later without moving other bytes.
-    /// The value 3 is encoded as 0x83 0x80 0x80 0x80 0x00.
-    /// https://github.com/WebAssembly/tool-conventions/blob/main/Linking.md#relocation-sections
-    /// Return its starting index in the buffer.
-    fn encode_padded_u32(&mut self, value: u32) -> usize;
-
-    /// Overwrite a padded LEB-128 encoded value at the given index
-    fn overwrite_padded_u32(&mut self, index: usize, value: u32);
-}
-
-pub trait Serialize {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T);
-}
-
 /// Write an unsigned integer into the provided buffer in LEB-128 format, returning byte length
 ///
 /// All integers in Wasm are variable-length encoded, which saves space for small values.
@@ -34,13 +8,13 @@ macro_rules! encode_uleb128 {
     ($name: ident, $ty: ty) => {
         fn $name(&mut self, value: $ty) -> usize {
             let mut x = value;
-            let start_len = self.len();
+            let start_len = self.size();
             while x >= 0x80 {
-                self.push(0x80 | ((x & 0x7f) as u8));
+                self.append_byte(0x80 | ((x & 0x7f) as u8));
                 x >>= 7;
             }
-            self.push(x as u8);
-            self.len() - start_len
+            self.append_byte(x as u8);
+            self.size() - start_len
         }
     };
 }
@@ -50,34 +24,81 @@ macro_rules! encode_sleb128 {
     ($name: ident, $ty: ty) => {
         fn $name(&mut self, value: $ty) -> usize {
             let mut x = value;
-            let start_len = self.len();
+            let start_len = self.size();
             loop {
                 let byte = (x & 0x7f) as u8;
                 x >>= 7;
                 let byte_is_negative = (byte & 0x40) != 0;
                 if ((x == 0 && !byte_is_negative) || (x == -1 && byte_is_negative)) {
-                    self.push(byte);
+                    self.append_byte(byte);
                     break;
                 }
-                self.push(byte | 0x80);
+                self.append_byte(byte | 0x80);
             }
-            self.len() - start_len
+            self.size() - start_len
         }
     };
 }
 
-/// Write a float with no LEB encoding, in little-endian format regardless of compiler host.
-macro_rules! encode_float {
+macro_rules! write_unencoded {
     ($name: ident, $ty: ty) => {
+        /// write an unencoded little-endian integer (only used in relocations)
         fn $name(&mut self, value: $ty) {
-            let mut x = value.to_bits();
+            let mut x = value;
             let size = std::mem::size_of::<$ty>();
             for _ in 0..size {
-                self.push((x & 0xff) as u8);
+                self.append_byte((x & 0xff) as u8);
                 x >>= 8;
             }
         }
     };
+}
+
+macro_rules! encode_padded_sleb128 {
+    ($name: ident, $ty: ty) => {
+        /// write a maximally-padded SLEB128 integer (only used in relocations)
+        fn $name(&mut self, value: $ty) {
+            let mut x = value;
+            let size = (std::mem::size_of::<$ty>() / 4) * 5;
+            for _ in 0..(size - 1) {
+                self.append_byte(0x80 | (x & 0x7f) as u8);
+                x >>= 7;
+            }
+            self.append_byte((x & 0x7f) as u8);
+        }
+    };
+}
+
+pub trait SerialBuffer {
+    fn append_byte(&mut self, b: u8);
+    fn append_slice(&mut self, b: &[u8]);
+    fn size(&self) -> usize;
+
+    encode_uleb128!(encode_u32, u32);
+    encode_uleb128!(encode_u64, u64);
+    encode_sleb128!(encode_i32, i32);
+    encode_sleb128!(encode_i64, i64);
+
+    fn encode_padded_u32(&mut self, value: u32) -> usize;
+    fn overwrite_padded_u32(&mut self, index: usize, value: u32);
+
+    fn encode_f32(&mut self, value: f32) {
+        self.write_unencoded_u32(value.to_bits());
+    }
+
+    fn encode_f64(&mut self, value: f64) {
+        self.write_unencoded_u64(value.to_bits());
+    }
+
+    // methods for relocations
+    write_unencoded!(write_unencoded_u32, u32);
+    write_unencoded!(write_unencoded_u64, u64);
+    encode_padded_sleb128!(encode_padded_i32, i32);
+    encode_padded_sleb128!(encode_padded_i64, i64);
+}
+
+pub trait Serialize {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T);
 }
 
 fn overwrite_padded_u32_help(buffer: &mut [u8], value: u32) {
@@ -99,14 +120,6 @@ impl SerialBuffer for std::vec::Vec<u8> {
     fn size(&self) -> usize {
         self.len()
     }
-
-    encode_uleb128!(encode_u32, u32);
-    encode_uleb128!(encode_u64, u64);
-    encode_sleb128!(encode_i32, i32);
-    encode_sleb128!(encode_i64, i64);
-    encode_float!(encode_f32, f32);
-    encode_float!(encode_f64, f64);
-
     fn encode_padded_u32(&mut self, value: u32) -> usize {
         let index = self.len();
         let new_len = index + 5;
@@ -114,7 +127,6 @@ impl SerialBuffer for std::vec::Vec<u8> {
         overwrite_padded_u32_help(&mut self[index..new_len], value);
         index
     }
-
     fn overwrite_padded_u32(&mut self, index: usize, value: u32) {
         overwrite_padded_u32_help(&mut self[index..(index + 5)], value);
     }
@@ -130,14 +142,6 @@ impl<'a> SerialBuffer for Vec<'a, u8> {
     fn size(&self) -> usize {
         self.len()
     }
-
-    encode_uleb128!(encode_u32, u32);
-    encode_uleb128!(encode_u64, u64);
-    encode_sleb128!(encode_i32, i32);
-    encode_sleb128!(encode_i64, i64);
-    encode_float!(encode_f32, f32);
-    encode_float!(encode_f64, f64);
-
     fn encode_padded_u32(&mut self, value: u32) -> usize {
         let index = self.len();
         let new_len = index + 5;
@@ -145,7 +149,6 @@ impl<'a> SerialBuffer for Vec<'a, u8> {
         overwrite_padded_u32_help(&mut self[index..new_len], value);
         index
     }
-
     fn overwrite_padded_u32(&mut self, index: usize, value: u32) {
         overwrite_padded_u32_help(&mut self[index..(index + 5)], value);
     }
@@ -256,5 +259,74 @@ mod tests {
 
         overwrite_padded_u32_help(&mut buffer, 128);
         assert_eq!(buffer, [0x80, 0x81, 0x80, 0x80, 0x00]);
+    }
+
+    #[test]
+    fn test_write_unencoded_u32() {
+        let mut buffer = std::vec::Vec::with_capacity(4);
+
+        buffer.write_unencoded_u32(0);
+        assert_eq!(buffer, &[0, 0, 0, 0]);
+
+        buffer.clear();
+        buffer.write_unencoded_u32(u32::MAX);
+        assert_eq!(buffer, &[0xff, 0xff, 0xff, 0xff]);
+    }
+
+    #[test]
+    fn test_write_unencoded_u64() {
+        let mut buffer = std::vec::Vec::with_capacity(8);
+
+        buffer.write_unencoded_u64(0);
+        assert_eq!(buffer, &[0, 0, 0, 0, 0, 0, 0, 0]);
+
+        buffer.clear();
+        buffer.write_unencoded_u64(u64::MAX);
+        assert_eq!(buffer, &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+    }
+
+    fn help_pad_i32(val: i32) -> std::vec::Vec<u8> {
+        let mut buffer = std::vec::Vec::with_capacity(5);
+        buffer.encode_padded_i32(val);
+        buffer
+    }
+
+    #[test]
+    fn test_encode_padded_i32() {
+        assert_eq!(help_pad_i32(0), &[0x80, 0x80, 0x80, 0x80, 0x00]);
+        assert_eq!(help_pad_i32(1), &[0x81, 0x80, 0x80, 0x80, 0x00]);
+        assert_eq!(help_pad_i32(-1), &[0xff, 0xff, 0xff, 0xff, 0x7f]);
+        assert_eq!(help_pad_i32(i32::MAX), &[0xff, 0xff, 0xff, 0xff, 0x07]);
+        assert_eq!(help_pad_i32(i32::MIN), &[0x80, 0x80, 0x80, 0x80, 0x78]);
+    }
+
+    fn help_pad_i64(val: i64) -> std::vec::Vec<u8> {
+        let mut buffer = std::vec::Vec::with_capacity(10);
+        buffer.encode_padded_i64(val);
+        buffer
+    }
+
+    #[test]
+    fn test_encode_padded_i64() {
+        assert_eq!(
+            help_pad_i64(0),
+            &[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00]
+        );
+        assert_eq!(
+            help_pad_i64(1),
+            &[0x81, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00]
+        );
+        assert_eq!(
+            help_pad_i64(-1),
+            &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f]
+        );
+        assert_eq!(
+            help_pad_i64(i64::MAX),
+            &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00],
+        );
+        assert_eq!(
+            help_pad_i64(i64::MIN),
+            &[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x7f],
+        );
     }
 }
