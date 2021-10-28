@@ -163,7 +163,7 @@ pub const RocStr = extern struct {
     ) RocStr {
         const element_width = 1;
 
-        if (self.bytes) |source_ptr| {
+        if (self.str_bytes) |source_ptr| {
             if (self.isUnique()) {
                 const new_source = utils.unsafeReallocate(source_ptr, RocStr.alignment, self.len(), new_length, element_width);
 
@@ -171,7 +171,7 @@ pub const RocStr = extern struct {
             }
         }
 
-        return self.reallocateFresh(RocStr.alignment, new_length, element_width);
+        return self.reallocateFresh(new_length);
     }
 
     /// reallocate by explicitly making a new allocation and copying elements over
@@ -294,7 +294,7 @@ pub const RocStr = extern struct {
     }
 
     pub fn isUnique(self: RocStr) bool {
-        // the empty list is unique (in the sense that copying it will not leak memory)
+        // the empty string is unique (in the sense that copying it will not leak memory)
         if (self.isEmpty()) {
             return true;
         }
@@ -305,6 +305,10 @@ pub const RocStr = extern struct {
         }
 
         // otherwise, check if the refcount is one
+        return @call(.{ .modifier = always_inline }, RocStr.isRefcountOne, .{self});
+    }
+
+    fn isRefcountOne(self: RocStr) bool {
         const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, self.str_bytes));
         return (ptr - 1)[0] == utils.REFCOUNT_ONE;
     }
@@ -1472,4 +1476,254 @@ test "validateUtf8Bytes: surrogate halves" {
     const list = sliceHelp(ptr, raw.len);
 
     try expectErr(list, 3, error.Utf8EncodesSurrogateHalf, Utf8ByteProblem.EncodesSurrogateHalf);
+}
+
+fn isWhitespace(codepoint: u21) bool {
+    // https://www.unicode.org/Public/UCD/latest/ucd/PropList.txt
+    return switch (codepoint) {
+        0x0009...0x000D => true, // control characters
+        0x0020 => true, // space
+        0x0085 => true, // control character
+        0x00A0 => true, // no-break space
+        0x1680 => true, // ogham space
+        0x2000...0x200A => true, // en quad..hair space
+        0x200E...0x200F => true, // left-to-right & right-to-left marks
+        0x2028 => true, // line separator
+        0x2029 => true, // paragraph separator
+        0x202F => true, // narrow no-break space
+        0x205F => true, // medium mathematical space
+        0x3000 => true, // ideographic space
+
+        else => false,
+    };
+}
+
+test "isWhitespace" {
+    try expect(isWhitespace(' '));
+    try expect(isWhitespace('\u{00A0}'));
+    try expect(!isWhitespace('x'));
+}
+
+pub fn strTrim(string: RocStr) callconv(.C) RocStr {
+    if (string.str_bytes) |bytes_ptr| {
+        const leading_bytes = countLeadingWhitespaceBytes(string);
+        const original_len = string.len();
+
+        if (original_len == leading_bytes) {
+            string.deinit();
+            return RocStr.empty();
+        }
+
+        const trailing_bytes = countTrailingWhitespaceBytes(string);
+        const new_len = original_len - leading_bytes - trailing_bytes;
+
+        const small_or_shared = new_len <= SMALL_STR_MAX_LENGTH or !string.isRefcountOne();
+        if (small_or_shared) {
+            return RocStr.init(string.asU8ptr() + leading_bytes, new_len);
+        }
+
+        // nonempty, large, and unique:
+
+        if (leading_bytes > 0) {
+            var i: usize = 0;
+            while (i < new_len) : (i += 1) {
+                const dest = bytes_ptr + i;
+                const source = dest + leading_bytes;
+                @memcpy(dest, source, 1);
+            }
+        }
+
+        var new_string = string;
+        new_string.str_len = new_len;
+
+        return new_string;
+    }
+
+    return RocStr.empty();
+}
+
+fn countLeadingWhitespaceBytes(string: RocStr) usize {
+    var byte_count: usize = 0;
+
+    var bytes = string.asU8ptr()[0..string.len()];
+    var iter = unicode.Utf8View.initUnchecked(bytes).iterator();
+    while (iter.nextCodepoint()) |codepoint| {
+        if (isWhitespace(codepoint)) {
+            byte_count += unicode.utf8CodepointSequenceLength(codepoint) catch break;
+        } else {
+            break;
+        }
+    }
+
+    return byte_count;
+}
+
+fn countTrailingWhitespaceBytes(string: RocStr) usize {
+    var byte_count: usize = 0;
+
+    var bytes = string.asU8ptr()[0..string.len()];
+    var iter = ReverseUtf8View.initUnchecked(bytes).iterator();
+    while (iter.nextCodepoint()) |codepoint| {
+        if (isWhitespace(codepoint)) {
+            byte_count += unicode.utf8CodepointSequenceLength(codepoint) catch break;
+        } else {
+            break;
+        }
+    }
+
+    return byte_count;
+}
+
+/// A backwards version of Utf8View from std.unicode
+const ReverseUtf8View = struct {
+    bytes: []const u8,
+
+    pub fn initUnchecked(s: []const u8) ReverseUtf8View {
+        return ReverseUtf8View{ .bytes = s };
+    }
+
+    pub fn iterator(s: ReverseUtf8View) ReverseUtf8Iterator {
+        return ReverseUtf8Iterator{
+            .bytes = s.bytes,
+            .i = if (s.bytes.len > 0) s.bytes.len - 1 else null,
+        };
+    }
+};
+
+/// A backwards version of Utf8Iterator from std.unicode
+const ReverseUtf8Iterator = struct {
+    bytes: []const u8,
+    // NOTE null signifies complete/empty
+    i: ?usize,
+
+    pub fn nextCodepointSlice(it: *ReverseUtf8Iterator) ?[]const u8 {
+        if (it.i) |index| {
+            var i = index;
+
+            // NOTE this relies on the string being valid utf8 to not run off the end
+            while (!utf8BeginByte(it.bytes[i])) {
+                i -= 1;
+            }
+
+            const cp_len = unicode.utf8ByteSequenceLength(it.bytes[i]) catch unreachable;
+            const slice = it.bytes[i .. i + cp_len];
+
+            it.i = if (i == 0) null else i - 1;
+
+            return slice;
+        } else {
+            return null;
+        }
+    }
+
+    pub fn nextCodepoint(it: *ReverseUtf8Iterator) ?u21 {
+        const slice = it.nextCodepointSlice() orelse return null;
+
+        return switch (slice.len) {
+            1 => @as(u21, slice[0]),
+            2 => unicode.utf8Decode2(slice) catch unreachable,
+            3 => unicode.utf8Decode3(slice) catch unreachable,
+            4 => unicode.utf8Decode4(slice) catch unreachable,
+            else => unreachable,
+        };
+    }
+};
+
+fn utf8BeginByte(byte: u8) bool {
+    return switch (byte) {
+        0b1000_0000...0b1011_1111 => false,
+        else => true,
+    };
+}
+
+test "strTrim: empty" {
+    const trimmedEmpty = strTrim(RocStr.empty());
+    try expect(trimmedEmpty.eq(RocStr.empty()));
+}
+
+test "strTrim: blank" {
+    const original_bytes = "   ";
+    const original = RocStr.init(original_bytes, original_bytes.len);
+    defer original.deinit();
+
+    const trimmed = strTrim(original);
+
+    try expect(trimmed.eq(RocStr.empty()));
+}
+
+test "strTrim: large to large" {
+    const original_bytes = " hello giant world ";
+    const original = RocStr.init(original_bytes, original_bytes.len);
+    defer original.deinit();
+
+    try expect(!original.isSmallStr());
+
+    const expected_bytes = "hello giant world";
+    const expected = RocStr.init(expected_bytes, expected_bytes.len);
+    defer expected.deinit();
+
+    try expect(!expected.isSmallStr());
+
+    const trimmed = strTrim(original);
+
+    try expect(trimmed.eq(expected));
+}
+
+test "strTrim: large to small" {
+    const original_bytes = "             hello world         ";
+    const original = RocStr.init(original_bytes, original_bytes.len);
+    defer original.deinit();
+
+    try expect(!original.isSmallStr());
+
+    const expected_bytes = "hello world";
+    const expected = RocStr.init(expected_bytes, expected_bytes.len);
+    defer expected.deinit();
+
+    try expect(expected.isSmallStr());
+
+    const trimmed = strTrim(original);
+
+    try expect(trimmed.eq(expected));
+    try expect(trimmed.isSmallStr());
+}
+
+test "strTrim: small to small" {
+    const original_bytes = " hello world ";
+    const original = RocStr.init(original_bytes, original_bytes.len);
+    defer original.deinit();
+
+    try expect(original.isSmallStr());
+
+    const expected_bytes = "hello world";
+    const expected = RocStr.init(expected_bytes, expected_bytes.len);
+    defer expected.deinit();
+
+    try expect(expected.isSmallStr());
+
+    const trimmed = strTrim(original);
+
+    try expect(trimmed.eq(expected));
+    try expect(trimmed.isSmallStr());
+}
+
+test "ReverseUtf8View: hello world" {
+    const original_bytes = "hello world";
+    const expected_bytes = "dlrow olleh";
+
+    var i: usize = 0;
+    var iter = ReverseUtf8View.initUnchecked(original_bytes).iterator();
+    while (iter.nextCodepoint()) |codepoint| {
+        try expect(expected_bytes[i] == codepoint);
+        i += 1;
+    }
+}
+
+test "ReverseUtf8View: empty" {
+    const original_bytes = "";
+
+    var iter = ReverseUtf8View.initUnchecked(original_bytes).iterator();
+    while (iter.nextCodepoint()) |codepoint| {
+        try expect(false);
+    }
 }

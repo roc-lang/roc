@@ -67,6 +67,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_TO_UTF8 => str_to_utf8,
         STR_FROM_FLOAT=> str_from_float,
         STR_REPEAT => str_repeat,
+        STR_TRIM => str_trim,
         LIST_LEN => list_len,
         LIST_GET => list_get,
         LIST_SET => list_set,
@@ -1236,6 +1237,11 @@ fn str_split(symbol: Symbol, var_store: &mut VarStore) -> Def {
         body,
         ret_list_var,
     )
+}
+
+/// Str.trim : Str -> Str
+fn str_trim(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::StrTrim, var_store)
 }
 
 /// Str.repeat : Str, Nat -> Str
