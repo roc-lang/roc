@@ -1,6 +1,7 @@
 mod backend;
 pub mod from_wasm32_memory;
 mod layout;
+mod module_builder;
 pub mod serialize;
 mod storage;
 
