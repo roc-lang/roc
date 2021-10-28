@@ -1,5 +1,4 @@
 use bumpalo::collections::vec::Vec;
-use bumpalo::Bump;
 use roc_module::symbol::{Interns, Symbol};
 
 use crate::code_builder::Align;
@@ -23,22 +22,52 @@ pub enum SectionId {
     DataCount = 12,
 }
 
+struct SectionHeaderIndices {
+    size_index: usize,
+    body_index: usize,
+}
+
 /// Write a section header, returning the position of the encoded length
-fn _write_section_header<T: SerialBuffer>(buffer: &mut T, id: SectionId) -> usize {
+fn _write_section_header<T: SerialBuffer>(buffer: &mut T, id: SectionId) -> SectionHeaderIndices {
     buffer.append_byte(id as u8);
-    buffer.encode_padded_u32(u32::MAX)
+    let size_index = buffer.reserve_padded_u32();
+    let body_index = buffer.size();
+    SectionHeaderIndices {
+        size_index,
+        body_index,
+    }
 }
 
 /// Write a custom section header, returning the position of the encoded length
 fn write_custom_section_header<'s, T: SerialBuffer>(
     buffer: &mut T,
-    id: SectionId,
     name: &'s str,
-) -> usize {
-    buffer.append_byte(id as u8);
-    let size_position = buffer.encode_padded_u32(u32::MAX);
+) -> SectionHeaderIndices {
+    buffer.append_byte(SectionId::Custom as u8);
+    let size_index = buffer.reserve_padded_u32();
+    let body_index = buffer.size();
     buffer.append_slice(name.as_bytes());
-    size_position
+    SectionHeaderIndices {
+        size_index,
+        body_index,
+    }
+}
+
+/// Update a section header with its final size, after writing the bytes
+fn update_section_size<T: SerialBuffer>(buffer: &mut T, header_indices: SectionHeaderIndices) {
+    let size = buffer.size() - header_indices.body_index;
+    buffer.overwrite_padded_u32(header_indices.size_index, size as u32);
+}
+
+fn serialize_vector_with_count<'bump, SB, S>(buffer: &mut SB, items: &Vec<'bump, S>)
+where
+    SB: SerialBuffer,
+    S: Serialize,
+{
+    buffer.encode_u32(items.len() as u32);
+    for item in items.iter() {
+        item.serialize(buffer);
+    }
 }
 
 /*******************************************************************
@@ -49,70 +78,98 @@ fn write_custom_section_header<'s, T: SerialBuffer>(
  *
  *******************************************************************/
 
-pub struct IndexRelocation {
-    offset: u32,       // offset 0 means the next byte after section id and size
-    symbol_index: u32, // index in symbol table
+#[repr(u8)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub enum IndexRelocType {
+    /// a function index encoded as a 5-byte [varuint32]. Used for the immediate argument of a `call` instruction.
+    FunctionIndexLeb = 0,
+    /// a function table index encoded as a 5-byte [varint32].
+    /// Used to refer to the immediate argument of a `i32.const` instruction, e.g. taking the address of a function.
+    TableIndexSleb = 1,
+    /// a function table index encoded as a [uint32], e.g. taking the address of a function in a static data initializer.
+    TableIndexI32 = 2,
+    /// a type index encoded as a 5-byte [varuint32], e.g. the type immediate in a `call_indirect`.
+    TypeIndexLeb = 6,
+    /// a global index encoded as a   5-byte [varuint32], e.g. the index immediate in a `get_global`.
+    GlobalIndexLeb = 7,
+    /// an event index encoded as a 5-byte [varuint32]. Used for the immediate argument of a `throw` and `if_except`   instruction.
+    EventIndexLeb = 10,
+    /// a global index encoded as [uint32].
+    GlobalIndexI32 = 13,
+    /// the 64-bit counterpart of  `R_WASM_TABLE_INDEX_SLEB`. A function table index encoded as a 10-byte [varint64].
+    /// Used to refer to the immediate argument of a `i64.const` instruction, e.g. taking the address of a function in Wasm64.
+    TableIndexSleb64 = 18,
+    /// the 64-bit counterpart of `R_WASM_TABLE_INDEX_I32`.
+    /// A function table index encoded as a [uint64], e.g. taking the address of a function in a static data initializer.
+    TableIndexI64 = 19,
+    /// a table number encoded as a 5-byte [varuint32]. Used for the table immediate argument in the table.*   instructions.
+    TableNumberLeb = 20,
 }
 
-pub struct OffsetRelocation {
-    offset: u32,       // offset 0 means the next byte after section id and size
-    symbol_index: u32, // index in symbol table
-    addend: u32,
+#[repr(u8)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub enum OffsetRelocType {
+    /// a linear memory index encoded as a 5-byte [varuint32].
+    /// Used for the immediate argument of a `load` or `store` instruction, e.g. directly loading from or storing to a C++ global.
+    MemoryAddrLeb = 3,
+    /// a linear memory index encoded as a 5-byte [varint32].
+    /// Used for the immediate argument of a `i32.const` instruction, e.g. taking the address of a C++ global.
+    MemoryAddrSleb = 4,
+    /// a linear memory index encoded as a [uint32], e.g. taking the address of a C++ global in a static data initializer.
+    MemoryAddrI32 = 5,
+    /// a byte offset within code section for the specific function encoded as a [uint32].
+    /// The offsets start at the actual function code excluding its size field.
+    FunctionOffsetI32 = 8,
+    /// a byte offset from start of the specified section encoded as a [uint32].
+    SectionOffsetI32 = 9,
+    /// the 64-bit counterpart of `R_WASM_MEMORY_ADDR_LEB`. A 64-bit linear memory index encoded as a 10-byte [varuint64],
+    /// Used for the immediate argument of a `load` or `store` instruction on a 64-bit linear memory array.
+    MemoryAddrLeb64 = 14,
+    /// the 64-bit counterpart of `R_WASM_MEMORY_ADDR_SLEB`. A 64-bit linear memory index encoded as a 10-byte [varint64].
+    /// Used for the immediate argument of a `i64.const` instruction.
+    MemoryAddrSleb64 = 15,
+    /// the 64-bit counterpart of `R_WASM_MEMORY_ADDR`. A 64-bit linear memory index encoded as a [uint64],
+    /// e.g. taking the 64-bit address of a C++ global in a static data initializer.
+    MemoryAddrI64 = 16,
 }
 
 pub enum RelocationEntry {
-    FunctionIndexLeb(IndexRelocation),
-    TableIndexSleb(IndexRelocation),
-    TableIndexI32(IndexRelocation),
-    MemoryAddrLeb(OffsetRelocation),
-    MemoryAddrSleb(OffsetRelocation),
-    MemoryAddrI32(OffsetRelocation),
-    TypeIndexLeb(IndexRelocation),
-    GlobalIndexLeb(IndexRelocation),
-    FunctionOffsetI32(OffsetRelocation),
-    SectionOffsetI32(OffsetRelocation),
-    EventIndexLeb(IndexRelocation),
-    // ... gap ...
-    GlobalIndexI32(IndexRelocation),
-    MemoryAddrLeb64(OffsetRelocation),
-    MemoryAddrSleb64(OffsetRelocation),
-    MemoryAddrI64(OffsetRelocation),
-    // ... gap ...
-    TableIndexSleb64(IndexRelocation),
-    TableIndexI64(IndexRelocation),
-    TableNumberLeb(IndexRelocation),
+    Index {
+        type_id: IndexRelocType,
+        offset: u32,       // offset 0 means the next byte after section id and size
+        symbol_index: u32, // index in symbol table
+    },
+    Offset {
+        type_id: OffsetRelocType,
+        offset: u32,       // offset 0 means the next byte after section id and size
+        symbol_index: u32, // index in symbol table
+        addend: i32,       // addend to add to the address
+    },
 }
 
 impl Serialize for RelocationEntry {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        let type_id = match self {
-            Self::FunctionIndexLeb(_) => 0,
-            Self::TableIndexSleb(_) => 1,
-            Self::TableIndexI32(_) => 2,
-            Self::MemoryAddrLeb(_) => 3,
-            Self::MemoryAddrSleb(_) => 4,
-            Self::MemoryAddrI32(_) => 5,
-            Self::TypeIndexLeb(_) => 6,
-            Self::GlobalIndexLeb(_) => 7,
-            Self::FunctionOffsetI32(_) => 8,
-            Self::SectionOffsetI32(_) => 9,
-            Self::EventIndexLeb(_) => 10,
-            // ... gap ...
-            Self::GlobalIndexI32(_) => 13,
-            Self::MemoryAddrLeb64(_) => 14,
-            Self::MemoryAddrSleb64(_) => 15,
-            Self::MemoryAddrI64(_) => 16,
-            // ... gap ...
-            Self::TableIndexSleb64(_) => 18,
-            Self::TableIndexI64(_) => 19,
-            Self::TableNumberLeb(_) => 20,
-        };
-
-        buffer.append_byte(type_id);
-        buffer.encode_u32(self.offset);
-        buffer.encode_u32(self.symbol_index);
-        if let Some(addend) = self.addend {
-            buffer.encode_i32(addend);
+        match self {
+            Self::Index {
+                type_id,
+                offset,
+                symbol_index,
+            } => {
+                buffer.append_byte(*type_id as u8);
+                buffer.encode_u32(*offset);
+                buffer.encode_u32(*symbol_index);
+            }
+            Self::Offset {
+                type_id,
+                offset,
+                symbol_index,
+                addend,
+            } => {
+                buffer.append_byte(*type_id as u8);
+                buffer.encode_u32(*offset);
+                buffer.encode_u32(*symbol_index);
+                buffer.encode_i32(*addend);
+            }
         }
     }
 }
@@ -124,12 +181,11 @@ pub struct RelocationSection<'s, 'bump> {
 
 impl<'s, 'bump> Serialize for RelocationSection<'s, 'bump> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        let size_position = write_custom_section_header(buffer, SectionId::Custom, self.name);
+        let header_indices = write_custom_section_header(buffer, self.name);
         for entry in self.entries.iter() {
             entry.serialize(buffer);
         }
-        let size = buffer.size() - size_position;
-        buffer.overwrite_padded_u32(size_position, size as u32);
+        update_section_size(buffer, header_indices);
     }
 }
 
@@ -147,16 +203,28 @@ pub struct LinkingSegment<'s> {
     alignment: Align,
     flags: u32,
 }
+impl<'s> Serialize for LinkingSegment<'s> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        todo!();
+    }
+}
 
 /// Linking metadata for init (start) functions
 pub struct LinkingInitFunc {
     priority: u32,
     symbol_index: u32, // index in the symbol table, not the function index
 }
+impl Serialize for LinkingInitFunc {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        todo!();
+    }
+}
 
-/*****************
- * Common data
- *****************/
+//----------------
+//
+// Common data
+//
+//----------------
 
 #[repr(u8)]
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
@@ -173,6 +241,11 @@ pub struct ComdatSym {
     kind: ComdatSymKind,
     index: u32,
 }
+impl Serialize for ComdatSym {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        todo!();
+    }
+}
 
 /// Linking metadata for common data
 /// A COMDAT group may contain one or more functions, data segments, and/or custom sections.
@@ -183,10 +256,17 @@ pub struct LinkingComdat<'s, 'bump> {
     flags: u32,
     syms: Vec<'bump, ComdatSym>,
 }
+impl<'s, 'bump> Serialize for LinkingComdat<'s, 'bump> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        todo!();
+    }
+}
 
-/*****************
- * Symbol table
-*****************/
+//----------------
+//
+// Symbol table
+//
+//----------------
 
 /// Indicating that this is a weak symbol.  When
 /// linking multiple modules defining the same symbol, all weak definitions are
@@ -226,61 +306,152 @@ pub const WASM_SYM_EXPLICIT_NAME: u32 = 0x40; // use the name from the symbol ta
 /// linker output, regardless of whether it is used by the program.
 pub const WASM_SYM_NO_STRIP: u32 = 0x80;
 
-pub struct DefinedWasmObjectSymbol<'s> {
-    wasm_object_index: u32, // Wasm index of the function/global/event/table
-    name: &'s str,
-}
-
 pub enum WasmObjectSymbol<'s> {
-    Defined(DefinedWasmObjectSymbol<'s>),
-    Imported(u32),
+    Defined { index: u32, name: &'s str },
+    Imported { index: u32 },
 }
-
-pub struct DefinedDataSymbol<'s> {
-    name: &'s str,
-    index: u32,
-    offset: u32,
-    size: u32,
+impl<'s> Serialize for WasmObjectSymbol<'s> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        match self {
+            Self::Defined { index, name } => {
+                buffer.encode_u32(*index);
+                buffer.encode_u32(name.len() as u32);
+                buffer.append_slice(name.as_bytes());
+            }
+            Self::Imported { index } => {
+                buffer.encode_u32(*index);
+            }
+        }
+    }
 }
 
 pub enum DataSymbol<'s> {
-    Defined(DefinedDataSymbol<'s>),
-    Imported(&'s str),
+    Defined {
+        name: &'s str,
+        index: u32,
+        offset: u32,
+        size: u32,
+    },
+    Imported {
+        name: &'s str,
+    },
+}
+impl<'s> Serialize for DataSymbol<'s> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        match self {
+            Self::Defined {
+                name,
+                index,
+                offset,
+                size,
+            } => {
+                buffer.encode_u32(name.len() as u32);
+                buffer.append_slice(name.as_bytes());
+                buffer.encode_u32(*index);
+                buffer.encode_u32(*offset);
+                buffer.encode_u32(*size);
+            }
+            Self::Imported { name } => {
+                buffer.encode_u32(name.len() as u32);
+                buffer.append_slice(name.as_bytes());
+            }
+        }
+    }
 }
 
-pub enum SymTableInfo<'s> {
-    Data(DataSymbol<'s>),
+/// section index (not section id!)
+#[derive(Clone, Copy, Debug)]
+pub struct SectionIndex(u32);
+
+pub enum SymInfoFields<'s> {
     Function(WasmObjectSymbol<'s>),
+    Data(DataSymbol<'s>),
     Global(WasmObjectSymbol<'s>),
-    /// section index (not id)
-    Section(u32),
+    Section(SectionIndex),
     Event(WasmObjectSymbol<'s>),
     Table(WasmObjectSymbol<'s>),
 }
 
-pub struct SymTableEntry<'s> {
+pub struct SymInfo<'s> {
     flags: u32,
-    kind: SymTableInfo<'s>,
+    info: SymInfoFields<'s>,
+}
+impl<'s> Serialize for SymInfo<'s> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.append_byte(match self.info {
+            SymInfoFields::Function(_) => 0,
+            SymInfoFields::Data(_) => 1,
+            SymInfoFields::Global(_) => 2,
+            SymInfoFields::Section(_) => 3,
+            SymInfoFields::Event(_) => 4,
+            SymInfoFields::Table(_) => 5,
+        });
+        buffer.encode_u32(self.flags);
+        match &self.info {
+            SymInfoFields::Function(x) => x.serialize(buffer),
+            SymInfoFields::Data(x) => x.serialize(buffer),
+            SymInfoFields::Global(x) => x.serialize(buffer),
+            SymInfoFields::Section(SectionIndex(x)) => {
+                buffer.encode_u32(*x);
+            }
+            SymInfoFields::Event(x) => x.serialize(buffer),
+            SymInfoFields::Table(x) => x.serialize(buffer),
+        };
+    }
 }
 
-/**********************************
- * Linking section & subsections
- **********************************/
+//--------------------------------
+//
+//  Linking subsections
+//
+//--------------------------------
 
 pub enum LinkingSubSection<'s, 'bump> {
+    /// Extra metadata about the data segments.
     SegmentInfo(Vec<'bump, LinkingSegment<'s>>),
+    /// Specifies a list of constructor functions to be called at startup.
+    /// These constructors will be called in priority order after memory has been initialized.
     InitFuncs(Vec<'bump, LinkingInitFunc>),
+    /// Specifies the COMDAT groups of associated linking objects, which are linked only once and all together.
     ComdatInfo(Vec<'bump, LinkingComdat<'s, 'bump>>),
-    SymbolTable(Vec<'bump, SymTableEntry<'s>>),
+    /// Specifies extra information about the symbols present in the module.
+    SymbolTable(Vec<'bump, SymInfo<'s>>),
+}
+impl<'s, 'bump> Serialize for LinkingSubSection<'s, 'bump> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.append_byte(match self {
+            Self::SegmentInfo(_) => 5,
+            Self::InitFuncs(_) => 6,
+            Self::ComdatInfo(_) => 7,
+            Self::SymbolTable(_) => 8,
+        });
+        let payload_len_index = buffer.reserve_padded_u32();
+        let payload_start_index = buffer.size();
+        match self {
+            Self::SegmentInfo(items) => serialize_vector_with_count(buffer, items),
+            Self::InitFuncs(items) => serialize_vector_with_count(buffer, items),
+            Self::ComdatInfo(items) => serialize_vector_with_count(buffer, items),
+            Self::SymbolTable(items) => serialize_vector_with_count(buffer, items),
+        }
+        buffer.overwrite_padded_u32(
+            payload_len_index,
+            (buffer.size() - payload_start_index) as u32,
+        );
+    }
 }
 
-#[repr(u8)]
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
-pub enum LinkingVersion {
-    V2 = 2,
-}
+const LINKING_VERSION: u8 = 2;
 
 pub struct LinkingSection<'s, 'bump> {
-    version: LinkingVersion,
     subsections: Vec<'bump, LinkingSubSection<'s, 'bump>>,
+}
+impl<'s, 'bump> Serialize for LinkingSection<'s, 'bump> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        let header_indices = write_custom_section_header(buffer, "linking");
+        buffer.append_byte(LINKING_VERSION);
+        for subsection in self.subsections.iter() {
+            subsection.serialize(buffer);
+        }
+        update_section_size(buffer, header_indices);
+    }
 }
