@@ -215,7 +215,7 @@ fn list_drop_at() {
 }
 
 #[test]
-fn list_drop_at_mutable() {
+fn list_drop_at_shared() {
     assert_evals_to!(
         indoc!(
             r#"
