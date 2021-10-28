@@ -2236,19 +2236,26 @@ fn list_min_lt(list_elem_var: Variable, var_store: &mut VarStore) -> Expr {
                 // elem < acc
                 RunLowLevel {
                     op: LowLevel::NumLt,
-                    args: vec![(list_elem_var, Var(Symbol::ARG_4)), (list_elem_var, Var(Symbol::ARG_3))],
+                    args: vec![
+                        (list_elem_var, Var(Symbol::ARG_4)),
+                        (list_elem_var, Var(Symbol::ARG_3)),
+                    ],
                     ret_var: bool_var,
                 },
             ),
-            // list was not empty
+            // return elem
             no_region(Var(Symbol::ARG_4)),
         )],
+        // return acc
         final_else: Box::new(no_region(Var(Symbol::ARG_3))),
     };
 
     defn_help(
         Symbol::LIST_MIN_LT,
-        vec![(list_elem_var, Symbol::ARG_3), (list_elem_var, Symbol::ARG_4)],
+        vec![
+            (list_elem_var, Symbol::ARG_3),
+            (list_elem_var, Symbol::ARG_4),
+        ],
         var_store,
         body,
         list_elem_var,
