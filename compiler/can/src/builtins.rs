@@ -79,6 +79,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_REVERSE => list_reverse,
         LIST_CONCAT => list_concat,
         LIST_CONTAINS => list_contains,
+        LIST_MIN => list_min,
         LIST_SUM => list_sum,
         LIST_PRODUCT => list_product,
         LIST_PREPEND => list_prepend,
@@ -2129,6 +2130,129 @@ fn list_walk_backwards(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// List.walkUntil : List elem, state, (state, elem -> [ Continue state, Stop state ]) -> state
 fn list_walk_until(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_3(symbol, LowLevel::ListWalkUntil, var_store)
+}
+
+// min :  List (Num a) -> Result (Num a) [ ListWasEmpty ]*
+fn list_min(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let arg_var = var_store.fresh();
+    let bool_var = var_store.fresh();
+    let list_var = var_store.fresh();
+    let len_var = Variable::NAT;
+    let num_var = len_var;
+    let num_precision_var = Variable::NATURAL;
+    let list_elem_var = var_store.fresh();
+    let ret_var = var_store.fresh();
+    let closure_var = var_store.fresh();
+
+    // Perform a bounds check. If it passes, delegate to List.getUnsafe.
+    let body = If {
+        cond_var: bool_var,
+        branch_var: var_store.fresh(),
+        branches: vec![(
+            // if-condition
+            no_region(
+                // List.len list != 0
+                RunLowLevel {
+                    op: LowLevel::NotEq,
+                    args: vec![
+                        (len_var, int(num_var, num_precision_var, 0)),
+                        (
+                            len_var,
+                            RunLowLevel {
+                                op: LowLevel::ListLen,
+                                args: vec![(list_var, Var(Symbol::ARG_1))],
+                                ret_var: len_var,
+                            },
+                        ),
+                    ],
+                    ret_var: bool_var,
+                },
+            ),
+            // list was not empty
+            no_region(
+                // Ok ( List.walk list (List.getUnsafe list 0) \acc,elem -> if elem < acc then elem else acc )
+                tag(
+                    "Ok",
+                    vec![
+                        // List.walk list (List.getUnsafe list 0) \acc,elem -> if elem < acc then elem else acc
+                        RunLowLevel {
+                            op: LowLevel::ListWalk,
+                            args: vec![
+                                (list_var, Var(Symbol::ARG_1)),
+                                // (List.getUnsafe list 0)
+                                (
+                                    list_elem_var,
+                                    RunLowLevel {
+                                        op: LowLevel::ListGetUnsafe,
+                                        args: vec![
+                                            (list_var, Var(Symbol::ARG_1)),
+                                            (arg_var, int(num_var, num_precision_var, 0)),
+                                        ],
+                                        ret_var: list_elem_var,
+                                    },
+                                ),
+                                // \acc,elem -> if elem < acc then elem else acc
+                                (closure_var, list_min_lt(list_elem_var, var_store)),
+                            ],
+                            ret_var: list_elem_var,
+                        },
+                    ],
+                    var_store,
+                ),
+            ),
+        )],
+        final_else: Box::new(
+            // list was empty
+            no_region(
+                // Err ListWasEmpty
+                tag(
+                    "Err",
+                    vec![tag("ListWasEmpty", Vec::new(), var_store)],
+                    var_store,
+                ),
+            ),
+        ),
+    };
+
+    defn(
+        symbol,
+        vec![(list_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
+// \acc,elem -> if elem < acc then elem else acc
+fn list_min_lt(list_elem_var: Variable, var_store: &mut VarStore) -> Expr {
+    let bool_var = var_store.fresh();
+    // if elem < acc then elem else acc
+    let body = If {
+        cond_var: bool_var,
+        branch_var: list_elem_var,
+        branches: vec![(
+            // if-condition
+            no_region(
+                // elem < acc
+                RunLowLevel {
+                    op: LowLevel::NumLt,
+                    args: vec![(list_elem_var, Var(Symbol::ARG_4)), (list_elem_var, Var(Symbol::ARG_3))],
+                    ret_var: bool_var,
+                },
+            ),
+            // list was not empty
+            no_region(Var(Symbol::ARG_4)),
+        )],
+        final_else: Box::new(no_region(Var(Symbol::ARG_3))),
+    };
+
+    defn_help(
+        Symbol::LIST_MIN_LT,
+        vec![(list_elem_var, Symbol::ARG_3), (list_elem_var, Symbol::ARG_4)],
+        var_store,
+        body,
+        list_elem_var,
+    )
 }
 
 /// List.sum : List (Num a) -> Num a

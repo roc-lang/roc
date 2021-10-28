@@ -722,7 +722,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_top_level_function_type!(
         Symbol::LIST_LAST,
         vec![list_type(flex(TVAR1))],
-        Box::new(result_type(flex(TVAR1), list_was_empty)),
+        Box::new(result_type(flex(TVAR1), list_was_empty.clone())),
     );
 
     // set : List elem, Nat, elem -> List elem
@@ -744,6 +744,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Symbol::LIST_CONTAINS,
         vec![list_type(flex(TVAR1)), flex(TVAR1)],
         Box::new(bool_type()),
+    );
+
+    // min :  List (Num a) -> Result (Num a) [ ListWasEmpty ]*
+    add_top_level_function_type!(
+        Symbol::LIST_MIN,
+        vec![list_type(num_type(flex(TVAR1)))],
+        Box::new(result_type(num_type(flex(TVAR1)), list_was_empty)),
     );
 
     // sum :  List (Num a) -> Num a
