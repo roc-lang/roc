@@ -6,4 +6,4 @@ app "reverse"
     provides [ reverse ] to base
 
 reverse : List Str -> List Str
-reverse = \list -> list
+reverse = \list -> List.reverse list
