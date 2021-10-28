@@ -43,14 +43,11 @@ pub struct WasmBackend<'a> {
 
 impl<'a> WasmBackend<'a> {
     pub fn new(env: &'a Env<'a>, proc_symbols: Vec<'a, Symbol>) -> Self {
-        // Code section is prefixed with the number of Wasm functions
-        // For now, this is the same as the number of IR procedures (until we start inlining!)
         let mut code_section_bytes = std::vec::Vec::with_capacity(4096);
 
-        // Reserve space for code section header: inner byte length and number of functions
-        // Padded to the maximum 5 bytes each, so we can update later without moving everything
-        code_section_bytes.resize(10, 0);
-        code_section_bytes.overwrite_padded_u32(5, proc_symbols.len() as u32); // gets modified in unit tests
+        // Code section header
+        code_section_bytes.reserve_padded_u32(); // byte length, to be written at the end
+        code_section_bytes.encode_padded_u32(proc_symbols.len() as u32); // modified later in unit tests
 
         WasmBackend {
             env,

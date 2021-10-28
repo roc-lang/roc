@@ -79,6 +79,7 @@ pub trait SerialBuffer {
     encode_sleb128!(encode_i32, i32);
     encode_sleb128!(encode_i64, i64);
 
+    fn reserve_padded_u32(&mut self) -> usize;
     fn encode_padded_u32(&mut self, value: u32) -> usize;
     fn overwrite_padded_u32(&mut self, index: usize, value: u32);
 
@@ -120,6 +121,11 @@ impl SerialBuffer for std::vec::Vec<u8> {
     fn size(&self) -> usize {
         self.len()
     }
+    fn reserve_padded_u32(&mut self) -> usize {
+        let index = self.len();
+        self.resize(index + 5, 0xff);
+        index
+    }
     fn encode_padded_u32(&mut self, value: u32) -> usize {
         let index = self.len();
         let new_len = index + 5;
@@ -141,6 +147,11 @@ impl<'a> SerialBuffer for Vec<'a, u8> {
     }
     fn size(&self) -> usize {
         self.len()
+    }
+    fn reserve_padded_u32(&mut self) -> usize {
+        let index = self.len();
+        self.resize(index + 5, 0xff);
+        index
     }
     fn encode_padded_u32(&mut self, value: u32) -> usize {
         let index = self.len();
