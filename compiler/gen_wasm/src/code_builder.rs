@@ -5,11 +5,9 @@ use std::fmt::Debug;
 
 use roc_module::symbol::Symbol;
 
-use crate::{
-    encode_f32, encode_f64, encode_i32, encode_i64, encode_padded_u32, encode_u32,
-    round_up_to_alignment, LocalId, FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID,
-};
-use crate::{opcodes::*, overwrite_padded_u32};
+use crate::opcodes::*;
+use crate::serialize::SerialBuffer;
+use crate::{round_up_to_alignment, LocalId, FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID};
 
 const DEBUG_LOG: bool = false;
 
@@ -221,7 +219,7 @@ impl<'a> CodeBuilder<'a> {
         let start = self.insert_bytes.len();
 
         self.insert_bytes.push(opcode);
-        encode_u32(&mut self.insert_bytes, immediate);
+        self.insert_bytes.encode_u32(immediate);
 
         self.insert_locations.push(InsertLocation {
             insert_at,
@@ -318,14 +316,14 @@ impl<'a> CodeBuilder<'a> {
             if *t == batch_type {
                 batch_size += 1;
             } else {
-                encode_u32(&mut self.preamble, batch_size);
+                self.preamble.encode_u32(batch_size);
                 self.preamble.push(batch_type as u8);
                 batch_type = *t;
                 batch_size = 1;
                 num_batches += 1;
             }
         }
-        encode_u32(&mut self.preamble, batch_size);
+        self.preamble.encode_u32(batch_size);
         self.preamble.push(batch_type as u8);
         num_batches += 1;
 
@@ -338,7 +336,7 @@ impl<'a> CodeBuilder<'a> {
             let old_len = self.preamble.len();
             self.preamble.resize(old_len + 4, 0);
             self.preamble.copy_within(1..old_len, 5);
-            overwrite_padded_u32(&mut self.preamble[0..5], num_batches);
+            self.preamble.overwrite_padded_u32(0, num_batches);
         }
     }
 
@@ -347,14 +345,14 @@ impl<'a> CodeBuilder<'a> {
         // Can't use the usual instruction methods because they push to self.code.
         // This is the only case where we push instructions somewhere different.
         self.preamble.push(GETGLOBAL);
-        encode_u32(&mut self.preamble, STACK_POINTER_GLOBAL_ID);
+        self.preamble.encode_u32(STACK_POINTER_GLOBAL_ID);
         self.preamble.push(I32CONST);
-        encode_i32(&mut self.preamble, frame_size);
+        self.preamble.encode_i32(frame_size);
         self.preamble.push(I32SUB);
         self.preamble.push(TEELOCAL);
-        encode_u32(&mut self.preamble, frame_pointer.0);
+        self.preamble.encode_u32(frame_pointer.0);
         self.preamble.push(SETGLOBAL);
-        encode_u32(&mut self.preamble, STACK_POINTER_GLOBAL_ID);
+        self.preamble.encode_u32(STACK_POINTER_GLOBAL_ID);
     }
 
     /// Generate instruction bytes to release a frame of stack memory on leaving the function
@@ -386,17 +384,17 @@ impl<'a> CodeBuilder<'a> {
         self.code.push(END);
 
         let inner_len = self.preamble.len() + self.code.len() + self.insert_bytes.len();
-        encode_u32(&mut self.inner_length, inner_len as u32);
+        self.inner_length.encode_u32(inner_len as u32);
     }
 
     /// Write out all the bytes in the right order
-    pub fn serialize(
+    pub fn serialize<T: SerialBuffer>(
         &mut self,
-        code_section_bytes: &mut std::vec::Vec<u8>,
+        code_section_buf: &mut T,
     ) -> Drain<(usize, Symbol)> {
-        let function_offset = code_section_bytes.len();
-        code_section_bytes.extend_from_slice(&self.inner_length);
-        code_section_bytes.extend_from_slice(&self.preamble);
+        let function_offset = code_section_buf.size();
+        code_section_buf.append_slice(&self.inner_length);
+        code_section_buf.append_slice(&self.preamble);
 
         // We created each insertion when a local was used for the _second_ time.
         // But we want them in the order they were first assigned, which may not be the same.
@@ -404,13 +402,13 @@ impl<'a> CodeBuilder<'a> {
 
         let mut pos: usize = 0;
         for location in self.insert_locations.iter() {
-            code_section_bytes.extend_from_slice(&self.code[pos..location.insert_at]);
-            code_section_bytes.extend_from_slice(&self.insert_bytes[location.start..location.end]);
+            code_section_buf.append_slice(&self.code[pos..location.insert_at]);
+            code_section_buf.append_slice(&self.insert_bytes[location.start..location.end]);
             pos = location.insert_at;
         }
 
         let len = self.code.len();
-        code_section_bytes.extend_from_slice(&self.code[pos..len]);
+        code_section_buf.append_slice(&self.code[pos..len]);
 
         let extra_offset = function_offset + self.inner_length.len() + self.preamble.len();
         for (offset, _) in self.relocations.iter_mut() {
@@ -443,13 +441,13 @@ impl<'a> CodeBuilder<'a> {
 
     fn inst_imm32(&mut self, opcode: u8, pops: usize, push: bool, immediate: u32) {
         self.inst(opcode, pops, push);
-        encode_u32(&mut self.code, immediate);
+        self.code.encode_u32(immediate);
     }
 
     fn inst_mem(&mut self, opcode: u8, pops: usize, push: bool, align: Align, offset: u32) {
         self.inst(opcode, pops, push);
         self.code.push(align as u8);
-        encode_u32(&mut self.code, offset);
+        self.code.encode_u32(offset);
     }
 
     /**********************************************************
@@ -511,7 +509,7 @@ impl<'a> CodeBuilder<'a> {
         self.code.push(CALL);
 
         let call_offset = self.code.len() + self.insert_bytes.len();
-        encode_padded_u32(&mut self.code, function_index);
+        self.code.encode_padded_u32(function_index);
         self.relocations.push((call_offset, function_sym));
     }
     fn call_indirect() {
@@ -569,19 +567,19 @@ impl<'a> CodeBuilder<'a> {
     }
     pub fn i32_const(&mut self, x: i32) {
         self.inst(I32CONST, 0, true);
-        encode_i32(&mut self.code, x);
+        self.code.encode_i32(x);
     }
     pub fn i64_const(&mut self, x: i64) {
         self.inst(I64CONST, 0, true);
-        encode_i64(&mut self.code, x);
+        self.code.encode_i64(x);
     }
     pub fn f32_const(&mut self, x: f32) {
         self.inst(F32CONST, 0, true);
-        encode_f32(&mut self.code, x);
+        self.code.encode_f32(x);
     }
     pub fn f64_const(&mut self, x: f64) {
         self.inst(F64CONST, 0, true);
-        encode_f64(&mut self.code, x);
+        self.code.encode_f64(x);
     }
 
     // TODO: Consider creating unified methods for numerical ops like 'eq' and 'add',

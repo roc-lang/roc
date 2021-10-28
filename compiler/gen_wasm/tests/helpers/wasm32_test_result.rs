@@ -3,7 +3,7 @@ use parity_wasm::elements::Internal;
 
 use roc_gen_wasm::code_builder::{Align, CodeBuilder, ValueType};
 use roc_gen_wasm::from_wasm32_memory::FromWasm32Memory;
-use roc_gen_wasm::{overwrite_padded_u32, LocalId};
+use roc_gen_wasm::{serialize::SerialBuffer, LocalId};
 use roc_module::symbol::Symbol;
 use roc_std::{RocDec, RocList, RocOrder, RocStr};
 
@@ -39,8 +39,8 @@ pub trait Wasm32TestResult {
             num_procs += ((byte & 0x7f) as u32) << (i * 7);
         }
         let inner_length = (code_section_bytes.len() - 5) as u32;
-        overwrite_padded_u32(&mut code_section_bytes[0..5], inner_length);
-        overwrite_padded_u32(&mut code_section_bytes[5..10], num_procs + 1);
+        code_section_bytes.overwrite_padded_u32(0, inner_length);
+        code_section_bytes.overwrite_padded_u32(5, num_procs + 1);
     }
 
     fn build_wrapper_body(
