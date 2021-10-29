@@ -1,6 +1,6 @@
 on:
   schedule:
-    - cron:  '0 0 * * *'
+    - cron:  '0 9 * * *'
 
 name: Nightly Release Build
 
@@ -13,8 +13,6 @@ jobs:
       FORCE_COLOR: 1 # for earthly logging
     steps:
       - uses: actions/checkout@v2
-      - name: install earthly
-        run: "sudo /bin/sh -c 'wget https://github.com/earthly/earthly/releases/latest/download/earthly-linux-amd64 -O /usr/local/bin/earthly && chmod +x /usr/local/bin/earthly && /usr/local/bin/earthly bootstrap --with-autocomplete'"
       - name: Earthly print version
         run: earthly --version
       - name: install dependencies, build, run tests, build release
