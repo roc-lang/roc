@@ -1,7 +1,6 @@
-use parity_wasm::elements::ValueType;
 use roc_mono::layout::{Layout, UnionLayout};
 
-use crate::{PTR_SIZE, PTR_TYPE};
+use crate::{code_builder::ValueType, PTR_SIZE, PTR_TYPE};
 
 // See README for background information on Wasm locals, memory and function calls
 #[derive(Debug, Clone)]

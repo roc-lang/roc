@@ -19,8 +19,9 @@ extern fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void;
 extern fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void;
 
 comptime {
+    const builtin = @import("builtin");
     // During tetsts, use the testing allocators to satisfy these functions.
-    if (std.builtin.is_test) {
+    if (builtin.is_test) {
         @export(testing_roc_alloc, .{ .name = "roc_alloc", .linkage = .Strong });
         @export(testing_roc_realloc, .{ .name = "roc_realloc", .linkage = .Strong });
         @export(testing_roc_dealloc, .{ .name = "roc_dealloc", .linkage = .Strong });
@@ -257,7 +258,7 @@ pub const Ordering = enum(u8) {
     LT = 2,
 };
 
-pub const UpdateMode = extern enum(u8) {
+pub const UpdateMode = enum(u8) {
     Immutable = 0,
     InPlace = 1,
 };

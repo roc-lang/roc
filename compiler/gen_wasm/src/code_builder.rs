@@ -1,15 +1,82 @@
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use core::panic;
-use std::collections::BTreeMap;
 use std::fmt::Debug;
 
-use parity_wasm::elements::{Instruction, Instruction::*};
 use roc_module::symbol::Symbol;
 
-use crate::LocalId;
+use crate::{
+    encode_f32, encode_f64, encode_i32, encode_i64, encode_u32, round_up_to_alignment, LocalId,
+    FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID,
+};
+use crate::{opcodes::*, overwrite_padded_u32};
 
 const DEBUG_LOG: bool = false;
+
+/// Wasm value type. (Rust representation matches Wasm encoding)
+#[repr(u8)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub enum ValueType {
+    I32 = 0x7f,
+    I64 = 0x7e,
+    F32 = 0x7d,
+    F64 = 0x7c,
+}
+
+// This is a bit unfortunate. Will go away if we generate our own Types section.
+impl ValueType {
+    pub fn to_parity_wasm(&self) -> parity_wasm::elements::ValueType {
+        match self {
+            Self::I32 => parity_wasm::elements::ValueType::I32,
+            Self::I64 => parity_wasm::elements::ValueType::I64,
+            Self::F32 => parity_wasm::elements::ValueType::F32,
+            Self::F64 => parity_wasm::elements::ValueType::F64,
+        }
+    }
+}
+
+pub enum BlockType {
+    NoResult,
+    Value(ValueType),
+}
+
+impl BlockType {
+    pub fn as_byte(&self) -> u8 {
+        match self {
+            Self::NoResult => 0x40,
+            Self::Value(t) => *t as u8,
+        }
+    }
+}
+
+/// Wasm memory alignment. (Rust representation matches Wasm encoding)
+#[repr(u8)]
+#[derive(Clone, Copy, Debug)]
+pub enum Align {
+    Bytes1 = 0,
+    Bytes2 = 1,
+    Bytes4 = 2,
+    Bytes8 = 3,
+    Bytes16 = 4,
+    Bytes32 = 5,
+    Bytes64 = 6,
+    // ... we can add more if we need them ...
+}
+
+impl From<u32> for Align {
+    fn from(x: u32) -> Align {
+        match x {
+            1 => Align::Bytes1,
+            2 => Align::Bytes2,
+            4 => Align::Bytes4,
+            8 => Align::Bytes8,
+            16 => Align::Bytes16,
+            32 => Align::Bytes32,
+            64 => Align::Bytes64,
+            _ => panic!("{:?}-byte alignment not supported", x),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Copy)]
 pub enum VirtualMachineSymbolState {
@@ -26,18 +93,52 @@ pub enum VirtualMachineSymbolState {
     Popped { pushed_at: usize },
 }
 
+// An instruction (local.set or local.tee) to be inserted into the function code
+#[derive(Debug)]
+struct InsertLocation {
+    insert_at: usize,
+    start: usize,
+    end: usize,
+}
+
+macro_rules! instruction_no_args {
+    ($method_name: ident, $opcode: expr, $pops: expr, $push: expr) => {
+        pub fn $method_name(&mut self) {
+            self.inst($opcode, $pops, $push);
+        }
+    };
+}
+
+macro_rules! instruction_memargs {
+    ($method_name: ident, $opcode: expr, $pops: expr, $push: expr) => {
+        pub fn $method_name(&mut self, align: Align, offset: u32) {
+            self.inst_mem($opcode, $pops, $push, align, offset);
+        }
+    };
+}
+
 #[derive(Debug)]
 pub struct CodeBuilder<'a> {
     /// The main container for the instructions
-    code: Vec<'a, Instruction>,
+    code: Vec<'a, u8>,
 
-    /// Extra instructions to insert at specific positions during finalisation
-    /// (Go back and set locals when we realise we need them)
-    /// We need BTree rather than Map or Vec, to ensure keys are sorted.
-    /// Entries may not be added in order. They are created when a Symbol
-    /// is used for the second time, or is in an inconvenient VM stack position,
-    /// so it's not a simple predictable order.
-    insertions: BTreeMap<usize, Instruction>,
+    /// Instruction bytes to be inserted into the code when finalizing the function
+    /// (Used for setting locals when we realise they are used multiple times)
+    insert_bytes: Vec<'a, u8>,
+
+    /// Code locations where the insert_bytes should go
+    insert_locations: Vec<'a, InsertLocation>,
+
+    /// Bytes for local variable declarations and stack-frame setup code.
+    /// We can't write this until we've finished the main code. But it goes
+    /// before it in the final output, so we need a separate vector.
+    preamble: Vec<'a, u8>,
+
+    /// Encoded bytes for the inner length of the function, locals + code.
+    /// ("inner" because it doesn't include its own length!)
+    /// Again, we can't write this until we've finished the code and preamble,
+    /// but it goes before them in the binary, so it's a separate vector.
+    inner_length: Vec<'a, u8>,
 
     /// Our simulation model of the Wasm stack machine
     /// Keeps track of where Symbol values are in the VM stack
@@ -48,102 +149,33 @@ pub struct CodeBuilder<'a> {
 impl<'a> CodeBuilder<'a> {
     pub fn new(arena: &'a Bump) -> Self {
         CodeBuilder {
-            vm_stack: Vec::with_capacity_in(32, arena),
-            insertions: BTreeMap::default(),
             code: Vec::with_capacity_in(1024, arena),
+            insert_locations: Vec::with_capacity_in(32, arena),
+            insert_bytes: Vec::with_capacity_in(64, arena),
+            preamble: Vec::with_capacity_in(32, arena),
+            inner_length: Vec::with_capacity_in(5, arena),
+            vm_stack: Vec::with_capacity_in(32, arena),
         }
     }
 
     pub fn clear(&mut self) {
         self.code.clear();
-        self.insertions.clear();
+        self.insert_locations.clear();
+        self.insert_bytes.clear();
+        self.preamble.clear();
+        self.inner_length.clear();
         self.vm_stack.clear();
     }
 
-    /// Add an instruction
-    pub fn push(&mut self, inst: Instruction) {
-        let (pops, push) = get_pops_and_pushes(&inst);
-        let new_len = self.vm_stack.len() - pops as usize;
-        self.vm_stack.truncate(new_len);
-        if push {
-            self.vm_stack.push(Symbol::WASM_ANONYMOUS_STACK_VALUE);
-        }
-        if DEBUG_LOG {
-            println!("{:?} {:?}", inst, self.vm_stack);
-        }
-        self.code.push(inst);
-    }
+    /**********************************************************
 
-    /// Add many instructions
-    pub fn extend_from_slice(&mut self, instructions: &[Instruction]) {
-        let old_len = self.vm_stack.len();
-        let mut len = old_len;
-        let mut min_len = len;
-        for inst in instructions {
-            let (pops, push) = get_pops_and_pushes(inst);
-            len -= pops as usize;
-            if len < min_len {
-                min_len = len;
-            }
-            if push {
-                len += 1;
-            }
-        }
-        self.vm_stack.truncate(min_len);
-        self.vm_stack
-            .resize(len, Symbol::WASM_ANONYMOUS_STACK_VALUE);
-        if DEBUG_LOG {
-            println!("{:?} {:?}", instructions, self.vm_stack);
-        }
-        self.code.extend_from_slice(instructions);
-    }
+        SYMBOLS
 
-    /// Special-case method to add a Call instruction
-    /// Specify the number of arguments the function pops from the VM stack, and whether it pushes a return value
-    pub fn push_call(&mut self, function_index: u32, pops: usize, push: bool) {
-        let stack_depth = self.vm_stack.len();
-        if pops > stack_depth {
-            let mut final_code =
-                std::vec::Vec::with_capacity(self.code.len() + self.insertions.len());
-            self.finalize_into(&mut final_code);
-            panic!(
-                "Trying to call to call function {:?} with {:?} values but only {:?} on the VM stack\nfinal_code={:?}\nvm_stack={:?}",
-                function_index, pops, stack_depth, final_code, self.vm_stack
-            );
-        }
-        self.vm_stack.truncate(stack_depth - pops);
-        if push {
-            self.vm_stack.push(Symbol::WASM_ANONYMOUS_STACK_VALUE);
-        }
-        let inst = Call(function_index);
-        if DEBUG_LOG {
-            println!("{:?} {:?}", inst, self.vm_stack);
-        }
-        self.code.push(inst);
-    }
+        The Wasm VM stores temporary values in its stack machine.
+        We track which stack positions correspond to IR Symbols,
+        because it helps to generate more efficient code.
 
-    /// Finalize a function body by copying all instructions into a vector
-    pub fn finalize_into(&mut self, final_code: &mut std::vec::Vec<Instruction>) {
-        let mut insertions_iter = self.insertions.iter();
-        let mut next_insertion = insertions_iter.next();
-
-        for (pos, instruction) in self.code.drain(0..).enumerate() {
-            match next_insertion {
-                Some((&insert_pos, insert_inst)) if insert_pos == pos => {
-                    final_code.push(insert_inst.to_owned());
-                    next_insertion = insertions_iter.next();
-                }
-                _ => {}
-            }
-            final_code.push(instruction);
-        }
-        debug_assert!(next_insertion == None);
-    }
-
-    /// Total number of instructions in the final output
-    pub fn len(&self) -> usize {
-        self.code.len() + self.insertions.len()
-    }
+    ***********************************************************/
 
     /// Set the Symbol that is at the top of the VM stack right now
     /// We will use this later when we need to load the Symbol
@@ -180,6 +212,19 @@ impl<'a> CodeBuilder<'a> {
         true
     }
 
+    fn add_insertion(&mut self, insert_at: usize, opcode: u8, immediate: u32) {
+        let start = self.insert_bytes.len();
+
+        self.insert_bytes.push(opcode);
+        encode_u32(&mut self.insert_bytes, immediate);
+
+        self.insert_locations.push(InsertLocation {
+            insert_at,
+            start,
+            end: self.insert_bytes.len(),
+        });
+    }
+
     /// Load a Symbol that is stored in the VM stack
     /// If it's already at the top of the stack, no code will be generated.
     /// Otherwise, local.set and local.get instructions will be inserted, using the LocalId provided.
@@ -208,22 +253,14 @@ impl<'a> CodeBuilder<'a> {
                 } else {
                     // Symbol is not on top of the stack. Find it.
                     if let Some(found_index) = self.vm_stack.iter().rposition(|&s| s == symbol) {
-                        // Insert a SetLocal where the value was created (this removes it from the VM stack)
-                        self.insertions.insert(pushed_at, SetLocal(next_local_id.0));
+                        // Insert a local.set where the value was created
+                        self.add_insertion(pushed_at, SETLOCAL, next_local_id.0);
+
+                        // Take the value out of the stack where local.set was inserted
                         self.vm_stack.remove(found_index);
 
-                        // Insert a GetLocal at the current position
-                        let inst = GetLocal(next_local_id.0);
-                        if DEBUG_LOG {
-                            println!(
-                                "{:?} {:?} (& insert {:?} at {:?})",
-                                inst,
-                                self.vm_stack,
-                                SetLocal(next_local_id.0),
-                                pushed_at
-                            );
-                        }
-                        self.code.push(inst);
+                        // Insert a local.get at the current position
+                        self.get_local(next_local_id);
                         self.vm_stack.push(symbol);
 
                         // This Symbol is no longer stored in the VM stack, but in a local
@@ -239,22 +276,11 @@ impl<'a> CodeBuilder<'a> {
 
             Popped { pushed_at } => {
                 // This Symbol is being used for a second time
+                // Insert a local.tee where it was pushed, so we don't interfere with the first usage
+                self.add_insertion(pushed_at, TEELOCAL, next_local_id.0);
 
-                // Insert a TeeLocal where it was created (must remain on the stack for the first usage)
-                self.insertions.insert(pushed_at, TeeLocal(next_local_id.0));
-
-                // Insert a GetLocal at the current position
-                let inst = GetLocal(next_local_id.0);
-                if DEBUG_LOG {
-                    println!(
-                        "{:?} {:?} (& insert {:?} at {:?})",
-                        inst,
-                        self.vm_stack,
-                        TeeLocal(next_local_id.0),
-                        pushed_at
-                    );
-                }
-                self.code.push(inst);
+                // Insert a local.get at the current position
+                self.get_local(next_local_id);
                 self.vm_stack.push(symbol);
 
                 // This symbol has been promoted to a Local
@@ -263,197 +289,400 @@ impl<'a> CodeBuilder<'a> {
             }
         }
     }
-}
 
-fn get_pops_and_pushes(inst: &Instruction) -> (u8, bool) {
-    match inst {
-        Unreachable => (0, false),
-        Nop => (0, false),
-        Block(_) => (0, false),
-        Loop(_) => (0, false),
-        If(_) => (1, false),
-        Else => (0, false),
-        End => (0, false),
-        Br(_) => (0, false),
-        BrIf(_) => (1, false),
-        BrTable(_) => (1, false),
-        Return => (0, false),
+    /**********************************************************
 
-        Call(_) | CallIndirect(_, _) => {
-            panic!("Unknown number of pushes and pops. Use add_call()");
+        FINALIZE AND SERIALIZE
+
+    ***********************************************************/
+
+    /// Generate bytes to declare the function's local variables
+    fn build_local_declarations(&mut self, local_types: &[ValueType]) {
+        // reserve one byte for num_batches
+        self.preamble.push(0);
+
+        if local_types.is_empty() {
+            return;
         }
 
-        Drop => (1, false),
-        Select => (3, true),
+        // Write declarations in batches of the same ValueType
+        let mut num_batches: u32 = 0;
+        let mut batch_type = local_types[0];
+        let mut batch_size = 0;
+        for t in local_types {
+            if *t == batch_type {
+                batch_size += 1;
+            } else {
+                encode_u32(&mut self.preamble, batch_size);
+                self.preamble.push(batch_type as u8);
+                batch_type = *t;
+                batch_size = 1;
+                num_batches += 1;
+            }
+        }
+        encode_u32(&mut self.preamble, batch_size);
+        self.preamble.push(batch_type as u8);
+        num_batches += 1;
 
-        GetLocal(_) => (0, true),
-        SetLocal(_) => (1, false),
-        TeeLocal(_) => (1, true),
-        GetGlobal(_) => (0, true),
-        SetGlobal(_) => (1, false),
-
-        I32Load(_, _) => (1, true),
-        I64Load(_, _) => (1, true),
-        F32Load(_, _) => (1, true),
-        F64Load(_, _) => (1, true),
-        I32Load8S(_, _) => (1, true),
-        I32Load8U(_, _) => (1, true),
-        I32Load16S(_, _) => (1, true),
-        I32Load16U(_, _) => (1, true),
-        I64Load8S(_, _) => (1, true),
-        I64Load8U(_, _) => (1, true),
-        I64Load16S(_, _) => (1, true),
-        I64Load16U(_, _) => (1, true),
-        I64Load32S(_, _) => (1, true),
-        I64Load32U(_, _) => (1, true),
-        I32Store(_, _) => (2, false),
-        I64Store(_, _) => (2, false),
-        F32Store(_, _) => (2, false),
-        F64Store(_, _) => (2, false),
-        I32Store8(_, _) => (2, false),
-        I32Store16(_, _) => (2, false),
-        I64Store8(_, _) => (2, false),
-        I64Store16(_, _) => (2, false),
-        I64Store32(_, _) => (2, false),
-
-        CurrentMemory(_) => (0, true),
-        GrowMemory(_) => (1, true),
-        I32Const(_) => (0, true),
-        I64Const(_) => (0, true),
-        F32Const(_) => (0, true),
-        F64Const(_) => (0, true),
-
-        I32Eqz => (1, true),
-        I32Eq => (2, true),
-        I32Ne => (2, true),
-        I32LtS => (2, true),
-        I32LtU => (2, true),
-        I32GtS => (2, true),
-        I32GtU => (2, true),
-        I32LeS => (2, true),
-        I32LeU => (2, true),
-        I32GeS => (2, true),
-        I32GeU => (2, true),
-
-        I64Eqz => (1, true),
-        I64Eq => (2, true),
-        I64Ne => (2, true),
-        I64LtS => (2, true),
-        I64LtU => (2, true),
-        I64GtS => (2, true),
-        I64GtU => (2, true),
-        I64LeS => (2, true),
-        I64LeU => (2, true),
-        I64GeS => (2, true),
-        I64GeU => (2, true),
-
-        F32Eq => (2, true),
-        F32Ne => (2, true),
-        F32Lt => (2, true),
-        F32Gt => (2, true),
-        F32Le => (2, true),
-        F32Ge => (2, true),
-
-        F64Eq => (2, true),
-        F64Ne => (2, true),
-        F64Lt => (2, true),
-        F64Gt => (2, true),
-        F64Le => (2, true),
-        F64Ge => (2, true),
-
-        I32Clz => (1, true),
-        I32Ctz => (1, true),
-        I32Popcnt => (1, true),
-        I32Add => (2, true),
-        I32Sub => (2, true),
-        I32Mul => (2, true),
-        I32DivS => (2, true),
-        I32DivU => (2, true),
-        I32RemS => (2, true),
-        I32RemU => (2, true),
-        I32And => (2, true),
-        I32Or => (2, true),
-        I32Xor => (2, true),
-        I32Shl => (2, true),
-        I32ShrS => (2, true),
-        I32ShrU => (2, true),
-        I32Rotl => (2, true),
-        I32Rotr => (2, true),
-
-        I64Clz => (1, true),
-        I64Ctz => (1, true),
-        I64Popcnt => (1, true),
-        I64Add => (2, true),
-        I64Sub => (2, true),
-        I64Mul => (2, true),
-        I64DivS => (2, true),
-        I64DivU => (2, true),
-        I64RemS => (2, true),
-        I64RemU => (2, true),
-        I64And => (2, true),
-        I64Or => (2, true),
-        I64Xor => (2, true),
-        I64Shl => (2, true),
-        I64ShrS => (2, true),
-        I64ShrU => (2, true),
-        I64Rotl => (2, true),
-        I64Rotr => (2, true),
-
-        F32Abs => (1, true),
-        F32Neg => (1, true),
-        F32Ceil => (1, true),
-        F32Floor => (1, true),
-        F32Trunc => (1, true),
-        F32Nearest => (1, true),
-        F32Sqrt => (1, true),
-        F32Add => (2, true),
-        F32Sub => (2, true),
-        F32Mul => (2, true),
-        F32Div => (2, true),
-        F32Min => (2, true),
-        F32Max => (2, true),
-        F32Copysign => (2, true),
-
-        F64Abs => (1, true),
-        F64Neg => (1, true),
-        F64Ceil => (1, true),
-        F64Floor => (1, true),
-        F64Trunc => (1, true),
-        F64Nearest => (1, true),
-        F64Sqrt => (1, true),
-        F64Add => (2, true),
-        F64Sub => (2, true),
-        F64Mul => (2, true),
-        F64Div => (2, true),
-        F64Min => (2, true),
-        F64Max => (2, true),
-        F64Copysign => (2, true),
-
-        I32WrapI64 => (1, true),
-        I32TruncSF32 => (1, true),
-        I32TruncUF32 => (1, true),
-        I32TruncSF64 => (1, true),
-        I32TruncUF64 => (1, true),
-        I64ExtendSI32 => (1, true),
-        I64ExtendUI32 => (1, true),
-        I64TruncSF32 => (1, true),
-        I64TruncUF32 => (1, true),
-        I64TruncSF64 => (1, true),
-        I64TruncUF64 => (1, true),
-        F32ConvertSI32 => (1, true),
-        F32ConvertUI32 => (1, true),
-        F32ConvertSI64 => (1, true),
-        F32ConvertUI64 => (1, true),
-        F32DemoteF64 => (1, true),
-        F64ConvertSI32 => (1, true),
-        F64ConvertUI32 => (1, true),
-        F64ConvertSI64 => (1, true),
-        F64ConvertUI64 => (1, true),
-        F64PromoteF32 => (1, true),
-
-        I32ReinterpretF32 => (1, true),
-        I64ReinterpretF64 => (1, true),
-        F32ReinterpretI32 => (1, true),
-        F64ReinterpretI64 => (1, true),
+        // Go back and write the number of batches at the start
+        if num_batches < 128 {
+            self.preamble[0] = num_batches as u8;
+        } else {
+            // We need more than 1 byte to encode num_batches!
+            // This is a ridiculous edge case, so just pad to 5 bytes for simplicity
+            let old_len = self.preamble.len();
+            self.preamble.resize(old_len + 4, 0);
+            self.preamble.copy_within(1..old_len, 5);
+            overwrite_padded_u32(&mut self.preamble[0..5], num_batches);
+        }
     }
+
+    /// Generate instruction bytes to grab a frame of stack memory on entering the function
+    fn build_stack_frame_push(&mut self, frame_size: i32, frame_pointer: LocalId) {
+        // Can't use the usual instruction methods because they push to self.code.
+        // This is the only case where we push instructions somewhere different.
+        self.preamble.push(GETGLOBAL);
+        encode_u32(&mut self.preamble, STACK_POINTER_GLOBAL_ID);
+        self.preamble.push(I32CONST);
+        encode_i32(&mut self.preamble, frame_size);
+        self.preamble.push(I32SUB);
+        self.preamble.push(TEELOCAL);
+        encode_u32(&mut self.preamble, frame_pointer.0);
+        self.preamble.push(SETGLOBAL);
+        encode_u32(&mut self.preamble, STACK_POINTER_GLOBAL_ID);
+    }
+
+    /// Generate instruction bytes to release a frame of stack memory on leaving the function
+    fn build_stack_frame_pop(&mut self, frame_size: i32, frame_pointer: LocalId) {
+        self.get_local(frame_pointer);
+        self.i32_const(frame_size);
+        self.i32_add();
+        self.set_global(STACK_POINTER_GLOBAL_ID);
+    }
+
+    /// Finalize the function
+    /// Generate all the "extra" bytes: local declarations, stack frame push/pop code, and function length
+    /// After this, bytes will have been _generated_, but not yet _serialized_ into a single stream.
+    /// Returns the final number of bytes the function will occupy in the target binary
+    pub fn finalize(
+        &mut self,
+        local_types: &[ValueType],
+        frame_size: i32,
+        frame_pointer: Option<LocalId>,
+    ) {
+        self.build_local_declarations(local_types);
+
+        if let Some(frame_ptr_id) = frame_pointer {
+            let aligned_size = round_up_to_alignment(frame_size, FRAME_ALIGNMENT_BYTES);
+            self.build_stack_frame_push(aligned_size, frame_ptr_id);
+            self.build_stack_frame_pop(aligned_size, frame_ptr_id);
+        }
+
+        self.code.push(END);
+
+        let inner_len = self.preamble.len() + self.code.len() + self.insert_bytes.len();
+        encode_u32(&mut self.inner_length, inner_len as u32);
+    }
+
+    /// Write out all the bytes in the right order
+    pub fn serialize<W: std::io::Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        writer.write_all(&self.inner_length)?;
+        writer.write_all(&self.preamble)?;
+
+        // We created each insertion when a local was used for the _second_ time.
+        // But we want them in the order they were first assigned, which may not be the same.
+        self.insert_locations.sort_by_key(|loc| loc.insert_at);
+
+        let mut pos: usize = 0;
+        for location in self.insert_locations.iter() {
+            writer.write_all(&self.code[pos..location.insert_at])?;
+            writer.write_all(&self.insert_bytes[location.start..location.end])?;
+            pos = location.insert_at;
+        }
+
+        let len = self.code.len();
+        writer.write_all(&self.code[pos..len])
+    }
+
+    /**********************************************************
+
+        INSTRUCTION HELPER METHODS
+
+    ***********************************************************/
+
+    /// Base method for generating instructions
+    /// Emits the opcode and simulates VM stack push/pop
+    fn inst(&mut self, opcode: u8, pops: usize, push: bool) {
+        let new_len = self.vm_stack.len() - pops as usize;
+        self.vm_stack.truncate(new_len);
+        if push {
+            self.vm_stack.push(Symbol::WASM_ANONYMOUS_STACK_VALUE);
+        }
+        self.code.push(opcode);
+    }
+
+    fn inst_imm8(&mut self, opcode: u8, pops: usize, push: bool, immediate: u8) {
+        self.inst(opcode, pops, push);
+        self.code.push(immediate);
+    }
+
+    fn inst_imm32(&mut self, opcode: u8, pops: usize, push: bool, immediate: u32) {
+        self.inst(opcode, pops, push);
+        encode_u32(&mut self.code, immediate);
+    }
+
+    fn inst_mem(&mut self, opcode: u8, pops: usize, push: bool, align: Align, offset: u32) {
+        self.inst(opcode, pops, push);
+        self.code.push(align as u8);
+        encode_u32(&mut self.code, offset);
+    }
+
+    /**********************************************************
+
+        INSTRUCTION METHODS
+
+        One method for each Wasm instruction (in same order as the spec)
+        macros are for compactness & readability for the most common cases
+        Patterns that don't repeat very much don't have macros
+
+    ***********************************************************/
+
+    instruction_no_args!(unreachable_, UNREACHABLE, 0, false);
+    instruction_no_args!(nop, NOP, 0, false);
+
+    pub fn block(&mut self, ty: BlockType) {
+        self.inst_imm8(BLOCK, 0, false, ty.as_byte());
+    }
+    pub fn loop_(&mut self, ty: BlockType) {
+        self.inst_imm8(LOOP, 0, false, ty.as_byte());
+    }
+    pub fn if_(&mut self, ty: BlockType) {
+        self.inst_imm8(IF, 1, false, ty.as_byte());
+    }
+
+    instruction_no_args!(else_, ELSE, 0, false);
+    instruction_no_args!(end, END, 0, false);
+
+    pub fn br(&mut self, levels: u32) {
+        self.inst_imm32(BR, 0, false, levels);
+    }
+    pub fn br_if(&mut self, levels: u32) {
+        self.inst_imm32(BRIF, 1, false, levels);
+    }
+    fn br_table() {
+        panic!("TODO");
+    }
+
+    instruction_no_args!(return_, RETURN, 0, false);
+
+    pub fn call(&mut self, function_index: u32, n_args: usize, has_return_val: bool) {
+        let stack_depth = self.vm_stack.len();
+        if n_args > stack_depth {
+            panic!(
+                "Trying to call to call function {:?} with {:?} values but only {:?} on the VM stack\n{:?}",
+                function_index, n_args, stack_depth, self
+            );
+        }
+        self.vm_stack.truncate(stack_depth - n_args);
+        if has_return_val {
+            self.vm_stack.push(Symbol::WASM_ANONYMOUS_STACK_VALUE);
+        }
+        self.code.push(CALL);
+        encode_u32(&mut self.code, function_index);
+    }
+    fn call_indirect() {
+        panic!("Not implemented. Roc doesn't use function pointers");
+    }
+
+    instruction_no_args!(drop_, DROP, 1, false);
+    instruction_no_args!(select, SELECT, 3, true);
+
+    pub fn get_local(&mut self, id: LocalId) {
+        self.inst_imm32(GETLOCAL, 0, true, id.0);
+    }
+    pub fn set_local(&mut self, id: LocalId) {
+        self.inst_imm32(SETLOCAL, 1, false, id.0);
+    }
+    pub fn tee_local(&mut self, id: LocalId) {
+        self.inst_imm32(TEELOCAL, 0, false, id.0);
+    }
+    pub fn get_global(&mut self, id: u32) {
+        self.inst_imm32(GETGLOBAL, 0, true, id);
+    }
+    pub fn set_global(&mut self, id: u32) {
+        self.inst_imm32(SETGLOBAL, 1, false, id);
+    }
+
+    instruction_memargs!(i32_load, I32LOAD, 1, true);
+    instruction_memargs!(i64_load, I64LOAD, 1, true);
+    instruction_memargs!(f32_load, F32LOAD, 1, true);
+    instruction_memargs!(f64_load, F64LOAD, 1, true);
+    instruction_memargs!(i32_load8_s, I32LOAD8S, 1, true);
+    instruction_memargs!(i32_load8_u, I32LOAD8U, 1, true);
+    instruction_memargs!(i32_load16_s, I32LOAD16S, 1, true);
+    instruction_memargs!(i32_load16_u, I32LOAD16U, 1, true);
+    instruction_memargs!(i64_load8_s, I64LOAD8S, 1, true);
+    instruction_memargs!(i64_load8_u, I64LOAD8U, 1, true);
+    instruction_memargs!(i64_load16_s, I64LOAD16S, 1, true);
+    instruction_memargs!(i64_load16_u, I64LOAD16U, 1, true);
+    instruction_memargs!(i64_load32_s, I64LOAD32S, 1, true);
+    instruction_memargs!(i64_load32_u, I64LOAD32U, 1, true);
+    instruction_memargs!(i32_store, I32STORE, 2, false);
+    instruction_memargs!(i64_store, I64STORE, 2, false);
+    instruction_memargs!(f32_store, F32STORE, 2, false);
+    instruction_memargs!(f64_store, F64STORE, 2, false);
+    instruction_memargs!(i32_store8, I32STORE8, 2, false);
+    instruction_memargs!(i32_store16, I32STORE16, 2, false);
+    instruction_memargs!(i64_store8, I64STORE8, 2, false);
+    instruction_memargs!(i64_store16, I64STORE16, 2, false);
+    instruction_memargs!(i64_store32, I64STORE32, 2, false);
+
+    pub fn memory_size(&mut self) {
+        self.inst_imm8(CURRENTMEMORY, 0, true, 0);
+    }
+    pub fn memory_grow(&mut self) {
+        self.inst_imm8(GROWMEMORY, 1, true, 0);
+    }
+    pub fn i32_const(&mut self, x: i32) {
+        self.inst(I32CONST, 0, true);
+        encode_i32(&mut self.code, x);
+    }
+    pub fn i64_const(&mut self, x: i64) {
+        self.inst(I64CONST, 0, true);
+        encode_i64(&mut self.code, x);
+    }
+    pub fn f32_const(&mut self, x: f32) {
+        self.inst(F32CONST, 0, true);
+        encode_f32(&mut self.code, x);
+    }
+    pub fn f64_const(&mut self, x: f64) {
+        self.inst(F64CONST, 0, true);
+        encode_f64(&mut self.code, x);
+    }
+
+    // TODO: Consider creating unified methods for numerical ops like 'eq' and 'add',
+    // passing the ValueType as an argument. Could simplify lowlevel code gen.
+    instruction_no_args!(i32_eqz, I32EQZ, 1, true);
+    instruction_no_args!(i32_eq, I32EQ, 2, true);
+    instruction_no_args!(i32_ne, I32NE, 2, true);
+    instruction_no_args!(i32_lt_s, I32LTS, 2, true);
+    instruction_no_args!(i32_lt_u, I32LTU, 2, true);
+    instruction_no_args!(i32_gt_s, I32GTS, 2, true);
+    instruction_no_args!(i32_gt_u, I32GTU, 2, true);
+    instruction_no_args!(i32_le_s, I32LES, 2, true);
+    instruction_no_args!(i32_le_u, I32LEU, 2, true);
+    instruction_no_args!(i32_ge_s, I32GES, 2, true);
+    instruction_no_args!(i32_ge_u, I32GEU, 2, true);
+    instruction_no_args!(i64_eqz, I64EQZ, 1, true);
+    instruction_no_args!(i64_eq, I64EQ, 2, true);
+    instruction_no_args!(i64_ne, I64NE, 2, true);
+    instruction_no_args!(i64_lt_s, I64LTS, 2, true);
+    instruction_no_args!(i64_lt_u, I64LTU, 2, true);
+    instruction_no_args!(i64_gt_s, I64GTS, 2, true);
+    instruction_no_args!(i64_gt_u, I64GTU, 2, true);
+    instruction_no_args!(i64_le_s, I64LES, 2, true);
+    instruction_no_args!(i64_le_u, I64LEU, 2, true);
+    instruction_no_args!(i64_ge_s, I64GES, 2, true);
+    instruction_no_args!(i64_ge_u, I64GEU, 2, true);
+    instruction_no_args!(f32_eq, F32EQ, 2, true);
+    instruction_no_args!(f32_ne, F32NE, 2, true);
+    instruction_no_args!(f32_lt, F32LT, 2, true);
+    instruction_no_args!(f32_gt, F32GT, 2, true);
+    instruction_no_args!(f32_le, F32LE, 2, true);
+    instruction_no_args!(f32_ge, F32GE, 2, true);
+    instruction_no_args!(f64_eq, F64EQ, 2, true);
+    instruction_no_args!(f64_ne, F64NE, 2, true);
+    instruction_no_args!(f64_lt, F64LT, 2, true);
+    instruction_no_args!(f64_gt, F64GT, 2, true);
+    instruction_no_args!(f64_le, F64LE, 2, true);
+    instruction_no_args!(f64_ge, F64GE, 2, true);
+    instruction_no_args!(i32_clz, I32CLZ, 1, true);
+    instruction_no_args!(i32_ctz, I32CTZ, 1, true);
+    instruction_no_args!(i32_popcnt, I32POPCNT, 1, true);
+    instruction_no_args!(i32_add, I32ADD, 2, true);
+    instruction_no_args!(i32_sub, I32SUB, 2, true);
+    instruction_no_args!(i32_mul, I32MUL, 2, true);
+    instruction_no_args!(i32_div_s, I32DIVS, 2, true);
+    instruction_no_args!(i32_div_u, I32DIVU, 2, true);
+    instruction_no_args!(i32_rem_s, I32REMS, 2, true);
+    instruction_no_args!(i32_rem_u, I32REMU, 2, true);
+    instruction_no_args!(i32_and, I32AND, 2, true);
+    instruction_no_args!(i32_or, I32OR, 2, true);
+    instruction_no_args!(i32_xor, I32XOR, 2, true);
+    instruction_no_args!(i32_shl, I32SHL, 2, true);
+    instruction_no_args!(i32_shr_s, I32SHRS, 2, true);
+    instruction_no_args!(i32_shr_u, I32SHRU, 2, true);
+    instruction_no_args!(i32_rotl, I32ROTL, 2, true);
+    instruction_no_args!(i32_rotr, I32ROTR, 2, true);
+    instruction_no_args!(i64_clz, I64CLZ, 1, true);
+    instruction_no_args!(i64_ctz, I64CTZ, 1, true);
+    instruction_no_args!(i64_popcnt, I64POPCNT, 1, true);
+    instruction_no_args!(i64_add, I64ADD, 2, true);
+    instruction_no_args!(i64_sub, I64SUB, 2, true);
+    instruction_no_args!(i64_mul, I64MUL, 2, true);
+    instruction_no_args!(i64_div_s, I64DIVS, 2, true);
+    instruction_no_args!(i64_div_u, I64DIVU, 2, true);
+    instruction_no_args!(i64_rem_s, I64REMS, 2, true);
+    instruction_no_args!(i64_rem_u, I64REMU, 2, true);
+    instruction_no_args!(i64_and, I64AND, 2, true);
+    instruction_no_args!(i64_or, I64OR, 2, true);
+    instruction_no_args!(i64_xor, I64XOR, 2, true);
+    instruction_no_args!(i64_shl, I64SHL, 2, true);
+    instruction_no_args!(i64_shr_s, I64SHRS, 2, true);
+    instruction_no_args!(i64_shr_u, I64SHRU, 2, true);
+    instruction_no_args!(i64_rotl, I64ROTL, 2, true);
+    instruction_no_args!(i64_rotr, I64ROTR, 2, true);
+    instruction_no_args!(f32_abs, F32ABS, 1, true);
+    instruction_no_args!(f32_neg, F32NEG, 1, true);
+    instruction_no_args!(f32_ceil, F32CEIL, 1, true);
+    instruction_no_args!(f32_floor, F32FLOOR, 1, true);
+    instruction_no_args!(f32_trunc, F32TRUNC, 1, true);
+    instruction_no_args!(f32_nearest, F32NEAREST, 1, true);
+    instruction_no_args!(f32_sqrt, F32SQRT, 1, true);
+    instruction_no_args!(f32_add, F32ADD, 2, true);
+    instruction_no_args!(f32_sub, F32SUB, 2, true);
+    instruction_no_args!(f32_mul, F32MUL, 2, true);
+    instruction_no_args!(f32_div, F32DIV, 2, true);
+    instruction_no_args!(f32_min, F32MIN, 2, true);
+    instruction_no_args!(f32_max, F32MAX, 2, true);
+    instruction_no_args!(f32_copysign, F32COPYSIGN, 2, true);
+    instruction_no_args!(f64_abs, F64ABS, 1, true);
+    instruction_no_args!(f64_neg, F64NEG, 1, true);
+    instruction_no_args!(f64_ceil, F64CEIL, 1, true);
+    instruction_no_args!(f64_floor, F64FLOOR, 1, true);
+    instruction_no_args!(f64_trunc, F64TRUNC, 1, true);
+    instruction_no_args!(f64_nearest, F64NEAREST, 1, true);
+    instruction_no_args!(f64_sqrt, F64SQRT, 1, true);
+    instruction_no_args!(f64_add, F64ADD, 2, true);
+    instruction_no_args!(f64_sub, F64SUB, 2, true);
+    instruction_no_args!(f64_mul, F64MUL, 2, true);
+    instruction_no_args!(f64_div, F64DIV, 2, true);
+    instruction_no_args!(f64_min, F64MIN, 2, true);
+    instruction_no_args!(f64_max, F64MAX, 2, true);
+    instruction_no_args!(f64_copysign, F64COPYSIGN, 2, true);
+    instruction_no_args!(i32_wrap_i64, I32WRAPI64, 1, true);
+    instruction_no_args!(i32_trunc_s_f32, I32TRUNCSF32, 1, true);
+    instruction_no_args!(i32_trunc_u_f32, I32TRUNCUF32, 1, true);
+    instruction_no_args!(i32_trunc_s_f64, I32TRUNCSF64, 1, true);
+    instruction_no_args!(i32_trunc_u_f64, I32TRUNCUF64, 1, true);
+    instruction_no_args!(i64_extend_s_i32, I64EXTENDSI32, 1, true);
+    instruction_no_args!(i64_extend_u_i32, I64EXTENDUI32, 1, true);
+    instruction_no_args!(i64_trunc_s_f32, I64TRUNCSF32, 1, true);
+    instruction_no_args!(i64_trunc_u_f32, I64TRUNCUF32, 1, true);
+    instruction_no_args!(i64_trunc_s_f64, I64TRUNCSF64, 1, true);
+    instruction_no_args!(i64_trunc_u_f64, I64TRUNCUF64, 1, true);
+    instruction_no_args!(f32_convert_s_i32, F32CONVERTSI32, 1, true);
+    instruction_no_args!(f32_convert_u_i32, F32CONVERTUI32, 1, true);
+    instruction_no_args!(f32_convert_s_i64, F32CONVERTSI64, 1, true);
+    instruction_no_args!(f32_convert_u_i64, F32CONVERTUI64, 1, true);
+    instruction_no_args!(f32_demote_f64, F32DEMOTEF64, 1, true);
+    instruction_no_args!(f64_convert_s_i32, F64CONVERTSI32, 1, true);
+    instruction_no_args!(f64_convert_u_i32, F64CONVERTUI32, 1, true);
+    instruction_no_args!(f64_convert_s_i64, F64CONVERTSI64, 1, true);
+    instruction_no_args!(f64_convert_u_i64, F64CONVERTUI64, 1, true);
+    instruction_no_args!(f64_promote_f32, F64PROMOTEF32, 1, true);
+    instruction_no_args!(i32_reinterpret_f32, I32REINTERPRETF32, 1, true);
+    instruction_no_args!(i64_reinterpret_f64, I64REINTERPRETF64, 1, true);
+    instruction_no_args!(f32_reinterpret_i32, F32REINTERPRETI32, 1, true);
+    instruction_no_args!(f64_reinterpret_i64, F64REINTERPRETI64, 1, true);
 }

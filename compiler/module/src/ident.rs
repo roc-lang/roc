@@ -4,7 +4,7 @@ use std::fmt;
 
 /// This could be uppercase or lowercase, qualified or unqualified.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Ident(IdentStr);
+pub struct Ident(pub IdentStr);
 
 impl Ident {
     pub fn as_inline_str(&self) -> &IdentStr {

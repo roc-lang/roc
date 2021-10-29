@@ -4,7 +4,8 @@ use roc_ast::ast_error::ASTError;
 use roc_ast::lang::core::ast::ASTNodeId;
 use roc_code_markup::markup_error::MarkError;
 use roc_code_markup::slow_pool::MarkNodeId;
-use snafu::{Backtrace, ErrorCompat, NoneError, ResultExt, Snafu};
+use roc_module::module_err::ModuleError;
+use snafu::{Backtrace, ErrorCompat, Snafu};
 
 //import errors as follows:
 // `use crate::error::OutOfBounds;`
@@ -253,7 +254,22 @@ pub enum EdError {
         msg: String,
         backtrace: Backtrace,
     },
-
+    WrapASTError {
+        #[snafu(backtrace)]
+        source: ASTError,
+    },
+    WrapUIError {
+        #[snafu(backtrace)]
+        source: UIError,
+    },
+    WrapMarkError {
+        #[snafu(backtrace)]
+        source: MarkError,
+    },
+    WrapModuleError {
+        #[snafu(backtrace)]
+        source: ModuleError,
+    },
     WrapIoError {
         source: std::io::Error,
     },
@@ -320,31 +336,25 @@ use crate::ui::ui_error::UIError;
 
 impl From<UIError> for EdError {
     fn from(ui_err: UIError) -> Self {
-        let msg = format!("{}", ui_err);
-
-        // hack to handle EdError derive
-        let dummy_res: Result<(), NoneError> = Err(NoneError {});
-        dummy_res.context(UIErrorBacktrace { msg }).unwrap_err()
+        Self::WrapUIError { source: ui_err }
     }
 }
 
 impl From<MarkError> for EdError {
     fn from(mark_err: MarkError) -> Self {
-        let msg = format!("{}", mark_err);
-
-        // hack to handle EdError derive
-        let dummy_res: Result<(), NoneError> = Err(NoneError {});
-        dummy_res.context(MarkErrorBacktrace { msg }).unwrap_err()
+        Self::WrapMarkError { source: mark_err }
     }
 }
 
 impl From<ASTError> for EdError {
     fn from(ast_err: ASTError) -> Self {
-        let msg = format!("{}", ast_err);
+        Self::WrapASTError { source: ast_err }
+    }
+}
 
-        // hack to handle EdError derive
-        let dummy_res: Result<(), NoneError> = Err(NoneError {});
-        dummy_res.context(ASTErrorBacktrace { msg }).unwrap_err()
+impl From<ModuleError> for EdError {
+    fn from(module_err: ModuleError) -> Self {
+        Self::WrapModuleError { source: module_err }
     }
 }
 

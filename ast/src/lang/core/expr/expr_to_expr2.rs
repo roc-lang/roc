@@ -232,7 +232,7 @@ pub fn expr_to_expr2<'a>(
                 //                env.problems.push(Problem::RuntimeError(error));
                 //
                 //                (answer, Output::default())
-                todo!()
+                todo!("{:?}", &can_update)
             }
         }
 
@@ -487,10 +487,10 @@ pub fn expr_to_expr2<'a>(
             (
                 Expr2::Closure {
                     function_type: env.var_store.fresh(),
-                    name: symbol,
+                    uniq_symbol: symbol,
                     recursive: Recursive::NotRecursive,
                     args: can_args,
-                    body: env.add(body_expr, loc_body_expr.region),
+                    body_id: env.add(body_expr, loc_body_expr.region),
                     extra: env.pool.add(extra),
                 },
                 output,
@@ -504,7 +504,6 @@ pub fn expr_to_expr2<'a>(
 
             // Canonicalize the function expression and its arguments
             let (fn_expr, mut output) = expr_to_expr2(env, scope, &loc_fn.value, fn_region);
-
             // The function's return type
             let args = PoolVec::with_capacity(loc_args.len() as u32, env.pool);
 
@@ -533,7 +532,7 @@ pub fn expr_to_expr2<'a>(
                     let fn_expr_id = env.add(fn_expr, fn_region);
                     Expr2::Call {
                         args,
-                        expr: fn_expr_id,
+                        expr_id: fn_expr_id,
                         expr_var: env.var_store.fresh(),
                         fn_var: env.var_store.fresh(),
                         closure_var: env.var_store.fresh(),
@@ -571,7 +570,7 @@ pub fn expr_to_expr2<'a>(
                     let fn_expr_id = env.add(fn_expr, fn_region);
                     Expr2::Call {
                         args,
-                        expr: fn_expr_id,
+                        expr_id: fn_expr_id,
                         expr_var: env.var_store.fresh(),
                         fn_var: env.var_store.fresh(),
                         closure_var: env.var_store.fresh(),
@@ -662,7 +661,10 @@ pub fn expr_to_expr2<'a>(
             //            (RuntimeError(problem), Output::default())
             todo!()
         }
-        Var { module_name, ident } => canonicalize_lookup(env, scope, module_name, ident, region),
+        Var {
+            module_name, // module_name will only be filled if the original Roc code stated something like `5 + SomeModule.myVar`, module_name will be blank if it was `5 + myVar`
+            ident,
+        } => canonicalize_lookup(env, scope, module_name, ident, region),
 
         // Below this point, we shouln't see any of these nodes anymore because
         // operator desugaring should have removed them!

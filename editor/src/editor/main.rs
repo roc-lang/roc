@@ -63,7 +63,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
 
     let window = winit::window::WindowBuilder::new()
         .with_inner_size(PhysicalSize::new(1900.0, 1000.0))
-        .with_title("The Roc Editor - very alpha")
+        .with_title("The Roc Editor - Work In Progress")
         .build(&event_loop)
         .unwrap();
 
