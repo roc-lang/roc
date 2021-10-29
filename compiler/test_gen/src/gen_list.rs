@@ -1949,6 +1949,31 @@ fn list_contains() {
 
     assert_evals_to!(indoc!("List.contains [] 4"), false, bool);
 }
+#[test]
+fn list_min() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when List.min [] is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+        ),
+        -1,
+        i64
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when List.min [3, 1, 2] is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+        ),
+        1,
+        i64
+    );
+}
 
 #[test]
 fn list_sum() {
