@@ -530,11 +530,7 @@ pub fn rebuild_host(
 }
 
 fn nix_path_opt() -> Option<String> {
-    if let Some(path) = env::var_os("NIX_GLIBC_PATH") {
-        Some(path.into_string().unwrap())
-    } else {
-        None
-    }
+    env::var_os("NIX_GLIBC_PATH").map(|path| path.into_string().unwrap())
 }
 
 fn library_path<const N: usize>(segments: [&str; N]) -> Option<PathBuf> {
@@ -583,7 +579,7 @@ fn link_linux(
         ));
     }
 
-    let libcrt_path = 
+    let libcrt_path =
         // give preference to nix_path if it's defined, this prevents bugs
         if let Some(nix_path) = nix_path_opt() {
             library_path([&nix_path])
@@ -595,7 +591,7 @@ fn link_linux(
         };
 
     let libgcc_name = "libgcc_s.so.1";
-    let libgcc_path = 
+    let libgcc_path =
         // give preference to nix_path if it's defined, this prevents bugs
         if let Some(nix_path) = nix_path_opt() {
             library_path([&nix_path, libgcc_name])
@@ -615,7 +611,7 @@ fn link_linux(
             } else {
                 library_path(["/lib64", "ld-linux-x86-64.so.2"])
             }
-        },
+        }
         Architecture::Aarch64(_) => library_path(["/lib", "ld-linux-aarch64.so.1"]),
         _ => panic!(
             "TODO gracefully handle unsupported linux architecture: {:?}",
