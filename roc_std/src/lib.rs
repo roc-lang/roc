@@ -199,7 +199,7 @@ impl<T> RocList<T> {
         T: Clone,
     {
         // Avoid allocation with empty list.
-        if slice.len() == 0 {
+        if slice.is_empty() {
             Self::default()
         } else {
             Self::from_slice_with_capacity(slice, slice.len())
