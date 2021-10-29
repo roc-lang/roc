@@ -27,10 +27,10 @@ pub struct WasmBackend<'a> {
     // Module-level data
     pub module_builder: ModuleBuilder,
     pub code_section_bytes: std::vec::Vec<u8>,
+    pub call_relocations: Vec<'a, (usize, Symbol)>,
     _data_offset_map: MutMap<Literal<'a>, u32>,
     _data_offset_next: u32,
-    proc_symbols: Vec<'a, Symbol>,
-    code_relocations: Vec<'a, (usize, Symbol)>,
+    proc_symbols: &'a Vec<'a, Symbol>,
 
     // Function-level data
     code_builder: CodeBuilder<'a>,
@@ -42,7 +42,7 @@ pub struct WasmBackend<'a> {
 }
 
 impl<'a> WasmBackend<'a> {
-    pub fn new(env: &'a Env<'a>, proc_symbols: Vec<'a, Symbol>) -> Self {
+    pub fn new(env: &'a Env<'a>, proc_symbols: &'a Vec<'a, Symbol>) -> Self {
         let mut code_section_bytes = std::vec::Vec::with_capacity(4096);
 
         // Code section header
@@ -58,7 +58,7 @@ impl<'a> WasmBackend<'a> {
             _data_offset_map: MutMap::default(),
             _data_offset_next: UNUSED_DATA_SECTION_BYTES,
             proc_symbols,
-            code_relocations: Vec::with_capacity_in(256, env.arena),
+            call_relocations: Vec::with_capacity_in(256, env.arena),
 
             // Function-level data
             block_depth: 0,
@@ -141,7 +141,7 @@ impl<'a> WasmBackend<'a> {
         );
 
         let relocs = self.code_builder.serialize(&mut self.code_section_bytes);
-        self.code_relocations.extend(relocs);
+        self.call_relocations.extend(relocs);
         Ok(())
     }
 

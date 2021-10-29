@@ -1,12 +1,10 @@
 mod backend;
+pub mod code_builder;
 pub mod from_wasm32_memory;
 mod layout;
-mod module_builder;
+pub mod module_builder;
 pub mod serialize;
 mod storage;
-
-#[allow(dead_code)]
-pub mod code_builder;
 
 #[allow(dead_code)]
 mod opcodes;
@@ -22,7 +20,10 @@ use roc_mono::layout::LayoutIds;
 
 use crate::backend::WasmBackend;
 use crate::code_builder::{Align, CodeBuilder, ValueType};
-use crate::serialize::SerialBuffer;
+use crate::module_builder::{
+    LinkingSection, LinkingSubSection, RelocationEntry, RelocationSection, SectionId, SymInfo,
+};
+use crate::serialize::{SerialBuffer, Serialize};
 
 const PTR_SIZE: u32 = 4;
 const PTR_TYPE: ValueType = ValueType::I32;
@@ -61,11 +62,18 @@ pub fn build_module_help<'a>(
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Result<(builder::ModuleBuilder, std::vec::Vec<u8>), String> {
     let proc_symbols = Vec::from_iter_in(procedures.keys().map(|(sym, _)| *sym), env.arena);
-    let mut backend = WasmBackend::new(env, proc_symbols);
+    let mut backend = WasmBackend::new(env, &proc_symbols);
     let mut layout_ids = LayoutIds::default();
+    let mut symbol_table_entries = Vec::with_capacity_in(procedures.len(), env.arena);
 
-    for ((sym, layout), proc) in procedures.into_iter() {
+    for (i, ((sym, layout), proc)) in procedures.into_iter().enumerate() {
+        let proc_name = LayoutIds::default()
+            .get(proc.name, &proc.ret_layout)
+            .to_symbol_string(proc.name, &env.interns);
+        symbol_table_entries.push(SymInfo::for_function(i as u32, proc_name));
+
         let function_index = backend.build_proc(proc, sym)?;
+
         if env.exposed_to_host.contains(&sym) {
             let fn_name = layout_ids
                 .get_toplevel(sym, &layout)
@@ -85,6 +93,42 @@ pub fn build_module_help<'a>(
     backend
         .code_section_bytes
         .overwrite_padded_u32(0, inner_length);
+
+    // linking metadata section
+    let mut linking_section_bytes = std::vec::Vec::with_capacity(symbol_table_entries.len() * 20);
+    let linking_section = LinkingSection {
+        subsections: bumpalo::vec![in env.arena;
+            LinkingSubSection::SymbolTable(symbol_table_entries)
+        ],
+    };
+    linking_section.serialize(&mut linking_section_bytes);
+    backend.module_builder = backend.module_builder.with_section(Section::Unparsed {
+        id: SectionId::Custom as u8,
+        payload: linking_section_bytes,
+    });
+
+    // Code relocations
+    let call_reloc_iter = backend
+        .call_relocations
+        .iter()
+        .map(|(offset, sym)| -> RelocationEntry {
+            let symbol_index = proc_symbols.iter().position(|s| s == sym).unwrap();
+            RelocationEntry::for_function_call(*offset as u32, symbol_index as u32)
+        });
+
+    let code_reloc_section = RelocationSection {
+        name: "reloc.CODE".to_string(),
+        entries: Vec::from_iter_in(call_reloc_iter, env.arena),
+    };
+
+    let mut code_reloc_section_bytes = std::vec::Vec::with_capacity(256);
+    code_reloc_section.serialize(&mut code_reloc_section_bytes);
+
+    // Must come after linking section
+    backend.module_builder = backend.module_builder.with_section(Section::Unparsed {
+        id: SectionId::Custom as u8,
+        payload: code_reloc_section_bytes,
+    });
 
     const MIN_MEMORY_SIZE_KB: u32 = 1024;
     const PAGE_SIZE_KB: u32 = 64;
@@ -122,7 +166,7 @@ pub fn replace_code_section(module: &mut Module, code_section_bytes: std::vec::V
         .unwrap();
 
     sections[code_section_index] = Section::Unparsed {
-        id: CODE_SECTION_ID,
+        id: SectionId::Code as u8,
         payload: code_section_bytes,
     };
 }

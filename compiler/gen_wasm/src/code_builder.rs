@@ -9,8 +9,6 @@ use crate::opcodes::*;
 use crate::serialize::SerialBuffer;
 use crate::{round_up_to_alignment, LocalId, FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID};
 
-const DEBUG_LOG: bool = false;
-
 /// Wasm value type. (Rust representation matches Wasm encoding)
 #[repr(u8)]
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
@@ -482,6 +480,7 @@ impl<'a> CodeBuilder<'a> {
     pub fn br_if(&mut self, levels: u32) {
         self.inst_imm32(BRIF, 1, false, levels);
     }
+    #[allow(dead_code)]
     fn br_table() {
         panic!("TODO");
     }
@@ -512,6 +511,8 @@ impl<'a> CodeBuilder<'a> {
         self.code.encode_padded_u32(function_index);
         self.relocations.push((call_offset, function_sym));
     }
+
+    #[allow(dead_code)]
     fn call_indirect() {
         panic!("Not implemented. Roc doesn't use function pointers");
     }

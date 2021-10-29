@@ -1,5 +1,4 @@
 use bumpalo::collections::vec::Vec;
-use roc_module::symbol::{Interns, Symbol};
 
 use crate::code_builder::Align;
 use crate::serialize::{SerialBuffer, Serialize};
@@ -39,11 +38,11 @@ fn _write_section_header<T: SerialBuffer>(buffer: &mut T, id: SectionId) -> Sect
 }
 
 /// Write a custom section header, returning the position of the encoded length
-fn write_custom_section_header<'s, T: SerialBuffer>(
+fn write_custom_section_header<T: SerialBuffer>(
     buffer: &mut T,
-    name: &'s str,
+    name: &str,
 ) -> SectionHeaderIndices {
-    buffer.append_byte(SectionId::Custom as u8);
+    // buffer.append_byte(SectionId::Custom as u8); // TODO: uncomment when we get rid of parity_wasm
     let size_index = buffer.reserve_padded_u32();
     let body_index = buffer.size();
     buffer.append_slice(name.as_bytes());
@@ -59,7 +58,7 @@ fn update_section_size<T: SerialBuffer>(buffer: &mut T, header_indices: SectionH
     buffer.overwrite_padded_u32(header_indices.size_index, size as u32);
 }
 
-fn serialize_vector_with_count<'bump, SB, S>(buffer: &mut SB, items: &Vec<'bump, S>)
+fn serialize_vector_with_count<'a, SB, S>(buffer: &mut SB, items: &Vec<'a, S>)
 where
     SB: SerialBuffer,
     S: Serialize,
@@ -147,6 +146,16 @@ pub enum RelocationEntry {
     },
 }
 
+impl RelocationEntry {
+    pub fn for_function_call(offset: u32, symbol_index: u32) -> Self {
+        RelocationEntry::Index {
+            type_id: IndexRelocType::FunctionIndexLeb,
+            offset,
+            symbol_index,
+        }
+    }
+}
+
 impl Serialize for RelocationEntry {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         match self {
@@ -174,14 +183,14 @@ impl Serialize for RelocationEntry {
     }
 }
 
-pub struct RelocationSection<'s, 'bump> {
-    name: &'s str,
-    entries: Vec<'bump, RelocationEntry>,
+pub struct RelocationSection<'a> {
+    pub name: String,
+    pub entries: Vec<'a, RelocationEntry>,
 }
 
-impl<'s, 'bump> Serialize for RelocationSection<'s, 'bump> {
+impl<'a> Serialize for RelocationSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        let header_indices = write_custom_section_header(buffer, self.name);
+        let header_indices = write_custom_section_header(buffer, &self.name);
         for entry in self.entries.iter() {
             entry.serialize(buffer);
         }
@@ -198,24 +207,24 @@ impl<'s, 'bump> Serialize for RelocationSection<'s, 'bump> {
  *******************************************************************/
 
 /// Linking metadata for data segments
-pub struct LinkingSegment<'s> {
-    name: &'s str,
-    alignment: Align,
-    flags: u32,
+pub struct LinkingSegment {
+    pub name: String,
+    pub alignment: Align,
+    pub flags: u32,
 }
-impl<'s> Serialize for LinkingSegment<'s> {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+impl Serialize for LinkingSegment {
+    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
         todo!();
     }
 }
 
 /// Linking metadata for init (start) functions
 pub struct LinkingInitFunc {
-    priority: u32,
-    symbol_index: u32, // index in the symbol table, not the function index
+    pub priority: u32,
+    pub symbol_index: u32, // index in the symbol table, not the function index
 }
 impl Serialize for LinkingInitFunc {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
         todo!();
     }
 }
@@ -238,11 +247,11 @@ pub enum ComdatSymKind {
 }
 
 pub struct ComdatSym {
-    kind: ComdatSymKind,
-    index: u32,
+    pub kind: ComdatSymKind,
+    pub index: u32,
 }
 impl Serialize for ComdatSym {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
         todo!();
     }
 }
@@ -251,13 +260,14 @@ impl Serialize for ComdatSym {
 /// A COMDAT group may contain one or more functions, data segments, and/or custom sections.
 /// The linker will include all of these elements with a given group name from one object file,
 /// and will exclude any element with this group name from all other object files.
-pub struct LinkingComdat<'s, 'bump> {
-    name: &'s str,
+#[allow(dead_code)]
+pub struct LinkingComdat<'a> {
+    name: String,
     flags: u32,
-    syms: Vec<'bump, ComdatSym>,
+    syms: Vec<'a, ComdatSym>,
 }
-impl<'s, 'bump> Serialize for LinkingComdat<'s, 'bump> {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+impl<'a> Serialize for LinkingComdat<'a> {
+    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
         todo!();
     }
 }
@@ -306,11 +316,11 @@ pub const WASM_SYM_EXPLICIT_NAME: u32 = 0x40; // use the name from the symbol ta
 /// linker output, regardless of whether it is used by the program.
 pub const WASM_SYM_NO_STRIP: u32 = 0x80;
 
-pub enum WasmObjectSymbol<'s> {
-    Defined { index: u32, name: &'s str },
+pub enum WasmObjectSymbol {
+    Defined { index: u32, name: String },
     Imported { index: u32 },
 }
-impl<'s> Serialize for WasmObjectSymbol<'s> {
+impl Serialize for WasmObjectSymbol {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         match self {
             Self::Defined { index, name } => {
@@ -325,18 +335,18 @@ impl<'s> Serialize for WasmObjectSymbol<'s> {
     }
 }
 
-pub enum DataSymbol<'s> {
+pub enum DataSymbol {
     Defined {
-        name: &'s str,
+        name: String,
         index: u32,
         offset: u32,
         size: u32,
     },
     Imported {
-        name: &'s str,
+        name: String,
     },
 }
-impl<'s> Serialize for DataSymbol<'s> {
+impl Serialize for DataSymbol {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         match self {
             Self::Defined {
@@ -363,20 +373,33 @@ impl<'s> Serialize for DataSymbol<'s> {
 #[derive(Clone, Copy, Debug)]
 pub struct SectionIndex(u32);
 
-pub enum SymInfoFields<'s> {
-    Function(WasmObjectSymbol<'s>),
-    Data(DataSymbol<'s>),
-    Global(WasmObjectSymbol<'s>),
+pub enum SymInfoFields {
+    Function(WasmObjectSymbol),
+    Data(DataSymbol),
+    Global(WasmObjectSymbol),
     Section(SectionIndex),
-    Event(WasmObjectSymbol<'s>),
-    Table(WasmObjectSymbol<'s>),
+    Event(WasmObjectSymbol),
+    Table(WasmObjectSymbol),
 }
 
-pub struct SymInfo<'s> {
+pub struct SymInfo {
     flags: u32,
-    info: SymInfoFields<'s>,
+    info: SymInfoFields,
 }
-impl<'s> Serialize for SymInfo<'s> {
+impl SymInfo {
+    pub fn for_function(wasm_function_index: u32, name: String) -> Self {
+        let linking_symbol = WasmObjectSymbol::Defined {
+            index: wasm_function_index,
+            name,
+        };
+        SymInfo {
+            flags: 0,
+            info: SymInfoFields::Function(linking_symbol),
+        }
+    }
+}
+
+impl Serialize for SymInfo {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         buffer.append_byte(match self.info {
             SymInfoFields::Function(_) => 0,
@@ -406,18 +429,18 @@ impl<'s> Serialize for SymInfo<'s> {
 //
 //--------------------------------
 
-pub enum LinkingSubSection<'s, 'bump> {
+pub enum LinkingSubSection<'a> {
     /// Extra metadata about the data segments.
-    SegmentInfo(Vec<'bump, LinkingSegment<'s>>),
+    SegmentInfo(Vec<'a, LinkingSegment>),
     /// Specifies a list of constructor functions to be called at startup.
     /// These constructors will be called in priority order after memory has been initialized.
-    InitFuncs(Vec<'bump, LinkingInitFunc>),
+    InitFuncs(Vec<'a, LinkingInitFunc>),
     /// Specifies the COMDAT groups of associated linking objects, which are linked only once and all together.
-    ComdatInfo(Vec<'bump, LinkingComdat<'s, 'bump>>),
+    ComdatInfo(Vec<'a, LinkingComdat<'a>>),
     /// Specifies extra information about the symbols present in the module.
-    SymbolTable(Vec<'bump, SymInfo<'s>>),
+    SymbolTable(Vec<'a, SymInfo>),
 }
-impl<'s, 'bump> Serialize for LinkingSubSection<'s, 'bump> {
+impl<'a> Serialize for LinkingSubSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         buffer.append_byte(match self {
             Self::SegmentInfo(_) => 5,
@@ -442,10 +465,10 @@ impl<'s, 'bump> Serialize for LinkingSubSection<'s, 'bump> {
 
 const LINKING_VERSION: u8 = 2;
 
-pub struct LinkingSection<'s, 'bump> {
-    subsections: Vec<'bump, LinkingSubSection<'s, 'bump>>,
+pub struct LinkingSection<'a> {
+    pub subsections: Vec<'a, LinkingSubSection<'a>>,
 }
-impl<'s, 'bump> Serialize for LinkingSection<'s, 'bump> {
+impl<'a> Serialize for LinkingSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         let header_indices = write_custom_section_header(buffer, "linking");
         buffer.append_byte(LINKING_VERSION);
