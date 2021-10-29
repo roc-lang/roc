@@ -372,6 +372,20 @@ pub fn rebuild_host(
                     shared_lib_path,
                 )
             }
+
+            Architecture::Aarch64(_) => {
+                let emit_bin = format!("-femit-bin={}", host_dest_native.to_str().unwrap());
+                build_zig_host_native(
+                    &env_path,
+                    &env_home,
+                    &emit_bin,
+                    zig_host_src.to_str().unwrap(),
+                    zig_str_path.to_str().unwrap(),
+                    "native",
+                    opt_level,
+                    shared_lib_path,
+                )
+            }
             _ => panic!("Unsupported architecture {:?}", target.architecture),
         };
 

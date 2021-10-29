@@ -15,7 +15,7 @@ test = false
 bench = false
 
 [features]
-default = ["target-x86", "llvm", "editor"]
+default = ["target-x86", "target-aarch64", "llvm", "editor"]
 wasm32-cli-run = []
 i386-cli-run = []
 
@@ -29,8 +29,10 @@ target-x86 = []
 # arm and wasm give linker errors on some platforms
 target-arm = []
 target-webassembly = []
+target-aarch64 = []
 
 target-all = [
+    "target-aarch64",
     "target-x86",
     "target-arm",
     "target-webassembly"
