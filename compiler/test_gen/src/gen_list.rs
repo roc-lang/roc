@@ -215,7 +215,7 @@ fn list_drop_at() {
 }
 
 #[test]
-fn list_drop_at_mutable() {
+fn list_drop_at_shared() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -228,6 +228,38 @@ fn list_drop_at_mutable() {
         (
             // new_list
             RocList::from_slice(&[5, 6]),
+            // original
+            RocList::from_slice(&[4, 5, 6]),
+        ),
+        (RocList<i64>, RocList<i64>,)
+    );
+}
+
+#[test]
+fn list_drop_last() {
+    assert_evals_to!(
+        "List.dropLast [1, 2, 3]",
+        RocList::from_slice(&[1, 2]),
+        RocList<i64>
+    );
+    assert_evals_to!("List.dropLast []", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!("List.dropLast [0]", RocList::from_slice(&[]), RocList<i64>);
+}
+
+#[test]
+fn list_drop_last_mutable() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+               list : List I64
+               list = [ if True then 4 else 4, 5, 6 ]
+
+               { newList: List.dropLast list, original: list }
+               "#
+        ),
+        (
+            // new_list
+            RocList::from_slice(&[4, 5]),
             // original
             RocList::from_slice(&[4, 5, 6]),
         ),
@@ -1916,6 +1948,31 @@ fn list_contains() {
     assert_evals_to!(indoc!("List.contains [1,2,3] 4"), false, bool);
 
     assert_evals_to!(indoc!("List.contains [] 4"), false, bool);
+}
+#[test]
+fn list_min() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when List.min [] is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+        ),
+        -1,
+        i64
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when List.min [3, 1, 2] is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+        ),
+        1,
+        i64
+    );
 }
 
 #[test]

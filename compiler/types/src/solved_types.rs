@@ -54,104 +54,102 @@ impl PartialEq for SolvedType {
 }
 
 fn hash_solved_type_help<H: Hasher>(
-    solved_type: &SolvedType,
+    initial: &SolvedType,
     flex_vars: &mut Vec<VarId>,
     state: &mut H,
 ) {
     use SolvedType::*;
 
-    match solved_type {
-        Flex(var_id) => {
-            var_id_hash_help(*var_id, flex_vars, state);
-        }
-        Wildcard => "wildcard".hash(state),
-        EmptyRecord => "empty_record".hash(state),
-        EmptyTagUnion => "empty_tag_union".hash(state),
-        Error => "error".hash(state),
-        Func(arguments, closure, result) => {
-            for x in arguments {
-                hash_solved_type_help(x, flex_vars, state);
-            }
+    let mut stack = Vec::with_capacity(63);
 
-            hash_solved_type_help(closure, flex_vars, state);
-            hash_solved_type_help(result, flex_vars, state);
-        }
-        Apply(name, arguments) => {
-            name.hash(state);
-            for x in arguments {
-                hash_solved_type_help(x, flex_vars, state);
-            }
-        }
-        Rigid(name) => name.hash(state),
-        Erroneous(problem) => problem.hash(state),
+    stack.push(initial);
 
-        Record { fields, ext } => {
-            for (name, x) in fields {
+    while let Some(solved_type) = stack.pop() {
+        match solved_type {
+            Flex(var_id) => {
+                var_id_hash_help(*var_id, flex_vars, state);
+            }
+            Wildcard => "wildcard".hash(state),
+            EmptyRecord => "empty_record".hash(state),
+            EmptyTagUnion => "empty_tag_union".hash(state),
+            Error => "error".hash(state),
+            Func(arguments, closure, result) => {
+                stack.extend(arguments);
+
+                stack.push(closure);
+                stack.push(result);
+            }
+            Apply(name, arguments) => {
                 name.hash(state);
-                "record_field".hash(state);
-                hash_solved_type_help(x.as_inner(), flex_vars, state);
+                stack.extend(arguments);
             }
-            hash_solved_type_help(ext, flex_vars, state);
-        }
+            Rigid(name) => name.hash(state),
+            Erroneous(problem) => problem.hash(state),
 
-        TagUnion(tags, ext) => {
-            for (name, arguments) in tags {
-                name.hash(state);
-                for x in arguments {
-                    hash_solved_type_help(x, flex_vars, state);
+            Record { fields, ext } => {
+                for (name, x) in fields {
+                    name.hash(state);
+                    "record_field".hash(state);
+                    stack.push(x.as_inner());
                 }
+                stack.push(ext);
             }
-            hash_solved_type_help(ext, flex_vars, state);
-        }
 
-        FunctionOrTagUnion(_, _, ext) => {
-            hash_solved_type_help(ext, flex_vars, state);
-        }
-
-        RecursiveTagUnion(rec, tags, ext) => {
-            var_id_hash_help(*rec, flex_vars, state);
-            for (name, arguments) in tags {
-                name.hash(state);
-                for x in arguments {
-                    hash_solved_type_help(x, flex_vars, state);
+            TagUnion(tags, ext) => {
+                for (name, arguments) in tags {
+                    name.hash(state);
+                    stack.extend(arguments);
                 }
+                stack.push(ext);
             }
-            hash_solved_type_help(ext, flex_vars, state);
-        }
 
-        Alias(name, arguments, solved_lambda_sets, actual) => {
-            name.hash(state);
-            for (name, x) in arguments {
+            FunctionOrTagUnion(_, _, ext) => {
+                stack.push(ext);
+            }
+
+            RecursiveTagUnion(rec, tags, ext) => {
+                var_id_hash_help(*rec, flex_vars, state);
+                for (name, arguments) in tags {
+                    name.hash(state);
+                    stack.extend(arguments);
+                }
+                stack.push(ext);
+            }
+
+            Alias(name, arguments, solved_lambda_sets, actual) => {
                 name.hash(state);
-                hash_solved_type_help(x, flex_vars, state);
+                for (name, x) in arguments {
+                    name.hash(state);
+                    stack.push(x);
+                }
+
+                for set in solved_lambda_sets {
+                    stack.push(&set.0);
+                }
+
+                stack.push(actual);
             }
 
-            for set in solved_lambda_sets {
-                hash_solved_type_help(&set.0, flex_vars, state);
-            }
-
-            hash_solved_type_help(actual, flex_vars, state);
-        }
-
-        HostExposedAlias {
-            name,
-            arguments,
-            lambda_set_variables: solved_lambda_sets,
-            actual,
-            actual_var,
-        } => {
-            name.hash(state);
-            for (name, x) in arguments {
+            HostExposedAlias {
+                name,
+                arguments,
+                lambda_set_variables: solved_lambda_sets,
+                actual,
+                actual_var,
+            } => {
                 name.hash(state);
-                hash_solved_type_help(x, flex_vars, state);
-            }
+                for (name, x) in arguments {
+                    name.hash(state);
+                    stack.push(x);
+                }
 
-            for set in solved_lambda_sets {
-                hash_solved_type_help(&set.0, flex_vars, state);
-            }
+                for set in solved_lambda_sets {
+                    stack.push(&set.0);
+                }
 
-            hash_solved_type_help(actual, flex_vars, state);
-            var_id_hash_help(*actual_var, flex_vars, state);
+                stack.push(actual);
+                var_id_hash_help(*actual_var, flex_vars, state);
+            }
         }
     }
 }

@@ -45,25 +45,25 @@ pub fn build_app<'a>() -> App<'a> {
             .about("Build a binary from the given .roc file, but don't run it")
             .arg(
                 Arg::with_name(ROC_FILE)
-                    .help("The .roc file to build")
+                    .about("The .roc file to build")
                     .required(true),
             )
             .arg(
                 Arg::with_name(FLAG_OPTIMIZE)
                     .long(FLAG_OPTIMIZE)
-                    .help("Optimize your compiled Roc program to run faster. (Optimization takes time to complete.)")
+                    .about("Optimize your compiled Roc program to run faster. (Optimization takes time to complete.)")
                     .required(false),
             )
             .arg(
                 Arg::with_name(FLAG_DEV)
                     .long(FLAG_DEV)
-                    .help("Make compilation as fast as possible. (Runtime performance may suffer)")
+                    .about("Make compilation as fast as possible. (Runtime performance may suffer)")
                     .required(false),
             )
             .arg(
                 Arg::with_name(FLAG_BACKEND)
                     .long(FLAG_BACKEND)
-                    .help("Choose a different backend")
+                    .about("Choose a different backend")
                     // .requires(BACKEND)
                 .default_value(Backend::default().as_str())
                     .possible_values(Backend::OPTIONS)
@@ -72,31 +72,31 @@ pub fn build_app<'a>() -> App<'a> {
             .arg(
                 Arg::with_name(FLAG_LIB)
                     .long(FLAG_LIB)
-                    .help("Build a C library instead of an executable.")
+                    .about("Build a C library instead of an executable.")
                     .required(false),
             )
             .arg(
                 Arg::with_name(FLAG_DEBUG)
                     .long(FLAG_DEBUG)
-                    .help("Store LLVM debug information in the generated program")
+                    .about("Store LLVM debug information in the generated program")
                     .required(false),
             )
             .arg(
                 Arg::with_name(FLAG_TIME)
                     .long(FLAG_TIME)
-                    .help("Prints detailed compilation time information.")
+                    .about("Prints detailed compilation time information.")
                     .required(false),
             )
             .arg(
                 Arg::with_name(FLAG_LINK)
                     .long(FLAG_LINK)
-                    .help("Uses the roc linker instead of the system linker.")
+                    .about("Uses the roc linker instead of the system linker.")
                     .required(false),
             )
             .arg(
                 Arg::with_name(FLAG_PRECOMPILED)
                     .long(FLAG_PRECOMPILED)
-                    .help("Assumes the host has been precompiled and skips recompiling the host.")
+                    .about("Assumes the host has been precompiled and skips recompiling the host.")
                     .required(false),
             )
         )
@@ -108,12 +108,12 @@ pub fn build_app<'a>() -> App<'a> {
             .arg(
                 Arg::with_name(FLAG_TIME)
                     .long(FLAG_TIME)
-                    .help("Prints detailed compilation time information.")
+                    .about("Prints detailed compilation time information.")
                     .required(false),
             )
             .arg(
                 Arg::with_name(ROC_FILE)
-                    .help("The .roc file of an app to run")
+                    .about("The .roc file of an app to run")
                     .required(true),
             )
             )
@@ -124,7 +124,7 @@ pub fn build_app<'a>() -> App<'a> {
                     .index(1)
                     .multiple(true)
                     .required(false)
-                    .help("The directory or files to build documentation for")
+                    .about("The directory or files to build documentation for")
 
                 )
         )
@@ -132,45 +132,45 @@ pub fn build_app<'a>() -> App<'a> {
         .arg(
             Arg::with_name(FLAG_OPTIMIZE)
                 .long(FLAG_OPTIMIZE)
-                .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
+                .about("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
                 .requires(ROC_FILE)
                 .required(false),
         )
             .arg(
                 Arg::with_name(FLAG_DEV)
                     .long(FLAG_DEV)
-                    .help("Make compilation as fast as possible. (Runtime performance may suffer)")
+                    .about("Make compilation as fast as possible. (Runtime performance may suffer)")
                     .required(false),
             )
         .arg(
             Arg::with_name(FLAG_DEBUG)
                 .long(FLAG_DEBUG)
-                .help("Store LLVM debug information in the generated program")
+                .about("Store LLVM debug information in the generated program")
                 .requires(ROC_FILE)
                 .required(false),
         )
         .arg(
             Arg::with_name(FLAG_TIME)
                 .long(FLAG_TIME)
-                .help("Prints detailed compilation time information.")
+                .about("Prints detailed compilation time information.")
                     .required(false),
         )
         .arg(
             Arg::with_name(FLAG_LINK)
                 .long(FLAG_LINK)
-                .help("Uses the roc linker instead of the system linker.")
+                .about("Uses the roc linker instead of the system linker.")
                 .required(false),
         )
         .arg(
             Arg::with_name(FLAG_PRECOMPILED)
                 .long(FLAG_PRECOMPILED)
-                .help("Assumes the host has been precompiled and skips recompiling the host.")
+                .about("Assumes the host has been precompiled and skips recompiling the host.")
                 .required(false),
         )
         .arg(
             Arg::with_name(FLAG_BACKEND)
                 .long(FLAG_BACKEND)
-                .help("Choose a different backend")
+                .about("Choose a different backend")
                 // .requires(BACKEND)
                 .default_value(Backend::default().as_str())
                 .possible_values(Backend::OPTIONS)
@@ -178,12 +178,12 @@ pub fn build_app<'a>() -> App<'a> {
         )
         .arg(
             Arg::with_name(ROC_FILE)
-                .help("The .roc file of an app to build and run")
+                .about("The .roc file of an app to build and run")
                 .required(false),
         )
         .arg(
             Arg::with_name(ARGS_FOR_APP)
-                .help("Arguments to pass into the app being run")
+                .about("Arguments to pass into the app being run")
                 .requires(ROC_FILE)
                 .multiple(true),
         );
@@ -195,7 +195,7 @@ pub fn build_app<'a>() -> App<'a> {
                     .index(1)
                     .multiple(true)
                     .required(false)
-                    .help("(optional) The directory or files to open on launch."),
+                    .about("(optional) The directory or files to open on launch."),
             ),
         )
     } else {

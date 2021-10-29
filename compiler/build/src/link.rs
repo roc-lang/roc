@@ -529,15 +529,8 @@ pub fn rebuild_host(
     }
 }
 
-fn nixos_path() -> String {
-    env::var("NIXOS_GLIBC_PATH").unwrap_or_else(|_| {
-        panic!(
-            "We couldn't find glibc! We tried looking for NIXOS_GLIBC_PATH
-to find it via Nix, but that didn't work either. Please file a bug report.
-
-This will only be an issue until we implement surgical linking.",
-        )
-    })
+fn nix_path_opt() -> Option<String> {
+    env::var_os("NIX_GLIBC_PATH").map(|path| path.into_string().unwrap())
 }
 
 fn library_path<const N: usize>(segments: [&str; N]) -> Option<PathBuf> {
@@ -586,21 +579,39 @@ fn link_linux(
         ));
     }
 
-    let libcrt_path = library_path(["/usr", "lib", &architecture])
-        .or_else(|| library_path(["/usr", "lib"]))
-        .or_else(|| library_path([&nixos_path()]))
-        .unwrap();
+    let libcrt_path =
+        // give preference to nix_path if it's defined, this prevents bugs
+        if let Some(nix_path) = nix_path_opt() {
+            library_path([&nix_path])
+            .unwrap()
+        } else {
+            library_path(["/usr", "lib", &architecture])
+            .or_else(|| library_path(["/usr", "lib"]))
+            .unwrap()
+        };
 
     let libgcc_name = "libgcc_s.so.1";
-    let libgcc_path = library_path(["/lib", &architecture, libgcc_name])
-        .or_else(|| library_path(["/usr", "lib", &architecture, libgcc_name]))
-        .or_else(|| library_path(["/usr", "lib", libgcc_name]))
-        .or_else(|| library_path([&nixos_path(), libgcc_name]))
-        .unwrap();
+    let libgcc_path =
+        // give preference to nix_path if it's defined, this prevents bugs
+        if let Some(nix_path) = nix_path_opt() {
+            library_path([&nix_path, libgcc_name])
+            .unwrap()
+        } else {
+            library_path(["/lib", &architecture, libgcc_name])
+            .or_else(|| library_path(["/usr", "lib", &architecture, libgcc_name]))
+            .or_else(|| library_path(["/usr", "lib", libgcc_name]))
+            .unwrap()
+        };
 
     let ld_linux = match target.architecture {
-        Architecture::X86_64 => library_path(["/lib64", "ld-linux-x86-64.so.2"])
-            .or_else(|| library_path([&nixos_path(), "ld-linux-x86-64.so.2"])),
+        Architecture::X86_64 => {
+            // give preference to nix_path if it's defined, this prevents bugs
+            if let Some(nix_path) = nix_path_opt() {
+                library_path([&nix_path, "ld-linux-x86-64.so.2"])
+            } else {
+                library_path(["/lib64", "ld-linux-x86-64.so.2"])
+            }
+        }
         Architecture::Aarch64(_) => library_path(["/lib", "ld-linux-aarch64.so.1"]),
         _ => panic!(
             "TODO gracefully handle unsupported linux architecture: {:?}",
@@ -665,7 +676,7 @@ fn link_linux(
             .args(&[
                 "--gc-sections",
                 "--eh-frame-hdr",
-                "-arch",
+                "--arch",
                 arch_str(target),
                 "-pie",
                 libcrt_path.join("crti.o").to_str().unwrap(),
@@ -674,7 +685,7 @@ fn link_linux(
             .args(&base_args)
             .args(&["-dynamic-linker", ld_linux])
             .args(input_paths)
-            // ld.lld requires this argument, and does not accept -arch
+            // ld.lld requires this argument, and does not accept --arch
             // .args(&["-L/usr/lib/x86_64-linux-gnu"])
             .args(&[
                 // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496365925

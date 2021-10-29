@@ -249,6 +249,16 @@ pub fn str_count_graphemes<'a, 'ctx, 'env>(
     )
 }
 
+/// Str.trim : Str -> Str
+pub fn str_trim<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    str_symbol: Symbol,
+) -> BasicValueEnum<'ctx> {
+    let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
+    call_bitcode_fn(env, &[str_i128.into()], bitcode::STR_TRIM)
+}
+
 /// Str.fromInt : Int -> Str
 pub fn str_from_int<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,

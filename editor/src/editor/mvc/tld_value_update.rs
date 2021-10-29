@@ -1,14 +1,6 @@
-use roc_ast::{
-    lang::{
-        core::{
-            ast::ASTNodeId,
-            def::def2::Def2,
-            expr::expr2::Expr2,
-            pattern::{get_identifier_string, Pattern2},
-        },
-        env::Env,
-    },
-    mem_pool::pool::NodeId,
+use roc_ast::lang::{
+    core::{ast::ASTNodeId, def::def2::Def2, expr::expr2::Expr2},
+    env::Env,
 };
 use roc_code_markup::{
     markup::{
@@ -19,7 +11,7 @@ use roc_code_markup::{
     slow_pool::{MarkNodeId, SlowPool},
     syntax_highlight::HighlightStyle,
 };
-use roc_module::symbol::{Interns, Symbol};
+use roc_module::symbol::IdentId;
 
 use crate::{
     editor::ed_error::{EdResult, FailedToUpdateIdentIdName, KeyNotFound},
@@ -35,20 +27,18 @@ use super::{
 // Top Level Defined Value. example: `main = "Hello, World!"`
 
 pub fn tld_mark_node<'a>(
-    identifier_id: NodeId<Pattern2>,
+    identifier_id: IdentId,
     expr_mark_node_id: MarkNodeId,
     ast_node_id: ASTNodeId,
     mark_node_pool: &mut SlowPool,
     env: &Env<'a>,
-    interns: &Interns,
 ) -> EdResult<MarkupNode> {
-    let pattern2 = env.pool.get(identifier_id);
-    let val_name = get_identifier_string(pattern2, interns)?;
+    let val_name = env.ident_ids.get_name_str_res(identifier_id)?;
 
     let val_name_mn = MarkupNode::Text {
-        content: val_name,
+        content: val_name.to_owned(),
         ast_node_id,
-        syn_high_style: HighlightStyle::Variable,
+        syn_high_style: HighlightStyle::Value,
         attributes: Attributes::default(),
         parent_id_opt: None,
         newlines_at_end: 0,
@@ -107,22 +97,16 @@ pub fn start_new_tld_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
         .fail()?
     }
 
-    let val_symbol = Symbol::new(ed_model.module.env.home, ident_id);
-
-    let patt2 = Pattern2::Identifier(val_symbol);
-    let patt2_id = ed_model.module.env.pool.add(patt2);
-
     let tld_mark_node = tld_mark_node(
-        patt2_id,
+        ident_id,
         val_expr_mn_id,
         ast_node_id,
         &mut ed_model.mark_node_pool,
         &ed_model.module.env,
-        &ed_model.loaded_module.interns,
     )?;
 
     let new_ast_node = Def2::ValueDef {
-        identifier_id: patt2_id,
+        identifier_id: ident_id,
         expr_id: val_expr_id,
     };
 

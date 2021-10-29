@@ -38,7 +38,7 @@ pub enum MarkError {
         node_type: String,
         backtrace: Backtrace,
     },
-    #[snafu(display("UIError: {}", msg))]
+    #[snafu(display("UtilError: {}", msg))]
     UtilErrorBacktrace { msg: String, backtrace: Backtrace },
 }
 
