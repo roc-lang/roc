@@ -1461,6 +1461,23 @@ pub fn build_tag<'a, 'ctx, 'env>(
                 .struct_type(&[internal_type, tag_id_type.into()], false);
             let result_alloca = env.builder.build_alloca(wrapper_type, "tag_opaque");
 
+            // Initialize all memory of the alloca. This _should_ not be required, but currently
+            // LLVM can access uninitialized memory after applying some optimizations. Hopefully
+            // we can in the future adjust code gen so this is no longer an issue.
+            //
+            // An example is
+            //
+            // main : Task.Task {} []
+            // main =
+            //     when List.len [ Ok "foo", Err 42, Ok "spam" ] is
+            //         n -> Task.putLine (Str.fromInt n)
+            //
+            // Here the decrement function of result must first check it's an Ok tag,
+            // then defers to string decrement, which must check is the string is small or large
+            //
+            // After inlining, those checks are combined. That means that even if the tag is Err,
+            // a check is done on the "string" to see if it is big or small, which will touch the
+            // uninitialized memory.
             let all_zeros = wrapper_type.const_zero();
             env.builder.build_store(result_alloca, all_zeros);
 
