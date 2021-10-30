@@ -3,11 +3,9 @@ pub mod code_builder;
 pub mod from_wasm32_memory;
 mod layout;
 pub mod module_builder;
+pub mod opcodes;
 pub mod serialize;
 mod storage;
-
-#[allow(dead_code)]
-mod opcodes;
 
 use bumpalo::{self, collections::Vec, Bump};
 use parity_wasm::builder;

@@ -91,7 +91,10 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
 
     debug_assert_eq!(exposed_to_host.len(), 1);
     let main_fn_symbol = loaded.entry_point.symbol;
-    let main_fn_index = procedures.keys().position(|(s, _)| *s == main_fn_symbol).unwrap();
+    let main_fn_index = procedures
+        .keys()
+        .position(|(s, _)| *s == main_fn_symbol)
+        .unwrap();
 
     let exposed_to_host = exposed_to_host.keys().copied().collect::<MutSet<_>>();
 
@@ -110,7 +113,6 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
         &mut code_section_bytes,
         TEST_WRAPPER_NAME,
         main_fn_index as u32,
-        main_fn_symbol
     );
 
     let mut parity_module = builder.build();

@@ -441,7 +441,8 @@ impl<'a> CodeBuilder<'a> {
         self.code.push(immediate);
     }
 
-    fn inst_imm32(&mut self, opcode: u8, pops: usize, push: bool, immediate: u32) {
+    // public for use in test code
+    pub fn inst_imm32(&mut self, opcode: u8, pops: usize, push: bool, immediate: u32) {
         self.inst(opcode, pops, push);
         self.code.encode_u32(immediate);
     }
