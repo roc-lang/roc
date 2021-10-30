@@ -185,7 +185,7 @@ impl Serialize for RelocationEntry {
 }
 
 pub struct RelocationSection<'a> {
-    pub name: String,
+    pub name: &'a str,
     pub entries: &'a Vec<'a, RelocationEntry>,
 }
 

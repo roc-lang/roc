@@ -109,7 +109,7 @@ pub fn build_module_help<'a>(
 
     // Code relocations
     let code_reloc_section = RelocationSection {
-        name: "reloc.CODE".to_string(),
+        name: "reloc.CODE",
         entries: &backend.code_relocations,
     };
 
