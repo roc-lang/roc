@@ -141,8 +141,8 @@ pub struct CodeBuilder<'a> {
     /// Keeps track of where Symbol values are in the VM stack
     vm_stack: Vec<'a, Symbol>,
 
-    /// Which byte offsets in the code section correspond to which symbols.
-    /// e.g. Function indices may change when we link Roc + builtins + platform
+    /// Linker info to help combine the Roc module with builtin & platform modules,
+    /// e.g. to modify call instructions when function indices change
     relocations: Vec<'a, RelocationEntry>,
 }
 

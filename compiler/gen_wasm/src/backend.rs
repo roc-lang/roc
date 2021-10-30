@@ -395,14 +395,18 @@ impl<'a> WasmBackend<'a> {
 
                     self.storage.load_symbols(&mut self.code_builder, wasm_args);
 
-                    // Index of the called function in the Wasm module code section
-                    // TODO: update when we start inlining functions (remember we emit procs out of order)
-                    let func_index = self
-                        .proc_symbols
-                        .iter()
-                        .position(|s| s == func_sym)
-                        .map(|i| i as u32)
-                        .unwrap_or(u32::MAX); // foreign symbol, updated at link time
+                    // Index of the called function in the code section
+                    // TODO: account for inlined functions when we start doing that (remember we emit procs out of order)
+                    let func_index = match self.proc_symbols.iter().position(|s| s == func_sym) {
+                        Some(i) => i as u32,
+                        None => {
+                            // TODO: actually useful linking! Push a relocation for it.
+                            return Err(format!(
+                                "Not yet supporteed: calling foreign function {:?}",
+                                func_sym
+                            ));
+                        }
+                    };
 
                     // Index of the function's name in the symbol table
                     let symbol_index = func_index; // TODO: update this when we add other things to the symbol table
