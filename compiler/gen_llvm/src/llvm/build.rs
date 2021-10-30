@@ -2671,14 +2671,6 @@ pub fn complex_bitcast_struct_struct<'ctx>(
     complex_bitcast(builder, from_value.into(), to_type.into(), name).into_struct_value()
 }
 
-fn cast_tag_to_block_of_memory<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    from_value: StructValue<'ctx>,
-    to_type: BasicTypeEnum<'ctx>,
-) -> BasicValueEnum<'ctx> {
-    complex_bitcast_check_size(env, from_value.into(), to_type, "tag_to_block_of_memory")
-}
-
 pub fn cast_block_of_memory_to_tag<'ctx>(
     builder: &Builder<'ctx>,
     from_value: StructValue<'ctx>,
