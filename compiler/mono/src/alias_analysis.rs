@@ -10,7 +10,8 @@ use roc_module::symbol::Symbol;
 use std::convert::TryFrom;
 
 use crate::ir::{
-    Call, CallType, Expr, HostExposedLayouts, ListLiteralElement, Literal, ModifyRc, Proc, Stmt,
+    Call, CallType, Expr, HostExposedLayouts, ListLiteralElement, Literal, ModifyRc, OptLevel,
+    Proc, Stmt,
 };
 use crate::layout::{Builtin, Layout, ListLayout, RawFunctionLayout, UnionLayout};
 
@@ -109,6 +110,7 @@ fn bytes_as_ascii(bytes: &[u8]) -> String {
 }
 
 pub fn spec_program<'a, I>(
+    opt_level: OptLevel,
     entry_point: crate::ir::EntryPoint<'a>,
     procs: I,
 ) -> Result<morphic_lib::Solutions>
@@ -239,7 +241,10 @@ where
         eprintln!("{}", program.to_source_string());
     }
 
-    morphic_lib::solve(program)
+    match opt_level {
+        OptLevel::Development | OptLevel::Normal => morphic_lib::solve_trivial(program),
+        OptLevel::Optimize => morphic_lib::solve(program),
+    }
 }
 
 /// if you want an "escape hatch" which allows you construct "best-case scenario" values

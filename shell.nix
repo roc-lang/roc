@@ -17,7 +17,6 @@ let
 
   linuxInputs = with pkgs;
     lib.optionals stdenv.isLinux [
-      glibc_multi
       valgrind
       vulkan-headers
       vulkan-loader
@@ -28,11 +27,11 @@ let
       xorg.libXrandr
       xorg.libXi
       xorg.libxcb
+      alsa-lib
     ];
 
   llvmPkgs = pkgs.llvmPackages_12;
 
-  zig = import ./nix/zig.nix { inherit pkgs; };
   debugir = import ./nix/debugir.nix { inherit pkgs; };
 
   inputs = with pkgs; [
@@ -71,9 +70,9 @@ in pkgs.mkShell {
 
   # Additional Env vars
   LLVM_SYS_120_PREFIX = "${llvmPkgs.llvm.dev}";
-  NIXOS_GLIBC_PATH =
-    if pkgs.stdenv.isLinux then "${pkgs.glibc_multi.out}/lib" else "";
   LD_LIBRARY_PATH = with pkgs;
     lib.makeLibraryPath
     ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ] ++ linuxInputs);
+  NIX_GLIBC_PATH =
+    if pkgs.stdenv.isLinux then "${pkgs.glibc_multi.out}/lib" else "";
 }

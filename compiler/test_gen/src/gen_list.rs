@@ -215,7 +215,7 @@ fn list_drop_at() {
 }
 
 #[test]
-fn list_drop_at_mutable() {
+fn list_drop_at_shared() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -1948,6 +1948,31 @@ fn list_contains() {
     assert_evals_to!(indoc!("List.contains [1,2,3] 4"), false, bool);
 
     assert_evals_to!(indoc!("List.contains [] 4"), false, bool);
+}
+#[test]
+fn list_min() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when List.min [] is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+        ),
+        -1,
+        i64
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when List.min [3, 1, 2] is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+        ),
+        1,
+        i64
+    );
 }
 
 #[test]
