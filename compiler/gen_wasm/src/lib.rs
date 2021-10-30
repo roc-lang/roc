@@ -21,7 +21,7 @@ use roc_mono::layout::LayoutIds;
 use crate::backend::WasmBackend;
 use crate::code_builder::{Align, CodeBuilder, ValueType};
 use crate::module_builder::{
-    LinkingSection, LinkingSubSection, RelocationEntry, RelocationSection, SectionId, SymInfo,
+    LinkingSection, LinkingSubSection, RelocationSection, SectionId, SymInfo,
 };
 use crate::serialize::{SerialBuffer, Serialize};
 
@@ -108,17 +108,9 @@ pub fn build_module_help<'a>(
     });
 
     // Code relocations
-    let call_reloc_iter = backend
-        .call_relocations
-        .iter()
-        .map(|(offset, sym)| -> RelocationEntry {
-            let symbol_index = proc_symbols.iter().position(|s| s == sym).unwrap();
-            RelocationEntry::for_function_call(*offset as u32, symbol_index as u32)
-        });
-
     let code_reloc_section = RelocationSection {
         name: "reloc.CODE".to_string(),
-        entries: Vec::from_iter_in(call_reloc_iter, env.arena),
+        entries: &backend.code_relocations,
     };
 
     let mut code_reloc_section_bytes = std::vec::Vec::with_capacity(256);

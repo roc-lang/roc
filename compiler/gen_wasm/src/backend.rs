@@ -10,6 +10,7 @@ use roc_mono::layout::{Builtin, Layout};
 
 use crate::code_builder::{BlockType, CodeBuilder, ValueType};
 use crate::layout::WasmLayout;
+use crate::module_builder::RelocationEntry;
 use crate::serialize::SerialBuffer;
 use crate::storage::{Storage, StoredValue, StoredValueKind};
 use crate::{copy_memory, CopyMemoryConfig, Env, LocalId, PTR_TYPE};
@@ -27,7 +28,7 @@ pub struct WasmBackend<'a> {
     // Module-level data
     pub module_builder: ModuleBuilder,
     pub code_section_bytes: std::vec::Vec<u8>,
-    pub call_relocations: Vec<'a, (usize, Symbol)>,
+    pub code_relocations: Vec<'a, RelocationEntry>,
     _data_offset_map: MutMap<Literal<'a>, u32>,
     _data_offset_next: u32,
     proc_symbols: &'a Vec<'a, Symbol>,
@@ -58,7 +59,7 @@ impl<'a> WasmBackend<'a> {
             _data_offset_map: MutMap::default(),
             _data_offset_next: UNUSED_DATA_SECTION_BYTES,
             proc_symbols,
-            call_relocations: Vec::with_capacity_in(256, env.arena),
+            code_relocations: Vec::with_capacity_in(256, env.arena),
 
             // Function-level data
             block_depth: 0,
@@ -141,7 +142,7 @@ impl<'a> WasmBackend<'a> {
         );
 
         let relocs = self.code_builder.serialize(&mut self.code_section_bytes);
-        self.call_relocations.extend(relocs);
+        self.code_relocations.extend(relocs);
         Ok(())
     }
 
@@ -394,6 +395,8 @@ impl<'a> WasmBackend<'a> {
 
                     self.storage.load_symbols(&mut self.code_builder, wasm_args);
 
+                    // Index of the called function in the Wasm module code section
+                    // TODO: update when we start inlining functions (remember we emit procs out of order)
                     let func_index = self
                         .proc_symbols
                         .iter()
@@ -401,8 +404,15 @@ impl<'a> WasmBackend<'a> {
                         .map(|i| i as u32)
                         .unwrap_or(u32::MAX); // foreign symbol, updated at link time
 
-                    self.code_builder
-                        .call(func_index, *func_sym, wasm_args.len(), has_return_val);
+                    // Index of the function's name in the symbol table
+                    let symbol_index = func_index; // TODO: update this when we add other things to the symbol table
+
+                    self.code_builder.call(
+                        func_index,
+                        symbol_index,
+                        wasm_args.len(),
+                        has_return_val,
+                    );
 
                     Ok(())
                 }

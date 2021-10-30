@@ -132,6 +132,7 @@ pub enum OffsetRelocType {
     MemoryAddrI64 = 16,
 }
 
+#[derive(Debug)]
 pub enum RelocationEntry {
     Index {
         type_id: IndexRelocType,
@@ -185,7 +186,7 @@ impl Serialize for RelocationEntry {
 
 pub struct RelocationSection<'a> {
     pub name: String,
-    pub entries: Vec<'a, RelocationEntry>,
+    pub entries: &'a Vec<'a, RelocationEntry>,
 }
 
 impl<'a> Serialize for RelocationSection<'a> {

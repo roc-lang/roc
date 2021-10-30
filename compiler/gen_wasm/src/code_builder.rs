@@ -5,6 +5,7 @@ use std::fmt::Debug;
 
 use roc_module::symbol::Symbol;
 
+use crate::module_builder::{IndexRelocType, RelocationEntry};
 use crate::opcodes::*;
 use crate::serialize::SerialBuffer;
 use crate::{round_up_to_alignment, LocalId, FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID};
@@ -141,8 +142,8 @@ pub struct CodeBuilder<'a> {
     vm_stack: Vec<'a, Symbol>,
 
     /// Which byte offsets in the code section correspond to which symbols.
-    /// e.g. Function indices that may change when we link Roc + Zig modules
-    relocations: Vec<'a, (usize, Symbol)>,
+    /// e.g. Function indices may change when we link Roc + builtins + platform
+    relocations: Vec<'a, RelocationEntry>,
 }
 
 #[allow(clippy::new_without_default)]
@@ -389,7 +390,7 @@ impl<'a> CodeBuilder<'a> {
     pub fn serialize<T: SerialBuffer>(
         &mut self,
         code_section_buf: &mut T,
-    ) -> Drain<(usize, Symbol)> {
+    ) -> Drain<RelocationEntry> {
         let function_offset = code_section_buf.size();
         code_section_buf.append_slice(&self.inner_length);
         code_section_buf.append_slice(&self.preamble);
@@ -409,8 +410,11 @@ impl<'a> CodeBuilder<'a> {
         code_section_buf.append_slice(&self.code[pos..len]);
 
         let extra_offset = function_offset + self.inner_length.len() + self.preamble.len();
-        for (offset, _) in self.relocations.iter_mut() {
-            *offset += extra_offset;
+        for reloc in self.relocations.iter_mut() {
+            match reloc {
+                RelocationEntry::Index { offset, .. } => *offset += extra_offset as u32,
+                RelocationEntry::Offset { offset, .. } => *offset += extra_offset as u32,
+            }
         }
         self.relocations.drain(0..)
     }
@@ -490,7 +494,7 @@ impl<'a> CodeBuilder<'a> {
     pub fn call(
         &mut self,
         function_index: u32,
-        function_sym: Symbol,
+        symbol_index: u32,
         n_args: usize,
         has_return_val: bool,
     ) {
@@ -507,9 +511,13 @@ impl<'a> CodeBuilder<'a> {
         }
         self.code.push(CALL);
 
-        let call_offset = self.code.len() + self.insert_bytes.len();
+        let fn_index_offset = self.code.len() + self.insert_bytes.len();
         self.code.encode_padded_u32(function_index);
-        self.relocations.push((call_offset, function_sym));
+        self.relocations.push(RelocationEntry::Index {
+            type_id: IndexRelocType::FunctionIndexLeb,
+            offset: fn_index_offset as u32,
+            symbol_index,
+        });
     }
 
     #[allow(dead_code)]
