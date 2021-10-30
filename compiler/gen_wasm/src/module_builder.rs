@@ -45,7 +45,7 @@ fn write_custom_section_header<T: SerialBuffer>(
     // buffer.append_byte(SectionId::Custom as u8); // TODO: uncomment when we get rid of parity_wasm
     let size_index = buffer.reserve_padded_u32();
     let body_index = buffer.size();
-    buffer.append_slice(name.as_bytes());
+    name.serialize(buffer);
     SectionHeaderIndices {
         size_index,
         body_index,

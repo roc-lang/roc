@@ -102,6 +102,13 @@ pub trait Serialize {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T);
 }
 
+impl Serialize for str {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.encode_u32(self.len() as u32);
+        buffer.append_slice(self.as_bytes());
+    }
+}
+
 fn overwrite_padded_u32_help(buffer: &mut [u8], value: u32) {
     let mut x = value;
     for byte in buffer.iter_mut().take(4) {
