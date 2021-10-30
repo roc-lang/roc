@@ -105,9 +105,14 @@ pub fn build_module_help<'a>(
         payload: linking_section_bytes,
     });
 
-    // Code relocations
+    // We always output the code section at the same index relative to other sections, and we need that for relocations.
+    // TODO: If there's a data section, this will be 6 so we'll need logic for that
+    // TODO: Build a cleaner solution after we replace parity-wasm with our own module_builder
+    const CODE_SECTION_INDEX: u32 = 5;
+
     let code_reloc_section = RelocationSection {
         name: "reloc.CODE",
+        target_section_index: CODE_SECTION_INDEX,
         entries: &backend.code_relocations,
     };
 

@@ -148,6 +148,22 @@ pub enum RelocationEntry {
 }
 
 impl RelocationEntry {
+    pub fn offset(&self) -> u32 {
+        match self {
+            Self::Index { offset, .. } => *offset,
+            Self::Offset { offset, .. } => *offset,
+        }
+    }
+
+    pub fn offset_mut(&mut self) -> &mut u32 {
+        match self {
+            Self::Index { offset, .. } => offset,
+            Self::Offset { offset, .. } => offset,
+        }
+    }
+}
+
+impl RelocationEntry {
     pub fn for_function_call(offset: u32, symbol_index: u32) -> Self {
         RelocationEntry::Index {
             type_id: IndexRelocType::FunctionIndexLeb,
@@ -184,17 +200,19 @@ impl Serialize for RelocationEntry {
     }
 }
 
+#[derive(Debug)]
 pub struct RelocationSection<'a> {
     pub name: &'a str,
+    /// The *index* (not ID!) of the target section in the module
+    pub target_section_index: u32,
     pub entries: &'a Vec<'a, RelocationEntry>,
 }
 
 impl<'a> Serialize for RelocationSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         let header_indices = write_custom_section_header(buffer, &self.name);
-        for entry in self.entries.iter() {
-            entry.serialize(buffer);
-        }
+        buffer.encode_u32(self.target_section_index);
+        serialize_vector_with_count(buffer, self.entries);
         update_section_size(buffer, header_indices);
     }
 }

@@ -391,31 +391,44 @@ impl<'a> CodeBuilder<'a> {
         &mut self,
         code_section_buf: &mut T,
     ) -> Drain<RelocationEntry> {
-        let function_offset = code_section_buf.size();
         code_section_buf.append_slice(&self.inner_length);
         code_section_buf.append_slice(&self.preamble);
 
-        // We created each insertion when a local was used for the _second_ time.
-        // But we want them in the order they were first assigned, which may not be the same.
+        // Sort insertions. They are not created in order of assignment, but in order of *second* usage.
         self.insert_locations.sort_by_key(|loc| loc.insert_at);
 
-        let mut pos: usize = 0;
+        // Do the insertions & update relocation offsets
+        const CODE_SECTION_BODY_OFFSET: usize = 5;
+        let mut reloc_index = 0;
+        let mut code_pos: usize = 0;
         for location in self.insert_locations.iter() {
-            code_section_buf.append_slice(&self.code[pos..location.insert_at]);
+            // Relocation offset needs to be an index into the body of the code section, but
+            // at this point it is an index into self.code. Need to adjust for all previous functions
+            // in the code section, and for insertions in the current function.
+            let section_body_pos = code_section_buf.size() - CODE_SECTION_BODY_OFFSET;
+            while reloc_index < self.relocations.len()
+                && self.relocations[reloc_index].offset() < location.insert_at as u32
+            {
+                let offset_ref = self.relocations[reloc_index].offset_mut();
+                *offset_ref += (section_body_pos - code_pos) as u32;
+                reloc_index += 1;
+            }
+
+            code_section_buf.append_slice(&self.code[code_pos..location.insert_at]);
             code_section_buf.append_slice(&self.insert_bytes[location.start..location.end]);
-            pos = location.insert_at;
+            code_pos = location.insert_at;
+        }
+
+        let section_body_pos = code_section_buf.size() - CODE_SECTION_BODY_OFFSET;
+        while reloc_index < self.relocations.len() {
+            let offset_ref = self.relocations[reloc_index].offset_mut();
+            *offset_ref += (section_body_pos - code_pos) as u32;
+            reloc_index += 1;
         }
 
         let len = self.code.len();
-        code_section_buf.append_slice(&self.code[pos..len]);
+        code_section_buf.append_slice(&self.code[code_pos..len]);
 
-        let extra_offset = function_offset + self.inner_length.len() + self.preamble.len();
-        for reloc in self.relocations.iter_mut() {
-            match reloc {
-                RelocationEntry::Index { offset, .. } => *offset += extra_offset as u32,
-                RelocationEntry::Offset { offset, .. } => *offset += extra_offset as u32,
-            }
-        }
         self.relocations.drain(0..)
     }
 
@@ -512,11 +525,11 @@ impl<'a> CodeBuilder<'a> {
         }
         self.code.push(CALL);
 
-        let fn_index_offset = self.code.len() + self.insert_bytes.len();
+        let offset = self.code.len() as u32;
         self.code.encode_padded_u32(function_index);
         self.relocations.push(RelocationEntry::Index {
             type_id: IndexRelocType::FunctionIndexLeb,
-            offset: fn_index_offset as u32,
+            offset,
             symbol_index,
         });
     }

@@ -119,7 +119,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     replace_code_section(&mut parity_module, code_section_bytes);
     let module_bytes = parity_module.into_bytes().unwrap();
 
-    // for debugging (e.g. with wasm2wat)
+    // for debugging (e.g. with wasm2wat or wasm-objdump)
     if false {
         use std::io::Write;
 
