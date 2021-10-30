@@ -17,7 +17,6 @@ let
 
   linuxInputs = with pkgs;
     lib.optionals stdenv.isLinux [
-      glibc_multi
       valgrind
       vulkan-headers
       vulkan-loader
@@ -33,7 +32,6 @@ let
 
   llvmPkgs = pkgs.llvmPackages_12;
 
-  zig = import ./nix/zig.nix { inherit pkgs; };
   debugir = import ./nix/debugir.nix { inherit pkgs; };
 
   inputs = with pkgs; [
@@ -72,7 +70,7 @@ in pkgs.mkShell {
 
   # Additional Env vars
   LLVM_SYS_120_PREFIX = "${llvmPkgs.llvm.dev}";
-  NIXOS_GLIBC_PATH =
+  NIX_GLIBC_PATH =
     if pkgs.stdenv.isLinux then "${pkgs.glibc_multi.out}/lib" else "";
   LD_LIBRARY_PATH = with pkgs;
     lib.makeLibraryPath
@@ -105,5 +103,6 @@ in pkgs.mkShell {
   # Nix-on-Linux development. It may be sufficient to use the pkgs.symlinkJoin
   # above regardless of system! That'd set us up for cross-compilation as well.
     "";
+
 
 }

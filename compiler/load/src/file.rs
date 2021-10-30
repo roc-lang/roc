@@ -2067,7 +2067,7 @@ fn update<'a>(
             log!("found specializations for {:?}", module_id);
             let subs = solved_subs.into_inner();
 
-            for (symbol, specs) in &procs_base.pending_specializations {
+            for (symbol, specs) in &procs_base.specializations_for_host {
                 let existing = match state.all_pending_specializations.entry(*symbol) {
                     Vacant(entry) => entry.insert(MutMap::default()),
                     Occupied(entry) => entry.into_mut(),
@@ -3970,12 +3970,15 @@ fn make_specializations<'a>(
         &mut mono_env,
         procs,
         specializations_we_must_make,
-        procs_base.pending_specializations,
+        procs_base.specializations_for_host,
         &mut layout_cache,
     );
 
     let external_specializations_requested = procs.externals_we_need.clone();
     let procedures = procs.get_specialized_procs_without_rc(&mut mono_env);
+
+    // Turn `Bytes.Decode.IdentId(238)` into `Bytes.Decode.238`, we rely on this in mono tests
+    mono_env.home.register_debug_idents(mono_env.ident_ids);
 
     let make_specializations_end = SystemTime::now();
     module_timing.make_specializations = make_specializations_end
@@ -3998,20 +4001,21 @@ fn make_specializations<'a>(
 struct ProcsBase<'a> {
     partial_procs: BumpMap<Symbol, PartialProc<'a>>,
     module_thunks: &'a [Symbol],
-    pending_specializations: BumpMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>,
+    /// A host-exposed function must be specialized; it's a seed for subsequent specializations
+    specializations_for_host: BumpMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>,
     runtime_errors: BumpMap<Symbol, &'a str>,
     imported_module_thunks: &'a [Symbol],
 }
 
 impl<'a> ProcsBase<'a> {
-    fn add_pending(
+    fn add_specialization_for_host(
         &mut self,
         symbol: Symbol,
         layout: ProcLayout<'a>,
         pending: PendingSpecialization<'a>,
     ) {
         let all_pending = self
-            .pending_specializations
+            .specializations_for_host
             .entry(symbol)
             .or_insert_with(|| HashMap::with_capacity_and_hasher(1, default_hasher()));
 
@@ -4040,7 +4044,7 @@ fn build_pending_specializations<'a>(
     let mut procs_base = ProcsBase {
         partial_procs: BumpMap::default(),
         module_thunks: &[],
-        pending_specializations: BumpMap::default(),
+        specializations_for_host: BumpMap::default(),
         runtime_errors: BumpMap::default(),
         imported_module_thunks,
     };
@@ -4146,15 +4150,6 @@ fn add_def_to_module<'a>(
                     // never gets called by Roc code, it will never
                     // get specialized!
                     if is_exposed {
-                        let mut pattern_vars = bumpalo::collections::Vec::with_capacity_in(
-                            loc_args.len(),
-                            mono_env.arena,
-                        );
-
-                        for (var, _) in loc_args.iter() {
-                            pattern_vars.push(*var);
-                        }
-
                         let layout = match layout_cache.raw_from_var(
                             mono_env.arena,
                             annotation,
@@ -4185,7 +4180,7 @@ fn add_def_to_module<'a>(
                             annotation,
                         );
 
-                        procs.add_pending(
+                        procs.add_specialization_for_host(
                             symbol,
                             ProcLayout::from_raw(mono_env.arena, layout),
                             pending,
@@ -4249,7 +4244,7 @@ fn add_def_to_module<'a>(
                             annotation,
                         );
 
-                        procs.add_pending(symbol, top_level, pending);
+                        procs.add_specialization_for_host(symbol, top_level, pending);
                     }
 
                     let proc = PartialProc {
