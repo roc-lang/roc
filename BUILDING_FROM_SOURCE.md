@@ -50,8 +50,12 @@ If you want to install it manually, you can also download Zig directly [here](ht
 **version: 12.0.x**
 
 For macOS, you can install LLVM 12 using `brew install llvm@12` and then adding
-`/usr/local/opt/llvm/bin` to your `PATH`. You can confirm this worked by
+`/usr/local/opt/llvm@12/bin` to your `PATH`. You can confirm this worked by
 running `llc --version` - it should mention "LLVM version 12.0.0" at the top.
+You may also need to manually specify a prefix env var like so:
+```
+export LLVM_SYS_120_PREFIX=/usr/local/opt/llvm@12
+```
 
 For Ubuntu and Debian:
 ```
