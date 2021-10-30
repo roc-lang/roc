@@ -210,7 +210,7 @@ pub struct RelocationSection<'a> {
 
 impl<'a> Serialize for RelocationSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        let header_indices = write_custom_section_header(buffer, &self.name);
+        let header_indices = write_custom_section_header(buffer, self.name);
         buffer.encode_u32(self.target_section_index);
         serialize_vector_with_count(buffer, self.entries);
         update_section_size(buffer, header_indices);

@@ -154,10 +154,7 @@ pub fn replace_code_section(module: &mut Module, code_section_bytes: std::vec::V
 
     let code_section_index = sections
         .iter()
-        .position(|s| match s {
-            Section::Code(_) => true,
-            _ => false,
-        })
+        .position(|s| matches!(s, Section::Code(_)))
         .unwrap();
 
     sections[code_section_index] = Section::Unparsed {
