@@ -66,7 +66,7 @@ chmod +x llvm.sh
 ```
 
 If you use this script, you'll need to add `clang` and `llvm-as` to your `PATH`.
-By default, the script installs them as `llvm-as-12` and `clang-12`,
+By default, the script installs them as `clang-12` and `llvm-as-12`,
 respectively. You can address this with symlinks like so:
 
 ```
