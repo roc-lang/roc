@@ -379,11 +379,6 @@ impl<T> Drop for IntoIter<T> {
         while let Some(item) = next_help(self) {
             drop(item);
         }
-
-        // deallocate the whole buffer
-        unsafe {
-            RocList::drop_pointer_to_first_argument(self.buf.as_mut());
-        }
     }
 }
 
