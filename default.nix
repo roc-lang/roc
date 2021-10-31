@@ -1,15 +1,9 @@
 { }:
 
 let
-  nixpkgsUnstableRef = "47b36ad103aeff17f9be6fb7b4847d63d53f227a";
-  nixpkgsUnstableSha = "109shladi2pj27mmna2g53m59m110pbczhnskrn3knbgpdmd78xz";
-  nixpkgsUnstableUrl = "https://github.com/nixos/nixpkgs/archive/${nixpkgsUnstableRef}.tar.gz";
-  nixpkgsUnstableTar = builtins.fetchTarball {
-    url = nixpkgsUnstableUrl;
-    sha256 = nixpkgsUnstableSha;
-  };
+  sources = import nix/sources.nix { };
+  pkgs = import sources.nixpkgs { };
 
-  pkgs = import "${nixpkgsUnstableTar}" {};
   rustPlatform = pkgs.rustPlatform;
   llvmPkgs = pkgs.llvmPackages_12;
 in
