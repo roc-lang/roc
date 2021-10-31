@@ -75,4 +75,6 @@ in pkgs.mkShell {
     ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ] ++ linuxInputs);
   NIX_GLIBC_PATH =
     if pkgs.stdenv.isLinux then "${pkgs.glibc_multi.out}/lib" else "";
+  # to prevent race condition in cli tests
+  ROC_NUM_WORKERS = 1;
 }
