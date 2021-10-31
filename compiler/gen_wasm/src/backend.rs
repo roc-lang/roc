@@ -10,7 +10,7 @@ use roc_mono::layout::{Builtin, Layout};
 
 use crate::code_builder::{BlockType, CodeBuilder, ValueType};
 use crate::layout::WasmLayout;
-use crate::module_builder::RelocationEntry;
+use crate::module_builder::WasmModule;
 use crate::serialize::SerialBuffer;
 use crate::storage::{Storage, StoredValue, StoredValueKind};
 use crate::{copy_memory, CopyMemoryConfig, Env, LocalId, PTR_TYPE};
@@ -26,9 +26,9 @@ pub struct WasmBackend<'a> {
     env: &'a Env<'a>,
 
     // Module-level data
+    pub module: WasmModule<'a>,
     pub module_builder: ModuleBuilder,
     pub code_section_bytes: std::vec::Vec<u8>,
-    pub code_relocations: Vec<'a, RelocationEntry>,
     _data_offset_map: MutMap<Literal<'a>, u32>,
     _data_offset_next: u32,
     proc_symbols: &'a [Symbol],
@@ -54,12 +54,12 @@ impl<'a> WasmBackend<'a> {
             env,
 
             // Module-level data
+            module: WasmModule::new(env.arena),
             module_builder: builder::module(),
             code_section_bytes,
             _data_offset_map: MutMap::default(),
             _data_offset_next: UNUSED_DATA_SECTION_BYTES,
             proc_symbols,
-            code_relocations: Vec::with_capacity_in(256, env.arena),
 
             // Function-level data
             block_depth: 0,
@@ -142,7 +142,7 @@ impl<'a> WasmBackend<'a> {
         );
 
         let relocs = self.code_builder.serialize(&mut self.code_section_bytes);
-        self.code_relocations.extend(relocs);
+        self.module.reloc_code.entries.extend(relocs);
         Ok(())
     }
 

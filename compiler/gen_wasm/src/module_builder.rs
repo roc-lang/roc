@@ -1,7 +1,14 @@
 use bumpalo::collections::vec::Vec;
+use bumpalo::Bump;
 
 use crate::code_builder::Align;
 use crate::serialize::{SerialBuffer, Serialize};
+
+/*******************************************************************
+ *
+ * Helper functions
+ *
+ *******************************************************************/
 
 #[repr(u8)]
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
@@ -204,15 +211,25 @@ impl Serialize for RelocationEntry {
 pub struct RelocationSection<'a> {
     pub name: &'a str,
     /// The *index* (not ID!) of the target section in the module
-    pub target_section_index: u32,
-    pub entries: &'a Vec<'a, RelocationEntry>,
+    pub target_section_index: Option<u32>,
+    pub entries: Vec<'a, RelocationEntry>,
+}
+
+impl<'a> RelocationSection<'a> {
+    fn new(arena: &'a Bump, name: &'a str) -> Self {
+        RelocationSection {
+            name,
+            target_section_index: None,
+            entries: Vec::with_capacity_in(64, arena),
+        }
+    }
 }
 
 impl<'a> Serialize for RelocationSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         let header_indices = write_custom_section_header(buffer, self.name);
-        buffer.encode_u32(self.target_section_index);
-        serialize_vector_with_count(buffer, self.entries);
+        buffer.encode_u32(self.target_section_index.unwrap());
+        serialize_vector_with_count(buffer, &self.entries);
         update_section_size(buffer, header_indices);
     }
 }
@@ -485,6 +502,15 @@ const LINKING_VERSION: u8 = 2;
 pub struct LinkingSection<'a> {
     pub subsections: Vec<'a, LinkingSubSection<'a>>,
 }
+
+impl<'a> LinkingSection<'a> {
+    fn new(arena: &'a Bump) -> Self {
+        LinkingSection {
+            subsections: Vec::with_capacity_in(1, arena),
+        }
+    }
+}
+
 impl<'a> Serialize for LinkingSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         let header_indices = write_custom_section_header(buffer, "linking");
@@ -493,5 +519,113 @@ impl<'a> Serialize for LinkingSection<'a> {
             subsection.serialize(buffer);
         }
         update_section_size(buffer, header_indices);
+    }
+}
+
+/*******************************************************************
+ *
+ * Module
+ *
+ * https://webassembly.github.io/spec/core/binary/modules.html
+ *
+ *******************************************************************/
+
+const WASM_VERSION: u32 = 1;
+
+pub struct WasmModule<'a> {
+    pub types: &'a str,      // TODO
+    pub import: &'a str,     // TODO
+    pub function: &'a str,   // TODO
+    pub table: &'a str,      // TODO
+    pub memory: &'a str,     // TODO
+    pub global: &'a str,     // TODO
+    pub export: &'a str,     // TODO
+    pub start: &'a str,      // TODO
+    pub element: &'a str,    // TODO
+    pub data_count: &'a str, // TODO
+    pub code: &'a str,       // TODO
+    pub data: &'a str,       // TODO
+    pub linking: LinkingSection<'a>,
+    pub reloc_code: RelocationSection<'a>,
+    pub reloc_data: RelocationSection<'a>,
+}
+
+fn maybe_increment_section(size: usize, prev_size: &mut usize, index: &mut u32) {
+    if size > *prev_size {
+        *index += 1;
+        *prev_size = size;
+    }
+}
+
+impl<'a> WasmModule<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
+        WasmModule {
+            types: "",
+            import: "",
+            function: "",
+            table: "",
+            memory: "",
+            global: "",
+            export: "",
+            start: "",
+            element: "",
+            data_count: "",
+            code: "",
+            data: "",
+            linking: LinkingSection::new(arena),
+            reloc_code: RelocationSection::new(arena, "reloc.CODE"),
+            reloc_data: RelocationSection::new(arena, "reloc.DATA"),
+        }
+    }
+
+    #[allow(dead_code)]
+    fn serialize<T: SerialBuffer>(&mut self, buffer: &mut T) {
+        buffer.append_byte(0);
+        buffer.append_slice("asm".as_bytes());
+        buffer.write_unencoded_u32(WASM_VERSION);
+
+        let mut index: u32 = 0;
+        let mut prev_size = buffer.size();
+
+        self.types.serialize(buffer);
+        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
+
+        self.import.serialize(buffer);
+        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
+
+        self.function.serialize(buffer);
+        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
+
+        self.table.serialize(buffer);
+        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
+
+        self.memory.serialize(buffer);
+        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
+
+        self.global.serialize(buffer);
+        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
+
+        self.export.serialize(buffer);
+        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
+
+        self.start.serialize(buffer);
+        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
+
+        self.element.serialize(buffer);
+        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
+
+        self.data_count.serialize(buffer);
+        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
+
+        self.code.serialize(buffer);
+        self.reloc_code.target_section_index = Some(index);
+        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
+
+        self.data.serialize(buffer);
+        self.reloc_data.target_section_index = Some(index);
+
+        self.linking.serialize(buffer);
+        self.reloc_code.serialize(buffer);
+        self.reloc_data.serialize(buffer);
     }
 }

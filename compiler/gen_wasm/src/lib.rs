@@ -18,9 +18,7 @@ use roc_mono::layout::LayoutIds;
 
 use crate::backend::WasmBackend;
 use crate::code_builder::{Align, CodeBuilder, ValueType};
-use crate::module_builder::{
-    LinkingSection, LinkingSubSection, RelocationSection, SectionId, SymInfo,
-};
+use crate::module_builder::{LinkingSection, LinkingSubSection, SectionId, SymInfo};
 use crate::serialize::{SerialBuffer, Serialize};
 
 const PTR_SIZE: u32 = 4;
@@ -105,19 +103,10 @@ pub fn build_module_help<'a>(
         payload: linking_section_bytes,
     });
 
-    // We always output the code section at the same index relative to other sections, and we need that for relocations.
-    // TODO: If there's a data section, this will be 6 so we'll need logic for that
-    // TODO: Build a cleaner solution after we replace parity-wasm with our own module_builder
     const CODE_SECTION_INDEX: u32 = 5;
-
-    let code_reloc_section = RelocationSection {
-        name: "reloc.CODE",
-        target_section_index: CODE_SECTION_INDEX,
-        entries: &backend.code_relocations,
-    };
-
+    backend.module.reloc_code.target_section_index = Some(CODE_SECTION_INDEX);
     let mut code_reloc_section_bytes = std::vec::Vec::with_capacity(256);
-    code_reloc_section.serialize(&mut code_reloc_section_bytes);
+    backend.module.reloc_code.serialize(&mut code_reloc_section_bytes);
 
     // Must come after linking section
     backend.module_builder = backend.module_builder.with_section(Section::Unparsed {
