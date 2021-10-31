@@ -1976,6 +1976,32 @@ fn list_min() {
 }
 
 #[test]
+fn list_max() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when List.max [] is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+        ),
+        -1,
+        i64
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when List.max [3, 1, 2] is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+        ),
+        3,
+        i64
+    );
+}
+
+#[test]
 fn list_sum() {
     assert_evals_to!("List.sum []", 0, i64);
     assert_evals_to!("List.sum [ 1, 2, 3 ]", 6, i64);
