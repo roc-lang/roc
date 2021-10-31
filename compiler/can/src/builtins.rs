@@ -2577,7 +2577,7 @@ fn list_map2(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_3(symbol, LowLevel::ListMap2, var_store)
 }
 
-/// List.map3 : List a, List b, (a, b -> c) -> List c
+/// List.map3 : List a, List b, List c, (a, b, c -> d) -> List d
 fn list_map3(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_4(symbol, LowLevel::ListMap3, var_store)
 }
