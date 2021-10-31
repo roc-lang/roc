@@ -6758,10 +6758,11 @@ fn call_by_name_module_thunk<'a>(
     let inner_layout = *ret_layout;
 
     // If we've already specialized this one, no further work is needed.
-    if procs
+    let already_specialized = procs
         .specialized
-        .contains_key(&(proc_name, top_level_layout))
-    {
+        .contains_key(&(proc_name, top_level_layout));
+
+    if already_specialized {
         force_thunk(env, proc_name, inner_layout, assigned, hole)
     } else {
         let pending = PendingSpecialization::from_var(env.arena, env.subs, fn_var);
