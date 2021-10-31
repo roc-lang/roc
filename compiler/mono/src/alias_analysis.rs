@@ -561,6 +561,32 @@ fn build_tuple_type(builder: &mut impl TypeContext, layouts: &[Layout]) -> Resul
     builder.add_tuple_type(&field_types)
 }
 
+fn add_loop(
+    builder: &mut FuncDefBuilder,
+    block: BlockId,
+    state_type: TypeId,
+    init_state: ValueId,
+    make_body: impl for<'a> FnOnce(&'a mut FuncDefBuilder, BlockId, ValueId) -> Result<ValueId>,
+) -> Result<ValueId> {
+    let sub_block = builder.add_block();
+    let (loop_cont, loop_arg) = builder.declare_continuation(sub_block, state_type, state_type)?;
+    let body = builder.add_block();
+    let ret_branch = builder.add_block();
+    let loop_branch = builder.add_block();
+    let new_state = make_body(builder, loop_branch, loop_arg)?;
+    let unreachable = builder.add_jump(loop_branch, loop_cont, new_state, state_type)?;
+    let result = builder.add_choice(
+        body,
+        &[
+            BlockExpr(ret_branch, loop_arg),
+            BlockExpr(loop_branch, unreachable),
+        ],
+    )?;
+    builder.define_continuation(loop_cont, BlockExpr(body, result))?;
+    let unreachable = builder.add_jump(sub_block, loop_cont, init_state, state_type)?;
+    builder.add_sub_block(block, BlockExpr(sub_block, unreachable))
+}
+
 fn call_spec(
     builder: &mut FuncDefBuilder,
     env: &Env,
@@ -613,6 +639,7 @@ fn call_spec(
         HigherOrderLowLevel {
             specialization_id,
             closure_env_layout,
+            update_mode,
             op,
             arg_layouts,
             ret_layout,
@@ -622,6 +649,9 @@ fn call_spec(
         } => {
             let array = specialization_id.to_bytes();
             let spec_var = CalleeSpecVar(&array);
+
+            let mode = update_mode.to_bytes();
+            let update_mode_var = UpdateModeVar(&mode);
 
             let it = arg_layouts.iter().copied();
             let bytes = func_name_bytes_help(*function_name, it, *ret_layout);
@@ -711,17 +741,32 @@ fn call_spec(
                     let list = env.symbols[xs];
                     let closure_env = env.symbols[function_env];
 
-                    let bag1 = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
-                    let _cell1 = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
+                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
+                        let bag = builder.add_get_tuple_field(block, state, LIST_BAG_INDEX)?;
+                        let cell = builder.add_get_tuple_field(block, state, LIST_CELL_INDEX)?;
 
-                    let elem1 = builder.add_bag_get(block, bag1)?;
+                        let element_1 = builder.add_bag_get(block, bag)?;
+                        let element_2 = builder.add_bag_get(block, bag)?;
 
-                    let argument = if closure_env_layout.is_none() {
-                        builder.add_make_tuple(block, &[elem1, elem1])?
-                    } else {
-                        builder.add_make_tuple(block, &[elem1, elem1, closure_env])?
+                        let argument = if closure_env_layout.is_none() {
+                            builder.add_make_tuple(block, &[element_1, element_2])?
+                        } else {
+                            builder.add_make_tuple(block, &[element_1, element_2, closure_env])?
+                        };
+
+                        builder.add_call(block, spec_var, module, name, argument)?;
+
+                        builder.add_update(block, update_mode_var, cell)?;
+
+                        let new_cell = builder.add_new_heap_cell(block)?;
+                        builder.add_make_tuple(block, &[new_cell, bag])
                     };
-                    builder.add_call(block, spec_var, module, name, argument)?;
+
+                    let state_layout = Layout::Builtin(Builtin::List(&arg_layouts[0]));
+                    let state_type = layout_spec(builder, &state_layout)?;
+                    let init_state = list;
+
+                    return add_loop(builder, block, state_type, init_state, loop_body);
                 }
 
                 ListMap2 { xs, ys } => {
@@ -882,6 +927,10 @@ fn lowlevel_spec(
 
             let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
             let cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
+
+            // decrement the overwritten element
+            let overwritten = builder.add_bag_get(block, bag)?;
+            let _unit = builder.add_recursive_touch(block, overwritten)?;
 
             let _unit = builder.add_update(block, update_mode_var, cell)?;
 

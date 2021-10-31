@@ -1112,6 +1112,7 @@ pub enum CallType<'a> {
 
         /// specialization id of the function argument, used for name generation
         specialization_id: CallSpecId,
+        update_mode: UpdateModeId,
         /// function layout, used for name generation
         arg_layouts: &'a [Layout<'a>],
         ret_layout: Layout<'a>,
