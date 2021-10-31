@@ -300,6 +300,34 @@ pub fn build_c_host_native(
     command.output().unwrap()
 }
 
+pub fn build_swift_host_native(
+    env_path: &str,
+    env_home: &str,
+    dest: &str,
+    sources: &[&str],
+    opt_level: OptLevel,
+    shared_lib_path: Option<&Path>,
+    objc_header_path: Option<&str>,
+) -> Output {
+    let mut command = Command::new("swiftc");
+    command
+        .env_clear()
+        .env("PATH", &env_path)
+        .env("HOME", &env_home)
+        .args(sources)
+        .arg("-emit-object")
+        .arg("-parse-as-library")
+        .args(&["-o", dest]);
+
+    if let Some(objc_header) = objc_header_path {
+        command.args(&["-import-objc-header", objc_header]);
+    }
+
+    // TODO: shared_lib_path
+    // TODO: opt
+    command.output().unwrap()
+}
+
 pub fn rebuild_host(
     opt_level: OptLevel,
     target: &Triple,
@@ -312,6 +340,9 @@ pub fn rebuild_host(
     let rust_host_src = host_input_path.with_file_name("host.rs");
     let rust_host_dest = host_input_path.with_file_name("rust_host.o");
     let cargo_host_src = host_input_path.with_file_name("Cargo.toml");
+    let swift_host_src = host_input_path.with_file_name("host.swift");
+    let swift_host_header_src = host_input_path.with_file_name("host.h");
+
     let host_dest_native = host_input_path.with_file_name(if shared_lib_path.is_some() {
         "dynhost"
     } else {
@@ -540,6 +571,20 @@ pub fn rebuild_host(
             shared_lib_path,
         );
         validate_output("host.c", "clang", output);
+    } else if swift_host_src.exists() {
+        // Compile host.swift, if it exists
+        let output = build_swift_host_native(
+            &env_path,
+            &env_home,
+            host_dest_native.to_str().unwrap(),
+            &[swift_host_src.to_str().unwrap()],
+            opt_level,
+            shared_lib_path,
+            swift_host_header_src
+                .exists()
+                .then(|| swift_host_header_src.to_str().unwrap()),
+        );
+        validate_output("host.swift", "swiftc", output);
     }
 }
 
@@ -773,6 +818,7 @@ fn link_macos(
             // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274
             // for discussion and further references
             &big_sur_fix,
+            "-L/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/swift", // TODO: Gate on host.swift
             "-lSystem",
             "-lresolv",
             "-lpthread",
