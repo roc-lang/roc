@@ -248,11 +248,9 @@ impl Serialize for LinkingInitFunc {
     }
 }
 
-//----------------
-//
+//------------------------------------------------
 // Common data
-//
-//----------------
+//------------------------------------------------
 
 #[repr(u8)]
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
@@ -291,11 +289,9 @@ impl<'a> Serialize for LinkingComdat<'a> {
     }
 }
 
-//----------------
-//
+//------------------------------------------------
 // Symbol table
-//
-//----------------
+//------------------------------------------------
 
 /// Indicating that this is a weak symbol.  When
 /// linking multiple modules defining the same symbol, all weak definitions are
@@ -442,11 +438,9 @@ impl Serialize for SymInfo {
     }
 }
 
-//--------------------------------
-//
+//----------------------------------------------------------------
 //  Linking subsections
-//
-//--------------------------------
+//----------------------------------------------------------------
 
 pub enum LinkingSubSection<'a> {
     /// Extra metadata about the data segments.
@@ -481,6 +475,10 @@ impl<'a> Serialize for LinkingSubSection<'a> {
         );
     }
 }
+
+//----------------------------------------------------------------
+//  Linking metadata section
+//----------------------------------------------------------------
 
 const LINKING_VERSION: u8 = 2;
 
