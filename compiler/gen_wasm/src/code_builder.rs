@@ -525,6 +525,10 @@ impl<'a> CodeBuilder<'a> {
         }
         self.code.push(CALL);
 
+        // Write the index of the function to be called.
+        // Also make a RelocationEntry so the linker can see that this byte offset relates to a function by name.
+        // Here we initialise the offset to an index of self.code. After completing the function, we'll add
+        // other factors to make it relative to the code section. (All insertions will be known then.)
         let offset = self.code.len() as u32;
         self.code.encode_padded_u32(function_index);
         self.relocations.push(RelocationEntry::Index {
