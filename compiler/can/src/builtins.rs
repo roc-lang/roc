@@ -89,6 +89,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_MAP => list_map,
         LIST_MAP2 => list_map2,
         LIST_MAP3 => list_map3,
+        LIST_MAP4 => list_map4,
         LIST_DROP => list_drop,
         LIST_DROP_AT => list_drop_at,
         LIST_DROP_LAST => list_drop_last,
@@ -283,6 +284,41 @@ fn lowlevel_4(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
             (arg2_var, Symbol::ARG_2),
             (arg3_var, Symbol::ARG_3),
             (arg4_var, Symbol::ARG_4),
+        ],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
+fn lowlevel_5(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
+    let arg1_var = var_store.fresh();
+    let arg2_var = var_store.fresh();
+    let arg3_var = var_store.fresh();
+    let arg4_var = var_store.fresh();
+    let arg5_var = var_store.fresh();
+    let ret_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op,
+        args: vec![
+            (arg1_var, Var(Symbol::ARG_1)),
+            (arg2_var, Var(Symbol::ARG_2)),
+            (arg3_var, Var(Symbol::ARG_3)),
+            (arg4_var, Var(Symbol::ARG_4)),
+            (arg5_var, Var(Symbol::ARG_5)),
+        ],
+        ret_var,
+    };
+
+    defn(
+        symbol,
+        vec![
+            (arg1_var, Symbol::ARG_1),
+            (arg2_var, Symbol::ARG_2),
+            (arg3_var, Symbol::ARG_3),
+            (arg4_var, Symbol::ARG_4),
+            (arg5_var, Symbol::ARG_5),
         ],
         var_store,
         body,
@@ -2544,6 +2580,11 @@ fn list_map2(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// List.map3 : List a, List b, (a, b -> c) -> List c
 fn list_map3(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_4(symbol, LowLevel::ListMap3, var_store)
+}
+
+/// List.map4 : List a, List b, List c, List d, (a, b, c, d -> e) -> List e
+fn list_map4(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_5(symbol, LowLevel::ListMap4, var_store)
 }
 
 /// List.sortWith : List a, (a, a -> Ordering) -> List a

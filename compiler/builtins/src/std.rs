@@ -930,6 +930,27 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     };
 
+    {
+        let_tvars! {a, b, c, d, e, cvar};
+
+        // map4 : List a, List b, List c, List d, (a, b, c, d -> e) -> List e
+        add_top_level_function_type!(
+            Symbol::LIST_MAP4,
+            vec![
+                list_type(flex(a)),
+                list_type(flex(b)),
+                list_type(flex(c)),
+                list_type(flex(d)),
+                closure(
+                    vec![flex(a), flex(b), flex(c), flex(d)],
+                    cvar,
+                    Box::new(flex(e))
+                ),
+            ],
+            Box::new(list_type(flex(e))),
+        )
+    };
+
     // append : List elem, elem -> List elem
     add_top_level_function_type!(
         Symbol::LIST_APPEND,

@@ -2,18 +2,55 @@ use roc_module::symbol::Symbol;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum HigherOrder {
-    ListMap { xs: Symbol },
-    ListMap2 { xs: Symbol, ys: Symbol },
-    ListMap3 { xs: Symbol, ys: Symbol, zs: Symbol },
-    ListMapWithIndex { xs: Symbol },
-    ListKeepIf { xs: Symbol },
-    ListWalk { xs: Symbol, state: Symbol },
-    ListWalkUntil { xs: Symbol, state: Symbol },
-    ListWalkBackwards { xs: Symbol, state: Symbol },
-    ListKeepOks { xs: Symbol },
-    ListKeepErrs { xs: Symbol },
-    ListSortWith { xs: Symbol },
-    DictWalk { xs: Symbol, state: Symbol },
+    ListMap {
+        xs: Symbol,
+    },
+    ListMap2 {
+        xs: Symbol,
+        ys: Symbol,
+    },
+    ListMap3 {
+        xs: Symbol,
+        ys: Symbol,
+        zs: Symbol,
+    },
+    ListMap4 {
+        xs: Symbol,
+        ys: Symbol,
+        zs: Symbol,
+        ws: Symbol,
+    },
+    ListMapWithIndex {
+        xs: Symbol,
+    },
+    ListKeepIf {
+        xs: Symbol,
+    },
+    ListWalk {
+        xs: Symbol,
+        state: Symbol,
+    },
+    ListWalkUntil {
+        xs: Symbol,
+        state: Symbol,
+    },
+    ListWalkBackwards {
+        xs: Symbol,
+        state: Symbol,
+    },
+    ListKeepOks {
+        xs: Symbol,
+    },
+    ListKeepErrs {
+        xs: Symbol,
+    },
+    ListSortWith {
+        xs: Symbol,
+    },
+    DictWalk {
+        xs: Symbol,
+        state: Symbol,
+    },
 }
 
 impl HigherOrder {
@@ -22,6 +59,7 @@ impl HigherOrder {
             HigherOrder::ListMap { .. } => 1,
             HigherOrder::ListMap2 { .. } => 2,
             HigherOrder::ListMap3 { .. } => 3,
+            HigherOrder::ListMap4 { .. } => 4,
             HigherOrder::ListMapWithIndex { .. } => 2,
             HigherOrder::ListKeepIf { .. } => 1,
             HigherOrder::ListWalk { .. } => 2,
@@ -256,6 +294,17 @@ fn from_low_level(low_level: &LowLevel, arguments: &[Symbol]) -> FirstOrHigher {
                 zs: arguments[2],
                 function_name: arguments[3],
                 function_env: arguments[4],
+            })
+        }
+        LowLevel::ListMap4 => {
+            debug_assert_eq!(arguments.len(), 6);
+            Higher(ListMap4 {
+                xs: arguments[0],
+                ys: arguments[1],
+                zs: arguments[2],
+                ws: arguments[3],
+                function_name: arguments[4],
+                function_env: arguments[5],
             })
         }
         LowLevel::ListMapWithIndex => {

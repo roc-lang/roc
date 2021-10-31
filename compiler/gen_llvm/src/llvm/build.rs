@@ -10,9 +10,9 @@ use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
     self, allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat,
     list_contains, list_drop, list_drop_at, list_get_unsafe, list_join, list_keep_errs,
-    list_keep_if, list_keep_oks, list_len, list_map, list_map2, list_map3, list_map_with_index,
-    list_prepend, list_range, list_repeat, list_reverse, list_set, list_single, list_sort_with,
-    list_swap,
+    list_keep_if, list_keep_oks, list_len, list_map, list_map2, list_map3, list_map4,
+    list_map_with_index, list_prepend, list_range, list_repeat, list_reverse, list_set,
+    list_single, list_sort_with, list_swap,
 };
 use crate::llvm::build_str::{
     empty_str, str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int,
@@ -4609,6 +4609,67 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!("invalid list layout"),
             }
         }
+        ListMap4 { xs, ys, zs, ws } => {
+            let (list1, list1_layout) = load_symbol_and_layout(scope, &xs);
+            let (list2, list2_layout) = load_symbol_and_layout(scope, &ys);
+            let (list3, list3_layout) = load_symbol_and_layout(scope, &zs);
+            let (list4, list4_layout) = load_symbol_and_layout(scope, &ws);
+
+            let (function, closure, closure_layout) = function_details!();
+
+            match (
+                list1_layout,
+                list2_layout,
+                list3_layout,
+                list4_layout,
+                return_layout,
+            ) {
+                (
+                    Layout::Builtin(Builtin::List(element1_layout)),
+                    Layout::Builtin(Builtin::List(element2_layout)),
+                    Layout::Builtin(Builtin::List(element3_layout)),
+                    Layout::Builtin(Builtin::List(element4_layout)),
+                    Layout::Builtin(Builtin::List(result_layout)),
+                ) => {
+                    let argument_layouts = &[
+                        **element1_layout,
+                        **element2_layout,
+                        **element3_layout,
+                        **element4_layout,
+                    ];
+
+                    let roc_function_call = roc_function_call(
+                        env,
+                        layout_ids,
+                        function,
+                        closure,
+                        closure_layout,
+                        function_owns_closure_data,
+                        argument_layouts,
+                    );
+
+                    list_map4(
+                        env,
+                        layout_ids,
+                        roc_function_call,
+                        list1,
+                        list2,
+                        list3,
+                        list4,
+                        element1_layout,
+                        element2_layout,
+                        element3_layout,
+                        element4_layout,
+                        result_layout,
+                    )
+                }
+                (Layout::Builtin(Builtin::EmptyList), _, _, _, _)
+                | (_, Layout::Builtin(Builtin::EmptyList), _, _, _)
+                | (_, _, Layout::Builtin(Builtin::EmptyList), _, _)
+                | (_, _, _, Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
+                _ => unreachable!("invalid list layout"),
+            }
+        }
         ListMapWithIndex { xs } => {
             // List.mapWithIndex : List before, (Nat, before -> after) -> List after
             let (list, list_layout) = load_symbol_and_layout(scope, &xs);
@@ -5640,7 +5701,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             cond
         }
 
-        ListMap | ListMap2 | ListMap3 | ListMapWithIndex | ListKeepIf | ListWalk
+        ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk
         | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith
         | DictWalk => unreachable!("these are higher order, and are handled elsewhere"),
     }

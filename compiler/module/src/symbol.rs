@@ -1060,6 +1060,7 @@ define_builtins! {
         37 LIST_MIN_LT: "#minlt"
         38 LIST_MAX: "max"
         39 LIST_MAX_GT: "#maxGt"
+        40 LIST_MAP4: "map4"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

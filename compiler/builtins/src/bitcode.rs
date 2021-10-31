@@ -165,6 +165,7 @@ pub const SET_FROM_LIST: &str = "roc_builtins.dict.set_from_list";
 pub const LIST_MAP: &str = "roc_builtins.list.map";
 pub const LIST_MAP2: &str = "roc_builtins.list.map2";
 pub const LIST_MAP3: &str = "roc_builtins.list.map3";
+pub const LIST_MAP4: &str = "roc_builtins.list.map4";
 pub const LIST_MAP_WITH_INDEX: &str = "roc_builtins.list.map_with_index";
 pub const LIST_KEEP_IF: &str = "roc_builtins.list.keep_if";
 pub const LIST_KEEP_OKS: &str = "roc_builtins.list.keep_oks";
