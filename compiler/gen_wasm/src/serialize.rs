@@ -71,6 +71,7 @@ macro_rules! encode_padded_sleb128 {
 
 pub trait SerialBuffer {
     fn append_byte(&mut self, b: u8);
+    fn set_byte(&mut self, index: usize, b: u8);
     fn append_slice(&mut self, b: &[u8]);
     fn size(&self) -> usize;
 
@@ -79,6 +80,8 @@ pub trait SerialBuffer {
     encode_sleb128!(encode_i32, i32);
     encode_sleb128!(encode_i64, i64);
 
+    /// Inserts extra entries at the given index by copying the following entries to higher indices
+    fn insert_space_at(&mut self, index: usize, size: usize);
     fn reserve_padded_u32(&mut self) -> usize;
     fn encode_padded_u32(&mut self, value: u32) -> usize;
     fn overwrite_padded_u32(&mut self, index: usize, value: u32);
@@ -122,11 +125,19 @@ impl SerialBuffer for std::vec::Vec<u8> {
     fn append_byte(&mut self, b: u8) {
         self.push(b);
     }
+    fn set_byte(&mut self, index: usize, b: u8) {
+        self[index] = b;
+    }
     fn append_slice(&mut self, b: &[u8]) {
         self.extend_from_slice(b);
     }
     fn size(&self) -> usize {
         self.len()
+    }
+    fn insert_space_at(&mut self, index: usize, size: usize) {
+        let old_len = self.len();
+        self.resize(old_len + size, 0);
+        self.copy_within(index..old_len, index + size);
     }
     fn reserve_padded_u32(&mut self) -> usize {
         let index = self.len();
@@ -149,11 +160,19 @@ impl<'a> SerialBuffer for Vec<'a, u8> {
     fn append_byte(&mut self, b: u8) {
         self.push(b);
     }
+    fn set_byte(&mut self, index: usize, b: u8) {
+        self[index] = b;
+    }
     fn append_slice(&mut self, b: &[u8]) {
         self.extend_from_slice(b);
     }
     fn size(&self) -> usize {
         self.len()
+    }
+    fn insert_space_at(&mut self, index: usize, size: usize) {
+        let old_len = self.len();
+        self.resize(old_len + size, 0);
+        self.copy_within(index..old_len, index + size);
     }
     fn reserve_padded_u32(&mut self) -> usize {
         let index = self.len();

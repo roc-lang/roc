@@ -120,7 +120,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     let module_bytes = parity_module.into_bytes().unwrap();
 
     // for debugging (e.g. with wasm2wat or wasm-objdump)
-    if false {
+    if true {
         use std::io::Write;
 
         let mut hash_state = DefaultHasher::new();

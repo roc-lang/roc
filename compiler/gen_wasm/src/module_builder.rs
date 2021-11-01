@@ -1,7 +1,7 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 
-use crate::code_builder::Align;
+use crate::code_builder::{Align, ValueType};
 use crate::serialize::{SerialBuffer, Serialize};
 
 /*******************************************************************
@@ -34,7 +34,7 @@ struct SectionHeaderIndices {
 }
 
 /// Write a section header, returning the position of the encoded length
-fn _write_section_header<T: SerialBuffer>(buffer: &mut T, id: SectionId) -> SectionHeaderIndices {
+fn write_section_header<T: SerialBuffer>(buffer: &mut T, id: SectionId) -> SectionHeaderIndices {
     buffer.append_byte(id as u8);
     let size_index = buffer.reserve_padded_u32();
     let body_index = buffer.size();
@@ -49,7 +49,7 @@ fn write_custom_section_header<T: SerialBuffer>(
     buffer: &mut T,
     name: &str,
 ) -> SectionHeaderIndices {
-    // buffer.append_byte(SectionId::Custom as u8); // TODO: uncomment when we get rid of parity_wasm
+    buffer.append_byte(SectionId::Custom as u8);
     let size_index = buffer.reserve_padded_u32();
     let body_index = buffer.size();
     name.serialize(buffer);
@@ -73,6 +73,262 @@ where
     buffer.encode_u32(items.len() as u32);
     for item in items.iter() {
         item.serialize(buffer);
+    }
+}
+
+/*******************************************************************
+ *
+ * Type section (function signature definitions)
+ *
+ *******************************************************************/
+
+impl<'a> Serialize for [ValueType] {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        // reserve one byte for num_batches
+        let start = buffer.size();
+        buffer.append_byte(0); // mut
+
+        if self.is_empty() {
+            return;
+        }
+
+        // Write declarations in batches of the same ValueType
+        let mut num_batches: u32 = 0;
+        let mut batch_type = self[0];
+        let mut batch_size = 0;
+        for t in self {
+            if *t == batch_type {
+                batch_size += 1;
+            } else {
+                buffer.encode_u32(batch_size);
+                buffer.append_byte(batch_type as u8);
+                batch_type = *t;
+                batch_size = 1;
+                num_batches += 1;
+            }
+        }
+        buffer.encode_u32(batch_size);
+        buffer.append_byte(batch_type as u8);
+        num_batches += 1;
+
+        // Go back and write the number of batches at the start
+        if num_batches < 128 {
+            buffer.set_byte(start, num_batches as u8);
+        } else {
+            // We need more than 1 byte to encode num_batches!
+            // This is a ridiculous edge case, so just pad to 5 bytes for simplicity
+            buffer.insert_space_at(1, 4);
+            buffer.overwrite_padded_u32(0, num_batches);
+        }
+    }
+}
+
+struct Signature<'a> {
+    param_types: Vec<'a, ValueType>,
+    ret_type: Option<ValueType>,
+}
+
+impl<'a> Serialize for Signature<'a> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.append_byte(0x60);
+        self.param_types.serialize(buffer);
+        match self.ret_type {
+            Some(t) => [t].serialize(buffer),
+            None => buffer.append_byte(0), // vector of length zero
+        }
+    }
+}
+
+pub struct TypeSection<'a> {
+    signatures: Vec<'a, Signature<'a>>,
+}
+
+impl<'a> TypeSection<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
+        TypeSection {
+            signatures: Vec::with_capacity_in(8, arena),
+        }
+    }
+}
+
+impl<'a> Serialize for TypeSection<'a> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        let header_indices = write_section_header(buffer, SectionId::Type);
+        serialize_vector_with_count(buffer, self.signatures);
+        update_section_size(buffer, header_indices);
+    }
+}
+
+/*******************************************************************
+ *
+ * Import section
+ *
+ *******************************************************************/
+
+pub struct ImportSection<'a> {
+    todo: &'a str,
+}
+
+impl<'a> ImportSection<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
+        ImportSection { todo: "" }
+    }
+}
+
+impl<'a> Serialize for ImportSection<'a> {
+    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {}
+}
+
+/*******************************************************************
+ *
+ * Function section (map function index to signature index)
+ *
+ *******************************************************************/
+
+pub struct FunctionSection<'a> {
+    pub signature_indices: Vec<'a, u32>,
+}
+
+impl<'a> FunctionSection<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
+        FunctionSection {
+            signature_indices: Vec::with_capacity_in(8, arena),
+        }
+    }
+}
+
+impl<'a> Serialize for FunctionSection<'a> {
+    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
+        todo!();
+    }
+}
+
+/*******************************************************************
+ *
+ * Memory section
+ *
+ *******************************************************************/
+
+enum Limits {
+    Min(u32),
+    MinMax(u32, u32),
+}
+
+pub struct MemorySection {
+    /// number of 64kB pages
+    num_pages: Limits,
+}
+
+impl MemorySection {
+    const PAGE_SIZE_KB: u32 = 64;
+
+    pub fn new(kb: u32) -> Self {
+        MemorySection {
+            num_pages: Limits::Min(kb / Self::PAGE_SIZE_KB),
+        }
+    }
+}
+
+impl Serialize for MemorySection {
+    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
+        todo!();
+    }
+}
+
+/*******************************************************************
+ *
+ * Global section
+ *
+ *******************************************************************/
+
+enum InitValue {
+    I32(i32),
+    I64(i64),
+    F32(f32),
+    F64(f64),
+}
+
+struct Global {
+    init_value: InitValue,
+    is_mutable: bool,
+}
+
+impl Serialize for Global {
+    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
+        todo!();
+    }
+}
+
+pub struct GlobalSection<'a>(Vec<'a, Global>);
+
+impl<'a> GlobalSection<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
+        GlobalSection(Vec::with_capacity_in(1, arena))
+    }
+}
+
+impl<'a> Serialize for GlobalSection<'a> {
+    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
+        todo!();
+    }
+}
+
+/*******************************************************************
+ *
+ * Export section
+ *
+ *******************************************************************/
+
+#[repr(u8)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+enum ExportType {
+    Func = 0,
+    Table = 1,
+    Mem = 2,
+    Global = 3,
+}
+
+struct Export {
+    name: String,
+    ty: ExportType,
+    index: u32,
+}
+
+pub struct ExportSection<'a> {
+    todo: &'a str,
+}
+
+impl<'a> ExportSection<'a> {
+    pub fn new(arena: &'a Bump) {}
+}
+
+impl<'a> Serialize for ExportSection<'a> {
+    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
+        todo!();
+    }
+}
+
+/*******************************************************************
+ *
+ * Code section
+ *
+ *******************************************************************/
+
+pub struct CodeSection<'a> {
+    bytes: Vec<'a, u8>,
+}
+
+impl<'a> CodeSection<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
+        CodeSection {
+            bytes: Vec::with_capacity_in(4096, arena),
+        }
+    }
+}
+
+impl<'a> Serialize for CodeSection<'a> {
+    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
+        todo!();
     }
 }
 
@@ -248,6 +504,7 @@ pub struct LinkingSegment {
     pub alignment: Align,
     pub flags: u32,
 }
+
 impl Serialize for LinkingSegment {
     fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
         todo!();
@@ -259,6 +516,7 @@ pub struct LinkingInitFunc {
     pub priority: u32,
     pub symbol_index: u32, // index in the symbol table, not the function index
 }
+
 impl Serialize for LinkingInitFunc {
     fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
         todo!();
@@ -284,6 +542,7 @@ pub struct ComdatSym {
     pub kind: ComdatSymKind,
     pub index: u32,
 }
+
 impl Serialize for ComdatSym {
     fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
         todo!();
@@ -300,6 +559,7 @@ pub struct LinkingComdat<'a> {
     flags: u32,
     syms: Vec<'a, ComdatSym>,
 }
+
 impl<'a> Serialize for LinkingComdat<'a> {
     fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
         todo!();
@@ -352,6 +612,7 @@ pub enum WasmObjectSymbol {
     Defined { index: u32, name: String },
     Imported { index: u32 },
 }
+
 impl Serialize for WasmObjectSymbol {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         match self {
@@ -378,6 +639,7 @@ pub enum DataSymbol {
         name: String,
     },
 }
+
 impl Serialize for DataSymbol {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         match self {
@@ -418,6 +680,7 @@ pub struct SymInfo {
     flags: u32,
     info: SymInfoFields,
 }
+
 impl SymInfo {
     pub fn for_function(wasm_function_index: u32, name: String) -> Self {
         let linking_symbol = WasmObjectSymbol::Defined {
@@ -470,6 +733,7 @@ pub enum LinkingSubSection<'a> {
     /// Specifies extra information about the symbols present in the module.
     SymbolTable(Vec<'a, SymInfo>),
 }
+
 impl<'a> Serialize for LinkingSubSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         buffer.append_byte(match self {
@@ -530,7 +794,7 @@ impl<'a> Serialize for LinkingSection<'a> {
  *
  *******************************************************************/
 
-const WASM_VERSION: u32 = 1;
+type UnusedSection<'a> = &'a str;
 
 pub struct WasmModule<'a> {
     pub types: &'a str,      // TODO
@@ -558,6 +822,8 @@ fn maybe_increment_section(size: usize, prev_size: &mut usize, index: &mut u32) 
 }
 
 impl<'a> WasmModule<'a> {
+    const WASM_VERSION: u32 = 1;
+
     pub fn new(arena: &'a Bump) -> Self {
         WasmModule {
             types: "",
@@ -582,7 +848,7 @@ impl<'a> WasmModule<'a> {
     fn serialize<T: SerialBuffer>(&mut self, buffer: &mut T) {
         buffer.append_byte(0);
         buffer.append_slice("asm".as_bytes());
-        buffer.write_unencoded_u32(WASM_VERSION);
+        buffer.write_unencoded_u32(Self::WASM_VERSION);
 
         let mut index: u32 = 0;
         let mut prev_size = buffer.size();
