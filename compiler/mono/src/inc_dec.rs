@@ -578,6 +578,27 @@ impl<'a> Context<'a> {
 
                         &*self.arena.alloc(Stmt::Let(z, v, l, b))
                     }
+                    ListMap4 { xs, ys, zs, ws } => {
+                        let borrows = [
+                            function_ps[0].borrow,
+                            function_ps[1].borrow,
+                            function_ps[2].borrow,
+                            function_ps[3].borrow,
+                            FUNCTION,
+                            CLOSURE_DATA,
+                        ];
+
+                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
+
+                        let b = decref_if_owned!(function_ps[0].borrow, *xs, b);
+                        let b = decref_if_owned!(function_ps[1].borrow, *ys, b);
+                        let b = decref_if_owned!(function_ps[2].borrow, *zs, b);
+                        let b = decref_if_owned!(function_ps[3].borrow, *ws, b);
+
+                        let v = create_call!(function_ps.get(3));
+
+                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                    }
                     ListMapWithIndex { xs } => {
                         let borrows = [function_ps[1].borrow, FUNCTION, CLOSURE_DATA];
 

@@ -4139,6 +4139,16 @@ pub fn with_hole<'a>(
 
                     match_on_closure_argument!(ListMap3, [xs, ys, zs])
                 }
+                ListMap4 => {
+                    debug_assert_eq!(arg_symbols.len(), 5);
+
+                    let xs = arg_symbols[0];
+                    let ys = arg_symbols[1];
+                    let zs = arg_symbols[2];
+                    let ws = arg_symbols[3];
+
+                    match_on_closure_argument!(ListMap4, [xs, ys, zs, ws])
+                }
                 _ => {
                     let call = self::Call {
                         call_type: CallType::LowLevel {

@@ -928,6 +928,45 @@ fn call_spec(
 
                     add_loop(builder, block, state_type, init_state, loop_body)
                 }
+                ListMap4 { xs, ys, zs, ws } => {
+                    let list1 = env.symbols[xs];
+                    let list2 = env.symbols[ys];
+                    let list3 = env.symbols[zs];
+                    let list4 = env.symbols[ws];
+
+                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
+                        let input_bag_1 =
+                            builder.add_get_tuple_field(block, list1, LIST_BAG_INDEX)?;
+                        let input_bag_2 =
+                            builder.add_get_tuple_field(block, list2, LIST_BAG_INDEX)?;
+                        let input_bag_3 =
+                            builder.add_get_tuple_field(block, list3, LIST_BAG_INDEX)?;
+                        let input_bag_4 =
+                            builder.add_get_tuple_field(block, list4, LIST_BAG_INDEX)?;
+
+                        let element_1 = builder.add_bag_get(block, input_bag_1)?;
+                        let element_2 = builder.add_bag_get(block, input_bag_2)?;
+                        let element_3 = builder.add_bag_get(block, input_bag_3)?;
+                        let element_4 = builder.add_bag_get(block, input_bag_4)?;
+
+                        let new_element = call_function!(
+                            builder,
+                            block,
+                            [element_1, element_2, element_3, element_4]
+                        );
+
+                        list_append(builder, block, update_mode_var, state, new_element)
+                    };
+
+                    let output_element_type = layout_spec(builder, ret_layout)?;
+
+                    let state_layout = Layout::Builtin(Builtin::List(ret_layout));
+                    let state_type = layout_spec(builder, &state_layout)?;
+
+                    let init_state = new_list(builder, block, output_element_type)?;
+
+                    add_loop(builder, block, state_type, init_state, loop_body)
+                }
 
                 ListKeepIf { xs } => {
                     let list = env.symbols[xs];
