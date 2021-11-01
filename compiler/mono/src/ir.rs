@@ -1112,7 +1112,10 @@ pub enum CallType<'a> {
 
         /// specialization id of the function argument, used for name generation
         specialization_id: CallSpecId,
+
+        /// update mode of the higher order lowlevel itself
         update_mode: UpdateModeId,
+
         /// function layout, used for name generation
         arg_layouts: &'a [Layout<'a>],
         ret_layout: Layout<'a>,
@@ -4007,11 +4010,12 @@ pub fn with_hole<'a>(
                                 lambda_set,
                                 op,
                                 closure_data_symbol,
-                                |top_level_function, closure_data, closure_env_layout, specialization_id| self::Call {
+                                |(top_level_function, closure_data, closure_env_layout,  specialization_id, update_mode)| self::Call {
                                     call_type: CallType::HigherOrderLowLevel {
                                         op: crate::low_level::HigherOrder::$ho { $($x,)* },
                                         closure_env_layout,
                                         specialization_id,
+                                        update_mode,
                                         function_owns_closure_data: false,
                                         function_env: closure_data_symbol,
                                         function_name: top_level_function,
@@ -7872,6 +7876,8 @@ pub fn num_argument_to_int_or_float(
     }
 }
 
+type ToLowLevelCallArguments<'a> = (Symbol, Symbol, Option<Layout<'a>>, CallSpecId, UpdateModeId);
+
 /// Use the lambda set to figure out how to make a lowlevel call
 #[allow(clippy::too_many_arguments)]
 fn lowlevel_match_on_lambda_set<'a, ToLowLevelCall>(
@@ -7885,7 +7891,7 @@ fn lowlevel_match_on_lambda_set<'a, ToLowLevelCall>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a>
 where
-    ToLowLevelCall: Fn(Symbol, Symbol, Option<Layout<'a>>, CallSpecId) -> Call<'a> + Copy,
+    ToLowLevelCall: Fn(ToLowLevelCallArguments<'a>) -> Call<'a> + Copy,
 {
     match lambda_set.runtime_representation() {
         Layout::Union(union_layout) => {
@@ -7920,12 +7926,14 @@ where
         Layout::Struct(_) => match lambda_set.set.get(0) {
             Some((function_symbol, _)) => {
                 let call_spec_id = env.next_call_specialization_id();
-                let call = to_lowlevel_call(
+                let update_mode = env.next_update_mode_id();
+                let call = to_lowlevel_call((
                     *function_symbol,
                     closure_data_symbol,
                     lambda_set.is_represented(),
                     call_spec_id,
-                );
+                    update_mode,
+                ));
 
                 build_call(env, call, assigned, return_layout, env.arena.alloc(hole))
             }
@@ -7990,7 +7998,7 @@ fn lowlevel_union_lambda_set_to_switch<'a, ToLowLevelCall>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a>
 where
-    ToLowLevelCall: Fn(Symbol, Symbol, Option<Layout<'a>>, CallSpecId) -> Call<'a> + Copy,
+    ToLowLevelCall: Fn(ToLowLevelCallArguments<'a>) -> Call<'a> + Copy,
 {
     debug_assert!(!lambda_set.is_empty());
 
@@ -8004,12 +8012,14 @@ where
         let hole = Stmt::Jump(join_point_id, env.arena.alloc([assigned]));
 
         let call_spec_id = env.next_call_specialization_id();
-        let call = to_lowlevel_call(
+        let update_mode = env.next_update_mode_id();
+        let call = to_lowlevel_call((
             *function_symbol,
             closure_data_symbol,
             closure_env_layout,
             call_spec_id,
-        );
+            update_mode,
+        ));
         let stmt = build_call(env, call, assigned, return_layout, env.arena.alloc(hole));
 
         branches.push((i as u64, BranchInfo::None, stmt));
@@ -8427,7 +8437,7 @@ fn lowlevel_enum_lambda_set_to_switch<'a, ToLowLevelCall>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a>
 where
-    ToLowLevelCall: Fn(Symbol, Symbol, Option<Layout<'a>>, CallSpecId) -> Call<'a> + Copy,
+    ToLowLevelCall: Fn(ToLowLevelCallArguments<'a>) -> Call<'a> + Copy,
 {
     debug_assert!(!lambda_set.is_empty());
 
@@ -8441,12 +8451,14 @@ where
         let hole = Stmt::Jump(join_point_id, env.arena.alloc([result_symbol]));
 
         let call_spec_id = env.next_call_specialization_id();
-        let call = to_lowlevel_call(
+        let update_mode = env.next_update_mode_id();
+        let call = to_lowlevel_call((
             *function_symbol,
             closure_data_symbol,
             closure_env_layout,
             call_spec_id,
-        );
+            update_mode,
+        ));
         let stmt = build_call(
             env,
             call,
