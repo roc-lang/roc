@@ -1,15 +1,17 @@
 use crate::target::arch_str;
 #[cfg(feature = "llvm")]
-use libloading::{Error, Library};
+use libloading::Library;
 use roc_builtins::bitcode;
 // #[cfg(feature = "llvm")]
 use roc_mono::ir::OptLevel;
 use std::collections::HashMap;
 use std::env;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output};
 use target_lexicon::{Architecture, OperatingSystem, Triple};
+use anyhow::anyhow;
+use anyhow::Error;
+use anyhow::Result;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum LinkType {
@@ -25,7 +27,7 @@ pub fn link(
     output_path: PathBuf,
     input_paths: &[&str],
     link_type: LinkType,
-) -> io::Result<(Child, PathBuf)> {
+) -> Result<(Child, PathBuf)> {
     match target {
         Triple {
             architecture: Architecture::Wasm32,
@@ -39,40 +41,40 @@ pub fn link(
             operating_system: OperatingSystem::Darwin,
             ..
         } => link_macos(target, output_path, input_paths, link_type),
-        _ => panic!("TODO gracefully handle unsupported target: {:?}", target),
+        _ => anyhow::bail!("TODO gracefully handle unsupported target: {:?}", target),
     }
 }
 
-fn find_zig_str_path() -> PathBuf {
+fn find_zig_str_path() -> Result<PathBuf> {
     let zig_str_path = PathBuf::from("compiler/builtins/bitcode/src/str.zig");
 
     if std::path::Path::exists(&zig_str_path) {
-        return zig_str_path;
+        return Ok(zig_str_path);
     }
 
     // when running the tests, we start in the /cli directory
     let zig_str_path = PathBuf::from("../compiler/builtins/bitcode/src/str.zig");
     if std::path::Path::exists(&zig_str_path) {
-        return zig_str_path;
+        return Ok(zig_str_path);
     }
 
-    panic!("cannot find `str.zig`. Launch me from either the root of the roc repo or one level down(roc/examples, roc/cli...)")
+    anyhow::bail!("cannot find `str.zig`. Launch me from either the root of the roc repo or one level down(roc/examples, roc/cli...)")
 }
 
-fn find_wasi_libc_path() -> PathBuf {
+fn find_wasi_libc_path() -> Result<PathBuf> {
     let wasi_libc_path = PathBuf::from("compiler/builtins/bitcode/wasi-libc.a");
 
     if std::path::Path::exists(&wasi_libc_path) {
-        return wasi_libc_path;
+        return Ok(wasi_libc_path);
     }
 
     // when running the tests, we start in the /cli directory
     let wasi_libc_path = PathBuf::from("../compiler/builtins/bitcode/wasi-libc.a");
     if std::path::Path::exists(&wasi_libc_path) {
-        return wasi_libc_path;
+        return Ok(wasi_libc_path);
     }
 
-    panic!("cannot find `wasi-libc.a`")
+    anyhow::bail!("cannot find `wasi-libc.a`")
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -86,7 +88,7 @@ pub fn build_zig_host_native(
     target: &str,
     opt_level: OptLevel,
     shared_lib_path: Option<&Path>,
-) -> Output {
+) -> Result<Output> {
     let mut command = Command::new("zig");
     command
         .env_clear()
@@ -121,7 +123,7 @@ pub fn build_zig_host_native(
     if matches!(opt_level, OptLevel::Optimize) {
         command.args(&["-O", "ReleaseSafe"]);
     }
-    command.output().unwrap()
+    command.output().map_err(Error::from)
 }
 
 #[cfg(target_os = "macos")]
@@ -135,23 +137,23 @@ pub fn build_zig_host_native(
     _target: &str,
     opt_level: OptLevel,
     shared_lib_path: Option<&Path>,
-) -> Output {
+) -> Result<Output> {
     use serde_json::Value;
 
     // Run `zig env` to find the location of zig's std/ directory
-    let zig_env_output = Command::new("zig").args(&["env"]).output().unwrap();
+    let zig_env_output = Command::new("zig").args(&["env"]).output()?;
 
     let zig_env_json = if zig_env_output.status.success() {
         std::str::from_utf8(&zig_env_output.stdout).unwrap_or_else(|utf8_err| {
-            panic!(
+            anyhow::bail!(
                 "`zig env` failed; its stderr output was invalid utf8 ({:?})",
                 utf8_err
             );
         })
     } else {
         match std::str::from_utf8(&zig_env_output.stderr) {
-            Ok(stderr) => panic!("`zig env` failed - stderr output was: {:?}", stderr),
-            Err(utf8_err) => panic!(
+            Ok(stderr) => anyhow::bail!("`zig env` failed - stderr output was: {:?}", stderr),
+            Err(utf8_err) => anyhow::bail!(
                 "`zig env` failed; its stderr output was invalid utf8 ({:?})",
                 utf8_err
             ),
@@ -162,11 +164,11 @@ pub fn build_zig_host_native(
         Ok(Value::Object(map)) => match map.get("std_dir") {
             Some(Value::String(std_dir)) => PathBuf::from(Path::new(std_dir)),
             _ => {
-                panic!("Expected JSON containing a `std_dir` String field from `zig env`, but got: {:?}", zig_env_json);
+                anyhow::bail!("Expected JSON containing a `std_dir` String field from `zig env`, but got: {:?}", zig_env_json);
             }
         },
         _ => {
-            panic!(
+            anyhow::bail!(
                 "Expected JSON containing a `std_dir` field from `zig env`, but got: {:?}",
                 zig_env_json
             );
@@ -210,7 +212,7 @@ pub fn build_zig_host_native(
     if matches!(opt_level, OptLevel::Optimize) {
         command.args(&["-O", "ReleaseSafe"]);
     }
-    command.output().unwrap()
+    command.output().map_err(Error::from)
 }
 
 pub fn build_zig_host_wasm32(
@@ -221,7 +223,7 @@ pub fn build_zig_host_wasm32(
     zig_str_path: &str,
     opt_level: OptLevel,
     shared_lib_path: Option<&Path>,
-) -> Output {
+) -> Result<Output> {
     if shared_lib_path.is_some() {
         unimplemented!("Linking a shared library to wasm not yet implemented");
     }
@@ -261,7 +263,7 @@ pub fn build_zig_host_wasm32(
     if matches!(opt_level, OptLevel::Optimize) {
         command.args(&["-O", "ReleaseSafe"]);
     }
-    command.output().unwrap()
+    command.output().map_err(Error::from)
 }
 
 pub fn build_c_host_native(
@@ -271,7 +273,7 @@ pub fn build_c_host_native(
     sources: &[&str],
     opt_level: OptLevel,
     shared_lib_path: Option<&Path>,
-) -> Output {
+) -> Result<Output> {
     let mut command = Command::new("clang");
     command
         .env_clear()
@@ -297,7 +299,7 @@ pub fn build_c_host_native(
     if matches!(opt_level, OptLevel::Optimize) {
         command.arg("-O2");
     }
-    command.output().unwrap()
+    command.output().map_err(Error::from)
 }
 
 pub fn rebuild_host(
@@ -305,7 +307,7 @@ pub fn rebuild_host(
     target: &Triple,
     host_input_path: &Path,
     shared_lib_path: Option<&Path>,
-) {
+) -> Result<()> {
     let c_host_src = host_input_path.with_file_name("host.c");
     let c_host_dest = host_input_path.with_file_name("c_host.o");
     let zig_host_src = host_input_path.with_file_name("host.zig");
@@ -325,7 +327,7 @@ pub fn rebuild_host(
     if zig_host_src.exists() {
         // Compile host.zig
 
-        let zig_str_path = find_zig_str_path();
+        let zig_str_path = find_zig_str_path()?;
 
         debug_assert!(
             std::path::Path::exists(&zig_str_path),
@@ -372,10 +374,10 @@ pub fn rebuild_host(
                     shared_lib_path,
                 )
             }
-            _ => panic!("Unsupported architecture {:?}", target.architecture),
-        };
+            _ => anyhow::bail!("Unsupported architecture {:?}", target.architecture),
+        }?;
 
-        validate_output("host.zig", "zig", output)
+        validate_output("host.zig", "zig", output)?;
     } else if cargo_host_src.exists() {
         // Compile and link Cargo.toml, if it exists
         let cargo_dir = host_input_path.parent().unwrap();
@@ -401,13 +403,14 @@ pub fn rebuild_host(
             command.arg("--lib");
             "src/lib.rs"
         };
-        let output = command.output().unwrap();
+        let output = command.output()?;
 
-        validate_output(source_file, "cargo build", output);
+        validate_output(source_file, "cargo build", output)?;
 
         if shared_lib_path.is_some() {
             // For surgical linking, just copy the dynamically linked rust app.
-            std::fs::copy(cargo_out_dir.join("host"), host_dest_native).unwrap();
+            std::fs::copy(cargo_out_dir.join("host"), host_dest_native)
+                .map(|_| ())?;
         } else {
             // Cargo hosts depend on a c wrapper for the api. Compile host.c as well.
 
@@ -418,8 +421,8 @@ pub fn rebuild_host(
                 &[c_host_src.to_str().unwrap()],
                 opt_level,
                 shared_lib_path,
-            );
-            validate_output("host.c", "clang", output);
+            )?;
+            validate_output("host.c", "clang", output)?;
 
             let output = Command::new("ld")
                 .env_clear()
@@ -435,7 +438,7 @@ pub fn rebuild_host(
                 ])
                 .output()
                 .unwrap();
-            validate_output("c_host.o", "ld", output);
+            validate_output("c_host.o", "ld", output)?;
 
             // Clean up c_host.o
             let output = Command::new("rm")
@@ -444,7 +447,7 @@ pub fn rebuild_host(
                 .output()
                 .unwrap();
 
-            validate_output("rust_host.o", "rm", output);
+            validate_output("rust_host.o", "rm", output)?;
         }
     } else if rust_host_src.exists() {
         // Compile and link host.rs, if it exists
@@ -459,7 +462,7 @@ pub fn rebuild_host(
         }
         let output = command.output().unwrap();
 
-        validate_output("host.rs", "rustc", output);
+        validate_output("host.rs", "rustc", output)?;
 
         // Rust hosts depend on a c wrapper for the api. Compile host.c as well.
         if shared_lib_path.is_some() {
@@ -474,8 +477,8 @@ pub fn rebuild_host(
                 ],
                 opt_level,
                 shared_lib_path,
-            );
-            validate_output("host.c", "clang", output);
+            )?;
+            validate_output("host.c", "clang", output)?;
         } else {
             let output = build_c_host_native(
                 &env_path,
@@ -484,9 +487,9 @@ pub fn rebuild_host(
                 &[c_host_src.to_str().unwrap()],
                 opt_level,
                 shared_lib_path,
-            );
+            )?;
 
-            validate_output("host.c", "clang", output);
+            validate_output("host.c", "clang", output)?;
             let output = Command::new("ld")
                 .env_clear()
                 .env("PATH", &env_path)
@@ -497,10 +500,9 @@ pub fn rebuild_host(
                     "-o",
                     host_dest_native.to_str().unwrap(),
                 ])
-                .output()
-                .unwrap();
+                .output()?;
 
-            validate_output("rust_host.o", "ld", output);
+            validate_output("rust_host.o", "ld", output)?;
         }
 
         // Clean up rust_host.o and c_host.o
@@ -511,10 +513,9 @@ pub fn rebuild_host(
                 rust_host_dest.to_str().unwrap(),
                 c_host_dest.to_str().unwrap(),
             ])
-            .output()
-            .unwrap();
+            .output()?;
 
-        validate_output("rust_host.o", "rm", output);
+        validate_output("rust_host.o", "rm", output)?;
     } else if c_host_src.exists() {
         // Compile host.c, if it exists
         let output = build_c_host_native(
@@ -524,9 +525,12 @@ pub fn rebuild_host(
             &[c_host_src.to_str().unwrap()],
             opt_level,
             shared_lib_path,
-        );
-        validate_output("host.c", "clang", output);
+        )?;
+        validate_output("host.c", "clang", output)?;
     }
+
+    // TODO: Not sure whether this is right
+    Ok(())
 }
 
 fn nix_path_opt() -> Option<String> {
@@ -550,7 +554,7 @@ fn link_linux(
     output_path: PathBuf,
     input_paths: &[&str],
     link_type: LinkType,
-) -> io::Result<(Child, PathBuf)> {
+) -> Result<(Child, PathBuf)> {
     let architecture = format!("{}-linux-gnu", target.architecture);
 
     //    Command::new("cp")
@@ -658,7 +662,7 @@ fn link_linux(
 
     let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
 
-    init_arch(target);
+    init_arch(target)?;
 
     // NOTE: order of arguments to `ld` matters here!
     // The `-l` flags should go after the `.o` arguments
@@ -677,7 +681,7 @@ fn link_linux(
                 "--gc-sections",
                 "--eh-frame-hdr",
                 "--arch",
-                arch_str(target),
+                arch_str(target)?,
                 "-pie",
                 libcrt_path.join("crti.o").to_str().unwrap(),
                 libcrt_path.join("crtn.o").to_str().unwrap(),
@@ -712,7 +716,7 @@ fn link_macos(
     output_path: PathBuf,
     input_paths: &[&str],
     link_type: LinkType,
-) -> io::Result<(Child, PathBuf)> {
+) -> Result<(Child, PathBuf)> {
     let (link_type_arg, output_path) = match link_type {
         LinkType::Executable => ("-execute", output_path),
         LinkType::Dylib => {
@@ -791,9 +795,9 @@ fn link_wasm32(
     output_path: PathBuf,
     input_paths: &[&str],
     _link_type: LinkType,
-) -> io::Result<(Child, PathBuf)> {
-    let zig_str_path = find_zig_str_path();
-    let wasi_libc_path = find_wasi_libc_path();
+) -> Result<(Child, PathBuf)> {
+    let zig_str_path = find_zig_str_path()?;
+    let wasi_libc_path = find_wasi_libc_path()?;
 
     let child = Command::new("zig9")
         // .env_clear()
@@ -827,11 +831,11 @@ pub fn module_to_dylib(
     module: &inkwell::module::Module,
     target: &Triple,
     opt_level: OptLevel,
-) -> Result<Library, Error> {
+) -> Result<Library> {
     use crate::target::{self, convert_opt_level};
     use inkwell::targets::{CodeModel, FileType, RelocMode};
 
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir()?;
     let filename = PathBuf::from("Test.roc");
     let file_path = dir.path().join(filename);
     let mut app_o_file = file_path;
@@ -841,51 +845,56 @@ pub fn module_to_dylib(
     // Emit the .o file using position-independent code (PIC) - needed for dylibs
     let reloc = RelocMode::PIC;
     let model = CodeModel::Default;
-    let target_machine =
-        target::target_machine(target, convert_opt_level(opt_level), reloc, model).unwrap();
+    let target_machine = target::target_machine(target, convert_opt_level(opt_level), reloc, model)?
+        .ok_or_else(|| anyhow!("No target machine"))?;
 
     target_machine
         .write_to_file(module, FileType::Object, &app_o_file)
-        .expect("Writing .o file failed");
+        .map_err(|_| anyhow!("Writing .o file failed"))?;
 
     // Link app.o into a dylib - e.g. app.so or app.dylib
+    let app_o_file_str = app_o_file.to_str()
+        .ok_or_else(|| anyhow!("Couldn't convert to string: '{}'", app_o_file.display()))?;
     let (mut child, dylib_path) = link(
         &Triple::host(),
         app_o_file.clone(),
-        &[app_o_file.to_str().unwrap()],
+        &[app_o_file_str],
         LinkType::Dylib,
-    )
-    .unwrap();
+    )?;
 
-    child.wait().unwrap();
+    child.wait()?;
 
     // Load the dylib
-    let path = dylib_path.as_path().to_str().unwrap();
+    let path = dylib_path.as_path()
+        .to_str()
+        .ok_or_else(|| anyhow!("Could not parse as string: '{}'", dylib_path.display()))?;
 
     Library::new(path)
+        .map_err(|e| anyhow!("Error while loading library: {}", e))
 }
 
-fn validate_output(file_name: &str, cmd_name: &str, output: Output) {
+fn validate_output(file_name: &str, cmd_name: &str, output: Output) -> Result<()> {
     if !output.status.success() {
         match std::str::from_utf8(&output.stderr) {
-            Ok(stderr) => panic!(
+            Ok(stderr) => anyhow::bail!(
                 "Failed to rebuild {} - stderr of the `{}` command was:\n{}",
                 file_name, cmd_name, stderr
             ),
-            Err(utf8_err) => panic!(
+            Err(utf8_err) => anyhow::bail!(
                 "Failed to rebuild {} - stderr of the `{}` command was invalid utf8 ({:?})",
                 file_name, cmd_name, utf8_err
             ),
         }
     }
+    Ok(())
 }
 
 #[cfg(feature = "llvm")]
-fn init_arch(target: &Triple) {
-    crate::target::init_arch(target);
+fn init_arch(target: &Triple) -> Result<()> {
+    crate::target::init_arch(target)
 }
 
 #[cfg(not(feature = "llvm"))]
-fn init_arch(_target: &Triple) {
-    panic!("Tried to initialize LLVM when crate was not built with `feature = \"llvm\"` enabled");
+fn init_arch(_target: &Triple) -> Result<()> {
+    anyhow::bail!("Tried to initialize LLVM when crate was not built with `feature = \"llvm\"` enabled")
 }

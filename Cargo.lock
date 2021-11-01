@@ -104,6 +104,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyhow"
+version = "1.0.44"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61604a8f862e1d5c3229fdd78f8b02c68dcf73a4c4b05fd636d12240aaa242c1"
+
+[[package]]
 name = "approx"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3574,6 +3580,7 @@ dependencies = [
 name = "roc_build"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "bumpalo",
  "im 14.3.0",
  "im-rc 14.3.0",
