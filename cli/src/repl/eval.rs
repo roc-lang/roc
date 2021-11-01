@@ -2,6 +2,9 @@ use anyhow::{anyhow, Result};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use libloading::Library;
+use parse_display::Display;
+use thiserror::Error;
+
 use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
 use roc_module::ident::TagName;
 use roc_module::operator::CalledVia;
@@ -11,6 +14,7 @@ use roc_mono::layout::{union_sorted_tags_help, Builtin, Layout, UnionLayout, Uni
 use roc_parse::ast::{AssignedField, Expr, StrLiteral};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{Content, FlatType, GetSubsSlice, RecordFields, Subs, UnionTags, Variable};
+use roc_utils::{IntoMaybeError, MaybeError};
 
 struct Env<'a, 'env> {
     arena: &'a Bump,
@@ -20,6 +24,8 @@ struct Env<'a, 'env> {
     home: ModuleId,
 }
 
+#[derive(Error, Debug, Display)]
+#[display("{}")]
 pub enum ToAstProblem {
     FunctionLayout,
 }
@@ -43,7 +49,7 @@ pub unsafe fn jit_to_ast<'a>(
     home: ModuleId,
     subs: &Subs,
     ptr_bytes: u32,
-) -> Result<Expr<'a>, ToAstProblem> {
+) -> Result<Expr<'a>, MaybeError<ToAstProblem>> {
     let env = Env {
         arena,
         subs,
@@ -60,7 +66,7 @@ pub unsafe fn jit_to_ast<'a>(
             // this is a thunk
             jit_to_ast_help(&env, lib, main_fn_name, &result, content)
         }
-        _ => Err(ToAstProblem::FunctionLayout),
+        _ => Err(ToAstProblem::FunctionLayout.into()),
     }
 }
 
@@ -70,7 +76,7 @@ fn jit_to_ast_help<'a>(
     main_fn_name: &str,
     layout: &Layout<'a>,
     content: &Content,
-) -> Result<Expr<'a>, ToAstProblem> {
+) -> Result<Expr<'a>, MaybeError<ToAstProblem>> {
     match layout {
         Layout::Builtin(Builtin::Int1) => Ok(run_jit_function!(lib, main_fn_name, bool, |num| {
             bool_to_ast(env, num, content)
@@ -83,49 +89,55 @@ fn jit_to_ast_help<'a>(
         }
         Layout::Builtin(Builtin::Usize) => Ok(run_jit_function!(lib, main_fn_name, usize, |num| {
             num_to_ast(env, number_literal_to_ast(env.arena, num), content)
-        })),
+        })
+        .into_maybe()?),
         Layout::Builtin(Builtin::Int16) => {
             Ok(run_jit_function!(lib, main_fn_name, i16, |num| num_to_ast(
                 env,
                 number_literal_to_ast(env.arena, num),
                 content
-            )))
+            ))
+            .into_maybe()?)
         }
         Layout::Builtin(Builtin::Int32) => {
             Ok(run_jit_function!(lib, main_fn_name, i32, |num| num_to_ast(
                 env,
                 number_literal_to_ast(env.arena, num),
                 content
-            )))
+            ))
+            .into_maybe()?)
         }
         Layout::Builtin(Builtin::Int64) => {
             Ok(run_jit_function!(lib, main_fn_name, i64, |num| num_to_ast(
                 env,
                 number_literal_to_ast(env.arena, num),
                 content
-            )))
+            ))
+            .into_maybe()?)
         }
         Layout::Builtin(Builtin::Int128) => {
-            Ok(run_jit_function!(
-                lib,
-                main_fn_name,
-                i128,
-                |num| num_to_ast(env, number_literal_to_ast(env.arena, num), content)
+            Ok(run_jit_function!(lib, main_fn_name, i128, |num| num_to_ast(
+                env,
+                number_literal_to_ast(env.arena, num),
+                content
             ))
+            .into_maybe()?)
         }
         Layout::Builtin(Builtin::Float32) => {
             Ok(run_jit_function!(lib, main_fn_name, f32, |num| num_to_ast(
                 env,
                 number_literal_to_ast(env.arena, num),
                 content
-            )))
+            ))
+            .into_maybe()?)
         }
         Layout::Builtin(Builtin::Float64) => {
             Ok(run_jit_function!(lib, main_fn_name, f64, |num| num_to_ast(
                 env,
                 number_literal_to_ast(env.arena, num),
                 content
-            )))
+            ))
+            .into_maybe()?)
         }
         Layout::Builtin(Builtin::Str) | Layout::Builtin(Builtin::EmptyStr) => Ok(
             run_jit_function!(lib, main_fn_name, &'static str, |string: &'static str| {
@@ -145,54 +157,58 @@ fn jit_to_ast_help<'a>(
             main_fn_name,
             (*const u8, usize),
             |(ptr, len): (*const u8, usize)| { list_to_ast(env, ptr, len, elem_layout, content) }
-        )),
+        )
+        .into_maybe()?),
         Layout::Builtin(other) => {
             todo!("add support for rendering builtin {:?} to the REPL", other)
         }
         Layout::Struct(field_layouts) => {
-            let ptr_to_ast = |ptr: *const u8| match content {
-                Content::Structure(FlatType::Record(fields, _)) => {
-                    Ok(struct_to_ast(env, ptr, field_layouts, *fields))
-                }
-                Content::Structure(FlatType::EmptyRecord) => Ok(struct_to_ast(
-                    env,
-                    ptr,
-                    field_layouts,
-                    RecordFields::empty(),
-                )),
-                Content::Structure(FlatType::TagUnion(tags, _)) => {
-                    debug_assert_eq!(tags.len(), 1);
-
-                    let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
-
-                    Ok(single_tag_union_to_ast(
+            let ptr_to_ast = |ptr: *const u8| -> Result<Expr> {
+                match content {
+                    Content::Structure(FlatType::Record(fields, _)) => {
+                        struct_to_ast(env, ptr, field_layouts, *fields)
+                    }
+                    Content::Structure(FlatType::EmptyRecord) => struct_to_ast(
                         env,
                         ptr,
                         field_layouts,
-                        tag_name,
-                        payload_vars,
-                    ))
-                }
-                Content::Structure(FlatType::FunctionOrTagUnion(tag_name, _, _)) => {
-                    let tag_name = &env.subs[*tag_name];
+                        RecordFields::empty(),
+                    ),
+                    Content::Structure(FlatType::TagUnion(tags, _)) => {
+                        debug_assert_eq!(tags.len(), 1);
 
-                    Ok(single_tag_union_to_ast(
-                        env,
-                        ptr,
-                        field_layouts,
-                        tag_name,
-                        &[],
-                    ))
-                }
-                Content::Structure(FlatType::Func(_, _, _)) => {
-                    // a function with a struct as the closure environment
-                    Err(ToAstProblem::FunctionLayout)
-                }
-                other => {
-                    unreachable!(
+                        let (tag_name, payload_vars) =
+                            unpack_single_element_tag_union(env.subs, *tags);
+
+                        single_tag_union_to_ast(
+                            env,
+                            ptr,
+                            field_layouts,
+                            tag_name,
+                            payload_vars,
+                        )
+                    }
+                    Content::Structure(FlatType::FunctionOrTagUnion(tag_name, _, _)) => {
+                        let tag_name = &env.subs[*tag_name];
+
+                        single_tag_union_to_ast(
+                            env,
+                            ptr,
+                            field_layouts,
+                            tag_name,
+                            &[],
+                        )
+                    }
+                    Content::Structure(FlatType::Func(_, _, _)) => {
+                        // a function with a struct as the closure environment
+                        Err(ToAstProblem::FunctionLayout.into())
+                    }
+                    other => {
+                        unreachable!(
                         "Something had a Struct layout, but instead of a Record or TagUnion type, it had: {:?}",
                         other
                     );
+                    }
                 }
             };
 
@@ -207,6 +223,7 @@ fn jit_to_ast_help<'a>(
                 result_stack_size as usize,
                 |bytes: *const u8| { ptr_to_ast(bytes as *const u8) }
             )
+            .into_maybe()
         }
         Layout::Union(UnionLayout::NonRecursive(union_layouts)) => {
             let union_layout = UnionLayout::NonRecursive(union_layouts);
@@ -238,7 +255,7 @@ fn jit_to_ast_help<'a>(
                                         lib,
                                         main_fn_name,
                                         size as usize,
-                                        |ptr: *const u8| {
+                                        |ptr: *const u8| -> Result<Expr> {
                                             // Because this is a `Wrapped`, the first 8 bytes encode the tag ID
                                             let offset = tags_and_layouts
                                                 .iter()
@@ -284,12 +301,13 @@ fn jit_to_ast_help<'a>(
                                             // NOTE assumes the data bytes are the first bytes
                                             let it =
                                                 variables.iter().copied().zip(arg_layouts.iter());
-                                            let output = sequence_of_expr(env, ptr, it);
+                                            let output = sequence_of_expr(env, ptr, it)?;
                                             let output = output.into_bump_slice();
 
-                                            Expr::Apply(loc_tag_expr, output, CalledVia::Space)
+                                            Ok(Expr::Apply(loc_tag_expr, output, CalledVia::Space))
                                         }
-                                    ))
+                                    )
+                                    .into_maybe()?)
                                 }
                                 Recursive {
                                     sorted_tag_layouts: tags_and_layouts,
@@ -298,7 +316,7 @@ fn jit_to_ast_help<'a>(
                                         lib,
                                         main_fn_name,
                                         size as usize,
-                                        |ptr: *const u8| {
+                                        |ptr: *const u8| -> Result<Expr> {
                                             // Because this is a `Wrapped`, the first 8 bytes encode the tag ID
                                             let tag_id = *(ptr as *const i64);
 
@@ -323,12 +341,13 @@ fn jit_to_ast_help<'a>(
 
                                             let it =
                                                 variables.iter().copied().zip(&arg_layouts[1..]);
-                                            let output = sequence_of_expr(env, ptr, it);
+                                            let output = sequence_of_expr(env, ptr, it)?;
                                             let output = output.into_bump_slice();
 
-                                            Expr::Apply(loc_tag_expr, output, CalledVia::Space)
+                                            Ok(Expr::Apply(loc_tag_expr, output, CalledVia::Space))
                                         }
-                                    ))
+                                    )
+                                    .into_maybe()?)
                                 }
                                 _ => todo!(),
                             }
@@ -383,7 +402,7 @@ fn ptr_to_ast<'a>(
     ptr: *const u8,
     layout: &Layout<'a>,
     content: &Content,
-) -> Expr<'a> {
+) -> Result<Expr<'a>> {
     match layout {
         Layout::Builtin(Builtin::Int128) => {
             let num = unsafe { *(ptr as *const i128) };
@@ -415,7 +434,7 @@ fn ptr_to_ast<'a>(
             // num is always false at the moment.
             let num = unsafe { *(ptr as *const bool) };
 
-            bool_to_ast(env, num, content)
+            Ok(bool_to_ast(env, num, content))
         }
         Layout::Builtin(Builtin::Usize) => {
             let num = unsafe { *(ptr as *const usize) };
@@ -432,10 +451,10 @@ fn ptr_to_ast<'a>(
 
             num_to_ast(env, number_literal_to_ast(env.arena, num), content)
         }
-        Layout::Builtin(Builtin::EmptyList) => Expr::List {
+        Layout::Builtin(Builtin::EmptyList) => Ok(Expr::List {
             items: &[],
             final_comments: &[],
-        },
+        }),
         Layout::Builtin(Builtin::List(elem_layout)) => {
             // Turn the (ptr, len) wrapper struct into actual ptr and len values.
             let len = unsafe { *(ptr.offset(env.ptr_bytes as isize) as *const usize) };
@@ -443,11 +462,11 @@ fn ptr_to_ast<'a>(
 
             list_to_ast(env, ptr, len, elem_layout, content)
         }
-        Layout::Builtin(Builtin::EmptyStr) => Expr::Str(StrLiteral::PlainLine("")),
+        Layout::Builtin(Builtin::EmptyStr) => Ok(Expr::Str(StrLiteral::PlainLine(""))),
         Layout::Builtin(Builtin::Str) => {
             let arena_str = unsafe { *(ptr as *const &'static str) };
 
-            str_to_ast(env.arena, arena_str)
+            Ok(str_to_ast(env.arena, arena_str))
         }
         Layout::Struct(field_layouts) => match content {
             Content::Structure(FlatType::Record(fields, _)) => {
@@ -488,7 +507,7 @@ fn list_to_ast<'a>(
     len: usize,
     elem_layout: &Layout<'a>,
     content: &Content,
-) -> Expr<'a> {
+) -> Result<Expr<'a>> {
     let elem_content = match content {
         Content::Structure(FlatType::Apply(Symbol::LIST_LIST, vars)) => {
             debug_assert_eq!(vars.len(), 1);
@@ -514,7 +533,7 @@ fn list_to_ast<'a>(
         let offset_bytes = index * elem_size;
         let elem_ptr = unsafe { ptr.add(offset_bytes) };
         let loc_expr = &*arena.alloc(Located {
-            value: ptr_to_ast(env, elem_ptr, elem_layout, elem_content),
+            value: ptr_to_ast(env, elem_ptr, elem_layout, elem_content)?,
             region: Region::zero(),
         });
 
@@ -523,10 +542,10 @@ fn list_to_ast<'a>(
 
     let output = output.into_bump_slice();
 
-    Expr::List {
+    Ok(Expr::List {
         items: output,
         final_comments: &[],
-    }
+    })
 }
 
 fn single_tag_union_to_ast<'a>(
@@ -535,7 +554,7 @@ fn single_tag_union_to_ast<'a>(
     field_layouts: &'a [Layout<'a>],
     tag_name: &TagName,
     payload_vars: &[Variable],
-) -> Expr<'a> {
+) -> Result<Expr<'a>> {
     let arena = env.arena;
     let tag_expr = tag_name_to_expr(env, tag_name);
 
@@ -543,23 +562,23 @@ fn single_tag_union_to_ast<'a>(
 
     let output = if field_layouts.len() == payload_vars.len() {
         let it = payload_vars.iter().copied().zip(field_layouts);
-        sequence_of_expr(env, ptr as *const u8, it).into_bump_slice()
+        sequence_of_expr(env, ptr as *const u8, it)?.into_bump_slice()
     } else if field_layouts.is_empty() && !payload_vars.is_empty() {
         // happens for e.g. `Foo Bar` where unit structures are nested and the inner one is dropped
         let it = payload_vars.iter().copied().zip([&Layout::Struct(&[])]);
-        sequence_of_expr(env, ptr as *const u8, it).into_bump_slice()
+        sequence_of_expr(env, ptr as *const u8, it)?.into_bump_slice()
     } else {
         unreachable!()
     };
 
-    Expr::Apply(loc_tag_expr, output, CalledVia::Space)
+    Ok(Expr::Apply(loc_tag_expr, output, CalledVia::Space))
 }
 
 fn sequence_of_expr<'a, I>(
     env: &Env<'a, '_>,
     ptr: *const u8,
     sequence: I,
-) -> Vec<'a, &'a Located<Expr<'a>>>
+) -> Result<Vec<'a, &'a Located<Expr<'a>>>>
 where
     I: Iterator<Item = (Variable, &'a Layout<'a>)>,
     I: ExactSizeIterator<Item = (Variable, &'a Layout<'a>)>,
@@ -573,7 +592,7 @@ where
 
     for (var, layout) in sequence {
         let content = subs.get_content_without_compacting(var);
-        let expr = ptr_to_ast(env, field_ptr, layout, content);
+        let expr = ptr_to_ast(env, field_ptr, layout, content)?;
         let loc_expr = Located::at_zero(expr);
 
         output.push(&*arena.alloc(loc_expr));
@@ -582,7 +601,7 @@ where
         field_ptr = unsafe { field_ptr.offset(layout.stack_size(env.ptr_bytes) as isize) };
     }
 
-    output
+    Ok(output)
 }
 
 fn struct_to_ast<'a>(
@@ -590,7 +609,7 @@ fn struct_to_ast<'a>(
     ptr: *const u8,
     field_layouts: &'a [Layout<'a>],
     record_fields: RecordFields,
-) -> Expr<'a> {
+) -> Result<Expr<'a>> {
     let arena = env.arena;
     let subs = env.subs;
     let mut output = Vec::with_capacity_in(field_layouts.len(), arena);
@@ -607,7 +626,7 @@ fn struct_to_ast<'a>(
         let inner_content = env.subs.get_content_without_compacting(field.into_inner());
 
         let loc_expr = &*arena.alloc(Located {
-            value: ptr_to_ast(env, ptr, &Layout::Struct(field_layouts), inner_content),
+            value: ptr_to_ast(env, ptr, &Layout::Struct(field_layouts), inner_content)?,
             region: Region::zero(),
         });
 
@@ -622,10 +641,10 @@ fn struct_to_ast<'a>(
 
         let output = env.arena.alloc([loc_field]);
 
-        Expr::Record {
+        Ok(Expr::Record {
             fields: output,
             final_comments: &[],
-        }
+        })
     } else {
         debug_assert_eq!(sorted_fields.len(), field_layouts.len());
 
@@ -637,7 +656,7 @@ fn struct_to_ast<'a>(
 
             let content = subs.get_content_without_compacting(var);
             let loc_expr = &*arena.alloc(Located {
-                value: ptr_to_ast(env, field_ptr, field_layout, content),
+                value: ptr_to_ast(env, field_ptr, field_layout, content)?,
                 region: Region::zero(),
             });
 
@@ -659,10 +678,10 @@ fn struct_to_ast<'a>(
 
         let output = output.into_bump_slice();
 
-        Expr::Record {
+        Ok(Expr::Record {
             fields: output,
             final_comments: &[],
-        }
+        })
     }
 }
 
@@ -937,7 +956,7 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> R
     match content {
         Structure(flat_type) => {
             match flat_type {
-                FlatType::Apply(Symbol::NUM_NUM, _) => num_expr,
+                FlatType::Apply(Symbol::NUM_NUM, _) => Ok(num_expr),
                 FlatType::Record(fields, _) => {
                     // This was a single-field record that got unwrapped at runtime.
                     // Even if it was an i64 at runtime, we still need to report
@@ -962,7 +981,7 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> R
                         let field_var = *field.as_inner();
                         let field_content = env.subs.get_content_without_compacting(field_var);
                         let loc_expr = Located {
-                            value: num_to_ast(env, num_expr, field_content),
+                            value: num_to_ast(env, num_expr, field_content)?,
                             region: Region::zero(),
                         };
 
@@ -973,10 +992,10 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> R
                         region: Region::zero(),
                     };
 
-                    Expr::Record {
+                    Ok(Expr::Record {
                         fields: arena.alloc([loc_assigned_field]),
                         final_comments: arena.alloc([]),
-                    }
+                    })
                 }
                 FlatType::TagUnion(tags, _) => {
                     // This was a single-tag union that got unwrapped at runtime.
@@ -987,7 +1006,7 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> R
                     // If this tag union represents a number, skip right to
                     // returning tis as an Expr::Num
                     if let TagName::Private(Symbol::NUM_AT_NUM) = &tag_name {
-                        return num_expr;
+                        return Ok(num_expr);
                     }
 
                     let loc_tag_expr = {
@@ -1013,14 +1032,14 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> R
                         let content = env.subs.get_content_without_compacting(var);
 
                         let loc_payload = &*arena.alloc(Located {
-                            value: num_to_ast(env, num_expr, content),
+                            value: num_to_ast(env, num_expr, content)?,
                             region: Region::zero(),
                         });
 
                         arena.alloc([loc_payload])
                     };
 
-                    Expr::Apply(loc_tag_expr, payload, CalledVia::Space)
+                    Ok(Expr::Apply(loc_tag_expr, payload, CalledVia::Space))
                 }
                 other => Err(anyhow!("Unexpected FlatType {:?} in num_to_ast", other)),
             }

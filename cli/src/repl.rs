@@ -1,12 +1,15 @@
+use std::borrow::Cow;
+
 use const_format::concatcp;
 #[cfg(feature = "llvm")]
 use gen::{gen_and_eval, ReplOutput};
-use roc_parse::parser::{EExpr, SyntaxError};
 use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
 use rustyline_derive::{Completer, Helper, Hinter};
-use std::borrow::Cow;
-use std::io;
+use anyhow::Result;
+
+use roc_parse::parser::{EExpr, SyntaxError};
+use roc_utils::MaybeError;
 
 const BLUE: &str = "\u{001b}[36m";
 const PINK: &str = "\u{001b}[35m";
@@ -112,7 +115,7 @@ pub fn main() -> Result<()> {
 }
 
 #[cfg(feature = "llvm")]
-pub fn main() -> io::Result<()> {
+pub fn main() -> Result<()> {
     use rustyline::error::ReadlineError;
     use rustyline::Editor;
 
@@ -150,8 +153,11 @@ pub fn main() -> io::Result<()> {
                                 Ok(output) => {
                                     println!("{}", output);
                                 }
-                                Err(fail) => {
+                                Err(MaybeError::Concrete(fail)) => {
                                     report_parse_error(fail);
+                                }
+                                Err(other) => {
+                                    return Err(other.into());
                                 }
                             }
 
@@ -187,13 +193,12 @@ pub fn main() -> io::Result<()> {
                                 println!("{}", output);
                                 pending_src.clear();
                             }
-                            //                            Err(Fail {
-                            //                                reason: FailReason::Eof(_),
-                            //                                ..
-                            //                            }) => {}
-                            Err(fail) => {
+                            Err(MaybeError::Concrete(fail)) => {
                                 report_parse_error(fail);
                                 pending_src.clear();
+                            }
+                            Err(other) => {
+                                return Err(other.into());
                             }
                         }
                     }
@@ -235,7 +240,7 @@ fn report_parse_error(fail: SyntaxError) {
 }
 
 #[cfg(feature = "llvm")]
-fn eval_and_format<'a>(src: &str) -> Result<String, SyntaxError<'a>> {
+fn eval_and_format<'a>(src: &str) -> Result<String, MaybeError<SyntaxError<'a>>> {
     use roc_mono::ir::OptLevel;
     use target_lexicon::Triple;
 
