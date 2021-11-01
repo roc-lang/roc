@@ -194,6 +194,14 @@ pub fn build_file<'a>(
         }
     };
 
+    let code_gen_timing = match code_gen_timing {
+        Err(e) => {
+            // TODO: Remove panic
+            panic!("Error: {}", e)
+        }
+        Ok(ok) => ok,
+    };
+
     buf.push('\n');
     buf.push_str("    ");
     buf.push_str("Code Generation");

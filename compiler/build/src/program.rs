@@ -8,6 +8,10 @@ use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use anyhow::anyhow;
+use anyhow::Context;
+use anyhow::Error;
+use anyhow::Result;
 
 use roc_collections::all::{MutMap, MutSet};
 
@@ -183,7 +187,7 @@ pub fn gen_from_mono_module_llvm(
     app_o_file: &Path,
     opt_level: OptLevel,
     emit_debug_info: bool,
-) -> CodeGenTiming {
+) -> Result<CodeGenTiming> {
     use crate::target::{self, convert_opt_level};
     use inkwell::attributes::{Attribute, AttributeLoc};
     use inkwell::context::Context;
@@ -275,7 +279,7 @@ pub fn gen_from_mono_module_llvm(
         // write the ll code to a file, so we can modify it
         env.module.print_to_file(&app_ll_file).unwrap();
 
-        panic!(
+        anyhow::bail!(
             "😱 LLVM errors when defining module; I wrote the full LLVM IR to {:?}\n\n {}",
             app_ll_file,
             errors.to_string(),
@@ -313,10 +317,10 @@ pub fn gen_from_mono_module_llvm(
             Err(error) => {
                 use std::io::ErrorKind;
                 match error.kind() {
-                    ErrorKind::NotFound => panic!(
+                    ErrorKind::NotFound => anyhow::bail!(
                         r"I could not find the `debugir` tool on the PATH, install it from https://github.com/vaivaswatha/debugir"
                     ),
-                    _ => panic!("{:?}", error),
+                    _ => return Err(Error::from(error)),
                 }
             }
         }
@@ -347,14 +351,11 @@ pub fn gen_from_mono_module_llvm(
                 //
                 // different systems name this executable differently, so we shotgun for
                 // the most common ones and then give up.
-                let _: Result<std::process::Output, std::io::Error> =
-                    Command::new(format!("llc-{}", LLVM_VERSION))
-                        .args(llc_args)
-                        .output()
-                        .or_else(|_| Command::new("llc").args(llc_args).output())
-                        .map_err(|_| {
-                            panic!("We couldn't find llc-{} on your machine!", LLVM_VERSION);
-                        });
+                let _ = Command::new(format!("llc-{}", LLVM_VERSION))
+                    .args(llc_args)
+                    .output()
+                    .or_else(|_| Command::new("llc").args(llc_args).output())
+                    .map_err(|_| anyhow!("We couldn't find llc-{} on your machine!", LLVM_VERSION))?;
             }
 
             Architecture::Wasm32 => {
@@ -378,7 +379,7 @@ pub fn gen_from_mono_module_llvm(
                 let reloc = RelocMode::PIC;
                 let model = CodeModel::Default;
                 let target_machine =
-                    target::target_machine(target, convert_opt_level(opt_level), reloc, model)
+                    target::target_machine(target, convert_opt_level(opt_level), reloc, model)?
                         .unwrap();
 
                 target_machine
@@ -390,7 +391,7 @@ pub fn gen_from_mono_module_llvm(
                 // module.print_to_file(app_ll_file);
                 module.write_bitcode_to_path(app_o_file);
             }
-            _ => panic!(
+            _ => anyhow::bail!(
                 "TODO gracefully handle unsupported architecture: {:?}",
                 target.architecture
             ),
@@ -399,10 +400,7 @@ pub fn gen_from_mono_module_llvm(
 
     let emit_o_file = emit_o_file_start.elapsed().unwrap();
 
-    CodeGenTiming {
-        code_gen,
-        emit_o_file,
-    }
+    Ok(CodeGenTiming { code_gen, emit_o_file })
 }
 
 pub fn gen_from_mono_module_dev(
@@ -410,7 +408,7 @@ pub fn gen_from_mono_module_dev(
     loaded: MonomorphizedModule,
     target: &target_lexicon::Triple,
     app_o_file: &Path,
-) -> CodeGenTiming {
+) -> Result<CodeGenTiming> {
     use target_lexicon::Architecture;
 
     match target.architecture {
@@ -426,7 +424,7 @@ fn gen_from_mono_module_dev_wasm32(
     arena: &bumpalo::Bump,
     loaded: MonomorphizedModule,
     app_o_file: &Path,
-) -> CodeGenTiming {
+) -> Result<CodeGenTiming> {
     let mut procedures = MutMap::default();
 
     for (key, proc) in loaded.procedures {
@@ -449,7 +447,7 @@ fn gen_from_mono_module_dev_wasm32(
 
     std::fs::write(&app_o_file, &bytes).expect("failed to write object to file");
 
-    CodeGenTiming::default()
+    Ok(CodeGenTiming::default())
 }
 
 fn gen_from_mono_module_dev_assembly(
@@ -457,7 +455,7 @@ fn gen_from_mono_module_dev_assembly(
     loaded: MonomorphizedModule,
     target: &target_lexicon::Triple,
     app_o_file: &Path,
-) -> CodeGenTiming {
+) -> Result<CodeGenTiming> {
     let lazy_literals = true;
     let generate_allocators = false; // provided by the platform
 
@@ -470,12 +468,14 @@ fn gen_from_mono_module_dev_assembly(
     };
 
     let module_object = roc_gen_dev::build_module(&env, target, loaded.procedures)
-        .expect("failed to compile module");
+        .map_err(|s| anyhow!("{}", s)) // TODO why does build_module() return Result<_, String>?
+        .context("failed to compile module")?;
 
     let module_out = module_object
         .write()
-        .expect("failed to build output object");
-    std::fs::write(&app_o_file, module_out).expect("failed to write object to file");
+        .context("failed to build output object")?;
+    std::fs::write(&app_o_file, module_out)
+        .context("failed to write object to file")?;
 
-    CodeGenTiming::default()
+    Ok(CodeGenTiming::default())
 }
