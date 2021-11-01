@@ -25,6 +25,7 @@ interface List
             map,
             map2,
             map3,
+            map4,
             mapWithIndex,
             mapOrDrop,
             mapJoin,
@@ -268,6 +269,11 @@ map2 : List a, List b, (a, b -> c) -> List c
 ## and use that as the first element in the returned list.
 ## Repeat until a list runs out of elements.
 map3 : List a, List b, List c, (a, b, c -> d) -> List d
+
+## Run a transformation function on the first element of each list,
+## and use that as the first element in the returned list.
+## Repeat until a list runs out of elements.
+map4 : List a, List b, List c, List d, (a, b, c, d -> e) -> List e
 
 ## This works like [List.map], except it also passes the index
 ## of the element to the conversion function.
