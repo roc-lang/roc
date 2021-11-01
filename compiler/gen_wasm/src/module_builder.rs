@@ -6,7 +6,7 @@ use crate::serialize::{SerialBuffer, Serialize};
 
 /*******************************************************************
  *
- * Helper functions
+ * Helpers
  *
  *******************************************************************/
 
@@ -26,6 +26,15 @@ pub enum SectionId {
     Code = 10,
     Data = 11,
     DataCount = 12,
+}
+
+#[repr(u8)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+enum ImportExportType {
+    Func = 0,
+    Table = 1,
+    Mem = 2,
+    Global = 3,
 }
 
 struct SectionHeaderIndices {
@@ -65,7 +74,7 @@ fn update_section_size<T: SerialBuffer>(buffer: &mut T, header_indices: SectionH
     buffer.overwrite_padded_u32(header_indices.size_index, size as u32);
 }
 
-fn serialize_vector_with_count<'a, SB, S>(buffer: &mut SB, items: &Vec<'a, S>)
+fn serialize_vector_with_count<'a, SB, S>(buffer: &mut SB, items: &[S])
 where
     SB: SerialBuffer,
     S: Serialize,
@@ -154,7 +163,7 @@ impl<'a> TypeSection<'a> {
 impl<'a> Serialize for TypeSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         let header_indices = write_section_header(buffer, SectionId::Type);
-        serialize_vector_with_count(buffer, self.signatures);
+        serialize_vector_with_count(buffer, &self.signatures);
         update_section_size(buffer, header_indices);
     }
 }
@@ -165,18 +174,80 @@ impl<'a> Serialize for TypeSection<'a> {
  *
  *******************************************************************/
 
-pub struct ImportSection<'a> {
-    todo: &'a str,
+#[repr(u8)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+enum RefType {
+    Func = 0x70,
+    Extern = 0x6f,
 }
+
+struct TableType {
+    ref_type: RefType,
+    limits: Limits,
+}
+
+impl Serialize for TableType {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.append_u8(self.ref_type as u8);
+        self.limits.serialize(buffer);
+    }
+}
+
+enum ImportDesc {
+    Func { signature_index: u32 },
+    Table { ty: TableType },
+    Mem { limits: Limits },
+    Global { ty: GlobalType },
+}
+
+struct Import {
+    module: String,
+    name: String,
+    description: ImportDesc,
+}
+
+impl Serialize for Import {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        self.module.serialize(buffer);
+        self.name.serialize(buffer);
+        match &self.description {
+            ImportDesc::Func { signature_index } => {
+                buffer.append_u8(0);
+                buffer.encode_u32(*signature_index);
+            }
+            ImportDesc::Table { ty } => {
+                buffer.append_u8(1);
+                ty.serialize(buffer);
+            }
+            ImportDesc::Mem { limits } => {
+                buffer.append_u8(2);
+                limits.serialize(buffer);
+            }
+            ImportDesc::Global { ty } => {
+                buffer.append_u8(3);
+                ty.serialize(buffer);
+            }
+        }
+    }
+}
+
+pub struct ImportSection<'a>(Vec<'a, Import>);
 
 impl<'a> ImportSection<'a> {
     pub fn new(arena: &'a Bump) -> Self {
-        ImportSection { todo: "" }
+        ImportSection(bumpalo::vec![in arena])
     }
 }
 
 impl<'a> Serialize for ImportSection<'a> {
-    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {}
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        if self.0.is_empty() {
+            return;
+        }
+        let header_indices = write_section_header(buffer, SectionId::Import);
+        serialize_vector_with_count(buffer, &self.0);
+        update_section_size(buffer, header_indices);
+    }
 }
 
 /*******************************************************************
@@ -198,7 +269,7 @@ impl<'a> FunctionSection<'a> {
 }
 
 impl<'a> Serialize for FunctionSection<'a> {
-    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         todo!();
     }
 }
@@ -212,6 +283,12 @@ impl<'a> Serialize for FunctionSection<'a> {
 enum Limits {
     Min(u32),
     MinMax(u32, u32),
+}
+
+impl Serialize for Limits {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        todo!();
+    }
 }
 
 pub struct MemorySection {
@@ -230,7 +307,7 @@ impl MemorySection {
 }
 
 impl Serialize for MemorySection {
-    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         todo!();
     }
 }
@@ -241,7 +318,19 @@ impl Serialize for MemorySection {
  *
  *******************************************************************/
 
-enum InitValue {
+struct GlobalType {
+    value_type: ValueType,
+    is_mutable: bool,
+}
+
+impl Serialize for GlobalType {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.append_u8(self.value_type as u8);
+        buffer.append_u8(self.is_mutable as u8);
+    }
+}
+
+enum GlobalInitValue {
     I32(i32),
     I64(i64),
     F32(f32),
@@ -249,12 +338,12 @@ enum InitValue {
 }
 
 struct Global {
-    init_value: InitValue,
-    is_mutable: bool,
+    ty: GlobalType,
+    init_value: GlobalInitValue,
 }
 
 impl Serialize for Global {
-    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         todo!();
     }
 }
@@ -268,7 +357,7 @@ impl<'a> GlobalSection<'a> {
 }
 
 impl<'a> Serialize for GlobalSection<'a> {
-    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         todo!();
     }
 }
@@ -279,18 +368,9 @@ impl<'a> Serialize for GlobalSection<'a> {
  *
  *******************************************************************/
 
-#[repr(u8)]
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
-enum ExportType {
-    Func = 0,
-    Table = 1,
-    Mem = 2,
-    Global = 3,
-}
-
 struct Export {
     name: String,
-    ty: ExportType,
+    ty: ImportExportType,
     index: u32,
 }
 
@@ -303,7 +383,7 @@ impl<'a> ExportSection<'a> {
 }
 
 impl<'a> Serialize for ExportSection<'a> {
-    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         todo!();
     }
 }
@@ -327,7 +407,7 @@ impl<'a> CodeSection<'a> {
 }
 
 impl<'a> Serialize for CodeSection<'a> {
-    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         todo!();
     }
 }
@@ -506,7 +586,7 @@ pub struct LinkingSegment {
 }
 
 impl Serialize for LinkingSegment {
-    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         todo!();
     }
 }
@@ -518,7 +598,7 @@ pub struct LinkingInitFunc {
 }
 
 impl Serialize for LinkingInitFunc {
-    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         todo!();
     }
 }
@@ -544,7 +624,7 @@ pub struct ComdatSym {
 }
 
 impl Serialize for ComdatSym {
-    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         todo!();
     }
 }
@@ -561,7 +641,7 @@ pub struct LinkingComdat<'a> {
 }
 
 impl<'a> Serialize for LinkingComdat<'a> {
-    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         todo!();
     }
 }
