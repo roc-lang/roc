@@ -3,7 +3,7 @@ use parity_wasm::elements::Internal;
 
 use roc_gen_wasm::code_builder::{Align, CodeBuilder, ValueType};
 use roc_gen_wasm::from_wasm32_memory::FromWasm32Memory;
-use roc_gen_wasm::{overwrite_padded_u32, LocalId};
+use roc_gen_wasm::{serialize::SerialBuffer, LocalId};
 use roc_std::{RocDec, RocList, RocOrder, RocStr};
 
 pub trait Wasm32TestResult {
@@ -30,15 +30,15 @@ pub trait Wasm32TestResult {
         let mut code_builder = CodeBuilder::new(arena);
         Self::build_wrapper_body(&mut code_builder, main_function_index);
 
-        code_builder.serialize(code_section_bytes).unwrap();
+        code_builder.serialize(code_section_bytes);
 
         let mut num_procs = 0;
         for (i, byte) in code_section_bytes[5..10].iter().enumerate() {
             num_procs += ((byte & 0x7f) as u32) << (i * 7);
         }
         let inner_length = (code_section_bytes.len() - 5) as u32;
-        overwrite_padded_u32(&mut code_section_bytes[0..5], inner_length);
-        overwrite_padded_u32(&mut code_section_bytes[5..10], num_procs + 1);
+        code_section_bytes.overwrite_padded_u32(0, inner_length);
+        code_section_bytes.overwrite_padded_u32(5, num_procs + 1);
     }
 
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32);
@@ -53,7 +53,8 @@ macro_rules! build_wrapper_body_primitive {
             let frame_size = 8;
 
             code_builder.get_local(frame_pointer_id);
-            code_builder.call(main_function_index, 0, true);
+            // Raw "call" instruction. Don't bother with symbol & relocation since we're not going to link.
+            code_builder.inst_imm32(roc_gen_wasm::opcodes::CALL, 0, true, main_function_index);
             code_builder.$store_instruction($align, 0);
             code_builder.get_local(frame_pointer_id);
 
@@ -80,7 +81,8 @@ fn build_wrapper_body_stack_memory(
     let frame_pointer = Some(local_id);
 
     code_builder.get_local(local_id);
-    code_builder.call(main_function_index, 0, true);
+    // Raw "call" instruction. Don't bother with symbol & relocation since we're not going to link.
+    code_builder.inst_imm32(roc_gen_wasm::opcodes::CALL, 0, true, main_function_index);
     code_builder.get_local(local_id);
     code_builder.finalize(local_types, size as i32, frame_pointer);
 }

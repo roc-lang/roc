@@ -1,6 +1,6 @@
 use bumpalo::collections::Vec;
 use parity_wasm::builder;
-use parity_wasm::builder::{CodeLocation, FunctionDefinition, ModuleBuilder};
+use parity_wasm::builder::{FunctionDefinition, ModuleBuilder};
 
 use roc_collections::all::MutMap;
 use roc_module::low_level::LowLevel;
@@ -10,8 +10,10 @@ use roc_mono::layout::{Builtin, Layout};
 
 use crate::code_builder::{BlockType, CodeBuilder, ValueType};
 use crate::layout::WasmLayout;
+use crate::module_builder::RelocationEntry;
+use crate::serialize::SerialBuffer;
 use crate::storage::{Storage, StoredValue, StoredValueKind};
-use crate::{copy_memory, overwrite_padded_u32, CopyMemoryConfig, Env, LocalId, PTR_TYPE};
+use crate::{copy_memory, CopyMemoryConfig, Env, LocalId, PTR_TYPE};
 
 // Don't allocate any constant data at address zero or near it. Would be valid, but bug-prone.
 // Follow Emscripten's example by using 1kB (4 bytes would probably do)
@@ -26,9 +28,10 @@ pub struct WasmBackend<'a> {
     // Module-level data
     pub module_builder: ModuleBuilder,
     pub code_section_bytes: std::vec::Vec<u8>,
+    pub code_relocations: Vec<'a, RelocationEntry>,
     _data_offset_map: MutMap<Literal<'a>, u32>,
     _data_offset_next: u32,
-    proc_symbol_map: MutMap<Symbol, CodeLocation>,
+    proc_symbols: &'a [Symbol],
 
     // Function-level data
     code_builder: CodeBuilder<'a>,
@@ -40,15 +43,12 @@ pub struct WasmBackend<'a> {
 }
 
 impl<'a> WasmBackend<'a> {
-    pub fn new(env: &'a Env<'a>, num_procs: usize) -> Self {
-        // Code section is prefixed with the number of Wasm functions
-        // For now, this is the same as the number of IR procedures (until we start inlining!)
+    pub fn new(env: &'a Env<'a>, proc_symbols: &'a [Symbol]) -> Self {
         let mut code_section_bytes = std::vec::Vec::with_capacity(4096);
 
-        // Reserve space for code section header: inner byte length and number of functions
-        // Padded to the maximum 5 bytes each, so we can update later without moving everything
-        code_section_bytes.resize(10, 0);
-        overwrite_padded_u32(&mut code_section_bytes[5..10], num_procs as u32); // gets modified in unit tests
+        // Code section header
+        code_section_bytes.reserve_padded_u32(); // byte length, to be written at the end
+        code_section_bytes.encode_padded_u32(proc_symbols.len() as u32); // modified later in unit tests
 
         WasmBackend {
             env,
@@ -58,7 +58,8 @@ impl<'a> WasmBackend<'a> {
             code_section_bytes,
             _data_offset_map: MutMap::default(),
             _data_offset_next: UNUSED_DATA_SECTION_BYTES,
-            proc_symbol_map: MutMap::default(),
+            proc_symbols,
+            code_relocations: Vec::with_capacity_in(256, env.arena),
 
             // Function-level data
             block_depth: 0,
@@ -81,7 +82,7 @@ impl<'a> WasmBackend<'a> {
 
     ***********************************************************/
 
-    pub fn build_proc(&mut self, proc: Proc<'a>, sym: Symbol) -> Result<u32, String> {
+    pub fn build_proc(&mut self, proc: Proc<'a>, _sym: Symbol) -> Result<u32, String> {
         // println!("\ngenerating procedure {:?}\n", sym);
 
         // Use parity-wasm to add the signature in "types" and "functions" sections
@@ -89,7 +90,6 @@ impl<'a> WasmBackend<'a> {
         let empty_function_def = self.start_proc(&proc);
         let location = self.module_builder.push_function(empty_function_def);
         let function_index = location.body;
-        self.proc_symbol_map.insert(sym, location);
 
         self.build_stmt(&proc.body, &proc.ret_layout)?;
 
@@ -141,9 +141,8 @@ impl<'a> WasmBackend<'a> {
             self.storage.stack_frame_pointer,
         );
 
-        self.code_builder
-            .serialize(&mut self.code_section_bytes)
-            .map_err(|e| format!("{:?}", e))?;
+        let relocs = self.code_builder.serialize(&mut self.code_section_bytes);
+        self.code_relocations.extend(relocs);
         Ok(())
     }
 
@@ -396,13 +395,29 @@ impl<'a> WasmBackend<'a> {
 
                     self.storage.load_symbols(&mut self.code_builder, wasm_args);
 
-                    let function_location = self.proc_symbol_map.get(func_sym).ok_or(format!(
-                        "Cannot find function {:?} called from {:?}",
-                        func_sym, sym
-                    ))?;
+                    // Index of the called function in the code section
+                    // TODO: account for inlined functions when we start doing that (remember we emit procs out of order)
+                    let func_index = match self.proc_symbols.iter().position(|s| s == func_sym) {
+                        Some(i) => i as u32,
+                        None => {
+                            // TODO: actually useful linking! Push a relocation for it.
+                            return Err(format!(
+                                "Not yet supporteed: calling foreign function {:?}",
+                                func_sym
+                            ));
+                        }
+                    };
 
-                    self.code_builder
-                        .call(function_location.body, wasm_args.len(), has_return_val);
+                    // Index of the function's name in the symbol table
+                    let symbol_index = func_index; // TODO: update this when we add other things to the symbol table
+
+                    self.code_builder.call(
+                        func_index,
+                        symbol_index,
+                        wasm_args.len(),
+                        has_return_val,
+                    );
+
                     Ok(())
                 }
 

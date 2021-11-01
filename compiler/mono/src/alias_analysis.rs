@@ -771,6 +771,37 @@ fn call_spec(
                     builder.add_call(block, spec_var, module, name, argument)?;
                 }
 
+                ListMap4 { xs, ys, zs, ws } => {
+                    let list1 = env.symbols[xs];
+                    let list2 = env.symbols[ys];
+                    let list3 = env.symbols[zs];
+                    let list4 = env.symbols[ws];
+                    let closure_env = env.symbols[function_env];
+
+                    let bag1 = builder.add_get_tuple_field(block, list1, LIST_BAG_INDEX)?;
+                    let _cell1 = builder.add_get_tuple_field(block, list1, LIST_CELL_INDEX)?;
+                    let elem1 = builder.add_bag_get(block, bag1)?;
+
+                    let bag2 = builder.add_get_tuple_field(block, list2, LIST_BAG_INDEX)?;
+                    let _cell2 = builder.add_get_tuple_field(block, list2, LIST_CELL_INDEX)?;
+                    let elem2 = builder.add_bag_get(block, bag2)?;
+
+                    let bag3 = builder.add_get_tuple_field(block, list3, LIST_BAG_INDEX)?;
+                    let _cell3 = builder.add_get_tuple_field(block, list3, LIST_CELL_INDEX)?;
+                    let elem3 = builder.add_bag_get(block, bag3)?;
+
+                    let bag4 = builder.add_get_tuple_field(block, list4, LIST_BAG_INDEX)?;
+                    let _cell4 = builder.add_get_tuple_field(block, list4, LIST_CELL_INDEX)?;
+                    let elem4 = builder.add_bag_get(block, bag4)?;
+
+                    let argument = if closure_env_layout.is_none() {
+                        builder.add_make_tuple(block, &[elem1, elem2, elem3, elem4])?
+                    } else {
+                        builder.add_make_tuple(block, &[elem1, elem2, elem3, elem4, closure_env])?
+                    };
+                    builder.add_call(block, spec_var, module, name, argument)?;
+                }
+
                 ListKeepIf { xs } | ListKeepOks { xs } | ListKeepErrs { xs } => {
                     let list = env.symbols[xs];
                     let closure_env = env.symbols[function_env];

@@ -64,7 +64,7 @@ const TVAR1: VarId = VarId::from_u32(1);
 const TVAR2: VarId = VarId::from_u32(2);
 const TVAR3: VarId = VarId::from_u32(3);
 const TVAR4: VarId = VarId::from_u32(4);
-const TOP_LEVEL_CLOSURE_VAR: VarId = VarId::from_u32(5);
+const TOP_LEVEL_CLOSURE_VAR: VarId = VarId::from_u32(10);
 
 pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     let mut types = HashMap::with_capacity_and_hasher(NUM_BUILTIN_IMPORTS, default_hasher());
@@ -753,6 +753,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_top_level_function_type!(
         Symbol::LIST_MIN,
         vec![list_type(num_type(flex(TVAR1)))],
+        Box::new(result_type(num_type(flex(TVAR1)), list_was_empty.clone())),
+    );
+
+    // max :  List (Num a) -> Result (Num a) [ ListWasEmpty ]*
+    add_top_level_function_type!(
+        Symbol::LIST_MAX,
+        vec![list_type(num_type(flex(TVAR1)))],
         Box::new(result_type(num_type(flex(TVAR1)), list_was_empty)),
     );
 
@@ -920,6 +927,27 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                 closure(vec![flex(a), flex(b), flex(c)], cvar, Box::new(flex(d))),
             ],
             Box::new(list_type(flex(d))),
+        )
+    };
+
+    {
+        let_tvars! {a, b, c, d, e, cvar};
+
+        // map4 : List a, List b, List c, List d, (a, b, c, d -> e) -> List e
+        add_top_level_function_type!(
+            Symbol::LIST_MAP4,
+            vec![
+                list_type(flex(a)),
+                list_type(flex(b)),
+                list_type(flex(c)),
+                list_type(flex(d)),
+                closure(
+                    vec![flex(a), flex(b), flex(c), flex(d)],
+                    cvar,
+                    Box::new(flex(e))
+                ),
+            ],
+            Box::new(list_type(flex(e))),
         )
     };
 
