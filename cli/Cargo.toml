@@ -80,6 +80,10 @@ tempfile = "3.2.0"
 
 wasmer = { version = "2.0.0", optional = true, default-features = false, features = ["default-cranelift", "default-universal"] }
 wasmer-wasi = { version = "2.0.0", optional = true }
+parse-display = "0.5.3"
+strum = "0.22"
+strum_macros = "0.22"
+lazy_static = "1.4.0"
 
 [dev-dependencies]
 wasmer = { version = "2.0.0", default-features = false, features = ["default-cranelift", "default-universal"] }
