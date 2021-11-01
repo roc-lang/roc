@@ -35,7 +35,7 @@ struct SectionHeaderIndices {
 
 /// Write a section header, returning the position of the encoded length
 fn write_section_header<T: SerialBuffer>(buffer: &mut T, id: SectionId) -> SectionHeaderIndices {
-    buffer.append_byte(id as u8);
+    buffer.append_u8(id as u8);
     let size_index = buffer.reserve_padded_u32();
     let body_index = buffer.size();
     SectionHeaderIndices {
@@ -49,7 +49,7 @@ fn write_custom_section_header<T: SerialBuffer>(
     buffer: &mut T,
     name: &str,
 ) -> SectionHeaderIndices {
-    buffer.append_byte(SectionId::Custom as u8);
+    buffer.append_u8(SectionId::Custom as u8);
     let size_index = buffer.reserve_padded_u32();
     let body_index = buffer.size();
     name.serialize(buffer);
@@ -86,7 +86,7 @@ impl<'a> Serialize for [ValueType] {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         // reserve one byte for num_batches
         let start = buffer.size();
-        buffer.append_byte(0); // mut
+        buffer.append_u8(0);
 
         if self.is_empty() {
             return;
@@ -101,19 +101,19 @@ impl<'a> Serialize for [ValueType] {
                 batch_size += 1;
             } else {
                 buffer.encode_u32(batch_size);
-                buffer.append_byte(batch_type as u8);
+                buffer.append_u8(batch_type as u8);
                 batch_type = *t;
                 batch_size = 1;
                 num_batches += 1;
             }
         }
         buffer.encode_u32(batch_size);
-        buffer.append_byte(batch_type as u8);
+        buffer.append_u8(batch_type as u8);
         num_batches += 1;
 
         // Go back and write the number of batches at the start
         if num_batches < 128 {
-            buffer.set_byte(start, num_batches as u8);
+            buffer.overwrite_u8(start, num_batches as u8);
         } else {
             // We need more than 1 byte to encode num_batches!
             // This is a ridiculous edge case, so just pad to 5 bytes for simplicity
@@ -130,11 +130,11 @@ struct Signature<'a> {
 
 impl<'a> Serialize for Signature<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        buffer.append_byte(0x60);
+        buffer.append_u8(0x60);
         self.param_types.serialize(buffer);
         match self.ret_type {
             Some(t) => [t].serialize(buffer),
-            None => buffer.append_byte(0), // vector of length zero
+            None => buffer.append_u8(0), // vector of length zero
         }
     }
 }
@@ -444,7 +444,7 @@ impl Serialize for RelocationEntry {
                 offset,
                 symbol_index,
             } => {
-                buffer.append_byte(*type_id as u8);
+                buffer.append_u8(*type_id as u8);
                 buffer.encode_u32(*offset);
                 buffer.encode_u32(*symbol_index);
             }
@@ -454,7 +454,7 @@ impl Serialize for RelocationEntry {
                 symbol_index,
                 addend,
             } => {
-                buffer.append_byte(*type_id as u8);
+                buffer.append_u8(*type_id as u8);
                 buffer.encode_u32(*offset);
                 buffer.encode_u32(*symbol_index);
                 buffer.encode_i32(*addend);
@@ -696,7 +696,7 @@ impl SymInfo {
 
 impl Serialize for SymInfo {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        buffer.append_byte(match self.info {
+        buffer.append_u8(match self.info {
             SymInfoFields::Function(_) => 0,
             SymInfoFields::Data(_) => 1,
             SymInfoFields::Global(_) => 2,
@@ -736,7 +736,7 @@ pub enum LinkingSubSection<'a> {
 
 impl<'a> Serialize for LinkingSubSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        buffer.append_byte(match self {
+        buffer.append_u8(match self {
             Self::SegmentInfo(_) => 5,
             Self::InitFuncs(_) => 6,
             Self::ComdatInfo(_) => 7,
@@ -778,7 +778,7 @@ impl<'a> LinkingSection<'a> {
 impl<'a> Serialize for LinkingSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         let header_indices = write_custom_section_header(buffer, "linking");
-        buffer.append_byte(LINKING_VERSION);
+        buffer.append_u8(LINKING_VERSION);
         for subsection in self.subsections.iter() {
             subsection.serialize(buffer);
         }
@@ -846,7 +846,7 @@ impl<'a> WasmModule<'a> {
 
     #[allow(dead_code)]
     fn serialize<T: SerialBuffer>(&mut self, buffer: &mut T) {
-        buffer.append_byte(0);
+        buffer.append_u8(0);
         buffer.append_slice("asm".as_bytes());
         buffer.write_unencoded_u32(Self::WASM_VERSION);
 

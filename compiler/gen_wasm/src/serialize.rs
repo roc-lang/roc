@@ -10,10 +10,10 @@ macro_rules! encode_uleb128 {
             let mut x = value;
             let start_len = self.size();
             while x >= 0x80 {
-                self.append_byte(0x80 | ((x & 0x7f) as u8));
+                self.append_u8(0x80 | ((x & 0x7f) as u8));
                 x >>= 7;
             }
-            self.append_byte(x as u8);
+            self.append_u8(x as u8);
             self.size() - start_len
         }
     };
@@ -30,10 +30,10 @@ macro_rules! encode_sleb128 {
                 x >>= 7;
                 let byte_is_negative = (byte & 0x40) != 0;
                 if ((x == 0 && !byte_is_negative) || (x == -1 && byte_is_negative)) {
-                    self.append_byte(byte);
+                    self.append_u8(byte);
                     break;
                 }
-                self.append_byte(byte | 0x80);
+                self.append_u8(byte | 0x80);
             }
             self.size() - start_len
         }
@@ -47,7 +47,7 @@ macro_rules! write_unencoded {
             let mut x = value;
             let size = std::mem::size_of::<$ty>();
             for _ in 0..size {
-                self.append_byte((x & 0xff) as u8);
+                self.append_u8((x & 0xff) as u8);
                 x >>= 8;
             }
         }
@@ -61,18 +61,19 @@ macro_rules! encode_padded_sleb128 {
             let mut x = value;
             let size = (std::mem::size_of::<$ty>() / 4) * 5;
             for _ in 0..(size - 1) {
-                self.append_byte(0x80 | (x & 0x7f) as u8);
+                self.append_u8(0x80 | (x & 0x7f) as u8);
                 x >>= 7;
             }
-            self.append_byte((x & 0x7f) as u8);
+            self.append_u8((x & 0x7f) as u8);
         }
     };
 }
 
 pub trait SerialBuffer {
-    fn append_byte(&mut self, b: u8);
-    fn set_byte(&mut self, index: usize, b: u8);
+    fn append_u8(&mut self, b: u8);
+    fn overwrite_u8(&mut self, index: usize, b: u8);
     fn append_slice(&mut self, b: &[u8]);
+
     fn size(&self) -> usize;
 
     encode_uleb128!(encode_u32, u32);
@@ -82,6 +83,7 @@ pub trait SerialBuffer {
 
     /// Inserts extra entries at the given index by copying the following entries to higher indices
     fn insert_space_at(&mut self, index: usize, size: usize);
+
     fn reserve_padded_u32(&mut self) -> usize;
     fn encode_padded_u32(&mut self, value: u32) -> usize;
     fn overwrite_padded_u32(&mut self, index: usize, value: u32);
@@ -122,10 +124,10 @@ fn overwrite_padded_u32_help(buffer: &mut [u8], value: u32) {
 }
 
 impl SerialBuffer for std::vec::Vec<u8> {
-    fn append_byte(&mut self, b: u8) {
+    fn append_u8(&mut self, b: u8) {
         self.push(b);
     }
-    fn set_byte(&mut self, index: usize, b: u8) {
+    fn overwrite_u8(&mut self, index: usize, b: u8) {
         self[index] = b;
     }
     fn append_slice(&mut self, b: &[u8]) {
@@ -157,10 +159,10 @@ impl SerialBuffer for std::vec::Vec<u8> {
 }
 
 impl<'a> SerialBuffer for Vec<'a, u8> {
-    fn append_byte(&mut self, b: u8) {
+    fn append_u8(&mut self, b: u8) {
         self.push(b);
     }
-    fn set_byte(&mut self, index: usize, b: u8) {
+    fn overwrite_u8(&mut self, index: usize, b: u8) {
         self[index] = b;
     }
     fn append_slice(&mut self, b: &[u8]) {
