@@ -104,6 +104,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyhow"
+version = "1.0.44"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61604a8f862e1d5c3229fdd78f8b02c68dcf73a4c4b05fd636d12240aaa242c1"
+
+[[package]]
 name = "approx"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -496,6 +502,7 @@ checksum = "4bfbf56724aa9eca8afa4fcfadeb479e722935bb2a0900c2d37e0cc477af0688"
 name = "cli_utils"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "bumpalo",
  "criterion",
  "inlinable_string",
@@ -3995,6 +4002,7 @@ dependencies = [
  "morphic_lib",
  "num_cpus",
  "parking_lot",
+ "parse-display",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
@@ -4012,6 +4020,7 @@ dependencies = [
  "roc_types",
  "roc_unify",
  "tempfile",
+ "thiserror",
  "ven_pretty",
 ]
 
@@ -4068,12 +4077,14 @@ dependencies = [
  "bumpalo",
  "encode_unicode",
  "indoc 0.3.6",
+ "parse-display",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
  "roc_collections",
  "roc_module",
  "roc_region",
+ "thiserror",
 ]
 
 [[package]]
@@ -4184,7 +4195,9 @@ dependencies = [
 name = "roc_utils"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "snafu",
+ "thiserror",
 ]
 
 [[package]]
@@ -4830,18 +4843,18 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "1.0.29"
+version = "1.0.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "602eca064b2d83369e2b2f34b09c70b605402801927c65c11071ac911d299b88"
+checksum = "854babe52e4df1653706b98fcfc05843010039b406875930a70e4d9644e5c417"
 dependencies = [
  "thiserror-impl",
 ]
 
 [[package]]
 name = "thiserror-impl"
-version = "1.0.29"
+version = "1.0.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bad553cc2c78e8de258400763a647e80e6d1b31ee237275d756f6836d204494c"
+checksum = "aa32fd3f627f367fe16f893e2597ae3c05020f8bba2666a4e6ea73d377e5714b"
 dependencies = [
  "proc-macro2 1.0.29",
  "quote 1.0.9",

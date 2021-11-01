@@ -1,13 +1,6 @@
-#[macro_use]
-extern crate pretty_assertions;
-
-extern crate bumpalo;
-extern crate roc_collections;
-extern crate roc_load;
-extern crate roc_module;
-
 #[cfg(test)]
 mod cli_run {
+    use anyhow::{anyhow, Result};
     use cli_utils::helpers::{
         example_file, examples_dir, extract_valgrind_errors, fixture_file, run_cmd, run_roc,
         run_with_valgrind, ValgrindError, ValgrindErrorXWhat,
@@ -715,7 +708,6 @@ mod cli_run {
     }
 }
 
-#[allow(dead_code)]
 fn run_with_wasmer(wasm_path: &std::path::Path, stdin: &[&str]) -> String {
     use std::io::Write;
     use wasmer::{Instance, Module, Store};
@@ -773,7 +765,6 @@ fn run_with_wasmer(wasm_path: &std::path::Path, stdin: &[&str]) -> String {
     }
 }
 
-#[allow(dead_code)]
 fn read_wasi_stdout(wasi_env: wasmer_wasi::WasiEnv) -> String {
     let mut state = wasi_env.state.lock().unwrap();
 

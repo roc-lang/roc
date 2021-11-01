@@ -93,3 +93,21 @@ pub fn first_last_index_of<T: ::std::fmt::Debug + std::cmp::Eq>(
         .fail()
     }
 }
+
+use thiserror::Error;
+
+#[derive(Error)]
+pub enum MaybeError<E: std::error::Error> {
+    Concrete(#[from] E),
+    Anyhow(anyhow::Error),
+}
+
+pub trait IntoMaybeError<T, E: std::error::Error> {
+    fn into_maybe(self) -> Result<T, MaybeError<E>>;
+}
+
+impl<T, E: std::error::Error> IntoMaybeError<T, E> for Result<T, anyhow::Error> {
+    fn into_maybe(self) -> Result<T, MaybeError<E>> {
+        self.or_else(|err| Err(MaybeError::Anyhow(err)))
+    }
+}

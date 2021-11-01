@@ -1,4 +1,12 @@
+use std::path::PathBuf;
+use std::time::{Duration, SystemTime};
+
+use anyhow::Result;
 use bumpalo::Bump;
+use target_lexicon::Triple;
+#[cfg(feature = "llvm")]
+use tempfile::Builder;
+
 use roc_build::{
     link::{link, rebuild_host, LinkType},
     program,
@@ -9,11 +17,7 @@ use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
 use roc_load::file::LoadingProblem;
 use roc_mono::ir::OptLevel;
-use std::path::PathBuf;
-use std::time::{Duration, SystemTime};
-use target_lexicon::Triple;
-#[cfg(feature = "llvm")]
-use tempfile::Builder;
+use roc_utils::{IntoMaybeError, MaybeError};
 
 fn report_timing(buf: &mut String, label: &str, duration: Duration) {
     buf.push_str(&format!(
@@ -58,7 +62,7 @@ pub fn build_file<'a>(
     link_type: LinkType,
     surgically_link: bool,
     precompiled: bool,
-) -> Result<BuiltFile, LoadingProblem<'a>> {
+) -> Result<BuiltFile, MaybeError<LoadingProblem<'a>>> {
     let compilation_start = SystemTime::now();
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
 
@@ -78,6 +82,7 @@ pub fn build_file<'a>(
         builtin_defs_map,
     )?;
 
+    use anyhow::Context;
     use target_lexicon::Architecture;
     let emit_wasm = matches!(target.architecture, Architecture::Wasm32);
 
@@ -127,9 +132,8 @@ pub fn build_file<'a>(
         .prefix("roc_app")
         .suffix(&format!(".{}", app_extension))
         .tempfile()
-        .map_err(|err| {
-            todo!("TODO Gracefully handle tempfile creation error {:?}", err);
-        })?;
+        .with_context(|| "TODO Gracefully handle tempfile creation error")
+        .into_maybe()?;
     let app_o_file = app_o_file.path();
     let buf = &mut String::with_capacity(1024);
 
@@ -205,12 +209,13 @@ pub fn build_file<'a>(
     let compilation_end = compilation_start.elapsed().unwrap();
 
     let size = std::fs::metadata(&app_o_file)
-        .unwrap_or_else(|err| {
-            panic!(
-                "Could not open {:?} - which was supposed to have been generated. Error: {:?}",
-                app_o_file, err
-            );
+        .with_context(|| {
+            format!(
+                "Could not open {:?} - which was supposed to have been generated.",
+                app_o_file
+            )
         })
+        .into_maybe()?
         .len();
 
     if emit_timings {
@@ -238,9 +243,9 @@ pub fn build_file<'a>(
     let link_start = SystemTime::now();
     let outcome = if surgically_link {
         roc_linker::link_preprocessed_host(target, &host_input_path, app_o_file, &binary_path)
-            .map_err(|_| {
-                todo!("gracefully handle failing to surgically link");
-            })?;
+            .with_context(|| "TODO gracefully handle failing to surgically link")
+            .into_maybe()?;
+
         BuildOutcome::NoProblems
     } else {
         let mut inputs = vec![
@@ -258,13 +263,13 @@ pub fn build_file<'a>(
             &inputs,
                 link_type
             )
-            .map_err(|_| {
-                todo!("gracefully handle `ld` failing to spawn.");
-            })?;
+            .with_context(|| "TODO gracefully handle `ld` failing to spawn.")
+            .into_maybe()?;
 
-        let exit_status = child.wait().map_err(|_| {
-            todo!("gracefully handle error after `ld` spawned");
-        })?;
+        let exit_status = child
+            .wait()
+            .with_context(|| "TODO gracefully handle error after `ld` spawned")
+            .into_maybe()?;
 
         // TODO change this to report whether there were errors or warnings!
         if exit_status.success() {

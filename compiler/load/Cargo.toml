@@ -25,6 +25,8 @@ bumpalo = { version = "3.6.1", features = ["collections"] }
 parking_lot = { version = "0.11", features = ["deadlock_detection"] }
 crossbeam = "0.7"
 num_cpus = "1"
+thiserror = "1.0.30"
+parse-display = "0.5.3"
 
 [dev-dependencies]
 tempfile = "3.1.0"
