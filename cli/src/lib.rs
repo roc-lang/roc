@@ -1,22 +1,26 @@
 #[macro_use]
 extern crate const_format;
 
-use build::{BuildOutcome, BuiltFile};
-use bumpalo::Bump;
-use clap::{App, AppSettings, Arg, ArgMatches};
-use roc_build::link::LinkType;
-use roc_load::file::LoadingProblem;
-use roc_mono::ir::OptLevel;
 use std::env;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::process::Command;
-use target_lexicon::BinaryFormat;
-use target_lexicon::{Architecture, OperatingSystem, Triple, X86_32Architecture};
 
+use build::{BuildOutcome, BuiltFile};
+use bumpalo::Bump;
+use clap::{App, AppSettings, Arg, ArgMatches};
+use target_lexicon::{Architecture};
+
+use roc_build::link::LinkType;
+use roc_load::file::LoadingProblem;
+use roc_mono::ir::OptLevel;
+
+pub mod backend;
 pub mod build;
 pub mod repl;
+
+use backend::*;
 
 pub const CMD_BUILD: &str = "build";
 pub const CMD_REPL: &str = "repl";
@@ -38,6 +42,8 @@ pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
 pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 
 pub fn build_app<'a>() -> App<'a> {
+    let all_backends: Vec<&str> = ALL_BACKENDS.iter().map(|s| s.as_ref()).collect();
+
     let app = App::new("roc")
         .version(concatcp!(include_str!("../../version.txt"), "\n"))
         .about("Runs the given .roc file. Use one of the SUBCOMMANDS below to do something else!")
@@ -65,8 +71,8 @@ pub fn build_app<'a>() -> App<'a> {
                     .long(FLAG_BACKEND)
                     .about("Choose a different backend")
                     // .requires(BACKEND)
-                .default_value(Backend::default().as_str())
-                    .possible_values(Backend::OPTIONS)
+                    .default_value(&*DEFAULT_BACKEND)
+                    .possible_values(&all_backends)
                     .required(false),
             )
             .arg(
@@ -172,8 +178,8 @@ pub fn build_app<'a>() -> App<'a> {
                 .long(FLAG_BACKEND)
                 .about("Choose a different backend")
                 // .requires(BACKEND)
-                .default_value(Backend::default().as_str())
-                .possible_values(Backend::OPTIONS)
+                .default_value(&*DEFAULT_BACKEND)
+                .possible_values(&all_backends)
                 .required(false),
         )
         .arg(
@@ -439,86 +445,5 @@ fn run_with_wasmer(wasm_path: &std::path::Path, args: &[String]) {
             }
             other => panic!("Wasmer error: {:?}", other),
         },
-    }
-}
-
-enum Backend {
-    Host,
-    X86_32,
-    X86_64,
-    Wasm32,
-}
-
-impl Default for Backend {
-    fn default() -> Self {
-        Backend::Host
-    }
-}
-
-impl Backend {
-    const fn as_str(&self) -> &'static str {
-        match self {
-            Backend::Host => "host",
-            Backend::X86_32 => "x86_32",
-            Backend::X86_64 => "x86_64",
-            Backend::Wasm32 => "wasm32",
-        }
-    }
-
-    /// NOTE keep up to date!
-    const OPTIONS: &'static [&'static str] = &[
-        Backend::Host.as_str(),
-        Backend::X86_32.as_str(),
-        Backend::X86_64.as_str(),
-        Backend::Wasm32.as_str(),
-    ];
-
-    fn to_triple(&self) -> Triple {
-        let mut triple = Triple::unknown();
-
-        match self {
-            Backend::Host => Triple::host(),
-            Backend::X86_32 => {
-                triple.architecture = Architecture::X86_32(X86_32Architecture::I386);
-                triple.binary_format = BinaryFormat::Elf;
-
-                // TODO make this user-specified?
-                triple.operating_system = OperatingSystem::Linux;
-
-                triple
-            }
-            Backend::X86_64 => {
-                triple.architecture = Architecture::X86_64;
-                triple.binary_format = BinaryFormat::Elf;
-
-                triple
-            }
-            Backend::Wasm32 => {
-                triple.architecture = Architecture::Wasm32;
-                triple.binary_format = BinaryFormat::Wasm;
-
-                triple
-            }
-        }
-    }
-}
-
-impl std::fmt::Display for Backend {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
-impl std::str::FromStr for Backend {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "host" => Ok(Backend::Host),
-            "x86_32" => Ok(Backend::X86_32),
-            "x86_64" => Ok(Backend::X86_64),
-            "wasm32" => Ok(Backend::Wasm32),
-            _ => Err(()),
-        }
     }
 }

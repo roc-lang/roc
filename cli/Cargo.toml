@@ -75,6 +75,10 @@ tempfile = "3.1.0"
 
 wasmer = "2.0.0"
 wasmer-wasi = "2.0.0"
+parse-display = "0.5.3"
+strum = "0.22"
+strum_macros = "0.22"
+lazy_static = "1.4.0"
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"

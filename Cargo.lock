@@ -2815,6 +2815,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "parse-display"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "898bf4c2a569dedbfd4e6c3f0bbd0ae825e5b6b0b69bae3e3c1000158689334a"
+dependencies = [
+ "once_cell",
+ "parse-display-derive",
+ "regex",
+]
+
+[[package]]
+name = "parse-display-derive"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1779d1e28ab04568223744c2af4aa4e642e67b92c76bdce0929a6d2c36267199"
+dependencies = [
+ "once_cell",
+ "proc-macro2 1.0.29",
+ "quote 1.0.9",
+ "regex",
+ "regex-syntax",
+ "structmeta",
+ "syn 1.0.76",
+]
+
+[[package]]
 name = "peeking_take_while"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3658,10 +3684,12 @@ dependencies = [
  "im-rc 14.3.0",
  "indoc 0.3.6",
  "inkwell 0.1.0",
+ "lazy_static",
  "libc",
  "libloading 0.6.7",
  "maplit",
  "mimalloc",
+ "parse-display",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
@@ -3688,6 +3716,8 @@ dependencies = [
  "rustyline",
  "rustyline-derive",
  "serial_test",
+ "strum",
+ "strum_macros",
  "target-lexicon",
  "tempfile",
  "wasmer",
@@ -4601,6 +4631,47 @@ name = "strsim"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
+
+[[package]]
+name = "structmeta"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59915b528a896f2e3bfa1a6ace65f7bb0ff9f9863de6213b0c01cb6fd3c3ac71"
+dependencies = [
+ "proc-macro2 1.0.29",
+ "quote 1.0.9",
+ "structmeta-derive",
+ "syn 1.0.76",
+]
+
+[[package]]
+name = "structmeta-derive"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b73800bcca56045d5ab138a48cd28a96093335335deaa916f22b5749c4150c79"
+dependencies = [
+ "proc-macro2 1.0.29",
+ "quote 1.0.9",
+ "syn 1.0.76",
+]
+
+[[package]]
+name = "strum"
+version = "0.22.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7ac893c7d471c8a21f31cfe213ec4f6d9afeed25537c772e08ef3f005f8729e"
+
+[[package]]
+name = "strum_macros"
+version = "0.22.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "339f799d8b549e3744c7ac7feb216383e4005d94bdb22561b3ab8f3b808ae9fb"
+dependencies = [
+ "heck",
+ "proc-macro2 1.0.29",
+ "quote 1.0.9",
+ "syn 1.0.76",
+]
 
 [[package]]
 name = "syn"
