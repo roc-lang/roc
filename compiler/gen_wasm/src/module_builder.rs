@@ -29,15 +29,6 @@ pub enum SectionId {
     DataCount = 12,
 }
 
-#[repr(u8)]
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
-enum ImportExportType {
-    Func = 0,
-    Table = 1,
-    Mem = 2,
-    Global = 3,
-}
-
 struct SectionHeaderIndices {
     size_index: usize,
     body_index: usize,
@@ -75,20 +66,23 @@ fn update_section_size<T: SerialBuffer>(buffer: &mut T, header_indices: SectionH
     buffer.overwrite_padded_u32(header_indices.size_index, size as u32);
 }
 
-fn serialize_vector_with_count<'a, SB, S>(buffer: &mut SB, items: &[S])
-where
-    SB: SerialBuffer,
-    S: Serialize,
-{
-    buffer.encode_u32(items.len() as u32);
-    for item in items.iter() {
-        item.serialize(buffer);
+/// Serialize a section that is just a vector of some struct
+fn serialize_vector_section<B: SerialBuffer, T: Serialize>(
+    buffer: &mut B,
+    section_id: SectionId,
+    subsections: &[T],
+) {
+    if !subsections.is_empty() {
+        let header_indices = write_section_header(buffer, section_id);
+        subsections.serialize(buffer);
+        update_section_size(buffer, header_indices);
     }
 }
 
 /*******************************************************************
  *
- * Type section (function signature definitions)
+ * Type section
+ * Deduplicated list of function type signatures
  *
  *******************************************************************/
 
@@ -163,9 +157,7 @@ impl<'a> TypeSection<'a> {
 
 impl<'a> Serialize for TypeSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        let header_indices = write_section_header(buffer, SectionId::Type);
-        serialize_vector_with_count(buffer, &self.signatures);
-        update_section_size(buffer, header_indices);
+        serialize_vector_section(buffer, SectionId::Type, &self.signatures);
     }
 }
 
@@ -242,18 +234,14 @@ impl<'a> ImportSection<'a> {
 
 impl<'a> Serialize for ImportSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        if self.0.is_empty() {
-            return;
-        }
-        let header_indices = write_section_header(buffer, SectionId::Import);
-        serialize_vector_with_count(buffer, &self.0);
-        update_section_size(buffer, header_indices);
+        serialize_vector_section(buffer, SectionId::Import, &self.0);
     }
 }
 
 /*******************************************************************
  *
- * Function section (map function index to signature index)
+ * Function section
+ * Maps function indices (Code section) to signature indices (Type section)
  *
  *******************************************************************/
 
@@ -271,9 +259,7 @@ impl<'a> FunctionSection<'a> {
 
 impl<'a> Serialize for FunctionSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        let header_indices = write_section_header(buffer, SectionId::Function);
-        serialize_vector_with_count(buffer, &self.signature_indices);
-        update_section_size(buffer, header_indices);
+        serialize_vector_section(buffer, SectionId::Function, &self.signature_indices);
     }
 }
 
@@ -394,7 +380,7 @@ impl<'a> GlobalSection<'a> {
 
 impl<'a> Serialize for GlobalSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        todo!();
+        serialize_vector_section(buffer, SectionId::Global, &self.0);
     }
 }
 
@@ -404,29 +390,45 @@ impl<'a> Serialize for GlobalSection<'a> {
  *
  *******************************************************************/
 
+#[repr(u8)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+enum ExportType {
+    Func = 0,
+    Table = 1,
+    Mem = 2,
+    Global = 3,
+}
+
 struct Export {
     name: String,
-    ty: ImportExportType,
+    ty: ExportType,
     index: u32,
 }
-
-pub struct ExportSection<'a> {
-    todo: &'a str,
+impl Serialize for Export {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        self.name.serialize(buffer);
+        buffer.append_u8(self.ty as u8);
+        buffer.encode_u32(self.index);
+    }
 }
 
+pub struct ExportSection<'a>(Vec<'a, Export>);
+
 impl<'a> ExportSection<'a> {
-    pub fn new(arena: &'a Bump) {}
+    pub fn new(arena: &'a Bump) -> Self {
+        ExportSection(bumpalo::vec![in arena])
+    }
 }
 
 impl<'a> Serialize for ExportSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        todo!();
+        serialize_vector_section(buffer, SectionId::Export, &self.0);
     }
 }
 
 /*******************************************************************
  *
- * Code section
+ * Code section (see also code_builder.rs)
  *
  *******************************************************************/
 
@@ -444,7 +446,13 @@ impl<'a> CodeSection<'a> {
 
 impl<'a> Serialize for CodeSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        todo!();
+        buffer.append_u8(SectionId::Code as u8);
+
+        // TODO
+        // We've copied each function into self.bytes, now we're copying again.
+        // Can eliminate one of those copies by refactoring to a vector of CodeBuilders
+
+        buffer.append_slice(&self.bytes);
     }
 }
 
@@ -601,7 +609,7 @@ impl<'a> Serialize for RelocationSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         let header_indices = write_custom_section_header(buffer, self.name);
         buffer.encode_u32(self.target_section_index.unwrap());
-        serialize_vector_with_count(buffer, &self.entries);
+        self.entries.serialize(buffer);
         update_section_size(buffer, header_indices);
     }
 }
@@ -622,7 +630,7 @@ pub struct LinkingSegment {
 }
 
 impl Serialize for LinkingSegment {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
         todo!();
     }
 }
@@ -634,7 +642,7 @@ pub struct LinkingInitFunc {
 }
 
 impl Serialize for LinkingInitFunc {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
         todo!();
     }
 }
@@ -660,7 +668,7 @@ pub struct ComdatSym {
 }
 
 impl Serialize for ComdatSym {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
         todo!();
     }
 }
@@ -677,7 +685,7 @@ pub struct LinkingComdat<'a> {
 }
 
 impl<'a> Serialize for LinkingComdat<'a> {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
         todo!();
     }
 }
@@ -861,10 +869,10 @@ impl<'a> Serialize for LinkingSubSection<'a> {
         let payload_len_index = buffer.reserve_padded_u32();
         let payload_start_index = buffer.size();
         match self {
-            Self::SegmentInfo(items) => serialize_vector_with_count(buffer, items),
-            Self::InitFuncs(items) => serialize_vector_with_count(buffer, items),
-            Self::ComdatInfo(items) => serialize_vector_with_count(buffer, items),
-            Self::SymbolTable(items) => serialize_vector_with_count(buffer, items),
+            Self::SegmentInfo(items) => items.serialize(buffer),
+            Self::InitFuncs(items) => items.serialize(buffer),
+            Self::ComdatInfo(items) => items.serialize(buffer),
+            Self::SymbolTable(items) => items.serialize(buffer),
         }
         buffer.overwrite_padded_u32(
             payload_len_index,
@@ -910,21 +918,21 @@ impl<'a> Serialize for LinkingSection<'a> {
  *
  *******************************************************************/
 
-type UnusedSection<'a> = &'a str;
+type RocUnusedSection<'a> = &'a str;
 
 pub struct WasmModule<'a> {
-    pub types: &'a str,      // TODO
-    pub import: &'a str,     // TODO
-    pub function: &'a str,   // TODO
-    pub table: &'a str,      // TODO
-    pub memory: &'a str,     // TODO
-    pub global: &'a str,     // TODO
-    pub export: &'a str,     // TODO
-    pub start: &'a str,      // TODO
-    pub element: &'a str,    // TODO
-    pub data_count: &'a str, // TODO
-    pub code: &'a str,       // TODO
-    pub data: &'a str,       // TODO
+    pub types: TypeSection<'a>,
+    pub import: ImportSection<'a>,
+    pub function: FunctionSection<'a>,
+    pub table: RocUnusedSection<'a>,
+    pub memory: MemorySection,
+    pub global: GlobalSection<'a>,
+    pub export: ExportSection<'a>,
+    pub start: RocUnusedSection<'a>,
+    pub element: RocUnusedSection<'a>,
+    pub data_count: RocUnusedSection<'a>,
+    pub code: CodeSection<'a>,
+    pub data: RocUnusedSection<'a>,
     pub linking: LinkingSection<'a>,
     pub reloc_code: RelocationSection<'a>,
     pub reloc_data: RelocationSection<'a>,
@@ -942,18 +950,18 @@ impl<'a> WasmModule<'a> {
 
     pub fn new(arena: &'a Bump) -> Self {
         WasmModule {
-            types: "",
-            import: "",
-            function: "",
-            table: "",
-            memory: "",
-            global: "",
-            export: "",
-            start: "",
-            element: "",
-            data_count: "",
-            code: "",
-            data: "",
+            types: TypeSection::new(arena),
+            import: ImportSection::new(arena),
+            function: FunctionSection::new(arena),
+            table: RocUnusedSection::default(),
+            memory: MemorySection::new(1024 * 1024),
+            global: GlobalSection::new(arena),
+            export: ExportSection::new(arena),
+            start: RocUnusedSection::default(),
+            element: RocUnusedSection::default(),
+            data_count: RocUnusedSection::default(),
+            code: CodeSection::new(arena),
+            data: RocUnusedSection::default(),
             linking: LinkingSection::new(arena),
             reloc_code: RelocationSection::new(arena, "reloc.CODE"),
             reloc_data: RelocationSection::new(arena, "reloc.DATA"),
