@@ -323,7 +323,8 @@ fn spawn_rebuild_thread(
                     &thread_local_target,
                     host_input_path.as_path(),
                     None,
-                );
+                )
+                .expect("Rebuilding failed"); // TODO: Remove panic
             }
         }
         if surgically_link {
