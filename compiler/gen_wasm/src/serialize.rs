@@ -120,6 +120,30 @@ impl Serialize for u32 {
     }
 }
 
+impl<S: Serialize> Serialize for [S] {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.encode_u32(self.len() as u32);
+        for item in self.iter() {
+            item.serialize(buffer);
+        }
+    }
+}
+
+impl<S: Serialize> Serialize for Option<S> {
+    /// serialize Option as a vector of length 1 or 0
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        match self {
+            Some(x) => {
+                buffer.append_u8(1);
+                x.serialize(buffer);
+            }
+            None => {
+                buffer.append_u8(0);
+            }
+        }
+    }
+}
+
 fn overwrite_padded_u32_help(buffer: &mut [u8], value: u32) {
     let mut x = value;
     for byte in buffer.iter_mut().take(4) {

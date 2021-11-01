@@ -2,6 +2,7 @@ use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 
 use crate::code_builder::{Align, ValueType};
+use crate::opcodes;
 use crate::serialize::{SerialBuffer, Serialize};
 
 /*******************************************************************
@@ -58,7 +59,7 @@ fn write_custom_section_header<T: SerialBuffer>(
     buffer: &mut T,
     name: &str,
 ) -> SectionHeaderIndices {
-    buffer.append_u8(SectionId::Custom as u8);
+    // buffer.append_u8(SectionId::Custom as u8);
     let size_index = buffer.reserve_padded_u32();
     let body_index = buffer.size();
     name.serialize(buffer);
@@ -289,28 +290,43 @@ enum Limits {
 
 impl Serialize for Limits {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        todo!();
+        match self {
+            Self::Min(min) => {
+                buffer.append_u8(0);
+                buffer.encode_u32(*min);
+            }
+            Self::MinMax(min, max) => {
+                buffer.append_u8(1);
+                buffer.encode_u32(*min);
+                buffer.encode_u32(*max);
+            }
+        }
     }
 }
 
-pub struct MemorySection {
-    /// number of 64kB pages
-    num_pages: Limits,
-}
+pub struct MemorySection(Option<Limits>);
 
 impl MemorySection {
-    const PAGE_SIZE_KB: u32 = 64;
+    pub const PAGE_SIZE: u32 = 64 * 1024;
 
-    pub fn new(kb: u32) -> Self {
-        MemorySection {
-            num_pages: Limits::Min(kb / Self::PAGE_SIZE_KB),
+    pub fn new(bytes: u32) -> Self {
+        if bytes == 0 {
+            MemorySection(None)
+        } else {
+            let pages = (bytes + Self::PAGE_SIZE - 1) / Self::PAGE_SIZE;
+            MemorySection(Some(Limits::Min(pages)))
         }
     }
 }
 
 impl Serialize for MemorySection {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        todo!();
+        if let Some(limits) = &self.0 {
+            let header_indices = write_section_header(buffer, SectionId::Memory);
+            buffer.append_u8(1);
+            limits.serialize(buffer);
+            update_section_size(buffer, header_indices);
+        }
     }
 }
 
@@ -346,7 +362,25 @@ struct Global {
 
 impl Serialize for Global {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        todo!();
+        self.ty.serialize(buffer);
+        match self.init_value {
+            GlobalInitValue::I32(x) => {
+                buffer.append_u8(opcodes::I32CONST);
+                buffer.encode_i32(x);
+            }
+            GlobalInitValue::I64(x) => {
+                buffer.append_u8(opcodes::I64CONST);
+                buffer.encode_i64(x);
+            }
+            GlobalInitValue::F32(x) => {
+                buffer.append_u8(opcodes::F32CONST);
+                buffer.encode_f32(x);
+            }
+            GlobalInitValue::F64(x) => {
+                buffer.append_u8(opcodes::F64CONST);
+                buffer.encode_f64(x);
+            }
+        }
     }
 }
 
