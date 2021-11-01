@@ -65,7 +65,7 @@ pub fn build_module_help<'a>(
     let mut symbol_table_entries = Vec::with_capacity_in(procedures.len(), env.arena);
 
     for (i, ((sym, layout), proc)) in procedures.into_iter().enumerate() {
-        let proc_name = LayoutIds::default()
+        let proc_name = layout_ids
             .get(proc.name, &proc.ret_layout)
             .to_symbol_string(proc.name, &env.interns);
         symbol_table_entries.push(SymInfo::for_function(i as u32, proc_name));
