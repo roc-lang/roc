@@ -114,6 +114,12 @@ impl Serialize for str {
     }
 }
 
+impl Serialize for u32 {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.encode_u32(*self);
+    }
+}
+
 fn overwrite_padded_u32_help(buffer: &mut [u8], value: u32) {
     let mut x = value;
     for byte in buffer.iter_mut().take(4) {

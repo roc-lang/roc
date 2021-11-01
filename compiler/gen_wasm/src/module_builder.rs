@@ -270,7 +270,9 @@ impl<'a> FunctionSection<'a> {
 
 impl<'a> Serialize for FunctionSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        todo!();
+        let header_indices = write_section_header(buffer, SectionId::Function);
+        serialize_vector_with_count(buffer, &self.signature_indices);
+        update_section_size(buffer, header_indices);
     }
 }
 
