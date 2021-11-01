@@ -96,9 +96,11 @@ pub fn first_last_index_of<T: ::std::fmt::Debug + std::cmp::Eq>(
 
 use thiserror::Error;
 
-#[derive(Error)]
+#[derive(Error, Debug)]
 pub enum MaybeError<E: std::error::Error> {
+    #[error("{0}")]
     Concrete(#[from] E),
+    #[error("{0}")]
     Anyhow(anyhow::Error),
 }
 

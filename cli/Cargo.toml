@@ -79,6 +79,7 @@ wasmer-wasi = "2.0.0"
 no-panic = "0.1.15"
 anyhow = "1.0.44"
 thiserror = "1.0.30"
+parse-display = "0.5.3"
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"

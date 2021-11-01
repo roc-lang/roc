@@ -1,5 +1,5 @@
 use std::ffi::{OsStr, OsString};
-use std::fmt::Result;
+// use std::fmt::Result;
 use std::fs::{self, FileType};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -26,7 +26,7 @@ use anyhow::{anyhow, Result};
 use no_panic::no_panic;
 
 #[no_panic]
-fn main() -> Result {
+fn main() -> Result<()> {
     let matches = build_app().get_matches();
 
     let exit_code = match matches.subcommand_name() {
@@ -71,7 +71,7 @@ fn main() -> Result {
                     Ok(1)
                 }
                 Err(other) => {
-                    anyhow!("build_file failed with error:\n{:?}", other)?;
+                    Err(anyhow!("build_file failed with error:\n{:?}", other))
                 }
             }
         }
@@ -134,13 +134,13 @@ fn main() -> Result {
 
             Ok(0)
         }
-        Some(subcommand) => anyhow::anyhow!("subcommand '{}' not handled", subcommand)?,
+        Some(subcommand) => Err(anyhow::anyhow!("subcommand '{}' not handled", subcommand)),
     }?;
 
     std::process::exit(exit_code);
 }
 
-fn print_help() -> Result {
+fn print_help() -> Result<()> {
     todo!("Print short help message")
 }
 
@@ -189,5 +189,5 @@ fn launch_editor(project_dir_path: Option<&Path>) -> Result<()> {
 
 #[cfg(not(feature = "editor"))]
 fn launch_editor(_project_dir_path: Option<&Path>) -> Result<()> {
-    anyhow!("Cannot launch the editor because this build of roc did not include `feature = \"editor\"`!")?;
+    Err(anyhow!("Cannot launch the editor because this build of roc did not include `feature = \"editor\"`!"))
 }

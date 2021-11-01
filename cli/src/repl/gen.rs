@@ -250,8 +250,11 @@ pub fn gen_and_eval<'a>(
             Ok(answer) => {
                 answer.format_with_options(&mut expr, Parens::NotNeeded, Newlines::Yes, 0);
             }
-            Err(FunctionLayout) => {
+            Err(MaybeError::Concrete(FunctionLayout)) => {
                 expr.push_str("<function>");
+            }
+            Err(other) => {
+                return Err(MaybeError::Anyhow(anyhow!(other)));
             }
         }
 

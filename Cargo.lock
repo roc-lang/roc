@@ -3708,6 +3708,7 @@ dependencies = [
  "maplit",
  "mimalloc",
  "no-panic",
+ "parse-display",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",

@@ -13,7 +13,6 @@ use target_lexicon::BinaryFormat;
 use target_lexicon::{Architecture, OperatingSystem, Triple, X86_32Architecture};
 
 use roc_build::link::LinkType;
-use roc_load::file::LoadingProblem;
 use roc_mono::ir::OptLevel;
 use roc_utils::MaybeError;
 
@@ -340,7 +339,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> Result<i32> {
                                 .skip(roc_file_arg_index)
                                 .collect::<Vec<_>>();
 
-                            run_with_wasmer(generated_filename, &args);
+                            run_with_wasmer(generated_filename, &args)?;
                             return Ok(0);
                         }
                         _ => Command::new(&binary_path),
@@ -370,8 +369,8 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> Result<i32> {
                 }
             }
         }
-        Err(MaybeError::Concrete(LoadingProblem::FormattedReport(report))) => {
-            print!("{}", report);
+        Err(MaybeError::Concrete(err)) => {
+            print!("{}", err);
 
             Ok(1)
         }
@@ -438,6 +437,10 @@ fn run_with_wasmer(wasm_path: &std::path::Path, args: &[String]) -> Result<()> {
             Ok(WasiError::Exit(0)) => {
                 Ok(()) // we run the `_start` function, so exit(0) is expected
             }
+            Ok(WasiError::Exit(exitcode)) => {
+                Err(anyhow!("Non zero exit code: {}", exitcode))
+            }
+            Ok(WasiError::UnknownWasiVersion) => Err(anyhow!("Unknown wasi version")),
             Err(e) => Err(e).with_context(|| "Wasmer error"),
         },
     }
