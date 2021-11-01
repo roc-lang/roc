@@ -32,6 +32,7 @@ let
 
   llvmPkgs = pkgs.llvmPackages_12;
 
+  zig = import ./nix/zig.nix { inherit pkgs; };
   debugir = import ./nix/debugir.nix { inherit pkgs; };
 
   inputs = with pkgs; [
