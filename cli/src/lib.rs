@@ -1,19 +1,21 @@
-#[macro_use]
-extern crate const_format;
-
-use build::{BuildOutcome, BuiltFile};
-use bumpalo::Bump;
-use clap::{App, AppSettings, Arg, ArgMatches};
-use roc_build::link::LinkType;
-use roc_load::file::LoadingProblem;
-use roc_mono::ir::OptLevel;
 use std::env;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::process::Command;
+
+use anyhow::Context;
+use anyhow::{anyhow, Result};
+use build::{BuildOutcome, BuiltFile};
+use bumpalo::Bump;
+use clap::{App, AppSettings, Arg, ArgMatches};
 use target_lexicon::BinaryFormat;
 use target_lexicon::{Architecture, OperatingSystem, Triple, X86_32Architecture};
+
+use roc_build::link::LinkType;
+use roc_load::file::LoadingProblem;
+use roc_mono::ir::OptLevel;
+use roc_utils::MaybeError;
 
 pub mod build;
 pub mod repl;
@@ -39,7 +41,7 @@ pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 
 pub fn build_app<'a>() -> App<'a> {
     let app = App::new("roc")
-        .version(concatcp!(include_str!("../../version.txt"), "\n"))
+        .version(concat!(include_str!("../../version.txt"), "\n"))
         .about("Runs the given .roc file. Use one of the SUBCOMMANDS below to do something else!")
         .subcommand(App::new(CMD_BUILD)
             .about("Build a binary from the given .roc file, but don't run it")
@@ -218,7 +220,7 @@ pub enum BuildConfig {
 }
 
 #[cfg(feature = "llvm")]
-pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
+pub fn build(matches: &ArgMatches, config: BuildConfig) -> Result<i32> {
     use build::build_file;
     use std::str::FromStr;
     use BuildConfig::*;
@@ -239,7 +241,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
         matches.is_present(FLAG_DEV),
     ) {
         (true, false) => OptLevel::Optimize,
-        (true, true) => panic!("development cannot be optimized!"),
+        (true, true) => return Err(anyhow!("development cannot be optimized!")),
         (false, true) => OptLevel::Development,
         (false, false) => OptLevel::Normal,
     };
@@ -254,10 +256,11 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     let surgically_link = matches.is_present(FLAG_LINK);
     let precompiled = matches.is_present(FLAG_PRECOMPILED);
     if surgically_link && !roc_linker::supported(&link_type, &target) {
-        panic!(
+        return Err(anyhow!(
             "Link type, {:?}, with target, {}, not supported by roc linker",
-            link_type, target
-        );
+            link_type,
+            target
+        ));
     }
 
     let path = Path::new(filename);
@@ -362,19 +365,17 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
 
                     match outcome {
                         BuildOutcome::Errors => Ok(outcome.status_code()),
-                        _ => roc_run(cmd.current_dir(original_cwd)),
+                        _ => roc_run(cmd.current_dir(original_cwd)).or_else(|err| Err(err.into())),
                     }
                 }
             }
         }
-        Err(LoadingProblem::FormattedReport(report)) => {
+        Err(MaybeError::Concrete(LoadingProblem::FormattedReport(report))) => {
             print!("{}", report);
 
             Ok(1)
         }
-        Err(other) => {
-            panic!("build_file failed with error:\n{:?}", other);
-        }
+        Err(MaybeError::Anyhow(other)) => Err(other).with_context(|| "build_file failed"),
     }
 }
 
@@ -392,13 +393,13 @@ fn roc_run(cmd: &mut Command) -> io::Result<i32> {
 }
 
 #[cfg(not(target_family = "unix"))]
-fn roc_run(cmd: &mut Command) -> io::Result<i32> {
+fn roc_run(cmd: &mut Command) -> Result<i32> {
     // Run the compiled app
     let exit_status = cmd
                         .spawn()
-                        .unwrap_or_else(|err| panic!("Failed to run app after building it: {:?}", err))
+                        .with_context(|err| format!("Failed to run app after building it: {:?}", err))
                         .wait()
-                        .expect("TODO gracefully handle block_on failing when `roc` spawns a subprocess for the compiled app");
+                        .unwrap_or_else(|| todo!("TODO gracefully handle block_on failing when `roc` spawns a subprocess for the compiled app"))?;
 
     // `roc [FILE]` exits with the same status code as the app it ran.
     //
@@ -412,7 +413,7 @@ fn roc_run(cmd: &mut Command) -> io::Result<i32> {
     }
 }
 
-fn run_with_wasmer(wasm_path: &std::path::Path, args: &[String]) {
+fn run_with_wasmer(wasm_path: &std::path::Path, args: &[String]) -> Result<()> {
     use wasmer::{Instance, Module, Store};
 
     let store = Store::default();
@@ -432,12 +433,12 @@ fn run_with_wasmer(wasm_path: &std::path::Path, args: &[String]) {
 
     use wasmer_wasi::WasiError;
     match start.call(&[]) {
-        Ok(_) => {}
+        Ok(_) => Ok(()),
         Err(e) => match e.downcast::<WasiError>() {
             Ok(WasiError::Exit(0)) => {
-                // we run the `_start` function, so exit(0) is expected
+                Ok(()) // we run the `_start` function, so exit(0) is expected
             }
-            other => panic!("Wasmer error: {:?}", other),
+            Err(e) => Err(e).with_context(|| "Wasmer error"),
         },
     }
 }

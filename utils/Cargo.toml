@@ -7,6 +7,8 @@ edition = "2018"
 description = "Utility functions used all over the code base."
 
 [dependencies]
+anyhow = "1.0.44"
 snafu = { version = "0.6", features = ["backtraces"] }
+thiserror = "1.0.30"
 
 [dev-dependencies]

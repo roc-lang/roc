@@ -1,4 +1,5 @@
 use crate::repl::eval;
+use anyhow::{anyhow, Result};
 use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
@@ -13,6 +14,7 @@ use roc_load::file::LoadingProblem;
 use roc_mono::ir::OptLevel;
 use roc_parse::parser::SyntaxError;
 use roc_types::pretty_print::{content_to_string, name_all_type_vars};
+use roc_utils::MaybeError;
 use std::path::{Path, PathBuf};
 use std::str::from_utf8_unchecked;
 use target_lexicon::Triple;
@@ -26,7 +28,7 @@ pub fn gen_and_eval<'a>(
     src: &[u8],
     target: Triple,
     opt_level: OptLevel,
-) -> Result<ReplOutput, SyntaxError<'a>> {
+) -> Result<ReplOutput, MaybeError<SyntaxError<'a>>> {
     use roc_reporting::report::{
         can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
     };
@@ -62,7 +64,10 @@ pub fn gen_and_eval<'a>(
             return Ok(ReplOutput::Problems(vec![report]));
         }
         Err(e) => {
-            panic!("error while loading module: {:?}", e)
+            return Err(MaybeError::Anyhow(anyhow!(
+                "error while loading module: {:?}",
+                e
+            )))
         }
     };
 
@@ -207,7 +212,7 @@ pub fn gen_and_eval<'a>(
         if main_fn.verify(true) {
             function_pass.run_on(&main_fn);
         } else {
-            panic!("Main function {} failed LLVM verification in build. Uncomment things nearby to see more details.", main_fn_name);
+            return Err(MaybeError::Anyhow(anyhow!("Main function {} failed LLVM verification in build. Uncomment things nearby to see more details.", main_fn_name)));
         }
 
         module_pass.run_on(env.module);
@@ -217,10 +222,10 @@ pub fn gen_and_eval<'a>(
 
         // Verify the module
         if let Err(errors) = env.module.verify() {
-            panic!(
+            return Err(MaybeError::Anyhow(anyhow!(
                 "Errors defining module: {}\n\nUncomment things nearby to see more details.",
                 errors
-            );
+            )));
         }
 
         let lib = module_to_dylib(env.module, &target, opt_level)

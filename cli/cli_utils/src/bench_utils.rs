@@ -1,7 +1,9 @@
 use crate::helpers::{example_file, run_cmd, run_roc};
 use criterion::{black_box, measurement::Measurement, BenchmarkGroup};
 use rlimit::{setrlimit, Resource};
-use std::path::Path;
+use std::{fmt::Result, path::Path};
+
+use anyhow::{anyhow, Result};
 
 fn exec_bench_w_input<T: Measurement>(
     file: &Path,
@@ -9,13 +11,13 @@ fn exec_bench_w_input<T: Measurement>(
     executable_filename: &str,
     expected_ending: &str,
     bench_group_opt: Option<&mut BenchmarkGroup<T>>,
-) {
+) -> Result {
     let flags: &[&str] = &["--optimize"];
 
     let compile_out = run_roc(&[&["build", file.to_str().unwrap()], flags].concat());
 
     if !compile_out.stderr.is_empty() {
-        panic!("{}", compile_out.stderr);
+        anyhow!("{}", compile_out.stderr)?;
     }
 
     assert!(
@@ -34,7 +36,7 @@ fn check_cmd_output(
     stdin_str: &str,
     executable_filename: &str,
     expected_ending: &str,
-) {
+) -> Result {
     let cmd_str = file
         .with_file_name(executable_filename)
         .to_str()
@@ -48,10 +50,11 @@ fn check_cmd_output(
     let out = run_cmd(&cmd_str, &[stdin_str], &[]);
 
     if !&out.stdout.ends_with(expected_ending) {
-        panic!(
+        anyhow!(
             "expected output to end with {:?} but instead got {:#?}",
-            expected_ending, out
-        );
+            expected_ending,
+            out
+        )?;
     }
     assert!(out.status.success());
 }
@@ -131,7 +134,6 @@ pub fn bench_rbtree_ck<T: Measurement>(bench_group_opt: Option<&mut BenchmarkGro
     );
 }
 
-#[allow(dead_code)]
 pub fn bench_rbtree_delete<T: Measurement>(bench_group_opt: Option<&mut BenchmarkGroup<T>>) {
     exec_bench_w_input(
         &example_file("benchmarks", "RBTreeDel.roc"),

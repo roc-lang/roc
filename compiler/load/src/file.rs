@@ -1064,7 +1064,11 @@ enum WorkerMsg {
     TaskAdded,
 }
 
-#[derive(Debug)]
+use parse_display::Display;
+use thiserror::Error;
+
+#[derive(Error, Debug, Display)]
+#[display("{}")]
 pub enum LoadingProblem<'a> {
     FileProblem {
         filename: PathBuf,

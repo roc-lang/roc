@@ -1,9 +1,4 @@
-extern crate bumpalo;
-extern crate roc_collections;
-extern crate roc_load;
-extern crate roc_module;
-extern crate tempfile;
-
+use anyhow::Context;
 use roc_cli::repl::{INSTRUCTIONS, WELCOME_MESSAGE};
 use serde::Deserialize;
 use serde_xml_rs::from_str;
@@ -14,6 +9,8 @@ use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
 use tempfile::NamedTempFile;
 
+use anyhow::{anyhow, Result};
+
 #[derive(Debug)]
 pub struct Out {
     pub stdout: String,
@@ -21,30 +18,29 @@ pub struct Out {
     pub status: ExitStatus,
 }
 
-pub fn path_to_roc_binary() -> PathBuf {
+pub fn path_to_roc_binary() -> Result<PathBuf> {
     // Adapted from https://github.com/volta-cli/volta/blob/cefdf7436a15af3ce3a38b8fe53bb0cfdb37d3dd/tests/acceptance/support/sandbox.rs#L680
     // by the Volta Contributors - license information can be found in
     // the LEGAL_DETAILS file in the root directory of this distribution.
     //
     // Thank you, Volta contributors!
     let mut path = env::var_os("CARGO_BIN_PATH")
-            .map(PathBuf::from)
-            .or_else(|| {
-                env::current_exe().ok().map(|mut path| {
-                    path.pop();
-                    if path.ends_with("deps") { path.pop();
-                    }
-                    path
-                })
+        .map(PathBuf::from)
+        .or_else(|| {
+            env::current_exe().ok().map(|mut path| {
+                path.pop();
+                if path.ends_with("deps") { path.pop();
+                }
+                path
             })
-            .unwrap_or_else(|| panic!("CARGO_BIN_PATH wasn't set, and couldn't be inferred from context. Can't run CLI tests."));
+        })
+        .with_context("CARGO_BIN_PATH wasn't set, and couldn't be inferred from context. Can't run CLI tests.")?;
 
     path.push("roc");
 
-    path
+    Ok(path)
 }
 
-#[allow(dead_code)]
 pub fn run_roc(args: &[&str]) -> Out {
     let mut cmd = Command::new(path_to_roc_binary());
 
@@ -63,8 +59,7 @@ pub fn run_roc(args: &[&str]) -> Out {
     }
 }
 
-#[allow(dead_code)]
-pub fn run_cmd(cmd_name: &str, stdin_vals: &[&str], args: &[&str]) -> Out {
+pub fn run_cmd(cmd_name: &str, stdin_vals: &[&str], args: &[&str]) -> Result<Out> {
     let mut cmd = Command::new(cmd_name);
 
     for arg in args {
@@ -76,7 +71,7 @@ pub fn run_cmd(cmd_name: &str, stdin_vals: &[&str], args: &[&str]) -> Out {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .unwrap_or_else(|_| panic!("failed to execute cmd `{}` in CLI test", cmd_name));
+        .with_context(format!("failed to execute cmd `{}` in CLI test", cmd_name))?;
 
     {
         let stdin = child.stdin.as_mut().expect("Failed to open stdin");
@@ -90,17 +85,16 @@ pub fn run_cmd(cmd_name: &str, stdin_vals: &[&str], args: &[&str]) -> Out {
 
     let output = child
         .wait_with_output()
-        .unwrap_or_else(|_| panic!("failed to execute cmd `{}` in CLI test", cmd_name));
+        .with_context(format!("failed to execute cmd `{}` in CLI test", cmd_name))?;
 
-    Out {
+    Ok(Out {
         stdout: String::from_utf8(output.stdout).unwrap(),
         stderr: String::from_utf8(output.stderr).unwrap(),
         status: output.status,
-    }
+    })
 }
 
-#[allow(dead_code)]
-pub fn run_with_valgrind(stdin_vals: &[&str], args: &[&str]) -> (Out, String) {
+pub fn run_with_valgrind(stdin_vals: &[&str], args: &[&str]) -> Result<(Out, String)> {
     //TODO: figure out if there is a better way to get the valgrind executable.
     let mut cmd = Command::new("valgrind");
     let named_tempfile =
@@ -115,7 +109,7 @@ pub fn run_with_valgrind(stdin_vals: &[&str], args: &[&str]) -> (Out, String) {
     if let Some(suppressions_file_os_str) = env::var_os("VALGRIND_SUPPRESSIONS") {
         match suppressions_file_os_str.to_str() {
             None => {
-                panic!("Could not determine suppression file location from OsStr");
+                anyhow!("Could not determine suppression file location from OsStr")?;
             }
             Some(suppressions_file) => {
                 let mut buf = String::new();
@@ -161,14 +155,14 @@ pub fn run_with_valgrind(stdin_vals: &[&str], args: &[&str]) -> (Out, String) {
 
     file.read_to_string(&mut raw_xml).unwrap();
 
-    (
+    Ok((
         Out {
             stdout: String::from_utf8(output.stdout).unwrap(),
             stderr: String::from_utf8(output.stderr).unwrap(),
             status: output.status,
         },
         raw_xml,
-    )
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -217,7 +211,6 @@ pub struct ValgrindErrorXWhat {
     pub leakedblocks: Option<isize>,
 }
 
-#[allow(dead_code)]
 pub fn extract_valgrind_errors(xml: &str) -> Result<Vec<ValgrindError>, serde_xml_rs::Error> {
     let parsed_xml: ValgrindOutput = from_str(xml)?;
     let answer = parsed_xml
@@ -232,7 +225,6 @@ pub fn extract_valgrind_errors(xml: &str) -> Result<Vec<ValgrindError>, serde_xm
     Ok(answer)
 }
 
-#[allow(dead_code)]
 pub fn root_dir() -> PathBuf {
     let mut path = env::current_exe().ok().unwrap();
 
@@ -251,7 +243,6 @@ pub fn root_dir() -> PathBuf {
     path
 }
 
-#[allow(dead_code)]
 pub fn examples_dir(dir_name: &str) -> PathBuf {
     let mut path = root_dir();
 
@@ -262,7 +253,6 @@ pub fn examples_dir(dir_name: &str) -> PathBuf {
     path
 }
 
-#[allow(dead_code)]
 pub fn example_file(dir_name: &str, file_name: &str) -> PathBuf {
     let mut path = examples_dir(dir_name);
 
@@ -271,7 +261,6 @@ pub fn example_file(dir_name: &str, file_name: &str) -> PathBuf {
     path
 }
 
-#[allow(dead_code)]
 pub fn fixtures_dir(dir_name: &str) -> PathBuf {
     let mut path = root_dir();
 
@@ -284,7 +273,6 @@ pub fn fixtures_dir(dir_name: &str) -> PathBuf {
     path
 }
 
-#[allow(dead_code)]
 pub fn fixture_file(dir_name: &str, file_name: &str) -> PathBuf {
     let mut path = fixtures_dir(dir_name);
 
@@ -293,8 +281,7 @@ pub fn fixture_file(dir_name: &str, file_name: &str) -> PathBuf {
     path
 }
 
-#[allow(dead_code)]
-pub fn repl_eval(input: &str) -> Out {
+pub fn repl_eval(input: &str) -> Result<Out> {
     let mut cmd = Command::new(path_to_roc_binary());
 
     cmd.arg("repl");
@@ -344,12 +331,12 @@ pub fn repl_eval(input: &str) -> Out {
         // The repl crashed before completing the evaluation.
         // This is most likely due to a segfault.
         if output.status.to_string() == "signal: 11" {
-            panic!(
+            anyhow!(
                 "repl segfaulted during the test. Stderr was {:?}",
                 String::from_utf8(output.stderr).unwrap()
-            );
+            )?;
         } else {
-            panic!("repl exited unexpectedly before finishing evaluation. Exit status was {:?} and stderr was {:?}", output.status, String::from_utf8(output.stderr).unwrap());
+            anyhow!("repl exited unexpectedly before finishing evaluation. Exit status was {:?} and stderr was {:?}", output.status, String::from_utf8(output.stderr).unwrap())?;
         }
     } else {
         let expected_after_answer = "\n".to_string();
@@ -371,9 +358,9 @@ pub fn repl_eval(input: &str) -> Out {
         strip_ansi_escapes::strip(answer).unwrap()
     };
 
-    Out {
+    Ok(Out {
         stdout: String::from_utf8(answer).unwrap(),
         stderr: String::from_utf8(output.stderr).unwrap(),
         status: output.status,
-    }
+    })
 }

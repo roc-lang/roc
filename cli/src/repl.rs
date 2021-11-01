@@ -107,8 +107,8 @@ impl Validator for InputValidator {
 }
 
 #[cfg(not(feature = "llvm"))]
-pub fn main() -> io::Result<()> {
-    panic!("The REPL currently requires being built with LLVM.");
+pub fn main() -> Result<()> {
+    anyhow!("The REPL currently requires being built with LLVM.")?;
 }
 
 #[cfg(feature = "llvm")]

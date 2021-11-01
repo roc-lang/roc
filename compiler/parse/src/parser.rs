@@ -172,12 +172,16 @@ impl Progress {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+use parse_display::Display;
+use thiserror::Error;
+
+#[derive(Error, Debug, Display, Clone, PartialEq)]
+#[display("{}")]
 pub enum SyntaxError<'a> {
     Unexpected(Region),
     OutdentedTooFar,
     ConditionFailed,
-    LineTooLong(u32 /* which line was too long */),
+    LineTooLong(u32), // which line was too long
     TooManyLines,
     Eof(Region),
     InvalidPattern,
@@ -194,7 +198,7 @@ pub enum SyntaxError<'a> {
     NotEndOfFile(Row, Col),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EHeader<'a> {
     Provides(EProvides<'a>, Row, Col),
     Exposes(EExposes, Row, Col),
@@ -211,7 +215,7 @@ pub enum EHeader<'a> {
     IndentStart(Row, Col),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EProvides<'a> {
     Provides(Row, Col),
     To(Row, Col),
@@ -239,7 +243,7 @@ pub enum EExposes {
     Space(BadInputError, Row, Col),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ERequires<'a> {
     Requires(Row, Col),
     IndentRequires(Row, Col),
@@ -252,7 +256,7 @@ pub enum ERequires<'a> {
     Space(BadInputError, Row, Col),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ETypedIdent<'a> {
     Space(BadInputError, Row, Col),
     HasType(Row, Col),
@@ -263,7 +267,7 @@ pub enum ETypedIdent<'a> {
     Identifier(Row, Col),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EPackages<'a> {
     Space(BadInputError, Row, Col),
     Packages(Row, Col),
@@ -282,13 +286,13 @@ pub enum EPackageName {
     Pkg(Row, Col),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EPackageOrPath<'a> {
     BadPath(EString<'a>, Row, Col),
     BadPackage(EPackageName, Row, Col),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EPackageEntry<'a> {
     BadPackageOrPath(EPackageOrPath<'a>, Row, Col),
     Shorthand(Row, Col),
@@ -297,7 +301,7 @@ pub enum EPackageEntry<'a> {
     Space(BadInputError, Row, Col),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EEffects<'a> {
     Space(BadInputError, Row, Col),
     Effects(Row, Col),
@@ -378,7 +382,7 @@ impl<'a> SyntaxError<'a> {
 pub type Row = u32;
 pub type Col = u16;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EExpr<'a> {
     Start(Row, Col),
     End(Row, Col),
@@ -426,13 +430,13 @@ pub enum EExpr<'a> {
     IndentEnd(Row, Col),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Number {
     End,
     LineTooLong,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EString<'a> {
     Open(Row, Col),
 
@@ -447,7 +451,7 @@ pub enum EString<'a> {
     FormatEnd(Row, Col),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ERecord<'a> {
     End(Row, Col),
     Open(Row, Col),
@@ -471,7 +475,7 @@ pub enum ERecord<'a> {
     IndentEnd(Row, Col),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EInParens<'a> {
     End(Row, Col),
     Open(Row, Col),
@@ -485,7 +489,7 @@ pub enum EInParens<'a> {
     IndentEnd(Row, Col),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ELambda<'a> {
     Space(BadInputError, Row, Col),
     Start(Row, Col),
@@ -500,7 +504,7 @@ pub enum ELambda<'a> {
     IndentArg(Row, Col),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum List<'a> {
     Open(Row, Col),
     End(Row, Col),
@@ -512,7 +516,7 @@ pub enum List<'a> {
     IndentEnd(Row, Col),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum When<'a> {
     Space(BadInputError, Row, Col),
     When(Row, Col),
@@ -536,7 +540,7 @@ pub enum When<'a> {
     PatternAlignment(u16, Row, Col),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum If<'a> {
     Space(BadInputError, Row, Col),
     If(Row, Col),
@@ -555,7 +559,7 @@ pub enum If<'a> {
     IndentElseBranch(Row, Col),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expect<'a> {
     Space(BadInputError, Row, Col),
     Expect(Row, Col),
@@ -564,7 +568,7 @@ pub enum Expect<'a> {
     IndentCondition(Row, Col),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EPattern<'a> {
     Record(PRecord<'a>, Row, Col),
     Underscore(Row, Col),
@@ -581,7 +585,7 @@ pub enum EPattern<'a> {
     AsIndentStart(Row, Col),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PRecord<'a> {
     End(Row, Col),
     Open(Row, Col),
@@ -601,7 +605,7 @@ pub enum PRecord<'a> {
     IndentEnd(Row, Col),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PInParens<'a> {
     End(Row, Col),
     Open(Row, Col),
@@ -612,7 +616,7 @@ pub enum PInParens<'a> {
     IndentEnd(Row, Col),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Type<'a> {
     TRecord(TRecord<'a>, Row, Col),
     TTagUnion(TTagUnion<'a>, Row, Col),
@@ -631,7 +635,7 @@ pub enum Type<'a> {
     TAsIndentStart(Row, Col),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TRecord<'a> {
     End(Row, Col),
     Open(Row, Col),
@@ -649,7 +653,7 @@ pub enum TRecord<'a> {
     IndentEnd(Row, Col),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TTagUnion<'a> {
     End(Row, Col),
     Open(Row, Col),
@@ -662,7 +666,7 @@ pub enum TTagUnion<'a> {
     IndentEnd(Row, Col),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TInParens<'a> {
     End(Row, Col),
     Open(Row, Col),
@@ -676,7 +680,7 @@ pub enum TInParens<'a> {
     IndentEnd(Row, Col),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TApply {
     ///
     StartNotUppercase(Row, Col),

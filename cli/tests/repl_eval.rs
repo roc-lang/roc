@@ -1,13 +1,10 @@
-#[macro_use]
-extern crate pretty_assertions;
-
-#[macro_use]
-extern crate indoc;
-
 #[cfg(test)]
 mod repl_eval {
+    use anyhow::{anyhow, Result};
     use cli_utils::helpers;
+    use indoc::indoc;
     use roc_gen_llvm::run_roc::RocCallResult;
+    // use pretty_assertions
 
     #[test]
     fn check_discriminant_size() {

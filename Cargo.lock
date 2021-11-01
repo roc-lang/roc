@@ -104,6 +104,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyhow"
+version = "1.0.44"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61604a8f862e1d5c3229fdd78f8b02c68dcf73a4c4b05fd636d12240aaa242c1"
+
+[[package]]
 name = "approx"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -496,6 +502,7 @@ checksum = "4bfbf56724aa9eca8afa4fcfadeb479e722935bb2a0900c2d37e0cc477af0688"
 name = "cli_utils"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "bumpalo",
  "criterion",
  "inlinable_string",
@@ -2476,6 +2483,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "no-panic"
+version = "0.1.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b884e0f4a7a80970539a7757902675ce503d98615f5b564564b4bd0236f7f36"
+dependencies = [
+ "proc-macro2 1.0.29",
+ "quote 1.0.9",
+ "syn 1.0.76",
+]
+
+[[package]]
 name = "nom"
 version = "5.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2812,6 +2830,32 @@ dependencies = [
  "smallvec",
  "thread-id",
  "winapi 0.3.9",
+]
+
+[[package]]
+name = "parse-display"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "898bf4c2a569dedbfd4e6c3f0bbd0ae825e5b6b0b69bae3e3c1000158689334a"
+dependencies = [
+ "once_cell",
+ "parse-display-derive",
+ "regex",
+]
+
+[[package]]
+name = "parse-display-derive"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1779d1e28ab04568223744c2af4aa4e642e67b92c76bdce0929a6d2c36267199"
+dependencies = [
+ "once_cell",
+ "proc-macro2 1.0.29",
+ "quote 1.0.9",
+ "regex",
+ "regex-syntax",
+ "structmeta",
+ "syn 1.0.76",
 ]
 
 [[package]]
@@ -3649,6 +3693,7 @@ dependencies = [
 name = "roc_cli"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "bumpalo",
  "clap 3.0.0-beta.1",
  "cli_utils",
@@ -3656,12 +3701,13 @@ dependencies = [
  "criterion",
  "im 14.3.0",
  "im-rc 14.3.0",
- "indoc 0.3.6",
+ "indoc 1.0.3",
  "inkwell 0.1.0",
  "libc",
  "libloading 0.6.7",
  "maplit",
  "mimalloc",
+ "no-panic",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
@@ -3685,11 +3731,13 @@ dependencies = [
  "roc_solve",
  "roc_types",
  "roc_unify",
+ "roc_utils",
  "rustyline",
  "rustyline-derive",
  "serial_test",
  "target-lexicon",
  "tempfile",
+ "thiserror",
  "wasmer",
  "wasmer-wasi",
 ]
@@ -3965,6 +4013,7 @@ dependencies = [
  "morphic_lib",
  "num_cpus",
  "parking_lot",
+ "parse-display",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
@@ -3982,6 +4031,7 @@ dependencies = [
  "roc_types",
  "roc_unify",
  "tempfile",
+ "thiserror",
  "ven_pretty",
 ]
 
@@ -4038,12 +4088,14 @@ dependencies = [
  "bumpalo",
  "encode_unicode",
  "indoc 0.3.6",
+ "parse-display",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
  "roc_collections",
  "roc_module",
  "roc_region",
+ "thiserror",
 ]
 
 [[package]]
@@ -4154,7 +4206,9 @@ dependencies = [
 name = "roc_utils"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "snafu",
+ "thiserror",
 ]
 
 [[package]]
@@ -4603,6 +4657,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
 
 [[package]]
+name = "structmeta"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59915b528a896f2e3bfa1a6ace65f7bb0ff9f9863de6213b0c01cb6fd3c3ac71"
+dependencies = [
+ "proc-macro2 1.0.29",
+ "quote 1.0.9",
+ "structmeta-derive",
+ "syn 1.0.76",
+]
+
+[[package]]
+name = "structmeta-derive"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b73800bcca56045d5ab138a48cd28a96093335335deaa916f22b5749c4150c79"
+dependencies = [
+ "proc-macro2 1.0.29",
+ "quote 1.0.9",
+ "syn 1.0.76",
+]
+
+[[package]]
 name = "syn"
 version = "0.15.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4759,18 +4836,18 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "1.0.29"
+version = "1.0.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "602eca064b2d83369e2b2f34b09c70b605402801927c65c11071ac911d299b88"
+checksum = "854babe52e4df1653706b98fcfc05843010039b406875930a70e4d9644e5c417"
 dependencies = [
  "thiserror-impl",
 ]
 
 [[package]]
 name = "thiserror-impl"
-version = "1.0.29"
+version = "1.0.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bad553cc2c78e8de258400763a647e80e6d1b31ee237275d756f6836d204494c"
+checksum = "aa32fd3f627f367fe16f893e2597ae3c05020f8bba2666a4e6ea73d377e5714b"
 dependencies = [
  "proc-macro2 1.0.29",
  "quote 1.0.9",

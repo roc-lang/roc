@@ -1,27 +1,32 @@
+use std::ffi::{OsStr, OsString};
+use std::fmt::Result;
+use std::fs::{self, FileType};
+use std::io;
+use std::path::{Path, PathBuf};
+
 use roc_cli::build::check_file;
 use roc_cli::{
     build_app, docs, repl, BuildConfig, CMD_BUILD, CMD_CHECK, CMD_DOCS, CMD_EDIT, CMD_REPL,
     DIRECTORY_OR_FILES, FLAG_TIME, ROC_FILE,
 };
 use roc_load::file::LoadingProblem;
-use std::fs::{self, FileType};
-use std::io;
-use std::path::{Path, PathBuf};
 
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
-
-use std::ffi::{OsStr, OsString};
 
 #[cfg(feature = "llvm")]
 use roc_cli::build;
 
 #[cfg(not(feature = "llvm"))]
-fn build(_matches: &clap::ArgMatches, _config: BuildConfig) -> io::Result<i32> {
-    panic!("Building without LLVM is not currently supported.");
+fn build(_matches: &clap::ArgMatches, _config: BuildConfig) -> Result<i32> {
+    anyhow!("Building without LLVM is not currently supported.")?
 }
 
-fn main() -> io::Result<()> {
+use anyhow::{anyhow, Result};
+use no_panic::no_panic;
+
+#[no_panic]
+fn main() -> Result {
     let matches = build_app().get_matches();
 
     let exit_code = match matches.subcommand_name() {
@@ -34,12 +39,13 @@ fn main() -> io::Result<()> {
                 }
 
                 None => {
-                    launch_editor(None)?;
+                    print_help()?;
 
                     Ok(0)
                 }
             }
         }
+
         Some(CMD_BUILD) => Ok(build(
             matches.subcommand_matches(CMD_BUILD).unwrap(),
             BuildConfig::BuildOnly,
@@ -65,7 +71,7 @@ fn main() -> io::Result<()> {
                     Ok(1)
                 }
                 Err(other) => {
-                    panic!("build_file failed with error:\n{:?}", other);
+                    anyhow!("build_file failed with error:\n{:?}", other)?;
                 }
             }
         }
@@ -128,10 +134,14 @@ fn main() -> io::Result<()> {
 
             Ok(0)
         }
-        _ => unreachable!(),
+        Some(subcommand) => anyhow::anyhow!("subcommand '{}' not handled", subcommand)?,
     }?;
 
     std::process::exit(exit_code);
+}
+
+fn print_help() -> Result {
+    todo!("Print short help message")
 }
 
 fn read_all_roc_files(
@@ -173,11 +183,11 @@ fn roc_files_recursive<P: AsRef<Path>>(
 }
 
 #[cfg(feature = "editor")]
-fn launch_editor(project_dir_path: Option<&Path>) -> io::Result<()> {
+fn launch_editor(project_dir_path: Option<&Path>) -> Result<()> {
     roc_editor::launch(project_dir_path)
 }
 
 #[cfg(not(feature = "editor"))]
-fn launch_editor(_project_dir_path: Option<&Path>) -> io::Result<()> {
-    panic!("Cannot launch the editor because this build of roc did not include `feature = \"editor\"`!");
+fn launch_editor(_project_dir_path: Option<&Path>) -> Result<()> {
+    anyhow!("Cannot launch the editor because this build of roc did not include `feature = \"editor\"`!")?;
 }

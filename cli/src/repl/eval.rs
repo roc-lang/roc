@@ -1,3 +1,4 @@
+use anyhow::{anyhow, Result};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use libloading::Library;
@@ -928,7 +929,7 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
     }
 }
 
-fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> Expr<'a> {
+fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> Result<Expr<'a>> {
     use Content::*;
 
     let arena = env.arena;
@@ -1021,9 +1022,7 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
 
                     Expr::Apply(loc_tag_expr, payload, CalledVia::Space)
                 }
-                other => {
-                    panic!("Unexpected FlatType {:?} in num_to_ast", other);
-                }
+                other => Err(anyhow!("Unexpected FlatType {:?} in num_to_ast", other)),
             }
         }
         Alias(_, _, var) => {
@@ -1031,9 +1030,7 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
 
             num_to_ast(env, num_expr, content)
         }
-        other => {
-            panic!("Unexpected FlatType {:?} in num_to_ast", other);
-        }
+        other => Err(anyhow!("Unexpected FlatType {:?} in num_to_ast", other)),
     }
 }
 
