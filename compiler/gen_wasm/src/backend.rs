@@ -31,7 +31,7 @@ pub struct WasmBackend<'a> {
     pub code_relocations: Vec<'a, RelocationEntry>,
     _data_offset_map: MutMap<Literal<'a>, u32>,
     _data_offset_next: u32,
-    proc_symbols: &'a Vec<'a, Symbol>,
+    proc_symbols: &'a [Symbol],
 
     // Function-level data
     code_builder: CodeBuilder<'a>,
@@ -43,7 +43,7 @@ pub struct WasmBackend<'a> {
 }
 
 impl<'a> WasmBackend<'a> {
-    pub fn new(env: &'a Env<'a>, proc_symbols: &'a Vec<'a, Symbol>) -> Self {
+    pub fn new(env: &'a Env<'a>, proc_symbols: &'a [Symbol]) -> Self {
         let mut code_section_bytes = std::vec::Vec::with_capacity(4096);
 
         // Code section header
