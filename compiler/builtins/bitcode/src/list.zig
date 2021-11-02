@@ -140,6 +140,7 @@ const Caller0 = fn (?[*]u8, ?[*]u8) callconv(.C) void;
 const Caller1 = fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 const Caller2 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 const Caller3 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
+const Caller4 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 
 pub fn listReverse(list: RocList, alignment: u32, element_width: usize, update_mode: UpdateMode) callconv(.C) RocList {
     if (list.bytes) |source_ptr| {
@@ -341,6 +342,70 @@ pub fn listMap3(
                 }
 
                 return output;
+            } else {
+                return RocList.empty();
+            }
+        } else {
+            return RocList.empty();
+        }
+    } else {
+        return RocList.empty();
+    }
+}
+
+pub fn listMap4(
+    list1: RocList,
+    list2: RocList,
+    list3: RocList,
+    list4: RocList,
+    caller: Caller4,
+    data: Opaque,
+    inc_n_data: IncN,
+    data_is_owned: bool,
+    alignment: u32,
+    a_width: usize,
+    b_width: usize,
+    c_width: usize,
+    d_width: usize,
+    e_width: usize,
+    dec_a: Dec,
+    dec_b: Dec,
+    dec_c: Dec,
+    dec_d: Dec,
+) callconv(.C) RocList {
+    const output_length = std.math.min(std.math.min(list1.len(), list2.len()), std.math.min(list3.len(), list4.len()));
+
+    decrementTail(list1, output_length, a_width, dec_a);
+    decrementTail(list2, output_length, b_width, dec_b);
+    decrementTail(list3, output_length, c_width, dec_c);
+    decrementTail(list4, output_length, d_width, dec_d);
+
+    if (data_is_owned) {
+        inc_n_data(data, output_length);
+    }
+
+    if (list1.bytes) |source_a| {
+        if (list2.bytes) |source_b| {
+            if (list3.bytes) |source_c| {
+                if (list4.bytes) |source_d| {
+                    const output = RocList.allocate(alignment, output_length, e_width);
+                    const target_ptr = output.bytes orelse unreachable;
+
+                    var i: usize = 0;
+                    while (i < output_length) : (i += 1) {
+                        const element_a = source_a + i * a_width;
+                        const element_b = source_b + i * b_width;
+                        const element_c = source_c + i * c_width;
+                        const element_d = source_d + i * d_width;
+                        const target = target_ptr + i * e_width;
+
+                        caller(data, element_a, element_b, element_c, element_d, target);
+                    }
+
+                    return output;
+                } else {
+                    return RocList.empty();
+                }
             } else {
                 return RocList.empty();
             }
