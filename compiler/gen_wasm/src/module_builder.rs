@@ -1,7 +1,7 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 
-use crate::code_builder::{Align, ValueType};
+use crate::code_builder::{Align, CodeBuilder, ValueType};
 use crate::opcodes;
 use crate::serialize::{SerialBuffer, Serialize};
 
@@ -456,26 +456,30 @@ impl<'a> Serialize for ExportSection<'a> {
 
 #[derive(Debug)]
 pub struct CodeSection<'a> {
-    pub bytes: Vec<'a, u8>,
+    pub code_builders: Vec<'a, CodeBuilder<'a>>,
 }
 
 impl<'a> CodeSection<'a> {
     pub fn new(arena: &'a Bump) -> Self {
         CodeSection {
-            bytes: Vec::with_capacity_in(4096, arena),
+            code_builders: Vec::with_capacity_in(8, arena),
         }
     }
-}
 
-impl<'a> Serialize for CodeSection<'a> {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        buffer.append_u8(SectionId::Code as u8);
+    /// Serialize the code builders for all functions, and get code relocations with final offsets
+    pub fn serialize_mut<T: SerialBuffer>(
+        &mut self,
+        buffer: &mut T,
+        relocations: &mut Vec<'a, RelocationEntry>,
+    ) {
+        let header_indices = write_section_header(buffer, SectionId::Code);
+        buffer.encode_u32(self.code_builders.len() as u32);
 
-        // TODO
-        // We've copied each function into self.bytes, now we're copying again.
-        // Can eliminate one of those copies by refactoring to a vector of CodeBuilders
+        for code_builder in self.code_builders.iter_mut() {
+            code_builder.serialize_with_relocs(buffer, relocations, header_indices.body_index);
+        }
 
-        buffer.append_slice(&self.bytes);
+        update_section_size(buffer, header_indices);
     }
 }
 
@@ -542,7 +546,7 @@ pub enum OffsetRelocType {
     MemoryAddrI64 = 16,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum RelocationEntry {
     Index {
         type_id: IndexRelocType,
@@ -1044,8 +1048,9 @@ impl<'a> WasmModule<'a> {
         self.data_count.serialize(buffer);
         maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
 
-        self.code.serialize(buffer);
         self.reloc_code.target_section_index = Some(index);
+        self.code
+            .serialize_mut(buffer, &mut self.reloc_code.entries);
         maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
 
         self.data.serialize(buffer);

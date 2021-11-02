@@ -83,14 +83,6 @@ pub fn build_module_help<'a>(
         }
     }
 
-    // Update code section length
-    let inner_length = (backend.module.code.bytes.len() - 5) as u32;
-    backend
-        .module
-        .code
-        .bytes
-        .overwrite_padded_u32(0, inner_length);
-
     let symbol_table = LinkingSubSection::SymbolTable(symbol_table_entries);
     backend.module.linking.subsections.push(symbol_table);
 
@@ -178,8 +170,8 @@ pub fn combine_and_serialize<'a>(
     // wasm_module.data_count.serialize(buffer);
     // maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
 
-    wasm_module.code.serialize(buffer);
     wasm_module.reloc_code.target_section_index = Some(index);
+    wasm_module.code.serialize_mut(buffer, &mut wasm_module.reloc_code.entries);
     maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
 
     wasm_module.data.serialize(buffer);

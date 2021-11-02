@@ -11,7 +11,6 @@ use roc_mono::layout::{Builtin, Layout};
 use crate::code_builder::{BlockType, CodeBuilder, ValueType};
 use crate::layout::WasmLayout;
 use crate::module_builder::WasmModule;
-use crate::serialize::SerialBuffer;
 use crate::storage::{Storage, StoredValue, StoredValueKind};
 use crate::{copy_memory, CopyMemoryConfig, Env, LocalId, PTR_TYPE};
 
@@ -43,18 +42,11 @@ pub struct WasmBackend<'a> {
 
 impl<'a> WasmBackend<'a> {
     pub fn new(env: &'a Env<'a>, proc_symbols: Vec<'a, Symbol>) -> Self {
-        let mut module = WasmModule::new(env.arena);
-
-        // Code section header
-        module.code.bytes.reserve_padded_u32(); // byte length, to be written at the end
-        let num_procs = proc_symbols.len() as u32;
-        module.code.bytes.encode_padded_u32(num_procs); // modified later in unit tests
-
         WasmBackend {
             env,
 
             // Module-level data
-            module,
+            module: WasmModule::new(env.arena),
             parity_builder: builder::module(),
             _data_offset_map: MutMap::default(),
             _data_offset_next: UNUSED_DATA_SECTION_BYTES,
@@ -68,8 +60,13 @@ impl<'a> WasmBackend<'a> {
         }
     }
 
+    /// Reset function-level data
     fn reset(&mut self) {
-        self.code_builder.clear();
+        // Push the completed CodeBuilder into the module and swap it for a new empty one
+        let mut swap_code_builder = CodeBuilder::new(self.env.arena);
+        std::mem::swap(&mut swap_code_builder, &mut self.code_builder);
+        self.module.code.code_builders.push(swap_code_builder);
+
         self.storage.clear();
         self.joinpoint_label_map.clear();
         assert_eq!(self.block_depth, 0);
@@ -140,8 +137,6 @@ impl<'a> WasmBackend<'a> {
             self.storage.stack_frame_pointer,
         );
 
-        let relocs = self.code_builder.serialize(&mut self.module.code.bytes);
-        self.module.reloc_code.entries.extend(relocs);
         Ok(())
     }
 
