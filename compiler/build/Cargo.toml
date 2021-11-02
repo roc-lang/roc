@@ -27,7 +27,6 @@ roc_std = { path = "../../roc_std" }
 im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
 bumpalo = { version = "3.6.1", features = ["collections"] }
-inlinable_string = "0.1.0"
 libloading = "0.6"
 tempfile = "3.1.0"
 serde_json = "1.0"

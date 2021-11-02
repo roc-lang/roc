@@ -498,7 +498,6 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "criterion",
- "inlinable_string",
  "rlimit",
  "roc_cli",
  "roc_collections",
@@ -1850,12 +1849,6 @@ dependencies = [
  "quote 1.0.9",
  "syn 1.0.76",
 ]
-
-[[package]]
-name = "inlinable_string"
-version = "0.1.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3094308123a0e9fd59659ce45e22de9f53fc1d2ac6e1feb9fef988e4f76cad77"
 
 [[package]]
 name = "inplace_it"
@@ -3579,7 +3572,6 @@ dependencies = [
  "im-rc 14.3.0",
  "indoc 0.3.6",
  "inkwell 0.1.0",
- "inlinable_string",
  "libloading 0.6.7",
  "maplit",
  "pretty_assertions 0.5.1",
