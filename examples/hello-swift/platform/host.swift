@@ -26,9 +26,24 @@ extension RocStr {
         len < 0
     }
     
+    var length: Int {
+        if isSmallString {
+            var len = len
+            let count = MemoryLayout.size(ofValue: len)
+            let bytes = Data(bytes: &len, count: count)
+            let lastByte = bytes[count - 1]
+            return Int(lastByte ^ 0b1000_0000)
+        } else {
+            return len
+        }
+    }
+    
     var string: String {
         if isSmallString {
-            fatalError("TODO: Implement small RocString")
+            let data: Data = withUnsafePointer(to: self) { ptr in
+                Data(bytes: ptr, count: length)
+            }
+            return String(data: data, encoding: .utf8)!
         } else {
             let data = Data(bytes: bytes, count: len)
             return String(data: data, encoding: .utf8)!
