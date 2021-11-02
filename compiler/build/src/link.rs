@@ -1,4 +1,4 @@
-use crate::target::arch_str;
+use crate::target::{arch_str, target_triple_str};
 #[cfg(feature = "llvm")]
 use libloading::{Error, Library};
 use roc_builtins::bitcode;
@@ -381,7 +381,7 @@ pub fn rebuild_host(
                     &emit_bin,
                     zig_host_src.to_str().unwrap(),
                     zig_str_path.to_str().unwrap(),
-                    "native",
+                    target_triple_str(target),
                     opt_level,
                     shared_lib_path,
                 )
