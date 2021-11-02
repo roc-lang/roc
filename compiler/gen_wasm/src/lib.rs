@@ -19,8 +19,7 @@ use roc_mono::layout::LayoutIds;
 use crate::backend::WasmBackend;
 use crate::code_builder::{Align, CodeBuilder, ValueType};
 use crate::module_builder::{
-    Export, ExportType, Global, GlobalInitValue, GlobalType, LinkingSection, LinkingSubSection,
-    SectionId, SymInfo, WasmModule,
+    Export, ExportType, Global, GlobalInitValue, GlobalType, LinkingSubSection, SymInfo, WasmModule,
 };
 use crate::serialize::{SerialBuffer, Serialize};
 
@@ -95,22 +94,20 @@ pub fn build_module_help<'a>(
     let symbol_table = LinkingSubSection::SymbolTable(symbol_table_entries);
     backend.module.linking.subsections.push(symbol_table);
 
-    const MIN_MEMORY_SIZE_KB: i32 = 1024;
-
     backend.module.export.entries.push(Export {
         name: "memory".to_string(),
         ty: ExportType::Mem,
         index: 0,
     });
 
-    let stack_pointer_global = Global {
+    let stack_pointer_init = backend.module.memory.min_size().unwrap() as i32;
+    backend.module.global.entries.push(Global {
         ty: GlobalType {
             value_type: ValueType::I32,
             is_mutable: true,
         },
-        init_value: GlobalInitValue::I32(MIN_MEMORY_SIZE_KB * 1024),
-    };
-    backend.module.global.entries.push(stack_pointer_global);
+        init_value: GlobalInitValue::I32(stack_pointer_init),
+    });
 
     Ok((backend.parity_builder, backend.module))
 }

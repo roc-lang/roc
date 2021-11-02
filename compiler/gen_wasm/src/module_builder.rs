@@ -224,11 +224,15 @@ impl Serialize for Import {
     }
 }
 
-pub struct ImportSection<'a> { entries: Vec<'a, Import> }
+pub struct ImportSection<'a> {
+    entries: Vec<'a, Import>,
+}
 
 impl<'a> ImportSection<'a> {
     pub fn new(arena: &'a Bump) -> Self {
-        ImportSection { entries: bumpalo::vec![in arena] }
+        ImportSection {
+            entries: bumpalo::vec![in arena],
+        }
     }
 }
 
@@ -301,6 +305,15 @@ impl MemorySection {
         } else {
             let pages = (bytes + Self::PAGE_SIZE - 1) / Self::PAGE_SIZE;
             MemorySection(Some(Limits::Min(pages)))
+        }
+    }
+
+    pub fn min_size(&self) -> Option<u32> {
+        match self {
+            MemorySection(Some(Limits::Min(min))) | MemorySection(Some(Limits::MinMax(min, _))) => {
+                Some(min * Self::PAGE_SIZE)
+            }
+            MemorySection(None) => None,
         }
     }
 }
