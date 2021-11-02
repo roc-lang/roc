@@ -14,7 +14,6 @@ roc_load = { path = "../compiler/load" }
 roc_builtins = { path = "../compiler/builtins" }
 roc_can = { path = "../compiler/can" }
 roc_code_markup = { path = "../code_markup"}
-roc_fmt = { path = "../compiler/fmt" }
 roc_module = { path = "../compiler/module" }
 roc_region = { path = "../compiler/region" }
 roc_types = { path = "../compiler/types" }
