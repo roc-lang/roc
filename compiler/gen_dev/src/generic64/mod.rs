@@ -830,8 +830,8 @@ impl<
         layout: &Layout<'a>,
         fields: &'a [Symbol],
     ) -> Result<(), String> {
+        let struct_size = layout.stack_size(PTR_SIZE);
         if let Layout::Struct(field_layouts) = layout {
-            let struct_size = layout.stack_size(PTR_SIZE);
             if struct_size > 0 {
                 let offset = self.claim_stack_size(struct_size)?;
                 self.symbol_storage_map.insert(
@@ -862,7 +862,6 @@ impl<
             Ok(())
         } else {
             // This is a single element struct. Just copy the single field to the stack.
-            let struct_size = layout.stack_size(PTR_SIZE);
             let offset = self.claim_stack_size(struct_size)?;
             self.symbol_storage_map.insert(
                 *sym,
