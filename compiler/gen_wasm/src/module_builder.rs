@@ -127,7 +127,7 @@ impl<'a> Serialize for [ValueType] {
     }
 }
 
-struct Signature<'a> {
+pub struct Signature<'a> {
     param_types: Vec<'a, ValueType>,
     ret_type: Option<ValueType>,
 }
@@ -169,14 +169,14 @@ impl<'a> Serialize for TypeSection<'a> {
 
 #[repr(u8)]
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
-enum RefType {
+pub enum RefType {
     Func = 0x70,
     Extern = 0x6f,
 }
 
-struct TableType {
-    ref_type: RefType,
-    limits: Limits,
+pub struct TableType {
+    pub ref_type: RefType,
+    pub limits: Limits,
 }
 
 impl Serialize for TableType {
@@ -186,17 +186,17 @@ impl Serialize for TableType {
     }
 }
 
-enum ImportDesc {
+pub enum ImportDesc {
     Func { signature_index: u32 },
     Table { ty: TableType },
     Mem { limits: Limits },
     Global { ty: GlobalType },
 }
 
-struct Import {
-    module: String,
-    name: String,
-    description: ImportDesc,
+pub struct Import {
+    pub module: String,
+    pub name: String,
+    pub description: ImportDesc,
 }
 
 impl Serialize for Import {
@@ -224,17 +224,17 @@ impl Serialize for Import {
     }
 }
 
-pub struct ImportSection<'a>(Vec<'a, Import>);
+pub struct ImportSection<'a> { entries: Vec<'a, Import> }
 
 impl<'a> ImportSection<'a> {
     pub fn new(arena: &'a Bump) -> Self {
-        ImportSection(bumpalo::vec![in arena])
+        ImportSection { entries: bumpalo::vec![in arena] }
     }
 }
 
 impl<'a> Serialize for ImportSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        serialize_vector_section(buffer, SectionId::Import, &self.0);
+        serialize_vector_section(buffer, SectionId::Import, &self.entries);
     }
 }
 
@@ -269,7 +269,7 @@ impl<'a> Serialize for FunctionSection<'a> {
  *
  *******************************************************************/
 
-enum Limits {
+pub enum Limits {
     Min(u32),
     MinMax(u32, u32),
 }
@@ -322,9 +322,9 @@ impl Serialize for MemorySection {
  *
  *******************************************************************/
 
-struct GlobalType {
-    value_type: ValueType,
-    is_mutable: bool,
+pub struct GlobalType {
+    pub value_type: ValueType,
+    pub is_mutable: bool,
 }
 
 impl Serialize for GlobalType {
@@ -334,16 +334,16 @@ impl Serialize for GlobalType {
     }
 }
 
-enum GlobalInitValue {
+pub enum GlobalInitValue {
     I32(i32),
     I64(i64),
     F32(f32),
     F64(f64),
 }
 
-struct Global {
-    ty: GlobalType,
-    init_value: GlobalInitValue,
+pub struct Global {
+    pub ty: GlobalType,
+    pub init_value: GlobalInitValue,
 }
 
 impl Serialize for Global {
@@ -367,20 +367,25 @@ impl Serialize for Global {
                 buffer.encode_f64(x);
             }
         }
+        buffer.append_u8(opcodes::END);
     }
 }
 
-pub struct GlobalSection<'a>(Vec<'a, Global>);
+pub struct GlobalSection<'a> {
+    pub entries: Vec<'a, Global>,
+}
 
 impl<'a> GlobalSection<'a> {
     pub fn new(arena: &'a Bump) -> Self {
-        GlobalSection(Vec::with_capacity_in(1, arena))
+        GlobalSection {
+            entries: Vec::with_capacity_in(1, arena),
+        }
     }
 }
 
 impl<'a> Serialize for GlobalSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        serialize_vector_section(buffer, SectionId::Global, &self.0);
+        serialize_vector_section(buffer, SectionId::Global, &self.entries);
     }
 }
 

@@ -8,9 +8,9 @@ pub mod serialize;
 mod storage;
 
 use bumpalo::{self, collections::Vec, Bump};
-use parity_wasm::builder::{self, ModuleBuilder};
+use parity_wasm::builder::{ModuleBuilder};
 
-use parity_wasm::elements::{Instruction, Section, Serialize as ParitySerialize};
+use parity_wasm::elements::{Section, Serialize as ParitySerialize};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::ir::{Proc, ProcLayout};
@@ -19,7 +19,8 @@ use roc_mono::layout::LayoutIds;
 use crate::backend::WasmBackend;
 use crate::code_builder::{Align, CodeBuilder, ValueType};
 use crate::module_builder::{
-    Export, ExportType, LinkingSection, LinkingSubSection, SectionId, SymInfo, WasmModule,
+    Export, ExportType, Global, GlobalInitValue, GlobalType, LinkingSection, LinkingSubSection,
+    SectionId, SymInfo, WasmModule,
 };
 use crate::serialize::{SerialBuffer, Serialize};
 
@@ -61,8 +62,6 @@ pub fn build_module_help<'a>(
 
     let mut layout_ids = LayoutIds::default();
     let mut symbol_table_entries = Vec::with_capacity_in(procedures.len(), env.arena);
-
-
 
     for (i, ((sym, layout), proc)) in procedures.into_iter().enumerate() {
         let proc_name = layout_ids
@@ -120,13 +119,7 @@ pub fn build_module_help<'a>(
         payload: code_reloc_section_bytes,
     });
 
-    const MIN_MEMORY_SIZE_KB: u32 = 1024;
-    const PAGE_SIZE_KB: u32 = 64;
-
-    let memory = builder::MemoryBuilder::new()
-        .with_min(MIN_MEMORY_SIZE_KB / PAGE_SIZE_KB)
-        .build();
-    backend.parity_builder.push_memory(memory);
+    const MIN_MEMORY_SIZE_KB: i32 = 1024;
 
     backend.module.export.entries.push(Export {
         name: "memory".to_string(),
@@ -134,12 +127,14 @@ pub fn build_module_help<'a>(
         index: 0,
     });
 
-    let stack_pointer_global = builder::global()
-        .with_type(parity_wasm::elements::ValueType::I32)
-        .mutable()
-        .init_expr(Instruction::I32Const((MIN_MEMORY_SIZE_KB * 1024) as i32))
-        .build();
-    backend.parity_builder.push_global(stack_pointer_global);
+    let stack_pointer_global = Global {
+        ty: GlobalType {
+            value_type: ValueType::I32,
+            is_mutable: true,
+        },
+        init_value: GlobalInitValue::I32(MIN_MEMORY_SIZE_KB * 1024),
+    };
+    backend.module.global.entries.push(stack_pointer_global);
 
     Ok((backend.parity_builder, backend.module))
 }
@@ -190,12 +185,12 @@ pub fn combine_and_serialize<'a>(
     // wasm_module.table.serialize(buffer);
     // maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
 
-    // wasm_module.memory.serialize(buffer);
-    serialize_parity!(buffer, sections, |s| matches!(s, Section::Memory(_)));
+    wasm_module.memory.serialize(buffer);
+    // serialize_parity!(buffer, sections, |s| matches!(s, Section::Memory(_)));
     maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
 
-    // wasm_module.global.serialize(buffer);
-    serialize_parity!(buffer, sections, |s| matches!(s, Section::Global(_)));
+    wasm_module.global.serialize(buffer);
+    // serialize_parity!(buffer, sections, |s| matches!(s, Section::Global(_)));
     maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
 
     wasm_module.export.serialize(buffer);
