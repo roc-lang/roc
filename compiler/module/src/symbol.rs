@@ -562,15 +562,17 @@ impl IdentIds {
     }
 
     pub fn get_or_insert(&mut self, name: &Ident) -> IdentId {
-        match self.by_ident.get(name) {
-            Some(id) => *id,
-            None => {
+        use std::collections::hash_map::Entry;
+
+        match self.by_ident.entry(name.clone()) {
+            Entry::Occupied(occupied) => *occupied.get(),
+            Entry::Vacant(vacant) => {
                 let by_id = &mut self.by_id;
                 let ident_id = IdentId(by_id.len() as u32);
 
                 by_id.push(name.clone());
 
-                self.by_ident.insert(name.clone(), ident_id);
+                vacant.insert(ident_id);
 
                 ident_id
             }
@@ -1056,6 +1058,9 @@ define_builtins! {
         35 LIST_DROP_LAST: "dropLast"
         36 LIST_MIN: "min"
         37 LIST_MIN_LT: "#minlt"
+        38 LIST_MAX: "max"
+        39 LIST_MAX_GT: "#maxGt"
+        40 LIST_MAP4: "map4"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

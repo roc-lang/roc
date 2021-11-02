@@ -79,7 +79,9 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                 compatible_surface: Some(&surface),
             })
             .await
-            .expect("Request adapter");
+            .expect(r#"Request adapter
+            If you're running this from inside nix, follow the instructions here to resolve this: https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#editor
+            "#);
 
         adapter
             .request_device(

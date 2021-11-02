@@ -467,6 +467,7 @@ impl<'a> Context<'a> {
                 op,
                 closure_env_layout,
                 specialization_id,
+                update_mode,
                 arg_layouts,
                 ret_layout,
                 function_name,
@@ -485,6 +486,7 @@ impl<'a> Context<'a> {
                                     closure_env_layout: *closure_env_layout,
                                     function_owns_closure_data: true,
                                     specialization_id: *specialization_id,
+                                    update_mode: *update_mode,
                                     function_name: *function_name,
                                     function_env: *function_env,
                                     arg_layouts,
@@ -571,6 +573,27 @@ impl<'a> Context<'a> {
                         let b = decref_if_owned!(function_ps[0].borrow, *xs, b);
                         let b = decref_if_owned!(function_ps[1].borrow, *ys, b);
                         let b = decref_if_owned!(function_ps[2].borrow, *zs, b);
+
+                        let v = create_call!(function_ps.get(3));
+
+                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                    }
+                    ListMap4 { xs, ys, zs, ws } => {
+                        let borrows = [
+                            function_ps[0].borrow,
+                            function_ps[1].borrow,
+                            function_ps[2].borrow,
+                            function_ps[3].borrow,
+                            FUNCTION,
+                            CLOSURE_DATA,
+                        ];
+
+                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
+
+                        let b = decref_if_owned!(function_ps[0].borrow, *xs, b);
+                        let b = decref_if_owned!(function_ps[1].borrow, *ys, b);
+                        let b = decref_if_owned!(function_ps[2].borrow, *zs, b);
+                        let b = decref_if_owned!(function_ps[3].borrow, *ws, b);
 
                         let v = create_call!(function_ps.get(3));
 

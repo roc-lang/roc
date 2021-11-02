@@ -9,7 +9,7 @@ use crate::layout::{
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use hashbrown::hash_map::Entry;
-use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap, MutSet};
+use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
@@ -378,7 +378,8 @@ impl<'a> Proc<'a> {
 
 #[derive(Clone, Debug)]
 pub struct ExternalSpecializations<'a> {
-    pub specs: BumpMap<Symbol, MutSet<SolvedType>>,
+    /// Not a bumpalo vec because bumpalo is not thread safe
+    pub specs: BumpMap<Symbol, std::vec::Vec<SolvedType>>,
     _lifetime: std::marker::PhantomData<&'a u8>,
 }
 
@@ -394,11 +395,11 @@ impl<'a> ExternalSpecializations<'a> {
         use hashbrown::hash_map::Entry::{Occupied, Vacant};
 
         let existing = match self.specs.entry(symbol) {
-            Vacant(entry) => entry.insert(MutSet::default()),
+            Vacant(entry) => entry.insert(std::vec::Vec::new()),
             Occupied(entry) => entry.into_mut(),
         };
 
-        existing.insert(typ);
+        existing.push(typ);
     }
 
     pub fn extend(&mut self, other: Self) {
@@ -406,7 +407,7 @@ impl<'a> ExternalSpecializations<'a> {
 
         for (symbol, solved_types) in other.specs {
             let existing = match self.specs.entry(symbol) {
-                Vacant(entry) => entry.insert(MutSet::default()),
+                Vacant(entry) => entry.insert(std::vec::Vec::new()),
                 Occupied(entry) => entry.into_mut(),
             };
 
@@ -514,9 +515,12 @@ impl<'a> Procs<'a> {
                 // by the surrounding context, so we can add pending specializations
                 // for them immediately.
 
-                let tuple = (symbol, top_level);
-                let already_specialized = self.specialized.contains_key(&tuple);
-                let (symbol, layout) = tuple;
+                let already_specialized = self
+                    .specialized
+                    .keys()
+                    .any(|(s, t)| *s == symbol && *t == top_level);
+
+                let layout = top_level;
 
                 // if we've already specialized this one, no further work is needed.
                 if !already_specialized {
@@ -777,8 +781,6 @@ pub struct Env<'a, 'i> {
 impl<'a, 'i> Env<'a, 'i> {
     pub fn unique_symbol(&mut self) -> Symbol {
         let ident_id = self.ident_ids.gen_unique();
-
-        self.home.register_debug_idents(self.ident_ids);
 
         Symbol::new(self.home, ident_id)
     }
@@ -1110,6 +1112,10 @@ pub enum CallType<'a> {
 
         /// specialization id of the function argument, used for name generation
         specialization_id: CallSpecId,
+
+        /// update mode of the higher order lowlevel itself
+        update_mode: UpdateModeId,
+
         /// function layout, used for name generation
         arg_layouts: &'a [Layout<'a>],
         ret_layout: Layout<'a>,
@@ -1695,19 +1701,16 @@ pub fn specialize_all<'a>(
     env: &mut Env<'a, '_>,
     mut procs: Procs<'a>,
     externals_others_need: ExternalSpecializations<'a>,
-    pending_specializations: BumpMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>,
+    specializations_for_host: BumpMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>,
     layout_cache: &mut LayoutCache<'a>,
 ) -> Procs<'a> {
-    specialize_all_help(env, &mut procs, externals_others_need, layout_cache);
+    specialize_externals_others_need(env, &mut procs, externals_others_need, layout_cache);
 
     // When calling from_can, pending_specializations should be unavailable.
     // This must be a single pass, and we must not add any more entries to it!
-
-    // observation: specialize_all_help does add to pending_specializations, but does not reference
-    // any existing values in it.
     let opt_pending_specializations = std::mem::replace(&mut procs.pending_specializations, None);
 
-    let it = pending_specializations
+    let it = specializations_for_host
         .into_iter()
         .chain(opt_pending_specializations.into_iter().flatten());
 
@@ -1774,17 +1777,18 @@ pub fn specialize_all<'a>(
     procs
 }
 
-fn specialize_all_help<'a>(
+fn specialize_externals_others_need<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
     externals_others_need: ExternalSpecializations<'a>,
     layout_cache: &mut LayoutCache<'a>,
 ) {
     for (symbol, solved_types) in externals_others_need.specs.iter() {
-        // for some unclear reason, the MutSet does not deduplicate according to the hash
-        // instance. So we do it manually here
+        // de-duplicate by the Hash instance (set only deduplicates by Eq instance)
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
+
+        let mut seen_hashes = Vec::with_capacity_in(solved_types.len(), env.arena);
 
         let hash_the_thing = |x: &SolvedType| {
             let mut hasher = DefaultHasher::new();
@@ -1792,15 +1796,16 @@ fn specialize_all_help<'a>(
             hasher.finish()
         };
 
-        let mut as_vec = Vec::from_iter_in(
-            solved_types.iter().map(|x| (hash_the_thing(x), x)),
-            env.arena,
-        );
+        for solved_type in solved_types {
+            let hash = hash_the_thing(solved_type);
 
-        as_vec.sort_by_key(|(k, _)| *k);
-        as_vec.dedup_by_key(|(k, _)| *k);
+            if seen_hashes.iter().any(|h| *h == hash) {
+                // we've seen this one already
+                continue;
+            }
 
-        for (_, solved_type) in as_vec {
+            seen_hashes.push(hash);
+
             let name = *symbol;
 
             let partial_proc = match procs.partial_procs.get(&name) {
@@ -4005,11 +4010,12 @@ pub fn with_hole<'a>(
                                 lambda_set,
                                 op,
                                 closure_data_symbol,
-                                |top_level_function, closure_data, closure_env_layout, specialization_id| self::Call {
+                                |(top_level_function, closure_data, closure_env_layout,  specialization_id, update_mode)| self::Call {
                                     call_type: CallType::HigherOrderLowLevel {
                                         op: crate::low_level::HigherOrder::$ho { $($x,)* },
                                         closure_env_layout,
                                         specialization_id,
+                                        update_mode,
                                         function_owns_closure_data: false,
                                         function_env: closure_data_symbol,
                                         function_name: top_level_function,
@@ -4132,6 +4138,16 @@ pub fn with_hole<'a>(
                     let zs = arg_symbols[2];
 
                     match_on_closure_argument!(ListMap3, [xs, ys, zs])
+                }
+                ListMap4 => {
+                    debug_assert_eq!(arg_symbols.len(), 5);
+
+                    let xs = arg_symbols[0];
+                    let ys = arg_symbols[1];
+                    let zs = arg_symbols[2];
+                    let ws = arg_symbols[3];
+
+                    match_on_closure_argument!(ListMap4, [xs, ys, zs, ws])
                 }
                 _ => {
                     let call = self::Call {
@@ -6535,7 +6551,8 @@ fn call_by_name_help<'a>(
     // If we've already specialized this one, no further work is needed.
     if procs
         .specialized
-        .contains_key(&(proc_name, top_level_layout))
+        .keys()
+        .any(|x| x == &(proc_name, top_level_layout))
     {
         debug_assert_eq!(
             argument_layouts.len(),
@@ -7869,6 +7886,8 @@ pub fn num_argument_to_int_or_float(
     }
 }
 
+type ToLowLevelCallArguments<'a> = (Symbol, Symbol, Option<Layout<'a>>, CallSpecId, UpdateModeId);
+
 /// Use the lambda set to figure out how to make a lowlevel call
 #[allow(clippy::too_many_arguments)]
 fn lowlevel_match_on_lambda_set<'a, ToLowLevelCall>(
@@ -7882,7 +7901,7 @@ fn lowlevel_match_on_lambda_set<'a, ToLowLevelCall>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a>
 where
-    ToLowLevelCall: Fn(Symbol, Symbol, Option<Layout<'a>>, CallSpecId) -> Call<'a> + Copy,
+    ToLowLevelCall: Fn(ToLowLevelCallArguments<'a>) -> Call<'a> + Copy,
 {
     match lambda_set.runtime_representation() {
         Layout::Union(union_layout) => {
@@ -7917,12 +7936,14 @@ where
         Layout::Struct(_) => match lambda_set.set.get(0) {
             Some((function_symbol, _)) => {
                 let call_spec_id = env.next_call_specialization_id();
-                let call = to_lowlevel_call(
+                let update_mode = env.next_update_mode_id();
+                let call = to_lowlevel_call((
                     *function_symbol,
                     closure_data_symbol,
                     lambda_set.is_represented(),
                     call_spec_id,
-                );
+                    update_mode,
+                ));
 
                 build_call(env, call, assigned, return_layout, env.arena.alloc(hole))
             }
@@ -7987,7 +8008,7 @@ fn lowlevel_union_lambda_set_to_switch<'a, ToLowLevelCall>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a>
 where
-    ToLowLevelCall: Fn(Symbol, Symbol, Option<Layout<'a>>, CallSpecId) -> Call<'a> + Copy,
+    ToLowLevelCall: Fn(ToLowLevelCallArguments<'a>) -> Call<'a> + Copy,
 {
     debug_assert!(!lambda_set.is_empty());
 
@@ -8001,12 +8022,14 @@ where
         let hole = Stmt::Jump(join_point_id, env.arena.alloc([assigned]));
 
         let call_spec_id = env.next_call_specialization_id();
-        let call = to_lowlevel_call(
+        let update_mode = env.next_update_mode_id();
+        let call = to_lowlevel_call((
             *function_symbol,
             closure_data_symbol,
             closure_env_layout,
             call_spec_id,
-        );
+            update_mode,
+        ));
         let stmt = build_call(env, call, assigned, return_layout, env.arena.alloc(hole));
 
         branches.push((i as u64, BranchInfo::None, stmt));
@@ -8424,7 +8447,7 @@ fn lowlevel_enum_lambda_set_to_switch<'a, ToLowLevelCall>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a>
 where
-    ToLowLevelCall: Fn(Symbol, Symbol, Option<Layout<'a>>, CallSpecId) -> Call<'a> + Copy,
+    ToLowLevelCall: Fn(ToLowLevelCallArguments<'a>) -> Call<'a> + Copy,
 {
     debug_assert!(!lambda_set.is_empty());
 
@@ -8438,12 +8461,14 @@ where
         let hole = Stmt::Jump(join_point_id, env.arena.alloc([result_symbol]));
 
         let call_spec_id = env.next_call_specialization_id();
-        let call = to_lowlevel_call(
+        let update_mode = env.next_update_mode_id();
+        let call = to_lowlevel_call((
             *function_symbol,
             closure_data_symbol,
             closure_env_layout,
             call_spec_id,
-        );
+            update_mode,
+        ));
         let stmt = build_call(
             env,
             call,

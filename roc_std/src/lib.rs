@@ -136,6 +136,7 @@ impl<T> RocList<T> {
     where
         T: Clone,
     {
+        assert!(capacity > 0);
         assert!(slice.len() <= capacity);
 
         let ptr = slice.as_ptr();
@@ -197,7 +198,12 @@ impl<T> RocList<T> {
     where
         T: Clone,
     {
-        Self::from_slice_with_capacity(slice, slice.len())
+        // Avoid allocation with empty list.
+        if slice.is_empty() {
+            Self::default()
+        } else {
+            Self::from_slice_with_capacity(slice, slice.len())
+        }
     }
 
     pub fn as_slice(&self) -> &[T] {
