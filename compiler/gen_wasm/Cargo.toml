@@ -15,7 +15,6 @@ parity-wasm = { git = "https://github.com/brian-carroll/parity-wasm", branch = "
 
 roc_std = { path = "../../roc_std" }
 wasmer = "2.0.0"
-wasmer-wasi = "2.0.0"
 
 [dev-dependencies]
 roc_can = { path = "../can" }
@@ -28,3 +27,4 @@ pretty_assertions = "0.5.1"
 libc = "0.2"
 target-lexicon = "0.12.2"
 tempfile = "3.1.0"
+wasmer-wasi = "2.0.0"

@@ -44,7 +44,6 @@ pest = "2.1"
 pest_derive = "2.1"
 ropey = "1.2.0"
 copypasta = "0.7.1"
-indoc = "1.0"
 palette = "0.5"
 # confy is currently unused but should not be removed
 confy = { git = 'https://github.com/rust-cli/confy', features = [
@@ -52,8 +51,6 @@ confy = { git = 'https://github.com/rust-cli/confy', features = [
 ], default-features = false }
 serde = { version = "1.0.123", features = ["derive"] }
 nonempty = "0.6.0"
-tempfile = "3.2.0"
-uuid = { version = "0.8", features = ["v4"] }
 fs_extra = "1.2.0"
 rodio = "0.14.0"
 threadpool = "1.8.1"
@@ -68,3 +65,6 @@ maplit = "1.0.1"
 quickcheck = "1.0"
 quickcheck_macros = "1.0"
 rand = "0.8.2"
+indoc = "1.0"
+tempfile = "3.2.0"
+uuid = { version = "0.8", features = ["v4"] }
