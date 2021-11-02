@@ -328,6 +328,7 @@ impl<T> IntoIterator for RocList<T> {
         let buf = unsafe { NonNull::new_unchecked(self.elements as _) };
         let ptr = self.elements;
 
+        mem::forget(self);
         IntoIter {
             buf,
             ptr,
@@ -378,6 +379,11 @@ impl<T> Drop for IntoIter<T> {
         // drop the elements that we have not yet returned.
         while let Some(item) = next_help(self) {
             drop(item);
+        }
+
+        // deallocate the whole buffer
+        unsafe {
+            RocList::drop_pointer_to_first_argument(self.buf.as_mut());
         }
     }
 }
