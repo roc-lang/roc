@@ -2,6 +2,52 @@ use std::fmt::Debug;
 
 use bumpalo::collections::vec::Vec;
 
+pub trait Serialize {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T);
+}
+
+impl Serialize for str {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.encode_u32(self.len() as u32);
+        buffer.append_slice(self.as_bytes());
+    }
+}
+
+impl Serialize for u32 {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.encode_u32(*self);
+    }
+}
+
+// Unit is used as a placeholder in parts of the Wasm spec we don't use yet
+impl Serialize for () {
+    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {}
+}
+
+impl<S: Serialize> Serialize for [S] {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.encode_u32(self.len() as u32);
+        for item in self.iter() {
+            item.serialize(buffer);
+        }
+    }
+}
+
+impl<S: Serialize> Serialize for Option<S> {
+    /// serialize Option as a vector of length 1 or 0
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        match self {
+            Some(x) => {
+                buffer.append_u8(1);
+                x.serialize(buffer);
+            }
+            None => {
+                buffer.append_u8(0);
+            }
+        }
+    }
+}
+
 /// Write an unsigned integer into the provided buffer in LEB-128 format, returning byte length
 ///
 /// All integers in Wasm are variable-length encoded, which saves space for small values.
@@ -103,52 +149,6 @@ pub trait SerialBuffer: Debug {
     write_unencoded!(write_unencoded_u64, u64);
     encode_padded_sleb128!(encode_padded_i32, i32);
     encode_padded_sleb128!(encode_padded_i64, i64);
-}
-
-pub trait Serialize {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T);
-}
-
-impl Serialize for str {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        buffer.encode_u32(self.len() as u32);
-        buffer.append_slice(self.as_bytes());
-    }
-}
-
-impl Serialize for u32 {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        buffer.encode_u32(*self);
-    }
-}
-
-// Unit is used as a placeholder in parts of the Wasm spec we don't use yet
-impl Serialize for () {
-    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {}
-}
-
-impl<S: Serialize> Serialize for [S] {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        buffer.encode_u32(self.len() as u32);
-        for item in self.iter() {
-            item.serialize(buffer);
-        }
-    }
-}
-
-impl<S: Serialize> Serialize for Option<S> {
-    /// serialize Option as a vector of length 1 or 0
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        match self {
-            Some(x) => {
-                buffer.append_u8(1);
-                x.serialize(buffer);
-            }
-            None => {
-                buffer.append_u8(0);
-            }
-        }
-    }
 }
 
 fn overwrite_padded_u32_help(buffer: &mut [u8], value: u32) {
