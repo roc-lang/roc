@@ -33,6 +33,7 @@ pub enum LowLevel {
     ListMap,
     ListMap2,
     ListMap3,
+    ListMap4,
     ListMapWithIndex,
     ListKeepIf,
     ListWalk,
@@ -211,6 +212,7 @@ macro_rules! higher_order {
         ListMap
             | ListMap2
             | ListMap3
+            | ListMap4
             | ListMapWithIndex
             | ListKeepIf
             | ListWalk
@@ -243,6 +245,7 @@ impl LowLevel {
             ListMap => 1,
             ListMap2 => 2,
             ListMap3 => 3,
+            ListMap4 => 4,
             ListMapWithIndex => 1,
             ListKeepIf => 1,
             ListWalk => 2,

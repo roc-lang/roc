@@ -26,6 +26,7 @@ comptime {
     exportListFn(list.listMap, "map");
     exportListFn(list.listMap2, "map2");
     exportListFn(list.listMap3, "map3");
+    exportListFn(list.listMap4, "map4");
     exportListFn(list.listMapWithIndex, "map_with_index");
     exportListFn(list.listKeepIf, "keep_if");
     exportListFn(list.listWalk, "walk");

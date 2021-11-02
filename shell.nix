@@ -32,6 +32,7 @@ let
 
   llvmPkgs = pkgs.llvmPackages_12;
 
+  zig = import ./nix/zig.nix { inherit pkgs; };
   debugir = import ./nix/debugir.nix { inherit pkgs; };
 
   inputs = with pkgs; [
@@ -70,9 +71,39 @@ in pkgs.mkShell {
 
   # Additional Env vars
   LLVM_SYS_120_PREFIX = "${llvmPkgs.llvm.dev}";
+  NIX_GLIBC_PATH =
+    if pkgs.stdenv.isLinux then "${pkgs.glibc_multi.out}/lib" else "";
   LD_LIBRARY_PATH = with pkgs;
     lib.makeLibraryPath
     ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ] ++ linuxInputs);
-  NIX_GLIBC_PATH =
-    if pkgs.stdenv.isLinux then "${pkgs.glibc_multi.out}/lib" else "";
+
+  COREAUDIO_SDK_PATH = if pkgs.stdenv.isDarwin then
+  # The coreaudio-sys crate is configured to look for things in whatever the
+  # output of `xcrun --sdk macosx --show-sdk-path` is. However, this does not
+  # always contain the right frameworks, and it uses system versions instead of
+  # what we control via Nix. Instead of having to run a lot of extra scripts
+  # to set our systems up to build, we can just create a SDK directory with
+  # the same layout as the `MacOSX{version}.sdk` that XCode produces.
+    pkgs.symlinkJoin {
+      name = "sdk";
+      paths = with pkgs.darwin.apple_sdk.frameworks; [
+        AudioToolbox
+        AudioUnit
+        CoreAudio
+        CoreFoundation
+        CoreMIDI
+        OpenAL
+      ];
+      postBuild = ''
+        mkdir $out/System
+        mv $out/Library $out/System
+      '';
+    }
+  else
+  # TODO: I'm not 100% confident that this being blank won't cause issues for
+  # Nix-on-Linux development. It may be sufficient to use the pkgs.symlinkJoin
+  # above regardless of system! That'd set us up for cross-compilation as well.
+    "";
+
+
 }
