@@ -144,7 +144,7 @@ nixVulkanNvidia-460.91.03 cargo run edit
 
 #### Integrated Intel Graphics
 
-:exclamation: ** Our Nix setup can currently not run the editor with integrated intel graphics, see #1856 ** :exclamation:
+:exclamation: ** Our Nix setup currently cannot run the editor with integrated intel graphics, see #1856 ** :exclamation:
 
 Outside of a nix shell, run:
 
