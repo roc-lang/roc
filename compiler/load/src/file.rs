@@ -1004,7 +1004,7 @@ impl ModuleTiming {
                 .checked_sub(*read_roc_file)
         };
 
-        calculate(end_time.duration_since(*start_time)).unwrap_or_else(Duration::default)
+        calculate(end_time.duration_since(*start_time)).unwrap_or_default()
     }
 }
 
