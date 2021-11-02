@@ -8,7 +8,7 @@ pub mod serialize;
 mod storage;
 
 use bumpalo::{self, collections::Vec, Bump};
-use parity_wasm::builder::{ModuleBuilder};
+use parity_wasm::builder::ModuleBuilder;
 
 use parity_wasm::elements::{Section, Serialize as ParitySerialize};
 use roc_collections::all::{MutMap, MutSet};
@@ -92,32 +92,8 @@ pub fn build_module_help<'a>(
         .bytes
         .overwrite_padded_u32(0, inner_length);
 
-    // linking metadata section
-    let mut linking_section_bytes = std::vec::Vec::with_capacity(symbol_table_entries.len() * 20);
-    let linking_section = LinkingSection {
-        subsections: bumpalo::vec![in env.arena;
-            LinkingSubSection::SymbolTable(symbol_table_entries)
-        ],
-    };
-    linking_section.serialize(&mut linking_section_bytes);
-    backend.parity_builder = backend.parity_builder.with_section(Section::Unparsed {
-        id: SectionId::Custom as u8,
-        payload: linking_section_bytes,
-    });
-
-    const CODE_SECTION_INDEX: u32 = 5;
-    backend.module.reloc_code.target_section_index = Some(CODE_SECTION_INDEX);
-    let mut code_reloc_section_bytes = std::vec::Vec::with_capacity(256);
-    backend
-        .module
-        .reloc_code
-        .serialize(&mut code_reloc_section_bytes);
-
-    // Must come after linking section
-    backend.parity_builder = backend.parity_builder.with_section(Section::Unparsed {
-        id: SectionId::Custom as u8,
-        payload: code_reloc_section_bytes,
-    });
+    let symbol_table = LinkingSubSection::SymbolTable(symbol_table_entries);
+    backend.module.linking.subsections.push(symbol_table);
 
     const MIN_MEMORY_SIZE_KB: i32 = 1024;
 
