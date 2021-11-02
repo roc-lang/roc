@@ -37,7 +37,6 @@ quickcheck = "0.8"
 quickcheck_macros = "0.8"
 tokio = { version = "0.2", features = ["blocking", "fs", "sync", "rt-threaded"] }
 bumpalo = { version = "3.6.1", features = ["collections"] }
-libc = "0.2"
 tempfile = "3.1.0"
 itertools = "0.9"
 libloading = "0.6"

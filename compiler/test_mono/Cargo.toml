@@ -5,9 +5,6 @@ authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2018"
 
-[dependencies]
-libc = "0.2"
-
 [dev-dependencies]
 roc_collections = { path = "../collections" }
 roc_module = { path = "../module" }
