@@ -82,7 +82,7 @@ There are also alternative installation options at http://releases.llvm.org/down
 
 ## Using Nix
 
-:exclamation: **Our Nix setup is currently broken, you'll have to install manually for now** :exclamation:
+:exclamation: **Our Nix setup is not yet working on MacOS, you'll have to install manually for now** :exclamation:
 
 ### Install
 
@@ -94,7 +94,7 @@ First, install nix:
 
 `curl -L https://nixos.org/nix/install | sh`
 
-If MacOS and using a version >= 10.15:
+If you're on MacOS and using a OS version >= 10.15:
 
 `sh <(curl -L https://nixos.org/nix/install) --darwin-use-unencrypted-nix-store-volume`
 
@@ -104,7 +104,7 @@ You may prefer to setup up the volume manually by following nix documentation.
 
 ### Usage
 
-Now with nix installed you just need to run one command:
+Now with nix installed, you just need to run one command:
 
 `nix-shell`
 
@@ -124,29 +124,45 @@ If you plan on using `nix-shell` regularly, check out [direnv](https://direnv.ne
 
 ### Editor
 
-When you want to run the editor from Ubuntu inside nix you need to install [nixGL](https://github.com/guibou/nixGL) as well:
+`cargo run edit` should work from NixOS, if you use a nix-shell from inside another OS, follow the instructions below.
+
+#### Nvidia GPU
+
+Outside of a nix shell, execute the following:
+```
+nix-channel --add https://github.com/guibou/nixGL/archive/main.tar.gz nixgl && nix-channel --update
+nix-env -iA nixgl.auto.nixVulkanNvidia
+```
+Running the editor does not work with `nix-shell --pure`.
+```
+nix-shell
+```
+460.91.03 may be different for you, type nixVulkanNvidia and press tab to autocomplete for your version.
+```
+nixVulkanNvidia-460.91.03 cargo run edit
+```
+
+#### Integrated Intel Graphics
+
+:exclamation: ** Our Nix setup currently cannot run the editor with integrated intel graphics, see #1856 ** :exclamation:
+
+Outside of a nix shell, run:
 
 ```bash
-nix-shell
 git clone https://github.com/guibou/nixGL
 cd nixGL
-```
-
-If you have an Nvidia graphics card, run:
-```
-nix-env -f ./ -iA nixVulkanNvidia
-```
-If you have integrated Intel graphics, run:
-```
 nix-env -f ./ -iA nixVulkanIntel
 ```
-Check the [nixGL repo](https://github.com/guibou/nixGL) for other configurations.
 
-Now you should be able to run the editor:
-```bash
-cd roc
-nixVulkanNvidia cargo run edit `# replace Nvidia with the config you chose in the previous step`
+cd to the roc repo, and run (without --pure):
 ```
+nix-shell
+nixVulkanIntel cargo run edit
+```
+
+#### Other configs
+
+Check the [nixGL repo](https://github.com/guibou/nixGL) for other graphics configurations.
 
 ## Troubleshooting
 
