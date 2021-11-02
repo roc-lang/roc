@@ -4749,6 +4749,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_wasm"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "indoc 0.3.6",
+ "libc",
+ "parity-wasm",
+ "pretty_assertions 0.5.1",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_gen_wasm",
+ "roc_load",
+ "roc_module",
+ "roc_std",
+ "roc_types",
+ "target-lexicon",
+ "tempfile",
+ "wasmer",
+ "wasmer-wasi",
+]
+
+[[package]]
 name = "textwrap"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
