@@ -120,7 +120,7 @@ You should be in a repl now. Have fun!
 
 ### Extra tips
 
-If you plan on using `nix-shell` regularly, check out [direnv](https://direnv.net/) and [lorri](https://github.com/target/lorri). Whenever you `cd` into `roc/`, they will automatically load the Nix dependecies into your current shell, so you never have to run nix-shell directly!
+If you plan on using `nix-shell` regularly, check out [direnv](https://direnv.net/) and [lorri](https://github.com/nix-community/lorri). Whenever you `cd` into `roc/`, they will automatically load the Nix dependecies into your current shell, so you never have to run nix-shell directly!
 
 ### Editor
 
