@@ -459,6 +459,10 @@ impl<'a> Procs<'a> {
         self.module_thunks.iter().any(|x| *x == symbol)
     }
 
+    fn get_partial_proc<'b>(&'b self, symbol: Symbol) -> Option<&'b PartialProc<'a>> {
+        self.partial_procs.get(&symbol)
+    }
+
     pub fn get_specialized_procs_without_rc(
         self,
         env: &mut Env<'a, '_>,
@@ -573,7 +577,7 @@ impl<'a> Procs<'a> {
                             let outside_layout = layout;
 
                             let partial_proc;
-                            if let Some(existing) = self.partial_procs.get(&symbol) {
+                            if let Some(existing) = self.get_partial_proc(symbol) {
                                 // if we're adding the same partial proc twice, they must be the actual same!
                                 //
                                 // NOTE we can't skip extra work! we still need to make the specialization for this
@@ -583,17 +587,17 @@ impl<'a> Procs<'a> {
                                 debug_assert_eq!(captured_symbols, existing.captured_symbols);
                                 debug_assert_eq!(is_self_recursive, existing.is_self_recursive);
 
-                                partial_proc = existing.clone();
+                                partial_proc = existing;
                             } else {
                                 let pattern_symbols = pattern_symbols.into_bump_slice();
 
-                                partial_proc = PartialProc {
+                                partial_proc = env.arena.alloc(PartialProc {
                                     annotation,
                                     pattern_symbols,
                                     captured_symbols,
                                     body: body.value,
                                     is_self_recursive,
-                                };
+                                });
                             }
 
                             match specialize(env, self, symbol, layout_cache, pending, partial_proc)
@@ -662,9 +666,8 @@ impl<'a> Procs<'a> {
             None => {
                 let symbol = name;
 
-                // TODO should pending_procs hold a Rc<Proc>?
-                let partial_proc = match self.partial_procs.get(&symbol) {
-                    Some(p) => p.clone(),
+                let partial_proc = match self.get_partial_proc(symbol) {
+                    Some(p) => p,
                     None => panic!("no partial_proc for {:?} in module {:?}", symbol, env.home),
                 };
 
@@ -1722,14 +1725,14 @@ pub fn specialize_all<'a>(
                     continue;
                 }
                 Entry::Vacant(vacant) => {
-                    match procs.partial_procs.get(&name) {
+                    match procs.get_partial_proc(name) {
                         Some(v) => {
                             // Mark this proc as in-progress, so if we're dealing with
                             // mutually recursive functions, we don't loop forever.
                             // (We had a bug around this before this system existed!)
                             vacant.insert(InProgress);
 
-                            v.clone()
+                            v
                         }
                         None => {
                             // TODO this assumes the specialization is done by another module
@@ -1804,8 +1807,8 @@ fn specialize_externals_others_need<'a>(
 
             let name = *symbol;
 
-            let partial_proc = match procs.partial_procs.get(&name) {
-                Some(v) => v.clone(),
+            let partial_proc = match procs.get_partial_proc(name) {
+                Some(v) => v,
                 None => {
                     panic!("Cannot find a partial proc for {:?}", name);
                 }
@@ -1897,7 +1900,7 @@ fn specialize_external<'a>(
     layout_cache: &mut LayoutCache<'a>,
     fn_var: Variable,
     host_exposed_variables: &[(Symbol, Variable)],
-    partial_proc: PartialProc<'a>,
+    partial_proc: &PartialProc<'a>,
 ) -> Result<Proc<'a>, LayoutProblem> {
     let PartialProc {
         annotation,
@@ -1911,7 +1914,7 @@ fn specialize_external<'a>(
     let snapshot = env.subs.snapshot();
     let cache_snapshot = layout_cache.snapshot();
 
-    let _unified = roc_unify::unify::unify(env.subs, annotation, fn_var);
+    let _unified = roc_unify::unify::unify(env.subs, *annotation, fn_var);
 
     // This will not hold for programs with type errors
     // let is_valid = matches!(unified, roc_unify::unify::Unified::Success(_));
@@ -2019,13 +2022,13 @@ fn specialize_external<'a>(
         }
     };
 
-    let recursivity = if is_self_recursive {
+    let recursivity = if *is_self_recursive {
         SelfRecursive::SelfRecursive(JoinPointId(env.unique_symbol()))
     } else {
         SelfRecursive::NotSelfRecursive
     };
 
-    let mut specialized_body = from_can(env, fn_var, body, procs, layout_cache);
+    let mut specialized_body = from_can(env, fn_var, body.clone(), procs, layout_cache);
 
     match specialized {
         SpecializedLayout::FunctionPointerBody {
@@ -2415,13 +2418,24 @@ struct SpecializeFailure<'a> {
 
 type SpecializeSuccess<'a> = (Proc<'a>, RawFunctionLayout<'a>);
 
-fn specialize<'a>(
+fn specialize2<'a, 'b>(
     env: &mut Env<'a, '_>,
-    procs: &mut Procs<'a>,
+    partial_proc: &'b PartialProc<'a>,
+    procs: &'b mut Procs<'a>,
     proc_name: Symbol,
     layout_cache: &mut LayoutCache<'a>,
     pending: PendingSpecialization,
-    partial_proc: PartialProc<'a>,
+) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
+    todo!()
+}
+
+fn specialize<'a, 'b>(
+    env: &mut Env<'a, '_>,
+    procs: &'b mut Procs<'a>,
+    proc_name: Symbol,
+    layout_cache: &mut LayoutCache<'a>,
+    pending: PendingSpecialization,
+    partial_proc: &'b PartialProc<'a>,
 ) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
     let PendingSpecialization {
         solved_type,
@@ -2466,7 +2480,7 @@ fn specialize_solved_type<'a>(
     layout_cache: &mut LayoutCache<'a>,
     solved_type: &SolvedType,
     host_exposed_aliases: BumpMap<Symbol, SolvedType>,
-    partial_proc: PartialProc<'a>,
+    partial_proc: &PartialProc<'a>,
 ) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
     specialize_variable_help(
         env,
@@ -2486,7 +2500,7 @@ fn specialize_variable<'a>(
     layout_cache: &mut LayoutCache<'a>,
     fn_var: Variable,
     host_exposed_aliases: BumpMap<Symbol, SolvedType>,
-    partial_proc: PartialProc<'a>,
+    partial_proc: &PartialProc<'a>,
 ) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
     specialize_variable_help(
         env,
@@ -2506,7 +2520,7 @@ fn specialize_variable_help<'a, F>(
     layout_cache: &mut LayoutCache<'a>,
     fn_var_thunk: F,
     host_exposed_aliases: BumpMap<Symbol, SolvedType>,
-    partial_proc: PartialProc<'a>,
+    partial_proc: &PartialProc<'a>,
 ) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>>
 where
     F: FnOnce(&mut Env<'a, '_>) -> Variable,
@@ -2629,7 +2643,7 @@ fn specialize_naked_symbol<'a>(
     symbol: Symbol,
 ) -> Stmt<'a> {
     if procs.is_module_thunk(symbol) {
-        let partial_proc = procs.partial_procs.get(&symbol).unwrap();
+        let partial_proc = procs.get_partial_proc(symbol).unwrap();
         let fn_var = partial_proc.annotation;
 
         // This is a top-level declaration, which will code gen to a 0-arity thunk.
@@ -6086,7 +6100,7 @@ fn reuse_function_symbol<'a>(
     result: Stmt<'a>,
     original: Symbol,
 ) -> Stmt<'a> {
-    match procs.partial_procs.get(&original) {
+    match procs.get_partial_proc(original) {
         None => {
             match arg_var {
                 Some(arg_var) if env.is_imported_symbol(original) => {
@@ -6659,7 +6673,7 @@ fn call_by_name_help<'a>(
                 assign_to_symbols(env, procs, layout_cache, iter, result)
             }
             None => {
-                let opt_partial_proc = procs.partial_procs.get(&proc_name);
+                let opt_partial_proc = procs.get_partial_proc(proc_name);
 
                 /*
                 debug_assert_eq!(
@@ -6676,9 +6690,6 @@ fn call_by_name_help<'a>(
 
                 match opt_partial_proc {
                     Some(partial_proc) => {
-                        // TODO should pending_procs hold a Rc<Proc> to avoid this .clone()?
-                        let partial_proc = partial_proc.clone();
-
                         // Mark this proc as in-progress, so if we're dealing with
                         // mutually recursive functions, we don't loop forever.
                         // (We had a bug around this before this system existed!)
@@ -6797,13 +6808,10 @@ fn call_by_name_module_thunk<'a>(
                 force_thunk(env, proc_name, inner_layout, assigned, hole)
             }
             None => {
-                let opt_partial_proc = procs.partial_procs.get(&proc_name);
+                let opt_partial_proc = procs.get_partial_proc(proc_name);
 
                 match opt_partial_proc {
                     Some(partial_proc) => {
-                        // TODO should pending_procs hold a Rc<Proc> to avoid this .clone()?
-                        let partial_proc = partial_proc.clone();
-
                         // Mark this proc as in-progress, so if we're dealing with
                         // mutually recursive functions, we don't loop forever.
                         // (We had a bug around this before this system existed!)
