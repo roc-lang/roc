@@ -6,6 +6,12 @@ license = "UPL-1.0"
 edition = "2018"
 description = "An editor for Roc"
 
+[package.metadata.cargo-udeps.ignore]
+# confy is currently unused but should not be removed
+normal = ["confy"]
+#development = []
+#build = []
+
 [dependencies]
 roc_ast = { path = "../ast" }
 roc_collections = { path = "../compiler/collections" }
@@ -42,7 +48,6 @@ pest = "2.1"
 pest_derive = "2.1"
 copypasta = "0.7.1"
 palette = "0.5"
-# confy is currently unused but should not be removed
 confy = { git = 'https://github.com/rust-cli/confy', features = [
   "yaml_conf"
 ], default-features = false }
