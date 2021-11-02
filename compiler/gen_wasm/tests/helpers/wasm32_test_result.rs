@@ -1,8 +1,8 @@
 use parity_wasm::builder;
-use parity_wasm::elements::Internal;
 
 use roc_gen_wasm::code_builder::{Align, CodeBuilder, ValueType};
 use roc_gen_wasm::from_wasm32_memory::FromWasm32Memory;
+use roc_gen_wasm::module_builder::{Export, ExportType, WasmModule};
 use roc_gen_wasm::{serialize::SerialBuffer, LocalId};
 use roc_std::{RocDec, RocList, RocOrder, RocStr};
 
@@ -10,7 +10,7 @@ pub trait Wasm32TestResult {
     fn insert_test_wrapper<'a>(
         arena: &'a bumpalo::Bump,
         module_builder: &mut builder::ModuleBuilder,
-        code_section_bytes: &mut std::vec::Vec<u8>,
+        wasm_module: &mut WasmModule<'a>,
         wrapper_name: &str,
         main_function_index: u32,
     ) {
@@ -21,24 +21,26 @@ pub trait Wasm32TestResult {
         // parity-wasm FunctionDefinition with no instructions
         let empty_fn_def = builder::function().with_signature(signature).build();
         let location = module_builder.push_function(empty_fn_def);
-        let export = builder::export()
-            .field(wrapper_name)
-            .with_internal(Internal::Function(location.body))
-            .build();
-        module_builder.push_export(export);
+
+        wasm_module.export.entries.push(Export {
+            name: wrapper_name.to_string(),
+            ty: ExportType::Func,
+            index: location.body,
+        });
+
 
         let mut code_builder = CodeBuilder::new(arena);
         Self::build_wrapper_body(&mut code_builder, main_function_index);
 
-        code_builder.serialize(code_section_bytes);
+        code_builder.serialize(&mut wasm_module.code.bytes);
 
         let mut num_procs = 0;
-        for (i, byte) in code_section_bytes[5..10].iter().enumerate() {
+        for (i, byte) in wasm_module.code.bytes[5..10].iter().enumerate() {
             num_procs += ((byte & 0x7f) as u32) << (i * 7);
         }
-        let inner_length = (code_section_bytes.len() - 5) as u32;
-        code_section_bytes.overwrite_padded_u32(0, inner_length);
-        code_section_bytes.overwrite_padded_u32(5, num_procs + 1);
+        let inner_length = (wasm_module.code.bytes.len() - 5) as u32;
+        wasm_module.code.bytes.overwrite_padded_u32(0, inner_length);
+        wasm_module.code.bytes.overwrite_padded_u32(5, num_procs + 1);
     }
 
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32);

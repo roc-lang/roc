@@ -50,7 +50,7 @@ fn write_custom_section_header<T: SerialBuffer>(
     buffer: &mut T,
     name: &str,
 ) -> SectionHeaderIndices {
-    // buffer.append_u8(SectionId::Custom as u8);
+    buffer.append_u8(SectionId::Custom as u8);
     let size_index = buffer.reserve_padded_u32();
     let body_index = buffer.size();
     name.serialize(buffer);
@@ -392,17 +392,17 @@ impl<'a> Serialize for GlobalSection<'a> {
 
 #[repr(u8)]
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
-enum ExportType {
+pub enum ExportType {
     Func = 0,
     Table = 1,
     Mem = 2,
     Global = 3,
 }
 
-struct Export {
-    name: String,
-    ty: ExportType,
-    index: u32,
+pub struct Export {
+    pub name: String,
+    pub ty: ExportType,
+    pub index: u32,
 }
 impl Serialize for Export {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
@@ -412,17 +412,21 @@ impl Serialize for Export {
     }
 }
 
-pub struct ExportSection<'a>(Vec<'a, Export>);
+pub struct ExportSection<'a> {
+    pub entries: Vec<'a, Export>,
+}
 
 impl<'a> ExportSection<'a> {
     pub fn new(arena: &'a Bump) -> Self {
-        ExportSection(bumpalo::vec![in arena])
+        ExportSection {
+            entries: bumpalo::vec![in arena],
+        }
     }
 }
 
 impl<'a> Serialize for ExportSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        serialize_vector_section(buffer, SectionId::Export, &self.0);
+        serialize_vector_section(buffer, SectionId::Export, &self.entries);
     }
 }
 
@@ -432,8 +436,9 @@ impl<'a> Serialize for ExportSection<'a> {
  *
  *******************************************************************/
 
+#[derive(Debug)]
 pub struct CodeSection<'a> {
-    bytes: Vec<'a, u8>,
+    pub bytes: Vec<'a, u8>,
 }
 
 impl<'a> CodeSection<'a> {
@@ -607,10 +612,12 @@ impl<'a> RelocationSection<'a> {
 
 impl<'a> Serialize for RelocationSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        let header_indices = write_custom_section_header(buffer, self.name);
-        buffer.encode_u32(self.target_section_index.unwrap());
-        self.entries.serialize(buffer);
-        update_section_size(buffer, header_indices);
+        if !self.entries.is_empty() {
+            let header_indices = write_custom_section_header(buffer, self.name);
+            buffer.encode_u32(self.target_section_index.unwrap());
+            self.entries.serialize(buffer);
+            update_section_size(buffer, header_indices);
+        }
     }
 }
 
@@ -917,22 +924,34 @@ impl<'a> Serialize for LinkingSection<'a> {
  * https://webassembly.github.io/spec/core/binary/modules.html
  *
  *******************************************************************/
-
-type RocUnusedSection<'a> = &'a str;
+pub struct RocUnusedSection {}
+impl Serialize for RocUnusedSection {
+    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {}
+}
+impl Default for RocUnusedSection {
+    fn default() -> Self {
+        RocUnusedSection {}
+    }
+}
 
 pub struct WasmModule<'a> {
     pub types: TypeSection<'a>,
     pub import: ImportSection<'a>,
     pub function: FunctionSection<'a>,
-    pub table: RocUnusedSection<'a>,
+    /// Dummy placeholder for tables (used for function pointers and host references)
+    pub table: (),
     pub memory: MemorySection,
     pub global: GlobalSection<'a>,
     pub export: ExportSection<'a>,
-    pub start: RocUnusedSection<'a>,
-    pub element: RocUnusedSection<'a>,
-    pub data_count: RocUnusedSection<'a>,
+    /// Dummy placeholder for start function. In Roc, this would be part of the platform.
+    pub start: (),
+    /// Dummy placeholder for table elements. Roc does not use tables.
+    pub element: (),
+    /// Dummy placeholder for data count section, not yet implemented
+    pub data_count: (),
     pub code: CodeSection<'a>,
-    pub data: RocUnusedSection<'a>,
+    /// Dummy placeholder for data section, not yet implemented
+    pub data: (),
     pub linking: LinkingSection<'a>,
     pub reloc_code: RelocationSection<'a>,
     pub reloc_data: RelocationSection<'a>,
@@ -946,22 +965,22 @@ fn maybe_increment_section(size: usize, prev_size: &mut usize, index: &mut u32) 
 }
 
 impl<'a> WasmModule<'a> {
-    const WASM_VERSION: u32 = 1;
+    pub const WASM_VERSION: u32 = 1;
 
     pub fn new(arena: &'a Bump) -> Self {
         WasmModule {
             types: TypeSection::new(arena),
             import: ImportSection::new(arena),
             function: FunctionSection::new(arena),
-            table: RocUnusedSection::default(),
+            table: (),
             memory: MemorySection::new(1024 * 1024),
             global: GlobalSection::new(arena),
             export: ExportSection::new(arena),
-            start: RocUnusedSection::default(),
-            element: RocUnusedSection::default(),
-            data_count: RocUnusedSection::default(),
+            start: (),
+            element: (),
+            data_count: (),
             code: CodeSection::new(arena),
-            data: RocUnusedSection::default(),
+            data: (),
             linking: LinkingSection::new(arena),
             reloc_code: RelocationSection::new(arena, "reloc.CODE"),
             reloc_data: RelocationSection::new(arena, "reloc.DATA"),

@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use bumpalo::collections::vec::Vec;
 
 /// Write an unsigned integer into the provided buffer in LEB-128 format, returning byte length
@@ -69,7 +71,7 @@ macro_rules! encode_padded_sleb128 {
     };
 }
 
-pub trait SerialBuffer {
+pub trait SerialBuffer: Debug {
     fn append_u8(&mut self, b: u8);
     fn overwrite_u8(&mut self, index: usize, b: u8);
     fn append_slice(&mut self, b: &[u8]);
@@ -118,6 +120,11 @@ impl Serialize for u32 {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         buffer.encode_u32(*self);
     }
+}
+
+// Unit is used as a placeholder in parts of the Wasm spec we don't use yet
+impl Serialize for () {
+    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {}
 }
 
 impl<S: Serialize> Serialize for [S] {

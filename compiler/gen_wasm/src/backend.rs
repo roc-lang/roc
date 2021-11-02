@@ -27,11 +27,10 @@ pub struct WasmBackend<'a> {
 
     // Module-level data
     pub module: WasmModule<'a>,
-    pub module_builder: ModuleBuilder,
-    pub code_section_bytes: std::vec::Vec<u8>,
+    pub parity_builder: ModuleBuilder,
     _data_offset_map: MutMap<Literal<'a>, u32>,
     _data_offset_next: u32,
-    proc_symbols: &'a [Symbol],
+    proc_symbols: Vec<'a, Symbol>,
 
     // Function-level data
     code_builder: CodeBuilder<'a>,
@@ -43,20 +42,20 @@ pub struct WasmBackend<'a> {
 }
 
 impl<'a> WasmBackend<'a> {
-    pub fn new(env: &'a Env<'a>, proc_symbols: &'a [Symbol]) -> Self {
-        let mut code_section_bytes = std::vec::Vec::with_capacity(4096);
+    pub fn new(env: &'a Env<'a>, proc_symbols: Vec<'a, Symbol>) -> Self {
+        let mut module = WasmModule::new(env.arena);
 
         // Code section header
-        code_section_bytes.reserve_padded_u32(); // byte length, to be written at the end
-        code_section_bytes.encode_padded_u32(proc_symbols.len() as u32); // modified later in unit tests
+        module.code.bytes.reserve_padded_u32(); // byte length, to be written at the end
+        let num_procs = proc_symbols.len() as u32;
+        module.code.bytes.encode_padded_u32(num_procs); // modified later in unit tests
 
         WasmBackend {
             env,
 
             // Module-level data
-            module: WasmModule::new(env.arena),
-            module_builder: builder::module(),
-            code_section_bytes,
+            module,
+            parity_builder: builder::module(),
             _data_offset_map: MutMap::default(),
             _data_offset_next: UNUSED_DATA_SECTION_BYTES,
             proc_symbols,
@@ -88,7 +87,7 @@ impl<'a> WasmBackend<'a> {
         // Use parity-wasm to add the signature in "types" and "functions" sections
         // but no instructions, since we are building our own code section
         let empty_function_def = self.start_proc(&proc);
-        let location = self.module_builder.push_function(empty_function_def);
+        let location = self.parity_builder.push_function(empty_function_def);
         let function_index = location.body;
 
         self.build_stmt(&proc.body, &proc.ret_layout)?;
@@ -141,7 +140,7 @@ impl<'a> WasmBackend<'a> {
             self.storage.stack_frame_pointer,
         );
 
-        let relocs = self.code_builder.serialize(&mut self.code_section_bytes);
+        let relocs = self.code_builder.serialize(&mut self.module.code.bytes);
         self.module.reloc_code.entries.extend(relocs);
         Ok(())
     }
