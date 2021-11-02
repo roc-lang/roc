@@ -24,6 +24,7 @@ members = [
     "compiler/build",
     "compiler/arena_pool",
     "compiler/test_gen",
+    "compiler/test_wasm",
     "vendor/ena",
     "vendor/inkwell",
     "vendor/pathfinding",
