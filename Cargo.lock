@@ -3787,7 +3787,6 @@ dependencies = [
  "roc_can",
  "roc_code_markup",
  "roc_collections",
- "roc_fmt",
  "roc_load",
  "roc_module",
  "roc_parse",
