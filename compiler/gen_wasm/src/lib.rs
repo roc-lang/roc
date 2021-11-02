@@ -7,6 +7,8 @@ pub mod opcodes;
 pub mod serialize;
 mod storage;
 
+mod tests;
+
 use bumpalo::{self, collections::Vec, Bump};
 use parity_wasm::builder;
 
