@@ -1010,6 +1010,8 @@ where
     let ctx = env.context;
     let builder = env.builder;
 
+    let entry = env.builder.get_insert_block().unwrap();
+
     // constant 1i64
     let one = env.ptr_int().const_int(1, false);
 
@@ -1021,15 +1023,15 @@ where
     builder.build_unconditional_branch(loop_bb);
     builder.position_at_end(loop_bb);
 
-    let curr_index = builder
-        .build_load(index_alloca, index_name)
-        .into_int_value();
-    let next_index = builder.build_int_add(curr_index, one, "nextindex");
+    let current_index_phi = env.builder.build_phi(env.ptr_int(), "current_index");
+    let current_index = current_index_phi.as_basic_value().into_int_value();
 
-    builder.build_store(index_alloca, next_index);
+    let next_index = builder.build_int_add(current_index, one, "next_index");
+
+    current_index_phi.add_incoming(&[(&next_index, loop_bb), (&env.ptr_int().const_zero(), entry)]);
 
     // The body of the loop
-    loop_fn(curr_index);
+    loop_fn(current_index);
 
     // #index < end
     let loop_end_cond = bounds_check_comparison(builder, next_index, end);

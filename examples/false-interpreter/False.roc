@@ -11,7 +11,7 @@ app "false"
 # 1) The input files are considered too large to just read in at once. Instead it is read via buffer or line.
 # 2) The output is also considered too large to generate in memory. It must be printed as we go via buffer or line.
 
-# I think one of the biggest issues with this implementation is that it doesn't return the the platform frequently enough.
+# I think one of the biggest issues with this implementation is that it doesn't return to the platform frequently enough.
 # What I mean by that is we build a chain of all Tasks period and return that to the host.
 # In something like the elm architecture you return a single step with one Task.
 # The huge difference here is when it comes to things like stack overflows.
