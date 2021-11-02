@@ -831,6 +831,7 @@ impl<
         fields: &'a [Symbol],
     ) -> Result<(), String> {
         let struct_size = layout.stack_size(PTR_SIZE);
+
         if let Layout::Struct(field_layouts) = layout {
             if struct_size > 0 {
                 let offset = self.claim_stack_size(struct_size)?;
