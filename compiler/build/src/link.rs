@@ -783,14 +783,11 @@ fn link_macos(
         }
     };
 
-    // This path only exists on macOS Big Sur, and it causes ld errors
-    // on Catalina if it's specified with -L, so we replace it with a
-    // redundant -lSystem if the directory isn't there.
-    let big_sur_path = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib";
-    let big_sur_fix = if Path::new(big_sur_path).exists() {
-        format!("-L{}", big_sur_path)
-    } else {
-        String::from("-lSystem")
+    let sdk_path = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib";
+    let mut sdk_paths = Vec::new();
+    if Path::new(sdk_path).exists() {
+        sdk_paths.push(format!("-L{}", sdk_path));
+        sdk_paths.push(format!("-L{}/swift", sdk_path));
     };
 
     let arch = match target.architecture {
@@ -814,11 +811,10 @@ fn link_macos(
             &arch,
         ])
         .args(input_paths)
+        .args(sdk_paths)
         .args(&[
             // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274
             // for discussion and further references
-            &big_sur_fix,
-            "-L/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/swift", // TODO: Gate on host.swift
             "-lSystem",
             "-lresolv",
             "-lpthread",
