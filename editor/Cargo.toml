@@ -63,7 +63,6 @@ features = ["derive"]
 
 [dev-dependencies]
 pretty_assertions = "0.6"
-maplit = "1.0.1"
 quickcheck = "1.0"
 quickcheck_macros = "1.0"
 rand = "0.8.2"

@@ -3573,7 +3573,6 @@ dependencies = [
  "indoc 0.3.6",
  "inkwell 0.1.0",
  "libloading 0.6.7",
- "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
@@ -3605,7 +3604,6 @@ name = "roc_builtins"
 version = "0.1.0"
 dependencies = [
  "indoc 0.3.6",
- "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
@@ -3623,7 +3621,6 @@ dependencies = [
  "im 14.3.0",
  "im-rc 14.3.0",
  "indoc 0.3.6",
- "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
@@ -3651,7 +3648,6 @@ dependencies = [
  "indoc 0.3.6",
  "inkwell 0.1.0",
  "libloading 0.6.7",
- "maplit",
  "mimalloc",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
@@ -3715,7 +3711,6 @@ name = "roc_constrain"
 version = "0.1.0"
 dependencies = [
  "indoc 0.3.6",
- "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
@@ -3733,7 +3728,6 @@ name = "roc_docs"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
- "maplit",
  "pretty_assertions 0.5.1",
  "pulldown-cmark",
  "roc_ast",
@@ -3771,7 +3765,6 @@ dependencies = [
  "indoc 1.0.3",
  "libc",
  "log",
- "maplit",
  "nonempty",
  "page_size",
  "palette",
@@ -3815,7 +3808,6 @@ dependencies = [
  "im 14.3.0",
  "im-rc 14.3.0",
  "indoc 0.3.6",
- "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
@@ -3835,7 +3827,6 @@ dependencies = [
  "indoc 0.3.6",
  "itertools 0.9.0",
  "libloading 0.6.7",
- "maplit",
  "object 0.24.0",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
@@ -3870,7 +3861,6 @@ dependencies = [
  "im-rc 14.3.0",
  "indoc 0.3.6",
  "inkwell 0.1.0",
- "maplit",
  "morphic_lib",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
@@ -3976,7 +3966,6 @@ dependencies = [
  "bumpalo",
  "indoc 0.3.6",
  "lazy_static",
- "maplit",
  "pretty_assertions 0.5.1",
  "roc_collections",
  "roc_ident",
@@ -3993,7 +3982,6 @@ dependencies = [
  "hashbrown 0.11.2",
  "indoc 0.3.6",
  "linked-hash-map",
- "maplit",
  "morphic_lib",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
@@ -4035,7 +4023,6 @@ name = "roc_problem"
 version = "0.1.0"
 dependencies = [
  "indoc 0.3.6",
- "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
@@ -4058,7 +4045,6 @@ dependencies = [
  "im 14.3.0",
  "im-rc 14.3.0",
  "indoc 0.3.6",
- "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
@@ -4082,7 +4068,6 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "indoc 0.3.6",
- "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
@@ -4109,7 +4094,6 @@ name = "roc_types"
 version = "0.1.0"
 dependencies = [
  "indoc 0.3.6",
- "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
@@ -4125,7 +4109,6 @@ name = "roc_unify"
 version = "0.1.0"
 dependencies = [
  "indoc 0.3.6",
- "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
@@ -4640,7 +4623,6 @@ dependencies = [
  "inkwell 0.1.0",
  "libc",
  "libloading 0.6.7",
- "maplit",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
  "roc_build",
