@@ -2,9 +2,9 @@ use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+use crate::helpers::wasm32_test_result::Wasm32TestResult;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
-use crate::helpers::wasm32_test_result::Wasm32TestResult;
 use roc_gen_wasm::from_wasm32_memory::FromWasm32Memory;
 
 const TEST_WRAPPER_NAME: &str = "test_wrapper";
@@ -102,8 +102,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
         exposed_to_host,
     };
 
-    let mut wasm_module =
-        roc_gen_wasm::build_module_help(&env, procedures).unwrap();
+    let mut wasm_module = roc_gen_wasm::build_module_help(&env, procedures).unwrap();
 
     T::insert_test_wrapper(
         arena,
