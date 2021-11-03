@@ -951,15 +951,15 @@ impl<'a> WasmModule<'a> {
             types: TypeSection::new(arena),
             import: ImportSection::new(arena),
             function: FunctionSection::new(arena),
-            table: (),
+            table: (), // Unused in Roc (mainly for function pointers)
             memory: MemorySection::new(1024 * 1024),
             global: GlobalSection::new(arena),
             export: ExportSection::new(arena),
-            start: (),
-            element: (),
-            data_count: (),
+            start: (),      // Entry function. In Roc this would be part of the platform.
+            element: (),    // Unused in Roc (related to table section)
+            data_count: (), // TODO, related to data section
             code: CodeSection::new(arena),
-            data: (),
+            data: (), // TODO: program constants (e.g. string literals)
             linking: LinkingSection::new(arena),
             reloc_code: RelocationSection::new(arena, "reloc.CODE"),
             reloc_data: RelocationSection::new(arena, "reloc.DATA"),
@@ -972,6 +972,7 @@ impl<'a> WasmModule<'a> {
         self.function.signature_indices.push(index);
     }
 
+    #[allow(clippy::unit_arg)]
     pub fn serialize<T: SerialBuffer>(&mut self, buffer: &mut T) {
         buffer.append_u8(0);
         buffer.append_slice("asm".as_bytes());

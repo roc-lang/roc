@@ -395,7 +395,7 @@ impl<'a> CodeBuilder<'a> {
 
         loop {
             let next_insert = insert_iter.next();
-            let next_pos = next_insert.map(|i| i.at).unwrap_or(self.code.len());
+            let next_pos = next_insert.map(|i| i.at).unwrap_or_else(|| self.code.len());
 
             // Relocation offset needs to be an index into the body of the code section, but
             // at this point it is an index into self.code. Need to adjust for all previous functions
