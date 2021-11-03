@@ -796,10 +796,10 @@ fn link_macos(
 
     let mut ld_command = Command::new("ld");
 
-    // NOTE: order of arguments to `ld` matters here!
-    // The `-l` flags should go after the `.o` arguments
-    // Don't allow LD_ env vars to affect this
     ld_command
+        // NOTE: order of arguments to `ld` matters here!
+        // The `-l` flags should go after the `.o` arguments
+        // Don't allow LD_ env vars to affect this
         .env_clear()
         .args(&[
             // NOTE: we don't do --gc-sections on macOS because the default
