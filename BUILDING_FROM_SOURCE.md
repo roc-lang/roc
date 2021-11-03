@@ -213,6 +213,11 @@ on Windows. After lots of help from [**@IanMacKenzie**](https://github.com/IanMa
 
 Once all that was done, `cargo` ran successfully for Roc!
 
+### Build speed on WSL/WSL2
+
+If your Roc project folder is in the Windows filesystem but you're compiling from Linux, rebuilds may be as much as 20x slower than they should be!
+Disk access during linking seems to be the bottleneck. It's recommended to move your folder to the Linux filesystem.
+
 ## Use LLD for the linker
 
 Using [`lld` for Rust's linker](https://github.com/rust-lang/rust/issues/39915#issuecomment-538049306)
