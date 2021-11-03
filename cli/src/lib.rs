@@ -119,7 +119,7 @@ pub fn build_app<'a>() -> App<'a> {
             )
         .subcommand(
             App::new(CMD_DOCS)
-                .about("Generate documentation for Roc modules")
+                .about("Generate documentation for Roc modules (Work In Progress)")
                 .arg(Arg::with_name(DIRECTORY_OR_FILES)
                     .index(1)
                     .multiple(true)
