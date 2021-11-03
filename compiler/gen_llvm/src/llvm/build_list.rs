@@ -821,6 +821,51 @@ pub fn list_map3<'a, 'ctx, 'env>(
     )
 }
 
+pub fn list_map4<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    roc_function_call: RocFunctionCall<'ctx>,
+    list1: BasicValueEnum<'ctx>,
+    list2: BasicValueEnum<'ctx>,
+    list3: BasicValueEnum<'ctx>,
+    list4: BasicValueEnum<'ctx>,
+    element1_layout: &Layout<'a>,
+    element2_layout: &Layout<'a>,
+    element3_layout: &Layout<'a>,
+    element4_layout: &Layout<'a>,
+    result_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let dec_a = build_dec_wrapper(env, layout_ids, element1_layout);
+    let dec_b = build_dec_wrapper(env, layout_ids, element2_layout);
+    let dec_c = build_dec_wrapper(env, layout_ids, element3_layout);
+    let dec_d = build_dec_wrapper(env, layout_ids, element4_layout);
+
+    call_bitcode_fn_returns_list(
+        env,
+        &[
+            pass_list_cc(env, list1),
+            pass_list_cc(env, list2),
+            pass_list_cc(env, list3),
+            pass_list_cc(env, list4),
+            roc_function_call.caller.into(),
+            pass_as_opaque(env, roc_function_call.data),
+            roc_function_call.inc_n_data.into(),
+            roc_function_call.data_is_owned.into(),
+            env.alignment_intvalue(result_layout),
+            layout_width(env, element1_layout),
+            layout_width(env, element2_layout),
+            layout_width(env, element3_layout),
+            layout_width(env, element4_layout),
+            layout_width(env, result_layout),
+            dec_a.as_global_value().as_pointer_value().into(),
+            dec_b.as_global_value().as_pointer_value().into(),
+            dec_c.as_global_value().as_pointer_value().into(),
+            dec_d.as_global_value().as_pointer_value().into(),
+        ],
+        bitcode::LIST_MAP4,
+    )
+}
+
 /// List.concat : List elem, List elem -> List elem
 pub fn list_concat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -965,6 +1010,8 @@ where
     let ctx = env.context;
     let builder = env.builder;
 
+    let entry = env.builder.get_insert_block().unwrap();
+
     // constant 1i64
     let one = env.ptr_int().const_int(1, false);
 
@@ -976,15 +1023,15 @@ where
     builder.build_unconditional_branch(loop_bb);
     builder.position_at_end(loop_bb);
 
-    let curr_index = builder
-        .build_load(index_alloca, index_name)
-        .into_int_value();
-    let next_index = builder.build_int_add(curr_index, one, "nextindex");
+    let current_index_phi = env.builder.build_phi(env.ptr_int(), "current_index");
+    let current_index = current_index_phi.as_basic_value().into_int_value();
 
-    builder.build_store(index_alloca, next_index);
+    let next_index = builder.build_int_add(current_index, one, "next_index");
+
+    current_index_phi.add_incoming(&[(&next_index, loop_bb), (&env.ptr_int().const_zero(), entry)]);
 
     // The body of the loop
-    loop_fn(curr_index);
+    loop_fn(current_index);
 
     // #index < end
     let loop_end_cond = bounds_check_comparison(builder, next_index, end);

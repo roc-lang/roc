@@ -1,5 +1,3 @@
-extern crate bumpalo;
-
 #[macro_use]
 pub mod eval;
 pub mod wasm32_test_result;

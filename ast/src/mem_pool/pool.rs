@@ -10,8 +10,9 @@
 ///
 /// Pages also use the node value 0 (all 0 bits) to mark nodes as unoccupied.
 /// This is important for performance.
-use libc::{c_void, MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
+use libc::{MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
 use std::any::type_name;
+use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::mem::size_of;
 use std::ptr::null;

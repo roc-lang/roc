@@ -15,8 +15,7 @@ roc_collections = { path = "../../compiler/collections" }
 roc_load = { path = "../../compiler/load" }
 roc_module = { path = "../../compiler/module" }
 bumpalo = { version = "3.6.1", features = ["collections"] }
-criterion = { git = "https://github.com/Anton-4/criterion.rs"} 
-inlinable_string = "0.1"
+criterion = { git = "https://github.com/Anton-4/criterion.rs"}
 serde = { version = "1.0", features = ["derive"] }
 serde-xml-rs = "0.4"
 strip-ansi-escapes = "0.1"
