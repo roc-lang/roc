@@ -1,73 +1,9 @@
 use bumpalo::collections::vec::Vec;
+use bumpalo::Bump;
 
-use crate::code_builder::Align;
-use crate::serialize::{SerialBuffer, Serialize};
-
-#[repr(u8)]
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
-pub enum SectionId {
-    Custom = 0,
-    Type = 1,
-    Import = 2,
-    Function = 3,
-    Table = 4,
-    Memory = 5,
-    Global = 6,
-    Export = 7,
-    Start = 8,
-    Element = 9,
-    Code = 10,
-    Data = 11,
-    DataCount = 12,
-}
-
-struct SectionHeaderIndices {
-    size_index: usize,
-    body_index: usize,
-}
-
-/// Write a section header, returning the position of the encoded length
-fn _write_section_header<T: SerialBuffer>(buffer: &mut T, id: SectionId) -> SectionHeaderIndices {
-    buffer.append_byte(id as u8);
-    let size_index = buffer.reserve_padded_u32();
-    let body_index = buffer.size();
-    SectionHeaderIndices {
-        size_index,
-        body_index,
-    }
-}
-
-/// Write a custom section header, returning the position of the encoded length
-fn write_custom_section_header<T: SerialBuffer>(
-    buffer: &mut T,
-    name: &str,
-) -> SectionHeaderIndices {
-    // buffer.append_byte(SectionId::Custom as u8); // TODO: uncomment when we get rid of parity_wasm
-    let size_index = buffer.reserve_padded_u32();
-    let body_index = buffer.size();
-    name.serialize(buffer);
-    SectionHeaderIndices {
-        size_index,
-        body_index,
-    }
-}
-
-/// Update a section header with its final size, after writing the bytes
-fn update_section_size<T: SerialBuffer>(buffer: &mut T, header_indices: SectionHeaderIndices) {
-    let size = buffer.size() - header_indices.body_index;
-    buffer.overwrite_padded_u32(header_indices.size_index, size as u32);
-}
-
-fn serialize_vector_with_count<'a, SB, S>(buffer: &mut SB, items: &Vec<'a, S>)
-where
-    SB: SerialBuffer,
-    S: Serialize,
-{
-    buffer.encode_u32(items.len() as u32);
-    for item in items.iter() {
-        item.serialize(buffer);
-    }
-}
+use super::sections::{update_section_size, write_custom_section_header};
+use super::serialize::{SerialBuffer, Serialize};
+use super::Align;
 
 /*******************************************************************
  *
@@ -132,7 +68,7 @@ pub enum OffsetRelocType {
     MemoryAddrI64 = 16,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum RelocationEntry {
     Index {
         type_id: IndexRelocType,
@@ -181,7 +117,7 @@ impl Serialize for RelocationEntry {
                 offset,
                 symbol_index,
             } => {
-                buffer.append_byte(*type_id as u8);
+                buffer.append_u8(*type_id as u8);
                 buffer.encode_u32(*offset);
                 buffer.encode_u32(*symbol_index);
             }
@@ -191,7 +127,7 @@ impl Serialize for RelocationEntry {
                 symbol_index,
                 addend,
             } => {
-                buffer.append_byte(*type_id as u8);
+                buffer.append_u8(*type_id as u8);
                 buffer.encode_u32(*offset);
                 buffer.encode_u32(*symbol_index);
                 buffer.encode_i32(*addend);
@@ -204,16 +140,28 @@ impl Serialize for RelocationEntry {
 pub struct RelocationSection<'a> {
     pub name: &'a str,
     /// The *index* (not ID!) of the target section in the module
-    pub target_section_index: u32,
-    pub entries: &'a Vec<'a, RelocationEntry>,
+    pub target_section_index: Option<u32>,
+    pub entries: Vec<'a, RelocationEntry>,
+}
+
+impl<'a> RelocationSection<'a> {
+    pub fn new(arena: &'a Bump, name: &'a str) -> Self {
+        RelocationSection {
+            name,
+            target_section_index: None,
+            entries: Vec::with_capacity_in(64, arena),
+        }
+    }
 }
 
 impl<'a> Serialize for RelocationSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        let header_indices = write_custom_section_header(buffer, self.name);
-        buffer.encode_u32(self.target_section_index);
-        serialize_vector_with_count(buffer, self.entries);
-        update_section_size(buffer, header_indices);
+        if !self.entries.is_empty() {
+            let header_indices = write_custom_section_header(buffer, self.name);
+            buffer.encode_u32(self.target_section_index.unwrap());
+            self.entries.serialize(buffer);
+            update_section_size(buffer, header_indices);
+        }
     }
 }
 
@@ -231,6 +179,7 @@ pub struct LinkingSegment {
     pub alignment: Align,
     pub flags: u32,
 }
+
 impl Serialize for LinkingSegment {
     fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
         todo!();
@@ -242,17 +191,16 @@ pub struct LinkingInitFunc {
     pub priority: u32,
     pub symbol_index: u32, // index in the symbol table, not the function index
 }
+
 impl Serialize for LinkingInitFunc {
     fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
         todo!();
     }
 }
 
-//----------------
-//
+//------------------------------------------------
 // Common data
-//
-//----------------
+//------------------------------------------------
 
 #[repr(u8)]
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
@@ -269,6 +217,7 @@ pub struct ComdatSym {
     pub kind: ComdatSymKind,
     pub index: u32,
 }
+
 impl Serialize for ComdatSym {
     fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
         todo!();
@@ -285,17 +234,16 @@ pub struct LinkingComdat<'a> {
     flags: u32,
     syms: Vec<'a, ComdatSym>,
 }
+
 impl<'a> Serialize for LinkingComdat<'a> {
     fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
         todo!();
     }
 }
 
-//----------------
-//
+//------------------------------------------------
 // Symbol table
-//
-//----------------
+//------------------------------------------------
 
 /// Indicating that this is a weak symbol.  When
 /// linking multiple modules defining the same symbol, all weak definitions are
@@ -339,6 +287,7 @@ pub enum WasmObjectSymbol {
     Defined { index: u32, name: String },
     Imported { index: u32 },
 }
+
 impl Serialize for WasmObjectSymbol {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         match self {
@@ -365,6 +314,7 @@ pub enum DataSymbol {
         name: String,
     },
 }
+
 impl Serialize for DataSymbol {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         match self {
@@ -405,6 +355,7 @@ pub struct SymInfo {
     flags: u32,
     info: SymInfoFields,
 }
+
 impl SymInfo {
     pub fn for_function(wasm_function_index: u32, name: String) -> Self {
         let linking_symbol = WasmObjectSymbol::Defined {
@@ -420,7 +371,7 @@ impl SymInfo {
 
 impl Serialize for SymInfo {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        buffer.append_byte(match self.info {
+        buffer.append_u8(match self.info {
             SymInfoFields::Function(_) => 0,
             SymInfoFields::Data(_) => 1,
             SymInfoFields::Global(_) => 2,
@@ -442,11 +393,9 @@ impl Serialize for SymInfo {
     }
 }
 
-//--------------------------------
-//
+//----------------------------------------------------------------
 //  Linking subsections
-//
-//--------------------------------
+//----------------------------------------------------------------
 
 pub enum LinkingSubSection<'a> {
     /// Extra metadata about the data segments.
@@ -459,9 +408,10 @@ pub enum LinkingSubSection<'a> {
     /// Specifies extra information about the symbols present in the module.
     SymbolTable(Vec<'a, SymInfo>),
 }
+
 impl<'a> Serialize for LinkingSubSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        buffer.append_byte(match self {
+        buffer.append_u8(match self {
             Self::SegmentInfo(_) => 5,
             Self::InitFuncs(_) => 6,
             Self::ComdatInfo(_) => 7,
@@ -470,10 +420,10 @@ impl<'a> Serialize for LinkingSubSection<'a> {
         let payload_len_index = buffer.reserve_padded_u32();
         let payload_start_index = buffer.size();
         match self {
-            Self::SegmentInfo(items) => serialize_vector_with_count(buffer, items),
-            Self::InitFuncs(items) => serialize_vector_with_count(buffer, items),
-            Self::ComdatInfo(items) => serialize_vector_with_count(buffer, items),
-            Self::SymbolTable(items) => serialize_vector_with_count(buffer, items),
+            Self::SegmentInfo(items) => items.serialize(buffer),
+            Self::InitFuncs(items) => items.serialize(buffer),
+            Self::ComdatInfo(items) => items.serialize(buffer),
+            Self::SymbolTable(items) => items.serialize(buffer),
         }
         buffer.overwrite_padded_u32(
             payload_len_index,
@@ -482,15 +432,28 @@ impl<'a> Serialize for LinkingSubSection<'a> {
     }
 }
 
+//----------------------------------------------------------------
+//  Linking metadata section
+//----------------------------------------------------------------
+
 const LINKING_VERSION: u8 = 2;
 
 pub struct LinkingSection<'a> {
     pub subsections: Vec<'a, LinkingSubSection<'a>>,
 }
+
+impl<'a> LinkingSection<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
+        LinkingSection {
+            subsections: Vec::with_capacity_in(1, arena),
+        }
+    }
+}
+
 impl<'a> Serialize for LinkingSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         let header_indices = write_custom_section_header(buffer, "linking");
-        buffer.append_byte(LINKING_VERSION);
+        buffer.append_u8(LINKING_VERSION);
         for subsection in self.subsections.iter() {
             subsection.serialize(buffer);
         }

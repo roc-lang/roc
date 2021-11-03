@@ -1,44 +1,33 @@
-use parity_wasm::builder;
-use parity_wasm::elements::Internal;
+use bumpalo::collections::Vec;
 
-use roc_gen_wasm::code_builder::{Align, CodeBuilder, ValueType};
 use roc_gen_wasm::from_wasm32_memory::FromWasm32Memory;
-use roc_gen_wasm::{serialize::SerialBuffer, LocalId};
+use roc_gen_wasm::wasm_module::opcodes;
+use roc_gen_wasm::wasm_module::{
+    Align, CodeBuilder, Export, ExportType, LocalId, Signature, ValueType, WasmModule,
+};
 use roc_std::{RocDec, RocList, RocOrder, RocStr};
 
 pub trait Wasm32TestResult {
     fn insert_test_wrapper<'a>(
         arena: &'a bumpalo::Bump,
-        module_builder: &mut builder::ModuleBuilder,
-        code_section_bytes: &mut std::vec::Vec<u8>,
+        wasm_module: &mut WasmModule<'a>,
         wrapper_name: &str,
         main_function_index: u32,
     ) {
-        let signature = builder::signature()
-            .with_result(parity_wasm::elements::ValueType::I32)
-            .build_sig();
+        wasm_module.add_function_signature(Signature {
+            param_types: Vec::with_capacity_in(0, arena),
+            ret_type: Some(ValueType::I32),
+        });
 
-        // parity-wasm FunctionDefinition with no instructions
-        let empty_fn_def = builder::function().with_signature(signature).build();
-        let location = module_builder.push_function(empty_fn_def);
-        let export = builder::export()
-            .field(wrapper_name)
-            .with_internal(Internal::Function(location.body))
-            .build();
-        module_builder.push_export(export);
+        wasm_module.export.entries.push(Export {
+            name: wrapper_name.to_string(),
+            ty: ExportType::Func,
+            index: wasm_module.code.code_builders.len() as u32,
+        });
 
         let mut code_builder = CodeBuilder::new(arena);
         Self::build_wrapper_body(&mut code_builder, main_function_index);
-
-        code_builder.serialize(code_section_bytes);
-
-        let mut num_procs = 0;
-        for (i, byte) in code_section_bytes[5..10].iter().enumerate() {
-            num_procs += ((byte & 0x7f) as u32) << (i * 7);
-        }
-        let inner_length = (code_section_bytes.len() - 5) as u32;
-        code_section_bytes.overwrite_padded_u32(0, inner_length);
-        code_section_bytes.overwrite_padded_u32(5, num_procs + 1);
+        wasm_module.code.code_builders.push(code_builder);
     }
 
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32);
@@ -54,7 +43,7 @@ macro_rules! build_wrapper_body_primitive {
 
             code_builder.get_local(frame_pointer_id);
             // Raw "call" instruction. Don't bother with symbol & relocation since we're not going to link.
-            code_builder.inst_imm32(roc_gen_wasm::opcodes::CALL, 0, true, main_function_index);
+            code_builder.inst_imm32(opcodes::CALL, 0, true, main_function_index);
             code_builder.$store_instruction($align, 0);
             code_builder.get_local(frame_pointer_id);
 
@@ -82,7 +71,7 @@ fn build_wrapper_body_stack_memory(
 
     code_builder.get_local(local_id);
     // Raw "call" instruction. Don't bother with symbol & relocation since we're not going to link.
-    code_builder.inst_imm32(roc_gen_wasm::opcodes::CALL, 0, true, main_function_index);
+    code_builder.inst_imm32(opcodes::CALL, 0, true, main_function_index);
     code_builder.get_local(local_id);
     code_builder.finalize(local_types, size as i32, frame_pointer);
 }
