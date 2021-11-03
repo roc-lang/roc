@@ -65,7 +65,6 @@ rustyline-derive = { git = "https://github.com/rtfeldman/rustyline", tag = "prom
 im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
 bumpalo = { version = "3.2", features = ["collections"] }
-libc = "0.2"
 libloading = "0.6"
 mimalloc = { version = "0.1.26", default-features = false }
 
@@ -78,7 +77,6 @@ wasmer-wasi = "2.0.0"
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"
-maplit = "1.0.1"
 indoc = "0.3.3"
 quickcheck = "0.8"
 quickcheck_macros = "0.8"
@@ -90,4 +88,3 @@ cli_utils = { path = "cli_utils" }
 [[bench]]
 name = "time_bench"
 harness = false
-
