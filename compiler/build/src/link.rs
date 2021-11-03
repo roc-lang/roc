@@ -811,7 +811,15 @@ fn link_macos(
             "-arch",
             &arch,
         ])
-        .args(input_paths)
+        .args(input_paths);
+
+    let sdk_path = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib";
+    if Path::new(sdk_path).exists() {
+        ld_command.arg(format!("-L{}", sdk_path));
+        ld_command.arg(format!("-L{}/swift", sdk_path));
+    };
+
+    let mut ld_child = ld_command
         .args(&[
             // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274
             // for discussion and further references
@@ -826,15 +834,8 @@ fn link_macos(
             // Output
             "-o",
             output_path.to_str().unwrap(), // app
-        ]);
-
-    let sdk_path = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib";
-    if Path::new(sdk_path).exists() {
-        ld_command.arg(format!("-L{}", sdk_path));
-        ld_command.arg(format!("-L{}/swift", sdk_path));
-    };
-
-    let mut ld_child = ld_command.spawn()?;
+        ])
+        .spawn()?;
 
     match target.architecture {
         Architecture::Aarch64(_) => {
