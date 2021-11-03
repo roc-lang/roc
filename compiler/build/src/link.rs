@@ -1,4 +1,4 @@
-use crate::target::arch_str;
+use crate::target::{arch_str, target_triple_str};
 #[cfg(feature = "llvm")]
 use libloading::{Error, Library};
 use roc_builtins::bitcode;
@@ -368,6 +368,20 @@ pub fn rebuild_host(
                     zig_host_src.to_str().unwrap(),
                     zig_str_path.to_str().unwrap(),
                     "i386-linux-musl",
+                    opt_level,
+                    shared_lib_path,
+                )
+            }
+
+            Architecture::Aarch64(_) => {
+                let emit_bin = format!("-femit-bin={}", host_dest_native.to_str().unwrap());
+                build_zig_host_native(
+                    &env_path,
+                    &env_home,
+                    &emit_bin,
+                    zig_host_src.to_str().unwrap(),
+                    zig_str_path.to_str().unwrap(),
+                    target_triple_str(target),
                     opt_level,
                     shared_lib_path,
                 )
