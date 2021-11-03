@@ -4129,6 +4129,7 @@ fn add_def_to_module<'a>(
     exposed_to_host: &MutMap<Symbol, Variable>,
     is_recursive: bool,
 ) {
+    use roc_can::expr::ClosureData;
     use roc_can::expr::Expr::*;
     use roc_can::pattern::Pattern::*;
 
@@ -4137,14 +4138,14 @@ fn add_def_to_module<'a>(
             let is_exposed = exposed_to_host.contains_key(&symbol);
 
             match def.loc_expr.value {
-                Closure {
+                Closure(ClosureData {
                     function_type: annotation,
                     return_type: ret_var,
                     arguments: loc_args,
                     loc_body,
                     captured_symbols,
                     ..
-                } => {
+                }) => {
                     // this is a top-level definition, it should not capture anything
                     debug_assert!(captured_symbols.is_empty());
 

@@ -9,6 +9,7 @@ use crate::layout::{
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use hashbrown::hash_map::Entry;
+use roc_can::expr::ClosureData;
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -2910,7 +2911,7 @@ pub fn with_hole<'a>(
         }
         LetNonRec(def, cont, _) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
-                if let Closure {
+                if let Closure(ClosureData {
                     function_type,
                     return_type,
                     recursive,
@@ -2918,7 +2919,7 @@ pub fn with_hole<'a>(
                     loc_body: boxed_body,
                     captured_symbols,
                     ..
-                } = def.loc_expr.value
+                }) = def.loc_expr.value
                 {
                     // Extract Procs, but discard the resulting Expr::Load.
                     // That Load looks up the pointer, which we won't use here!
@@ -3086,14 +3087,14 @@ pub fn with_hole<'a>(
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {
                 if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
-                    if let Closure {
+                    if let Closure(ClosureData {
                         function_type,
                         return_type,
                         recursive,
                         arguments,
                         loc_body: boxed_body,
                         ..
-                    } = def.loc_expr.value
+                    }) = def.loc_expr.value
                     {
                         // Extract Procs, but discard the resulting Expr::Load.
                         // That Load looks up the pointer, which we won't use here!
@@ -3811,7 +3812,7 @@ pub fn with_hole<'a>(
             }
         }
 
-        Closure {
+        Closure(ClosureData {
             function_type,
             return_type,
             name,
@@ -3819,7 +3820,7 @@ pub fn with_hole<'a>(
             captured_symbols,
             loc_body: boxed_body,
             ..
-        } => {
+        }) => {
             let loc_body = *boxed_body;
 
             let raw = layout_cache.raw_from_var(env.arena, function_type, env.subs);
@@ -4803,14 +4804,14 @@ pub fn from_can<'a>(
                     // Now that we know for sure it's a closure, get an owned
                     // version of these variant args so we can use them properly.
                     match def.loc_expr.value {
-                        Closure {
+                        Closure(ClosureData {
                             function_type,
                             return_type,
                             recursive,
                             arguments,
                             loc_body: boxed_body,
                             ..
-                        } => {
+                        }) => {
                             // Extract Procs, but discard the resulting Expr::Load.
                             // That Load looks up the pointer, which we won't use here!
 
@@ -4844,11 +4845,11 @@ pub fn from_can<'a>(
         }
         LetNonRec(def, cont, outer_annotation) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
-                if let Closure { .. } = &def.loc_expr.value {
+                if let Closure(_) = &def.loc_expr.value {
                     // Now that we know for sure it's a closure, get an owned
                     // version of these variant args so we can use them properly.
                     match def.loc_expr.value {
-                        Closure {
+                        Closure(ClosureData {
                             function_type,
                             return_type,
                             closure_type,
@@ -4858,7 +4859,7 @@ pub fn from_can<'a>(
                             loc_body: boxed_body,
                             captured_symbols,
                             ..
-                        } => {
+                        }) => {
                             if true || !procs.partial_procs.contains_key(*symbol) {
                                 let loc_body = *boxed_body;
 
