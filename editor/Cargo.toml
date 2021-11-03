@@ -6,6 +6,12 @@ license = "UPL-1.0"
 edition = "2018"
 description = "An editor for Roc"
 
+[package.metadata.cargo-udeps.ignore]
+# confy is currently unused but should not be removed
+normal = ["confy"]
+#development = []
+#build = []
+
 [dependencies]
 roc_ast = { path = "../ast" }
 roc_collections = { path = "../compiler/collections" }
@@ -19,7 +25,6 @@ roc_module = { path = "../compiler/module" }
 roc_problem = { path = "../compiler/problem" }
 roc_types = { path = "../compiler/types" }
 roc_unify = { path = "../compiler/unify" }
-roc_fmt = { path = "../compiler/fmt" }
 roc_reporting = { path = "../compiler/reporting" }
 roc_solve = { path = "../compiler/solve" }
 ven_graph = { path = "../vendor/pathfinding" }
@@ -33,7 +38,6 @@ winit = "0.24"
 wgpu = "0.10"
 glyph_brush = "0.7"
 log = "0.4"
-zerocopy = "0.3"
 env_logger = "0.8"
 futures = "0.3"
 wgpu_glyph = "0.14"
@@ -42,18 +46,13 @@ snafu = { version = "0.6", features = ["backtraces"] }
 colored = "2"
 pest = "2.1"
 pest_derive = "2.1"
-ropey = "1.2.0"
 copypasta = "0.7.1"
-indoc = "1.0"
 palette = "0.5"
-# confy is currently unused but should not be removed
 confy = { git = 'https://github.com/rust-cli/confy', features = [
   "yaml_conf"
 ], default-features = false }
 serde = { version = "1.0.123", features = ["derive"] }
 nonempty = "0.6.0"
-tempfile = "3.2.0"
-uuid = { version = "0.8", features = ["v4"] }
 fs_extra = "1.2.0"
 rodio = "0.14.0"
 threadpool = "1.8.1"
@@ -64,7 +63,9 @@ features = ["derive"]
 
 [dev-dependencies]
 pretty_assertions = "0.6"
-maplit = "1.0.1"
 quickcheck = "1.0"
 quickcheck_macros = "1.0"
 rand = "0.8.2"
+indoc = "1.0"
+tempfile = "3.2.0"
+uuid = { version = "0.8", features = ["v4"] }
