@@ -4685,6 +4685,87 @@ fn sorted_field_symbols<'a>(
     field_symbols_temp
 }
 
+/// Insert a closure that may capture symbols to the list of partial procs
+fn register_capturing_closure<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    closure_name: Symbol,
+    closure_data: ClosureData,
+) {
+    // the function surrounding the closure definition may be specialized multiple times,
+    // hence in theory this partial proc may be added multiple times. That would be wasteful
+    // so we check whether this partial proc is already there.
+    //
+    // (the `gen_primitives::task_always_twice` test has this behavior)
+    if !procs.partial_procs.contains_key(closure_name) {
+        let ClosureData {
+            function_type,
+            return_type,
+            closure_type,
+            closure_ext_var,
+            recursive,
+            arguments,
+            loc_body: boxed_body,
+            captured_symbols,
+            ..
+        } = closure_data;
+        let loc_body = *boxed_body;
+
+        let is_self_recursive = !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
+
+        // does this function capture any local values?
+        let function_layout = layout_cache.raw_from_var(env.arena, function_type, env.subs);
+
+        let captured_symbols = match function_layout {
+            Ok(RawFunctionLayout::Function(_, lambda_set, _)) => {
+                if let Layout::Struct(&[]) = lambda_set.runtime_representation() {
+                    CapturedSymbols::None
+                } else {
+                    let mut temp = Vec::from_iter_in(captured_symbols, env.arena);
+                    temp.sort();
+                    CapturedSymbols::Captured(temp.into_bump_slice())
+                }
+            }
+            Ok(RawFunctionLayout::ZeroArgumentThunk(_)) => {
+                // top-level thunks cannot capture any variables
+                debug_assert!(
+                    captured_symbols.is_empty(),
+                    "{:?} with layout {:?} {:?} {:?}",
+                    &captured_symbols,
+                    function_layout,
+                    env.subs,
+                    (function_type, closure_type, closure_ext_var),
+                );
+                CapturedSymbols::None
+            }
+            Err(_) => {
+                // just allow this. see https://github.com/rtfeldman/roc/issues/1585
+                if captured_symbols.is_empty() {
+                    CapturedSymbols::None
+                } else {
+                    let mut temp = Vec::from_iter_in(captured_symbols, env.arena);
+                    temp.sort();
+                    CapturedSymbols::Captured(temp.into_bump_slice())
+                }
+            }
+        };
+
+        let partial_proc = PartialProc::from_named_function(
+            env,
+            layout_cache,
+            function_type,
+            arguments,
+            loc_body,
+            captured_symbols,
+            is_self_recursive,
+            return_type,
+        );
+
+        procs.partial_procs.insert(closure_name, partial_proc);
+    }
+}
+
 pub fn from_can<'a>(
     env: &mut Env<'a, '_>,
     variable: Variable,
@@ -4804,34 +4885,14 @@ pub fn from_can<'a>(
                     // Now that we know for sure it's a closure, get an owned
                     // version of these variant args so we can use them properly.
                     match def.loc_expr.value {
-                        Closure(ClosureData {
-                            function_type,
-                            return_type,
-                            recursive,
-                            arguments,
-                            loc_body: boxed_body,
-                            ..
-                        }) => {
-                            // Extract Procs, but discard the resulting Expr::Load.
-                            // That Load looks up the pointer, which we won't use here!
-
-                            let loc_body = *boxed_body;
-
-                            let is_self_recursive =
-                                !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
-
-                            let partial_proc = PartialProc::from_named_function(
+                        Closure(closure_data) => {
+                            register_capturing_closure(
                                 env,
+                                procs,
                                 layout_cache,
-                                function_type,
-                                arguments,
-                                loc_body,
-                                CapturedSymbols::None,
-                                is_self_recursive,
-                                return_type,
+                                *symbol,
+                                closure_data,
                             );
-
-                            procs.partial_procs.insert(*symbol, partial_proc);
 
                             continue;
                         }
@@ -4845,90 +4906,12 @@ pub fn from_can<'a>(
         }
         LetNonRec(def, cont, outer_annotation) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
-                if let Closure(_) = &def.loc_expr.value {
-                    // Now that we know for sure it's a closure, get an owned
-                    // version of these variant args so we can use them properly.
-                    match def.loc_expr.value {
-                        Closure(ClosureData {
-                            function_type,
-                            return_type,
-                            closure_type,
-                            closure_ext_var,
-                            recursive,
-                            arguments,
-                            loc_body: boxed_body,
-                            captured_symbols,
-                            ..
-                        }) => {
-                            if true || !procs.partial_procs.contains_key(*symbol) {
-                                let loc_body = *boxed_body;
-
-                                let is_self_recursive =
-                                    !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
-
-                                // does this function capture any local values?
-                                let function_layout =
-                                    layout_cache.raw_from_var(env.arena, function_type, env.subs);
-
-                                let captured_symbols = match function_layout {
-                                    Ok(RawFunctionLayout::Function(_, lambda_set, _)) => {
-                                        if let Layout::Struct(&[]) =
-                                            lambda_set.runtime_representation()
-                                        {
-                                            CapturedSymbols::None
-                                        } else {
-                                            let mut temp =
-                                                Vec::from_iter_in(captured_symbols, env.arena);
-                                            temp.sort();
-                                            CapturedSymbols::Captured(temp.into_bump_slice())
-                                        }
-                                    }
-                                    Ok(RawFunctionLayout::ZeroArgumentThunk(_)) => {
-                                        // top-level thunks cannot capture any variables
-                                        debug_assert!(
-                                            captured_symbols.is_empty(),
-                                            "{:?} with layout {:?} {:?} {:?}",
-                                            &captured_symbols,
-                                            function_layout,
-                                            env.subs,
-                                            (function_type, closure_type, closure_ext_var),
-                                        );
-                                        CapturedSymbols::None
-                                    }
-                                    Err(_) => {
-                                        // just allow this. see https://github.com/rtfeldman/roc/issues/1585
-                                        if captured_symbols.is_empty() {
-                                            CapturedSymbols::None
-                                        } else {
-                                            let mut temp =
-                                                Vec::from_iter_in(captured_symbols, env.arena);
-                                            temp.sort();
-                                            CapturedSymbols::Captured(temp.into_bump_slice())
-                                        }
-                                    }
-                                };
-
-                                let partial_proc = PartialProc::from_named_function(
-                                    env,
-                                    layout_cache,
-                                    function_type,
-                                    arguments,
-                                    loc_body,
-                                    captured_symbols,
-                                    is_self_recursive,
-                                    return_type,
-                                );
-
-                                procs.partial_procs.insert(*symbol, partial_proc);
-                            }
-
-                            return from_can(env, variable, cont.value, procs, layout_cache);
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-
                 match def.loc_expr.value {
+                    roc_can::expr::Expr::Closure(closure_data) => {
+                        register_capturing_closure(env, procs, layout_cache, *symbol, closure_data);
+
+                        return from_can(env, variable, cont.value, procs, layout_cache);
+                    }
                     roc_can::expr::Expr::Var(original) => {
                         // a variable is aliased, e.g.
                         //
