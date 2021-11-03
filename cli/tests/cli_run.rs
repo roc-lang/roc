@@ -191,6 +191,12 @@ mod cli_run {
                             eprintln!("WARNING: skipping testing example {} because the test is broken right now!", example.filename);
                             return;
                         }
+                        "hello-swift" => {
+                            if cfg!(not(target_os = "macos")) {
+                                eprintln!("WARNING: skipping testing example {} because it only works on MacOS.", example.filename);
+                                return;
+                            }
+                        }
                         _ => {}
                     }
 
@@ -281,6 +287,14 @@ mod cli_run {
             stdin: &[],
             input_file: None,
             expected_ending:"Hello, World!\n",
+            use_valgrind: true,
+        },
+        hello_swift:"hello-swift" => Example {
+            filename: "Hello.roc",
+            executable_filename: "hello-swift",
+            stdin: &[],
+            input_file: None,
+            expected_ending:"Hello Swift, meet Roc\n",
             use_valgrind: true,
         },
         hello_web:"hello-web" => Example {
