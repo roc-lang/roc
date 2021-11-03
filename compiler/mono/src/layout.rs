@@ -932,20 +932,26 @@ impl<'a> Layout<'a> {
 
                 match variant {
                     NonRecursive(tags) => {
-                        let tag_id_builtin = variant.tag_id_builtin();
+                        let max_alignment = tags
+                            .iter()
+                            .flat_map(|layouts| {
+                                layouts
+                                    .iter()
+                                    .map(|layout| layout.alignment_bytes(pointer_size))
+                            })
+                            .max();
 
-                        tags.iter()
-                            .map(|x| x.iter())
-                            .flatten()
-                            .map(|x| x.alignment_bytes(pointer_size))
-                            .max()
-                            .map(|w| {
+                        match max_alignment {
+                            Some(align) => {
+                                let tag_id_builtin = variant.tag_id_builtin();
+
                                 round_up_to_alignment(
-                                    w,
+                                    align,
                                     tag_id_builtin.alignment_bytes(pointer_size),
                                 )
-                            })
-                            .unwrap_or(0)
+                            }
+                            None => 0,
+                        }
                     }
                     Recursive(_)
                     | NullableWrapped { .. }
