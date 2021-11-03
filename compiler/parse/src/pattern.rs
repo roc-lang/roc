@@ -326,7 +326,8 @@ fn record_pattern_help<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>, PRec
             min_indent,
             PRecord::Open,
             PRecord::Space,
-            PRecord::IndentEnd
+            PRecord::IndentEnd,
+            Pattern::SpaceBefore
         )
         .parse(arena, state)?;
 
