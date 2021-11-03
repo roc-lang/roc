@@ -2910,42 +2910,9 @@ pub fn with_hole<'a>(
             }
         }
         LetNonRec(def, cont, _) => {
-            if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
-                if let Closure(ClosureData {
-                    function_type,
-                    return_type,
-                    recursive,
-                    arguments,
-                    loc_body: boxed_body,
-                    captured_symbols,
-                    ..
-                }) = def.loc_expr.value
-                {
-                    // Extract Procs, but discard the resulting Expr::Load.
-                    // That Load looks up the pointer, which we won't use here!
-
-                    let loc_body = *boxed_body;
-
-                    let is_self_recursive =
-                        !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
-
-                    // this should be a top-level declaration, and hence have no captured symbols
-                    // if we ever do hit this (and it's not a bug), we should make sure to put the
-                    // captured symbols into a CapturedSymbols and give it to PartialProc::from_named_function
-                    debug_assert!(captured_symbols.is_empty());
-
-                    let partial_proc = PartialProc::from_named_function(
-                        env,
-                        layout_cache,
-                        function_type,
-                        arguments,
-                        loc_body,
-                        CapturedSymbols::None,
-                        is_self_recursive,
-                        return_type,
-                    );
-
-                    procs.partial_procs.insert(*symbol, partial_proc);
+            if let roc_can::pattern::Pattern::Identifier(symbol) = def.loc_pattern.value {
+                if let Closure(closure_data) = def.loc_expr.value {
+                    register_noncapturing_closure(env, procs, layout_cache, symbol, closure_data);
 
                     return with_hole(
                         env,
@@ -2957,9 +2924,6 @@ pub fn with_hole<'a>(
                         hole,
                     );
                 }
-            }
-
-            if let roc_can::pattern::Pattern::Identifier(symbol) = def.loc_pattern.value {
                 // special-case the form `let x = E in x`
                 // not doing so will drop the `hole`
                 match &cont.value {
@@ -3087,35 +3051,14 @@ pub fn with_hole<'a>(
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {
                 if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
-                    if let Closure(ClosureData {
-                        function_type,
-                        return_type,
-                        recursive,
-                        arguments,
-                        loc_body: boxed_body,
-                        ..
-                    }) = def.loc_expr.value
-                    {
-                        // Extract Procs, but discard the resulting Expr::Load.
-                        // That Load looks up the pointer, which we won't use here!
-
-                        let loc_body = *boxed_body;
-
-                        let is_self_recursive =
-                            !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
-
-                        let partial_proc = PartialProc::from_named_function(
+                    if let Closure(closure_data) = def.loc_expr.value {
+                        register_noncapturing_closure(
                             env,
+                            procs,
                             layout_cache,
-                            function_type,
-                            arguments,
-                            loc_body,
-                            CapturedSymbols::None,
-                            is_self_recursive,
-                            return_type,
+                            *symbol,
+                            closure_data,
                         );
-
-                        procs.partial_procs.insert(*symbol, partial_proc);
 
                         continue;
                     }
@@ -4683,6 +4626,50 @@ fn sorted_field_symbols<'a>(
     field_symbols_temp.sort_by(|a, b| b.0.cmp(&a.0));
 
     field_symbols_temp
+}
+
+/// Insert a closure that does capture symbols (because it is top-level) to the list of partial procs
+fn register_noncapturing_closure<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    closure_name: Symbol,
+    closure_data: ClosureData,
+) {
+    let ClosureData {
+        function_type,
+        return_type,
+        recursive,
+        arguments,
+        loc_body: boxed_body,
+        captured_symbols,
+        ..
+    } = closure_data;
+
+    // Extract Procs, but discard the resulting Expr::Load.
+    // That Load looks up the pointer, which we won't use here!
+
+    let loc_body = *boxed_body;
+
+    let is_self_recursive = !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
+
+    // this should be a top-level declaration, and hence have no captured symbols
+    // if we ever do hit this (and it's not a bug), we should make sure to put the
+    // captured symbols into a CapturedSymbols and give it to PartialProc::from_named_function
+    debug_assert!(captured_symbols.is_empty());
+
+    let partial_proc = PartialProc::from_named_function(
+        env,
+        layout_cache,
+        function_type,
+        arguments,
+        loc_body,
+        CapturedSymbols::None,
+        is_self_recursive,
+        return_type,
+    );
+
+    procs.partial_procs.insert(closure_name, partial_proc);
 }
 
 /// Insert a closure that may capture symbols to the list of partial procs
