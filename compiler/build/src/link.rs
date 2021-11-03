@@ -751,7 +751,7 @@ fn link_macos(
             // we'd like to re-enable it on macOS!
             // "--gc-sections",
             link_type_arg,
-            "-A",
+            "-arch",
             &arch,
         ])
         .args(input_paths)
