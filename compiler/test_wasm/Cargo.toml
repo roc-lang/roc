@@ -9,9 +9,6 @@ edition = "2018"
 # roc_module = { path = "../module" }
 # roc_mono = { path = "../mono" }
 
-# # TODO: switch to parity-wasm 0.44 once it's out (allows bumpalo vectors in some places)
-parity-wasm = { git = "https://github.com/brian-carroll/parity-wasm", branch = "master" }
-
 wasmer = "2.0.0"
 wasmer-wasi = "2.0.0"
 

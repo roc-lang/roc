@@ -4,8 +4,6 @@ use std::hash::{Hash, Hasher};
 
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
-use roc_gen_wasm::combine_and_serialize;
-// use roc_std::{RocDec, RocList, RocOrder, RocStr};
 use crate::helpers::wasm32_test_result::Wasm32TestResult;
 use roc_gen_wasm::from_wasm32_memory::FromWasm32Memory;
 
@@ -104,19 +102,18 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
         exposed_to_host,
     };
 
-    let (mut parity_builder, mut wasm_module) =
+    let mut wasm_module =
         roc_gen_wasm::build_module_help(&env, procedures).unwrap();
 
     T::insert_test_wrapper(
         arena,
-        &mut parity_builder,
         &mut wasm_module,
         TEST_WRAPPER_NAME,
         main_fn_index as u32,
     );
 
     let mut module_bytes = std::vec::Vec::with_capacity(4096);
-    combine_and_serialize(&mut module_bytes, parity_builder, &mut wasm_module);
+    wasm_module.serialize(&mut module_bytes);
 
     // for debugging (e.g. with wasm2wat or wasm-objdump)
     if false {

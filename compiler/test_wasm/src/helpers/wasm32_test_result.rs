@@ -1,5 +1,4 @@
 use bumpalo::collections::Vec;
-use parity_wasm::builder;
 
 use roc_gen_wasm::code_builder::{Align, CodeBuilder, ValueType};
 use roc_gen_wasm::from_wasm32_memory::FromWasm32Memory;
@@ -10,7 +9,6 @@ use roc_std::{RocDec, RocList, RocOrder, RocStr};
 pub trait Wasm32TestResult {
     fn insert_test_wrapper<'a>(
         arena: &'a bumpalo::Bump,
-        module_builder: &mut builder::ModuleBuilder,
         wasm_module: &mut WasmModule<'a>,
         wrapper_name: &str,
         main_function_index: u32,

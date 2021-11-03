@@ -2782,11 +2782,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "parity-wasm"
-version = "0.44.0"
-source = "git+https://github.com/brian-carroll/parity-wasm?branch=master#373f655f64d2260a2e9665811f7b6ed17f9db705"
-
-[[package]]
 name = "parking_lot"
 version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3916,7 +3911,6 @@ dependencies = [
  "bumpalo",
  "indoc 0.3.6",
  "libc",
- "parity-wasm",
  "pretty_assertions 0.5.1",
  "roc_builtins",
  "roc_can",
@@ -4755,7 +4749,6 @@ dependencies = [
  "bumpalo",
  "indoc 0.3.6",
  "libc",
- "parity-wasm",
  "pretty_assertions 0.5.1",
  "roc_builtins",
  "roc_can",

@@ -8,9 +8,7 @@ pub mod serialize;
 mod storage;
 
 use bumpalo::{self, collections::Vec, Bump};
-use parity_wasm::builder::ModuleBuilder;
 
-use parity_wasm::elements::{Section, Serialize as ParitySerialize};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::ir::{Proc, ProcLayout};
@@ -21,7 +19,6 @@ use crate::code_builder::{Align, CodeBuilder, ValueType};
 use crate::module_builder::{
     Export, ExportType, Global, GlobalInitValue, GlobalType, LinkingSubSection, SymInfo, WasmModule,
 };
-use crate::serialize::{SerialBuffer, Serialize};
 
 const PTR_SIZE: u32 = 4;
 const PTR_TYPE: ValueType = ValueType::I32;
@@ -46,16 +43,16 @@ pub fn build_module<'a>(
     env: &'a Env,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Result<std::vec::Vec<u8>, String> {
-    let (parity_builder, mut wasm_module) = build_module_help(env, procedures)?;
+    let mut wasm_module = build_module_help(env, procedures)?;
     let mut buffer = std::vec::Vec::with_capacity(4096);
-    combine_and_serialize(&mut buffer, parity_builder, &mut wasm_module);
+    wasm_module.serialize(&mut buffer);
     Ok(buffer)
 }
 
 pub fn build_module_help<'a>(
     env: &'a Env,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-) -> Result<(ModuleBuilder, WasmModule<'a>), String> {
+) -> Result<WasmModule<'a>, String> {
     let proc_symbols = Vec::from_iter_in(procedures.keys().map(|(sym, _)| *sym), env.arena);
     let mut backend = WasmBackend::new(env, proc_symbols);
 
@@ -101,91 +98,7 @@ pub fn build_module_help<'a>(
         init_value: GlobalInitValue::I32(stack_pointer_init),
     });
 
-    Ok((backend.parity_builder, backend.module))
-}
-
-fn maybe_increment_section(size: usize, prev_size: &mut usize, index: &mut u32) {
-    if size > *prev_size {
-        *index += 1;
-        *prev_size = size;
-    }
-}
-
-macro_rules! serialize_parity {
-    ($buffer: expr, $sections: expr, $lambda: expr) => {
-        $sections
-            .remove($sections.iter().position($lambda).unwrap())
-            .serialize($buffer)
-            .unwrap();
-    };
-}
-
-/// Replace parity-wasm's code section with our own handmade one
-pub fn combine_and_serialize<'a>(
-    buffer: &mut std::vec::Vec<u8>,
-    parity_builder: ModuleBuilder,
-    wasm_module: &mut WasmModule<'a>, // backend: &mut WasmBackend<'a>
-) {
-    buffer.append_u8(0);
-    buffer.append_slice("asm".as_bytes());
-    buffer.write_unencoded_u32(WasmModule::WASM_VERSION);
-
-    let mut index: u32 = 0;
-    let mut prev_size = buffer.size();
-
-    let mut parity_module = parity_builder.build();
-    let sections = parity_module.sections_mut();
-
-    wasm_module.types.serialize(buffer);
-    // serialize_parity!(buffer, sections, |s| matches!(s, Section::Type(_)));
-    maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-    // wasm_module.import.serialize(buffer);
-    // maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-    wasm_module.function.serialize(buffer);
-    // serialize_parity!(buffer, sections, |s| matches!(s, Section::Function(_)));
-    maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-    // wasm_module.table.serialize(buffer);
-    // maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-    wasm_module.memory.serialize(buffer);
-    // serialize_parity!(buffer, sections, |s| matches!(s, Section::Memory(_)));
-    maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-    wasm_module.global.serialize(buffer);
-    // serialize_parity!(buffer, sections, |s| matches!(s, Section::Global(_)));
-    maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-    wasm_module.export.serialize(buffer);
-    maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-    // wasm_module.start.serialize(buffer);
-    // maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-    // wasm_module.element.serialize(buffer);
-    // maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-    // wasm_module.data_count.serialize(buffer);
-    // maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-    wasm_module.reloc_code.target_section_index = Some(index);
-    wasm_module.code.serialize_mut(buffer, &mut wasm_module.reloc_code.entries);
-    maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-    wasm_module.data.serialize(buffer);
-    wasm_module.reloc_data.target_section_index = Some(index);
-    maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-    wasm_module.linking.serialize(buffer);
-    maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-    wasm_module.reloc_code.serialize(buffer);
-    maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-    wasm_module.reloc_data.serialize(buffer);
-    maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
+    Ok(backend.module)
 }
 
 pub struct CopyMemoryConfig {

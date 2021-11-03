@@ -1,6 +1,4 @@
 use bumpalo::collections::Vec;
-use parity_wasm::builder;
-use parity_wasm::builder::{FunctionDefinition, ModuleBuilder};
 
 use roc_collections::all::MutMap;
 use roc_module::low_level::LowLevel;
@@ -26,7 +24,6 @@ pub struct WasmBackend<'a> {
 
     // Module-level data
     pub module: WasmModule<'a>,
-    pub parity_builder: ModuleBuilder,
     _data_offset_map: MutMap<Literal<'a>, u32>,
     _data_offset_next: u32,
     proc_symbols: Vec<'a, Symbol>,
@@ -47,7 +44,6 @@ impl<'a> WasmBackend<'a> {
 
             // Module-level data
             module: WasmModule::new(env.arena),
-            parity_builder: builder::module(),
             _data_offset_map: MutMap::default(),
             _data_offset_next: UNUSED_DATA_SECTION_BYTES,
             proc_symbols,
