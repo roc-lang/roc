@@ -6,7 +6,7 @@ use std::fmt::Debug;
 use roc_module::symbol::Symbol;
 
 use super::opcodes::*;
-use super::sections::{IndexRelocType, RelocationEntry};
+use super::linking::{IndexRelocType, RelocationEntry};
 use super::serialize::{SerialBuffer, Serialize};
 use crate::{round_up_to_alignment, FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID};
 
