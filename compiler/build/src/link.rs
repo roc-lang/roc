@@ -819,23 +819,23 @@ fn link_macos(
         ld_command.arg(format!("-L{}/swift", sdk_path));
     };
 
-    let mut ld_child = ld_command
-        .args(&[
-            // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274
-            // for discussion and further references
-            "-lSystem",
-            "-lresolv",
-            "-lpthread",
-            // "-lrt", // TODO shouldn't we need this?
-            // "-lc_nonshared", // TODO shouldn't we need this?
-            // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
-            // "-framework", // Uncomment this line & the following ro run the `rand` crate in examples/cli
-            // "Security",
-            // Output
-            "-o",
-            output_path.to_str().unwrap(), // app
-        ])
-        .spawn()?;
+    ld_command.args(&[
+        // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274
+        // for discussion and further references
+        "-lSystem",
+        "-lresolv",
+        "-lpthread",
+        // "-lrt", // TODO shouldn't we need this?
+        // "-lc_nonshared", // TODO shouldn't we need this?
+        // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
+        // "-framework", // Uncomment this line & the following ro run the `rand` crate in examples/cli
+        // "Security",
+        // Output
+        "-o",
+        output_path.to_str().unwrap(), // app
+    ]);
+
+    let mut ld_child = ld_command.spawn()?;
 
     match target.architecture {
         Architecture::Aarch64(_) => {
