@@ -309,6 +309,10 @@ pub fn build_swift_host_native(
     shared_lib_path: Option<&Path>,
     objc_header_path: Option<&str>,
 ) -> Output {
+    if shared_lib_path.is_some() {
+        unimplemented!("Linking a shared library to Swift not yet implemented");
+    }
+
     let mut command = Command::new("swiftc");
     command
         .env_clear()
@@ -323,8 +327,10 @@ pub fn build_swift_host_native(
         command.args(&["-import-objc-header", objc_header]);
     }
 
-    // TODO: shared_lib_path
-    // TODO: opt
+    if matches!(opt_level, OptLevel::Optimize) {
+        command.arg("-O");
+    }
+
     command.output().unwrap()
 }
 
