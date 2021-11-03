@@ -783,22 +783,17 @@ fn link_macos(
         }
     };
 
-    let sdk_path = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib";
-    let mut sdk_paths = Vec::new();
-    if Path::new(sdk_path).exists() {
-        sdk_paths.push(format!("-L{}", sdk_path));
-        sdk_paths.push(format!("-L{}/swift", sdk_path));
-    };
-
     let arch = match target.architecture {
         Architecture::Aarch64(_) => "arm64".to_string(),
         _ => target.architecture.to_string(),
     };
 
-    let mut ld_child = Command::new("ld")
-        // NOTE: order of arguments to `ld` matters here!
-        // The `-l` flags should go after the `.o` arguments
-        // Don't allow LD_ env vars to affect this
+    let mut ld_command = Command::new("ld");
+
+    // NOTE: order of arguments to `ld` matters here!
+    // The `-l` flags should go after the `.o` arguments
+    // Don't allow LD_ env vars to affect this
+    ld_command
         .env_clear()
         .args(&[
             // NOTE: we don't do --gc-sections on macOS because the default
@@ -811,7 +806,6 @@ fn link_macos(
             &arch,
         ])
         .args(input_paths)
-        .args(sdk_paths)
         .args(&[
             // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274
             // for discussion and further references
@@ -826,17 +820,24 @@ fn link_macos(
             // Output
             "-o",
             output_path.to_str().unwrap(), // app
-        ])
-        .spawn()?;
+        ]);
+
+    let sdk_path = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib";
+    if Path::new(sdk_path).exists() {
+        ld_command.arg(format!("-L{}", sdk_path));
+        ld_command.arg(format!("-L{}/swift", sdk_path));
+    };
+
+    let mut ld_child = ld_command.spawn()?;
 
     match target.architecture {
         Architecture::Aarch64(_) => {
             ld_child.wait()?;
-            let child = Command::new("codesign")
+            let codesign_child = Command::new("codesign")
                 .args(&["-s", "-", output_path.to_str().unwrap()])
                 .spawn()?;
 
-            Ok((child, output_path))
+            Ok((codesign_child, output_path))
         }
         _ => Ok((ld_child, output_path)),
     }
