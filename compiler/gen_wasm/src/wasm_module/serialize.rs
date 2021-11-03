@@ -1,4 +1,52 @@
+use std::fmt::Debug;
+
 use bumpalo::collections::vec::Vec;
+
+pub trait Serialize {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T);
+}
+
+impl Serialize for str {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.encode_u32(self.len() as u32);
+        buffer.append_slice(self.as_bytes());
+    }
+}
+
+impl Serialize for u32 {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.encode_u32(*self);
+    }
+}
+
+// Unit is used as a placeholder in parts of the Wasm spec we don't use yet
+impl Serialize for () {
+    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {}
+}
+
+impl<S: Serialize> Serialize for [S] {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.encode_u32(self.len() as u32);
+        for item in self.iter() {
+            item.serialize(buffer);
+        }
+    }
+}
+
+impl<S: Serialize> Serialize for Option<S> {
+    /// serialize Option as a vector of length 1 or 0
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        match self {
+            Some(x) => {
+                buffer.append_u8(1);
+                x.serialize(buffer);
+            }
+            None => {
+                buffer.append_u8(0);
+            }
+        }
+    }
+}
 
 /// Write an unsigned integer into the provided buffer in LEB-128 format, returning byte length
 ///
@@ -10,10 +58,10 @@ macro_rules! encode_uleb128 {
             let mut x = value;
             let start_len = self.size();
             while x >= 0x80 {
-                self.append_byte(0x80 | ((x & 0x7f) as u8));
+                self.append_u8(0x80 | ((x & 0x7f) as u8));
                 x >>= 7;
             }
-            self.append_byte(x as u8);
+            self.append_u8(x as u8);
             self.size() - start_len
         }
     };
@@ -30,10 +78,10 @@ macro_rules! encode_sleb128 {
                 x >>= 7;
                 let byte_is_negative = (byte & 0x40) != 0;
                 if ((x == 0 && !byte_is_negative) || (x == -1 && byte_is_negative)) {
-                    self.append_byte(byte);
+                    self.append_u8(byte);
                     break;
                 }
-                self.append_byte(byte | 0x80);
+                self.append_u8(byte | 0x80);
             }
             self.size() - start_len
         }
@@ -47,7 +95,7 @@ macro_rules! write_unencoded {
             let mut x = value;
             let size = std::mem::size_of::<$ty>();
             for _ in 0..size {
-                self.append_byte((x & 0xff) as u8);
+                self.append_u8((x & 0xff) as u8);
                 x >>= 8;
             }
         }
@@ -61,17 +109,19 @@ macro_rules! encode_padded_sleb128 {
             let mut x = value;
             let size = (std::mem::size_of::<$ty>() / 4) * 5;
             for _ in 0..(size - 1) {
-                self.append_byte(0x80 | (x & 0x7f) as u8);
+                self.append_u8(0x80 | (x & 0x7f) as u8);
                 x >>= 7;
             }
-            self.append_byte((x & 0x7f) as u8);
+            self.append_u8((x & 0x7f) as u8);
         }
     };
 }
 
-pub trait SerialBuffer {
-    fn append_byte(&mut self, b: u8);
+pub trait SerialBuffer: Debug {
+    fn append_u8(&mut self, b: u8);
+    fn overwrite_u8(&mut self, index: usize, b: u8);
     fn append_slice(&mut self, b: &[u8]);
+
     fn size(&self) -> usize;
 
     encode_uleb128!(encode_u32, u32);
@@ -98,17 +148,6 @@ pub trait SerialBuffer {
     encode_padded_sleb128!(encode_padded_i64, i64);
 }
 
-pub trait Serialize {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T);
-}
-
-impl Serialize for str {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        buffer.encode_u32(self.len() as u32);
-        buffer.append_slice(self.as_bytes());
-    }
-}
-
 fn overwrite_padded_u32_help(buffer: &mut [u8], value: u32) {
     let mut x = value;
     for byte in buffer.iter_mut().take(4) {
@@ -119,8 +158,11 @@ fn overwrite_padded_u32_help(buffer: &mut [u8], value: u32) {
 }
 
 impl SerialBuffer for std::vec::Vec<u8> {
-    fn append_byte(&mut self, b: u8) {
+    fn append_u8(&mut self, b: u8) {
         self.push(b);
+    }
+    fn overwrite_u8(&mut self, index: usize, b: u8) {
+        self[index] = b;
     }
     fn append_slice(&mut self, b: &[u8]) {
         self.extend_from_slice(b);
@@ -146,8 +188,11 @@ impl SerialBuffer for std::vec::Vec<u8> {
 }
 
 impl<'a> SerialBuffer for Vec<'a, u8> {
-    fn append_byte(&mut self, b: u8) {
+    fn append_u8(&mut self, b: u8) {
         self.push(b);
+    }
+    fn overwrite_u8(&mut self, index: usize, b: u8) {
+        self[index] = b;
     }
     fn append_slice(&mut self, b: &[u8]) {
         self.extend_from_slice(b);

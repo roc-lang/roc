@@ -1,14 +1,17 @@
-use bumpalo::collections::vec::{Drain, Vec};
+use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use core::panic;
 use std::fmt::Debug;
 
 use roc_module::symbol::Symbol;
 
-use crate::module_builder::{IndexRelocType, RelocationEntry};
-use crate::opcodes::*;
-use crate::serialize::SerialBuffer;
-use crate::{round_up_to_alignment, LocalId, FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID};
+use super::linking::{IndexRelocType, RelocationEntry};
+use super::opcodes::*;
+use super::serialize::{SerialBuffer, Serialize};
+use crate::{round_up_to_alignment, FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LocalId(pub u32);
 
 /// Wasm value type. (Rust representation matches Wasm encoding)
 #[repr(u8)]
@@ -20,15 +23,9 @@ pub enum ValueType {
     F64 = 0x7c,
 }
 
-// This is a bit unfortunate. Will go away if we generate our own Types section.
-impl ValueType {
-    pub fn to_parity_wasm(&self) -> parity_wasm::elements::ValueType {
-        match self {
-            Self::I32 => parity_wasm::elements::ValueType::I32,
-            Self::I64 => parity_wasm::elements::ValueType::I64,
-            Self::F32 => parity_wasm::elements::ValueType::F32,
-            Self::F64 => parity_wasm::elements::ValueType::F64,
-        }
+impl Serialize for ValueType {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.append_u8(*self as u8);
     }
 }
 
@@ -92,8 +89,8 @@ pub enum VirtualMachineSymbolState {
 
 // An instruction (local.set or local.tee) to be inserted into the function code
 #[derive(Debug)]
-struct InsertLocation {
-    insert_at: usize,
+struct Insertion {
+    at: usize,
     start: usize,
     end: usize,
 }
@@ -124,7 +121,7 @@ pub struct CodeBuilder<'a> {
     insert_bytes: Vec<'a, u8>,
 
     /// Code locations where the insert_bytes should go
-    insert_locations: Vec<'a, InsertLocation>,
+    insertions: Vec<'a, Insertion>,
 
     /// Bytes for local variable declarations and stack-frame setup code.
     /// We can't write this until we've finished the main code. But it goes
@@ -151,22 +148,13 @@ impl<'a> CodeBuilder<'a> {
     pub fn new(arena: &'a Bump) -> Self {
         CodeBuilder {
             code: Vec::with_capacity_in(1024, arena),
-            insert_locations: Vec::with_capacity_in(32, arena),
+            insertions: Vec::with_capacity_in(32, arena),
             insert_bytes: Vec::with_capacity_in(64, arena),
             preamble: Vec::with_capacity_in(32, arena),
             inner_length: Vec::with_capacity_in(5, arena),
             vm_stack: Vec::with_capacity_in(32, arena),
             relocations: Vec::with_capacity_in(32, arena),
         }
-    }
-
-    pub fn clear(&mut self) {
-        self.code.clear();
-        self.insert_locations.clear();
-        self.insert_bytes.clear();
-        self.preamble.clear();
-        self.inner_length.clear();
-        self.vm_stack.clear();
     }
 
     /**********************************************************
@@ -220,8 +208,8 @@ impl<'a> CodeBuilder<'a> {
         self.insert_bytes.push(opcode);
         self.insert_bytes.encode_u32(immediate);
 
-        self.insert_locations.push(InsertLocation {
-            insert_at,
+        self.insertions.push(Insertion {
+            at: insert_at,
             start,
             end: self.insert_bytes.len(),
         });
@@ -384,52 +372,56 @@ impl<'a> CodeBuilder<'a> {
 
         let inner_len = self.preamble.len() + self.code.len() + self.insert_bytes.len();
         self.inner_length.encode_u32(inner_len as u32);
-    }
-
-    /// Write out all the bytes in the right order
-    pub fn serialize<T: SerialBuffer>(
-        &mut self,
-        code_section_buf: &mut T,
-    ) -> Drain<RelocationEntry> {
-        code_section_buf.append_slice(&self.inner_length);
-        code_section_buf.append_slice(&self.preamble);
 
         // Sort insertions. They are not created in order of assignment, but in order of *second* usage.
-        self.insert_locations.sort_by_key(|loc| loc.insert_at);
+        self.insertions.sort_by_key(|ins| ins.at);
+    }
+
+    /// Serialize all byte vectors in the right order
+    /// Also update relocation offsets relative to the provided base offset in the buffer
+    pub fn serialize_with_relocs<T: SerialBuffer>(
+        &self,
+        buffer: &mut T,
+        final_relocs: &mut Vec<'a, RelocationEntry>,
+        reloc_base_offset: usize,
+    ) {
+        buffer.append_slice(&self.inner_length);
+        buffer.append_slice(&self.preamble);
 
         // Do the insertions & update relocation offsets
-        const CODE_SECTION_BODY_OFFSET: usize = 5;
         let mut reloc_index = 0;
-        let mut code_pos: usize = 0;
-        for location in self.insert_locations.iter() {
+        let mut code_pos = 0;
+        let mut insert_iter = self.insertions.iter();
+
+        loop {
+            let next_insert = insert_iter.next();
+            let next_pos = next_insert.map(|i| i.at).unwrap_or_else(|| self.code.len());
+
             // Relocation offset needs to be an index into the body of the code section, but
             // at this point it is an index into self.code. Need to adjust for all previous functions
             // in the code section, and for insertions in the current function.
-            let section_body_pos = code_section_buf.size() - CODE_SECTION_BODY_OFFSET;
+            let section_body_pos = buffer.size() - reloc_base_offset;
             while reloc_index < self.relocations.len()
-                && self.relocations[reloc_index].offset() < location.insert_at as u32
+                && self.relocations[reloc_index].offset() < next_pos as u32
             {
-                let offset_ref = self.relocations[reloc_index].offset_mut();
-                *offset_ref += (section_body_pos - code_pos) as u32;
+                let mut reloc_clone = self.relocations[reloc_index].clone();
+                *reloc_clone.offset_mut() += (section_body_pos - code_pos) as u32;
+                final_relocs.push(reloc_clone);
                 reloc_index += 1;
             }
 
-            code_section_buf.append_slice(&self.code[code_pos..location.insert_at]);
-            code_section_buf.append_slice(&self.insert_bytes[location.start..location.end]);
-            code_pos = location.insert_at;
+            buffer.append_slice(&self.code[code_pos..next_pos]);
+
+            match next_insert {
+                Some(Insertion { at, start, end }) => {
+                    buffer.append_slice(&self.insert_bytes[*start..*end]);
+                    code_pos = *at;
+                }
+                None => {
+                    break;
+                }
+            }
         }
-
-        let section_body_pos = code_section_buf.size() - CODE_SECTION_BODY_OFFSET;
-        while reloc_index < self.relocations.len() {
-            let offset_ref = self.relocations[reloc_index].offset_mut();
-            *offset_ref += (section_body_pos - code_pos) as u32;
-            reloc_index += 1;
-        }
-
-        let len = self.code.len();
-        code_section_buf.append_slice(&self.code[code_pos..len]);
-
-        self.relocations.drain(0..)
     }
 
     /**********************************************************

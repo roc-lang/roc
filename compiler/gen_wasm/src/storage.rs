@@ -4,9 +4,9 @@ use bumpalo::Bump;
 use roc_collections::all::MutMap;
 use roc_module::symbol::Symbol;
 
-use crate::code_builder::{CodeBuilder, ValueType, VirtualMachineSymbolState};
 use crate::layout::WasmLayout;
-use crate::{copy_memory, round_up_to_alignment, CopyMemoryConfig, LocalId, PTR_SIZE, PTR_TYPE};
+use crate::wasm_module::{CodeBuilder, LocalId, ValueType, VirtualMachineSymbolState};
+use crate::{copy_memory, round_up_to_alignment, CopyMemoryConfig, PTR_SIZE, PTR_TYPE};
 
 pub enum StoredValueKind {
     Parameter,
@@ -291,7 +291,7 @@ impl<'a> Storage<'a> {
             | StoredValue::Local {
                 value_type, size, ..
             } => {
-                use crate::code_builder::Align::*;
+                use crate::wasm_module::Align::*;
                 code_builder.get_local(to_ptr);
                 self.load_symbols(code_builder, &[from_symbol]);
                 match (value_type, size) {
