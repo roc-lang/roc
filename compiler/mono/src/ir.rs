@@ -71,6 +71,61 @@ pub struct EntryPoint<'a> {
     pub layout: ProcLayout<'a>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct PartialProcId(usize);
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PartialProcs<'a> {
+    /// maps a function name (symbol) to an index
+    symbols: Vec<'a, Symbol>,
+
+    partial_procs: Vec<'a, PartialProc<'a>>,
+}
+
+impl<'a> PartialProcs<'a> {
+    fn new_in(arena: &'a Bump) -> Self {
+        Self {
+            symbols: Vec::new_in(arena),
+            partial_procs: Vec::new_in(arena),
+        }
+    }
+    fn contains_key(&self, symbol: Symbol) -> bool {
+        self.symbol_to_id(symbol).is_some()
+    }
+
+    fn symbol_to_id(&self, symbol: Symbol) -> Option<PartialProcId> {
+        self.symbols
+            .iter()
+            .position(|s| *s == symbol)
+            .map(PartialProcId)
+    }
+
+    fn get_symbol(&self, symbol: Symbol) -> Option<&PartialProc<'a>> {
+        let id = self.symbol_to_id(symbol)?;
+
+        Some(self.get_id(id))
+    }
+
+    fn get_id(&self, id: PartialProcId) -> &PartialProc<'a> {
+        &self.partial_procs[id.0]
+    }
+
+    pub fn insert(&mut self, symbol: Symbol, partial_proc: PartialProc<'a>) -> PartialProcId {
+        debug_assert!(
+            !self.contains_key(symbol),
+            "The {:?} is inserted as a partial proc twice: that's a bug!",
+            symbol,
+        );
+
+        let id = PartialProcId(self.symbols.len());
+
+        self.symbols.push(symbol);
+        self.partial_procs.push(partial_proc);
+
+        id
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PartialProc<'a> {
     pub annotation: Variable,
@@ -129,7 +184,7 @@ impl<'a> PartialProc<'a> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CapturedSymbols<'a> {
     None,
     Captured(&'a [(Symbol, Variable)]),
@@ -418,7 +473,7 @@ impl<'a> ExternalSpecializations<'a> {
 
 #[derive(Clone, Debug)]
 pub struct Procs<'a> {
-    pub partial_procs: BumpMap<Symbol, PartialProc<'a>>,
+    pub partial_procs: PartialProcs<'a>,
     pub imported_module_thunks: &'a [Symbol],
     pub module_thunks: &'a [Symbol],
     pub pending_specializations:
@@ -432,7 +487,7 @@ pub struct Procs<'a> {
 impl<'a> Procs<'a> {
     pub fn new_in(arena: &'a Bump) -> Self {
         Self {
-            partial_procs: BumpMap::new_in(arena),
+            partial_procs: PartialProcs::new_in(arena),
             imported_module_thunks: &[],
             module_thunks: &[],
             pending_specializations: Some(BumpMap::new_in(arena)),
@@ -460,7 +515,7 @@ impl<'a> Procs<'a> {
     }
 
     fn get_partial_proc<'b>(&'b self, symbol: Symbol) -> Option<&'b PartialProc<'a>> {
-        self.partial_procs.get(&symbol)
+        self.partial_procs.get_symbol(symbol)
     }
 
     pub fn get_specialized_procs_without_rc(
@@ -539,9 +594,9 @@ impl<'a> Procs<'a> {
                             // register the pending specialization, so this gets code genned later
                             add_pending(pending_specializations, symbol, layout, pending);
 
-                            match self.partial_procs.entry(symbol) {
-                                Entry::Occupied(occupied) => {
-                                    let existing = occupied.get();
+                            match self.partial_procs.symbol_to_id(symbol) {
+                                Some(occupied) => {
+                                    let existing = self.partial_procs.get_id(occupied);
                                     // if we're adding the same partial proc twice, they must be the actual same!
                                     //
                                     // NOTE we can't skip extra work! we still need to make the specialization for this
@@ -553,7 +608,7 @@ impl<'a> Procs<'a> {
 
                                     // the partial proc is already in there, do nothing
                                 }
-                                Entry::Vacant(vacant) => {
+                                None => {
                                     let pattern_symbols = pattern_symbols.into_bump_slice();
 
                                     let partial_proc = PartialProc {
@@ -564,7 +619,7 @@ impl<'a> Procs<'a> {
                                         is_self_recursive,
                                     };
 
-                                    vacant.insert(partial_proc);
+                                    self.partial_procs.insert(symbol, partial_proc);
                                 }
                             }
                         }
@@ -576,8 +631,10 @@ impl<'a> Procs<'a> {
 
                             let outside_layout = layout;
 
-                            let partial_proc;
-                            if let Some(existing) = self.get_partial_proc(symbol) {
+                            let partial_proc_id = if let Some(partial_proc_id) =
+                                self.partial_procs.symbol_to_id(symbol)
+                            {
+                                let existing = self.partial_procs.get_id(partial_proc_id);
                                 // if we're adding the same partial proc twice, they must be the actual same!
                                 //
                                 // NOTE we can't skip extra work! we still need to make the specialization for this
@@ -587,21 +644,29 @@ impl<'a> Procs<'a> {
                                 debug_assert_eq!(captured_symbols, existing.captured_symbols);
                                 debug_assert_eq!(is_self_recursive, existing.is_self_recursive);
 
-                                partial_proc = existing;
+                                partial_proc_id
                             } else {
                                 let pattern_symbols = pattern_symbols.into_bump_slice();
 
-                                partial_proc = env.arena.alloc(PartialProc {
+                                let partial_proc = PartialProc {
                                     annotation,
                                     pattern_symbols,
                                     captured_symbols,
                                     body: body.value,
                                     is_self_recursive,
-                                });
-                            }
+                                };
 
-                            match specialize(env, self, symbol, layout_cache, pending, partial_proc)
-                            {
+                                self.partial_procs.insert(symbol, partial_proc)
+                            };
+
+                            match specialize(
+                                env,
+                                self,
+                                symbol,
+                                layout_cache,
+                                pending,
+                                partial_proc_id,
+                            ) {
                                 Ok((proc, layout)) => {
                                     let top_level = ProcLayout::from_raw(env.arena, layout);
 
@@ -666,7 +731,7 @@ impl<'a> Procs<'a> {
             None => {
                 let symbol = name;
 
-                let partial_proc = match self.get_partial_proc(symbol) {
+                let partial_proc_id = match self.partial_procs.symbol_to_id(symbol) {
                     Some(p) => p,
                     None => panic!("no partial_proc for {:?} in module {:?}", symbol, env.home),
                 };
@@ -694,7 +759,7 @@ impl<'a> Procs<'a> {
                     layout_cache,
                     fn_var,
                     Default::default(),
-                    partial_proc,
+                    partial_proc_id,
                 ) {
                     Ok((proc, _ignore_layout)) => {
                         // the `layout` is a function pointer, while `_ignore_layout` can be a
@@ -1725,7 +1790,7 @@ pub fn specialize_all<'a>(
                     continue;
                 }
                 Entry::Vacant(vacant) => {
-                    match procs.get_partial_proc(name) {
+                    match procs.partial_procs.symbol_to_id(name) {
                         Some(v) => {
                             // Mark this proc as in-progress, so if we're dealing with
                             // mutually recursive functions, we don't loop forever.
@@ -1807,7 +1872,7 @@ fn specialize_externals_others_need<'a>(
 
             let name = *symbol;
 
-            let partial_proc = match procs.get_partial_proc(name) {
+            let partial_proc_id = match procs.partial_procs.symbol_to_id(name) {
                 Some(v) => v,
                 None => {
                     panic!("Cannot find a partial proc for {:?}", name);
@@ -1822,7 +1887,7 @@ fn specialize_externals_others_need<'a>(
                 layout_cache,
                 solved_type,
                 BumpMap::new_in(env.arena),
-                partial_proc,
+                partial_proc_id,
             ) {
                 Ok((proc, layout)) => {
                     let top_level = ProcLayout::from_raw(env.arena, layout);
@@ -1900,32 +1965,28 @@ fn specialize_external<'a>(
     layout_cache: &mut LayoutCache<'a>,
     fn_var: Variable,
     host_exposed_variables: &[(Symbol, Variable)],
-    partial_proc: &PartialProc<'a>,
+    partial_proc_id: PartialProcId,
 ) -> Result<Proc<'a>, LayoutProblem> {
-    let PartialProc {
-        annotation,
-        pattern_symbols,
-        captured_symbols,
-        body,
-        is_self_recursive,
-    } = partial_proc;
+    let partial_proc = procs.partial_procs.get_id(partial_proc_id);
+    let captured_symbols = partial_proc.captured_symbols;
 
     // unify the called function with the specialized signature, then specialize the function body
     let snapshot = env.subs.snapshot();
     let cache_snapshot = layout_cache.snapshot();
 
-    let _unified = roc_unify::unify::unify(env.subs, *annotation, fn_var);
+    let _unified = roc_unify::unify::unify(env.subs, partial_proc.annotation, fn_var);
 
     // This will not hold for programs with type errors
     // let is_valid = matches!(unified, roc_unify::unify::Unified::Success(_));
     // debug_assert!(is_valid, "unificaton failure for {:?}", proc_name);
 
     // if this is a closure, add the closure record argument
-    let pattern_symbols = match captured_symbols {
-        CapturedSymbols::None => pattern_symbols,
-        CapturedSymbols::Captured([]) => pattern_symbols,
+    let pattern_symbols = match partial_proc.captured_symbols {
+        CapturedSymbols::None => partial_proc.pattern_symbols,
+        CapturedSymbols::Captured([]) => partial_proc.pattern_symbols,
         CapturedSymbols::Captured(_) => {
-            let mut temp = Vec::from_iter_in(pattern_symbols.iter().copied(), env.arena);
+            let mut temp =
+                Vec::from_iter_in(partial_proc.pattern_symbols.iter().copied(), env.arena);
             temp.push(Symbol::ARG_CLOSURE);
             temp.into_bump_slice()
         }
@@ -2022,13 +2083,14 @@ fn specialize_external<'a>(
         }
     };
 
-    let recursivity = if *is_self_recursive {
+    let recursivity = if partial_proc.is_self_recursive {
         SelfRecursive::SelfRecursive(JoinPointId(env.unique_symbol()))
     } else {
         SelfRecursive::NotSelfRecursive
     };
 
-    let mut specialized_body = from_can(env, fn_var, body.clone(), procs, layout_cache);
+    let body = partial_proc.body.clone();
+    let mut specialized_body = from_can(env, fn_var, body, procs, layout_cache);
 
     match specialized {
         SpecializedLayout::FunctionPointerBody {
@@ -2418,24 +2480,13 @@ struct SpecializeFailure<'a> {
 
 type SpecializeSuccess<'a> = (Proc<'a>, RawFunctionLayout<'a>);
 
-fn specialize2<'a, 'b>(
-    env: &mut Env<'a, '_>,
-    partial_proc: &'b PartialProc<'a>,
-    procs: &'b mut Procs<'a>,
-    proc_name: Symbol,
-    layout_cache: &mut LayoutCache<'a>,
-    pending: PendingSpecialization,
-) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
-    todo!()
-}
-
 fn specialize<'a, 'b>(
     env: &mut Env<'a, '_>,
     procs: &'b mut Procs<'a>,
     proc_name: Symbol,
     layout_cache: &mut LayoutCache<'a>,
     pending: PendingSpecialization,
-    partial_proc: &'b PartialProc<'a>,
+    partial_proc_id: PartialProcId,
 ) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
     let PendingSpecialization {
         solved_type,
@@ -2450,7 +2501,7 @@ fn specialize<'a, 'b>(
         layout_cache,
         &solved_type,
         host_exposed_aliases,
-        partial_proc,
+        partial_proc_id,
     )
 }
 
@@ -2480,7 +2531,7 @@ fn specialize_solved_type<'a>(
     layout_cache: &mut LayoutCache<'a>,
     solved_type: &SolvedType,
     host_exposed_aliases: BumpMap<Symbol, SolvedType>,
-    partial_proc: &PartialProc<'a>,
+    partial_proc_id: PartialProcId,
 ) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
     specialize_variable_help(
         env,
@@ -2489,7 +2540,7 @@ fn specialize_solved_type<'a>(
         layout_cache,
         |env| introduce_solved_type_to_subs(env, solved_type),
         host_exposed_aliases,
-        partial_proc,
+        partial_proc_id,
     )
 }
 
@@ -2500,7 +2551,7 @@ fn specialize_variable<'a>(
     layout_cache: &mut LayoutCache<'a>,
     fn_var: Variable,
     host_exposed_aliases: BumpMap<Symbol, SolvedType>,
-    partial_proc: &PartialProc<'a>,
+    partial_proc_id: PartialProcId,
 ) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
     specialize_variable_help(
         env,
@@ -2509,7 +2560,7 @@ fn specialize_variable<'a>(
         layout_cache,
         |_| fn_var,
         host_exposed_aliases,
-        partial_proc,
+        partial_proc_id,
     )
 }
 
@@ -2520,7 +2571,7 @@ fn specialize_variable_help<'a, F>(
     layout_cache: &mut LayoutCache<'a>,
     fn_var_thunk: F,
     host_exposed_aliases: BumpMap<Symbol, SolvedType>,
-    partial_proc: &PartialProc<'a>,
+    partial_proc_id: PartialProcId,
 ) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>>
 where
     F: FnOnce(&mut Env<'a, '_>) -> Variable,
@@ -2551,7 +2602,8 @@ where
     };
 
     // make sure rigid variables in the annotation are converted to flex variables
-    instantiate_rigids(env.subs, partial_proc.annotation);
+    let annotation_var = procs.partial_procs.get_id(partial_proc_id).annotation;
+    instantiate_rigids(env.subs, annotation_var);
 
     let mut host_exposed_variables = Vec::with_capacity_in(host_exposed_aliases.len(), env.arena);
 
@@ -2568,7 +2620,7 @@ where
         layout_cache,
         fn_var,
         &host_exposed_variables,
-        partial_proc,
+        partial_proc_id,
     );
 
     match specialized {
@@ -3824,11 +3876,11 @@ pub fn with_hole<'a>(
             // if it's in there, it's a call by name, otherwise it's a call by pointer
             let is_known = |key| {
                 // a proc in this module, or an imported symbol
-                procs.partial_procs.contains_key(key) || env.is_imported_symbol(*key)
+                procs.partial_procs.contains_key(key) || env.is_imported_symbol(key)
             };
 
             match loc_expr.value {
-                roc_can::expr::Expr::Var(proc_name) if is_known(&proc_name) => {
+                roc_can::expr::Expr::Var(proc_name) if is_known(proc_name) => {
                     // a call by a known name
                     call_by_name(
                         env,
@@ -4807,67 +4859,67 @@ pub fn from_can<'a>(
                             captured_symbols,
                             ..
                         } => {
-                            // Extract Procs, but discard the resulting Expr::Load.
-                            // That Load looks up the pointer, which we won't use here!
+                            if true || !procs.partial_procs.contains_key(*symbol) {
+                                let loc_body = *boxed_body;
 
-                            let loc_body = *boxed_body;
+                                let is_self_recursive =
+                                    !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
 
-                            let is_self_recursive =
-                                !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
+                                // does this function capture any local values?
+                                let function_layout =
+                                    layout_cache.raw_from_var(env.arena, function_type, env.subs);
 
-                            // does this function capture any local values?
-                            let function_layout =
-                                layout_cache.raw_from_var(env.arena, function_type, env.subs);
-
-                            let captured_symbols = match function_layout {
-                                Ok(RawFunctionLayout::Function(_, lambda_set, _)) => {
-                                    if let Layout::Struct(&[]) = lambda_set.runtime_representation()
-                                    {
-                                        CapturedSymbols::None
-                                    } else {
-                                        let mut temp =
-                                            Vec::from_iter_in(captured_symbols, env.arena);
-                                        temp.sort();
-                                        CapturedSymbols::Captured(temp.into_bump_slice())
+                                let captured_symbols = match function_layout {
+                                    Ok(RawFunctionLayout::Function(_, lambda_set, _)) => {
+                                        if let Layout::Struct(&[]) =
+                                            lambda_set.runtime_representation()
+                                        {
+                                            CapturedSymbols::None
+                                        } else {
+                                            let mut temp =
+                                                Vec::from_iter_in(captured_symbols, env.arena);
+                                            temp.sort();
+                                            CapturedSymbols::Captured(temp.into_bump_slice())
+                                        }
                                     }
-                                }
-                                Ok(RawFunctionLayout::ZeroArgumentThunk(_)) => {
-                                    // top-level thunks cannot capture any variables
-                                    debug_assert!(
-                                        captured_symbols.is_empty(),
-                                        "{:?} with layout {:?} {:?} {:?}",
-                                        &captured_symbols,
-                                        function_layout,
-                                        env.subs,
-                                        (function_type, closure_type, closure_ext_var),
-                                    );
-                                    CapturedSymbols::None
-                                }
-                                Err(_) => {
-                                    // just allow this. see https://github.com/rtfeldman/roc/issues/1585
-                                    if captured_symbols.is_empty() {
+                                    Ok(RawFunctionLayout::ZeroArgumentThunk(_)) => {
+                                        // top-level thunks cannot capture any variables
+                                        debug_assert!(
+                                            captured_symbols.is_empty(),
+                                            "{:?} with layout {:?} {:?} {:?}",
+                                            &captured_symbols,
+                                            function_layout,
+                                            env.subs,
+                                            (function_type, closure_type, closure_ext_var),
+                                        );
                                         CapturedSymbols::None
-                                    } else {
-                                        let mut temp =
-                                            Vec::from_iter_in(captured_symbols, env.arena);
-                                        temp.sort();
-                                        CapturedSymbols::Captured(temp.into_bump_slice())
                                     }
-                                }
-                            };
+                                    Err(_) => {
+                                        // just allow this. see https://github.com/rtfeldman/roc/issues/1585
+                                        if captured_symbols.is_empty() {
+                                            CapturedSymbols::None
+                                        } else {
+                                            let mut temp =
+                                                Vec::from_iter_in(captured_symbols, env.arena);
+                                            temp.sort();
+                                            CapturedSymbols::Captured(temp.into_bump_slice())
+                                        }
+                                    }
+                                };
 
-                            let partial_proc = PartialProc::from_named_function(
-                                env,
-                                layout_cache,
-                                function_type,
-                                arguments,
-                                loc_body,
-                                captured_symbols,
-                                is_self_recursive,
-                                return_type,
-                            );
+                                let partial_proc = PartialProc::from_named_function(
+                                    env,
+                                    layout_cache,
+                                    function_type,
+                                    arguments,
+                                    loc_body,
+                                    captured_symbols,
+                                    is_self_recursive,
+                                    return_type,
+                                );
 
-                            procs.partial_procs.insert(*symbol, partial_proc);
+                                procs.partial_procs.insert(*symbol, partial_proc);
+                            }
 
                             return from_can(env, variable, cont.value, procs, layout_cache);
                         }
@@ -6011,7 +6063,7 @@ fn can_reuse_symbol<'a>(
 
         if env.is_imported_symbol(symbol) {
             Imported(symbol)
-        } else if procs.partial_procs.contains_key(&symbol) {
+        } else if procs.partial_procs.contains_key(symbol) {
             LocalFunction(symbol)
         } else {
             Value(symbol)
@@ -6673,7 +6725,7 @@ fn call_by_name_help<'a>(
                 assign_to_symbols(env, procs, layout_cache, iter, result)
             }
             None => {
-                let opt_partial_proc = procs.get_partial_proc(proc_name);
+                let opt_partial_proc = procs.partial_procs.symbol_to_id(proc_name);
 
                 /*
                 debug_assert_eq!(
@@ -6808,7 +6860,7 @@ fn call_by_name_module_thunk<'a>(
                 force_thunk(env, proc_name, inner_layout, assigned, hole)
             }
             None => {
-                let opt_partial_proc = procs.get_partial_proc(proc_name);
+                let opt_partial_proc = procs.partial_procs.symbol_to_id(proc_name);
 
                 match opt_partial_proc {
                     Some(partial_proc) => {
@@ -6928,7 +6980,7 @@ fn call_specialized_proc<'a>(
 
         match procs
             .partial_procs
-            .get(&proc_name)
+            .get_symbol(proc_name)
             .map(|pp| &pp.captured_symbols)
         {
             Some(&CapturedSymbols::Captured(captured_symbols)) => {

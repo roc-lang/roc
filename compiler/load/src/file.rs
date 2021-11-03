@@ -3958,7 +3958,10 @@ fn make_specializations<'a>(
 
     let mut procs = Procs::new_in(arena);
 
-    procs.partial_procs = procs_base.partial_procs;
+    for (symbol, partial_proc) in procs_base.partial_procs.into_iter() {
+        procs.partial_procs.insert(symbol, partial_proc);
+    }
+
     procs.module_thunks = procs_base.module_thunks;
     procs.runtime_errors = procs_base.runtime_errors;
     procs.imported_module_thunks = procs_base.imported_module_thunks;
