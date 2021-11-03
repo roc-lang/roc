@@ -15,7 +15,7 @@ mod test_can {
     use crate::helpers::{can_expr_with, test_home, CanExprOut};
     use bumpalo::Bump;
     use roc_can::expr::Expr::{self, *};
-    use roc_can::expr::Recursive;
+    use roc_can::expr::{ClosureData, Recursive};
     use roc_problem::can::{CycleEntry, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
     use roc_region::all::Region;
     use std::{f64, i64};
@@ -654,10 +654,10 @@ mod test_can {
         match expr {
             LetRec(assignments, body, _) => {
                 match &assignments.get(i).map(|def| &def.loc_expr.value) {
-                    Some(Closure {
+                    Some(Closure(ClosureData {
                         recursive: recursion,
                         ..
-                    }) => recursion.clone(),
+                    })) => recursion.clone(),
                     Some(other) => {
                         panic!("assignment at {} is not a closure, but a {:?}", i, other)
                     }
@@ -676,10 +676,10 @@ mod test_can {
                     get_closure(&body.value, i - 1)
                 } else {
                     match &def.loc_expr.value {
-                        Closure {
+                        Closure(ClosureData {
                             recursive: recursion,
                             ..
-                        } => recursion.clone(),
+                        }) => recursion.clone(),
                         other => {
                             panic!("assignment at {} is not a closure, but a {:?}", i, other)
                         }
