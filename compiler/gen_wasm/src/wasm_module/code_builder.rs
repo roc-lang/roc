@@ -5,10 +5,13 @@ use std::fmt::Debug;
 
 use roc_module::symbol::Symbol;
 
-use crate::module_builder::{IndexRelocType, RelocationEntry};
-use crate::opcodes::*;
-use crate::serialize::{SerialBuffer, Serialize};
-use crate::{round_up_to_alignment, LocalId, FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID};
+use super::opcodes::*;
+use super::sections::{IndexRelocType, RelocationEntry};
+use super::serialize::{SerialBuffer, Serialize};
+use crate::{round_up_to_alignment, FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LocalId(pub u32);
 
 /// Wasm value type. (Rust representation matches Wasm encoding)
 #[repr(u8)]

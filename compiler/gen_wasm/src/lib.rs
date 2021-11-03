@@ -1,11 +1,8 @@
 mod backend;
-pub mod code_builder;
 pub mod from_wasm32_memory;
 mod layout;
-pub mod module_builder;
-pub mod opcodes;
-pub mod serialize;
 mod storage;
+pub mod wasm_module;
 
 use bumpalo::{self, collections::Vec, Bump};
 
@@ -15,9 +12,9 @@ use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::LayoutIds;
 
 use crate::backend::WasmBackend;
-use crate::code_builder::{Align, CodeBuilder, ValueType};
-use crate::module_builder::{
-    Export, ExportType, Global, GlobalInitValue, GlobalType, LinkingSubSection, SymInfo, WasmModule,
+use crate::wasm_module::{
+    Align, CodeBuilder, Export, ExportType, Global, GlobalInitValue, GlobalType, LinkingSubSection,
+    LocalId, SymInfo, ValueType, WasmModule,
 };
 
 const PTR_SIZE: u32 = 4;
@@ -25,13 +22,6 @@ const PTR_TYPE: ValueType = ValueType::I32;
 
 pub const STACK_POINTER_GLOBAL_ID: u32 = 0;
 pub const FRAME_ALIGNMENT_BYTES: i32 = 16;
-
-/// Code section ID from spec
-/// https://webassembly.github.io/spec/core/binary/modules.html#sections
-pub const CODE_SECTION_ID: u8 = 10;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LocalId(pub u32);
 
 pub struct Env<'a> {
     pub arena: &'a Bump,

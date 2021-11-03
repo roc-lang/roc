@@ -6,11 +6,10 @@ use roc_module::symbol::Symbol;
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
 use roc_mono::layout::{Builtin, Layout};
 
-use crate::code_builder::{BlockType, CodeBuilder, ValueType};
 use crate::layout::WasmLayout;
-use crate::module_builder::{Signature, WasmModule};
 use crate::storage::{Storage, StoredValue, StoredValueKind};
-use crate::{copy_memory, CopyMemoryConfig, Env, LocalId, PTR_TYPE};
+use crate::wasm_module::{BlockType, CodeBuilder, LocalId, Signature, ValueType, WasmModule};
+use crate::{copy_memory, CopyMemoryConfig, Env, PTR_TYPE};
 
 // Don't allocate any constant data at address zero or near it. Would be valid, but bug-prone.
 // Follow Emscripten's example by using 1kB (4 bytes would probably do)

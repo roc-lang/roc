@@ -1,9 +1,9 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 
-use crate::code_builder::{Align, CodeBuilder, ValueType};
-use crate::opcodes;
-use crate::serialize::{SerialBuffer, Serialize};
+use super::opcodes;
+use super::serialize::{SerialBuffer, Serialize};
+use super::{Align, CodeBuilder, ValueType};
 
 /*******************************************************************
  *
@@ -920,16 +920,6 @@ impl<'a> Serialize for LinkingSection<'a> {
  * https://webassembly.github.io/spec/core/binary/modules.html
  *
  *******************************************************************/
-pub struct RocUnusedSection {}
-impl Serialize for RocUnusedSection {
-    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {}
-}
-impl Default for RocUnusedSection {
-    fn default() -> Self {
-        RocUnusedSection {}
-    }
-}
-
 pub struct WasmModule<'a> {
     pub types: TypeSection<'a>,
     pub import: ImportSection<'a>,
@@ -951,13 +941,6 @@ pub struct WasmModule<'a> {
     pub linking: LinkingSection<'a>,
     pub reloc_code: RelocationSection<'a>,
     pub reloc_data: RelocationSection<'a>,
-}
-
-fn maybe_increment_section(size: usize, prev_size: &mut usize, index: &mut u32) {
-    if size > *prev_size {
-        *index += 1;
-        *prev_size = size;
-    }
 }
 
 impl<'a> WasmModule<'a> {
@@ -1038,5 +1021,12 @@ impl<'a> WasmModule<'a> {
         self.linking.serialize(buffer);
         self.reloc_code.serialize(buffer);
         self.reloc_data.serialize(buffer);
+    }
+}
+
+fn maybe_increment_section(size: usize, prev_size: &mut usize, index: &mut u32) {
+    if size > *prev_size {
+        *index += 1;
+        *prev_size = size;
     }
 }

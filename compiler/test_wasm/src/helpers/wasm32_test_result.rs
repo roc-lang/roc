@@ -1,9 +1,10 @@
 use bumpalo::collections::Vec;
 
-use roc_gen_wasm::code_builder::{Align, CodeBuilder, ValueType};
 use roc_gen_wasm::from_wasm32_memory::FromWasm32Memory;
-use roc_gen_wasm::module_builder::{Export, ExportType, Signature, WasmModule};
-use roc_gen_wasm::LocalId;
+use roc_gen_wasm::wasm_module::opcodes;
+use roc_gen_wasm::wasm_module::{
+    Align, CodeBuilder, Export, ExportType, LocalId, Signature, ValueType, WasmModule,
+};
 use roc_std::{RocDec, RocList, RocOrder, RocStr};
 
 pub trait Wasm32TestResult {
@@ -42,7 +43,7 @@ macro_rules! build_wrapper_body_primitive {
 
             code_builder.get_local(frame_pointer_id);
             // Raw "call" instruction. Don't bother with symbol & relocation since we're not going to link.
-            code_builder.inst_imm32(roc_gen_wasm::opcodes::CALL, 0, true, main_function_index);
+            code_builder.inst_imm32(opcodes::CALL, 0, true, main_function_index);
             code_builder.$store_instruction($align, 0);
             code_builder.get_local(frame_pointer_id);
 
@@ -70,7 +71,7 @@ fn build_wrapper_body_stack_memory(
 
     code_builder.get_local(local_id);
     // Raw "call" instruction. Don't bother with symbol & relocation since we're not going to link.
-    code_builder.inst_imm32(roc_gen_wasm::opcodes::CALL, 0, true, main_function_index);
+    code_builder.inst_imm32(opcodes::CALL, 0, true, main_function_index);
     code_builder.get_local(local_id);
     code_builder.finalize(local_types, size as i32, frame_pointer);
 }
