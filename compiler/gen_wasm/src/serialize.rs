@@ -129,9 +129,6 @@ pub trait SerialBuffer: Debug {
     encode_sleb128!(encode_i32, i32);
     encode_sleb128!(encode_i64, i64);
 
-    /// Inserts extra entries at the given index by copying the following entries to higher indices
-    fn insert_space_at(&mut self, index: usize, size: usize);
-
     fn reserve_padded_u32(&mut self) -> usize;
     fn encode_padded_u32(&mut self, value: u32) -> usize;
     fn overwrite_padded_u32(&mut self, index: usize, value: u32);
@@ -173,11 +170,6 @@ impl SerialBuffer for std::vec::Vec<u8> {
     fn size(&self) -> usize {
         self.len()
     }
-    fn insert_space_at(&mut self, index: usize, size: usize) {
-        let old_len = self.len();
-        self.resize(old_len + size, 0);
-        self.copy_within(index..old_len, index + size);
-    }
     fn reserve_padded_u32(&mut self) -> usize {
         let index = self.len();
         self.resize(index + 5, 0xff);
@@ -207,11 +199,6 @@ impl<'a> SerialBuffer for Vec<'a, u8> {
     }
     fn size(&self) -> usize {
         self.len()
-    }
-    fn insert_space_at(&mut self, index: usize, size: usize) {
-        let old_len = self.len();
-        self.resize(old_len + size, 0);
-        self.copy_within(index..old_len, index + size);
     }
     fn reserve_padded_u32(&mut self) -> usize {
         let index = self.len();

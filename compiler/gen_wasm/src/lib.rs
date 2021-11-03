@@ -136,15 +136,15 @@ pub fn combine_and_serialize<'a>(
     let mut parity_module = parity_builder.build();
     let sections = parity_module.sections_mut();
 
-    // wasm_module.types.serialize(buffer);
-    serialize_parity!(buffer, sections, |s| matches!(s, Section::Type(_)));
+    wasm_module.types.serialize(buffer);
+    // serialize_parity!(buffer, sections, |s| matches!(s, Section::Type(_)));
     maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
 
     // wasm_module.import.serialize(buffer);
     // maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
 
-    // wasm_module.function.serialize(buffer);
-    serialize_parity!(buffer, sections, |s| matches!(s, Section::Function(_)));
+    wasm_module.function.serialize(buffer);
+    // serialize_parity!(buffer, sections, |s| matches!(s, Section::Function(_)));
     maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
 
     // wasm_module.table.serialize(buffer);

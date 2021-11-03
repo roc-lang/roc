@@ -119,7 +119,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     combine_and_serialize(&mut module_bytes, parity_builder, &mut wasm_module);
 
     // for debugging (e.g. with wasm2wat or wasm-objdump)
-    if true {
+    if false {
         use std::io::Write;
 
         let mut hash_state = DefaultHasher::new();

@@ -20,15 +20,9 @@ pub enum ValueType {
     F64 = 0x7c,
 }
 
-// This is a bit unfortunate. Will go away if we generate our own Types section.
-impl ValueType {
-    pub fn to_parity_wasm(&self) -> parity_wasm::elements::ValueType {
-        match self {
-            Self::I32 => parity_wasm::elements::ValueType::I32,
-            Self::I64 => parity_wasm::elements::ValueType::I64,
-            Self::F32 => parity_wasm::elements::ValueType::F32,
-            Self::F64 => parity_wasm::elements::ValueType::F64,
-        }
+impl Serialize for ValueType {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.append_u8(*self as u8);
     }
 }
 
@@ -291,7 +285,43 @@ impl<'a> CodeBuilder<'a> {
 
     /// Generate bytes to declare the function's local variables
     fn build_local_declarations(&mut self, local_types: &[ValueType]) {
-        local_types.serialize(&mut self.preamble);
+        // reserve one byte for num_batches
+        self.preamble.push(0);
+
+        if local_types.is_empty() {
+            return;
+        }
+
+        // Write declarations in batches of the same ValueType
+        let mut num_batches: u32 = 0;
+        let mut batch_type = local_types[0];
+        let mut batch_size = 0;
+        for t in local_types {
+            if *t == batch_type {
+                batch_size += 1;
+            } else {
+                self.preamble.encode_u32(batch_size);
+                self.preamble.push(batch_type as u8);
+                batch_type = *t;
+                batch_size = 1;
+                num_batches += 1;
+            }
+        }
+        self.preamble.encode_u32(batch_size);
+        self.preamble.push(batch_type as u8);
+        num_batches += 1;
+
+        // Go back and write the number of batches at the start
+        if num_batches < 128 {
+            self.preamble[0] = num_batches as u8;
+        } else {
+            // We need more than 1 byte to encode num_batches!
+            // This is a ridiculous edge case, so just pad to 5 bytes for simplicity
+            let old_len = self.preamble.len();
+            self.preamble.resize(old_len + 4, 0);
+            self.preamble.copy_within(1..old_len, 5);
+            self.preamble.overwrite_padded_u32(0, num_batches);
+        }
     }
 
     /// Generate instruction bytes to grab a frame of stack memory on entering the function

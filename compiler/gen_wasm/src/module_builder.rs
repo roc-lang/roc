@@ -86,64 +86,22 @@ fn serialize_vector_section<B: SerialBuffer, T: Serialize>(
  *
  *******************************************************************/
 
-impl<'a> Serialize for [ValueType] {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        // reserve one byte for num_batches
-        let start = buffer.size();
-        buffer.append_u8(0);
-
-        if self.is_empty() {
-            return;
-        }
-
-        // Write declarations in batches of the same ValueType
-        let mut num_batches: u32 = 0;
-        let mut batch_type = self[0];
-        let mut batch_size = 0;
-        for t in self {
-            if *t == batch_type {
-                batch_size += 1;
-            } else {
-                buffer.encode_u32(batch_size);
-                buffer.append_u8(batch_type as u8);
-                batch_type = *t;
-                batch_size = 1;
-                num_batches += 1;
-            }
-        }
-        buffer.encode_u32(batch_size);
-        buffer.append_u8(batch_type as u8);
-        num_batches += 1;
-
-        // Go back and write the number of batches at the start
-        if num_batches < 128 {
-            buffer.overwrite_u8(start, num_batches as u8);
-        } else {
-            // We need more than 1 byte to encode num_batches!
-            // This is a ridiculous edge case, so just pad to 5 bytes for simplicity
-            buffer.insert_space_at(1, 4);
-            buffer.overwrite_padded_u32(0, num_batches);
-        }
-    }
-}
-
+#[derive(PartialEq, Eq)]
 pub struct Signature<'a> {
-    param_types: Vec<'a, ValueType>,
-    ret_type: Option<ValueType>,
+    pub param_types: Vec<'a, ValueType>,
+    pub ret_type: Option<ValueType>,
 }
 
 impl<'a> Serialize for Signature<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         buffer.append_u8(0x60);
         self.param_types.serialize(buffer);
-        match self.ret_type {
-            Some(t) => [t].serialize(buffer),
-            None => buffer.append_u8(0), // vector of length zero
-        }
+        self.ret_type.serialize(buffer);
     }
 }
 
 pub struct TypeSection<'a> {
+    /// Private. See WasmModule::add_function_signature
     signatures: Vec<'a, Signature<'a>>,
 }
 
@@ -151,6 +109,21 @@ impl<'a> TypeSection<'a> {
     pub fn new(arena: &'a Bump) -> Self {
         TypeSection {
             signatures: Vec::with_capacity_in(8, arena),
+        }
+    }
+
+    /// Find a matching signature or insert a new one. Return the index.
+    fn insert(&mut self, signature: Signature<'a>) -> u32 {
+        // Using linear search because we need to preserve indices stored in
+        // the Function section. (Also for practical sizes it's fast)
+        let maybe_index = self.signatures.iter().position(|s| *s == signature);
+        match maybe_index {
+            Some(index) => index as u32,
+            None => {
+                let index = self.signatures.len();
+                self.signatures.push(signature);
+                index as u32
+            }
         }
     }
 }
@@ -250,7 +223,8 @@ impl<'a> Serialize for ImportSection<'a> {
  *******************************************************************/
 
 pub struct FunctionSection<'a> {
-    pub signature_indices: Vec<'a, u32>,
+    /// Private. See WasmModule::add_function_signature
+    signature_indices: Vec<'a, u32>,
 }
 
 impl<'a> FunctionSection<'a> {
@@ -1009,8 +983,13 @@ impl<'a> WasmModule<'a> {
         }
     }
 
-    #[allow(dead_code)]
-    fn serialize<T: SerialBuffer>(&mut self, buffer: &mut T) {
+    /// Create entries in the Type and Function sections for a function signature
+    pub fn add_function_signature(&mut self, signature: Signature<'a>) {
+        let index = self.types.insert(signature);
+        self.function.signature_indices.push(index);
+    }
+
+    pub fn serialize<T: SerialBuffer>(&mut self, buffer: &mut T) {
         buffer.append_u8(0);
         buffer.append_slice("asm".as_bytes());
         buffer.write_unencoded_u32(Self::WASM_VERSION);

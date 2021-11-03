@@ -1,8 +1,9 @@
+use bumpalo::collections::Vec;
 use parity_wasm::builder;
 
 use roc_gen_wasm::code_builder::{Align, CodeBuilder, ValueType};
 use roc_gen_wasm::from_wasm32_memory::FromWasm32Memory;
-use roc_gen_wasm::module_builder::{Export, ExportType, WasmModule};
+use roc_gen_wasm::module_builder::{Export, ExportType, Signature, WasmModule};
 use roc_gen_wasm::LocalId;
 use roc_std::{RocDec, RocList, RocOrder, RocStr};
 
@@ -14,18 +15,15 @@ pub trait Wasm32TestResult {
         wrapper_name: &str,
         main_function_index: u32,
     ) {
-        let signature = builder::signature()
-            .with_result(parity_wasm::elements::ValueType::I32)
-            .build_sig();
-
-        // parity-wasm FunctionDefinition with no instructions
-        let empty_fn_def = builder::function().with_signature(signature).build();
-        let location = module_builder.push_function(empty_fn_def);
+        wasm_module.add_function_signature(Signature {
+            param_types: Vec::with_capacity_in(0, arena),
+            ret_type: Some(ValueType::I32),
+        });
 
         wasm_module.export.entries.push(Export {
             name: wrapper_name.to_string(),
             ty: ExportType::Func,
-            index: location.body,
+            index: wasm_module.code.code_builders.len() as u32,
         });
 
         let mut code_builder = CodeBuilder::new(arena);

@@ -71,11 +71,7 @@ impl WasmLayout {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn stack_memory(&self) -> u32 {
-        match self {
-            Self::StackMemory { size, .. } => *size,
-            _ => 0,
-        }
+    pub fn is_stack_memory(&self) -> bool {
+        matches!(self, Self::StackMemory { .. })
     }
 }

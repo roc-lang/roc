@@ -10,7 +10,7 @@ use roc_mono::layout::{Builtin, Layout};
 
 use crate::code_builder::{BlockType, CodeBuilder, ValueType};
 use crate::layout::WasmLayout;
-use crate::module_builder::WasmModule;
+use crate::module_builder::{Signature, WasmModule};
 use crate::storage::{Storage, StoredValue, StoredValueKind};
 use crate::{copy_memory, CopyMemoryConfig, Env, LocalId, PTR_TYPE};
 
@@ -78,52 +78,43 @@ impl<'a> WasmBackend<'a> {
 
     ***********************************************************/
 
-    pub fn build_proc(&mut self, proc: Proc<'a>, _sym: Symbol) -> Result<u32, String> {
-        // println!("\ngenerating procedure {:?}\n", sym);
+    pub fn build_proc(&mut self, proc: Proc<'a>, _sym: Symbol) -> Result<(), String> {
+        // println!("\ngenerating procedure {:?}\n", _sym);
 
-        // Use parity-wasm to add the signature in "types" and "functions" sections
-        // but no instructions, since we are building our own code section
-        let empty_function_def = self.start_proc(&proc);
-        let location = self.parity_builder.push_function(empty_function_def);
-        let function_index = location.body;
+        self.start_proc(&proc);
 
         self.build_stmt(&proc.body, &proc.ret_layout)?;
 
         self.finalize_proc()?;
         self.reset();
 
-        // println!("\nfinished generating {:?}\n", sym);
+        // println!("\nfinished generating {:?}\n", _sym);
 
-        Ok(function_index)
+        Ok(())
     }
 
-    fn start_proc(&mut self, proc: &Proc<'a>) -> FunctionDefinition {
+    fn start_proc(&mut self, proc: &Proc<'a>) {
         let ret_layout = WasmLayout::new(&proc.ret_layout);
-
-        let signature_builder = if let WasmLayout::StackMemory { .. } = ret_layout {
+        let ret_type = if ret_layout.is_stack_memory() {
             self.storage.arg_types.push(PTR_TYPE);
             self.start_block(BlockType::NoResult); // block to ensure all paths pop stack memory (if any)
-            builder::signature()
+            None
         } else {
-            let ret_type = ret_layout.value_type();
-            self.start_block(BlockType::Value(ret_type)); // block to ensure all paths pop stack memory (if any)
-            builder::signature().with_result(ret_type.to_parity_wasm())
+            let ty = ret_layout.value_type();
+            self.start_block(BlockType::Value(ty)); // block to ensure all paths pop stack memory (if any)
+            Some(ty)
         };
 
         for (layout, symbol) in proc.args {
-            self.storage.allocate(
-                &WasmLayout::new(layout),
-                *symbol,
-                StoredValueKind::Parameter,
-            );
+            let arg_layout = WasmLayout::new(layout);
+            self.storage
+                .allocate(&arg_layout, *symbol, StoredValueKind::Parameter);
         }
 
-        let parity_params = self.storage.arg_types.iter().map(|t| t.to_parity_wasm());
-
-        let signature = signature_builder.with_params(parity_params).build_sig();
-
-        // parity-wasm FunctionDefinition with no instructions
-        builder::function().with_signature(signature).build()
+        self.module.add_function_signature(Signature {
+            param_types: self.storage.arg_types.clone(),
+            ret_type,
+        });
     }
 
     fn finalize_proc(&mut self) -> Result<(), String> {
