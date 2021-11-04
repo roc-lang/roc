@@ -13,8 +13,8 @@ use roc_mono::layout::LayoutIds;
 
 use crate::backend::WasmBackend;
 use crate::wasm_module::{
-    Align, CodeBuilder, Export, ExportType, Global, ConstExpr, GlobalType, LinkingSubSection,
-    LocalId, SymInfo, ValueType, WasmModule,
+    Align, CodeBuilder, Export, ExportType, LinkingSubSection, LocalId, SymInfo, ValueType,
+    WasmModule,
 };
 
 const PTR_SIZE: u32 = 4;
@@ -72,21 +72,6 @@ pub fn build_module_help<'a>(
 
     let symbol_table = LinkingSubSection::SymbolTable(symbol_table_entries);
     backend.module.linking.subsections.push(symbol_table);
-
-    backend.module.export.entries.push(Export {
-        name: "memory".to_string(),
-        ty: ExportType::Mem,
-        index: 0,
-    });
-
-    let stack_pointer_init = backend.module.memory.min_size().unwrap() as i32;
-    backend.module.global.entries.push(Global {
-        ty: GlobalType {
-            value_type: ValueType::I32,
-            is_mutable: true,
-        },
-        init: ConstExpr::I32(stack_pointer_init),
-    });
 
     Ok(backend.module)
 }

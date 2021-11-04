@@ -9,8 +9,14 @@ use roc_mono::layout::Layout;
 
 use crate::layout::WasmLayout;
 use crate::storage::{Storage, StoredValue, StoredValueKind};
+use crate::wasm_module::linking::{LinkingSection, RelocationSection};
+use crate::wasm_module::sections::{
+    CodeSection, DataMode, DataSection, DataSegment, ExportSection, FunctionSection, GlobalSection,
+    ImportSection, MemorySection, TypeSection, WasmModule,
+};
 use crate::wasm_module::{
-    code_builder, BlockType, CodeBuilder, LocalId, Signature, ValueType, WasmModule,
+    code_builder, BlockType, CodeBuilder, ConstExpr, Export, ExportType, Global, GlobalType,
+    LocalId, Signature, ValueType,
 };
 use crate::{copy_memory, CopyMemoryConfig, Env, PTR_TYPE};
 
@@ -18,16 +24,12 @@ use crate::{copy_memory, CopyMemoryConfig, Env, PTR_TYPE};
 // Follow Emscripten's example by using 1kB (4 bytes would probably do)
 const UNUSED_DATA_SECTION_BYTES: u32 = 1024;
 
-#[derive(Clone, Copy, Debug)]
-struct LabelId(u32);
-
 pub struct WasmBackend<'a> {
     env: &'a Env<'a>,
 
     // Module-level data
     pub module: WasmModule<'a>,
-    _data_offset_map: MutMap<Literal<'a>, u32>,
-    _data_offset_next: u32,
+    next_literal_addr: u32,
     proc_symbols: Vec<'a, Symbol>,
 
     // Function-level data
@@ -41,13 +43,54 @@ pub struct WasmBackend<'a> {
 
 impl<'a> WasmBackend<'a> {
     pub fn new(env: &'a Env<'a>, proc_symbols: Vec<'a, Symbol>) -> Self {
+        const MEMORY_INIT_SIZE: u32 = 1024 * 1024;
+
+        let mut module = WasmModule {
+            types: TypeSection::new(env.arena),
+            import: ImportSection::new(env.arena),
+            function: FunctionSection::new(env.arena),
+            table: (), // Unused in Roc (mainly for function pointers)
+            memory: MemorySection::new(MEMORY_INIT_SIZE),
+            global: GlobalSection::new(env.arena),
+            export: ExportSection::new(env.arena),
+            start: (),   // Entry function. In Roc this would be part of the platform.
+            element: (), // Unused in Roc (related to table section)
+            code: CodeSection::new(env.arena),
+            data: DataSection::new(env.arena),
+            linking: LinkingSection::new(env.arena),
+            reloc_code: RelocationSection::new(env.arena, "reloc.CODE"),
+            reloc_data: RelocationSection::new(env.arena, "reloc.DATA"),
+        };
+
+        module.export.entries.push(Export {
+            name: "memory".to_string(),
+            ty: ExportType::Mem,
+            index: 0,
+        });
+
+        let stack_pointer_global = Global {
+            ty: GlobalType {
+                value_type: ValueType::I32,
+                is_mutable: true,
+            },
+            init: ConstExpr::I32(MEMORY_INIT_SIZE as i32),
+        };
+        module.global.entries.push(stack_pointer_global);
+
+        let literal_segment = DataSegment {
+            mode: DataMode::Active {
+                offset: ConstExpr::I32(UNUSED_DATA_SECTION_BYTES as i32),
+            },
+            init: Vec::with_capacity_in(64, env.arena),
+        };
+        module.data.segments.push(literal_segment);
+
         WasmBackend {
             env,
 
             // Module-level data
-            module: WasmModule::new(env.arena),
-            _data_offset_map: MutMap::default(),
-            _data_offset_next: UNUSED_DATA_SECTION_BYTES,
+            module,
+            next_literal_addr: UNUSED_DATA_SECTION_BYTES,
             proc_symbols,
 
             // Function-level data

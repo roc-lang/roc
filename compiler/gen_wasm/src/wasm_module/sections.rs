@@ -351,6 +351,7 @@ impl Serialize for ConstExpr {
                 buffer.encode_f64(*x);
             }
         }
+        buffer.append_u8(opcodes::END);
     }
 }
 
@@ -365,7 +366,6 @@ impl Serialize for Global {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         self.ty.serialize(buffer);
         self.init.serialize(buffer);
-        buffer.append_u8(opcodes::END);
     }
 }
 
@@ -482,8 +482,8 @@ pub enum DataMode {
 }
 
 pub struct DataSegment<'a> {
-    mode: DataMode,
-    init: Vec<'a, u8>,
+    pub mode: DataMode,
+    pub init: Vec<'a, u8>,
 }
 
 impl Serialize for DataSegment<'_> {
@@ -503,7 +503,7 @@ impl Serialize for DataSegment<'_> {
 }
 
 pub struct DataSection<'a> {
-    segments: Vec<'a, DataSegment<'a>>,
+    pub segments: Vec<'a, DataSegment<'a>>,
 }
 
 impl<'a> DataSection<'a> {
@@ -556,25 +556,6 @@ pub struct WasmModule<'a> {
 
 impl<'a> WasmModule<'a> {
     pub const WASM_VERSION: u32 = 1;
-
-    pub fn new(arena: &'a Bump) -> Self {
-        WasmModule {
-            types: TypeSection::new(arena),
-            import: ImportSection::new(arena),
-            function: FunctionSection::new(arena),
-            table: (), // Unused in Roc (mainly for function pointers)
-            memory: MemorySection::new(1024 * 1024),
-            global: GlobalSection::new(arena),
-            export: ExportSection::new(arena),
-            start: (),   // Entry function. In Roc this would be part of the platform.
-            element: (), // Unused in Roc (related to table section)
-            code: CodeSection::new(arena),
-            data: DataSection::new(arena),
-            linking: LinkingSection::new(arena),
-            reloc_code: RelocationSection::new(arena, "reloc.CODE"),
-            reloc_data: RelocationSection::new(arena, "reloc.DATA"),
-        }
-    }
 
     /// Create entries in the Type and Function sections for a function signature
     pub fn add_function_signature(&mut self, signature: Signature<'a>) {
