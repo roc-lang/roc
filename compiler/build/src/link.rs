@@ -822,6 +822,8 @@ fn link_macos(
     ld_command.args(&[
         // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274
         // for discussion and further references
+        "-macos_version_min",
+        "11.0",
         "-lSystem",
         "-lresolv",
         "-lpthread",
