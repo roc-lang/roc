@@ -300,6 +300,40 @@ pub fn build_c_host_native(
     command.output().unwrap()
 }
 
+pub fn build_swift_host_native(
+    env_path: &str,
+    env_home: &str,
+    dest: &str,
+    sources: &[&str],
+    opt_level: OptLevel,
+    shared_lib_path: Option<&Path>,
+    objc_header_path: Option<&str>,
+) -> Output {
+    if shared_lib_path.is_some() {
+        unimplemented!("Linking a shared library to Swift not yet implemented");
+    }
+
+    let mut command = Command::new("swiftc");
+    command
+        .env_clear()
+        .env("PATH", &env_path)
+        .env("HOME", &env_home)
+        .args(sources)
+        .arg("-emit-object")
+        .arg("-parse-as-library")
+        .args(&["-o", dest]);
+
+    if let Some(objc_header) = objc_header_path {
+        command.args(&["-import-objc-header", objc_header]);
+    }
+
+    if matches!(opt_level, OptLevel::Optimize) {
+        command.arg("-O");
+    }
+
+    command.output().unwrap()
+}
+
 pub fn rebuild_host(
     opt_level: OptLevel,
     target: &Triple,
@@ -312,6 +346,9 @@ pub fn rebuild_host(
     let rust_host_src = host_input_path.with_file_name("host.rs");
     let rust_host_dest = host_input_path.with_file_name("rust_host.o");
     let cargo_host_src = host_input_path.with_file_name("Cargo.toml");
+    let swift_host_src = host_input_path.with_file_name("host.swift");
+    let swift_host_header_src = host_input_path.with_file_name("host.h");
+
     let host_dest_native = host_input_path.with_file_name(if shared_lib_path.is_some() {
         "dynhost"
     } else {
@@ -540,6 +577,20 @@ pub fn rebuild_host(
             shared_lib_path,
         );
         validate_output("host.c", "clang", output);
+    } else if swift_host_src.exists() {
+        // Compile host.swift, if it exists
+        let output = build_swift_host_native(
+            &env_path,
+            &env_home,
+            host_dest_native.to_str().unwrap(),
+            &[swift_host_src.to_str().unwrap()],
+            opt_level,
+            shared_lib_path,
+            swift_host_header_src
+                .exists()
+                .then(|| swift_host_header_src.to_str().unwrap()),
+        );
+        validate_output("host.swift", "swiftc", output);
     }
 }
 
@@ -738,22 +789,14 @@ fn link_macos(
         }
     };
 
-    // This path only exists on macOS Big Sur, and it causes ld errors
-    // on Catalina if it's specified with -L, so we replace it with a
-    // redundant -lSystem if the directory isn't there.
-    let big_sur_path = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib";
-    let big_sur_fix = if Path::new(big_sur_path).exists() {
-        format!("-L{}", big_sur_path)
-    } else {
-        String::from("-lSystem")
-    };
-
     let arch = match target.architecture {
         Architecture::Aarch64(_) => "arm64".to_string(),
         _ => target.architecture.to_string(),
     };
 
-    let mut ld_child = Command::new("ld")
+    let mut ld_command = Command::new("ld");
+
+    ld_command
         // NOTE: order of arguments to `ld` matters here!
         // The `-l` flags should go after the `.o` arguments
         // Don't allow LD_ env vars to affect this
@@ -768,33 +811,40 @@ fn link_macos(
             "-arch",
             &arch,
         ])
-        .args(input_paths)
-        .args(&[
-            // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274
-            // for discussion and further references
-            &big_sur_fix,
-            "-lSystem",
-            "-lresolv",
-            "-lpthread",
-            // "-lrt", // TODO shouldn't we need this?
-            // "-lc_nonshared", // TODO shouldn't we need this?
-            // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
-            // "-framework", // Uncomment this line & the following ro run the `rand` crate in examples/cli
-            // "Security",
-            // Output
-            "-o",
-            output_path.to_str().unwrap(), // app
-        ])
-        .spawn()?;
+        .args(input_paths);
+
+    let sdk_path = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib";
+    if Path::new(sdk_path).exists() {
+        ld_command.arg(format!("-L{}", sdk_path));
+        ld_command.arg(format!("-L{}/swift", sdk_path));
+    };
+
+    ld_command.args(&[
+        // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274
+        // for discussion and further references
+        "-lSystem",
+        "-lresolv",
+        "-lpthread",
+        // "-lrt", // TODO shouldn't we need this?
+        // "-lc_nonshared", // TODO shouldn't we need this?
+        // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
+        // "-framework", // Uncomment this line & the following ro run the `rand` crate in examples/cli
+        // "Security",
+        // Output
+        "-o",
+        output_path.to_str().unwrap(), // app
+    ]);
+
+    let mut ld_child = ld_command.spawn()?;
 
     match target.architecture {
         Architecture::Aarch64(_) => {
             ld_child.wait()?;
-            let child = Command::new("codesign")
+            let codesign_child = Command::new("codesign")
                 .args(&["-s", "-", output_path.to_str().unwrap()])
                 .spawn()?;
 
-            Ok((child, output_path))
+            Ok((codesign_child, output_path))
         }
         _ => Ok((ld_child, output_path)),
     }

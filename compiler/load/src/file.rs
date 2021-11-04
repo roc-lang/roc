@@ -3958,7 +3958,10 @@ fn make_specializations<'a>(
 
     let mut procs = Procs::new_in(arena);
 
-    procs.partial_procs = procs_base.partial_procs;
+    for (symbol, partial_proc) in procs_base.partial_procs.into_iter() {
+        procs.partial_procs.insert(symbol, partial_proc);
+    }
+
     procs.module_thunks = procs_base.module_thunks;
     procs.runtime_errors = procs_base.runtime_errors;
     procs.imported_module_thunks = procs_base.imported_module_thunks;
@@ -4126,6 +4129,7 @@ fn add_def_to_module<'a>(
     exposed_to_host: &MutMap<Symbol, Variable>,
     is_recursive: bool,
 ) {
+    use roc_can::expr::ClosureData;
     use roc_can::expr::Expr::*;
     use roc_can::pattern::Pattern::*;
 
@@ -4134,14 +4138,14 @@ fn add_def_to_module<'a>(
             let is_exposed = exposed_to_host.contains_key(&symbol);
 
             match def.loc_expr.value {
-                Closure {
+                Closure(ClosureData {
                     function_type: annotation,
                     return_type: ret_var,
                     arguments: loc_args,
                     loc_body,
                     captured_symbols,
                     ..
-                } => {
+                }) => {
                     // this is a top-level definition, it should not capture anything
                     debug_assert!(captured_symbols.is_empty());
 
