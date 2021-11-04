@@ -478,29 +478,41 @@ impl<'a> WasmBackend<'a> {
                 };
             }
 
-            StoredValue::StackMemory { location, size, .. } => match lit {
+            StoredValue::StackMemory { location, .. } => match lit {
                 Literal::Str(s) => {
-                    // Small string is 8 bytes in Wasm
-                    debug_assert!(*size == 8);
+                    // Load the stack memory address where we want to write
+                    let (local_id, offset) =
+                        location.local_and_offset(self.storage.stack_frame_pointer);
+                    self.code_builder.get_local(local_id);
+                    self.code_builder.i32_const(offset as i32);
+                    self.code_builder.i32_add();
+
+                    // For either small or regular strings, we write 8 bytes to stack memory
+                    let mut stack_mem_bytes = [0; 8];
+
                     let len = s.len();
                     if len < 8 {
-                        // A small string fits in an i64, so let's transform it to one.
-                        let mut bytes = [0; 8];
-                        bytes[0..len].clone_from_slice(s.as_bytes());
-                        bytes[7] = 0x80 | (len as u8);
-                        let str_as_int = i64::from_le_bytes(bytes);
-
-                        // Store it to the allocated stack memory location
-                        let (local_id, offset) =
-                            location.local_and_offset(self.storage.stack_frame_pointer);
-                        self.code_builder.get_local(local_id);
-                        self.code_builder.i32_const(offset as i32);
-                        self.code_builder.i32_add();
-                        self.code_builder.i64_const(str_as_int);
-                        self.code_builder.i64_store(Align::Bytes4, offset);
+                        // Small string payload
+                        stack_mem_bytes[0..len].clone_from_slice(s.as_bytes());
+                        // Small string flag and length
+                        stack_mem_bytes[7] = 0x80 | (len as u8);
                     } else {
-                        return not_supported_error();
-                    }
+                        // Store the bytes to the literals data segment
+                        let literal_bytes: &mut Vec<'a, u8> =
+                            &mut self.module.data.segments[0].init;
+                        literal_bytes.extend_from_slice(s.as_bytes());
+
+                        // Calculate bytes for elements and length
+                        let len32 = len as u32;
+                        let elements_addr = self.next_literal_addr;
+                        self.next_literal_addr += len32;
+                        stack_mem_bytes[0..3].clone_from_slice(&elements_addr.to_le_bytes());
+                        stack_mem_bytes[4..8].clone_from_slice(&len32.to_le_bytes());
+                    };
+
+                    self.code_builder
+                        .i64_const(i64::from_le_bytes(stack_mem_bytes));
+                    self.code_builder.i64_store(Align::Bytes4, offset);
                 }
                 _ => {
                     return not_supported_error();
