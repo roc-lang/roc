@@ -322,39 +322,49 @@ impl Serialize for GlobalType {
     }
 }
 
-pub enum GlobalInitValue {
+/// Constant expression for initialising globals or data segments
+/// Note: This is restricted for simplicity, but the spec allows arbitrary constant expressions
+pub enum ConstExpr {
     I32(i32),
     I64(i64),
     F32(f32),
     F64(f64),
 }
 
+impl Serialize for ConstExpr {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        match self {
+            ConstExpr::I32(x) => {
+                buffer.append_u8(opcodes::I32CONST);
+                buffer.encode_i32(*x);
+            }
+            ConstExpr::I64(x) => {
+                buffer.append_u8(opcodes::I64CONST);
+                buffer.encode_i64(*x);
+            }
+            ConstExpr::F32(x) => {
+                buffer.append_u8(opcodes::F32CONST);
+                buffer.encode_f32(*x);
+            }
+            ConstExpr::F64(x) => {
+                buffer.append_u8(opcodes::F64CONST);
+                buffer.encode_f64(*x);
+            }
+        }
+    }
+}
+
 pub struct Global {
+    /// Type and mutability of the global
     pub ty: GlobalType,
-    pub init_value: GlobalInitValue,
+    /// Initial value of the global.
+    pub init: ConstExpr,
 }
 
 impl Serialize for Global {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         self.ty.serialize(buffer);
-        match self.init_value {
-            GlobalInitValue::I32(x) => {
-                buffer.append_u8(opcodes::I32CONST);
-                buffer.encode_i32(x);
-            }
-            GlobalInitValue::I64(x) => {
-                buffer.append_u8(opcodes::I64CONST);
-                buffer.encode_i64(x);
-            }
-            GlobalInitValue::F32(x) => {
-                buffer.append_u8(opcodes::F32CONST);
-                buffer.encode_f32(x);
-            }
-            GlobalInitValue::F64(x) => {
-                buffer.append_u8(opcodes::F64CONST);
-                buffer.encode_f64(x);
-            }
-        }
+        self.init.serialize(buffer);
         buffer.append_u8(opcodes::END);
     }
 }
@@ -460,6 +470,76 @@ impl<'a> CodeSection<'a> {
 
 /*******************************************************************
  *
+ * Data section
+ *
+ *******************************************************************/
+
+pub enum DataMode {
+    /// A data segment that auto-initialises on instantiation
+    Active { memidx: u32, offset: ConstExpr },
+    /// A data segment that can be initialised with the `memory.init` instruction
+    Passive,
+}
+
+#[repr(u8)]
+enum DataModeEncoding {
+    DefaultMemoryActive = 0,
+    Passive = 1,
+    ExplicitMemoryActive = 2,
+}
+
+pub struct DataSegment<'a> {
+    mode: DataMode,
+    init: Vec<'a, u8>,
+}
+
+impl Serialize for DataSegment<'_> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        match &self.mode {
+            DataMode::Active { memidx, offset } => {
+                if *memidx == 0 {
+                    buffer.append_u8(DataModeEncoding::DefaultMemoryActive as u8);
+                } else {
+                    buffer.append_u8(DataModeEncoding::ExplicitMemoryActive as u8);
+                    buffer.encode_u32(*memidx);
+                }
+                offset.serialize(buffer);
+            }
+            DataMode::Passive => {
+                buffer.append_u8(DataModeEncoding::Passive as u8);
+            }
+        }
+
+        self.init.serialize(buffer);
+    }
+}
+
+pub struct DataSection<'a> {
+    segments: Vec<'a, DataSegment<'a>>,
+}
+
+impl<'a> DataSection<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
+        DataSection {
+            segments: Vec::with_capacity_in(1, arena),
+        }
+    }
+}
+
+impl Serialize for DataSection<'_> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        serialize_vector_section(buffer, SectionId::Data, &self.segments);
+    }
+}
+
+fn write_data_count_section<'a, T: SerialBuffer>(buffer: &mut T, data_section: &DataSection<'a>) {
+    let header_indices = write_section_header(buffer, SectionId::DataCount);
+    buffer.encode_u32(data_section.segments.len() as u32);
+    update_section_size(buffer, header_indices);
+}
+
+/*******************************************************************
+ *
  * Module
  *
  * https://webassembly.github.io/spec/core/binary/modules.html
@@ -478,11 +558,9 @@ pub struct WasmModule<'a> {
     pub start: (),
     /// Dummy placeholder for table elements. Roc does not use tables.
     pub element: (),
-    /// Dummy placeholder for data count section, not yet implemented
-    pub data_count: (),
     pub code: CodeSection<'a>,
     /// Dummy placeholder for data section, not yet implemented
-    pub data: (),
+    pub data: DataSection<'a>,
     pub linking: LinkingSection<'a>,
     pub reloc_code: RelocationSection<'a>,
     pub reloc_data: RelocationSection<'a>,
@@ -500,11 +578,10 @@ impl<'a> WasmModule<'a> {
             memory: MemorySection::new(1024 * 1024),
             global: GlobalSection::new(arena),
             export: ExportSection::new(arena),
-            start: (),      // Entry function. In Roc this would be part of the platform.
-            element: (),    // Unused in Roc (related to table section)
-            data_count: (), // TODO, related to data section
+            start: (),   // Entry function. In Roc this would be part of the platform.
+            element: (), // Unused in Roc (related to table section)
             code: CodeSection::new(arena),
-            data: (), // TODO: program constants (e.g. string literals)
+            data: DataSection::new(arena),
             linking: LinkingSection::new(arena),
             reloc_code: RelocationSection::new(arena, "reloc.CODE"),
             reloc_data: RelocationSection::new(arena, "reloc.DATA"),
@@ -553,7 +630,8 @@ impl<'a> WasmModule<'a> {
         self.element.serialize(buffer);
         maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
 
-        self.data_count.serialize(buffer);
+        // Data count section has no independent data, it's just to enable single-pass validation
+        write_data_count_section(buffer, &self.data);
         maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
 
         self.reloc_code.target_section_index = Some(index);

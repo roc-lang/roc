@@ -9,5 +9,5 @@ pub use code_builder::{
 };
 pub use linking::{LinkingSubSection, SymInfo};
 pub use sections::{
-    Export, ExportType, Global, GlobalInitValue, GlobalType, Signature, WasmModule,
+    Export, ExportType, Global, ConstExpr, GlobalType, Signature, WasmModule,
 };

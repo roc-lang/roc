@@ -13,7 +13,7 @@ use roc_mono::layout::LayoutIds;
 
 use crate::backend::WasmBackend;
 use crate::wasm_module::{
-    Align, CodeBuilder, Export, ExportType, Global, GlobalInitValue, GlobalType, LinkingSubSection,
+    Align, CodeBuilder, Export, ExportType, Global, ConstExpr, GlobalType, LinkingSubSection,
     LocalId, SymInfo, ValueType, WasmModule,
 };
 
@@ -85,7 +85,7 @@ pub fn build_module_help<'a>(
             value_type: ValueType::I32,
             is_mutable: true,
         },
-        init_value: GlobalInitValue::I32(stack_pointer_init),
+        init: ConstExpr::I32(stack_pointer_init),
     });
 
     Ok(backend.module)
