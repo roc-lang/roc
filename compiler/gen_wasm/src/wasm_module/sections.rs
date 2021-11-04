@@ -476,16 +476,9 @@ impl<'a> CodeSection<'a> {
 
 pub enum DataMode {
     /// A data segment that auto-initialises on instantiation
-    Active { memidx: u32, offset: ConstExpr },
+    Active { offset: ConstExpr },
     /// A data segment that can be initialised with the `memory.init` instruction
     Passive,
-}
-
-#[repr(u8)]
-enum DataModeEncoding {
-    DefaultMemoryActive = 0,
-    Passive = 1,
-    ExplicitMemoryActive = 2,
 }
 
 pub struct DataSegment<'a> {
@@ -496,17 +489,12 @@ pub struct DataSegment<'a> {
 impl Serialize for DataSegment<'_> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         match &self.mode {
-            DataMode::Active { memidx, offset } => {
-                if *memidx == 0 {
-                    buffer.append_u8(DataModeEncoding::DefaultMemoryActive as u8);
-                } else {
-                    buffer.append_u8(DataModeEncoding::ExplicitMemoryActive as u8);
-                    buffer.encode_u32(*memidx);
-                }
+            DataMode::Active { offset } => {
+                buffer.append_u8(0);
                 offset.serialize(buffer);
             }
             DataMode::Passive => {
-                buffer.append_u8(DataModeEncoding::Passive as u8);
+                buffer.append_u8(1);
             }
         }
 
