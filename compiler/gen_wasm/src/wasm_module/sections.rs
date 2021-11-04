@@ -516,7 +516,10 @@ impl<'a> DataSection<'a> {
 
 impl Serialize for DataSection<'_> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        serialize_vector_section(buffer, SectionId::Data, &self.segments);
+        let total_payload_size = self.segments.iter().map(|seg| seg.init.len()).sum();
+        if total_payload_size > 0 {
+            serialize_vector_section(buffer, SectionId::Data, &self.segments);
+        }
     }
 }
 
