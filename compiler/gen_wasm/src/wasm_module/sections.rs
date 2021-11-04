@@ -475,9 +475,9 @@ impl<'a> CodeSection<'a> {
  *******************************************************************/
 
 pub enum DataMode {
-    /// A data segment that auto-initialises on instantiation
+    /// A data segment that auto-loads into memory on instantiation
     Active { offset: ConstExpr },
-    /// A data segment that can be initialised with the `memory.init` instruction
+    /// A data segment that can be loaded with the `memory.init` instruction
     Passive,
 }
 

@@ -497,7 +497,8 @@ impl<'a> WasmBackend<'a> {
                         // Small string flag and length
                         stack_mem_bytes[7] = 0x80 | (len as u8);
                     } else {
-                        // Store the bytes to the literals data segment
+                        // Store the bytes in the data section, to be initialised on module load.
+                        // Point there instead of to the heap
                         let literal_bytes: &mut Vec<'a, u8> =
                             &mut self.module.data.segments[0].init;
                         literal_bytes.extend_from_slice(s.as_bytes());
@@ -510,6 +511,7 @@ impl<'a> WasmBackend<'a> {
                         stack_mem_bytes[4..8].clone_from_slice(&len32.to_le_bytes());
                     };
 
+                    // Since we have 64 bits of data, we can squeeze them into one instruction
                     self.code_builder
                         .i64_const(i64::from_le_bytes(stack_mem_bytes));
                     self.code_builder.i64_store(Align::Bytes4, offset);
