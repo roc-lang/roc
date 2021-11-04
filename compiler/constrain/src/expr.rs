@@ -7,7 +7,7 @@ use roc_can::def::{Declaration, Def};
 use roc_can::expected::Expected::{self, *};
 use roc_can::expected::PExpected;
 use roc_can::expr::Expr::{self, *};
-use roc_can::expr::{Field, WhenBranch};
+use roc_can::expr::{ClosureData, Field, WhenBranch};
 use roc_can::pattern::Pattern;
 use roc_collections::all::{ImMap, Index, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
@@ -333,7 +333,7 @@ pub fn constrain_expr(
             // make lookup constraint to lookup this symbol's type in the environment
             Lookup(*symbol, expected, region)
         }
-        Closure {
+        Closure(ClosureData {
             function_type: fn_var,
             closure_type: closure_var,
             closure_ext_var,
@@ -343,7 +343,7 @@ pub fn constrain_expr(
             captured_symbols,
             name,
             ..
-        } => {
+        }) => {
             // NOTE defs are treated somewhere else!
             let loc_body_expr = &**boxed;
 
@@ -1203,7 +1203,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
             // instead of the more generic "something is wrong with the body of `f`"
             match (&def.loc_expr.value, &signature) {
                 (
-                    Closure {
+                    Closure(ClosureData {
                         function_type: fn_var,
                         closure_type: closure_var,
                         closure_ext_var,
@@ -1213,7 +1213,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                         loc_body,
                         name,
                         ..
-                    },
+                    }),
                     Type::Function(arg_types, signature_closure_type, ret_type),
                 ) => {
                     // NOTE if we ever have problems with the closure, the ignored `_closure_type`
@@ -1561,7 +1561,7 @@ pub fn rec_defs_help(
                 // instead of the more generic "something is wrong with the body of `f`"
                 match (&def.loc_expr.value, &signature) {
                     (
-                        Closure {
+                        Closure(ClosureData {
                             function_type: fn_var,
                             closure_type: closure_var,
                             closure_ext_var,
@@ -1571,7 +1571,7 @@ pub fn rec_defs_help(
                             loc_body,
                             name,
                             ..
-                        },
+                        }),
                         Type::Function(arg_types, _closure_type, ret_type),
                     ) => {
                         // NOTE if we ever have trouble with closure type unification, the ignored
