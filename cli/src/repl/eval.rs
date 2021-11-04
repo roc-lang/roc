@@ -353,6 +353,13 @@ fn jit_to_ast_help<'a>(
         | Layout::RecursivePointer => {
             todo!("add support for rendering recursive tag unions in the REPL")
         }
+        Layout::LambdaSet(lambda_set) => jit_to_ast_help(
+            env,
+            lib,
+            main_fn_name,
+            &lambda_set.runtime_representation(),
+            content,
+        ),
     }
 }
 
@@ -528,16 +535,21 @@ fn single_tag_union_to_ast<'a>(
     tag_name: &TagName,
     payload_vars: &[Variable],
 ) -> Expr<'a> {
-    debug_assert_eq!(field_layouts.len(), payload_vars.len());
-
     let arena = env.arena;
-
     let tag_expr = tag_name_to_expr(env, tag_name);
 
     let loc_tag_expr = &*arena.alloc(Located::at_zero(tag_expr));
 
-    let it = payload_vars.iter().copied().zip(field_layouts);
-    let output = sequence_of_expr(env, ptr as *const u8, it).into_bump_slice();
+    let output = if field_layouts.len() == payload_vars.len() {
+        let it = payload_vars.iter().copied().zip(field_layouts);
+        sequence_of_expr(env, ptr as *const u8, it).into_bump_slice()
+    } else if field_layouts.is_empty() && !payload_vars.is_empty() {
+        // happens for e.g. `Foo Bar` where unit structures are nested and the inner one is dropped
+        let it = payload_vars.iter().copied().zip([&Layout::Struct(&[])]);
+        sequence_of_expr(env, ptr as *const u8, it).into_bump_slice()
+    } else {
+        unreachable!()
+    };
 
     Expr::Apply(loc_tag_expr, output, CalledVia::Space)
 }

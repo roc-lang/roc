@@ -1,9 +1,7 @@
 use crate::ast::CommentOrNewline;
 use crate::ast::Spaceable;
 use crate::parser::{
-    self, and, backtrackable, BadInputError, Col, Parser,
-    Progress::{self, *},
-    Row, State,
+    self, and, backtrackable, BadInputError, Col, Parser, Progress::*, Row, State,
 };
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
@@ -179,109 +177,6 @@ where
     E: 'a,
 {
     spaces_help_help(min_indent, space_problem, indent_problem)
-}
-
-pub fn spaces_till_end_of_line<'a, E: 'a>(
-    tab_problem: fn(Row, Col) -> E,
-) -> impl Parser<'a, Option<&'a str>, E> {
-    move |_, mut state: State<'a>| {
-        let mut bytes = state.bytes;
-        let mut row = state.line;
-        let mut col = state.column;
-
-        for c in bytes {
-            match c {
-                b' ' => {
-                    bytes = &bytes[1..];
-                    col += 1;
-                }
-                b'\n' => {
-                    bytes = &bytes[1..];
-                    row += 1;
-                    col = 0;
-
-                    state.line = row;
-                    state.column = col;
-                    state.bytes = bytes;
-
-                    return Ok((MadeProgress, None, state));
-                }
-                b'\r' => {
-                    bytes = &bytes[1..];
-                }
-                b'\t' => {
-                    return Err((
-                        MadeProgress,
-                        tab_problem(row, col),
-                        State {
-                            line: row,
-                            column: col,
-                            ..state
-                        },
-                    ))
-                }
-                b'#' => match chomp_line_comment(bytes) {
-                    Ok(comment) => {
-                        state.line += 1;
-                        state.column = 0;
-
-                        let width = 1 + comment.len();
-                        if let Some(b'\n') = bytes.get(width) {
-                            state.bytes = &bytes[width + 1..];
-                        } else {
-                            state.bytes = &bytes[width..];
-                        }
-
-                        return Ok((MadeProgress, Some(comment), state));
-                    }
-                    Err(_) => unreachable!("we check the first character is a #"),
-                },
-                _ => break,
-            }
-        }
-
-        if state.column == col {
-            Ok((NoProgress, None, state))
-        } else {
-            Ok((
-                MadeProgress,
-                None,
-                State {
-                    column: col,
-                    bytes,
-                    ..state
-                },
-            ))
-        }
-    }
-}
-
-fn chomp_line_comment(buffer: &[u8]) -> Result<&str, Progress> {
-    if let Some(b'#') = buffer.get(0) {
-        if (&buffer[1..]).starts_with(b"# ") {
-            // this is a doc comment, not a line comment
-            Err(NoProgress)
-        } else {
-            use encode_unicode::CharExt;
-
-            let mut chomped = 1;
-
-            while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
-                if ch == '\n' {
-                    break;
-                } else {
-                    chomped += width;
-                }
-            }
-
-            let comment_bytes = &buffer[1..chomped];
-            let comment = unsafe { std::str::from_utf8_unchecked(comment_bytes) };
-
-            Ok(comment)
-        }
-    } else {
-        Err(NoProgress)
-    }
 }
 
 #[inline(always)]

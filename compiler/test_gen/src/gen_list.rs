@@ -1,8 +1,8 @@
 #![cfg(test)]
 
 use crate::assert_evals_to;
-use crate::assert_llvm_evals_to;
 use crate::helpers::with_larger_debug_stack;
+//use crate::assert_wasm_evals_to as assert_evals_to;
 use core::ffi::c_void;
 use indoc::indoc;
 use roc_std::{RocList, RocStr};
@@ -31,9 +31,9 @@ pub unsafe fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
 pub unsafe fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
     use roc_gen_llvm::llvm::build::PanicTagId;
 
-    use libc::c_char;
     use std::convert::TryFrom;
     use std::ffi::CStr;
+    use std::os::raw::c_char;
 
     match PanicTagId::try_from(tag_id) {
         Ok(PanicTagId::NullTerminatedString) => {
@@ -199,6 +199,75 @@ fn list_drop() {
 }
 
 #[test]
+fn list_drop_at() {
+    assert_evals_to!(
+        "List.dropAt [1, 2, 3] 0",
+        RocList::from_slice(&[2, 3]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.dropAt [0, 0, 0] 3",
+        RocList::from_slice(&[0, 0, 0]),
+        RocList<i64>
+    );
+    assert_evals_to!("List.dropAt [] 1", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!("List.dropAt [0] 0", RocList::from_slice(&[]), RocList<i64>);
+}
+
+#[test]
+fn list_drop_at_shared() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+               list : List I64
+               list = [ if True then 4 else 4, 5, 6 ]
+
+               { newList: List.dropAt list 0, original: list }
+               "#
+        ),
+        (
+            // new_list
+            RocList::from_slice(&[5, 6]),
+            // original
+            RocList::from_slice(&[4, 5, 6]),
+        ),
+        (RocList<i64>, RocList<i64>,)
+    );
+}
+
+#[test]
+fn list_drop_last() {
+    assert_evals_to!(
+        "List.dropLast [1, 2, 3]",
+        RocList::from_slice(&[1, 2]),
+        RocList<i64>
+    );
+    assert_evals_to!("List.dropLast []", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!("List.dropLast [0]", RocList::from_slice(&[]), RocList<i64>);
+}
+
+#[test]
+fn list_drop_last_mutable() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+               list : List I64
+               list = [ if True then 4 else 4, 5, 6 ]
+
+               { newList: List.dropLast list, original: list }
+               "#
+        ),
+        (
+            // new_list
+            RocList::from_slice(&[4, 5]),
+            // original
+            RocList::from_slice(&[4, 5, 6]),
+        ),
+        (RocList<i64>, RocList<i64>,)
+    );
+}
+
+#[test]
 fn list_swap() {
     assert_evals_to!("List.swap [] 0 1", RocList::from_slice(&[]), RocList<i64>);
     assert_evals_to!(
@@ -336,7 +405,7 @@ fn list_walk_backwards_empty_all_inline() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.walkBackwards [0x1] (\a, b -> a + b) 0
+            List.walkBackwards [0x1] 0 \state, elem -> state + elem
             "#
         ),
         1,
@@ -350,7 +419,7 @@ fn list_walk_backwards_empty_all_inline() {
             empty =
                 []
 
-            List.walkBackwards empty (\a, b -> a + b) 0
+            List.walkBackwards empty 0 \state, elem -> state + elem
             "#
         ),
         0,
@@ -361,14 +430,14 @@ fn list_walk_backwards_empty_all_inline() {
 #[test]
 fn list_walk_backwards_with_str() {
     assert_evals_to!(
-        r#"List.walkBackwards [ "x", "y", "z" ] Str.concat "<""#,
-        RocStr::from("xyz<"),
+        r#"List.walkBackwards [ "x", "y", "z" ] "<" Str.concat"#,
+        RocStr::from("<zyx"),
         RocStr
     );
 
     assert_evals_to!(
-        r#"List.walkBackwards [ "Third", "Second", "First" ] Str.concat "Fourth""#,
-        RocStr::from("ThirdSecondFirstFourth"),
+        r#"List.walkBackwards [ "Second", "Third", "Fourth" ] "First" Str.concat"#,
+        RocStr::from("FirstFourthThirdSecond"),
         RocStr
     );
 }
@@ -385,12 +454,12 @@ fn list_walk_backwards_with_record() {
 
             initialCounts = { zeroes: 0, ones: 0 }
 
-            acc = \b, r ->
+            acc = \r, b ->
                 when b is
                     Zero -> { r & zeroes: r.zeroes + 1 }
                     One -> { r & ones: r.ones + 1 }
 
-            finalCounts = List.walkBackwards byte acc initialCounts
+            finalCounts = List.walkBackwards byte initialCounts acc
 
             finalCounts.ones * 10 + finalCounts.zeroes
             "#
@@ -403,13 +472,13 @@ fn list_walk_backwards_with_record() {
 #[test]
 fn list_walk_with_str() {
     assert_evals_to!(
-        r#"List.walk [ "x", "y", "z" ] Str.concat "<""#,
-        RocStr::from("zyx<"),
+        r#"List.walk [ "x", "y", "z" ] "<" Str.concat"#,
+        RocStr::from("<xyz"),
         RocStr
     );
 
     assert_evals_to!(
-        r#"List.walk [ "Third", "Second", "First" ] Str.concat "Fourth""#,
+        r#"List.walk [ "Second", "Third", "Fourth" ] "First" Str.concat"#,
         RocStr::from("FirstSecondThirdFourth"),
         RocStr
     );
@@ -417,13 +486,13 @@ fn list_walk_with_str() {
 
 #[test]
 fn list_walk_subtraction() {
-    assert_evals_to!(r#"List.walk [ 1, 2 ] Num.sub 1"#, 2, i64);
+    assert_evals_to!(r#"List.walk [ 1, 2 ] 1 Num.sub"#, (1 - 1) - 2, i64);
 }
 
 #[test]
 fn list_walk_until_sum() {
     assert_evals_to!(
-        r#"List.walkUntil [ 1, 2 ] (\a,b -> Continue (a + b)) 0"#,
+        r#"List.walkUntil [ 1, 2 ] 0 \a,b -> Continue (a + b)"#,
         3,
         i64
     );
@@ -434,13 +503,13 @@ fn list_walk_until_even_prefix_sum() {
     assert_evals_to!(
         r#"
         helper = \a, b ->
-            if Num.isEven a then
+            if Num.isEven b then
                 Continue (a + b)
 
             else
-                Stop b
+                Stop a
 
-        List.walkUntil [ 2, 4, 8, 9 ] helper 0"#,
+        List.walkUntil [ 2, 4, 8, 9 ] 0 helper"#,
         2 + 4 + 8,
         i64
     );
@@ -455,7 +524,7 @@ fn list_keep_if_empty_list_of_int() {
             empty =
                 []
 
-            List.keepIf empty (\_ -> True)
+            List.keepIf empty \_ -> True
             "#
         ),
         RocList::from_slice(&[]),
@@ -695,6 +764,37 @@ fn list_map_closure() {
 }
 
 #[test]
+fn list_map4_group() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.map4 [1,2,3] [3,2,1] [2,1,3] [3,1,2] (\a, b, c, d -> Group a b c d)
+            "#
+        ),
+        RocList::from_slice(&[(1, 3, 2, 3), (2, 2, 1, 1), (3, 1, 3, 2)]),
+        RocList<(i64, i64, i64, i64)>
+    );
+}
+
+#[test]
+fn list_map4_different_length() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.map4
+                ["h", "i", "j", "k"]
+                ["o", "p", "q"]
+                ["l", "m"]
+                ["a"]
+                (\a, b, c, d -> Str.concat a (Str.concat b (Str.concat c d)))
+            "#
+        ),
+        RocList::from_slice(&[RocStr::from_slice("hola".as_bytes()),]),
+        RocList<RocStr>
+    );
+}
+
+#[test]
 fn list_map3_group() {
     assert_evals_to!(
         indoc!(
@@ -865,9 +965,12 @@ fn list_repeat() {
         RocList<i64>
     );
 
-    let empty_lists: &'static [&'static [i64]] = &[&[], &[]];
+    assert_evals_to!(
+        "List.repeat 2 []",
+        RocList::from_slice(&[RocList::default(), RocList::default()]),
+        RocList<RocList<i64>>
+    );
 
-    assert_evals_to!("List.repeat 2 []", empty_lists, &'static [&'static [i64]]);
     assert_evals_to!(
         indoc!(
             r#"
@@ -878,8 +981,8 @@ fn list_repeat() {
                 List.repeat 2 noStrs
             "#
         ),
-        empty_lists,
-        &'static [&'static [i64]]
+        RocList::from_slice(&[RocList::default(), RocList::default()]),
+        RocList<RocList<i64>>
     );
 
     assert_evals_to!(
@@ -1419,10 +1522,8 @@ fn gen_wrap_first() {
                 wrapFirst [ 1, 2 ]
             "#
         ),
-        //            RocList::from_slice(&[1]),
-        //            RocList<i64>
-        &[1],
-        &'static [i64]
+        RocList::from_slice(&[1]),
+        RocList<i64>
     );
 }
 
@@ -1879,6 +1980,57 @@ fn list_contains() {
 
     assert_evals_to!(indoc!("List.contains [] 4"), false, bool);
 }
+#[test]
+fn list_min() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when List.min [] is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+        ),
+        -1,
+        i64
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when List.min [3, 1, 2] is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+        ),
+        1,
+        i64
+    );
+}
+
+#[test]
+fn list_max() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when List.max [] is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+        ),
+        -1,
+        i64
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when List.max [3, 1, 2] is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+        ),
+        3,
+        i64
+    );
+}
 
 #[test]
 fn list_sum() {
@@ -1897,34 +2049,54 @@ fn list_product() {
 #[test]
 fn list_keep_oks() {
     assert_evals_to!("List.keepOks [] (\\x -> x)", 0, i64);
-    assert_evals_to!("List.keepOks [1,2] (\\x -> Ok x)", &[1, 2], &[i64]);
-    assert_evals_to!("List.keepOks [1,2] (\\x -> x % 2)", &[1, 0], &[i64]);
-    assert_evals_to!("List.keepOks [Ok 1, Err 2] (\\x -> x)", &[1], &[i64]);
+    assert_evals_to!(
+        "List.keepOks [1,2] (\\x -> Ok x)",
+        RocList::from_slice(&[1, 2]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.keepOks [1,2] (\\x -> x % 2)",
+        RocList::from_slice(&[1, 0]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.keepOks [Ok 1, Err 2] (\\x -> x)",
+        RocList::from_slice(&[1]),
+        RocList<i64>
+    );
 }
 
 #[test]
 fn list_keep_errs() {
     assert_evals_to!("List.keepErrs [] (\\x -> x)", 0, i64);
-    assert_evals_to!("List.keepErrs [1,2] (\\x -> Err x)", &[1, 2], &[i64]);
+    assert_evals_to!(
+        "List.keepErrs [1,2] (\\x -> Err x)",
+        RocList::from_slice(&[1, 2]),
+        RocList<i64>
+    );
     assert_evals_to!(
         indoc!(
             r#"
             List.keepErrs [0,1,2] (\x -> x % 0 |> Result.mapErr (\_ -> 32))
             "#
         ),
-        &[32, 32, 32],
-        &[i64]
+        RocList::from_slice(&[32, 32, 32]),
+        RocList<i64>
     );
 
-    assert_evals_to!("List.keepErrs [Ok 1, Err 2] (\\x -> x)", &[2], &[i64]);
+    assert_evals_to!(
+        "List.keepErrs [Ok 1, Err 2] (\\x -> x)",
+        RocList::from_slice(&[2]),
+        RocList<i64>
+    );
 }
 
 #[test]
 fn list_map_with_index() {
     assert_evals_to!(
-        "List.mapWithIndex [0,0,0] (\\index, x -> index + x)",
-        &[0, 1, 2],
-        &[i64]
+        "List.mapWithIndex [0,0,0] (\\index, x -> Num.intCast index + x)",
+        RocList::from_slice(&[0, 1, 2]),
+        RocList<i64>
     );
 }
 
@@ -1935,11 +2107,15 @@ fn cleanup_because_exception() {
         indoc!(
             r#"
             x = [ 1,2 ]
-            5 + Num.maxInt + 3 + List.len x
+
+            five : I64
+            five = 5
+
+            five + Num.maxInt + 3 + (Num.intCast (List.len x))
                "#
         ),
-        RocList::from_slice(&[false; 1]),
-        RocList<bool>
+        9,
+        i64
     );
 }
 
@@ -1989,6 +2165,48 @@ fn lists_with_incompatible_type_param_in_if() {
             "#
         ),
         RocStr::default(),
+        RocStr
+    );
+}
+
+#[test]
+fn map_with_index_multi_record() {
+    // see https://github.com/rtfeldman/roc/issues/1700
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.mapWithIndex [ { x: {}, y: {} } ] \_, _ -> {}
+            "#
+        ),
+        RocList::from_slice(&[((), ())]),
+        RocList<((), ())>
+    );
+}
+
+#[test]
+fn empty_list_of_function_type() {
+    // see https://github.com/rtfeldman/roc/issues/1732
+    assert_evals_to!(
+        indoc!(
+            r#"
+            myList : List (Str -> Str)
+            myList = []
+
+            myClosure : Str -> Str
+            myClosure = \_ -> "bar"
+
+            choose =
+                if False then
+                    myList
+                else
+                    [ myClosure ]
+
+            when List.get choose 0 is
+                Ok f -> f "foo"
+                Err _ -> "bad!"
+            "#
+        ),
+        RocStr::from_slice(b"bar"),
         RocStr
     );
 }

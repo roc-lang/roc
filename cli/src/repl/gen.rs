@@ -107,12 +107,13 @@ pub fn gen_and_eval<'a>(
         }
 
         for problem in type_problems {
-            let report = type_problem(&alloc, module_path.clone(), problem);
-            let mut buf = String::new();
+            if let Some(report) = type_problem(&alloc, module_path.clone(), problem) {
+                let mut buf = String::new();
 
-            report.render_color_terminal(&mut buf, &alloc, &palette);
+                report.render_color_terminal(&mut buf, &alloc, &palette);
 
-            lines.push(buf);
+                lines.push(buf);
+            }
         }
 
         for problem in mono_problems {
@@ -132,7 +133,7 @@ pub fn gen_and_eval<'a>(
         let builder = context.create_builder();
         let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
         let module = arena.alloc(roc_gen_llvm::llvm::build::module_from_builtins(
-            &context, "", ptr_bytes,
+            &target, &context, "",
         ));
 
         // mark our zig-defined builtins as internal
@@ -179,7 +180,7 @@ pub fn gen_and_eval<'a>(
             interns,
             module,
             ptr_bytes,
-            is_gen_test: false,
+            is_gen_test: true, // so roc_panic is generated
             // important! we don't want any procedures to get the C calling convention
             exposed_to_host: MutSet::default(),
         };
@@ -196,6 +197,9 @@ pub fn gen_and_eval<'a>(
         );
 
         env.dibuilder.finalize();
+
+        // we don't use the debug info, and it causes weird errors.
+        module.strip_debug_info();
 
         // Uncomment this to see the module's un-optimized LLVM instruction output:
         // env.module.print_to_stderr();

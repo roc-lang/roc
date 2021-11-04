@@ -64,7 +64,7 @@ const TVAR1: VarId = VarId::from_u32(1);
 const TVAR2: VarId = VarId::from_u32(2);
 const TVAR3: VarId = VarId::from_u32(3);
 const TVAR4: VarId = VarId::from_u32(4);
-const TOP_LEVEL_CLOSURE_VAR: VarId = VarId::from_u32(5);
+const TOP_LEVEL_CLOSURE_VAR: VarId = VarId::from_u32(10);
 
 pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     let mut types = HashMap::with_capacity_and_hasher(NUM_BUILTIN_IMPORTS, default_hasher());
@@ -293,14 +293,21 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // minInt : Int range
     add_type!(Symbol::NUM_MIN_INT, int_type(flex(TVAR1)));
 
-    // divInt : Int a, Int a -> Result (Int a) [ DivByZero ]*
     let div_by_zero = SolvedType::TagUnion(
         vec![(TagName::Global("DivByZero".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
 
+    // divInt : Int a, Int a -> Result (Int a) [ DivByZero ]*
     add_top_level_function_type!(
         Symbol::NUM_DIV_INT,
+        vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+        Box::new(result_type(int_type(flex(TVAR1)), div_by_zero.clone())),
+    );
+
+    //divCeil: Int a, Int a -> Result (Int a) [ DivByZero ]*
+    add_top_level_function_type!(
+        Symbol::NUM_DIV_CEIL,
         vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
         Box::new(result_type(int_type(flex(TVAR1)), div_by_zero.clone())),
     );
@@ -618,6 +625,16 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(str_type())
     );
 
+    // repeat : Str, Nat -> Str
+    add_top_level_function_type!(
+        Symbol::STR_REPEAT,
+        vec![str_type(), nat_type()],
+        Box::new(str_type())
+    );
+
+    // trim : Str -> Str
+    add_top_level_function_type!(Symbol::STR_TRIM, vec![str_type()], Box::new(str_type()));
+
     // fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8Problem ]*
     {
         let bad_utf8 = SolvedType::TagUnion(
@@ -708,7 +725,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_top_level_function_type!(
         Symbol::LIST_LAST,
         vec![list_type(flex(TVAR1))],
-        Box::new(result_type(flex(TVAR1), list_was_empty)),
+        Box::new(result_type(flex(TVAR1), list_was_empty.clone())),
     );
 
     // set : List elem, Nat, elem -> List elem
@@ -732,6 +749,20 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(bool_type()),
     );
 
+    // min :  List (Num a) -> Result (Num a) [ ListWasEmpty ]*
+    add_top_level_function_type!(
+        Symbol::LIST_MIN,
+        vec![list_type(num_type(flex(TVAR1)))],
+        Box::new(result_type(num_type(flex(TVAR1)), list_was_empty.clone())),
+    );
+
+    // max :  List (Num a) -> Result (Num a) [ ListWasEmpty ]*
+    add_top_level_function_type!(
+        Symbol::LIST_MAX,
+        vec![list_type(num_type(flex(TVAR1)))],
+        Box::new(result_type(num_type(flex(TVAR1)), list_was_empty)),
+    );
+
     // sum :  List (Num a) -> Num a
     add_top_level_function_type!(
         Symbol::LIST_SUM,
@@ -746,24 +777,24 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(num_type(flex(TVAR1))),
     );
 
-    // walk : List elem, (elem -> accum -> accum), accum -> accum
+    // walk : List elem, state, (state, elem -> state) -> state
     add_top_level_function_type!(
         Symbol::LIST_WALK,
         vec![
             list_type(flex(TVAR1)),
-            closure(vec![flex(TVAR1), flex(TVAR2)], TVAR3, Box::new(flex(TVAR2))),
             flex(TVAR2),
+            closure(vec![flex(TVAR2), flex(TVAR1)], TVAR3, Box::new(flex(TVAR2))),
         ],
         Box::new(flex(TVAR2)),
     );
 
-    // walkBackwards : List elem, (elem -> accum -> accum), accum -> accum
+    // walkBackwards : List elem, state, (state, elem -> state) -> state
     add_top_level_function_type!(
         Symbol::LIST_WALK_BACKWARDS,
         vec![
             list_type(flex(TVAR1)),
-            closure(vec![flex(TVAR1), flex(TVAR2)], TVAR3, Box::new(flex(TVAR2))),
             flex(TVAR2),
+            closure(vec![flex(TVAR2), flex(TVAR1)], TVAR3, Box::new(flex(TVAR2))),
         ],
         Box::new(flex(TVAR2)),
     );
@@ -779,17 +810,17 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     }
 
-    // walkUntil : List elem, (elem -> accum -> [ Continue accum, Stop accum ]), accum -> accum
+    // walkUntil : List elem, state, (state, elem -> [ Continue state, Stop state ]) -> state
     add_top_level_function_type!(
         Symbol::LIST_WALK_UNTIL,
         vec![
             list_type(flex(TVAR1)),
+            flex(TVAR2),
             closure(
-                vec![flex(TVAR1), flex(TVAR2)],
+                vec![flex(TVAR2), flex(TVAR1)],
                 TVAR3,
                 Box::new(until_type(flex(TVAR2))),
             ),
-            flex(TVAR2),
         ],
         Box::new(flex(TVAR2)),
     );
@@ -899,6 +930,27 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     };
 
+    {
+        let_tvars! {a, b, c, d, e, cvar};
+
+        // map4 : List a, List b, List c, List d, (a, b, c, d -> e) -> List e
+        add_top_level_function_type!(
+            Symbol::LIST_MAP4,
+            vec![
+                list_type(flex(a)),
+                list_type(flex(b)),
+                list_type(flex(c)),
+                list_type(flex(d)),
+                closure(
+                    vec![flex(a), flex(b), flex(c), flex(d)],
+                    cvar,
+                    Box::new(flex(e))
+                ),
+            ],
+            Box::new(list_type(flex(e))),
+        )
+    };
+
     // append : List elem, elem -> List elem
     add_top_level_function_type!(
         Symbol::LIST_APPEND,
@@ -910,6 +962,20 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_top_level_function_type!(
         Symbol::LIST_DROP,
         vec![list_type(flex(TVAR1)), nat_type()],
+        Box::new(list_type(flex(TVAR1))),
+    );
+
+    // dropAt : List elem, Nat -> List elem
+    add_top_level_function_type!(
+        Symbol::LIST_DROP_AT,
+        vec![list_type(flex(TVAR1)), nat_type()],
+        Box::new(list_type(flex(TVAR1))),
+    );
+
+    // dropLast : List elem -> List elem
+    add_top_level_function_type!(
+        Symbol::LIST_DROP_LAST,
+        vec![list_type(flex(TVAR1))],
         Box::new(list_type(flex(TVAR1))),
     );
 
@@ -985,11 +1051,11 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // Dict module
 
-    // Dict.hashTestOnly : Nat, v -> Nat
+    // Dict.hashTestOnly : U64, v -> U64
     add_top_level_function_type!(
         Symbol::DICT_TEST_HASH,
         vec![u64_type(), flex(TVAR2)],
-        Box::new(nat_type())
+        Box::new(u64_type())
     );
 
     // len : Dict * * -> Nat
@@ -1090,17 +1156,17 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(dict_type(flex(TVAR1), flex(TVAR2))),
     );
 
-    // Dict.walk : Dict k v, (k, v, accum -> accum), accum -> accum
+    // Dict.walk : Dict k v, state, (state, k, v -> state) -> state
     add_top_level_function_type!(
         Symbol::DICT_WALK,
         vec![
             dict_type(flex(TVAR1), flex(TVAR2)),
+            flex(TVAR3),
             closure(
-                vec![flex(TVAR1), flex(TVAR2), flex(TVAR3)],
+                vec![flex(TVAR3), flex(TVAR1), flex(TVAR2)],
                 TVAR4,
                 Box::new(flex(TVAR3)),
             ),
-            flex(TVAR3),
         ],
         Box::new(flex(TVAR3)),
     );
@@ -1159,13 +1225,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(set_type(flex(TVAR1))),
     );
 
-    // Set.walk : Set a, (a, b -> b), b -> b
+    // Set.walk : Set a, (b, a -> b), b -> b
     add_top_level_function_type!(
         Symbol::SET_WALK,
         vec![
             set_type(flex(TVAR1)),
-            closure(vec![flex(TVAR1), flex(TVAR2)], TVAR3, Box::new(flex(TVAR2))),
             flex(TVAR2),
+            closure(vec![flex(TVAR2), flex(TVAR1)], TVAR3, Box::new(flex(TVAR2))),
         ],
         Box::new(flex(TVAR2)),
     );

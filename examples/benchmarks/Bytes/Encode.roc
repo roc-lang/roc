@@ -9,7 +9,7 @@ u8 : U8 -> Encoder
 u8 = \value -> Unsigned8 value
 
 empty : Encoder
-empty = 
+empty =
     foo : List Encoder
     foo = []
 
@@ -40,11 +40,11 @@ getWidth = \encoder ->
         # Signed128 _ -> 16
         # Unsigned128 _ -> 16
         Sequence w _ -> w
-        Bytes bs -> List.len bs 
+        Bytes bs -> List.len bs
 
 getWidths : List Encoder, Nat -> Nat
-getWidths = \encoders, initial -> List.walk encoders (\encoder, accum -> accum + getWidth encoder) initial
-
+getWidths = \encoders, initial ->
+    List.walk encoders initial \accum, encoder -> accum + getWidth encoder
 
 
 encode : Encoder -> List U8
@@ -79,13 +79,13 @@ encodeHelp = \encoder, offset, output ->
             b : U8
             b = Num.intCast value
 
-            newOutput = 
+            newOutput =
                 when endianness is
                     BE ->
                         output
                             |> List.set (offset + 0) a
                             |> List.set (offset + 1) b
-                    LE -> 
+                    LE ->
                         output
                             |> List.set (offset + 0) b
                             |> List.set (offset + 1) a
@@ -102,24 +102,29 @@ encodeHelp = \encoder, offset, output ->
             b : U8
             b = Num.intCast value
 
-            newOutput = 
+            newOutput =
                 when endianness is
                     BE ->
                         output
                             |> List.set (offset + 0) a
                             |> List.set (offset + 1) b
-                    LE -> 
+                    LE ->
                         output
                             |> List.set (offset + 0) b
                             |> List.set (offset + 1) a
 
             {
-                output: newOutput, 
+                output: newOutput,
                 offset: offset + 1
             }
 
         Bytes bs ->
-            List.walk bs (\byte, accum -> { offset: accum.offset + 1, output : List.set accum.output offset byte }) { output, offset }
+            List.walk bs { output, offset } \accum, byte ->
+                {
+                    offset: accum.offset + 1,
+                    output : List.set accum.output offset byte
+                }
 
         Sequence _ encoders ->
-            List.walk encoders (\single, accum -> encodeHelp single accum.offset accum.output) { output, offset }
+            List.walk encoders { output, offset } \accum, single ->
+                encodeHelp single accum.offset accum.output

@@ -44,6 +44,12 @@ pub struct RocList<T> {
     length: usize,
 }
 
+impl<T: Clone> Clone for RocList<T> {
+    fn clone(&self) -> Self {
+        Self::from_slice(self.as_slice())
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum Storage {
     ReadOnly,
@@ -130,6 +136,7 @@ impl<T> RocList<T> {
     where
         T: Clone,
     {
+        assert!(capacity > 0);
         assert!(slice.len() <= capacity);
 
         let ptr = slice.as_ptr();
@@ -191,7 +198,12 @@ impl<T> RocList<T> {
     where
         T: Clone,
     {
-        Self::from_slice_with_capacity(slice, slice.len())
+        // Avoid allocation with empty list.
+        if slice.is_empty() {
+            Self::default()
+        } else {
+            Self::from_slice_with_capacity(slice, slice.len())
+        }
     }
 
     pub fn as_slice(&self) -> &[T] {
@@ -614,7 +626,9 @@ impl RocStr {
     }
 
     pub fn as_slice(&self) -> &[u8] {
-        if self.is_small_str() {
+        if self.is_empty() {
+            &[]
+        } else if self.is_small_str() {
             unsafe { core::slice::from_raw_parts(self.get_small_str_ptr(), self.len()) }
         } else {
             unsafe { core::slice::from_raw_parts(self.elements, self.length) }
@@ -718,7 +732,7 @@ impl Clone for RocStr {
 
 impl Drop for RocStr {
     fn drop(&mut self) {
-        if !self.is_small_str() {
+        if !self.is_small_str() && !self.is_empty() {
             let storage_ptr = self.get_storage_ptr_mut();
 
             unsafe {
@@ -748,69 +762,6 @@ impl Drop for RocStr {
 pub enum RocResult<Ok, Err> {
     Err(Err),
     Ok(Ok),
-}
-
-#[allow(non_camel_case_types)]
-type c_char = u8;
-
-#[repr(u64)]
-pub enum RocCallResult<T> {
-    Success(T),
-    Failure(*mut c_char),
-}
-
-impl<T: Sized> From<RocCallResult<T>> for Result<T, &'static str> {
-    fn from(call_result: RocCallResult<T>) -> Self {
-        use RocCallResult::*;
-
-        match call_result {
-            Success(value) => Ok(value),
-            Failure(failure) => Err({
-                let msg = unsafe {
-                    let mut null_byte_index = 0;
-                    loop {
-                        if *failure.offset(null_byte_index) == 0 {
-                            break;
-                        }
-                        null_byte_index += 1;
-                    }
-
-                    let bytes = core::slice::from_raw_parts(failure, null_byte_index as usize);
-
-                    core::str::from_utf8_unchecked(bytes)
-                };
-
-                msg
-            }),
-        }
-    }
-}
-
-impl<'a, T: Sized + Copy> From<&'a RocCallResult<T>> for Result<T, &'a str> {
-    fn from(call_result: &'a RocCallResult<T>) -> Self {
-        use RocCallResult::*;
-
-        match call_result {
-            Success(value) => Ok(*value),
-            Failure(failure) => Err({
-                let msg = unsafe {
-                    let mut null_byte_index = 0;
-                    loop {
-                        if *failure.offset(null_byte_index) == 0 {
-                            break;
-                        }
-                        null_byte_index += 1;
-                    }
-
-                    let bytes = core::slice::from_raw_parts(*failure, null_byte_index as usize);
-
-                    core::str::from_utf8_unchecked(bytes)
-                };
-
-                msg
-            }),
-        }
-    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]

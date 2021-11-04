@@ -1,7 +1,7 @@
 use roc_can::annotation::IntroducedVariables;
 use roc_can::def::{Declaration, Def};
 use roc_can::env::Env;
-use roc_can::expr::{Expr, Recursive};
+use roc_can::expr::{ClosureData, Expr, Recursive};
 use roc_can::pattern::Pattern;
 use roc_can::scope::Scope;
 use roc_collections::all::{MutSet, SendMap};
@@ -117,7 +117,7 @@ fn build_effect_always(
 
         let body = Expr::Var(value_symbol);
 
-        Expr::Closure {
+        Expr::Closure(ClosureData {
             function_type: var_store.fresh(),
             closure_type: var_store.fresh(),
             closure_ext_var: var_store.fresh(),
@@ -127,7 +127,7 @@ fn build_effect_always(
             recursive: Recursive::NotRecursive,
             arguments,
             loc_body: Box::new(Located::at_zero(body)),
-        }
+        })
     };
 
     // \value -> @Effect \{} -> value
@@ -146,7 +146,7 @@ fn build_effect_always(
         )];
 
         let function_var = var_store.fresh();
-        let closure = Expr::Closure {
+        let closure = Expr::Closure(ClosureData {
             function_type: function_var,
             closure_type: var_store.fresh(),
             closure_ext_var: var_store.fresh(),
@@ -156,7 +156,7 @@ fn build_effect_always(
             recursive: Recursive::NotRecursive,
             arguments,
             loc_body: Box::new(Located::at_zero(body)),
-        };
+        });
 
         (function_var, closure)
     };
@@ -295,7 +295,7 @@ fn build_effect_map(
             Located::at_zero(empty_record_pattern(var_store)),
         )];
 
-        Expr::Closure {
+        Expr::Closure(ClosureData {
             function_type: var_store.fresh(),
             closure_type: var_store.fresh(),
             closure_ext_var: var_store.fresh(),
@@ -308,7 +308,7 @@ fn build_effect_map(
             recursive: Recursive::NotRecursive,
             arguments,
             loc_body: Box::new(Located::at_zero(mapper_call)),
-        }
+        })
     };
 
     let arguments = vec![
@@ -339,7 +339,7 @@ fn build_effect_map(
     };
 
     let function_var = var_store.fresh();
-    let map_closure = Expr::Closure {
+    let map_closure = Expr::Closure(ClosureData {
         function_type: function_var,
         closure_type: var_store.fresh(),
         closure_ext_var: var_store.fresh(),
@@ -349,7 +349,7 @@ fn build_effect_map(
         recursive: Recursive::NotRecursive,
         arguments,
         loc_body: Box::new(Located::at_zero(body)),
-    };
+    });
 
     let mut introduced_variables = IntroducedVariables::default();
 
@@ -509,7 +509,7 @@ fn build_effect_after(
     ];
 
     let function_var = var_store.fresh();
-    let after_closure = Expr::Closure {
+    let after_closure = Expr::Closure(ClosureData {
         function_type: function_var,
         closure_type: var_store.fresh(),
         closure_ext_var: var_store.fresh(),
@@ -519,7 +519,7 @@ fn build_effect_after(
         recursive: Recursive::NotRecursive,
         arguments,
         loc_body: Box::new(Located::at_zero(to_effect_call)),
-    };
+    });
 
     let mut introduced_variables = IntroducedVariables::default();
 
@@ -653,7 +653,7 @@ pub fn build_host_exposed_def(
                         .unwrap()
                 };
 
-                let effect_closure = Expr::Closure {
+                let effect_closure = Expr::Closure(ClosureData {
                     function_type: var_store.fresh(),
                     closure_type: var_store.fresh(),
                     closure_ext_var: var_store.fresh(),
@@ -666,7 +666,7 @@ pub fn build_host_exposed_def(
                         Located::at_zero(empty_record_pattern(var_store)),
                     )],
                     loc_body: Box::new(Located::at_zero(low_level_call)),
-                };
+                });
 
                 let body = Expr::Tag {
                     variant_var: var_store.fresh(),
@@ -675,7 +675,7 @@ pub fn build_host_exposed_def(
                     arguments: vec![(var_store.fresh(), Located::at_zero(effect_closure))],
                 };
 
-                Expr::Closure {
+                Expr::Closure(ClosureData {
                     function_type: var_store.fresh(),
                     closure_type: var_store.fresh(),
                     closure_ext_var: var_store.fresh(),
@@ -685,7 +685,7 @@ pub fn build_host_exposed_def(
                     recursive: Recursive::NotRecursive,
                     arguments,
                     loc_body: Box::new(Located::at_zero(body)),
-                }
+                })
             }
             _ => {
                 // not a function
@@ -717,7 +717,7 @@ pub fn build_host_exposed_def(
                     destructs: vec![],
                 };
 
-                let effect_closure = Expr::Closure {
+                let effect_closure = Expr::Closure(ClosureData {
                     function_type: var_store.fresh(),
                     closure_type: var_store.fresh(),
                     closure_ext_var: var_store.fresh(),
@@ -727,7 +727,7 @@ pub fn build_host_exposed_def(
                     recursive: Recursive::NotRecursive,
                     arguments: vec![(var_store.fresh(), Located::at_zero(empty_record_pattern))],
                     loc_body: Box::new(Located::at_zero(low_level_call)),
-                };
+                });
 
                 Expr::Tag {
                     variant_var: var_store.fresh(),

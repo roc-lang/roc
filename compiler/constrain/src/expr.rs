@@ -7,9 +7,9 @@ use roc_can::def::{Declaration, Def};
 use roc_can::expected::Expected::{self, *};
 use roc_can::expected::PExpected;
 use roc_can::expr::Expr::{self, *};
-use roc_can::expr::{Field, WhenBranch};
+use roc_can::expr::{ClosureData, Field, WhenBranch};
 use roc_can::pattern::Pattern;
-use roc_collections::all::{ImMap, Index, SendMap};
+use roc_collections::all::{ImMap, Index, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Located, Region};
@@ -333,7 +333,7 @@ pub fn constrain_expr(
             // make lookup constraint to lookup this symbol's type in the environment
             Lookup(*symbol, expected, region)
         }
-        Closure {
+        Closure(ClosureData {
             function_type: fn_var,
             closure_type: closure_var,
             closure_ext_var,
@@ -343,7 +343,7 @@ pub fn constrain_expr(
             captured_symbols,
             name,
             ..
-        } => {
+        }) => {
             // NOTE defs are treated somewhere else!
             let loc_body_expr = &**boxed;
 
@@ -1203,7 +1203,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
             // instead of the more generic "something is wrong with the body of `f`"
             match (&def.loc_expr.value, &signature) {
                 (
-                    Closure {
+                    Closure(ClosureData {
                         function_type: fn_var,
                         closure_type: closure_var,
                         closure_ext_var,
@@ -1213,7 +1213,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                         loc_body,
                         name,
                         ..
-                    },
+                    }),
                     Type::Function(arg_types, signature_closure_type, ret_type),
                 ) => {
                     // NOTE if we ever have problems with the closure, the ignored `_closure_type`
@@ -1438,12 +1438,14 @@ fn instantiate_rigids(
     annotation: &Type,
     introduced_vars: &IntroducedVariables,
     new_rigids: &mut Vec<Variable>,
-    ftv: &mut ImMap<Lowercase, Variable>,
+    ftv: &mut ImMap<Lowercase, Variable>, // rigids defined before the current annotation
     loc_pattern: &Located<Pattern>,
     headers: &mut SendMap<Symbol, Located<Type>>,
 ) -> Type {
     let mut annotation = annotation.clone();
     let mut rigid_substitution: ImMap<Variable, Type> = ImMap::default();
+
+    let outside_rigids: MutSet<Variable> = ftv.values().copied().collect();
 
     for (name, var) in introduced_vars.var_by_name.iter() {
         if let Some(existing_rigid) = ftv.get(name) {
@@ -1464,7 +1466,12 @@ fn instantiate_rigids(
         &Located::at(loc_pattern.region, annotation.clone()),
     ) {
         for (symbol, loc_type) in new_headers {
-            new_rigids.extend(loc_type.value.variables());
+            for var in loc_type.value.variables() {
+                // a rigid is only new if this annotation is the first occurrence of this rigid
+                if !outside_rigids.contains(&var) {
+                    new_rigids.push(var);
+                }
+            }
             headers.insert(symbol, loc_type);
         }
     }
@@ -1554,7 +1561,7 @@ pub fn rec_defs_help(
                 // instead of the more generic "something is wrong with the body of `f`"
                 match (&def.loc_expr.value, &signature) {
                     (
-                        Closure {
+                        Closure(ClosureData {
                             function_type: fn_var,
                             closure_type: closure_var,
                             closure_ext_var,
@@ -1564,7 +1571,7 @@ pub fn rec_defs_help(
                             loc_body,
                             name,
                             ..
-                        },
+                        }),
                         Type::Function(arg_types, _closure_type, ret_type),
                     ) => {
                         // NOTE if we ever have trouble with closure type unification, the ignored

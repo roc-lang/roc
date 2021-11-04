@@ -1,16 +1,129 @@
+use std::ops::Index;
+
 pub const OBJ_PATH: &str = env!(
     "BUILTINS_O",
     "Env var BUILTINS_O not found. Is there a problem with the build script?"
 );
 
-pub const NUM_ASIN: &str = "roc_builtins.num.asin";
-pub const NUM_ACOS: &str = "roc_builtins.num.acos";
-pub const NUM_ATAN: &str = "roc_builtins.num.atan";
-pub const NUM_IS_FINITE: &str = "roc_builtins.num.is_finite";
-pub const NUM_POW_INT: &str = "roc_builtins.num.pow_int";
+#[derive(Debug, Default)]
+pub struct IntrinsicName {
+    pub options: [&'static str; 14],
+}
+
+impl IntrinsicName {
+    pub const fn default() -> Self {
+        Self { options: [""; 14] }
+    }
+}
+
+#[repr(u8)]
+pub enum DecWidth {
+    Dec,
+}
+
+#[repr(u8)]
+pub enum FloatWidth {
+    F32,
+    F64,
+    F128,
+}
+
+#[repr(u8)]
+pub enum IntWidth {
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+}
+
+impl Index<DecWidth> for IntrinsicName {
+    type Output = str;
+
+    fn index(&self, _: DecWidth) -> &Self::Output {
+        self.options[0]
+    }
+}
+
+impl Index<FloatWidth> for IntrinsicName {
+    type Output = str;
+
+    fn index(&self, index: FloatWidth) -> &Self::Output {
+        match index {
+            FloatWidth::F32 => self.options[1],
+            FloatWidth::F64 => self.options[2],
+            FloatWidth::F128 => self.options[3],
+        }
+    }
+}
+
+impl Index<IntWidth> for IntrinsicName {
+    type Output = str;
+
+    fn index(&self, index: IntWidth) -> &Self::Output {
+        match index {
+            IntWidth::U8 => self.options[4],
+            IntWidth::U16 => self.options[5],
+            IntWidth::U32 => self.options[6],
+            IntWidth::U64 => self.options[7],
+            IntWidth::U128 => self.options[8],
+            IntWidth::I8 => self.options[9],
+            IntWidth::I16 => self.options[10],
+            IntWidth::I32 => self.options[11],
+            IntWidth::I64 => self.options[12],
+            IntWidth::I128 => self.options[13],
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! float_intrinsic {
+    ($name:literal) => {{
+        let mut output = IntrinsicName::default();
+
+        output.options[1] = concat!($name, ".f32");
+        output.options[2] = concat!($name, ".f64");
+        output.options[3] = concat!($name, ".f128");
+
+        output
+    }};
+}
+
+#[macro_export]
+macro_rules! int_intrinsic {
+    ($name:literal) => {{
+        let mut output = IntrinsicName::default();
+
+        output.options[4] = concat!($name, ".i8");
+        output.options[5] = concat!($name, ".i16");
+        output.options[6] = concat!($name, ".i32");
+        output.options[7] = concat!($name, ".i64");
+        output.options[8] = concat!($name, ".i128");
+        output.options[9] = concat!($name, ".i8");
+        output.options[10] = concat!($name, ".i16");
+        output.options[11] = concat!($name, ".i32");
+        output.options[12] = concat!($name, ".i64");
+        output.options[13] = concat!($name, ".i128");
+
+        output
+    }};
+}
+
+pub const NUM_ASIN: IntrinsicName = float_intrinsic!("roc_builtins.num.asin");
+pub const NUM_ACOS: IntrinsicName = float_intrinsic!("roc_builtins.num.acos");
+pub const NUM_ATAN: IntrinsicName = float_intrinsic!("roc_builtins.num.atan");
+pub const NUM_IS_FINITE: IntrinsicName = float_intrinsic!("roc_builtins.num.is_finite");
+pub const NUM_POW_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.pow_int");
+pub const NUM_DIV_CEIL: IntrinsicName = int_intrinsic!("roc_builtins.num.div_ceil");
+pub const NUM_ROUND: IntrinsicName = float_intrinsic!("roc_builtins.num.round");
+
 pub const NUM_BYTES_TO_U16: &str = "roc_builtins.num.bytes_to_u16";
 pub const NUM_BYTES_TO_U32: &str = "roc_builtins.num.bytes_to_u32";
-pub const NUM_ROUND: &str = "roc_builtins.num.round";
 
 pub const STR_INIT: &str = "roc_builtins.str.init";
 pub const STR_COUNT_SEGMENTS: &str = "roc_builtins.str.count_segments";
@@ -28,6 +141,8 @@ pub const STR_EQUAL: &str = "roc_builtins.str.equal";
 pub const STR_TO_UTF8: &str = "roc_builtins.str.to_utf8";
 pub const STR_FROM_UTF8: &str = "roc_builtins.str.from_utf8";
 pub const STR_FROM_UTF8_RANGE: &str = "roc_builtins.str.from_utf8_range";
+pub const STR_REPEAT: &str = "roc_builtins.str.repeat";
+pub const STR_TRIM: &str = "roc_builtins.str.trim";
 
 pub const DICT_HASH: &str = "roc_builtins.dict.hash";
 pub const DICT_HASH_STR: &str = "roc_builtins.dict.hash_str";
@@ -50,6 +165,7 @@ pub const SET_FROM_LIST: &str = "roc_builtins.dict.set_from_list";
 pub const LIST_MAP: &str = "roc_builtins.list.map";
 pub const LIST_MAP2: &str = "roc_builtins.list.map2";
 pub const LIST_MAP3: &str = "roc_builtins.list.map3";
+pub const LIST_MAP4: &str = "roc_builtins.list.map4";
 pub const LIST_MAP_WITH_INDEX: &str = "roc_builtins.list.map_with_index";
 pub const LIST_KEEP_IF: &str = "roc_builtins.list.keep_if";
 pub const LIST_KEEP_OKS: &str = "roc_builtins.list.keep_oks";
@@ -62,6 +178,7 @@ pub const LIST_REPEAT: &str = "roc_builtins.list.repeat";
 pub const LIST_APPEND: &str = "roc_builtins.list.append";
 pub const LIST_PREPEND: &str = "roc_builtins.list.prepend";
 pub const LIST_DROP: &str = "roc_builtins.list.drop";
+pub const LIST_DROP_AT: &str = "roc_builtins.list.drop_at";
 pub const LIST_SWAP: &str = "roc_builtins.list.swap";
 pub const LIST_SINGLE: &str = "roc_builtins.list.single";
 pub const LIST_JOIN: &str = "roc_builtins.list.join";
@@ -82,3 +199,5 @@ pub const DEC_MUL_WITH_OVERFLOW: &str = "roc_builtins.dec.mul_with_overflow";
 pub const DEC_DIV: &str = "roc_builtins.dec.div";
 
 pub const UTILS_TEST_PANIC: &str = "roc_builtins.utils.test_panic";
+pub const UTILS_DECREF: &str = "roc_builtins.utils.decref";
+pub const UTILS_DECREF_CHECK_NULL: &str = "roc_builtins.utils.decref_check_null";

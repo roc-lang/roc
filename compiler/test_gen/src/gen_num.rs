@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod gen_num {
     use crate::assert_evals_to;
-    use crate::assert_llvm_evals_to;
+    // use crate::assert_wasm_evals_to as assert_evals_to;
     use indoc::indoc;
     use roc_std::{RocDec, RocOrder};
 
@@ -752,7 +752,7 @@ mod gen_num {
 
                     y : Dec
                     y = 2.4
-                    
+
                     z : Dec
                     z = 3
 
@@ -1776,6 +1776,50 @@ mod gen_num {
             ),
             2_038_463_740,
             u32
+        );
+    }
+
+    #[test]
+    fn when_on_i32() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                x : I32
+                x = 0
+
+                main : I32
+                main =
+                    when x is
+                        0 -> 42
+                        _ -> -1
+            "#
+            ),
+            42,
+            i32
+        );
+    }
+
+    #[test]
+    fn when_on_i16() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                x : I16
+                x = 0
+
+                main : I16
+                main =
+                    when x is
+                        0 -> 42
+                        _ -> -1
+            "#
+            ),
+            42,
+            i16
         );
     }
 }

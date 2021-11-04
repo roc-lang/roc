@@ -1,7 +1,9 @@
 use crate::ident::{Ident, ModuleName};
+use crate::module_err::{IdentIdNotFound, ModuleIdNotFound, ModuleResult};
 use roc_collections::all::{default_hasher, MutMap, SendMap};
 use roc_ident::IdentStr;
 use roc_region::all::Region;
+use snafu::OptionExt;
 use std::collections::HashMap;
 use std::{fmt, u32};
 
@@ -251,6 +253,30 @@ impl Interns {
     pub fn from_index(module_id: ModuleId, ident_id: u32) -> Symbol {
         Symbol::new(module_id, IdentId(ident_id))
     }
+}
+
+pub fn get_module_ident_ids<'a>(
+    all_ident_ids: &'a MutMap<ModuleId, IdentIds>,
+    module_id: &ModuleId,
+) -> ModuleResult<&'a IdentIds> {
+    all_ident_ids
+        .get(module_id)
+        .with_context(|| ModuleIdNotFound {
+            module_id: format!("{:?}", module_id),
+            all_ident_ids: format!("{:?}", all_ident_ids),
+        })
+}
+
+pub fn get_module_ident_ids_mut<'a>(
+    all_ident_ids: &'a mut MutMap<ModuleId, IdentIds>,
+    module_id: &ModuleId,
+) -> ModuleResult<&'a mut IdentIds> {
+    all_ident_ids
+        .get_mut(module_id)
+        .with_context(|| ModuleIdNotFound {
+            module_id: format!("{:?}", module_id),
+            all_ident_ids: "I could not return all_ident_ids here because of borrowing issues.",
+        })
 }
 
 #[cfg(debug_assertions)]
@@ -536,22 +562,70 @@ impl IdentIds {
     }
 
     pub fn get_or_insert(&mut self, name: &Ident) -> IdentId {
-        match self.by_ident.get(name) {
-            Some(id) => *id,
-            None => {
+        use std::collections::hash_map::Entry;
+
+        match self.by_ident.entry(name.clone()) {
+            Entry::Occupied(occupied) => *occupied.get(),
+            Entry::Vacant(vacant) => {
                 let by_id = &mut self.by_id;
                 let ident_id = IdentId(by_id.len() as u32);
 
                 by_id.push(name.clone());
 
-                self.by_ident.insert(name.clone(), ident_id);
+                vacant.insert(ident_id);
 
                 ident_id
             }
         }
     }
 
-    /// Generates a unique, new name that's just a stringified integer
+    // necessary when the name of a value is changed in the editor
+    pub fn update_key(
+        &mut self,
+        old_ident_name: &str,
+        new_ident_name: &str,
+    ) -> Result<IdentId, String> {
+        let old_ident: Ident = old_ident_name.into();
+
+        let ident_id_ref_opt = self.by_ident.get(&old_ident);
+
+        match ident_id_ref_opt {
+            Some(ident_id_ref) => {
+                let ident_id = *ident_id_ref;
+
+                self.by_ident.remove(&old_ident);
+                self.by_ident.insert(new_ident_name.into(), ident_id);
+
+                let by_id = &mut self.by_id;
+                let key_index_opt = by_id.iter().position(|x| *x == old_ident);
+
+                if let Some(key_index) = key_index_opt {
+                    if let Some(vec_elt) = by_id.get_mut(key_index) {
+                        *vec_elt = new_ident_name.into();
+                    } else {
+                        // we get the index from by_id
+                        unreachable!()
+                    }
+
+                    Ok(ident_id)
+                } else {
+                    Err(
+                        format!(
+                            "Tried to find position of key {:?} in IdentIds.by_id but I could not find the key. IdentIds.by_id: {:?}",
+                            old_ident_name,
+                            self.by_id
+                        )
+                    )
+                }
+            }
+            None => Err(format!(
+                "Tried to update key in IdentIds ({:?}) but I could not find the key ({}).",
+                self.by_ident, old_ident_name
+            )),
+        }
+    }
+
+    /// Generates a unique, new name that's just a strigified integer
     /// (e.g. "1" or "5"), using an internal counter. Since valid Roc variable
     /// names cannot begin with a number, this has no chance of colliding
     /// with actual user-defined variables.
@@ -574,6 +648,17 @@ impl IdentIds {
 
     pub fn get_name(&self, id: IdentId) -> Option<&Ident> {
         self.by_id.get(id.0 as usize)
+    }
+
+    pub fn get_name_str_res(&self, ident_id: IdentId) -> ModuleResult<&str> {
+        Ok(self
+            .get_name(ident_id)
+            .with_context(|| IdentIdNotFound {
+                ident_id,
+                ident_ids_str: format!("{:?}", self),
+            })?
+            .as_inline_str()
+            .as_str())
     }
 }
 
@@ -789,6 +874,9 @@ define_builtins! {
 
         // used by the dev backend to store the pointer to where to store large return types
         23 RET_POINTER: "#ret_pointer"
+
+        // used in wasm dev backend to mark values in the VM stack that have no other Symbol
+        24 WASM_ANONYMOUS_STACK_VALUE: "#wasm_anonymous_stack_value"
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
@@ -897,6 +985,7 @@ define_builtins! {
         103 NUM_BYTES_TO_U16: "bytesToU16"
         104 NUM_BYTES_TO_U32: "bytesToU32"
         105 NUM_CAST_TO_NAT: "#castToNat"
+        106 NUM_DIV_CEIL: "divCeil"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
@@ -927,6 +1016,8 @@ define_builtins! {
         16 STR_STARTS_WITH_CODE_PT: "startsWithCodePt"
         17 STR_ALIAS_ANALYSIS_STATIC: "#aliasAnalysisStatic" // string with the static lifetime
         18 STR_FROM_UTF8_RANGE: "fromUtf8Range"
+        19 STR_REPEAT: "repeat"
+        20 STR_TRIM: "trim"
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
@@ -963,6 +1054,13 @@ define_builtins! {
         31 LIST_SORT_WITH: "sortWith"
         32 LIST_DROP: "drop"
         33 LIST_SWAP: "swap"
+        34 LIST_DROP_AT: "dropAt"
+        35 LIST_DROP_LAST: "dropLast"
+        36 LIST_MIN: "min"
+        37 LIST_MIN_LT: "#minlt"
+        38 LIST_MAX: "max"
+        39 LIST_MAX_GT: "#maxGt"
+        40 LIST_MAP4: "map4"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

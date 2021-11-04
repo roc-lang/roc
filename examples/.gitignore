@@ -4,3 +4,7 @@ app
 libhost.a
 roc_app.ll
 roc_app.bc
+dynhost
+preprocessedhost
+metadata
+libapp.so

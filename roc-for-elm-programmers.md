@@ -509,7 +509,7 @@ Elm's custom types) instead of product types (such as records).
 > algebraic data types, and they have the usual support for pattern matching,
 > exhaustiveness checking, and so on.
 
-You don't need to declare tag unions them before using them. Instead, you can
+You don't need to declare tag unions before using them. Instead, you can
 just write a *tag* (essentially a variant) anywhere you like, and Roc will infer
 the type of the union it goes in.
 
@@ -847,7 +847,7 @@ error. However, the `/` operator in Roc is infix syntax sugar for `Num.div`,
 which is a normal function you can pass to anything you like.
 
 Elm has one unary operator, namely `-`. (In Elm, `-x` means
-"apply unary `negate` to `x`.") Roc has that one, and also unary `!`.
+"apply unary `negate` to `x`.") Roc has that one too, and also unary `!`.
 The expression `!foo` desugars to `Bool.not foo`, and `!foo bar` desugars
 to `Bool.not (foo bar)`.
 

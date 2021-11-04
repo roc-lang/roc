@@ -1,16 +1,17 @@
+use roc_ast::lang::core::expr::expr2::{Expr2, ExprId};
+use roc_ast::mem_pool::pool_str::PoolStr;
+use roc_code_markup::slow_pool::MarkNodeId;
+
 use crate::editor::ed_error::EdResult;
 use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::mvc::ed_model::EdModel;
-use crate::editor::slow_pool::MarkNodeId;
-use crate::lang::ast::{Expr2, ExprId};
-use crate::lang::pool::PoolStr;
 use crate::ui::text::lines::SelectableLines;
 
 pub fn update_invalid_lookup(
     input_str: &str,
     old_pool_str: &PoolStr,
     curr_mark_node_id: MarkNodeId,
-    ast_node_id: ExprId,
+    expr_id: ExprId,
     ed_model: &mut EdModel,
 ) -> EdResult<InputOutcome> {
     if input_str.chars().all(|ch| ch.is_ascii_alphanumeric()) {
@@ -32,10 +33,10 @@ pub fn update_invalid_lookup(
             .module
             .env
             .pool
-            .set(ast_node_id, Expr2::InvalidLookup(new_pool_str));
+            .set(expr_id, Expr2::InvalidLookup(new_pool_str));
 
         // update MarkupNode
-        let curr_mark_node_mut = ed_model.markup_node_pool.get_mut(curr_mark_node_id);
+        let curr_mark_node_mut = ed_model.mark_node_pool.get_mut(curr_mark_node_id);
         let content_str_mut = curr_mark_node_mut.get_content_mut()?;
         content_str_mut.insert_str(caret_offset, input_str);
 
@@ -43,11 +44,13 @@ pub fn update_invalid_lookup(
         ed_model.simple_move_carets_right(input_str.len());
 
         // update GridNodeMap and CodeLines
-        ed_model.insert_between_line(
+        EdModel::insert_between_line(
             old_caret_pos.line,
             old_caret_pos.column,
             input_str,
             curr_mark_node_id,
+            &mut ed_model.grid_node_map,
+            &mut ed_model.code_lines,
         )?;
 
         Ok(InputOutcome::Accepted)
