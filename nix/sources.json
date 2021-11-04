@@ -5,10 +5,10 @@
         "homepage": "https://github.com/Anton-4/niv",
         "owner": "Anton-4",
         "repo": "niv",
-        "rev": "c372f966c69b0b93803587218feb80e54d82dacf",
-        "sha256": "1p0cha414mmhys3zzk7m27ybjd2iaawyhpbncjiifynqa1g5g7ql",
+        "rev": "f292d8d149a0e5d1e7fdd0ef68d5dde75814ef7e",
+        "sha256": "0lf52chvqfl5jq09sc2k9vg8faqnd27f3ic5cgzp68jk036bax7r",
         "type": "tarball",
-        "url": "https://github.com/Anton-4/niv/archive/c372f966c69b0b93803587218feb80e54d82dacf.tar.gz",
+        "url": "https://github.com/Anton-4/niv/archive/f292d8d149a0e5d1e7fdd0ef68d5dde75814ef7e.tar.gz",
         "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
     },
     "nixpkgs": {
