@@ -1,8 +1,8 @@
 #![cfg(test)]
 
 use crate::assert_evals_to;
-// use indoc::indoc;
-// use roc_std::{RocList, RocStr};
+use indoc::indoc;
+// use roc_std::RocStr;
 
 // #[test]
 // fn str_split_bigger_delimiter_small_str() {
@@ -231,16 +231,7 @@ use crate::assert_evals_to;
 fn small_str_literal() {
     assert_evals_to!(
         "\"JJJJJJJ\"",
-        [
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0b1000_0111
-        ],
+        [0x4a, 0x4a, 0x4a, 0x4a, 0x4a, 0x4a, 0x4a, 0b1000_0111],
         [u8; 8]
     );
 }
@@ -250,22 +241,41 @@ fn small_str_zeroed_literal() {
     // Verifies that we zero out unused bytes in the string.
     // This is important so that string equality tests don't randomly
     // fail due to unused memory being there!
+    // Note: Ensure the memory is non-zero beforehand, or it's not a real test!
+    // (It's trickier than it sounds!)
     assert_evals_to!(
-        "\"J\"",
-        [
-            0x4a,
-            0x00,
-            0x00,
-            0x00,
-            0x00,
-            0x00,
-            0x00,
-            0b1000_0001
-        ],
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                createStr = \isForRealThisTime ->
+                    if isForRealThisTime then
+                        "J"
+                    else
+                        "xxxxxxx"
+
+                functionWithReusedSpace = \isForRealThisTime ->
+                    # Different string value on each call, at the same memory location
+                    # (Can't inline createStr without refcounting, which isn't implemented)
+                    reusedSpace = createStr isForRealThisTime
+
+                    # Unoptimised 'if' ensures that we don't just allocate in the caller's frame
+                    if True then
+                        reusedSpace
+                    else
+                        reusedSpace
+
+                main =
+                    garbage = functionWithReusedSpace False
+                    functionWithReusedSpace True
+                 "#
+        ),
+        [0x4a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0b1000_0001],
         [u8; 8]
     );
 }
 
+// TODO: fix linking errors for undefined symbols roc_alloc, roc_dealloc
 // #[test]
 // fn long_str_literal() {
 //     assert_evals_to!(
