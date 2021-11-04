@@ -741,7 +741,7 @@ fn link_linux(
             .args(&[
                 "--gc-sections",
                 "--eh-frame-hdr",
-                "--arch",
+                "-A",
                 arch_str(target),
                 "-pie",
                 libcrt_path.join("crti.o").to_str().unwrap(),
