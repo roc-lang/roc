@@ -1,14 +1,17 @@
 use bumpalo::collections::Vec;
 
+use code_builder::Align;
 use roc_collections::all::MutMap;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
-use roc_mono::layout::{Builtin, Layout};
+use roc_mono::layout::Layout;
 
 use crate::layout::WasmLayout;
 use crate::storage::{Storage, StoredValue, StoredValueKind};
-use crate::wasm_module::{BlockType, CodeBuilder, LocalId, Signature, ValueType, WasmModule};
+use crate::wasm_module::{
+    code_builder, BlockType, CodeBuilder, LocalId, Signature, ValueType, WasmModule,
+};
 use crate::{copy_memory, CopyMemoryConfig, Env, PTR_TYPE};
 
 // Don't allocate any constant data at address zero or near it. Would be valid, but bug-prone.
@@ -158,9 +161,9 @@ impl<'a> WasmBackend<'a> {
                     _ => StoredValueKind::Variable,
                 };
 
-                self.storage.allocate(&wasm_layout, *sym, kind);
+                let sym_storage = self.storage.allocate(&wasm_layout, *sym, kind);
 
-                self.build_expr(sym, expr, layout)?;
+                self.build_expr(sym, expr, layout, &sym_storage)?;
 
                 // For primitives, we record that this symbol is at the top of the VM stack
                 // (For other values, we wrote to memory and there's nothing on the VM stack)
@@ -347,10 +350,11 @@ impl<'a> WasmBackend<'a> {
         sym: &Symbol,
         expr: &Expr<'a>,
         layout: &Layout<'a>,
+        storage: &StoredValue,
     ) -> Result<(), String> {
         let wasm_layout = WasmLayout::new(layout);
         match expr {
-            Expr::Literal(lit) => self.load_literal(lit, wasm_layout),
+            Expr::Literal(lit) => self.load_literal(lit, storage),
 
             Expr::Call(roc_mono::ir::Call {
                 call_type,
@@ -413,11 +417,11 @@ impl<'a> WasmBackend<'a> {
         }
     }
 
-    fn load_literal(&mut self, lit: &Literal<'a>, wasm_layout: WasmLayout) -> Result<(), String> {
+    fn load_literal(&mut self, lit: &Literal<'a>, storage: &StoredValue) -> Result<(), String> {
         let not_supported_error = || Err(format!("Literal value {:?} is not yet implemented", lit));
 
-        match wasm_layout {
-            WasmLayout::Primitive(value_type, size) => {
+        match storage {
+            StoredValue::VirtualMachineStack { value_type, .. } => {
                 match (lit, value_type) {
                     (Literal::Float(x), ValueType::F64) => self.code_builder.f64_const(*x as f64),
                     (Literal::Float(x), ValueType::F32) => self.code_builder.f32_const(*x as f32),
@@ -430,6 +434,36 @@ impl<'a> WasmBackend<'a> {
                     }
                 };
             }
+
+            StoredValue::StackMemory { location, size, .. } => match lit {
+                Literal::Str(s) => {
+                    // Small string is 8 bytes in Wasm
+                    debug_assert!(*size == 8);
+                    let len = s.len();
+                    if len < 8 {
+                        // A small string fits in an i64, so let's transform it to one.
+                        let mut bytes = [0; 8];
+                        bytes[0..len].clone_from_slice(s.as_bytes());
+                        bytes[7] = 0x80 | (len as u8);
+                        let str_as_int = i64::from_le_bytes(bytes);
+
+                        // Store it to the allocated stack memory location
+                        let (local_id, offset) =
+                            location.local_and_offset(self.storage.stack_frame_pointer);
+                        self.code_builder.get_local(local_id);
+                        self.code_builder.i32_const(offset as i32);
+                        self.code_builder.i32_add();
+                        self.code_builder.i64_const(str_as_int);
+                        self.code_builder.i64_store(Align::Bytes4, offset);
+                    } else {
+                        return not_supported_error();
+                    }
+                }
+                _ => {
+                    return not_supported_error();
+                }
+            },
+
             _ => {
                 return not_supported_error();
             }
