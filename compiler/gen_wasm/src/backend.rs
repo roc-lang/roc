@@ -348,8 +348,9 @@ impl<'a> WasmBackend<'a> {
         expr: &Expr<'a>,
         layout: &Layout<'a>,
     ) -> Result<(), String> {
+        let wasm_layout = WasmLayout::new(layout);
         match expr {
-            Expr::Literal(lit) => self.load_literal(lit, layout),
+            Expr::Literal(lit) => self.load_literal(lit, wasm_layout),
 
             Expr::Call(roc_mono::ir::Call {
                 call_type,
@@ -359,7 +360,6 @@ impl<'a> WasmBackend<'a> {
                     // TODO: See if we can make this more efficient
                     // Recreating the same WasmLayout again, rather than passing it down,
                     // to match signature of Backend::build_expr
-                    let wasm_layout = WasmLayout::new(layout);
 
                     let mut wasm_args_tmp: Vec<Symbol>;
                     let (wasm_args, has_return_val) = match wasm_layout {
@@ -413,32 +413,25 @@ impl<'a> WasmBackend<'a> {
         }
     }
 
-    fn load_literal(&mut self, lit: &Literal<'a>, layout: &Layout<'a>) -> Result<(), String> {
-        match lit {
-            Literal::Bool(x) => self.code_builder.i32_const(*x as i32),
-            Literal::Byte(x) => self.code_builder.i32_const(*x as i32),
-            Literal::Int(x) => match layout {
-                Layout::Builtin(Builtin::Int64) => self.code_builder.i64_const(*x as i64),
-                Layout::Builtin(
-                    Builtin::Int32
-                    | Builtin::Int16
-                    | Builtin::Int8
-                    | Builtin::Int1
-                    | Builtin::Usize,
-                ) => self.code_builder.i32_const(*x as i32),
-                x => {
-                    return Err(format!("loading literal, {:?}, is not yet implemented", x));
-                }
-            },
-            Literal::Float(x) => match layout {
-                Layout::Builtin(Builtin::Float64) => self.code_builder.f64_const(*x as f64),
-                Layout::Builtin(Builtin::Float32) => self.code_builder.f32_const(*x as f32),
-                x => {
-                    return Err(format!("loading literal, {:?}, is not yet implemented", x));
-                }
-            },
-            x => {
-                return Err(format!("loading literal, {:?}, is not yet implemented", x));
+    fn load_literal(&mut self, lit: &Literal<'a>, wasm_layout: WasmLayout) -> Result<(), String> {
+        let not_supported_error = || Err(format!("Literal value {:?} is not yet implemented", lit));
+
+        match wasm_layout {
+            WasmLayout::Primitive(value_type, size) => {
+                match (lit, value_type) {
+                    (Literal::Float(x), ValueType::F64) => self.code_builder.f64_const(*x as f64),
+                    (Literal::Float(x), ValueType::F32) => self.code_builder.f32_const(*x as f32),
+                    (Literal::Int(x), ValueType::I64) => self.code_builder.i64_const(*x as i64),
+                    (Literal::Int(x), ValueType::I32) => self.code_builder.i32_const(*x as i32),
+                    (Literal::Bool(x), ValueType::I32) => self.code_builder.i32_const(*x as i32),
+                    (Literal::Byte(x), ValueType::I32) => self.code_builder.i32_const(*x as i32),
+                    _ => {
+                        return not_supported_error();
+                    }
+                };
+            }
+            _ => {
+                return not_supported_error();
             }
         };
         Ok(())
