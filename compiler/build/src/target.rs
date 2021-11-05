@@ -77,8 +77,8 @@ pub fn arch_str(target: &Triple) -> &'static str {
     //
     // https://stackoverflow.com/questions/15036909/clang-how-to-list-supported-target-architectures
     match target.architecture {
-        Architecture::X86_64 if cfg!(feature = "target-x86") => "x86-64",
-        Architecture::X86_32(_) if cfg!(feature = "target-x86_64") => "x86",
+        Architecture::X86_64 if cfg!(feature = "target-x86_64") => "x86-64",
+        Architecture::X86_32(_) if cfg!(feature = "target-x86") => "x86",
         Architecture::Aarch64(_) if cfg!(feature = "target-aarch64") => "aarch64",
         Architecture::Arm(_) if cfg!(feature = "target-arm") => "arm",
         Architecture::Wasm32 if cfg!(feature = "target-webassembly") => "wasm32",
