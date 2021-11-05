@@ -3499,7 +3499,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
         }
     }
 
-    let arguments_for_call = &arguments_for_call.into_bump_slice();
+    let arguments_for_call = arguments_for_call.into_bump_slice();
 
     let call_result = call_roc_function(env, roc_function, &return_layout, arguments_for_call);
 
@@ -4411,11 +4411,12 @@ pub fn call_roc_function<'a, 'ctx, 'env>(
         RocReturn::ByPointer => {
             if !pass_by_pointer {
                 let mut arguments = Vec::from_iter_in(arguments.iter().copied(), env.arena);
+                arguments.pop();
 
                 let result_type = basic_type_from_layout(env, result_layout);
                 let result_alloca = env.builder.build_alloca(result_type, "result_value");
 
-                //arguments.push(result_alloca.into());
+                arguments.push(result_alloca.into());
 
                 debug_assert_eq!(
                     roc_function.get_type().get_param_types().len(),
