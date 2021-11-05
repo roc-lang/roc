@@ -24,9 +24,9 @@ object = { version = "0.24", features = ["write"] }
 
 [dev-dependencies]
 roc_can = { path = "../can" }
+roc_build = { path = "../build" }
 roc_parse = { path = "../parse" }
 roc_reporting = { path = "../reporting" }
-roc_build = { path = "../build" }
 roc_load = { path = "../load" }
 roc_constrain = { path = "../constrain" }
 roc_std = { path = "../../roc_std" }
@@ -41,4 +41,5 @@ itertools = "0.9"
 libloading = "0.6"
 
 [features]
-target-aarch64 = ["roc_build/target-aarch64"]
+target-aarch64 = []
+target-x86_64 = []

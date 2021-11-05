@@ -217,7 +217,6 @@ pub enum BuildConfig {
     BuildAndRun { roc_file_arg_index: usize },
 }
 
-#[cfg(feature = "llvm")]
 pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     use build::build_file;
     use std::str::FromStr;
