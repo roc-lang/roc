@@ -512,20 +512,26 @@ impl<'a> DataSection<'a> {
             segments: Vec::with_capacity_in(1, arena),
         }
     }
+
+    fn is_empty(&self) -> bool {
+        self.segments.is_empty() || self.segments.iter().all(|seg| seg.init.is_empty())
+    }
 }
 
 impl Serialize for DataSection<'_> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        if self.segments.iter().any(|seg| !seg.init.is_empty()) {
+        if !self.is_empty() {
             serialize_vector_section(buffer, SectionId::Data, &self.segments);
         }
     }
 }
 
 fn write_data_count_section<'a, T: SerialBuffer>(buffer: &mut T, data_section: &DataSection<'a>) {
-    let header_indices = write_section_header(buffer, SectionId::DataCount);
-    buffer.encode_u32(data_section.segments.len() as u32);
-    update_section_size(buffer, header_indices);
+    if !data_section.is_empty() {
+        let header_indices = write_section_header(buffer, SectionId::DataCount);
+        buffer.encode_u32(data_section.segments.len() as u32);
+        update_section_size(buffer, header_indices);
+    }
 }
 
 /*******************************************************************
@@ -549,7 +555,6 @@ pub struct WasmModule<'a> {
     /// Dummy placeholder for table elements. Roc does not use tables.
     pub element: (),
     pub code: CodeSection<'a>,
-    /// Dummy placeholder for data section, not yet implemented
     pub data: DataSection<'a>,
     pub linking: LinkingSection<'a>,
     pub reloc_code: RelocationSection<'a>,
@@ -601,7 +606,8 @@ impl<'a> WasmModule<'a> {
         self.element.serialize(buffer);
         maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
 
-        // Data count section has no independent data, it's just to enable single-pass validation
+        // Data count section has no independent data, just helps the runtime
+        // to validate code references to the data section in a single pass
         write_data_count_section(buffer, &self.data);
         maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
 
