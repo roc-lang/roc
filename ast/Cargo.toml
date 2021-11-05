@@ -25,5 +25,4 @@ snafu = { version = "0.6", features = ["backtraces"] }
 ven_graph = { path = "../vendor/pathfinding" }
 
 [dev-dependencies]
-pretty_assertions = "0.6"
 indoc = "1.0"

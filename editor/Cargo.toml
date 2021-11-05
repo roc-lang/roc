@@ -62,10 +62,6 @@ version = "1.4"
 features = ["derive"]
 
 [dev-dependencies]
-pretty_assertions = "0.6"
-quickcheck = "1.0"
-quickcheck_macros = "1.0"
 rand = "0.8.2"
-indoc = "1.0"
 tempfile = "3.2.0"
 uuid = { version = "0.8", features = ["v4"] }

@@ -133,9 +133,6 @@ dependencies = [
 [[package]]
 name = "arena-pool"
 version = "0.1.0"
-dependencies = [
- "pretty_assertions 0.5.1",
-]
 
 [[package]]
 name = "arraystring"
@@ -348,12 +345,6 @@ name = "byteorder"
 version = "1.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "14c189c53d098945499cdfa7ecc63567cf3886b3332b312a5b4585d8d3a6a610"
-
-[[package]]
-name = "bytes"
-version = "0.5.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e4cec68f03f32e44924783795810fa50a7035d8c8ebe78580ad7e6c703fba38"
 
 [[package]]
 name = "bytes"
@@ -586,7 +577,7 @@ version = "4.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a909e4d93292cd8e9c42e189f61681eff9d67b6541f96b8a1a737f23737bd001"
 dependencies = [
- "bytes 1.1.0",
+ "bytes",
  "memchr",
 ]
 
@@ -1458,7 +1449,7 @@ dependencies = [
  "futures-sink",
  "futures-task",
  "memchr",
- "pin-project-lite 0.2.7",
+ "pin-project-lite",
  "pin-utils",
  "proc-macro-hack",
  "proc-macro-nested",
@@ -2714,15 +2705,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "afb2e1c3ee07430c2cf76151675e583e0f19985fa6efae47d6848a3e2c824f85"
 
 [[package]]
-name = "output_vt100"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53cdc5b785b7a58c5aad8216b3dfa114df64b0b06ae6e1501cef91df2fbdf8f9"
-dependencies = [
- "winapi 0.3.9",
-]
-
-[[package]]
 name = "owned_ttf_parser"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2917,12 +2899,6 @@ dependencies = [
 
 [[package]]
 name = "pin-project-lite"
-version = "0.1.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "257b64915a082f7811703966789728173279bdebb956b143dbcd23f6f970a777"
-
-[[package]]
-name = "pin-project-lite"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d31d11c69a6b52a174b42bdc0c30e5e11670f90788b2c471c31c1d17d449443"
@@ -2980,18 +2956,6 @@ checksum = "3a029430f0d744bc3d15dd474d591bed2402b645d024583082b9f63bb936dac6"
 dependencies = [
  "ansi_term",
  "difference",
-]
-
-[[package]]
-name = "pretty_assertions"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f81e1644e1b54f5a68959a29aa86cde704219254669da328ecfdf6a1f09d427"
-dependencies = [
- "ansi_term",
- "ctor",
- "difference",
- "output_vt100",
 ]
 
 [[package]]
@@ -3117,17 +3081,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "quickcheck"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "588f6378e4dd99458b60ec275b4477add41ce4fa9f64dcba6f15adccb19b50d6"
-dependencies = [
- "env_logger 0.8.4",
- "log",
- "rand 0.8.4",
-]
-
-[[package]]
 name = "quickcheck_macros"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3136,17 +3089,6 @@ dependencies = [
  "proc-macro2 0.4.30",
  "quote 0.6.13",
  "syn 0.15.44",
-]
-
-[[package]]
-name = "quickcheck_macros"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b22a693222d716a9587786f37ac3f6b4faedb5b80c23914e7303ff5a1d8016e9"
-dependencies = [
- "proc-macro2 1.0.29",
- "quote 1.0.9",
- "syn 1.0.76",
 ]
 
 [[package]]
@@ -3543,7 +3485,6 @@ dependencies = [
  "indoc 1.0.3",
  "libc",
  "page_size",
- "pretty_assertions 0.6.1",
  "roc_builtins",
  "roc_can",
  "roc_collections",
@@ -3565,12 +3506,8 @@ dependencies = [
  "bumpalo",
  "im 14.3.0",
  "im-rc 14.3.0",
- "indoc 0.3.6",
  "inkwell 0.1.0",
  "libloading 0.6.7",
- "pretty_assertions 0.5.1",
- "quickcheck 0.8.5",
- "quickcheck_macros 0.8.0",
  "roc_builtins",
  "roc_can",
  "roc_collections",
@@ -3589,7 +3526,6 @@ dependencies = [
  "roc_std",
  "roc_types",
  "roc_unify",
- "serde_json",
  "target-lexicon",
  "tempfile",
 ]
@@ -3598,10 +3534,6 @@ dependencies = [
 name = "roc_builtins"
 version = "0.1.0"
 dependencies = [
- "indoc 0.3.6",
- "pretty_assertions 0.5.1",
- "quickcheck 0.8.5",
- "quickcheck_macros 0.8.0",
  "roc_collections",
  "roc_module",
  "roc_region",
@@ -3616,9 +3548,7 @@ dependencies = [
  "im 14.3.0",
  "im-rc 14.3.0",
  "indoc 0.3.6",
- "pretty_assertions 0.5.1",
- "quickcheck 0.8.5",
- "quickcheck_macros 0.8.0",
+ "pretty_assertions",
  "roc_builtins",
  "roc_collections",
  "roc_module",
@@ -3644,9 +3574,7 @@ dependencies = [
  "inkwell 0.1.0",
  "libloading 0.6.7",
  "mimalloc",
- "pretty_assertions 0.5.1",
- "quickcheck 0.8.5",
- "quickcheck_macros 0.8.0",
+ "pretty_assertions",
  "roc_build",
  "roc_builtins",
  "roc_can",
@@ -3705,10 +3633,6 @@ dependencies = [
 name = "roc_constrain"
 version = "0.1.0"
 dependencies = [
- "indoc 0.3.6",
- "pretty_assertions 0.5.1",
- "quickcheck 0.8.5",
- "quickcheck_macros 0.8.0",
  "roc_builtins",
  "roc_can",
  "roc_collections",
@@ -3723,7 +3647,7 @@ name = "roc_docs"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
- "pretty_assertions 0.5.1",
+ "pretty_assertions",
  "pulldown-cmark",
  "roc_ast",
  "roc_builtins",
@@ -3757,7 +3681,6 @@ dependencies = [
  "glyph_brush",
  "im 15.0.0",
  "im-rc 15.0.0",
- "indoc 1.0.3",
  "libc",
  "log",
  "nonempty",
@@ -3765,9 +3688,6 @@ dependencies = [
  "palette",
  "pest",
  "pest_derive",
- "pretty_assertions 0.6.1",
- "quickcheck 1.0.3",
- "quickcheck_macros 1.0.0",
  "rand 0.8.4",
  "roc_ast",
  "roc_builtins",
@@ -3803,9 +3723,7 @@ dependencies = [
  "im 14.3.0",
  "im-rc 14.3.0",
  "indoc 0.3.6",
- "pretty_assertions 0.5.1",
- "quickcheck 0.8.5",
- "quickcheck_macros 0.8.0",
+ "pretty_assertions",
  "roc_collections",
  "roc_module",
  "roc_parse",
@@ -3820,12 +3738,8 @@ dependencies = [
  "im 14.3.0",
  "im-rc 14.3.0",
  "indoc 0.3.6",
- "itertools 0.9.0",
  "libloading 0.6.7",
  "object 0.24.0",
- "pretty_assertions 0.5.1",
- "quickcheck 0.8.5",
- "quickcheck_macros 0.8.0",
  "roc_build",
  "roc_builtins",
  "roc_can",
@@ -3844,7 +3758,6 @@ dependencies = [
  "roc_unify",
  "target-lexicon",
  "tempfile",
- "tokio",
 ]
 
 [[package]]
@@ -3854,29 +3767,21 @@ dependencies = [
  "bumpalo",
  "im 14.3.0",
  "im-rc 14.3.0",
- "indoc 0.3.6",
  "inkwell 0.1.0",
  "morphic_lib",
- "pretty_assertions 0.5.1",
- "quickcheck 0.8.5",
- "quickcheck_macros 0.8.0",
- "roc_build",
  "roc_builtins",
  "roc_can",
  "roc_collections",
- "roc_load",
  "roc_module",
  "roc_mono",
  "roc_parse",
  "roc_problem",
  "roc_region",
- "roc_reporting",
  "roc_solve",
  "roc_std",
  "roc_types",
  "roc_unify",
  "target-lexicon",
- "tokio",
 ]
 
 [[package]]
@@ -3884,20 +3789,15 @@ name = "roc_gen_wasm"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
- "indoc 0.3.6",
- "pretty_assertions 0.5.1",
  "roc_builtins",
  "roc_can",
  "roc_collections",
- "roc_load",
  "roc_module",
  "roc_mono",
  "roc_std",
  "roc_types",
  "target-lexicon",
- "tempfile",
  "wasmer",
- "wasmer-wasi",
 ]
 
 [[package]]
@@ -3933,9 +3833,7 @@ dependencies = [
  "morphic_lib",
  "num_cpus",
  "parking_lot",
- "pretty_assertions 0.5.1",
- "quickcheck 0.8.5",
- "quickcheck_macros 0.8.0",
+ "pretty_assertions",
  "roc_builtins",
  "roc_can",
  "roc_collections",
@@ -3958,9 +3856,7 @@ name = "roc_module"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
- "indoc 0.3.6",
  "lazy_static",
- "pretty_assertions 0.5.1",
  "roc_collections",
  "roc_ident",
  "roc_region",
@@ -3974,16 +3870,11 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "hashbrown 0.11.2",
- "indoc 0.3.6",
  "linked-hash-map",
  "morphic_lib",
- "pretty_assertions 0.5.1",
- "quickcheck 0.8.5",
- "quickcheck_macros 0.8.0",
  "roc_builtins",
  "roc_can",
  "roc_collections",
- "roc_load",
  "roc_module",
  "roc_parse",
  "roc_problem",
@@ -4004,9 +3895,9 @@ dependencies = [
  "bumpalo",
  "encode_unicode",
  "indoc 0.3.6",
- "pretty_assertions 0.5.1",
- "quickcheck 0.8.5",
- "quickcheck_macros 0.8.0",
+ "pretty_assertions",
+ "quickcheck",
+ "quickcheck_macros",
  "roc_collections",
  "roc_module",
  "roc_region",
@@ -4016,10 +3907,6 @@ dependencies = [
 name = "roc_problem"
 version = "0.1.0"
 dependencies = [
- "indoc 0.3.6",
- "pretty_assertions 0.5.1",
- "quickcheck 0.8.5",
- "quickcheck_macros 0.8.0",
  "roc_collections",
  "roc_module",
  "roc_parse",
@@ -4039,9 +3926,7 @@ dependencies = [
  "im 14.3.0",
  "im-rc 14.3.0",
  "indoc 0.3.6",
- "pretty_assertions 0.5.1",
- "quickcheck 0.8.5",
- "quickcheck_macros 0.8.0",
+ "pretty_assertions",
  "roc_builtins",
  "roc_can",
  "roc_collections",
@@ -4062,9 +3947,7 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "indoc 0.3.6",
- "pretty_assertions 0.5.1",
- "quickcheck 0.8.5",
- "quickcheck_macros 0.8.0",
+ "pretty_assertions",
  "roc_builtins",
  "roc_can",
  "roc_collections",
@@ -4087,10 +3970,6 @@ version = "0.1.0"
 name = "roc_types"
 version = "0.1.0"
 dependencies = [
- "indoc 0.3.6",
- "pretty_assertions 0.5.1",
- "quickcheck 0.8.5",
- "quickcheck_macros 0.8.0",
  "roc_collections",
  "roc_module",
  "roc_region",
@@ -4102,10 +3981,6 @@ dependencies = [
 name = "roc_unify"
 version = "0.1.0"
 dependencies = [
- "indoc 0.3.6",
- "pretty_assertions 0.5.1",
- "quickcheck 0.8.5",
- "quickcheck_macros 0.8.0",
  "roc_collections",
  "roc_module",
  "roc_types",
@@ -4617,8 +4492,6 @@ dependencies = [
  "inkwell 0.1.0",
  "libc",
  "libloading 0.6.7",
- "quickcheck 0.8.5",
- "quickcheck_macros 0.8.0",
  "roc_build",
  "roc_builtins",
  "roc_can",
@@ -4639,7 +4512,6 @@ dependencies = [
  "roc_unify",
  "target-lexicon",
  "tempfile",
- "tokio",
  "wasmer",
  "wasmer-wasi",
 ]
@@ -4650,9 +4522,7 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "indoc 0.3.6",
- "pretty_assertions 0.5.1",
- "quickcheck 0.8.5",
- "quickcheck_macros 0.8.0",
+ "pretty_assertions",
  "roc_builtins",
  "roc_can",
  "roc_collections",
@@ -4678,7 +4548,6 @@ dependencies = [
  "bumpalo",
  "indoc 0.3.6",
  "libc",
- "pretty_assertions 0.5.1",
  "roc_builtins",
  "roc_can",
  "roc_collections",
@@ -4688,7 +4557,6 @@ dependencies = [
  "roc_std",
  "roc_types",
  "target-lexicon",
- "tempfile",
  "wasmer",
  "wasmer-wasi",
 ]
@@ -4778,20 +4646,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cda74da7e1a664f795bb1f8a87ec406fb89a02522cf6e50620d016add6dbbf5c"
 
 [[package]]
-name = "tokio"
-version = "0.2.25"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6703a273949a90131b290be1fe7b039d0fc884aa1935860dfcbe056f28cd8092"
-dependencies = [
- "bytes 0.5.6",
- "fnv",
- "memchr",
- "num_cpus",
- "pin-project-lite 0.1.12",
- "slab",
-]
-
-[[package]]
 name = "toml"
 version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4808,7 +4662,7 @@ checksum = "09adeb8c97449311ccd28a427f96fb563e7fd31aabf994189879d9da2394b89d"
 dependencies = [
  "cfg-if 1.0.0",
  "log",
- "pin-project-lite 0.2.7",
+ "pin-project-lite",
  "tracing-attributes",
  "tracing-core",
 ]
@@ -4977,9 +4831,6 @@ name = "ven_pretty"
 version = "0.9.1-alpha.0"
 dependencies = [
  "arrayvec 0.5.2",
- "criterion",
- "difference",
- "tempfile",
  "termcolor",
  "typed-arena",
 ]

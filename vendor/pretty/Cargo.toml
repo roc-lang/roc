@@ -17,8 +17,3 @@ features = ["termcolor"]
 arrayvec = "0.5"
 typed-arena = "2.0.0"
 termcolor = { version = "1.1.0", optional = true }
-
-[dev-dependencies]
-tempfile = "3.1.0"
-difference = "2"
-criterion = { git = "https://github.com/Anton-4/criterion.rs"}

@@ -24,11 +24,6 @@ ven_graph = { path = "../../vendor/pathfinding" }
 linked-hash-map = "0.5.4"
 
 [dev-dependencies]
-roc_load= { path = "../load" }
 roc_builtins = { path = "../builtins" }
 roc_parse = { path = "../parse" }
 roc_solve = { path = "../solve" }
-pretty_assertions = "0.5.1"
-indoc = "0.3.3"
-quickcheck = "0.8"
-quickcheck_macros = "0.8"

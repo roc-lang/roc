@@ -29,15 +29,8 @@ im-rc = "14" # im and im-rc should always have the same version!
 bumpalo = { version = "3.6.1", features = ["collections"] }
 libloading = "0.6"
 tempfile = "3.1.0"
-serde_json = "1.0"
 inkwell = { path = "../../vendor/inkwell", optional = true }
 target-lexicon = "0.12.2"
-
-[dev-dependencies]
-pretty_assertions = "0.5.1"
-indoc = "0.3.3"
-quickcheck = "0.8"
-quickcheck_macros = "0.8"
 
 [features]
 default = ["llvm", "target-aarch64", "target-x86_64", "target-wasm32"]

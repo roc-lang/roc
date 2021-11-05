@@ -27,12 +27,4 @@ target-lexicon = "0.12.2"
 [dev-dependencies]
 roc_can = { path = "../can" }
 roc_parse = { path = "../parse" }
-roc_load = { path = "../load" }
-roc_reporting = { path = "../reporting" }
-roc_build = { path = "../build" }
-pretty_assertions = "0.5.1"
-indoc = "0.3.3"
-quickcheck = "0.8"
-quickcheck_macros = "0.8"
-tokio = { version = "0.2", features = ["blocking", "fs", "sync", "rt-threaded"] }
 bumpalo = { version = "3.6.1", features = ["collections"] }
