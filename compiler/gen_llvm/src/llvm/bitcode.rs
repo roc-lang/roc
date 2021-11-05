@@ -191,6 +191,7 @@ pub fn build_transform_caller<'a, 'ctx, 'env>(
     function: FunctionValue<'ctx>,
     closure_data_layout: LambdaSet<'a>,
     argument_layouts: &[Layout<'a>],
+    result_layout: Layout<'a>,
 ) -> FunctionValue<'ctx> {
     let fn_name: &str = &format!(
         "{}_zig_function_caller",
@@ -204,6 +205,7 @@ pub fn build_transform_caller<'a, 'ctx, 'env>(
             function,
             closure_data_layout,
             argument_layouts,
+            result_layout,
             fn_name,
         ),
     }
@@ -214,6 +216,7 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
     roc_function: FunctionValue<'ctx>,
     closure_data_layout: LambdaSet<'a>,
     argument_layouts: &[Layout<'a>],
+    result_layout: Layout<'a>,
     fn_name: &str,
 ) -> FunctionValue<'ctx> {
     debug_assert!(argument_layouts.len() <= 7);
@@ -288,17 +291,12 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
         }
     }
 
-    let call = {
-        env.builder
-            .build_call(roc_function, arguments_cast.as_slice(), "tmp")
-    };
-
-    call.set_call_convention(FAST_CALL_CONV);
-
-    let result = call
-        .try_as_basic_value()
-        .left()
-        .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."));
+    let result = crate::llvm::build::call_roc_function(
+        env,
+        roc_function,
+        &result_layout,
+        arguments_cast.as_slice(),
+    );
 
     let result_u8_ptr = function_value
         .get_nth_param(argument_layouts.len() as u32 + 1)

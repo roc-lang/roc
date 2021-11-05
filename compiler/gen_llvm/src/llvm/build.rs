@@ -3216,7 +3216,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
         if env.is_gen_test {
             debug_assert_eq!(args.len(), roc_function.get_params().len());
 
-            let roc_wrapper_function = make_exception_catcher(env, roc_function);
+            let roc_wrapper_function = make_exception_catcher(env, roc_function, return_layout);
             debug_assert_eq!(
                 arguments_for_call.len(),
                 roc_wrapper_function.get_params().len()
@@ -3261,7 +3261,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
     let wrapper_return_type = context.struct_type(
         &[
             context.i64_type().into(),
-            roc_function.get_type().get_return_type().unwrap(),
+            basic_type_from_layout(env, &return_layout),
         ],
         false,
     );
@@ -3326,18 +3326,14 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
     let arguments_for_call = &arguments_for_call.into_bump_slice();
 
     let call_result = {
-        let roc_wrapper_function = make_exception_catcher(env, roc_function);
-        debug_assert_eq!(
-            arguments_for_call.len(),
-            roc_wrapper_function.get_params().len()
-        );
+        let roc_wrapper_function = make_exception_catcher(env, roc_function, return_layout);
 
         builder.position_at_end(entry);
 
         call_roc_function(
             env,
             roc_wrapper_function,
-            &return_layout,
+            &Layout::Struct(&[Layout::Builtin(Builtin::Int64), return_layout]),
             arguments_for_call,
         )
     };
@@ -3574,20 +3570,17 @@ pub fn get_sjlj_buffer<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> PointerValu
         .into_pointer_value()
 }
 
-fn set_jump_and_catch_long_jump<'a, 'ctx, 'env, F, T>(
+fn set_jump_and_catch_long_jump<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
-    function: F,
-    calling_convention: u32,
+    roc_function: FunctionValue<'ctx>,
     arguments: &[BasicValueEnum<'ctx>],
-    return_type: T,
-) -> BasicValueEnum<'ctx>
-where
-    T: inkwell::types::BasicType<'ctx>,
-    F: Into<CallableValue<'ctx>>,
-{
+    return_layout: Layout<'a>,
+) -> BasicValueEnum<'ctx> {
     let context = env.context;
     let builder = env.builder;
+
+    let return_type = basic_type_from_layout(env, &return_layout);
 
     let call_result_type = context.struct_type(
         &[context.i64_type().into(), return_type.as_basic_type_enum()],
@@ -3661,11 +3654,7 @@ where
     {
         builder.position_at_end(then_block);
 
-        let call = env.builder.build_call(function, arguments, "call_function");
-
-        call.set_call_convention(calling_convention);
-
-        let call_result = call.try_as_basic_value().left().unwrap();
+        let call_result = call_roc_function(env, roc_function, &return_layout, arguments);
 
         let return_value = make_good_roc_result(env, call_result);
 
@@ -3738,10 +3727,12 @@ where
 fn make_exception_catcher<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     roc_function: FunctionValue<'ctx>,
+    return_layout: Layout<'a>,
 ) -> FunctionValue<'ctx> {
     let wrapper_function_name = format!("{}_catcher", roc_function.get_name().to_str().unwrap());
 
-    let function_value = make_exception_catching_wrapper(env, roc_function, &wrapper_function_name);
+    let function_value =
+        make_exception_catching_wrapper(env, roc_function, return_layout, &wrapper_function_name);
 
     function_value.set_linkage(Linkage::Internal);
 
@@ -3775,6 +3766,7 @@ fn make_good_roc_result<'a, 'ctx, 'env>(
 fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     roc_function: FunctionValue<'ctx>,
+    return_layout: Layout<'a>,
     wrapper_function_name: &str,
 ) -> FunctionValue<'ctx> {
     // build the C calling convention wrapper
@@ -3783,12 +3775,20 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
     let builder = env.builder;
 
     let roc_function_type = roc_function.get_type();
-    let argument_types = roc_function_type.get_param_types();
+    let argument_types = match RocReturn::from_layout(env, &return_layout) {
+        RocReturn::Return => roc_function_type.get_param_types(),
+        RocReturn::ByPointer => {
+            let mut types = roc_function_type.get_param_types();
+            types.remove(0);
+
+            types
+        }
+    };
 
     let wrapper_return_type = context.struct_type(
         &[
             context.i64_type().into(),
-            roc_function.get_type().get_return_type().unwrap(),
+            basic_type_from_layout(env, &return_layout),
         ],
         false,
     );
@@ -3825,9 +3825,8 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
         env,
         wrapper_function,
         roc_function,
-        roc_function.get_call_conventions(),
         &arguments,
-        roc_function_type.get_return_type().unwrap(),
+        return_layout,
     );
 
     builder.build_return(Some(&result));
@@ -4029,10 +4028,7 @@ fn build_proc_header<'a, 'ctx, 'env>(
     let fn_type = match RocReturn::from_layout(env, &proc.ret_layout) {
         RocReturn::Return => ret_type.fn_type(&arg_basic_types, false),
         RocReturn::ByPointer => {
-            println!(
-                "{:?}  will return void instead of {:?}",
-                symbol, proc.ret_layout
-            );
+            // println!( "{:?}  will return void instead of {:?}", symbol, proc.ret_layout);
             arg_basic_types.push(ret_type.ptr_type(AddressSpace::Generic).into());
             env.context.void_type().fn_type(&arg_basic_types, false)
         }
@@ -4141,9 +4137,8 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
             env,
             function_value,
             evaluator,
-            evaluator.get_call_conventions(),
             &evaluator_arguments,
-            result_type,
+            *return_layout,
         )
     } else {
         call_roc_function(env, evaluator, return_layout, &evaluator_arguments)
@@ -4404,7 +4399,7 @@ fn roc_call_with_args<'a, 'ctx, 'env>(
     call_roc_function(env, fn_val, result_layout, arguments)
 }
 
-fn call_roc_function<'a, 'ctx, 'env>(
+pub fn call_roc_function<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     roc_function: FunctionValue<'ctx>,
     result_layout: &Layout<'a>,
@@ -4510,6 +4505,7 @@ fn roc_function_call<'a, 'ctx, 'env>(
     lambda_set: LambdaSet<'a>,
     closure_data_is_owned: bool,
     argument_layouts: &[Layout<'a>],
+    result_layout: Layout<'a>,
 ) -> RocFunctionCall<'ctx> {
     use crate::llvm::bitcode::{build_inc_n_wrapper, build_transform_caller};
 
@@ -4518,9 +4514,10 @@ fn roc_function_call<'a, 'ctx, 'env>(
         .build_alloca(closure_data.get_type(), "closure_data_ptr");
     env.builder.build_store(closure_data_ptr, closure_data);
 
-    let stepper_caller = build_transform_caller(env, transform, lambda_set, argument_layouts)
-        .as_global_value()
-        .as_pointer_value();
+    let stepper_caller =
+        build_transform_caller(env, transform, lambda_set, argument_layouts, result_layout)
+            .as_global_value()
+            .as_pointer_value();
 
     let inc_closure_data =
         build_inc_n_wrapper(env, layout_ids, &lambda_set.runtime_representation())
@@ -4593,6 +4590,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
+                        *result_layout,
                     );
 
                     crate::llvm::build_list::list_walk_generic(
@@ -4634,6 +4632,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
+                        **result_layout,
                     );
 
                     list_map(env, roc_function_call, list, element_layout, result_layout)
@@ -4663,6 +4662,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
+                        **result_layout,
                     );
 
                     list_map2(
@@ -4706,6 +4706,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
+                        **result_layout,
                     );
 
                     list_map3(
@@ -4764,6 +4765,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
+                        **result_layout,
                     );
 
                     list_map4(
@@ -4810,6 +4812,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
+                        **result_layout,
                     );
 
                     list_map_with_index(env, roc_function_call, list, element_layout, result_layout)
@@ -4836,6 +4839,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
+                        *result_layout,
                     );
 
                     list_keep_if(env, layout_ids, roc_function_call, list, element_layout)
@@ -4866,6 +4870,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
+                        *result_layout,
                     );
 
                     list_keep_oks(
@@ -4906,6 +4911,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
+                        *result_layout,
                     );
 
                     list_keep_errs(
@@ -4958,6 +4964,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
+                        *result_layout,
                     );
 
                     list_sort_with(
@@ -4993,6 +5000,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
+                        *result_layout,
                     );
 
                     dict_walk(
