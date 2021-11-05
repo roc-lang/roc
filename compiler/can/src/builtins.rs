@@ -92,6 +92,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_MAP4 => list_map4,
         LIST_DROP => list_drop,
         LIST_DROP_AT => list_drop_at,
+        LIST_DROP_FIRST => list_drop_first,
         LIST_DROP_LAST => list_drop_last,
         LIST_SWAP => list_swap,
         LIST_MAP_WITH_INDEX => list_map_with_index,
@@ -2043,6 +2044,30 @@ fn list_drop_at(symbol: Symbol, var_store: &mut VarStore) -> Def {
     defn(
         symbol,
         vec![(list_var, Symbol::ARG_1), (index_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        list_var,
+    )
+}
+
+fn list_drop_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
+    let index_var = var_store.fresh();
+    let num_var = Variable::NAT;
+    let num_precision_var = Variable::NATURAL;
+
+    let body = RunLowLevel {
+        op: LowLevel::ListDropAt,
+        args: vec![
+            (list_var, Var(Symbol::ARG_1)),
+            (index_var, int(num_var, num_precision_var, 0)),
+        ],
+        ret_var: list_var,
+    };
+
+    defn(
+        symbol,
+        vec![(list_var, Symbol::ARG_1)],
         var_store,
         body,
         list_var,
