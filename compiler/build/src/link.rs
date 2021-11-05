@@ -810,6 +810,8 @@ fn link_macos(
             link_type_arg,
             "-arch",
             &arch,
+            "-macos_version_min",
+            "10.15",
         ])
         .args(input_paths);
 
