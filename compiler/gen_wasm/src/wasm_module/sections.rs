@@ -452,15 +452,15 @@ impl<'a> CodeSection<'a> {
     }
 
     /// Serialize the code builders for all functions, and get code relocations with final offsets
-    pub fn serialize_mut<T: SerialBuffer>(
-        &mut self,
+    pub fn serialize_with_relocs<T: SerialBuffer>(
+        &self,
         buffer: &mut T,
         relocations: &mut Vec<'a, RelocationEntry>,
     ) {
         let header_indices = write_section_header(buffer, SectionId::Code);
         buffer.encode_u32(self.code_builders.len() as u32);
 
-        for code_builder in self.code_builders.iter_mut() {
+        for code_builder in self.code_builders.iter() {
             code_builder.serialize_with_relocs(buffer, relocations, header_indices.body_index);
         }
 
@@ -657,7 +657,7 @@ impl<'a> WasmModule<'a> {
         // Code section mutates its linker relocation data during serialization
         let code_section_index = counter.section_index;
         self.code
-            .serialize_mut(buffer, &mut self.reloc_code.entries);
+            .serialize_with_relocs(buffer, &mut self.reloc_code.entries);
         counter.update(buffer);
 
         // Data section is the last one before linking, so we can stop counting
