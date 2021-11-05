@@ -14,8 +14,9 @@ path = "src/main.rs"
 test = false
 bench = false
 
-[features]
-default = ["target-x86", "llvm", "editor"]
+[features] 
+default = ["target-aarch64", "target-x86_64", "target-wasm32", "llvm", "editor"]
+
 wasm32-cli-run = []
 i386-cli-run = []
 
@@ -24,16 +25,20 @@ i386-cli-run = []
 llvm = ["inkwell", "roc_gen_llvm", "roc_build/llvm"]
 editor = ["roc_editor"]
 
-target-x86 = []
 
-# arm and wasm give linker errors on some platforms
-target-arm = []
-target-webassembly = []
+# Compiling for a different platform than the host can cause linker errors.
+target-arm = ["roc_build/target-arm"]
+target-aarch64 = ["roc_build/target-aarch64"]
+target-x86 = ["roc_build/target-x86"]
+target-x86_64 = ["roc_build/target-x86_64"]
+target-wasm32 = ["roc_build/target-wasm32"]
 
 target-all = [
-    "target-x86",
+    "target-aarch64",
     "target-arm",
-    "target-webassembly"
+    "target-x86",
+    "target-x86_64",
+    "target-wasm32"
 ]
 
 

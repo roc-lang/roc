@@ -13,13 +13,7 @@ static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use std::ffi::{OsStr, OsString};
 
-#[cfg(feature = "llvm")]
 use roc_cli::build;
-
-#[cfg(not(feature = "llvm"))]
-fn build(_matches: &clap::ArgMatches, _config: BuildConfig) -> io::Result<i32> {
-    panic!("Building without LLVM is not currently supported.");
-}
 
 fn main() -> io::Result<()> {
     let matches = build_app().get_matches();
