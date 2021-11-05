@@ -1,7 +1,7 @@
 /// Helpers for interacting with the zig that generates bitcode
 use crate::debug_info_init;
 use crate::llvm::build::{struct_from_fields, Env, C_CALL_CONV, FAST_CALL_CONV, TAG_DATA_INDEX};
-use crate::llvm::convert::basic_type_from_layout;
+use crate::llvm::convert::{basic_type_from_layout, basic_type_from_layout_1};
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_n_refcount_layout, increment_refcount_layout,
 };
@@ -128,20 +128,19 @@ fn build_has_tag_id_help<'a, 'ctx, 'env>(
         [tag_id, tag_value_ptr] => {
             let tag_type = basic_type_from_layout(env, &Layout::Union(union_layout));
 
-            let argument_cast = env
-                .builder
-                .build_bitcast(
-                    *tag_value_ptr,
-                    tag_type.ptr_type(AddressSpace::Generic),
-                    "load_opaque",
-                )
-                .into_pointer_value();
-
-            let tag_value = env.builder.build_load(argument_cast, "get_value");
+            let tag_value = env.builder.build_pointer_cast(
+                tag_value_ptr.into_pointer_value(),
+                tag_type.ptr_type(AddressSpace::Generic),
+                "load_opaque_get_tag_id",
+            );
 
             let actual_tag_id = {
-                let tag_id_i64 =
-                    crate::llvm::build::get_tag_id(env, function_value, &union_layout, tag_value);
+                let tag_id_i64 = crate::llvm::build::get_tag_id(
+                    env,
+                    function_value,
+                    &union_layout,
+                    tag_value.into(),
+                );
 
                 env.builder
                     .build_int_cast(tag_id_i64, env.context.i16_type(), "to_i16")
@@ -263,12 +262,22 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
     for (argument_ptr, layout) in arguments.iter().zip(argument_layouts) {
         let basic_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
 
-        let argument_cast = env
-            .builder
-            .build_bitcast(*argument_ptr, basic_type, "load_opaque")
-            .into_pointer_value();
+        let argument = if layout.is_passed_by_reference() {
+            env.builder
+                .build_pointer_cast(
+                    argument_ptr.into_pointer_value(),
+                    basic_type,
+                    "cast_ptr_to_tag",
+                )
+                .into()
+        } else {
+            let argument_cast = env
+                .builder
+                .build_bitcast(*argument_ptr, basic_type, "load_opaque_1")
+                .into_pointer_value();
 
-        let argument = env.builder.build_load(argument_cast, "load_opaque");
+            env.builder.build_load(argument_cast, "load_opaque_2")
+        };
 
         arguments_cast.push(argument);
     }
@@ -300,17 +309,10 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
 
     let result_u8_ptr = function_value
         .get_nth_param(argument_layouts.len() as u32 + 1)
-        .unwrap();
-    let result_ptr = env
-        .builder
-        .build_bitcast(
-            result_u8_ptr,
-            result.get_type().ptr_type(AddressSpace::Generic),
-            "write_result",
-        )
+        .unwrap()
         .into_pointer_value();
 
-    env.builder.build_store(result_ptr, result);
+    crate::llvm::build::store_roc_value_opaque(env, result_layout, result_u8_ptr, result);
     env.builder.build_return(None);
 
     env.builder.position_at_end(block);
@@ -412,12 +414,18 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
 
             let value_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
 
-            let value_cast = env
-                .builder
-                .build_bitcast(value_ptr, value_type, "load_opaque")
-                .into_pointer_value();
+            let value = if layout.is_passed_by_reference() {
+                env.builder
+                    .build_pointer_cast(value_ptr, value_type, "cast_ptr_to_tag")
+                    .into()
+            } else {
+                let value_cast = env
+                    .builder
+                    .build_bitcast(value_ptr, value_type, "load_opaque")
+                    .into_pointer_value();
 
-            let value = env.builder.build_load(value_cast, "load_opaque");
+                env.builder.build_load(value_cast, "load_opaque")
+            };
 
             match rc_operation {
                 Mode::Inc => {

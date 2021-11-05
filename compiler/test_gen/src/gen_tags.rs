@@ -3,6 +3,7 @@
 use crate::assert_evals_to;
 // use crate::assert_wasm_evals_to as assert_evals_to;
 use indoc::indoc;
+use roc_mono::layout::LambdaSet;
 use roc_std::{RocList, RocStr};
 
 #[test]
@@ -423,7 +424,7 @@ fn result_with_guard_pattern() {
 }
 
 #[test]
-fn maybe_is_just() {
+fn maybe_is_just_not_nested() {
     assert_evals_to!(
         indoc!(
             r#"

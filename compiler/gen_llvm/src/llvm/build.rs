@@ -21,7 +21,8 @@ use crate::llvm::build_str::{
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
-    basic_type_from_builtin, basic_type_from_layout, block_of_memory_slices, ptr_int,
+    basic_type_from_builtin, basic_type_from_layout, basic_type_from_layout_1,
+    block_of_memory_slices, ptr_int,
 };
 use crate::llvm::refcounting::{
     build_reset, decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
@@ -618,8 +619,8 @@ pub fn construct_optimization_passes<'a>(
     mpm.add_always_inliner_pass();
 
     // tail-call elimination is always on
-    fpm.add_instruction_combining_pass();
-    fpm.add_tail_call_elimination_pass();
+    // fpm.add_instruction_combining_pass();
+    // fpm.add_tail_call_elimination_pass();
 
     let pmb = PassManagerBuilder::create();
     match opt_level {
@@ -1235,32 +1236,21 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
             match union_layout {
                 UnionLayout::NonRecursive(tag_layouts) => {
-                    debug_assert!(argument.is_struct_value());
+                    debug_assert!(argument.is_pointer_value());
+
                     let field_layouts = tag_layouts[*tag_id as usize];
-                    let struct_layout = Layout::Struct(field_layouts);
 
-                    let struct_type = basic_type_from_layout(env, &struct_layout);
+                    let tag_id_type =
+                        basic_type_from_layout(env, &union_layout.tag_id_layout()).into_int_type();
 
-                    let argument_pointer = builder.build_alloca(argument.get_type(), "cast_alloca");
-                    builder.build_store(argument_pointer, argument);
-
-                    let struct_ptr = builder.build_pointer_cast(
-                        argument_pointer,
-                        struct_type.ptr_type(AddressSpace::Generic),
-                        "foobar",
-                    );
-
-                    //                    let struct_value = access_index_struct_value(
-                    //                        builder,
-                    //                        argument.into_struct_value(),
-                    //                        struct_type.into_struct_type(),
-                    //                    );
-
-                    let result = builder
-                        .build_struct_gep(struct_ptr, *index as u32, "")
-                        .expect("desired field did not decode");
-
-                    builder.build_load(result, "foobarbaz")
+                    lookup_at_index_ptr2(
+                        env,
+                        union_layout,
+                        tag_id_type,
+                        field_layouts,
+                        *index as usize,
+                        argument.into_pointer_value(),
+                    )
                 }
                 UnionLayout::Recursive(tag_layouts) => {
                     debug_assert!(argument.is_pointer_value());
@@ -1555,10 +1545,13 @@ pub fn build_tag<'a, 'ctx, 'env>(
                     .builder
                     .build_struct_gep(struct_ptr, index, "get_tag_field_ptr")
                     .unwrap();
-                env.builder.build_store(ptr, field_val);
+
+                let field_layout = tag_field_layouts[index as usize];
+                store_roc_value(env, field_layout, ptr, field_val);
             }
 
-            env.builder.build_load(result_alloca, "load_result")
+            // env.builder.build_load(result_alloca, "load_result")
+            result_alloca.into()
         }
         UnionLayout::Recursive(tags) => {
             debug_assert!(union_size > 1);
@@ -1866,9 +1859,10 @@ pub fn get_tag_id<'a, 'ctx, 'env>(
 
     match union_layout {
         UnionLayout::NonRecursive(_) => {
-            let tag = argument.into_struct_value();
+            debug_assert!(argument.is_pointer_value(), "{:?}", argument);
 
-            get_tag_id_non_recursive(env, tag)
+            let argument_ptr = argument.into_pointer_value();
+            get_tag_id_wrapped(env, argument_ptr)
         }
         UnionLayout::Recursive(_) => {
             let argument_ptr = argument.into_pointer_value();
@@ -2008,7 +2002,26 @@ fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
         .build_struct_gep(data_ptr, index as u32, "at_index_struct_gep")
         .unwrap();
 
-    let result = builder.build_load(elem_ptr, "load_at_index_ptr");
+    let field_layout = field_layouts[index];
+    let result = if field_layout.is_passed_by_reference() {
+        let field_type = basic_type_from_layout(env, &field_layout);
+
+        let align_bytes = field_layout.alignment_bytes(env.ptr_bytes);
+        let alloca = env.builder.build_alloca(field_type, "copied_tag");
+        if align_bytes > 0 {
+            let size = env
+                .ptr_int()
+                .const_int(field_layout.stack_size(env.ptr_bytes) as u64, false);
+
+            env.builder
+                .build_memcpy(alloca, align_bytes, elem_ptr, align_bytes, size)
+                .unwrap();
+        }
+
+        alloca.into()
+    } else {
+        builder.build_load(elem_ptr, "load_at_index_ptr")
+    };
 
     if let Some(Layout::RecursivePointer) = field_layouts.get(index as usize) {
         // a recursive field is stored as a `i64*`, to use it we must cast it to
@@ -2155,17 +2168,12 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
         let ptr_type = value_type.ptr_type(AddressSpace::Generic);
 
         unsafe {
-            builder
-                .build_bitcast(
-                    env.builder.build_in_bounds_gep(
-                        as_usize_ptr,
-                        &[index_intvalue],
-                        "get_data_ptr",
-                    ),
-                    ptr_type,
-                    "alloc_cast_to_desired",
-                )
-                .into_pointer_value()
+            builder.build_pointer_cast(
+                env.builder
+                    .build_in_bounds_gep(as_usize_ptr, &[index_intvalue], "get_data_ptr"),
+                ptr_type,
+                "alloc_cast_to_desired",
+            )
         }
     };
 
@@ -2191,13 +2199,13 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
 fn list_literal<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
-    elem_layout: &Layout<'a>,
+    element_layout: &Layout<'a>,
     elems: &[ListLiteralElement],
 ) -> BasicValueEnum<'ctx> {
     let ctx = env.context;
     let builder = env.builder;
 
-    let element_type = basic_type_from_layout(env, elem_layout);
+    let element_type = basic_type_from_layout(env, element_layout);
 
     let list_length = elems.len();
     let list_length_intval = env.ptr_int().const_int(list_length as _, false);
@@ -2207,9 +2215,9 @@ fn list_literal<'a, 'ctx, 'env>(
     // if element_type.is_int_type() {
     if false {
         let element_type = element_type.into_int_type();
-        let element_width = elem_layout.stack_size(env.ptr_bytes);
+        let element_width = element_layout.stack_size(env.ptr_bytes);
         let size = list_length * element_width as usize;
-        let alignment = elem_layout
+        let alignment = element_layout
             .alignment_bytes(env.ptr_bytes)
             .max(env.ptr_bytes);
 
@@ -2241,7 +2249,7 @@ fn list_literal<'a, 'ctx, 'env>(
             for (index, element) in elems.iter().enumerate() {
                 match element {
                     ListLiteralElement::Literal(literal) => {
-                        let val = build_exp_literal(env, elem_layout, literal);
+                        let val = build_exp_literal(env, element_layout, literal);
                         global_elements.push(val.into_int_value());
                     }
                     ListLiteralElement::Symbol(symbol) => {
@@ -2296,7 +2304,7 @@ fn list_literal<'a, 'ctx, 'env>(
             super::build_list::store_list(env, ptr, list_length_intval)
         } else {
             // some of our elements are non-constant, so we must allocate space on the heap
-            let ptr = allocate_list(env, elem_layout, list_length_intval);
+            let ptr = allocate_list(env, element_layout, list_length_intval);
 
             // then, copy the relevant segment from the constant section into the heap
             env.builder
@@ -2320,23 +2328,66 @@ fn list_literal<'a, 'ctx, 'env>(
             super::build_list::store_list(env, ptr, list_length_intval)
         }
     } else {
-        let ptr = allocate_list(env, elem_layout, list_length_intval);
+        let ptr = allocate_list(env, element_layout, list_length_intval);
 
         // Copy the elements from the list literal into the array
         for (index, element) in elems.iter().enumerate() {
             let val = match element {
                 ListLiteralElement::Literal(literal) => {
-                    build_exp_literal(env, elem_layout, literal)
+                    build_exp_literal(env, element_layout, literal)
                 }
                 ListLiteralElement::Symbol(symbol) => load_symbol(scope, symbol),
             };
             let index_val = ctx.i64_type().const_int(index as u64, false);
             let elem_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
 
-            builder.build_store(elem_ptr, val);
+            store_roc_value(env, *element_layout, elem_ptr, val);
         }
 
         super::build_list::store_list(env, ptr, list_length_intval)
+    }
+}
+
+pub fn store_roc_value_opaque<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout: Layout<'a>,
+    opaque_destination: PointerValue<'ctx>,
+    value: BasicValueEnum<'ctx>,
+) {
+    let target_type = basic_type_from_layout(env, &layout).ptr_type(AddressSpace::Generic);
+    let destination =
+        env.builder
+            .build_pointer_cast(opaque_destination, target_type, "store_roc_value_opaque");
+
+    store_roc_value(env, layout, destination, value)
+}
+
+pub fn store_roc_value<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout: Layout<'a>,
+    destination: PointerValue<'ctx>,
+    value: BasicValueEnum<'ctx>,
+) {
+    if layout.is_passed_by_reference() {
+        let align_bytes = layout.alignment_bytes(env.ptr_bytes);
+
+        if align_bytes > 0 {
+            let size = env
+                .ptr_int()
+                .const_int(layout.stack_size(env.ptr_bytes) as u64, false);
+
+            env.builder
+                .build_memcpy(
+                    destination,
+                    align_bytes,
+                    value.into_pointer_value(),
+                    align_bytes,
+                    size,
+                )
+                .unwrap();
+        }
+    } else {
+        env.builder.build_store(destination, value);
     }
 }
 
@@ -2415,8 +2466,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     let out_parameter = parameters.last().unwrap();
                     debug_assert!(out_parameter.is_pointer_value());
 
-                    env.builder
-                        .build_store(out_parameter.into_pointer_value(), value);
+                    store_roc_value(env, *layout, out_parameter.into_pointer_value(), value);
 
                     if let Some(block) = env.builder.get_insert_block() {
                         match block.get_terminator() {
@@ -3656,7 +3706,7 @@ fn set_jump_and_catch_long_jump<'a, 'ctx, 'env>(
 
         let call_result = call_roc_function(env, roc_function, &return_layout, arguments);
 
-        let return_value = make_good_roc_result(env, call_result);
+        let return_value = make_good_roc_result(env, return_layout, call_result);
 
         builder.build_store(result_alloca, return_value);
 
@@ -3721,7 +3771,7 @@ fn set_jump_and_catch_long_jump<'a, 'ctx, 'env>(
 
     env.builder.position_at_end(cont_block);
 
-    builder.build_load(result_alloca, "load_result")
+    builder.build_load(result_alloca, "set_jump_and_catch_long_jump_load_result")
 }
 
 fn make_exception_catcher<'a, 'ctx, 'env>(
@@ -3741,12 +3791,13 @@ fn make_exception_catcher<'a, 'ctx, 'env>(
 
 fn make_good_roc_result<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    return_layout: Layout<'a>,
     return_value: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let context = env.context;
     let builder = env.builder;
 
-    let content_type = return_value.get_type();
+    let content_type = basic_type_from_layout(env, &return_layout);
     let wrapper_return_type =
         context.struct_type(&[context.i64_type().into(), content_type], false);
 
@@ -3756,9 +3807,19 @@ fn make_good_roc_result<'a, 'ctx, 'env>(
         .build_insert_value(v1, context.i64_type().const_zero(), 0, "set_no_error")
         .unwrap();
 
-    let v3 = builder
-        .build_insert_value(v2, return_value, 1, "set_call_result")
-        .unwrap();
+    let v3 = if return_layout.is_passed_by_reference() {
+        let loaded = env.builder.build_load(
+            return_value.into_pointer_value(),
+            "load_call_result_passed_by_ptr",
+        );
+        builder
+            .build_insert_value(v2, loaded, 1, "set_call_result")
+            .unwrap()
+    } else {
+        builder
+            .build_insert_value(v2, return_value, 1, "set_call_result")
+            .unwrap()
+    };
 
     v3.into_struct_value().into()
 }
@@ -3971,6 +4032,8 @@ fn build_procedures_help<'a, 'ctx, 'env>(
                         app_ll_file,
                     );
                 } else {
+                    env.module.print_to_stderr();
+
                     panic!(
                     "The preceding code was from {:?}, which failed LLVM verification in {} build.",
                      fn_val.get_name().to_str().unwrap(),
@@ -4020,7 +4083,7 @@ fn build_proc_header<'a, 'ctx, 'env>(
     let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
 
     for (layout, _) in args.iter() {
-        let arg_type = basic_type_from_layout(env, layout);
+        let arg_type = basic_type_from_layout_1(env, layout);
 
         arg_basic_types.push(arg_type);
     }
@@ -4132,19 +4195,41 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
         }
     }
 
-    let call_result = if env.is_gen_test {
-        set_jump_and_catch_long_jump(
+    if env.is_gen_test {
+        let call_result = set_jump_and_catch_long_jump(
             env,
             function_value,
             evaluator,
             &evaluator_arguments,
             *return_layout,
-        )
-    } else {
-        call_roc_function(env, evaluator, return_layout, &evaluator_arguments)
-    };
+        );
 
-    builder.build_store(output, call_result);
+        builder.build_store(output, call_result);
+    } else {
+        let call_result = call_roc_function(env, evaluator, return_layout, &evaluator_arguments);
+
+        if return_layout.is_passed_by_reference() {
+            let align_bytes = return_layout.alignment_bytes(env.ptr_bytes);
+
+            if align_bytes > 0 {
+                let size = env
+                    .ptr_int()
+                    .const_int(return_layout.stack_size(env.ptr_bytes) as u64, false);
+
+                env.builder
+                    .build_memcpy(
+                        output,
+                        align_bytes,
+                        call_result.into_pointer_value(),
+                        align_bytes,
+                        size,
+                    )
+                    .unwrap();
+            }
+        } else {
+            builder.build_store(output, call_result);
+        }
+    };
 
     builder.build_return(None);
 
@@ -4408,29 +4493,10 @@ pub fn call_roc_function<'a, 'ctx, 'env>(
     let pass_by_pointer = roc_function.get_type().get_param_types().len() == arguments.len() + 1;
 
     match RocReturn::from_layout(env, result_layout) {
-        RocReturn::ByPointer => {
-            if !pass_by_pointer {
-                let mut arguments = Vec::from_iter_in(arguments.iter().copied(), env.arena);
-                arguments.pop();
-
-                let result_type = basic_type_from_layout(env, result_layout);
-                let result_alloca = env.builder.build_alloca(result_type, "result_value");
-
-                arguments.push(result_alloca.into());
-
-                debug_assert_eq!(
-                    roc_function.get_type().get_param_types().len(),
-                    arguments.len()
-                );
-                let call = env.builder.build_call(roc_function, &arguments, "call");
-
-                // roc functions should have the fast calling convention
-                debug_assert_eq!(roc_function.get_call_conventions(), FAST_CALL_CONV);
-                call.set_call_convention(FAST_CALL_CONV);
-
-                return env.builder.build_load(result_alloca, "load_result");
-            }
+        RocReturn::ByPointer if !pass_by_pointer => {
+            // WARNING this is a hack!!
             let mut arguments = Vec::from_iter_in(arguments.iter().copied(), env.arena);
+            arguments.pop();
 
             let result_type = basic_type_from_layout(env, result_layout);
             let result_alloca = env.builder.build_alloca(result_type, "result_value");
@@ -4448,6 +4514,31 @@ pub fn call_roc_function<'a, 'ctx, 'env>(
             call.set_call_convention(FAST_CALL_CONV);
 
             env.builder.build_load(result_alloca, "load_result")
+        }
+        RocReturn::ByPointer => {
+            let mut arguments = Vec::from_iter_in(arguments.iter().copied(), env.arena);
+
+            let result_type = basic_type_from_layout(env, result_layout);
+            let result_alloca = env.builder.build_alloca(result_type, "result_value");
+
+            arguments.push(result_alloca.into());
+
+            debug_assert_eq!(
+                roc_function.get_type().get_param_types().len(),
+                arguments.len()
+            );
+            let call = env.builder.build_call(roc_function, &arguments, "call");
+
+            // roc functions should have the fast calling convention
+            debug_assert_eq!(roc_function.get_call_conventions(), FAST_CALL_CONV);
+            call.set_call_convention(FAST_CALL_CONV);
+
+            if result_layout.is_passed_by_reference() {
+                result_alloca.into()
+            } else {
+                env.builder
+                    .build_load(result_alloca, "return_by_pointer_load_result")
+            }
         }
         RocReturn::Return => {
             debug_assert_eq!(

@@ -1,11 +1,11 @@
 use crate::debug_info_init;
 use crate::llvm::bitcode::call_void_bitcode_fn;
 use crate::llvm::build::{
-    add_func, cast_basic_basic, cast_block_of_memory_to_tag, get_tag_id, get_tag_id_non_recursive,
-    tag_pointer_clear_tag_id, Env, FAST_CALL_CONV, TAG_DATA_INDEX, TAG_ID_INDEX,
+    add_func, cast_basic_basic, get_tag_id, tag_pointer_clear_tag_id, Env, FAST_CALL_CONV,
+    TAG_DATA_INDEX, TAG_ID_INDEX,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
-use crate::llvm::convert::{basic_type_from_layout, ptr_int};
+use crate::llvm::convert::{basic_type_from_layout, basic_type_from_layout_1, ptr_int};
 use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
 use inkwell::context::Context;
@@ -542,24 +542,6 @@ fn modify_refcount_layout_help<'a, 'ctx, 'env>(
             }
         },
         _ => {
-            if let Layout::Union(UnionLayout::NonRecursive(_)) = layout {
-                let alloca = env.builder.build_alloca(value.get_type(), "tag_union");
-                env.builder.build_store(alloca, value);
-                call_help(env, function, call_mode, alloca.into());
-                return;
-            }
-
-            if let Layout::LambdaSet(lambda_set) = layout {
-                if let Layout::Union(UnionLayout::NonRecursive(_)) =
-                    lambda_set.runtime_representation()
-                {
-                    let alloca = env.builder.build_alloca(value.get_type(), "tag_union");
-                    env.builder.build_store(alloca, value);
-                    call_help(env, function, call_mode, alloca.into());
-                    return;
-                }
-            }
-
             call_help(env, function, call_mode, value);
         }
     }
@@ -1620,10 +1602,9 @@ fn modify_refcount_union<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let basic_type = basic_type_from_layout(env, &layout);
-            // we pass tag unions by reference for efficiency
-            let ptr_type = basic_type.ptr_type(AddressSpace::Generic).into();
-            let function_value = build_header(env, ptr_type, mode, &fn_name);
+            let basic_type = basic_type_from_layout_1(env, &layout);
+            let function_value = build_header(env, basic_type, mode, &fn_name);
+            dbg!(function_value);
 
             modify_refcount_union_help(
                 env,
@@ -1674,6 +1655,8 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
     let parent = fn_val;
 
     let before_block = env.builder.get_insert_block().expect("to be in a function");
+
+    dbg!(fn_val, arg_ptr);
 
     // read the tag_id
     let tag_id_ptr = env
