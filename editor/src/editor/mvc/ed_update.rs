@@ -562,12 +562,9 @@ impl<'a> EdModel<'a> {
             }
             F12 => {
                 #[cfg(feature = "with_sound")]
-                {
-                    println!("playing sound...");
-                    _sound_thread_pool.execute(move || {
-                        play_sound("./editor/src/editor/resources/sounds/bell_sound.mp3");
-                    });
-                }
+                _sound_thread_pool.execute(move || {
+                    play_sound("./editor/src/editor/resources/sounds/bell_sound.mp3");
+                });
             }
             _ => (),
         }
