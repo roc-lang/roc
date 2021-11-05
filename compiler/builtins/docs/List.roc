@@ -687,4 +687,6 @@ endsWith : List elem, List elem -> Bool
 
 all : List elem, (elem -> Bool) -> Bool
 
+## Run the given predicate on each element of the list, returning `True` if
+## any of the elements satisfy it.
 any : List elem, (elem -> Bool) -> Bool
