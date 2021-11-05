@@ -31,9 +31,9 @@ pub unsafe fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
 pub unsafe fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
     use roc_gen_llvm::llvm::build::PanicTagId;
 
-    use libc::c_char;
     use std::convert::TryFrom;
     use std::ffi::CStr;
+    use std::os::raw::c_char;
 
     match PanicTagId::try_from(tag_id) {
         Ok(PanicTagId::NullTerminatedString) => {
@@ -215,7 +215,7 @@ fn list_drop_at() {
 }
 
 #[test]
-fn list_drop_at_mutable() {
+fn list_drop_at_shared() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -228,6 +228,38 @@ fn list_drop_at_mutable() {
         (
             // new_list
             RocList::from_slice(&[5, 6]),
+            // original
+            RocList::from_slice(&[4, 5, 6]),
+        ),
+        (RocList<i64>, RocList<i64>,)
+    );
+}
+
+#[test]
+fn list_drop_last() {
+    assert_evals_to!(
+        "List.dropLast [1, 2, 3]",
+        RocList::from_slice(&[1, 2]),
+        RocList<i64>
+    );
+    assert_evals_to!("List.dropLast []", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!("List.dropLast [0]", RocList::from_slice(&[]), RocList<i64>);
+}
+
+#[test]
+fn list_drop_last_mutable() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+               list : List I64
+               list = [ if True then 4 else 4, 5, 6 ]
+
+               { newList: List.dropLast list, original: list }
+               "#
+        ),
+        (
+            // new_list
+            RocList::from_slice(&[4, 5]),
             // original
             RocList::from_slice(&[4, 5, 6]),
         ),
@@ -728,6 +760,37 @@ fn list_map_closure() {
         ),
         RocList::from_slice(&[3.14]),
         RocList<f64>
+    );
+}
+
+#[test]
+fn list_map4_group() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.map4 [1,2,3] [3,2,1] [2,1,3] [3,1,2] (\a, b, c, d -> Group a b c d)
+            "#
+        ),
+        RocList::from_slice(&[(1, 3, 2, 3), (2, 2, 1, 1), (3, 1, 3, 2)]),
+        RocList<(i64, i64, i64, i64)>
+    );
+}
+
+#[test]
+fn list_map4_different_length() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.map4
+                ["h", "i", "j", "k"]
+                ["o", "p", "q"]
+                ["l", "m"]
+                ["a"]
+                (\a, b, c, d -> Str.concat a (Str.concat b (Str.concat c d)))
+            "#
+        ),
+        RocList::from_slice(&[RocStr::from_slice("hola".as_bytes()),]),
+        RocList<RocStr>
     );
 }
 
@@ -1916,6 +1979,57 @@ fn list_contains() {
     assert_evals_to!(indoc!("List.contains [1,2,3] 4"), false, bool);
 
     assert_evals_to!(indoc!("List.contains [] 4"), false, bool);
+}
+#[test]
+fn list_min() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when List.min [] is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+        ),
+        -1,
+        i64
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when List.min [3, 1, 2] is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+        ),
+        1,
+        i64
+    );
+}
+
+#[test]
+fn list_max() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when List.max [] is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+        ),
+        -1,
+        i64
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when List.max [3, 1, 2] is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+        ),
+        3,
+        i64
+    );
 }
 
 #[test]

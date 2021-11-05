@@ -6,6 +6,23 @@ use indoc::indoc;
 use roc_std::{RocList, RocStr};
 
 #[test]
+fn width_and_alignment_u8_u8() {
+    use roc_mono::layout::Builtin;
+    use roc_mono::layout::Layout;
+    use roc_mono::layout::UnionLayout;
+
+    let t = &[Layout::Builtin(Builtin::Int8)] as &[_];
+    let tt = [t, t];
+
+    let layout = Layout::Union(UnionLayout::NonRecursive(&tt));
+
+    // at the moment, the tag id uses an I64, so
+    let ptr_width = 8;
+    assert_eq!(layout.alignment_bytes(ptr_width), 8);
+    assert_eq!(layout.stack_size(ptr_width), 16);
+}
+
+#[test]
 fn applied_tag_nothing_ir() {
     assert_evals_to!(
         indoc!(

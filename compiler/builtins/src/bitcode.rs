@@ -142,6 +142,7 @@ pub const STR_TO_UTF8: &str = "roc_builtins.str.to_utf8";
 pub const STR_FROM_UTF8: &str = "roc_builtins.str.from_utf8";
 pub const STR_FROM_UTF8_RANGE: &str = "roc_builtins.str.from_utf8_range";
 pub const STR_REPEAT: &str = "roc_builtins.str.repeat";
+pub const STR_TRIM: &str = "roc_builtins.str.trim";
 
 pub const DICT_HASH: &str = "roc_builtins.dict.hash";
 pub const DICT_HASH_STR: &str = "roc_builtins.dict.hash_str";
@@ -164,6 +165,7 @@ pub const SET_FROM_LIST: &str = "roc_builtins.dict.set_from_list";
 pub const LIST_MAP: &str = "roc_builtins.list.map";
 pub const LIST_MAP2: &str = "roc_builtins.list.map2";
 pub const LIST_MAP3: &str = "roc_builtins.list.map3";
+pub const LIST_MAP4: &str = "roc_builtins.list.map4";
 pub const LIST_MAP_WITH_INDEX: &str = "roc_builtins.list.map_with_index";
 pub const LIST_KEEP_IF: &str = "roc_builtins.list.keep_if";
 pub const LIST_KEEP_OKS: &str = "roc_builtins.list.keep_oks";

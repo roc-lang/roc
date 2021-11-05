@@ -16,7 +16,7 @@
     - [x] Distinguish which variables go in locals, own stack frame, caller stack frame, etc.
     - [x] Ensure early Return statements don't skip stack cleanup
   - [x] Model the stack machine as a storage mechanism, to make generated code "less bad"
-  - [ ] Vendor-in parity_wasm library so that we can use `bumpalo::Vec`
+  - [x] Switch vectors to `bumpalo::Vec` where possible
   - [ ] Implement relocations
     - Requires knowing the _byte_ offset of each call site. This is awkward as the backend builds a `Vec<Instruction>` rather than a `Vec<u8>`. It may be worth serialising each instruction as it is inserted.
 
@@ -225,6 +225,4 @@ The Module is a _specification_ for how to create an Instance of the program. Th
 
 A WebAssembly module is equivalent to an executable file. It doesn't normally need relocations since at the WebAssembly layer, there is no Address Space Layout Randomisation. If it has relocations then it's an object file.
 
-The [official spec](https://webassembly.github.io/spec/core/binary/modules.html#sections) lists the sections that are part of the final module. It doesn't mention any sections for relocations or symbol names, but it has room for "custom sections" that in practice seem to be used for that.
-
-The WebAssembly `tool-conventions` repo has a document on [linking](https://github.com/WebAssembly/tool-conventions/blob/main/Linking.md), and the `parity_wasm` crate supports "name" and "relocation" [sections](https://docs.rs/parity-wasm/0.42.2/parity_wasm/elements/enum.Section.html).
+The [official spec](https://webassembly.github.io/spec/core/binary/modules.html#sections) lists the sections that are part of the final module. It doesn't mention any sections for relocations or symbol names, but it does support "custom" sections. Conventions to use those for linking are documented in the WebAssembly `tool-conventions` repo [here](https://github.com/WebAssembly/tool-conventions/blob/main/Linking.md) and it mentions that LLVM is using those conventions.

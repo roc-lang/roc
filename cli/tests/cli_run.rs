@@ -129,7 +129,7 @@ mod cli_run {
         if !&out.stdout.ends_with(expected_ending) {
             panic!(
                 "expected output to end with {:?} but instead got {:#?}",
-                expected_ending, out
+                expected_ending, out.stdout
             );
         }
         assert!(out.status.success());
@@ -191,6 +191,12 @@ mod cli_run {
                             eprintln!("WARNING: skipping testing example {} because the test is broken right now!", example.filename);
                             return;
                         }
+                        "hello-swift" => {
+                            if cfg!(not(target_os = "macos")) {
+                                eprintln!("WARNING: skipping testing example {} because it only works on MacOS.", example.filename);
+                                return;
+                            }
+                        }
                         _ => {}
                     }
 
@@ -205,6 +211,9 @@ mod cli_run {
                         example.use_valgrind,
                     );
 
+                    // This is mostly because the false interpreter is still very slow -
+                    // 25s for the cli tests is just not acceptable during development!
+                    #[cfg(not(debug_assertions))]
                     check_output_with_stdin(
                         &file_name,
                         example.stdin,
@@ -278,6 +287,14 @@ mod cli_run {
             stdin: &[],
             input_file: None,
             expected_ending:"Hello, World!\n",
+            use_valgrind: true,
+        },
+        hello_swift:"hello-swift" => Example {
+            filename: "Hello.roc",
+            executable_filename: "hello-swift",
+            stdin: &[],
+            input_file: None,
+            expected_ending:"Hello Swift, meet Roc\n",
             use_valgrind: true,
         },
         hello_web:"hello-web" => Example {
@@ -359,7 +376,7 @@ mod cli_run {
                 stdin: &[],
                 input_file: Some("examples/hello.false"),
                 expected_ending:"Hello, World!\n",
-                use_valgrind: false,
+                use_valgrind: true,
             }
         },
     }

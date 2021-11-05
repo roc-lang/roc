@@ -23,7 +23,7 @@ libc = "0.2"
 page_size = "0.4"
 snafu = { version = "0.6", features = ["backtraces"] }
 ven_graph = { path = "../vendor/pathfinding" }
-indoc = "1.0"
 
 [dev-dependencies]
 pretty_assertions = "0.6"
+indoc = "1.0"

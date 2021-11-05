@@ -1,8 +1,4 @@
-use parity_wasm::builder;
-use parity_wasm::builder::{CodeLocation, FunctionDefinition, ModuleBuilder, SignatureBuilder};
-use parity_wasm::elements::{
-    BlockType, Instruction, Instruction::*, Instructions, Local, ValueType,
-};
+use bumpalo::collections::Vec;
 
 use roc_collections::all::MutMap;
 use roc_module::low_level::LowLevel;
@@ -10,10 +6,10 @@ use roc_module::symbol::Symbol;
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
 use roc_mono::layout::{Builtin, Layout};
 
-use crate::code_builder::CodeBuilder;
 use crate::layout::WasmLayout;
 use crate::storage::{Storage, StoredValue, StoredValueKind};
-use crate::{copy_memory, pop_stack_frame, push_stack_frame, CopyMemoryConfig, LocalId, PTR_TYPE};
+use crate::wasm_module::{BlockType, CodeBuilder, LocalId, Signature, ValueType, WasmModule};
+use crate::{copy_memory, CopyMemoryConfig, Env, PTR_TYPE};
 
 // Don't allocate any constant data at address zero or near it. Would be valid, but bug-prone.
 // Follow Emscripten's example by using 1kB (4 bytes would probably do)
@@ -22,47 +18,50 @@ const UNUSED_DATA_SECTION_BYTES: u32 = 1024;
 #[derive(Clone, Copy, Debug)]
 struct LabelId(u32);
 
-// TODO: use Bumpalo Vec once parity_wasm supports general iterators (>=0.43)
 pub struct WasmBackend<'a> {
-    // Module level: Wasm AST
-    pub module_builder: ModuleBuilder,
+    env: &'a Env<'a>,
 
-    // Module level: internal state & IR mappings
+    // Module-level data
+    pub module: WasmModule<'a>,
     _data_offset_map: MutMap<Literal<'a>, u32>,
     _data_offset_next: u32,
-    proc_symbol_map: MutMap<Symbol, CodeLocation>,
+    proc_symbols: Vec<'a, Symbol>,
 
-    // Function level
-    code_builder: CodeBuilder,
-    storage: Storage,
+    // Function-level data
+    code_builder: CodeBuilder<'a>,
+    storage: Storage<'a>,
 
     /// how many blocks deep are we (used for jumps)
     block_depth: u32,
-    joinpoint_label_map: MutMap<JoinPointId, (u32, std::vec::Vec<StoredValue>)>,
+    joinpoint_label_map: MutMap<JoinPointId, (u32, Vec<'a, StoredValue>)>,
 }
 
 impl<'a> WasmBackend<'a> {
-    pub fn new() -> Self {
+    pub fn new(env: &'a Env<'a>, proc_symbols: Vec<'a, Symbol>) -> Self {
         WasmBackend {
-            // Module: Wasm AST
-            module_builder: builder::module(),
+            env,
 
-            // Module: internal state & IR mappings
+            // Module-level data
+            module: WasmModule::new(env.arena),
             _data_offset_map: MutMap::default(),
             _data_offset_next: UNUSED_DATA_SECTION_BYTES,
-            proc_symbol_map: MutMap::default(),
+            proc_symbols,
 
+            // Function-level data
             block_depth: 0,
             joinpoint_label_map: MutMap::default(),
-
-            // Functions
-            code_builder: CodeBuilder::new(),
-            storage: Storage::new(),
+            code_builder: CodeBuilder::new(env.arena),
+            storage: Storage::new(env.arena),
         }
     }
 
+    /// Reset function-level data
     fn reset(&mut self) {
-        self.code_builder.clear();
+        // Push the completed CodeBuilder into the module and swap it for a new empty one
+        let mut swap_code_builder = CodeBuilder::new(self.env.arena);
+        std::mem::swap(&mut swap_code_builder, &mut self.code_builder);
+        self.module.code.code_builders.push(swap_code_builder);
+
         self.storage.clear();
         self.joinpoint_label_map.clear();
         assert_eq!(self.block_depth, 0);
@@ -74,98 +73,57 @@ impl<'a> WasmBackend<'a> {
 
     ***********************************************************/
 
-    pub fn build_proc(&mut self, proc: Proc<'a>, sym: Symbol) -> Result<u32, String> {
-        // println!("\ngenerating procedure {:?}\n", sym);
+    pub fn build_proc(&mut self, proc: Proc<'a>, _sym: Symbol) -> Result<(), String> {
+        // println!("\ngenerating procedure {:?}\n", _sym);
 
-        let signature_builder = self.start_proc(&proc);
+        self.start_proc(&proc);
 
         self.build_stmt(&proc.body, &proc.ret_layout)?;
 
-        let function_def = self.finalize_proc(signature_builder);
-        let location = self.module_builder.push_function(function_def);
-        let function_index = location.body;
-        self.proc_symbol_map.insert(sym, location);
+        self.finalize_proc()?;
         self.reset();
-        // println!("\nfinished generating {:?}\n", sym);
 
-        Ok(function_index)
+        // println!("\nfinished generating {:?}\n", _sym);
+
+        Ok(())
     }
 
-    fn start_proc(&mut self, proc: &Proc<'a>) -> SignatureBuilder {
+    fn start_proc(&mut self, proc: &Proc<'a>) {
         let ret_layout = WasmLayout::new(&proc.ret_layout);
-
-        let signature_builder = if let WasmLayout::StackMemory { .. } = ret_layout {
+        let ret_type = if ret_layout.is_stack_memory() {
             self.storage.arg_types.push(PTR_TYPE);
             self.start_block(BlockType::NoResult); // block to ensure all paths pop stack memory (if any)
-            builder::signature()
+            None
         } else {
-            let ret_type = ret_layout.value_type();
-            self.start_block(BlockType::Value(ret_type)); // block to ensure all paths pop stack memory (if any)
-            builder::signature().with_result(ret_type)
+            let ty = ret_layout.value_type();
+            self.start_block(BlockType::Value(ty)); // block to ensure all paths pop stack memory (if any)
+            Some(ty)
         };
 
         for (layout, symbol) in proc.args {
-            self.storage.allocate(
-                &WasmLayout::new(layout),
-                *symbol,
-                StoredValueKind::Parameter,
-            );
+            let arg_layout = WasmLayout::new(layout);
+            self.storage
+                .allocate(&arg_layout, *symbol, StoredValueKind::Parameter);
         }
 
-        signature_builder.with_params(self.storage.arg_types.clone())
+        self.module.add_function_signature(Signature {
+            param_types: self.storage.arg_types.clone(),
+            ret_type,
+        });
     }
 
-    fn finalize_proc(&mut self, signature_builder: SignatureBuilder) -> FunctionDefinition {
-        self.end_block(); // end the block from start_proc, to ensure all paths pop stack memory (if any)
+    fn finalize_proc(&mut self) -> Result<(), String> {
+        // end the block from start_proc, to ensure all paths pop stack memory (if any)
+        self.end_block();
 
-        const STACK_FRAME_INSTRUCTIONS_LEN: usize = 10;
-        let mut final_instructions =
-            Vec::with_capacity(self.code_builder.len() + STACK_FRAME_INSTRUCTIONS_LEN);
+        // Write local declarations and stack frame push/pop code
+        self.code_builder.finalize(
+            &self.storage.local_types,
+            self.storage.stack_frame_size,
+            self.storage.stack_frame_pointer,
+        );
 
-        if self.storage.stack_frame_size > 0 {
-            push_stack_frame(
-                &mut final_instructions,
-                self.storage.stack_frame_size,
-                self.storage.stack_frame_pointer.unwrap(),
-            );
-        }
-
-        self.code_builder.finalize_into(&mut final_instructions);
-
-        if self.storage.stack_frame_size > 0 {
-            pop_stack_frame(
-                &mut final_instructions,
-                self.storage.stack_frame_size,
-                self.storage.stack_frame_pointer.unwrap(),
-            );
-        }
-        final_instructions.push(End);
-
-        // Declare local variables (in batches of the same type)
-        let num_locals = self.storage.local_types.len();
-        let mut locals = Vec::with_capacity(num_locals);
-        if num_locals > 0 {
-            let mut batch_type = self.storage.local_types[0];
-            let mut batch_size = 0;
-            for t in &self.storage.local_types {
-                if *t == batch_type {
-                    batch_size += 1;
-                } else {
-                    locals.push(Local::new(batch_size, batch_type));
-                    batch_type = *t;
-                    batch_size = 1;
-                }
-            }
-            locals.push(Local::new(batch_size, batch_type));
-        }
-
-        builder::function()
-            .with_signature(signature_builder.build_sig())
-            .body()
-            .with_locals(locals)
-            .with_instructions(Instructions::new(final_instructions))
-            .build() // body
-            .build() // function
+        Ok(())
     }
 
     /**********************************************************
@@ -177,17 +135,17 @@ impl<'a> WasmBackend<'a> {
     /// start a loop that leaves a value on the stack
     fn start_loop_with_return(&mut self, value_type: ValueType) {
         self.block_depth += 1;
-        self.code_builder.push(Loop(BlockType::Value(value_type)));
+        self.code_builder.loop_(BlockType::Value(value_type));
     }
 
     fn start_block(&mut self, block_type: BlockType) {
         self.block_depth += 1;
-        self.code_builder.push(Block(block_type));
+        self.code_builder.block(block_type);
     }
 
     fn end_block(&mut self) {
         self.block_depth -= 1;
-        self.code_builder.push(End);
+        self.code_builder.end();
     }
 
     fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) -> Result<(), String> {
@@ -250,7 +208,7 @@ impl<'a> WasmBackend<'a> {
 
                     _ => {
                         self.storage.load_symbols(&mut self.code_builder, &[*sym]);
-                        self.code_builder.push(Br(self.block_depth)); // jump to end of function (for stack frame pop)
+                        self.code_builder.br(self.block_depth); // jump to end of function (for stack frame pop)
                     }
                 }
 
@@ -288,13 +246,13 @@ impl<'a> WasmBackend<'a> {
                     self.storage
                         .load_symbols(&mut self.code_builder, &[*cond_symbol]);
 
-                    self.code_builder.push(I32Const(*value as i32));
+                    self.code_builder.i32_const(*value as i32);
 
                     // compare the 2 topmost values
-                    self.code_builder.push(I32Eq);
+                    self.code_builder.i32_eq();
 
                     // "break" out of `i` surrounding blocks
-                    self.code_builder.push(BrIf(i as u32));
+                    self.code_builder.br_if(i as u32);
                 }
 
                 // if we never jumped because a value matched, we're in the default case
@@ -318,7 +276,7 @@ impl<'a> WasmBackend<'a> {
                 remainder,
             } => {
                 // make locals for join pointer parameters
-                let mut jp_param_storages = std::vec::Vec::with_capacity(parameters.len());
+                let mut jp_param_storages = Vec::with_capacity_in(parameters.len(), self.env.arena);
                 for parameter in parameters.iter() {
                     let wasm_layout = WasmLayout::new(&parameter.layout);
                     let mut param_storage = self.storage.allocate(
@@ -370,7 +328,7 @@ impl<'a> WasmBackend<'a> {
 
                 // jump
                 let levels = self.block_depth - target;
-                self.code_builder.push(Br(levels));
+                self.code_builder.br(levels);
 
                 Ok(())
             }
@@ -406,7 +364,8 @@ impl<'a> WasmBackend<'a> {
                     let mut wasm_args_tmp: Vec<Symbol>;
                     let (wasm_args, has_return_val) = match wasm_layout {
                         WasmLayout::StackMemory { .. } => {
-                            wasm_args_tmp = Vec::with_capacity(arguments.len() + 1); // TODO: bumpalo
+                            wasm_args_tmp =
+                                Vec::with_capacity_in(arguments.len() + 1, self.env.arena);
                             wasm_args_tmp.push(*sym);
                             wasm_args_tmp.extend_from_slice(*arguments);
                             (wasm_args_tmp.as_slice(), false)
@@ -416,16 +375,29 @@ impl<'a> WasmBackend<'a> {
 
                     self.storage.load_symbols(&mut self.code_builder, wasm_args);
 
-                    let function_location = self.proc_symbol_map.get(func_sym).ok_or(format!(
-                        "Cannot find function {:?} called from {:?}",
-                        func_sym, sym
-                    ))?;
+                    // Index of the called function in the code section
+                    // TODO: account for inlined functions when we start doing that (remember we emit procs out of order)
+                    let func_index = match self.proc_symbols.iter().position(|s| s == func_sym) {
+                        Some(i) => i as u32,
+                        None => {
+                            // TODO: actually useful linking! Push a relocation for it.
+                            return Err(format!(
+                                "Not yet supporteed: calling foreign function {:?}",
+                                func_sym
+                            ));
+                        }
+                    };
 
-                    self.code_builder.push_call(
-                        function_location.body,
+                    // Index of the function's name in the symbol table
+                    let symbol_index = func_index; // TODO: update this when we add other things to the symbol table
+
+                    self.code_builder.call(
+                        func_index,
+                        symbol_index,
                         wasm_args.len(),
                         has_return_val,
                     );
+
                     Ok(())
                 }
 
@@ -442,25 +414,25 @@ impl<'a> WasmBackend<'a> {
     }
 
     fn load_literal(&mut self, lit: &Literal<'a>, layout: &Layout<'a>) -> Result<(), String> {
-        let instruction = match lit {
-            Literal::Bool(x) => I32Const(*x as i32),
-            Literal::Byte(x) => I32Const(*x as i32),
+        match lit {
+            Literal::Bool(x) => self.code_builder.i32_const(*x as i32),
+            Literal::Byte(x) => self.code_builder.i32_const(*x as i32),
             Literal::Int(x) => match layout {
-                Layout::Builtin(Builtin::Int64) => I64Const(*x as i64),
+                Layout::Builtin(Builtin::Int64) => self.code_builder.i64_const(*x as i64),
                 Layout::Builtin(
                     Builtin::Int32
                     | Builtin::Int16
                     | Builtin::Int8
                     | Builtin::Int1
                     | Builtin::Usize,
-                ) => I32Const(*x as i32),
+                ) => self.code_builder.i32_const(*x as i32),
                 x => {
                     return Err(format!("loading literal, {:?}, is not yet implemented", x));
                 }
             },
             Literal::Float(x) => match layout {
-                Layout::Builtin(Builtin::Float64) => F64Const((*x as f64).to_bits()),
-                Layout::Builtin(Builtin::Float32) => F32Const((*x as f32).to_bits()),
+                Layout::Builtin(Builtin::Float64) => self.code_builder.f64_const(*x as f64),
+                Layout::Builtin(Builtin::Float32) => self.code_builder.f32_const(*x as f32),
                 x => {
                     return Err(format!("loading literal, {:?}, is not yet implemented", x));
                 }
@@ -469,7 +441,6 @@ impl<'a> WasmBackend<'a> {
                 return Err(format!("loading literal, {:?}, is not yet implemented", x));
             }
         };
-        self.code_builder.push(instruction);
         Ok(())
     }
 
@@ -540,34 +511,33 @@ impl<'a> WasmBackend<'a> {
         // Some Roc low-level ops care about wrapping, clipping, sign-extending...
         // For those, we'll need to pre-process each argument before the main op,
         // so simple arrays of instructions won't work. But there are common patterns.
-        let instructions: &[Instruction] = match lowlevel {
+        match lowlevel {
             LowLevel::NumAdd => match return_value_type {
-                ValueType::I32 => &[I32Add],
-                ValueType::I64 => &[I64Add],
-                ValueType::F32 => &[F32Add],
-                ValueType::F64 => &[F64Add],
+                ValueType::I32 => self.code_builder.i32_add(),
+                ValueType::I64 => self.code_builder.i64_add(),
+                ValueType::F32 => self.code_builder.f32_add(),
+                ValueType::F64 => self.code_builder.f64_add(),
             },
             LowLevel::NumSub => match return_value_type {
-                ValueType::I32 => &[I32Sub],
-                ValueType::I64 => &[I64Sub],
-                ValueType::F32 => &[F32Sub],
-                ValueType::F64 => &[F64Sub],
+                ValueType::I32 => self.code_builder.i32_sub(),
+                ValueType::I64 => self.code_builder.i64_sub(),
+                ValueType::F32 => self.code_builder.f32_sub(),
+                ValueType::F64 => self.code_builder.f64_sub(),
             },
             LowLevel::NumMul => match return_value_type {
-                ValueType::I32 => &[I32Mul],
-                ValueType::I64 => &[I64Mul],
-                ValueType::F32 => &[F32Mul],
-                ValueType::F64 => &[F64Mul],
+                ValueType::I32 => self.code_builder.i32_mul(),
+                ValueType::I64 => self.code_builder.i64_mul(),
+                ValueType::F32 => self.code_builder.f32_mul(),
+                ValueType::F64 => self.code_builder.f64_mul(),
             },
             LowLevel::NumGt => {
                 // needs layout of the argument to be implemented fully
-                &[I32GtS]
+                self.code_builder.i32_gt_s()
             }
             _ => {
                 return Err(format!("unsupported low-level op {:?}", lowlevel));
             }
         };
-        self.code_builder.extend_from_slice(instructions);
         Ok(())
     }
 }

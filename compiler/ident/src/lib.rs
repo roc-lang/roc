@@ -231,9 +231,9 @@ impl fmt::Debug for IdentStr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // IdentStr { is_small_str: false, storage: Refcounted(3), elements: [ 1,2,3,4] }
         f.debug_struct("IdentStr")
-            .field("is_small_str", &self.is_small_str())
+            //.field("is_small_str", &self.is_small_str())
             .field("string", &self.as_str())
-            .field("elements", &self.as_slice())
+            //.field("elements", &self.as_slice())
             .finish()
     }
 }

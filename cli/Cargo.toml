@@ -58,15 +58,13 @@ roc_fmt = { path = "../compiler/fmt" }
 roc_reporting = { path = "../compiler/reporting" }
 roc_editor = { path = "../editor", optional = true }
 roc_linker = { path = "../linker" }
-# TODO switch to clap 3.0.0 once it's out. Tried adding clap = "~3.0.0-beta.1" and cargo wouldn't accept it
-clap = { git = "https://github.com/rtfeldman/clap", branch = "master" }
+clap = "= 3.0.0-beta.1"
 const_format = "0.2"
 rustyline = { git = "https://github.com/rtfeldman/rustyline", tag = "prompt-fix" }
 rustyline-derive = { git = "https://github.com/rtfeldman/rustyline", tag = "prompt-fix" }
 im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
 bumpalo = { version = "3.2", features = ["collections"] }
-libc = "0.2"
 libloading = "0.6"
 mimalloc = { version = "0.1.26", default-features = false }
 
@@ -79,7 +77,6 @@ wasmer-wasi = "2.0.0"
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"
-maplit = "1.0.1"
 indoc = "0.3.3"
 quickcheck = "0.8"
 quickcheck_macros = "0.8"
@@ -91,4 +88,3 @@ cli_utils = { path = "cli_utils" }
 [[bench]]
 name = "time_bench"
 harness = false
-

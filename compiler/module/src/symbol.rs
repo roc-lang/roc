@@ -1,7 +1,9 @@
 use crate::ident::{Ident, ModuleName};
+use crate::module_err::{IdentIdNotFound, ModuleIdNotFound, ModuleResult};
 use roc_collections::all::{default_hasher, MutMap, SendMap};
 use roc_ident::IdentStr;
 use roc_region::all::Region;
+use snafu::OptionExt;
 use std::collections::HashMap;
 use std::{fmt, u32};
 
@@ -251,6 +253,30 @@ impl Interns {
     pub fn from_index(module_id: ModuleId, ident_id: u32) -> Symbol {
         Symbol::new(module_id, IdentId(ident_id))
     }
+}
+
+pub fn get_module_ident_ids<'a>(
+    all_ident_ids: &'a MutMap<ModuleId, IdentIds>,
+    module_id: &ModuleId,
+) -> ModuleResult<&'a IdentIds> {
+    all_ident_ids
+        .get(module_id)
+        .with_context(|| ModuleIdNotFound {
+            module_id: format!("{:?}", module_id),
+            all_ident_ids: format!("{:?}", all_ident_ids),
+        })
+}
+
+pub fn get_module_ident_ids_mut<'a>(
+    all_ident_ids: &'a mut MutMap<ModuleId, IdentIds>,
+    module_id: &ModuleId,
+) -> ModuleResult<&'a mut IdentIds> {
+    all_ident_ids
+        .get_mut(module_id)
+        .with_context(|| ModuleIdNotFound {
+            module_id: format!("{:?}", module_id),
+            all_ident_ids: "I could not return all_ident_ids here because of borrowing issues.",
+        })
 }
 
 #[cfg(debug_assertions)]
@@ -536,15 +562,17 @@ impl IdentIds {
     }
 
     pub fn get_or_insert(&mut self, name: &Ident) -> IdentId {
-        match self.by_ident.get(name) {
-            Some(id) => *id,
-            None => {
+        use std::collections::hash_map::Entry;
+
+        match self.by_ident.entry(name.clone()) {
+            Entry::Occupied(occupied) => *occupied.get(),
+            Entry::Vacant(vacant) => {
                 let by_id = &mut self.by_id;
                 let ident_id = IdentId(by_id.len() as u32);
 
                 by_id.push(name.clone());
 
-                self.by_ident.insert(name.clone(), ident_id);
+                vacant.insert(ident_id);
 
                 ident_id
             }
@@ -620,6 +648,17 @@ impl IdentIds {
 
     pub fn get_name(&self, id: IdentId) -> Option<&Ident> {
         self.by_id.get(id.0 as usize)
+    }
+
+    pub fn get_name_str_res(&self, ident_id: IdentId) -> ModuleResult<&str> {
+        Ok(self
+            .get_name(ident_id)
+            .with_context(|| IdentIdNotFound {
+                ident_id,
+                ident_ids_str: format!("{:?}", self),
+            })?
+            .as_inline_str()
+            .as_str())
     }
 }
 
@@ -978,6 +1017,7 @@ define_builtins! {
         17 STR_ALIAS_ANALYSIS_STATIC: "#aliasAnalysisStatic" // string with the static lifetime
         18 STR_FROM_UTF8_RANGE: "fromUtf8Range"
         19 STR_REPEAT: "repeat"
+        20 STR_TRIM: "trim"
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
@@ -1015,6 +1055,12 @@ define_builtins! {
         32 LIST_DROP: "drop"
         33 LIST_SWAP: "swap"
         34 LIST_DROP_AT: "dropAt"
+        35 LIST_DROP_LAST: "dropLast"
+        36 LIST_MIN: "min"
+        37 LIST_MIN_LT: "#minlt"
+        38 LIST_MAX: "max"
+        39 LIST_MAX_GT: "#maxGt"
+        40 LIST_MAP4: "map4"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

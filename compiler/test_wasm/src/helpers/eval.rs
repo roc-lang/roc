@@ -2,10 +2,9 @@ use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+use crate::helpers::wasm32_test_result::Wasm32TestResult;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
-// use roc_std::{RocDec, RocList, RocOrder, RocStr};
-use crate::helpers::wasm32_test_result::Wasm32TestResult;
 use roc_gen_wasm::from_wasm32_memory::FromWasm32Memory;
 
 const TEST_WRAPPER_NAME: &str = "test_wrapper";
@@ -66,17 +65,11 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
 
     use roc_load::file::MonomorphizedModule;
     let MonomorphizedModule {
-        procedures: top_procedures,
+        procedures,
         interns,
         exposed_to_host,
         ..
     } = loaded;
-
-    let mut procedures = MutMap::default();
-
-    for (key, proc) in top_procedures {
-        procedures.insert(key, proc);
-    }
 
     // You can comment and uncomment this block out to get more useful information
     // while you're working on the wasm backend!
@@ -94,6 +87,13 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     //     println!("=================================\n");
     // }
 
+    debug_assert_eq!(exposed_to_host.len(), 1);
+    let main_fn_symbol = loaded.entry_point.symbol;
+    let main_fn_index = procedures
+        .keys()
+        .position(|(s, _)| *s == main_fn_symbol)
+        .unwrap();
+
     let exposed_to_host = exposed_to_host.keys().copied().collect::<MutSet<_>>();
 
     let env = roc_gen_wasm::Env {
@@ -102,13 +102,19 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
         exposed_to_host,
     };
 
-    let (mut builder, main_function_index) =
-        roc_gen_wasm::build_module_help(&env, procedures).unwrap();
-    T::insert_test_wrapper(&mut builder, TEST_WRAPPER_NAME, main_function_index);
+    let mut wasm_module = roc_gen_wasm::build_module_help(&env, procedures).unwrap();
 
-    let module_bytes = builder.build().to_bytes().unwrap();
+    T::insert_test_wrapper(
+        arena,
+        &mut wasm_module,
+        TEST_WRAPPER_NAME,
+        main_fn_index as u32,
+    );
 
-    // for debugging (e.g. with wasm2wat)
+    let mut module_bytes = std::vec::Vec::with_capacity(4096);
+    wasm_module.serialize(&mut module_bytes);
+
+    // for debugging (e.g. with wasm2wat or wasm-objdump)
     if false {
         use std::io::Write;
 
@@ -138,7 +144,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
 
     let store = Store::default();
     // let module = Module::from_file(&store, &test_wasm_path).unwrap();
-    let module = Module::from_binary(&store, &module_bytes).unwrap();
+    let wasmer_module = Module::from_binary(&store, &module_bytes).unwrap();
 
     // First, we create the `WasiEnv`
     use wasmer_wasi::WasiState;
@@ -147,10 +153,10 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     // Then, we get the import object related to our WASI
     // and attach it to the Wasm instance.
     let import_object = wasi_env
-        .import_object(&module)
+        .import_object(&wasmer_module)
         .unwrap_or_else(|_| wasmer::imports!());
 
-    Instance::new(&module, &import_object).unwrap()
+    Instance::new(&wasmer_module, &import_object).unwrap()
 }
 
 #[allow(dead_code)]
@@ -188,9 +194,8 @@ where
 macro_rules! assert_wasm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
         match $crate::helpers::eval::assert_wasm_evals_to_help::<$ty>($src, $expected) {
-            Err(msg) => println!("{:?}", msg),
+            Err(msg) => panic!("{:?}", msg),
             Ok(actual) => {
-                #[allow(clippy::bool_assert_comparison)]
                 assert_eq!($transform(actual), $expected)
             }
         }

@@ -26,6 +26,7 @@ comptime {
     exportListFn(list.listMap, "map");
     exportListFn(list.listMap2, "map2");
     exportListFn(list.listMap3, "map3");
+    exportListFn(list.listMap4, "map4");
     exportListFn(list.listMapWithIndex, "map_with_index");
     exportListFn(list.listKeepIf, "keep_if");
     exportListFn(list.listWalk, "walk");
@@ -121,6 +122,7 @@ comptime {
     exportStrFn(str.fromUtf8C, "from_utf8");
     exportStrFn(str.fromUtf8RangeC, "from_utf8_range");
     exportStrFn(str.repeat, "repeat");
+    exportStrFn(str.strTrim, "trim");
 }
 
 // Utils
@@ -159,7 +161,8 @@ fn exportUtilsFn(comptime func: anytype, comptime func_name: []const u8) void {
 
 // Custom panic function, as builtin Zig version errors during LLVM verification
 pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace) noreturn {
-    if (std.builtin.is_test) {
+    const builtin = @import("builtin");
+    if (builtin.is_test) {
         std.debug.print("{s}: {?}", .{ message, stacktrace });
     } else {
         _ = message;

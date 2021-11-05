@@ -977,3 +977,94 @@ fn str_repeat_empty_string() {
 fn str_repeat_zero_times() {
     assert_evals_to!(indoc!(r#"Str.repeat "Roc" 0"#), RocStr::from(""), RocStr);
 }
+
+#[test]
+fn str_trim_empty_string() {
+    assert_evals_to!(indoc!(r#"Str.trim """#), RocStr::from(""), RocStr);
+}
+
+#[test]
+fn str_trim_small_blank_string() {
+    assert_evals_to!(indoc!(r#"Str.trim " ""#), RocStr::from(""), RocStr);
+}
+
+#[test]
+fn str_trim_small_to_small() {
+    assert_evals_to!(
+        indoc!(r#"Str.trim "  hello world  ""#),
+        RocStr::from("hello world"),
+        RocStr
+    );
+}
+
+#[test]
+fn str_trim_large_to_large_unique() {
+    assert_evals_to!(
+        indoc!(r#"Str.trim (Str.concat "  " "hello world from a large string ")"#),
+        RocStr::from("hello world from a large string"),
+        RocStr
+    );
+}
+
+#[test]
+fn str_trim_large_to_small_unique() {
+    assert_evals_to!(
+        indoc!(r#"Str.trim (Str.concat "  " "hello world        ")"#),
+        RocStr::from("hello world"),
+        RocStr
+    );
+}
+
+#[test]
+fn str_trim_large_to_large_shared() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+               original : Str
+               original = " hello world world "
+
+               { trimmed: Str.trim original, original: original }
+               "#
+        ),
+        (
+            RocStr::from(" hello world world "),
+            RocStr::from("hello world world"),
+        ),
+        (RocStr, RocStr)
+    );
+}
+
+#[test]
+fn str_trim_large_to_small_shared() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+               original : Str
+               original = " hello world             "
+
+               { trimmed: Str.trim original, original: original }
+               "#
+        ),
+        (
+            RocStr::from(" hello world             "),
+            RocStr::from("hello world"),
+        ),
+        (RocStr, RocStr)
+    );
+}
+
+#[test]
+fn str_trim_small_to_small_shared() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+               original : Str
+               original = " hello world "
+
+               { trimmed: Str.trim original, original: original }
+               "#
+        ),
+        (RocStr::from(" hello world "), RocStr::from("hello world"),),
+        (RocStr, RocStr)
+    );
+}

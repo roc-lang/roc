@@ -8,6 +8,7 @@ use roc_types::subs::{
     Content, FlatType, RecordFields, Subs, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::{gather_fields_unsorted_iter, RecordField};
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use ven_pretty::{DocAllocator, DocBuilder};
 
@@ -723,6 +724,14 @@ impl<'a, 'b> Env<'a, 'b> {
     }
 }
 
+const fn round_up_to_alignment(width: u32, alignment: u32) -> u32 {
+    if alignment != 0 && width % alignment > 0 {
+        width + alignment - (width % alignment)
+    } else {
+        width
+    }
+}
+
 impl<'a> Layout<'a> {
     fn new_help<'b>(
         env: &mut Env<'a, 'b>,
@@ -858,11 +867,7 @@ impl<'a> Layout<'a> {
         let width = self.stack_size_without_alignment(pointer_size);
         let alignment = self.alignment_bytes(pointer_size);
 
-        if alignment != 0 && width % alignment > 0 {
-            width + alignment - (width % alignment)
-        } else {
-            width
-        }
+        round_up_to_alignment(width, alignment)
     }
 
     fn stack_size_without_alignment(&self, pointer_size: u32) -> u32 {
@@ -884,6 +889,8 @@ impl<'a> Layout<'a> {
 
                 match variant {
                     NonRecursive(fields) => {
+                        let tag_id_builtin = variant.tag_id_builtin();
+
                         fields
                             .iter()
                             .map(|tag_layout| {
@@ -893,9 +900,10 @@ impl<'a> Layout<'a> {
                                     .sum::<u32>()
                             })
                             .max()
+                            .map(|w| round_up_to_alignment(w, tag_id_builtin.alignment_bytes(pointer_size)))
                             .unwrap_or_default()
                             // the size of the tag_id
-                            + variant.tag_id_builtin().stack_size(pointer_size)
+                            + tag_id_builtin.stack_size(pointer_size)
                     }
 
                     Recursive(_)
@@ -923,13 +931,28 @@ impl<'a> Layout<'a> {
                 use UnionLayout::*;
 
                 match variant {
-                    NonRecursive(tags) => tags
-                        .iter()
-                        .map(|x| x.iter())
-                        .flatten()
-                        .map(|x| x.alignment_bytes(pointer_size))
-                        .max()
-                        .unwrap_or(0),
+                    NonRecursive(tags) => {
+                        let max_alignment = tags
+                            .iter()
+                            .flat_map(|layouts| {
+                                layouts
+                                    .iter()
+                                    .map(|layout| layout.alignment_bytes(pointer_size))
+                            })
+                            .max();
+
+                        match max_alignment {
+                            Some(align) => {
+                                let tag_id_builtin = variant.tag_id_builtin();
+
+                                round_up_to_alignment(
+                                    align,
+                                    tag_id_builtin.alignment_bytes(pointer_size),
+                                )
+                            }
+                            None => 0,
+                        }
+                    }
                     Recursive(_)
                     | NullableWrapped { .. }
                     | NullableUnwrapped { .. }
@@ -2534,6 +2557,64 @@ struct IdsByLayout<'a> {
     next_id: u32,
 }
 
+impl<'a> IdsByLayout<'a> {
+    #[inline(always)]
+    fn insert_layout(&mut self, layout: Layout<'a>) -> LayoutId {
+        match self.by_id.entry(layout) {
+            Entry::Vacant(vacant) => {
+                let answer = self.next_id;
+                vacant.insert(answer);
+                self.next_id += 1;
+
+                LayoutId(answer)
+            }
+            Entry::Occupied(occupied) => LayoutId(*occupied.get()),
+        }
+    }
+
+    #[inline(always)]
+    fn singleton_layout(layout: Layout<'a>) -> (Self, LayoutId) {
+        let mut by_id = HashMap::with_capacity_and_hasher(1, default_hasher());
+        by_id.insert(layout, 1);
+
+        let ids_by_layout = IdsByLayout {
+            by_id,
+            toplevels_by_id: Default::default(),
+            next_id: 2,
+        };
+
+        (ids_by_layout, LayoutId(1))
+    }
+
+    #[inline(always)]
+    fn insert_toplevel(&mut self, layout: crate::ir::ProcLayout<'a>) -> LayoutId {
+        match self.toplevels_by_id.entry(layout) {
+            Entry::Vacant(vacant) => {
+                let answer = self.next_id;
+                vacant.insert(answer);
+                self.next_id += 1;
+
+                LayoutId(answer)
+            }
+            Entry::Occupied(occupied) => LayoutId(*occupied.get()),
+        }
+    }
+
+    #[inline(always)]
+    fn singleton_toplevel(layout: crate::ir::ProcLayout<'a>) -> (Self, LayoutId) {
+        let mut toplevels_by_id = HashMap::with_capacity_and_hasher(1, default_hasher());
+        toplevels_by_id.insert(layout, 1);
+
+        let ids_by_layout = IdsByLayout {
+            by_id: Default::default(),
+            toplevels_by_id,
+            next_id: 2,
+        };
+
+        (ids_by_layout, LayoutId(1))
+    }
+}
+
 #[derive(Default)]
 pub struct LayoutIds<'a> {
     by_symbol: MutMap<Symbol, IdsByLayout<'a>>,
@@ -2542,60 +2623,38 @@ pub struct LayoutIds<'a> {
 impl<'a> LayoutIds<'a> {
     /// Returns a LayoutId which is unique for the given symbol and layout.
     /// If given the same symbol and same layout, returns the same LayoutId.
+    #[inline(always)]
     pub fn get<'b>(&mut self, symbol: Symbol, layout: &'b Layout<'a>) -> LayoutId {
-        // Note: this function does some weird stuff to satisfy the borrow checker.
-        // There's probably a nicer way to write it that still works.
-        let ids = self.by_symbol.entry(symbol).or_insert_with(|| IdsByLayout {
-            by_id: HashMap::with_capacity_and_hasher(1, default_hasher()),
-            toplevels_by_id: Default::default(),
-            next_id: 1,
-        });
+        match self.by_symbol.entry(symbol) {
+            Entry::Vacant(vacant) => {
+                let (ids_by_layout, layout_id) = IdsByLayout::singleton_layout(*layout);
 
-        // Get the id associated with this layout, or default to next_id.
-        let answer = ids.by_id.get(layout).copied().unwrap_or(ids.next_id);
+                vacant.insert(ids_by_layout);
 
-        // If we had to default to next_id, it must not have been found;
-        // store the ID we're going to return and increment next_id.
-        if answer == ids.next_id {
-            ids.by_id.insert(*layout, ids.next_id);
-
-            ids.next_id += 1;
+                layout_id
+            }
+            Entry::Occupied(mut occupied_ids) => occupied_ids.get_mut().insert_layout(*layout),
         }
-
-        LayoutId(answer)
     }
 
     /// Returns a LayoutId which is unique for the given symbol and layout.
     /// If given the same symbol and same layout, returns the same LayoutId.
+    #[inline(always)]
     pub fn get_toplevel<'b>(
         &mut self,
         symbol: Symbol,
         layout: &'b crate::ir::ProcLayout<'a>,
     ) -> LayoutId {
-        // Note: this function does some weird stuff to satisfy the borrow checker.
-        // There's probably a nicer way to write it that still works.
-        let ids = self.by_symbol.entry(symbol).or_insert_with(|| IdsByLayout {
-            by_id: Default::default(),
-            toplevels_by_id: HashMap::with_capacity_and_hasher(1, default_hasher()),
-            next_id: 1,
-        });
+        match self.by_symbol.entry(symbol) {
+            Entry::Vacant(vacant) => {
+                let (ids_by_layout, layout_id) = IdsByLayout::singleton_toplevel(*layout);
 
-        // Get the id associated with this layout, or default to next_id.
-        let answer = ids
-            .toplevels_by_id
-            .get(layout)
-            .copied()
-            .unwrap_or(ids.next_id);
+                vacant.insert(ids_by_layout);
 
-        // If we had to default to next_id, it must not have been found;
-        // store the ID we're going to return and increment next_id.
-        if answer == ids.next_id {
-            ids.toplevels_by_id.insert(*layout, ids.next_id);
-
-            ids.next_id += 1;
+                layout_id
+            }
+            Entry::Occupied(mut occupied_ids) => occupied_ids.get_mut().insert_toplevel(*layout),
         }
-
-        LayoutId(answer)
     }
 }
 

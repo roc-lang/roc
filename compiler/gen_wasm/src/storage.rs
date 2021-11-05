@@ -1,14 +1,12 @@
-use parity_wasm::elements::{Instruction::*, ValueType};
+use bumpalo::collections::Vec;
+use bumpalo::Bump;
 
 use roc_collections::all::MutMap;
 use roc_module::symbol::Symbol;
 
-use crate::code_builder::{CodeBuilder, VirtualMachineSymbolState};
 use crate::layout::WasmLayout;
-use crate::{
-    copy_memory, round_up_to_alignment, CopyMemoryConfig, LocalId, ALIGN_1, ALIGN_2, ALIGN_4,
-    ALIGN_8, PTR_SIZE, PTR_TYPE,
-};
+use crate::wasm_module::{CodeBuilder, LocalId, ValueType, VirtualMachineSymbolState};
+use crate::{copy_memory, round_up_to_alignment, CopyMemoryConfig, PTR_SIZE, PTR_TYPE};
 
 pub enum StoredValueKind {
     Parameter,
@@ -58,19 +56,19 @@ pub enum StoredValue {
 
 /// Helper structure for WasmBackend, to keep track of how values are stored,
 /// including the VM stack, local variables, and linear memory
-pub struct Storage {
-    pub arg_types: std::vec::Vec<ValueType>,
-    pub local_types: std::vec::Vec<ValueType>,
+pub struct Storage<'a> {
+    pub arg_types: Vec<'a, ValueType>,
+    pub local_types: Vec<'a, ValueType>,
     pub symbol_storage_map: MutMap<Symbol, StoredValue>,
     pub stack_frame_pointer: Option<LocalId>,
     pub stack_frame_size: i32,
 }
 
-impl Storage {
-    pub fn new() -> Self {
+impl<'a> Storage<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
         Storage {
-            arg_types: std::vec::Vec::with_capacity(8),
-            local_types: std::vec::Vec::with_capacity(32),
+            arg_types: Vec::with_capacity_in(8, arena),
+            local_types: Vec::with_capacity_in(32, arena),
             symbol_storage_map: MutMap::default(),
             stack_frame_pointer: None,
             stack_frame_size: 0,
@@ -239,7 +237,7 @@ impl Storage {
                     location: StackMemoryLocation::PointerArg(local_id),
                     ..
                 } => {
-                    code_builder.push(GetLocal(local_id.0));
+                    code_builder.get_local(local_id);
                     code_builder.set_top_symbol(*sym);
                 }
 
@@ -247,11 +245,9 @@ impl Storage {
                     location: StackMemoryLocation::FrameOffset(offset),
                     ..
                 } => {
-                    code_builder.extend_from_slice(&[
-                        GetLocal(self.stack_frame_pointer.unwrap().0),
-                        I32Const(offset as i32),
-                        I32Add,
-                    ]);
+                    code_builder.get_local(self.stack_frame_pointer.unwrap());
+                    code_builder.i32_const(offset as i32);
+                    code_builder.i32_add();
                     code_builder.set_top_symbol(*sym);
                 }
             }
@@ -295,20 +291,20 @@ impl Storage {
             | StoredValue::Local {
                 value_type, size, ..
             } => {
-                let store_instruction = match (value_type, size) {
-                    (ValueType::I64, 8) => I64Store(ALIGN_8, to_offset),
-                    (ValueType::I32, 4) => I32Store(ALIGN_4, to_offset),
-                    (ValueType::I32, 2) => I32Store16(ALIGN_2, to_offset),
-                    (ValueType::I32, 1) => I32Store8(ALIGN_1, to_offset),
-                    (ValueType::F32, 4) => F32Store(ALIGN_4, to_offset),
-                    (ValueType::F64, 8) => F64Store(ALIGN_8, to_offset),
+                use crate::wasm_module::Align::*;
+                code_builder.get_local(to_ptr);
+                self.load_symbols(code_builder, &[from_symbol]);
+                match (value_type, size) {
+                    (ValueType::I64, 8) => code_builder.i64_store(Bytes8, to_offset),
+                    (ValueType::I32, 4) => code_builder.i32_store(Bytes4, to_offset),
+                    (ValueType::I32, 2) => code_builder.i32_store16(Bytes2, to_offset),
+                    (ValueType::I32, 1) => code_builder.i32_store8(Bytes1, to_offset),
+                    (ValueType::F32, 4) => code_builder.f32_store(Bytes4, to_offset),
+                    (ValueType::F64, 8) => code_builder.f64_store(Bytes8, to_offset),
                     _ => {
                         panic!("Cannot store {:?} with alignment of {:?}", value_type, size);
                     }
                 };
-                code_builder.push(GetLocal(to_ptr.0));
-                self.load_symbols(code_builder, &[from_symbol]);
-                code_builder.push(store_instruction);
                 size
             }
         }
@@ -341,7 +337,7 @@ impl Storage {
                 debug_assert!(to_value_type == from_value_type);
                 debug_assert!(to_size == from_size);
                 self.load_symbols(code_builder, &[from_symbol]);
-                code_builder.push(SetLocal(to_local_id.0));
+                code_builder.set_local(*to_local_id);
                 self.symbol_storage_map.insert(from_symbol, to.clone());
             }
 
@@ -359,8 +355,8 @@ impl Storage {
             ) => {
                 debug_assert!(to_value_type == from_value_type);
                 debug_assert!(to_size == from_size);
-                code_builder
-                    .extend_from_slice(&[GetLocal(from_local_id.0), SetLocal(to_local_id.0)]);
+                code_builder.get_local(*from_local_id);
+                code_builder.set_local(*to_local_id);
             }
 
             (
@@ -419,7 +415,7 @@ impl Storage {
             let local_id = self.get_next_local_id();
             if vm_state != VirtualMachineSymbolState::NotYetPushed {
                 code_builder.load_symbol(symbol, vm_state, local_id);
-                code_builder.push(SetLocal(local_id.0));
+                code_builder.set_local(local_id);
             }
 
             self.local_types.push(value_type);

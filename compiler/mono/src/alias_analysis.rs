@@ -10,7 +10,8 @@ use roc_module::symbol::Symbol;
 use std::convert::TryFrom;
 
 use crate::ir::{
-    Call, CallType, Expr, HostExposedLayouts, ListLiteralElement, Literal, ModifyRc, Proc, Stmt,
+    Call, CallType, Expr, HostExposedLayouts, ListLiteralElement, Literal, ModifyRc, OptLevel,
+    Proc, Stmt,
 };
 use crate::layout::{Builtin, Layout, ListLayout, RawFunctionLayout, UnionLayout};
 
@@ -109,6 +110,7 @@ fn bytes_as_ascii(bytes: &[u8]) -> String {
 }
 
 pub fn spec_program<'a, I>(
+    opt_level: OptLevel,
     entry_point: crate::ir::EntryPoint<'a>,
     procs: I,
 ) -> Result<morphic_lib::Solutions>
@@ -239,7 +241,10 @@ where
         eprintln!("{}", program.to_source_string());
     }
 
-    morphic_lib::solve(program)
+    match opt_level {
+        OptLevel::Development | OptLevel::Normal => morphic_lib::solve_trivial(program),
+        OptLevel::Optimize => morphic_lib::solve(program),
+    }
 }
 
 /// if you want an "escape hatch" which allows you construct "best-case scenario" values
@@ -556,6 +561,84 @@ fn build_tuple_type(builder: &mut impl TypeContext, layouts: &[Layout]) -> Resul
     builder.add_tuple_type(&field_types)
 }
 
+#[repr(u32)]
+#[derive(Clone, Copy)]
+enum KeepResult {
+    Errs = ERR_TAG_ID,
+    Oks = OK_TAG_ID,
+}
+
+impl KeepResult {
+    fn invert(&self) -> Self {
+        match self {
+            KeepResult::Errs => KeepResult::Oks,
+            KeepResult::Oks => KeepResult::Errs,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ResultRepr<'a> {
+    Int1,
+    NonRecursive { err: Layout<'a>, ok: Layout<'a> },
+}
+
+impl<'a> ResultRepr<'a> {
+    fn from_layout(layout: &Layout<'a>) -> Self {
+        match layout {
+            Layout::Union(UnionLayout::NonRecursive(tags)) => ResultRepr::NonRecursive {
+                err: tags[ERR_TAG_ID as usize][0],
+                ok: tags[OK_TAG_ID as usize][0],
+            },
+            Layout::Builtin(Builtin::Int1) => ResultRepr::Int1,
+            other => unreachable!("unexpected layout: {:?}", other),
+        }
+    }
+
+    fn unwrap(
+        &self,
+        builder: &mut FuncDefBuilder,
+        block: BlockId,
+        err_or_ok: ValueId,
+        keep_tag_id: u32,
+    ) -> Result<ValueId> {
+        match self {
+            ResultRepr::NonRecursive { .. } => {
+                let unwrapped = builder.add_unwrap_union(block, err_or_ok, keep_tag_id)?;
+
+                builder.add_get_tuple_field(block, unwrapped, 0)
+            }
+            ResultRepr::Int1 => builder.add_make_tuple(block, &[]),
+        }
+    }
+}
+
+fn add_loop(
+    builder: &mut FuncDefBuilder,
+    block: BlockId,
+    state_type: TypeId,
+    init_state: ValueId,
+    make_body: impl for<'a> FnOnce(&'a mut FuncDefBuilder, BlockId, ValueId) -> Result<ValueId>,
+) -> Result<ValueId> {
+    let sub_block = builder.add_block();
+    let (loop_cont, loop_arg) = builder.declare_continuation(sub_block, state_type, state_type)?;
+    let body = builder.add_block();
+    let ret_branch = builder.add_block();
+    let loop_branch = builder.add_block();
+    let new_state = make_body(builder, loop_branch, loop_arg)?;
+    let unreachable = builder.add_jump(loop_branch, loop_cont, new_state, state_type)?;
+    let result = builder.add_choice(
+        body,
+        &[
+            BlockExpr(ret_branch, loop_arg),
+            BlockExpr(loop_branch, unreachable),
+        ],
+    )?;
+    builder.define_continuation(loop_cont, BlockExpr(body, result))?;
+    let unreachable = builder.add_jump(sub_block, loop_cont, init_state, state_type)?;
+    builder.add_sub_block(block, BlockExpr(sub_block, unreachable))
+}
+
 fn call_spec(
     builder: &mut FuncDefBuilder,
     env: &Env,
@@ -608,6 +691,7 @@ fn call_spec(
         HigherOrderLowLevel {
             specialization_id,
             closure_env_layout,
+            update_mode,
             op,
             arg_layouts,
             ret_layout,
@@ -615,192 +699,403 @@ fn call_spec(
             function_env,
             ..
         } => {
+            use crate::low_level::HigherOrder::*;
+
             let array = specialization_id.to_bytes();
             let spec_var = CalleeSpecVar(&array);
+
+            let mode = update_mode.to_bytes();
+            let update_mode_var = UpdateModeVar(&mode);
 
             let it = arg_layouts.iter().copied();
             let bytes = func_name_bytes_help(*function_name, it, *ret_layout);
             let name = FuncName(&bytes);
             let module = MOD_APP;
 
-            use crate::low_level::HigherOrder::*;
+            let closure_env = env.symbols[function_env];
+
+            macro_rules! call_function {
+                ($builder: expr, $block:expr, [$($arg:expr),+ $(,)?]) => {{
+                    let argument = if closure_env_layout.is_none() {
+                        $builder.add_make_tuple($block, &[$($arg),+])?
+                    } else {
+                        $builder.add_make_tuple($block, &[$($arg),+, closure_env])?
+                    };
+
+                    $builder.add_call($block, spec_var, module, name, argument)?
+                }};
+            }
 
             match op {
                 DictWalk { xs, state } => {
                     let dict = env.symbols[xs];
                     let state = env.symbols[state];
-                    let closure_env = env.symbols[function_env];
 
-                    let bag = builder.add_get_tuple_field(block, dict, DICT_BAG_INDEX)?;
-                    let _cell = builder.add_get_tuple_field(block, dict, DICT_CELL_INDEX)?;
+                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
+                        let bag = builder.add_get_tuple_field(block, dict, DICT_BAG_INDEX)?;
 
-                    let first = builder.add_bag_get(block, bag)?;
+                        let element = builder.add_bag_get(block, bag)?;
 
-                    let key = builder.add_get_tuple_field(block, first, 0)?;
-                    let val = builder.add_get_tuple_field(block, first, 1)?;
+                        let key = builder.add_get_tuple_field(block, element, 0)?;
+                        let val = builder.add_get_tuple_field(block, element, 1)?;
 
-                    let argument = if closure_env_layout.is_none() {
-                        builder.add_make_tuple(block, &[state, key, val])?
-                    } else {
-                        builder.add_make_tuple(block, &[state, key, val, closure_env])?
+                        let new_state = call_function!(builder, block, [state, key, val]);
+
+                        Ok(new_state)
                     };
-                    builder.add_call(block, spec_var, module, name, argument)?;
+
+                    let state_layout = arg_layouts[0];
+                    let state_type = layout_spec(builder, &state_layout)?;
+                    let init_state = state;
+
+                    add_loop(builder, block, state_type, init_state, loop_body)
                 }
 
-                ListWalk { xs, state }
-                | ListWalkBackwards { xs, state }
-                | ListWalkUntil { xs, state } => {
+                ListWalk { xs, state } | ListWalkBackwards { xs, state } => {
                     let list = env.symbols[xs];
                     let state = env.symbols[state];
-                    let closure_env = env.symbols[function_env];
 
-                    let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
-                    let _cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
+                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
+                        let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
 
-                    let first = builder.add_bag_get(block, bag)?;
+                        let element = builder.add_bag_get(block, bag)?;
 
-                    let argument = if closure_env_layout.is_none() {
-                        builder.add_make_tuple(block, &[state, first])?
-                    } else {
-                        builder.add_make_tuple(block, &[state, first, closure_env])?
+                        let new_state = call_function!(builder, block, [state, element]);
+
+                        Ok(new_state)
                     };
-                    builder.add_call(block, spec_var, module, name, argument)?;
+
+                    let state_layout = arg_layouts[0];
+                    let state_type = layout_spec(builder, &state_layout)?;
+                    let init_state = state;
+
+                    add_loop(builder, block, state_type, init_state, loop_body)
+                }
+                ListWalkUntil { xs, state } => {
+                    let list = env.symbols[xs];
+                    let state = env.symbols[state];
+
+                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
+                        let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
+
+                        let element = builder.add_bag_get(block, bag)?;
+
+                        let continue_or_stop = call_function!(builder, block, [state, element]);
+
+                        // just assume it is a continue
+                        let unwrapped = builder.add_unwrap_union(block, continue_or_stop, 0)?;
+                        let new_state = builder.add_get_tuple_field(block, unwrapped, 0)?;
+
+                        Ok(new_state)
+                    };
+
+                    let state_layout = arg_layouts[0];
+                    let state_type = layout_spec(builder, &state_layout)?;
+                    let init_state = state;
+
+                    add_loop(builder, block, state_type, init_state, loop_body)
                 }
 
                 ListMapWithIndex { xs } => {
                     let list = env.symbols[xs];
-                    let closure_env = env.symbols[function_env];
 
-                    let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
-                    let _cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
+                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
+                        let input_bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
 
-                    let first = builder.add_bag_get(block, bag)?;
-                    let index = builder.add_make_tuple(block, &[])?;
+                        let element = builder.add_bag_get(block, input_bag)?;
+                        let index = builder.add_make_tuple(block, &[])?;
 
-                    let argument = if closure_env_layout.is_none() {
-                        builder.add_make_tuple(block, &[index, first])?
-                    } else {
-                        builder.add_make_tuple(block, &[index, first, closure_env])?
+                        let new_element = call_function!(builder, block, [index, element]);
+
+                        list_append(builder, block, update_mode_var, state, new_element)
                     };
-                    builder.add_call(block, spec_var, module, name, argument)?;
+
+                    let output_element_type = layout_spec(builder, ret_layout)?;
+
+                    let state_layout = Layout::Builtin(Builtin::List(ret_layout));
+                    let state_type = layout_spec(builder, &state_layout)?;
+
+                    let init_state = new_list(builder, block, output_element_type)?;
+
+                    add_loop(builder, block, state_type, init_state, loop_body)
                 }
 
                 ListMap { xs } => {
                     let list = env.symbols[xs];
-                    let closure_env = env.symbols[function_env];
 
-                    let bag1 = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
-                    let _cell1 = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
+                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
+                        let input_bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
 
-                    let elem1 = builder.add_bag_get(block, bag1)?;
+                        let element = builder.add_bag_get(block, input_bag)?;
 
-                    let argument = if closure_env_layout.is_none() {
-                        builder.add_make_tuple(block, &[elem1])?
-                    } else {
-                        builder.add_make_tuple(block, &[elem1, closure_env])?
+                        let new_element = call_function!(builder, block, [element]);
+
+                        list_append(builder, block, update_mode_var, state, new_element)
                     };
-                    builder.add_call(block, spec_var, module, name, argument)?;
+
+                    let output_element_type = layout_spec(builder, ret_layout)?;
+
+                    let state_layout = Layout::Builtin(Builtin::List(ret_layout));
+                    let state_type = layout_spec(builder, &state_layout)?;
+
+                    let init_state = new_list(builder, block, output_element_type)?;
+
+                    add_loop(builder, block, state_type, init_state, loop_body)
                 }
 
                 ListSortWith { xs } => {
                     let list = env.symbols[xs];
-                    let closure_env = env.symbols[function_env];
 
-                    let bag1 = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
-                    let _cell1 = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
+                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
+                        let bag = builder.add_get_tuple_field(block, state, LIST_BAG_INDEX)?;
+                        let cell = builder.add_get_tuple_field(block, state, LIST_CELL_INDEX)?;
 
-                    let elem1 = builder.add_bag_get(block, bag1)?;
+                        let element_1 = builder.add_bag_get(block, bag)?;
+                        let element_2 = builder.add_bag_get(block, bag)?;
 
-                    let argument = if closure_env_layout.is_none() {
-                        builder.add_make_tuple(block, &[elem1, elem1])?
-                    } else {
-                        builder.add_make_tuple(block, &[elem1, elem1, closure_env])?
+                        let _ = call_function!(builder, block, [element_1, element_2]);
+
+                        builder.add_update(block, update_mode_var, cell)?;
+
+                        let new_cell = builder.add_new_heap_cell(block)?;
+                        builder.add_make_tuple(block, &[new_cell, bag])
                     };
-                    builder.add_call(block, spec_var, module, name, argument)?;
+
+                    let state_layout = Layout::Builtin(Builtin::List(&arg_layouts[0]));
+                    let state_type = layout_spec(builder, &state_layout)?;
+                    let init_state = list;
+
+                    add_loop(builder, block, state_type, init_state, loop_body)
                 }
 
                 ListMap2 { xs, ys } => {
                     let list1 = env.symbols[xs];
                     let list2 = env.symbols[ys];
-                    let closure_env = env.symbols[function_env];
 
-                    let bag1 = builder.add_get_tuple_field(block, list1, LIST_BAG_INDEX)?;
-                    let _cell1 = builder.add_get_tuple_field(block, list1, LIST_CELL_INDEX)?;
-                    let elem1 = builder.add_bag_get(block, bag1)?;
+                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
+                        let input_bag_1 =
+                            builder.add_get_tuple_field(block, list1, LIST_BAG_INDEX)?;
+                        let input_bag_2 =
+                            builder.add_get_tuple_field(block, list2, LIST_BAG_INDEX)?;
 
-                    let bag2 = builder.add_get_tuple_field(block, list2, LIST_BAG_INDEX)?;
-                    let _cell2 = builder.add_get_tuple_field(block, list2, LIST_CELL_INDEX)?;
-                    let elem2 = builder.add_bag_get(block, bag2)?;
+                        let element_1 = builder.add_bag_get(block, input_bag_1)?;
+                        let element_2 = builder.add_bag_get(block, input_bag_2)?;
 
-                    let argument = if closure_env_layout.is_none() {
-                        builder.add_make_tuple(block, &[elem1, elem2])?
-                    } else {
-                        builder.add_make_tuple(block, &[elem1, elem2, closure_env])?
+                        let new_element = call_function!(builder, block, [element_1, element_2]);
+
+                        list_append(builder, block, update_mode_var, state, new_element)
                     };
-                    builder.add_call(block, spec_var, module, name, argument)?;
+
+                    let output_element_type = layout_spec(builder, ret_layout)?;
+
+                    let state_layout = Layout::Builtin(Builtin::List(ret_layout));
+                    let state_type = layout_spec(builder, &state_layout)?;
+
+                    let init_state = new_list(builder, block, output_element_type)?;
+
+                    add_loop(builder, block, state_type, init_state, loop_body)
                 }
 
                 ListMap3 { xs, ys, zs } => {
                     let list1 = env.symbols[xs];
                     let list2 = env.symbols[ys];
                     let list3 = env.symbols[zs];
-                    let closure_env = env.symbols[function_env];
 
-                    let bag1 = builder.add_get_tuple_field(block, list1, LIST_BAG_INDEX)?;
-                    let _cell1 = builder.add_get_tuple_field(block, list1, LIST_CELL_INDEX)?;
-                    let elem1 = builder.add_bag_get(block, bag1)?;
+                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
+                        let input_bag_1 =
+                            builder.add_get_tuple_field(block, list1, LIST_BAG_INDEX)?;
+                        let input_bag_2 =
+                            builder.add_get_tuple_field(block, list2, LIST_BAG_INDEX)?;
+                        let input_bag_3 =
+                            builder.add_get_tuple_field(block, list3, LIST_BAG_INDEX)?;
 
-                    let bag2 = builder.add_get_tuple_field(block, list2, LIST_BAG_INDEX)?;
-                    let _cell2 = builder.add_get_tuple_field(block, list2, LIST_CELL_INDEX)?;
-                    let elem2 = builder.add_bag_get(block, bag2)?;
+                        let element_1 = builder.add_bag_get(block, input_bag_1)?;
+                        let element_2 = builder.add_bag_get(block, input_bag_2)?;
+                        let element_3 = builder.add_bag_get(block, input_bag_3)?;
 
-                    let bag3 = builder.add_get_tuple_field(block, list3, LIST_BAG_INDEX)?;
-                    let _cell3 = builder.add_get_tuple_field(block, list3, LIST_CELL_INDEX)?;
-                    let elem3 = builder.add_bag_get(block, bag3)?;
+                        let new_element =
+                            call_function!(builder, block, [element_1, element_2, element_3]);
 
-                    let argument = if closure_env_layout.is_none() {
-                        builder.add_make_tuple(block, &[elem1, elem2, elem3])?
-                    } else {
-                        builder.add_make_tuple(block, &[elem1, elem2, elem3, closure_env])?
+                        list_append(builder, block, update_mode_var, state, new_element)
                     };
-                    builder.add_call(block, spec_var, module, name, argument)?;
+
+                    let output_element_type = layout_spec(builder, ret_layout)?;
+
+                    let state_layout = Layout::Builtin(Builtin::List(ret_layout));
+                    let state_type = layout_spec(builder, &state_layout)?;
+
+                    let init_state = new_list(builder, block, output_element_type)?;
+
+                    add_loop(builder, block, state_type, init_state, loop_body)
+                }
+                ListMap4 { xs, ys, zs, ws } => {
+                    let list1 = env.symbols[xs];
+                    let list2 = env.symbols[ys];
+                    let list3 = env.symbols[zs];
+                    let list4 = env.symbols[ws];
+
+                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
+                        let input_bag_1 =
+                            builder.add_get_tuple_field(block, list1, LIST_BAG_INDEX)?;
+                        let input_bag_2 =
+                            builder.add_get_tuple_field(block, list2, LIST_BAG_INDEX)?;
+                        let input_bag_3 =
+                            builder.add_get_tuple_field(block, list3, LIST_BAG_INDEX)?;
+                        let input_bag_4 =
+                            builder.add_get_tuple_field(block, list4, LIST_BAG_INDEX)?;
+
+                        let element_1 = builder.add_bag_get(block, input_bag_1)?;
+                        let element_2 = builder.add_bag_get(block, input_bag_2)?;
+                        let element_3 = builder.add_bag_get(block, input_bag_3)?;
+                        let element_4 = builder.add_bag_get(block, input_bag_4)?;
+
+                        let new_element = call_function!(
+                            builder,
+                            block,
+                            [element_1, element_2, element_3, element_4]
+                        );
+
+                        list_append(builder, block, update_mode_var, state, new_element)
+                    };
+
+                    let output_element_type = layout_spec(builder, ret_layout)?;
+
+                    let state_layout = Layout::Builtin(Builtin::List(ret_layout));
+                    let state_type = layout_spec(builder, &state_layout)?;
+
+                    let init_state = new_list(builder, block, output_element_type)?;
+
+                    add_loop(builder, block, state_type, init_state, loop_body)
                 }
 
-                ListKeepIf { xs } | ListKeepOks { xs } | ListKeepErrs { xs } => {
+                ListKeepIf { xs } => {
                     let list = env.symbols[xs];
-                    let closure_env = env.symbols[function_env];
 
-                    let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
-                    // let _cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
+                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
+                        let bag = builder.add_get_tuple_field(block, state, LIST_BAG_INDEX)?;
+                        let cell = builder.add_get_tuple_field(block, state, LIST_CELL_INDEX)?;
 
-                    let first = builder.add_bag_get(block, bag)?;
+                        let element = builder.add_bag_get(block, bag)?;
 
-                    let argument = if closure_env_layout.is_none() {
-                        builder.add_make_tuple(block, &[first])?
-                    } else {
-                        builder.add_make_tuple(block, &[first, closure_env])?
+                        let _ = call_function!(builder, block, [element]);
+
+                        // NOTE: we assume the element is not kept
+                        builder.add_update(block, update_mode_var, cell)?;
+
+                        let removed = builder.add_bag_remove(block, bag)?;
+
+                        // decrement the removed element
+                        let removed_element = builder.add_get_tuple_field(block, removed, 1)?;
+                        builder.add_recursive_touch(block, removed_element)?;
+
+                        let new_bag = builder.add_get_tuple_field(block, removed, 0)?;
+                        let new_cell = builder.add_new_heap_cell(block)?;
+
+                        builder.add_make_tuple(block, &[new_cell, new_bag])
                     };
-                    let result = builder.add_call(block, spec_var, module, name, argument)?;
-                    let unit = builder.add_tuple_type(&[])?;
-                    builder.add_unknown_with(block, &[result], unit)?;
+
+                    let state_layout = Layout::Builtin(Builtin::List(&arg_layouts[0]));
+                    let state_type = layout_spec(builder, &state_layout)?;
+                    let init_state = list;
+
+                    add_loop(builder, block, state_type, init_state, loop_body)
+                }
+                ListKeepOks { xs } | ListKeepErrs { xs } => {
+                    let list = env.symbols[xs];
+
+                    let keep_result = match op {
+                        ListKeepOks { .. } => KeepResult::Oks,
+                        ListKeepErrs { .. } => KeepResult::Errs,
+                        _ => unreachable!(),
+                    };
+
+                    let result_repr = ResultRepr::from_layout(ret_layout);
+
+                    let output_element_layout = match (keep_result, result_repr) {
+                        (KeepResult::Errs, ResultRepr::NonRecursive { err, .. }) => err,
+                        (KeepResult::Oks, ResultRepr::NonRecursive { ok, .. }) => ok,
+                        (_, ResultRepr::Int1) => Layout::Struct(&[]),
+                    };
+
+                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
+                        let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
+
+                        let element = builder.add_bag_get(block, bag)?;
+
+                        let err_or_ok = call_function!(builder, block, [element]);
+
+                        let kept_branch = builder.add_block();
+                        let not_kept_branch = builder.add_block();
+
+                        let element_kept = {
+                            let block = kept_branch;
+
+                            // a Result can be represented as a Int1
+                            let new_element = result_repr.unwrap(
+                                builder,
+                                block,
+                                err_or_ok,
+                                keep_result as u32,
+                            )?;
+
+                            list_append(builder, block, update_mode_var, state, new_element)?
+                        };
+
+                        let element_not_kept = {
+                            let block = not_kept_branch;
+
+                            // a Result can be represented as a Int1
+                            let dropped_element = result_repr.unwrap(
+                                builder,
+                                block,
+                                err_or_ok,
+                                keep_result.invert() as u32,
+                            )?;
+
+                            // decrement the element we will not keep
+                            builder.add_recursive_touch(block, dropped_element)?;
+
+                            state
+                        };
+
+                        builder.add_choice(
+                            block,
+                            &[
+                                BlockExpr(not_kept_branch, element_not_kept),
+                                BlockExpr(kept_branch, element_kept),
+                            ],
+                        )
+                    };
+
+                    let output_element_type = layout_spec(builder, &output_element_layout)?;
+                    let init_state = new_list(builder, block, output_element_type)?;
+
+                    let state_layout = Layout::Builtin(Builtin::List(&output_element_layout));
+                    let state_type = layout_spec(builder, &state_layout)?;
+
+                    add_loop(builder, block, state_type, init_state, loop_body)
                 }
             }
-
-            // TODO overly pessimstic
-            // filter_map because one of the arguments is a function name, which
-            // is not defined in the env
-            let arguments: Vec<_> = call
-                .arguments
-                .iter()
-                .filter_map(|symbol| env.symbols.get(symbol))
-                .copied()
-                .collect();
-
-            let result_type = layout_spec(builder, layout)?;
-
-            builder.add_unknown_with(block, &arguments, result_type)
         }
     }
+}
+
+fn list_append(
+    builder: &mut FuncDefBuilder,
+    block: BlockId,
+    update_mode_var: UpdateModeVar,
+    list: ValueId,
+    to_insert: ValueId,
+) -> Result<ValueId> {
+    let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
+    let cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
+
+    let _unit = builder.add_update(block, update_mode_var, cell)?;
+
+    let new_bag = builder.add_bag_insert(block, bag, to_insert)?;
+
+    let new_cell = builder.add_new_heap_cell(block)?;
+    builder.add_make_tuple(block, &[new_cell, new_bag])
 }
 
 fn lowlevel_spec(
@@ -878,6 +1173,10 @@ fn lowlevel_spec(
             let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
             let cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
 
+            // decrement the overwritten element
+            let overwritten = builder.add_bag_get(block, bag)?;
+            let _unit = builder.add_recursive_touch(block, overwritten)?;
+
             let _unit = builder.add_update(block, update_mode_var, cell)?;
 
             builder.add_bag_insert(block, bag, to_insert)?;
@@ -911,16 +1210,7 @@ fn lowlevel_spec(
             let list = env.symbols[&arguments[0]];
             let to_insert = env.symbols[&arguments[1]];
 
-            let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
-            let cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
-
-            let _unit = builder.add_update(block, update_mode_var, cell)?;
-
-            // TODO new heap cell
-            builder.add_bag_insert(block, bag, to_insert)?;
-
-            let new_cell = builder.add_new_heap_cell(block)?;
-            builder.add_make_tuple(block, &[new_cell, bag])
+            list_append(builder, block, update_mode_var, list, to_insert)
         }
         StrToUtf8 => {
             let string = env.symbols[&arguments[0]];
@@ -1420,8 +1710,8 @@ fn static_list_type<TC: TypeContext>(builder: &mut TC) -> Result<TypeId> {
     builder.add_tuple_type(&[cell, bag])
 }
 
-// const OK_TAG_ID: u8 = 1u8;
-// const ERR_TAG_ID: u8 = 0u8;
+const OK_TAG_ID: u32 = 1;
+const ERR_TAG_ID: u32 = 0;
 
 const LIST_CELL_INDEX: u32 = 0;
 const LIST_BAG_INDEX: u32 = 1;

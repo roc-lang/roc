@@ -10,14 +10,14 @@ use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
     self, allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat,
     list_contains, list_drop, list_drop_at, list_get_unsafe, list_join, list_keep_errs,
-    list_keep_if, list_keep_oks, list_len, list_map, list_map2, list_map3, list_map_with_index,
-    list_prepend, list_range, list_repeat, list_reverse, list_set, list_single, list_sort_with,
-    list_swap,
+    list_keep_if, list_keep_oks, list_len, list_map, list_map2, list_map3, list_map4,
+    list_map_with_index, list_prepend, list_range, list_repeat, list_reverse, list_set,
+    list_single, list_sort_with, list_swap,
 };
 use crate::llvm::build_str::{
     empty_str, str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int,
     str_from_utf8, str_from_utf8_range, str_join_with, str_number_of_bytes, str_repeat, str_split,
-    str_starts_with, str_starts_with_code_point, str_to_utf8,
+    str_starts_with, str_starts_with_code_point, str_to_utf8, str_trim,
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
@@ -1470,6 +1470,26 @@ pub fn build_tag<'a, 'ctx, 'env>(
                 .struct_type(&[internal_type, tag_id_type.into()], false);
             let result_alloca = env.builder.build_alloca(wrapper_type, "tag_opaque");
 
+            // Initialize all memory of the alloca. This _should_ not be required, but currently
+            // LLVM can access uninitialized memory after applying some optimizations. Hopefully
+            // we can in the future adjust code gen so this is no longer an issue.
+            //
+            // An example is
+            //
+            // main : Task.Task {} []
+            // main =
+            //     when List.len [ Ok "foo", Err 42, Ok "spam" ] is
+            //         n -> Task.putLine (Str.fromInt n)
+            //
+            // Here the decrement function of result must first check it's an Ok tag,
+            // then defers to string decrement, which must check is the string is small or large
+            //
+            // After inlining, those checks are combined. That means that even if the tag is Err,
+            // a check is done on the "string" to see if it is big or small, which will touch the
+            // uninitialized memory.
+            let all_zeros = wrapper_type.const_zero();
+            env.builder.build_store(result_alloca, all_zeros);
+
             // Determine types
             let num_fields = arguments.len() + 1;
             let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
@@ -2687,14 +2707,6 @@ pub fn complex_bitcast_struct_struct<'ctx>(
     complex_bitcast(builder, from_value.into(), to_type.into(), name).into_struct_value()
 }
 
-fn cast_tag_to_block_of_memory<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    from_value: StructValue<'ctx>,
-    to_type: BasicTypeEnum<'ctx>,
-) -> BasicValueEnum<'ctx> {
-    complex_bitcast_check_size(env, from_value.into(), to_type, "tag_to_block_of_memory")
-}
-
 pub fn cast_block_of_memory_to_tag<'ctx>(
     builder: &Builder<'ctx>,
     from_value: StructValue<'ctx>,
@@ -3898,7 +3910,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
 
     let it = procedures.iter().map(|x| x.1);
 
-    let solutions = match roc_mono::alias_analysis::spec_program(entry_point, it) {
+    let solutions = match roc_mono::alias_analysis::spec_program(opt_level, entry_point, it) {
         Err(e) => panic!("Error in alias analysis: {}", e),
         Ok(solutions) => solutions,
     };
@@ -4715,6 +4727,67 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!("invalid list layout"),
             }
         }
+        ListMap4 { xs, ys, zs, ws } => {
+            let (list1, list1_layout) = load_symbol_and_layout(scope, &xs);
+            let (list2, list2_layout) = load_symbol_and_layout(scope, &ys);
+            let (list3, list3_layout) = load_symbol_and_layout(scope, &zs);
+            let (list4, list4_layout) = load_symbol_and_layout(scope, &ws);
+
+            let (function, closure, closure_layout) = function_details!();
+
+            match (
+                list1_layout,
+                list2_layout,
+                list3_layout,
+                list4_layout,
+                return_layout,
+            ) {
+                (
+                    Layout::Builtin(Builtin::List(element1_layout)),
+                    Layout::Builtin(Builtin::List(element2_layout)),
+                    Layout::Builtin(Builtin::List(element3_layout)),
+                    Layout::Builtin(Builtin::List(element4_layout)),
+                    Layout::Builtin(Builtin::List(result_layout)),
+                ) => {
+                    let argument_layouts = &[
+                        **element1_layout,
+                        **element2_layout,
+                        **element3_layout,
+                        **element4_layout,
+                    ];
+
+                    let roc_function_call = roc_function_call(
+                        env,
+                        layout_ids,
+                        function,
+                        closure,
+                        closure_layout,
+                        function_owns_closure_data,
+                        argument_layouts,
+                    );
+
+                    list_map4(
+                        env,
+                        layout_ids,
+                        roc_function_call,
+                        list1,
+                        list2,
+                        list3,
+                        list4,
+                        element1_layout,
+                        element2_layout,
+                        element3_layout,
+                        element4_layout,
+                        result_layout,
+                    )
+                }
+                (Layout::Builtin(Builtin::EmptyList), _, _, _, _)
+                | (_, Layout::Builtin(Builtin::EmptyList), _, _, _)
+                | (_, _, Layout::Builtin(Builtin::EmptyList), _, _)
+                | (_, _, _, Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
+                _ => unreachable!("invalid list layout"),
+            }
+        }
         ListMapWithIndex { xs } => {
             // List.mapWithIndex : List before, (Nat, before -> after) -> List after
             let (list, list_layout) = load_symbol_and_layout(scope, &xs);
@@ -5058,6 +5131,12 @@ fn run_low_level<'a, 'ctx, 'env>(
             debug_assert_eq!(args.len(), 1);
 
             str_count_graphemes(env, scope, args[0])
+        }
+        StrTrim => {
+            // Str.trim : Str -> Str
+            debug_assert_eq!(args.len(), 1);
+
+            str_trim(env, scope, args[0])
         }
         ListLen => {
             // List.len : List * -> Int
@@ -5740,7 +5819,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             cond
         }
 
-        ListMap | ListMap2 | ListMap3 | ListMapWithIndex | ListKeepIf | ListWalk
+        ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk
         | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith
         | DictWalk => unreachable!("these are higher order, and are handled elsewhere"),
     }

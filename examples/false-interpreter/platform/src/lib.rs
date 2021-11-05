@@ -30,12 +30,12 @@ extern "C" {
 }
 
 #[no_mangle]
-pub unsafe fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
+pub unsafe extern "C" fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
     libc::malloc(size)
 }
 
 #[no_mangle]
-pub unsafe fn roc_realloc(
+pub unsafe extern "C" fn roc_realloc(
     c_ptr: *mut c_void,
     new_size: usize,
     _old_size: usize,
@@ -45,12 +45,12 @@ pub unsafe fn roc_realloc(
 }
 
 #[no_mangle]
-pub unsafe fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
+pub unsafe extern "C" fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
     libc::free(c_ptr)
 }
 
 #[no_mangle]
-pub unsafe fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
+pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
     match tag_id {
         0 => {
             let slice = CStr::from_ptr(c_ptr as *const c_char);
@@ -73,7 +73,7 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 }
 
 #[no_mangle]
-pub fn rust_main() -> i32 {
+pub extern "C" fn rust_main() -> i32 {
     let arg = env::args().skip(1).next().unwrap();
     let arg = RocStr::from_slice(arg.as_bytes());
 
@@ -115,7 +115,7 @@ unsafe fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
 }
 
 #[no_mangle]
-pub fn roc_fx_getLine() -> RocStr {
+pub extern "C" fn roc_fx_getLine() -> RocStr {
     use std::io::{self, BufRead};
 
     let stdin = io::stdin();
@@ -125,7 +125,7 @@ pub fn roc_fx_getLine() -> RocStr {
 }
 
 #[no_mangle]
-pub fn roc_fx_getChar() -> u8 {
+pub extern "C" fn roc_fx_getChar() -> u8 {
     use std::io::{self, BufRead};
     let mut buffer = [0];
 
@@ -141,7 +141,7 @@ pub fn roc_fx_getChar() -> u8 {
 }
 
 #[no_mangle]
-pub fn roc_fx_putLine(line: RocStr) -> () {
+pub extern "C" fn roc_fx_putLine(line: RocStr) -> () {
     let bytes = line.as_slice();
     let string = unsafe { std::str::from_utf8_unchecked(bytes) };
     println!("{}", string);
@@ -154,7 +154,7 @@ pub fn roc_fx_putLine(line: RocStr) -> () {
 }
 
 #[no_mangle]
-pub fn roc_fx_putRaw(line: RocStr) -> () {
+pub extern "C" fn roc_fx_putRaw(line: RocStr) -> () {
     let bytes = line.as_slice();
     let string = unsafe { std::str::from_utf8_unchecked(bytes) };
     print!("{}", string);
@@ -167,7 +167,7 @@ pub fn roc_fx_putRaw(line: RocStr) -> () {
 }
 
 #[no_mangle]
-pub fn roc_fx_getFileLine(br_ptr: *mut BufReader<File>) -> RocStr {
+pub extern "C" fn roc_fx_getFileLine(br_ptr: *mut BufReader<File>) -> RocStr {
     let br = unsafe { &mut *br_ptr };
     let mut line1 = String::default();
 
@@ -178,7 +178,7 @@ pub fn roc_fx_getFileLine(br_ptr: *mut BufReader<File>) -> RocStr {
 }
 
 #[no_mangle]
-pub fn roc_fx_getFileBytes(br_ptr: *mut BufReader<File>) -> RocList<u8> {
+pub extern "C" fn roc_fx_getFileBytes(br_ptr: *mut BufReader<File>) -> RocList<u8> {
     let br = unsafe { &mut *br_ptr };
     let mut buffer = [0; 0x10 /* This is intentially small to ensure correct implementation */];
 
@@ -190,22 +190,25 @@ pub fn roc_fx_getFileBytes(br_ptr: *mut BufReader<File>) -> RocList<u8> {
 }
 
 #[no_mangle]
-pub fn roc_fx_closeFile(br_ptr: *mut BufReader<File>) -> () {
+pub extern "C" fn roc_fx_closeFile(br_ptr: *mut BufReader<File>) -> () {
     unsafe {
         Box::from_raw(br_ptr);
     }
 }
 
 #[no_mangle]
-pub fn roc_fx_openFile(name: RocStr) -> *mut BufReader<File> {
+pub extern "C" fn roc_fx_openFile(name: RocStr) -> *mut BufReader<File> {
     let f = File::open(name.as_str()).expect("Unable to open file");
     let br = BufReader::new(f);
+
+    // don't mess with the refcount!
+    core::mem::forget(name);
 
     Box::into_raw(Box::new(br))
 }
 
 #[no_mangle]
-pub fn roc_fx_withFileOpen(name: RocStr, buffer: *const u8) -> () {
+pub extern "C" fn roc_fx_withFileOpen(name: RocStr, buffer: *const u8) -> () {
     // let f = File::open(name.as_str()).expect("Unable to open file");
     // let mut br = BufReader::new(f);
 
