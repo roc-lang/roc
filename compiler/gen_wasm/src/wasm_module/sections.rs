@@ -578,6 +578,7 @@ struct SectionCounter {
 
 impl SectionCounter {
     /// Update the section counter if buffer size increased since last call
+    #[inline]
     fn update<SB: SerialBuffer>(&mut self, buffer: &mut SB) {
         let new_size = buffer.size();
         if new_size > self.buffer_size {
@@ -586,6 +587,7 @@ impl SectionCounter {
         }
     }
 
+    #[inline]
     fn serialize_and_count<SB: SerialBuffer, S: Serialize>(
         &mut self,
         buffer: &mut SB,
