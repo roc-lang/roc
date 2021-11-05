@@ -22,6 +22,7 @@ use crate::editor::mvc::string_update::start_new_string;
 use crate::editor::mvc::string_update::update_small_string;
 use crate::editor::mvc::string_update::update_string;
 use crate::editor::mvc::tld_value_update::{start_new_tld_value, update_tld_val_name};
+#[cfg(feature = "with_sound")]
 use crate::editor::sound::play_sound;
 use crate::ui::text::caret_w_select::CaretWSelect;
 use crate::ui::text::lines::MoveCaretFun;
@@ -521,7 +522,7 @@ impl<'a> EdModel<'a> {
         &mut self,
         modifiers: &Modifiers,
         virtual_keycode: VirtualKeyCode,
-        sound_thread_pool: &mut ThreadPool,
+        _sound_thread_pool: &mut ThreadPool,
     ) -> EdResult<()> {
         match virtual_keycode {
             Left => self.move_caret_left(modifiers)?,
@@ -560,9 +561,13 @@ impl<'a> EdModel<'a> {
                 self.dirty = true;
             }
             F12 => {
-                sound_thread_pool.execute(move || {
-                    play_sound("./editor/src/editor/resources/sounds/bell_sound.mp3");
-                });
+                #[cfg(feature = "with_sound")]
+                {
+                    println!("playing sound...");
+                    _sound_thread_pool.execute(move || {
+                        play_sound("./editor/src/editor/resources/sounds/bell_sound.mp3");
+                    });
+                }
             }
             _ => (),
         }
