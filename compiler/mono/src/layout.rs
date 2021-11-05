@@ -724,6 +724,14 @@ impl<'a, 'b> Env<'a, 'b> {
     }
 }
 
+const fn round_up_to_alignment(width: u32, alignment: u32) -> u32 {
+    if alignment != 0 && width % alignment > 0 {
+        width + alignment - (width % alignment)
+    } else {
+        width
+    }
+}
+
 impl<'a> Layout<'a> {
     fn new_help<'b>(
         env: &mut Env<'a, 'b>,
@@ -859,11 +867,7 @@ impl<'a> Layout<'a> {
         let width = self.stack_size_without_alignment(pointer_size);
         let alignment = self.alignment_bytes(pointer_size);
 
-        if alignment != 0 && width % alignment > 0 {
-            width + alignment - (width % alignment)
-        } else {
-            width
-        }
+        round_up_to_alignment(width, alignment)
     }
 
     fn stack_size_without_alignment(&self, pointer_size: u32) -> u32 {
@@ -885,6 +889,8 @@ impl<'a> Layout<'a> {
 
                 match variant {
                     NonRecursive(fields) => {
+                        let tag_id_builtin = variant.tag_id_builtin();
+
                         fields
                             .iter()
                             .map(|tag_layout| {
@@ -894,9 +900,10 @@ impl<'a> Layout<'a> {
                                     .sum::<u32>()
                             })
                             .max()
+                            .map(|w| round_up_to_alignment(w, tag_id_builtin.alignment_bytes(pointer_size)))
                             .unwrap_or_default()
                             // the size of the tag_id
-                            + variant.tag_id_builtin().stack_size(pointer_size)
+                            + tag_id_builtin.stack_size(pointer_size)
                     }
 
                     Recursive(_)
@@ -924,13 +931,28 @@ impl<'a> Layout<'a> {
                 use UnionLayout::*;
 
                 match variant {
-                    NonRecursive(tags) => tags
-                        .iter()
-                        .map(|x| x.iter())
-                        .flatten()
-                        .map(|x| x.alignment_bytes(pointer_size))
-                        .max()
-                        .unwrap_or(0),
+                    NonRecursive(tags) => {
+                        let max_alignment = tags
+                            .iter()
+                            .flat_map(|layouts| {
+                                layouts
+                                    .iter()
+                                    .map(|layout| layout.alignment_bytes(pointer_size))
+                            })
+                            .max();
+
+                        match max_alignment {
+                            Some(align) => {
+                                let tag_id_builtin = variant.tag_id_builtin();
+
+                                round_up_to_alignment(
+                                    align,
+                                    tag_id_builtin.alignment_bytes(pointer_size),
+                                )
+                            }
+                            None => 0,
+                        }
+                    }
                     Recursive(_)
                     | NullableWrapped { .. }
                     | NullableUnwrapped { .. }

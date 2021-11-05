@@ -52,6 +52,7 @@ extension RocStr {
 }
 
 @_cdecl("main")
-func main() {
+func main() -> UInt8 {
     print(roc__mainForHost_1_exposed().string)
+    return 0
 }
