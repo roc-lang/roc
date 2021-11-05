@@ -8,6 +8,4 @@ pub use code_builder::{
     Align, BlockType, CodeBuilder, LocalId, ValueType, VirtualMachineSymbolState,
 };
 pub use linking::{LinkingSubSection, SymInfo};
-pub use sections::{
-    Export, ExportType, Global, GlobalInitValue, GlobalType, Signature, WasmModule,
-};
+pub use sections::{ConstExpr, Export, ExportType, Global, GlobalType, Signature, WasmModule};
