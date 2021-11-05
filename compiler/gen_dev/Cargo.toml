@@ -24,6 +24,7 @@ object = { version = "0.24", features = ["write"] }
 
 [dev-dependencies]
 roc_can = { path = "../can" }
+roc_build = { path = "../build" }
 roc_parse = { path = "../parse" }
 roc_reporting = { path = "../reporting" }
 roc_load = { path = "../load" }
