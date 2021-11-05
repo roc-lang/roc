@@ -17,8 +17,8 @@ bench = false
 [features] 
 default = ["target-aarch64", "target-x86_64", "target-wasm32", "llvm", "editor"]
 
-wasm32-cli-run = []
-i386-cli-run = []
+wasm32-cli-run = ["target-wasm32"]
+i386-cli-run = ["target-x86"]
 
 # This is a separate feature because when we generate docs on Netlify,
 # it doesn't have LLVM installed. (Also, it doesn't need to do code gen.)
