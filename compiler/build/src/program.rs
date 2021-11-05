@@ -205,7 +205,7 @@ pub fn gen_from_mono_module(
         OptLevel::Normal | OptLevel::Optimize => gen_from_mono_module_llvm(
             arena,
             loaded,
-            &roc_file_path,
+            roc_file_path,
             target,
             app_o_file,
             opt_level,
