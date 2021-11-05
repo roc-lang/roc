@@ -1,30 +1,35 @@
 use bumpalo::collections::Vec;
 
+use code_builder::Align;
 use roc_collections::all::MutMap;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
-use roc_mono::layout::{Builtin, Layout};
+use roc_mono::layout::Layout;
 
 use crate::layout::WasmLayout;
 use crate::storage::{Storage, StoredValue, StoredValueKind};
-use crate::wasm_module::{BlockType, CodeBuilder, LocalId, Signature, ValueType, WasmModule};
+use crate::wasm_module::linking::{LinkingSection, RelocationSection};
+use crate::wasm_module::sections::{
+    CodeSection, DataMode, DataSection, DataSegment, ExportSection, FunctionSection, GlobalSection,
+    ImportSection, MemorySection, TypeSection, WasmModule,
+};
+use crate::wasm_module::{
+    code_builder, BlockType, CodeBuilder, ConstExpr, Export, ExportType, Global, GlobalType,
+    LocalId, Signature, ValueType,
+};
 use crate::{copy_memory, CopyMemoryConfig, Env, PTR_TYPE};
 
 // Don't allocate any constant data at address zero or near it. Would be valid, but bug-prone.
 // Follow Emscripten's example by using 1kB (4 bytes would probably do)
 const UNUSED_DATA_SECTION_BYTES: u32 = 1024;
 
-#[derive(Clone, Copy, Debug)]
-struct LabelId(u32);
-
 pub struct WasmBackend<'a> {
     env: &'a Env<'a>,
 
     // Module-level data
     pub module: WasmModule<'a>,
-    _data_offset_map: MutMap<Literal<'a>, u32>,
-    _data_offset_next: u32,
+    next_literal_addr: u32,
     proc_symbols: Vec<'a, Symbol>,
 
     // Function-level data
@@ -38,13 +43,54 @@ pub struct WasmBackend<'a> {
 
 impl<'a> WasmBackend<'a> {
     pub fn new(env: &'a Env<'a>, proc_symbols: Vec<'a, Symbol>) -> Self {
+        const MEMORY_INIT_SIZE: u32 = 1024 * 1024;
+
+        let mut module = WasmModule {
+            types: TypeSection::new(env.arena),
+            import: ImportSection::new(env.arena),
+            function: FunctionSection::new(env.arena),
+            table: (), // Unused in Roc (mainly for function pointers)
+            memory: MemorySection::new(MEMORY_INIT_SIZE),
+            global: GlobalSection::new(env.arena),
+            export: ExportSection::new(env.arena),
+            start: (),   // Entry function. In Roc this would be part of the platform.
+            element: (), // Unused in Roc (related to table section)
+            code: CodeSection::new(env.arena),
+            data: DataSection::new(env.arena),
+            linking: LinkingSection::new(env.arena),
+            reloc_code: RelocationSection::new(env.arena, "reloc.CODE"),
+            reloc_data: RelocationSection::new(env.arena, "reloc.DATA"),
+        };
+
+        module.export.entries.push(Export {
+            name: "memory".to_string(),
+            ty: ExportType::Mem,
+            index: 0,
+        });
+
+        let stack_pointer_global = Global {
+            ty: GlobalType {
+                value_type: ValueType::I32,
+                is_mutable: true,
+            },
+            init: ConstExpr::I32(MEMORY_INIT_SIZE as i32),
+        };
+        module.global.entries.push(stack_pointer_global);
+
+        let literal_segment = DataSegment {
+            mode: DataMode::Active {
+                offset: ConstExpr::I32(UNUSED_DATA_SECTION_BYTES as i32),
+            },
+            init: Vec::with_capacity_in(64, env.arena),
+        };
+        module.data.segments.push(literal_segment);
+
         WasmBackend {
             env,
 
             // Module-level data
-            module: WasmModule::new(env.arena),
-            _data_offset_map: MutMap::default(),
-            _data_offset_next: UNUSED_DATA_SECTION_BYTES,
+            module,
+            next_literal_addr: UNUSED_DATA_SECTION_BYTES,
             proc_symbols,
 
             // Function-level data
@@ -158,9 +204,9 @@ impl<'a> WasmBackend<'a> {
                     _ => StoredValueKind::Variable,
                 };
 
-                self.storage.allocate(&wasm_layout, *sym, kind);
+                let sym_storage = self.storage.allocate(&wasm_layout, *sym, kind);
 
-                self.build_expr(sym, expr, layout)?;
+                self.build_expr(sym, expr, layout, &sym_storage)?;
 
                 // For primitives, we record that this symbol is at the top of the VM stack
                 // (For other values, we wrote to memory and there's nothing on the VM stack)
@@ -347,9 +393,11 @@ impl<'a> WasmBackend<'a> {
         sym: &Symbol,
         expr: &Expr<'a>,
         layout: &Layout<'a>,
+        storage: &StoredValue,
     ) -> Result<(), String> {
+        let wasm_layout = WasmLayout::new(layout);
         match expr {
-            Expr::Literal(lit) => self.load_literal(lit, layout),
+            Expr::Literal(lit) => self.load_literal(lit, storage),
 
             Expr::Call(roc_mono::ir::Call {
                 call_type,
@@ -359,7 +407,6 @@ impl<'a> WasmBackend<'a> {
                     // TODO: See if we can make this more efficient
                     // Recreating the same WasmLayout again, rather than passing it down,
                     // to match signature of Backend::build_expr
-                    let wasm_layout = WasmLayout::new(layout);
 
                     let mut wasm_args_tmp: Vec<Symbol>;
                     let (wasm_args, has_return_val) = match wasm_layout {
@@ -413,32 +460,69 @@ impl<'a> WasmBackend<'a> {
         }
     }
 
-    fn load_literal(&mut self, lit: &Literal<'a>, layout: &Layout<'a>) -> Result<(), String> {
-        match lit {
-            Literal::Bool(x) => self.code_builder.i32_const(*x as i32),
-            Literal::Byte(x) => self.code_builder.i32_const(*x as i32),
-            Literal::Int(x) => match layout {
-                Layout::Builtin(Builtin::Int64) => self.code_builder.i64_const(*x as i64),
-                Layout::Builtin(
-                    Builtin::Int32
-                    | Builtin::Int16
-                    | Builtin::Int8
-                    | Builtin::Int1
-                    | Builtin::Usize,
-                ) => self.code_builder.i32_const(*x as i32),
-                x => {
-                    return Err(format!("loading literal, {:?}, is not yet implemented", x));
+    fn load_literal(&mut self, lit: &Literal<'a>, storage: &StoredValue) -> Result<(), String> {
+        let not_supported_error = || Err(format!("Literal value {:?} is not yet implemented", lit));
+
+        match storage {
+            StoredValue::VirtualMachineStack { value_type, .. } => {
+                match (lit, value_type) {
+                    (Literal::Float(x), ValueType::F64) => self.code_builder.f64_const(*x as f64),
+                    (Literal::Float(x), ValueType::F32) => self.code_builder.f32_const(*x as f32),
+                    (Literal::Int(x), ValueType::I64) => self.code_builder.i64_const(*x as i64),
+                    (Literal::Int(x), ValueType::I32) => self.code_builder.i32_const(*x as i32),
+                    (Literal::Bool(x), ValueType::I32) => self.code_builder.i32_const(*x as i32),
+                    (Literal::Byte(x), ValueType::I32) => self.code_builder.i32_const(*x as i32),
+                    _ => {
+                        return not_supported_error();
+                    }
+                };
+            }
+
+            StoredValue::StackMemory { location, .. } => match lit {
+                Literal::Str(s) => {
+                    // Load the stack memory address where we want to write
+                    let (local_id, offset) =
+                        location.local_and_offset(self.storage.stack_frame_pointer);
+                    self.code_builder.get_local(local_id);
+                    self.code_builder.i32_const(offset as i32);
+                    self.code_builder.i32_add();
+
+                    // For either small or regular strings, we write 8 bytes to stack memory
+                    let mut stack_mem_bytes = [0; 8];
+
+                    let len = s.len();
+                    if len < 8 {
+                        // Small string payload
+                        stack_mem_bytes[0..len].clone_from_slice(s.as_bytes());
+                        // Small string flag and length
+                        stack_mem_bytes[7] = 0x80 | (len as u8);
+                    } else {
+                        // Store the bytes in the data section, to be initialised on module load.
+                        // Point there instead of to the heap
+                        let literal_bytes: &mut Vec<'a, u8> =
+                            &mut self.module.data.segments[0].init;
+                        literal_bytes.extend_from_slice(s.as_bytes());
+
+                        // Calculate bytes for elements and length
+                        let len32 = len as u32;
+                        let elements_addr = self.next_literal_addr;
+                        self.next_literal_addr += len32;
+                        stack_mem_bytes[0..3].clone_from_slice(&elements_addr.to_le_bytes());
+                        stack_mem_bytes[4..8].clone_from_slice(&len32.to_le_bytes());
+                    };
+
+                    // Since we have 64 bits of data, we can squeeze them into one instruction
+                    self.code_builder
+                        .i64_const(i64::from_le_bytes(stack_mem_bytes));
+                    self.code_builder.i64_store(Align::Bytes4, offset);
+                }
+                _ => {
+                    return not_supported_error();
                 }
             },
-            Literal::Float(x) => match layout {
-                Layout::Builtin(Builtin::Float64) => self.code_builder.f64_const(*x as f64),
-                Layout::Builtin(Builtin::Float32) => self.code_builder.f32_const(*x as f32),
-                x => {
-                    return Err(format!("loading literal, {:?}, is not yet implemented", x));
-                }
-            },
-            x => {
-                return Err(format!("loading literal, {:?}, is not yet implemented", x));
+
+            _ => {
+                return not_supported_error();
             }
         };
         Ok(())

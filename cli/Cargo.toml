@@ -14,26 +14,31 @@ path = "src/main.rs"
 test = false
 bench = false
 
-[features]
-default = ["target-x86", "llvm", "editor"]
-wasm32-cli-run = []
-i386-cli-run = []
+[features] 
+default = ["target-aarch64", "target-x86_64", "target-wasm32", "llvm", "editor"]
+
+wasm32-cli-run = ["target-wasm32"]
+i386-cli-run = ["target-x86"]
 
 # This is a separate feature because when we generate docs on Netlify,
 # it doesn't have LLVM installed. (Also, it doesn't need to do code gen.)
 llvm = ["inkwell", "roc_gen_llvm", "roc_build/llvm"]
 editor = ["roc_editor"]
 
-target-x86 = []
 
-# arm and wasm give linker errors on some platforms
-target-arm = []
-target-webassembly = []
+# Compiling for a different platform than the host can cause linker errors.
+target-arm = ["roc_build/target-arm"]
+target-aarch64 = ["roc_build/target-aarch64"]
+target-x86 = ["roc_build/target-x86"]
+target-x86_64 = ["roc_build/target-x86_64"]
+target-wasm32 = ["roc_build/target-wasm32"]
 
 target-all = [
-    "target-x86",
+    "target-aarch64",
     "target-arm",
-    "target-webassembly"
+    "target-x86",
+    "target-x86_64",
+    "target-wasm32"
 ]
 
 

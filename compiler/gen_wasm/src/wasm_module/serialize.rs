@@ -13,6 +13,12 @@ impl Serialize for str {
     }
 }
 
+impl Serialize for u8 {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.append_u8(*self);
+    }
+}
+
 impl Serialize for u32 {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         buffer.encode_u32(*self);
@@ -30,6 +36,13 @@ impl<S: Serialize> Serialize for [S] {
         for item in self.iter() {
             item.serialize(buffer);
         }
+    }
+}
+
+impl Serialize for Vec<'_, u8> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.encode_u32(self.len() as u32);
+        buffer.append_slice(self);
     }
 }
 
