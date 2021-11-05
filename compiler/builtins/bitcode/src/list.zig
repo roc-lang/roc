@@ -1078,6 +1078,33 @@ pub fn listSortWith(
     return list;
 }
 
+pub fn listAny(
+    list: RocList,
+    caller: Caller1,
+    data: Opaque,
+    inc_n_data: IncN,
+    data_is_owned: bool,
+    alignment: u32,
+    element_width: usize,
+) callconv(.C) bool {
+    if (list.bytes) |source_ptr| {
+        const size = list.len();
+        var i: usize = 0;
+        var satisfied = false;
+
+        while (i < size) : (i += 1) {
+            const element = source_ptr + i * element_width;
+            caller(data, element, @ptrCast(?[*]u8, &satisfied));
+
+            if (satisfied) {
+                return satisfied;
+            }
+        }
+    }
+
+    return false;
+}
+
 // SWAP ELEMENTS
 
 inline fn swapHelp(width: usize, temporary: [*]u8, ptr1: [*]u8, ptr2: [*]u8) void {

@@ -188,6 +188,7 @@ pub const LIST_SORT_WITH: &str = "roc_builtins.list.sort_with";
 pub const LIST_CONCAT: &str = "roc_builtins.list.concat";
 pub const LIST_SET: &str = "roc_builtins.list.set";
 pub const LIST_SET_IN_PLACE: &str = "roc_builtins.list.set_in_place";
+pub const LIST_ANY: &str = "roc_builtins.list.any";
 
 pub const DEC_FROM_F64: &str = "roc_builtins.dec.from_f64";
 pub const DEC_EQ: &str = "roc_builtins.dec.eq";

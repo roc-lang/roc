@@ -1055,6 +1055,16 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(bool_type())
     );
 
+    // any: List elem, (elem -> Bool) -> Bool
+    add_top_level_function_type!(
+        Symbol::LIST_ANY,
+        vec![
+            list_type(flex(TVAR1)),
+            closure(vec![flex(TVAR1)], TVAR2, Box::new(bool_type())),
+        ],
+        Box::new(bool_type()),
+    );
+
     // sortWith : List a, (a, a -> Ordering) -> List a
     add_top_level_function_type!(
         Symbol::LIST_SORT_WITH,

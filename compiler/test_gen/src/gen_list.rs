@@ -2161,6 +2161,13 @@ fn list_sort_with() {
 }
 
 #[test]
+fn list_any() {
+    assert_evals_to!("List.any [] (\\e -> e > 3)", false, bool);
+    assert_evals_to!("List.any [ 1, 2, 3 ] (\\e -> e > 3)", false, bool);
+    assert_evals_to!("List.any [ 1, 2, 4 ] (\\e -> e > 3)", true, bool);
+}
+
+#[test]
 #[should_panic(expected = r#"Roc failed with message: "invalid ret_layout""#)]
 fn lists_with_incompatible_type_param_in_if() {
     assert_evals_to!(

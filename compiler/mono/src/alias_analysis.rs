@@ -967,7 +967,6 @@ fn call_spec(
 
                     add_loop(builder, block, state_type, init_state, loop_body)
                 }
-
                 ListKeepIf { xs } => {
                     let list = env.symbols[xs];
 
@@ -1072,6 +1071,25 @@ fn call_spec(
 
                     let state_layout = Layout::Builtin(Builtin::List(&output_element_layout));
                     let state_type = layout_spec(builder, &state_layout)?;
+
+                    add_loop(builder, block, state_type, init_state, loop_body)
+                }
+                ListAny { xs } => {
+                    let list = env.symbols[xs];
+
+                    let loop_body = |builder: &mut FuncDefBuilder, block, _state| {
+                        let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
+                        let element = builder.add_bag_get(block, bag)?;
+
+                        let new_state = call_function!(builder, block, [element]);
+
+                        Ok(new_state)
+                    };
+
+                    let state_layout = Layout::Builtin(Builtin::Int1);
+                    let state_type = layout_spec(builder, &state_layout)?;
+
+                    let init_state = new_num(builder, block)?;
 
                     add_loop(builder, block, state_type, init_state, loop_body)
                 }
