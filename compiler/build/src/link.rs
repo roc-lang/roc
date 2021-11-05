@@ -810,6 +810,8 @@ fn link_macos(
             link_type_arg,
             "-arch",
             &arch,
+            "-macos_version_min",
+            "10.15",
         ])
         .args(input_paths);
 
@@ -822,8 +824,6 @@ fn link_macos(
     ld_command.args(&[
         // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274
         // for discussion and further references
-        "-macos_version_min",
-        "11.0",
         "-lSystem",
         "-lresolv",
         "-lpthread",
