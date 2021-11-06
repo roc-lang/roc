@@ -300,7 +300,7 @@ pub(crate) struct Graph {
     // this must be so.
     exit_blocks: SmallVec<[BlockId; 1]>,
     ret_type: TypeId,
-    // Invariant: `sccs` is strored in topological order.
+    // Invariant: `sccs` is stored in topological order.
     sccs: FlatSlices<SccId, SccKind, BlockId>,
     update_mode_vars: Count<UpdateModeVarId>,
     callee_spec_vars: Count<CalleeSpecVarId>,

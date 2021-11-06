@@ -973,7 +973,7 @@ fn canonicalize_pending_def<'a>(
                 env.tailcallable_symbol = Some(*defined_symbol);
             };
 
-            // regiser the name of this closure, to make sure the closure won't capture it's own name
+            // register the name of this closure, to make sure the closure won't capture it's own name
             if let (Pattern::Identifier(ref defined_symbol), &ast::Expr::Closure(_, _)) =
                 (&loc_can_pattern.value, &loc_expr.value)
             {
@@ -1120,7 +1120,7 @@ fn canonicalize_pending_def<'a>(
                 vars_by_symbol.insert(*defined_symbol, expr_var);
             };
 
-            // regiser the name of this closure, to make sure the closure won't capture it's own name
+            // register the name of this closure, to make sure the closure won't capture it's own name
             if let (Pattern::Identifier(ref defined_symbol), &ast::Expr::Closure(_, _)) =
                 (&loc_can_pattern.value, &loc_expr.value)
             {
