@@ -614,8 +614,7 @@ pub struct WasmModule<'a> {
     pub code: CodeSection<'a>,
     pub data: DataSection<'a>,
     pub linking: LinkingSection<'a>,
-    pub reloc_code: RelocationSection<'a>,
-    pub reloc_data: RelocationSection<'a>,
+    pub relocations: RelocationSection<'a>,
 }
 
 impl<'a> WasmModule<'a> {
@@ -654,22 +653,16 @@ impl<'a> WasmModule<'a> {
         let data_count_section = DataCountSection::new(&self.data);
         counter.serialize_and_count(buffer, &data_count_section);
 
-        // Code section mutates its linker relocation data during serialization
+        // Code section is the only one with relocations so we can stop counting
         let code_section_index = counter.section_index;
         self.code
-            .serialize_with_relocs(buffer, &mut self.reloc_code.entries);
-        counter.update(buffer);
+            .serialize_with_relocs(buffer, &mut self.relocations.entries);
 
-        // Data section is the last one before linking, so we can stop counting
-        let data_section_index = counter.section_index;
         self.data.serialize(buffer);
 
         self.linking.serialize(buffer);
 
-        self.reloc_code.target_section_index = Some(code_section_index);
-        self.reloc_code.serialize(buffer);
-
-        self.reloc_data.target_section_index = Some(data_section_index);
-        self.reloc_data.serialize(buffer);
+        self.relocations.target_section_index = Some(code_section_index);
+        self.relocations.serialize(buffer);
     }
 }

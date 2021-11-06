@@ -5,7 +5,7 @@ use std::fmt::Debug;
 
 use roc_module::symbol::Symbol;
 
-use super::linking::{IndexRelocType, RelocationEntry};
+use super::linking::{IndexRelocType, OffsetRelocType, RelocationEntry};
 use super::opcodes::*;
 use super::serialize::{SerialBuffer, Serialize};
 use crate::{round_up_to_alignment, FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID};
@@ -459,6 +459,16 @@ impl<'a> CodeBuilder<'a> {
         self.inst(opcode, pops, push);
         self.code.push(align as u8);
         self.code.encode_u32(offset);
+    }
+
+    /// Insert a linker relocation for a memory address
+    pub fn insert_memory_relocation(&mut self, symbol_index: u32) {
+        self.relocations.push(RelocationEntry::Offset {
+            type_id: OffsetRelocType::MemoryAddrLeb,
+            offset: self.code.len() as u32,
+            symbol_index,
+            addend: 0,
+        });
     }
 
     /**********************************************************

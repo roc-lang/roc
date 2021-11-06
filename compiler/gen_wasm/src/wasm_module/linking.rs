@@ -303,11 +303,12 @@ impl Serialize for WasmObjectSymbol {
     }
 }
 
+#[derive(Clone)]
 pub enum DataSymbol {
     Defined {
         name: String,
-        index: u32,
-        offset: u32,
+        segment_index: u32,
+        segment_offset: u32,
         size: u32,
     },
     Imported {
@@ -320,14 +321,14 @@ impl Serialize for DataSymbol {
         match self {
             Self::Defined {
                 name,
-                index,
-                offset,
+                segment_index,
+                segment_offset,
                 size,
             } => {
                 buffer.encode_u32(name.len() as u32);
                 buffer.append_slice(name.as_bytes());
-                buffer.encode_u32(*index);
-                buffer.encode_u32(*offset);
+                buffer.encode_u32(*segment_index);
+                buffer.encode_u32(*segment_offset);
                 buffer.encode_u32(*size);
             }
             Self::Imported { name } => {
@@ -365,6 +366,13 @@ impl SymInfo {
         SymInfo {
             flags: 0,
             info: SymInfoFields::Function(linking_symbol),
+        }
+    }
+
+    pub fn for_data(data_symbol: DataSymbol) -> Self {
+        SymInfo {
+            flags: 0,
+            info: SymInfoFields::Data(data_symbol),
         }
     }
 }

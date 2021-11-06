@@ -5,11 +5,11 @@ use roc_collections::all::MutMap;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
-use roc_mono::layout::Layout;
+use roc_mono::layout::{Layout, LayoutIds};
 
 use crate::layout::WasmLayout;
 use crate::storage::{Storage, StoredValue, StoredValueKind};
-use crate::wasm_module::linking::{LinkingSection, RelocationSection};
+use crate::wasm_module::linking::{DataSymbol, LinkingSection, RelocationSection};
 use crate::wasm_module::sections::{
     CodeSection, DataMode, DataSection, DataSegment, ExportSection, FunctionSection, GlobalSection,
     ImportSection, MemorySection, TypeSection, WasmModule,
@@ -20,16 +20,18 @@ use crate::wasm_module::{
 };
 use crate::{copy_memory, CopyMemoryConfig, Env, PTR_TYPE};
 
-// Don't allocate any constant data at address zero or near it. Would be valid, but bug-prone.
-// Follow Emscripten's example by using 1kB (4 bytes would probably do)
-const UNUSED_DATA_SECTION_BYTES: u32 = 1024;
+// Don't store any constants at address zero or near it. Would be valid, but bug-prone.
+// Follow Emscripten's example by leaving 1kB unused (4 bytes would probably do)
+const CONSTANTS_MIN_ADDR: u32 = 1024;
 
 pub struct WasmBackend<'a> {
     env: &'a Env<'a>,
 
     // Module-level data
     pub module: WasmModule<'a>,
-    next_literal_addr: u32,
+    pub layout_ids: LayoutIds<'a>,
+    pub strings: MutMap<&'a str, (u32, DataSymbol)>,
+    next_string_addr: u32,
     proc_symbols: Vec<'a, Symbol>,
 
     // Function-level data
@@ -58,8 +60,7 @@ impl<'a> WasmBackend<'a> {
             code: CodeSection::new(env.arena),
             data: DataSection::new(env.arena),
             linking: LinkingSection::new(env.arena),
-            reloc_code: RelocationSection::new(env.arena, "reloc.CODE"),
-            reloc_data: RelocationSection::new(env.arena, "reloc.DATA"),
+            relocations: RelocationSection::new(env.arena, "reloc.CODE"),
         };
 
         module.export.entries.push(Export {
@@ -79,7 +80,7 @@ impl<'a> WasmBackend<'a> {
 
         let literal_segment = DataSegment {
             mode: DataMode::Active {
-                offset: ConstExpr::I32(UNUSED_DATA_SECTION_BYTES as i32),
+                offset: ConstExpr::I32(CONSTANTS_MIN_ADDR as i32),
             },
             init: Vec::with_capacity_in(64, env.arena),
         };
@@ -90,8 +91,10 @@ impl<'a> WasmBackend<'a> {
 
             // Module-level data
             module,
-            next_literal_addr: UNUSED_DATA_SECTION_BYTES,
+            next_string_addr: CONSTANTS_MIN_ADDR,
             proc_symbols,
+            layout_ids: LayoutIds::default(),
+            strings: MutMap::default(),
 
             // Function-level data
             block_depth: 0,
@@ -397,17 +400,13 @@ impl<'a> WasmBackend<'a> {
     ) -> Result<(), String> {
         let wasm_layout = WasmLayout::new(layout);
         match expr {
-            Expr::Literal(lit) => self.load_literal(lit, storage),
+            Expr::Literal(lit) => self.load_literal(lit, storage, *sym, layout),
 
             Expr::Call(roc_mono::ir::Call {
                 call_type,
                 arguments,
             }) => match call_type {
                 CallType::ByName { name: func_sym, .. } => {
-                    // TODO: See if we can make this more efficient
-                    // Recreating the same WasmLayout again, rather than passing it down,
-                    // to match signature of Backend::build_expr
-
                     let mut wasm_args_tmp: Vec<Symbol>;
                     let (wasm_args, has_return_val) = match wasm_layout {
                         WasmLayout::StackMemory { .. } => {
@@ -429,7 +428,7 @@ impl<'a> WasmBackend<'a> {
                         None => {
                             // TODO: actually useful linking! Push a relocation for it.
                             return Err(format!(
-                                "Not yet supporteed: calling foreign function {:?}",
+                                "Not yet supported: calling foreign function {:?}",
                                 func_sym
                             ));
                         }
@@ -460,7 +459,13 @@ impl<'a> WasmBackend<'a> {
         }
     }
 
-    fn load_literal(&mut self, lit: &Literal<'a>, storage: &StoredValue) -> Result<(), String> {
+    fn load_literal(
+        &mut self,
+        lit: &Literal<'a>,
+        storage: &StoredValue,
+        sym: Symbol,
+        layout: &Layout<'a>,
+    ) -> Result<(), String> {
         let not_supported_error = || Err(format!("Literal value {:?} is not yet implemented", lit));
 
         match storage {
@@ -480,41 +485,66 @@ impl<'a> WasmBackend<'a> {
 
             StoredValue::StackMemory { location, .. } => match lit {
                 Literal::Str(s) => {
-                    // Load the stack memory address where we want to write
                     let (local_id, offset) =
                         location.local_and_offset(self.storage.stack_frame_pointer);
-                    self.code_builder.get_local(local_id);
-                    self.code_builder.i32_const(offset as i32);
-                    self.code_builder.i32_add();
-
-                    // For either small or regular strings, we write 8 bytes to stack memory
-                    let mut stack_mem_bytes = [0; 8];
 
                     let len = s.len();
                     if len < 8 {
-                        // Small string payload
+                        let mut stack_mem_bytes = [0; 8];
                         stack_mem_bytes[0..len].clone_from_slice(s.as_bytes());
-                        // Small string flag and length
                         stack_mem_bytes[7] = 0x80 | (len as u8);
+                        let str_as_int = i64::from_le_bytes(stack_mem_bytes);
+
+                        self.code_builder.get_local(local_id);
+                        self.code_builder.i64_const(str_as_int);
+                        self.code_builder.i64_store(Align::Bytes4, offset);
                     } else {
-                        // Store the bytes in the data section, to be initialised on module load.
-                        // Point there instead of to the heap
-                        let literal_bytes: &mut Vec<'a, u8> =
-                            &mut self.module.data.segments[0].init;
-                        literal_bytes.extend_from_slice(s.as_bytes());
+                        let (linker_sym_index, elements_addr) = match self.strings.get(s) {
+                            // We've seen this string before. Retrieve its address from linker data.
+                            Some((sym_index, DataSymbol::Defined { segment_offset, .. })) => {
+                                let addr = segment_offset + CONSTANTS_MIN_ADDR;
+                                (*sym_index, addr)
+                            }
 
-                        // Calculate bytes for elements and length
-                        let len32 = len as u32;
-                        let elements_addr = self.next_literal_addr;
-                        self.next_literal_addr += len32;
-                        stack_mem_bytes[0..3].clone_from_slice(&elements_addr.to_le_bytes());
-                        stack_mem_bytes[4..8].clone_from_slice(&len32.to_le_bytes());
+                            _ => {
+                                // Store the string in the data section, to be initialised on module load.
+                                // `elements` field points to that constant data, not the heap
+                                self.module.data.segments[0]
+                                    .init
+                                    .extend_from_slice(s.as_bytes());
+
+                                let addr = self.next_string_addr;
+                                self.next_string_addr += len as u32;
+
+                                // Generate linker info
+                                let sym_index =
+                                    (self.proc_symbols.len() + self.strings.len()) as u32;
+                                let name = self
+                                    .layout_ids
+                                    .get(sym, layout)
+                                    .to_symbol_string(sym, &self.env.interns);
+                                let linker_symbol = DataSymbol::Defined {
+                                    name,
+                                    segment_index: 0,
+                                    segment_offset: addr - CONSTANTS_MIN_ADDR,
+                                    size: len as u32,
+                                };
+
+                                self.strings.insert(*s, (sym_index, linker_symbol));
+
+                                (sym_index, addr)
+                            }
+                        };
+
+                        self.code_builder.get_local(local_id);
+                        self.code_builder.insert_memory_relocation(linker_sym_index);
+                        self.code_builder.i32_const(elements_addr as i32);
+                        self.code_builder.i32_store(Align::Bytes4, offset);
+
+                        self.code_builder.get_local(local_id);
+                        self.code_builder.i32_const(len as i32);
+                        self.code_builder.i32_store(Align::Bytes4, offset + 4);
                     };
-
-                    // Since we have 64 bits of data, we can squeeze them into one instruction
-                    self.code_builder
-                        .i64_const(i64::from_le_bytes(stack_mem_bytes));
-                    self.code_builder.i64_store(Align::Bytes4, offset);
                 }
                 _ => {
                     return not_supported_error();
