@@ -83,7 +83,7 @@ getCharScope = \scope ->
                     bytes <- Task.await (File.chunk h)
                     when List.first bytes is
                         Ok val ->
-                            # This starts at 1 because the first charater is already being returned.
+                            # This starts at 1 because the first character is already being returned.
                             Task.succeed (T val {scope & buf: bytes, index: 1 })
                         Err ListWasEmpty -> 
                             Task.fail EndOfData

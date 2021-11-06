@@ -1,14 +1,14 @@
 {
     "niv": {
         "branch": "master",
-        "description": "Easy dependency management for Nix projects",
-        "homepage": "https://github.com/nmattia/niv",
-        "owner": "nmattia",
+        "description": "Niv fork using unstable nix packages.",
+        "homepage": "https://github.com/Anton-4/niv",
+        "owner": "Anton-4",
         "repo": "niv",
-        "rev": "e0ca65c81a2d7a4d82a189f1e23a48d59ad42070",
-        "sha256": "1pq9nh1d8nn3xvbdny8fafzw87mj7gsmp6pxkdl65w2g18rmcmzx",
+        "rev": "f292d8d149a0e5d1e7fdd0ef68d5dde75814ef7e",
+        "sha256": "0lf52chvqfl5jq09sc2k9vg8faqnd27f3ic5cgzp68jk036bax7r",
         "type": "tarball",
-        "url": "https://github.com/nmattia/niv/archive/e0ca65c81a2d7a4d82a189f1e23a48d59ad42070.tar.gz",
+        "url": "https://github.com/Anton-4/niv/archive/f292d8d149a0e5d1e7fdd0ef68d5dde75814ef7e.tar.gz",
         "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
     },
     "nixpkgs": {

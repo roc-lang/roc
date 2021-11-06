@@ -2849,7 +2849,7 @@ fn do_pass_bool_byte_closure_layout() {
 
             ## ANY
 
-            # If succcessful, the any parser consumes one character
+            # If successful, the any parser consumes one character
 
             any: Parser U8
             any = \inp ->

@@ -192,7 +192,7 @@ test "" {
 //
 // Thank you Zig Contributors!
 
-// Export it as weak incase it is alreadly linked in by something else.
+// Export it as weak incase it is already linked in by something else.
 comptime {
     @export(__muloti4, .{ .name = "__muloti4", .linkage = .Weak });
 }

@@ -552,7 +552,7 @@ pub fn canonicalize_expr<'a>(
 
                     // We shouldn't ultimately count arguments as referenced locals. Otherwise,
                     // we end up with weird conclusions like the expression (\x -> x + 1)
-                    // references the (nonexistant) local variable x!
+                    // references the (nonexistent) local variable x!
                     output.references.lookups.remove(sub_symbol);
                 }
             }
@@ -1683,7 +1683,7 @@ fn flatten_str_lines<'a>(
     (desugar_str_segments(var_store, segments), output)
 }
 
-/// Resolve stirng interpolations by desugaring a sequence of StrSegments
+/// Resolve string interpolations by desugaring a sequence of StrSegments
 /// into nested calls to Str.concat
 fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> Expr {
     use StrSegment::*;

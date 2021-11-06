@@ -68,7 +68,7 @@ where
 
     /// finalize does any setup and cleanup that should happen around the procedure.
     /// finalize does setup because things like stack size and jump locations are not know until the function is written.
-    /// For example, this can store the frame pionter and setup stack space.
+    /// For example, this can store the frame pointer and setup stack space.
     /// finalize is run at the end of build_proc when all internal code is finalized.
     fn finalize(&mut self) -> Result<(&'a [u8], &[Relocation]), String>;
 

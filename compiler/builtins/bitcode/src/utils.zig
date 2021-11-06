@@ -15,7 +15,7 @@ extern fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignmen
 // This should never be passed a null pointer.
 extern fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void;
 
-// Signals to the host that the program has paniced
+// Signals to the host that the program has panicked
 extern fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void;
 
 comptime {
@@ -50,7 +50,7 @@ fn testing_roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
     _ = c_ptr;
     _ = tag_id;
 
-    @panic("Roc paniced");
+    @panic("Roc panicked");
 }
 
 pub fn alloc(size: usize, alignment: u32) [*]u8 {
@@ -70,7 +70,7 @@ pub fn panic(c_ptr: *c_void, alignment: u32) callconv(.C) void {
     return @call(.{ .modifier = always_inline }, roc_panic, .{ c_ptr, alignment });
 }
 
-// indirection because otherwise zig creats an alias to the panic function which our LLVM code
+// indirection because otherwise zig creates an alias to the panic function which our LLVM code
 // does not know how to deal with
 pub fn test_panic(c_ptr: *c_void, alignment: u32) callconv(.C) void {
     _ = c_ptr;

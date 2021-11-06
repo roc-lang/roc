@@ -264,7 +264,7 @@ pub const RocStr = extern struct {
     }
 
     // Returns (@sizeOf(RocStr) - 1) for small strings and the empty string.
-    // Returns 0 for refcounted stirngs and immortal strings.
+    // Returns 0 for refcounted strings and immortal strings.
     // Returns the stored capacity value for all other strings.
     pub fn capacity(self: RocStr) usize {
         const length = self.len();
