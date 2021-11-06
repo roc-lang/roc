@@ -6649,39 +6649,6 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
     }
 }
 
-pub fn call_bitcode_int_fn<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    fn_name: &str,
-    args: &[BasicValueEnum<'ctx>],
-    int_width: IntWidth,
-) -> BasicValueEnum<'ctx> {
-    match int_width {
-        IntWidth::U8 => call_bitcode_fn(env, args, &format!("{}_u8", fn_name)),
-        IntWidth::U16 => call_bitcode_fn(env, args, &format!("{}_u16", fn_name)),
-        IntWidth::U32 => call_bitcode_fn(env, args, &format!("{}_u32", fn_name)),
-        IntWidth::U64 => call_bitcode_fn(env, args, &format!("{}_u64", fn_name)),
-        IntWidth::U128 => call_bitcode_fn(env, args, &format!("{}_u128", fn_name)),
-        IntWidth::I8 => call_bitcode_fn(env, args, &format!("{}_i8", fn_name)),
-        IntWidth::I16 => call_bitcode_fn(env, args, &format!("{}_i16", fn_name)),
-        IntWidth::I32 => call_bitcode_fn(env, args, &format!("{}_i32", fn_name)),
-        IntWidth::I64 => call_bitcode_fn(env, args, &format!("{}_i64", fn_name)),
-        IntWidth::I128 => call_bitcode_fn(env, args, &format!("{}_i128", fn_name)),
-    }
-}
-
-pub fn call_bitcode_float_fn<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    fn_name: &str,
-    args: &[BasicValueEnum<'ctx>],
-    float_width: FloatWidth,
-) -> BasicValueEnum<'ctx> {
-    match float_width {
-        FloatWidth::F32 => call_bitcode_fn(env, args, &format!("{}_f32", fn_name)),
-        FloatWidth::F64 => call_bitcode_fn(env, args, &format!("{}_f64", fn_name)),
-        FloatWidth::F128 => todo!("suport 128-bit floats"),
-    }
-}
-
 fn define_global_str_literal_ptr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     message: &str,
