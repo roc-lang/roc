@@ -1065,7 +1065,16 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 if !field_layout.is_dropped_because_empty() {
                     field_types.push(basic_type_from_layout(env, field_layout));
 
-                    field_vals.push(field_expr);
+                    if field_layout.is_passed_by_reference() {
+                        let field_value = env.builder.build_load(
+                            field_expr.into_pointer_value(),
+                            "load_tag_to_put_in_struct",
+                        );
+
+                        field_vals.push(field_value);
+                    } else {
+                        field_vals.push(field_expr);
+                    }
                 }
             }
 
@@ -1173,14 +1182,29 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             match (value, layout) {
                 (StructValue(argument), Layout::Struct(fields)) => {
                     debug_assert!(!fields.is_empty());
-                    env.builder
+
+                    let field_value = env
+                        .builder
                         .build_extract_value(
                             argument,
                             *index as u32,
                             env.arena
                                 .alloc(format!("struct_field_access_record_{}", index)),
                         )
-                        .unwrap()
+                        .unwrap();
+
+                    let field_layout = fields[*index as usize];
+                    if field_layout.is_passed_by_reference() {
+                        let alloca = env.builder.build_alloca(
+                            basic_type_from_layout(env, &field_layout),
+                            "struct_field_tag",
+                        );
+                        env.builder.build_store(alloca, field_value);
+
+                        alloca.into()
+                    } else {
+                        field_value
+                    }
                 }
                 (
                     PointerValue(argument),
@@ -2555,7 +2579,11 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             builder.position_at_end(cont_block);
 
             for (ptr, param) in joinpoint_args.iter().zip(parameters.iter()) {
-                let value = env.builder.build_load(*ptr, "load_jp_argument");
+                let value = if param.layout.is_passed_by_reference() {
+                    (*ptr).into()
+                } else {
+                    env.builder.build_load(*ptr, "load_jp_argument")
+                };
                 scope.insert(param.symbol, (param.layout, value));
             }
 
@@ -2582,8 +2610,9 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             let (cont_block, argument_pointers) = scope.join_points.get(join_point).unwrap();
 
             for (pointer, argument) in argument_pointers.iter().zip(arguments.iter()) {
-                let value = load_symbol(scope, argument);
-                builder.build_store(*pointer, value);
+                let (value, layout) = load_symbol_and_layout(scope, argument);
+
+                store_roc_value(env, *layout, *pointer, value);
             }
 
             builder.build_unconditional_branch(*cont_block);

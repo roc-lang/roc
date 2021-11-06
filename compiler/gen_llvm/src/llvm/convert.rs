@@ -90,7 +90,7 @@ pub fn basic_type_from_layout_1<'a, 'ctx, 'env>(
         Union(union_layout) => {
             use UnionLayout::*;
 
-            let tag_id_type = basic_type_from_layout_1(env, &union_layout.tag_id_layout());
+            let tag_id_type = basic_type_from_layout(env, &union_layout.tag_id_layout());
 
             match union_layout {
                 NonRecursive(tags) => {

@@ -349,10 +349,22 @@ fn modify_refcount_struct_help<'a, 'ctx, 'env>(
 
     for (i, field_layout) in layouts.iter().enumerate() {
         if field_layout.contains_refcounted() {
-            let field_ptr = env
+            let raw_value = env
                 .builder
                 .build_extract_value(wrapper_struct, i as u32, "decrement_struct_field")
                 .unwrap();
+
+            let field_value = if field_layout.is_passed_by_reference() {
+                let field_type = basic_type_from_layout(env, field_layout);
+                let alloca = env
+                    .builder
+                    .build_alloca(field_type, "load_struct_tag_field_for_decrement");
+                env.builder.build_store(alloca, raw_value);
+
+                alloca.into()
+            } else {
+                raw_value
+            };
 
             modify_refcount_layout_help(
                 env,
@@ -360,7 +372,7 @@ fn modify_refcount_struct_help<'a, 'ctx, 'env>(
                 layout_ids,
                 mode.to_call_mode(fn_val),
                 when_recursive,
-                field_ptr,
+                field_value,
                 field_layout,
             );
         }
@@ -1289,7 +1301,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
             .build_bitcast(
                 value_ptr,
                 wrapper_type.ptr_type(AddressSpace::Generic),
-                "opaque_to_correct",
+                "opaque_to_correct_recursive_decrement",
             )
             .into_pointer_value();
 
