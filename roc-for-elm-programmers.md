@@ -1235,7 +1235,7 @@ target (for example, WebAssembly) at runtime it will be the same as `U32` instea
 For example:
 
 * `List.len : List * -> Nat`
-* `List.get : List elem, Nat -> List elem`
+* `List.get : List elem, Nat -> Result elem [ OutOfBounds ]*`
 * `List.set : List elem, Nat, elem -> List elem`
 
 As with floats, which integer type to use depends on the values you want to support

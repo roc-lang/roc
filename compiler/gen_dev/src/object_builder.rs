@@ -28,7 +28,7 @@ pub fn build_module<'a>(
             architecture: TargetArch::X86_64,
             binary_format: TargetBF::Elf,
             ..
-        } => {
+        } if cfg!(feature = "target-x86_64") => {
             let backend: Backend64Bit<
                 x86_64::X86_64GeneralReg,
                 x86_64::X86_64FloatReg,
@@ -46,7 +46,7 @@ pub fn build_module<'a>(
             architecture: TargetArch::X86_64,
             binary_format: TargetBF::Macho,
             ..
-        } => {
+        } if cfg!(feature = "target-x86_64") => {
             let backend: Backend64Bit<
                 x86_64::X86_64GeneralReg,
                 x86_64::X86_64FloatReg,
@@ -68,7 +68,7 @@ pub fn build_module<'a>(
             architecture: TargetArch::Aarch64(_),
             binary_format: TargetBF::Elf,
             ..
-        } => {
+        } if cfg!(feature = "target-aarch64") => {
             let backend: Backend64Bit<
                 aarch64::AArch64GeneralReg,
                 aarch64::AArch64FloatReg,

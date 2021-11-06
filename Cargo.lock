@@ -498,7 +498,6 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "criterion",
- "inlinable_string",
  "rlimit",
  "roc_cli",
  "roc_collections",
@@ -1852,12 +1851,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "inlinable_string"
-version = "0.1.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3094308123a0e9fd59659ce45e22de9f53fc1d2ac6e1feb9fef988e4f76cad77"
-
-[[package]]
 name = "inplace_it"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2782,11 +2775,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "parity-wasm"
-version = "0.44.0"
-source = "git+https://github.com/brian-carroll/parity-wasm?branch=master#373f655f64d2260a2e9665811f7b6ed17f9db705"
-
-[[package]]
 name = "parking_lot"
 version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3579,9 +3567,7 @@ dependencies = [
  "im-rc 14.3.0",
  "indoc 0.3.6",
  "inkwell 0.1.0",
- "inlinable_string",
  "libloading 0.6.7",
- "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
@@ -3613,7 +3599,6 @@ name = "roc_builtins"
 version = "0.1.0"
 dependencies = [
  "indoc 0.3.6",
- "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
@@ -3631,7 +3616,6 @@ dependencies = [
  "im 14.3.0",
  "im-rc 14.3.0",
  "indoc 0.3.6",
- "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
@@ -3658,9 +3642,7 @@ dependencies = [
  "im-rc 14.3.0",
  "indoc 0.3.6",
  "inkwell 0.1.0",
- "libc",
  "libloading 0.6.7",
- "maplit",
  "mimalloc",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
@@ -3724,7 +3706,6 @@ name = "roc_constrain"
 version = "0.1.0"
 dependencies = [
  "indoc 0.3.6",
- "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
@@ -3742,7 +3723,6 @@ name = "roc_docs"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
- "maplit",
  "pretty_assertions 0.5.1",
  "pulldown-cmark",
  "roc_ast",
@@ -3750,7 +3730,6 @@ dependencies = [
  "roc_can",
  "roc_code_markup",
  "roc_collections",
- "roc_fmt",
  "roc_load",
  "roc_module",
  "roc_parse",
@@ -3781,7 +3760,6 @@ dependencies = [
  "indoc 1.0.3",
  "libc",
  "log",
- "maplit",
  "nonempty",
  "page_size",
  "palette",
@@ -3796,7 +3774,6 @@ dependencies = [
  "roc_can",
  "roc_code_markup",
  "roc_collections",
- "roc_fmt",
  "roc_load",
  "roc_module",
  "roc_parse",
@@ -3807,7 +3784,6 @@ dependencies = [
  "roc_types",
  "roc_unify",
  "rodio",
- "ropey",
  "serde",
  "snafu",
  "tempfile",
@@ -3817,7 +3793,6 @@ dependencies = [
  "wgpu",
  "wgpu_glyph",
  "winit",
- "zerocopy",
 ]
 
 [[package]]
@@ -3828,7 +3803,6 @@ dependencies = [
  "im 14.3.0",
  "im-rc 14.3.0",
  "indoc 0.3.6",
- "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
@@ -3847,9 +3821,7 @@ dependencies = [
  "im-rc 14.3.0",
  "indoc 0.3.6",
  "itertools 0.9.0",
- "libc",
  "libloading 0.6.7",
- "maplit",
  "object 0.24.0",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
@@ -3884,8 +3856,6 @@ dependencies = [
  "im-rc 14.3.0",
  "indoc 0.3.6",
  "inkwell 0.1.0",
- "libc",
- "maplit",
  "morphic_lib",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
@@ -3915,8 +3885,6 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "indoc 0.3.6",
- "libc",
- "parity-wasm",
  "pretty_assertions 0.5.1",
  "roc_builtins",
  "roc_can",
@@ -3992,7 +3960,6 @@ dependencies = [
  "bumpalo",
  "indoc 0.3.6",
  "lazy_static",
- "maplit",
  "pretty_assertions 0.5.1",
  "roc_collections",
  "roc_ident",
@@ -4009,7 +3976,6 @@ dependencies = [
  "hashbrown 0.11.2",
  "indoc 0.3.6",
  "linked-hash-map",
- "maplit",
  "morphic_lib",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
@@ -4051,7 +4017,6 @@ name = "roc_problem"
 version = "0.1.0"
 dependencies = [
  "indoc 0.3.6",
- "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
@@ -4074,7 +4039,6 @@ dependencies = [
  "im 14.3.0",
  "im-rc 14.3.0",
  "indoc 0.3.6",
- "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
@@ -4098,7 +4062,6 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "indoc 0.3.6",
- "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
@@ -4125,7 +4088,6 @@ name = "roc_types"
 version = "0.1.0"
 dependencies = [
  "indoc 0.3.6",
- "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
@@ -4141,7 +4103,6 @@ name = "roc_unify"
 version = "0.1.0"
 dependencies = [
  "indoc 0.3.6",
- "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
@@ -4168,15 +4129,6 @@ dependencies = [
  "hound",
  "lewton",
  "minimp3",
-]
-
-[[package]]
-name = "ropey"
-version = "1.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9150aff6deb25b20ed110889f070a678bcd1033e46e5e9d6fb1abeab17947f28"
-dependencies = [
- "smallvec",
 ]
 
 [[package]]
@@ -4625,18 +4577,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "synstructure"
-version = "0.12.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "474aaa926faa1603c40b7885a9eaea29b444d1cb2850cb7c0e37bb1a4182f4fa"
-dependencies = [
- "proc-macro2 1.0.29",
- "quote 1.0.9",
- "syn 1.0.76",
- "unicode-xid 0.2.2",
-]
-
-[[package]]
 name = "target-lexicon"
 version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4677,7 +4617,6 @@ dependencies = [
  "inkwell 0.1.0",
  "libc",
  "libloading 0.6.7",
- "maplit",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
  "roc_build",
@@ -4710,31 +4649,16 @@ name = "test_mono"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
- "either",
- "im 14.3.0",
- "im-rc 14.3.0",
  "indoc 0.3.6",
- "libc",
- "libloading 0.6.7",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
- "roc_build",
  "roc_builtins",
  "roc_can",
  "roc_collections",
- "roc_constrain",
  "roc_load",
  "roc_module",
  "roc_mono",
- "roc_parse",
- "roc_problem",
- "roc_region",
- "roc_reporting",
- "roc_solve",
- "roc_types",
- "roc_unify",
- "target-lexicon",
  "test_mono_macros",
 ]
 
@@ -4742,10 +4666,31 @@ dependencies = [
 name = "test_mono_macros"
 version = "0.1.0"
 dependencies = [
- "darling 0.10.2",
  "proc-macro2 1.0.29",
  "quote 1.0.9",
  "syn 1.0.76",
+]
+
+[[package]]
+name = "test_wasm"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "indoc 0.3.6",
+ "libc",
+ "pretty_assertions 0.5.1",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_gen_wasm",
+ "roc_load",
+ "roc_module",
+ "roc_std",
+ "roc_types",
+ "target-lexicon",
+ "tempfile",
+ "wasmer",
+ "wasmer-wasi",
 ]
 
 [[package]]
@@ -5748,25 +5693,4 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56c1936c4cc7a1c9ab21a1ebb602eb942ba868cbd44a99cb7cdc5892335e1c85"
 dependencies = [
  "linked-hash-map",
-]
-
-[[package]]
-name = "zerocopy"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6580539ad917b7c026220c4b3f2c08d52ce54d6ce0dc491e66002e35388fab46"
-dependencies = [
- "byteorder",
- "zerocopy-derive",
-]
-
-[[package]]
-name = "zerocopy-derive"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d498dbd1fd7beb83c86709ae1c33ca50942889473473d287d56ce4770a18edfb"
-dependencies = [
- "proc-macro2 1.0.29",
- "syn 1.0.76",
- "synstructure",
 ]

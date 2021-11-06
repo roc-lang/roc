@@ -1,5 +1,5 @@
 use crate::def::Def;
-use crate::expr::Expr::*;
+use crate::expr::{ClosureData, Expr::*};
 use crate::expr::{Expr, Recursive, WhenBranch};
 use crate::pattern::Pattern;
 use roc_collections::all::SendMap;
@@ -2955,7 +2955,7 @@ fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
         CalledVia::Space,
     );
 
-    let wrapper = Closure {
+    let wrapper = Closure(ClosureData {
         function_type: wrapper_var,
         closure_type: var_store.fresh(),
         closure_ext_var: var_store.fresh(),
@@ -2969,7 +2969,7 @@ fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
             (Variable::EMPTY_RECORD, no_region(Pattern::Underscore)),
         ],
         loc_body: Box::new(no_region(call_func)),
-    };
+    });
 
     let body = RunLowLevel {
         op: LowLevel::DictWalk,
@@ -3984,7 +3984,7 @@ fn defn_help(
         .map(|(var, symbol)| (var, no_region(Identifier(symbol))))
         .collect();
 
-    Closure {
+    Closure(ClosureData {
         function_type: var_store.fresh(),
         closure_type: var_store.fresh(),
         closure_ext_var: var_store.fresh(),
@@ -3994,7 +3994,7 @@ fn defn_help(
         recursive: Recursive::NotRecursive,
         arguments: closure_args,
         loc_body: Box::new(no_region(body)),
-    }
+    })
 }
 
 #[inline(always)]

@@ -1,4 +1,4 @@
-FROM rust:1.54-slim-bullseye
+FROM rust:1.56.1-slim-bullseye
 WORKDIR /earthbuild
 
 prep-debian:
@@ -81,7 +81,7 @@ test-rust:
     RUN --mount=type=cache,target=$SCCACHE_DIR \
         cargo test --release && sccache --show-stats
     # run i386 (32-bit linux) cli tests
-    RUN echo "4" | cargo run --release -- --backend=x86_32 examples/benchmarks/NQueens.roc
+    RUN echo "4" | cargo run --release --features="target-x86" -- --backend=x86_32 examples/benchmarks/NQueens.roc
     RUN --mount=type=cache,target=$SCCACHE_DIR \
         cargo test --release --test cli_run i386 --features="i386-cli-run" && sccache --show-stats
 

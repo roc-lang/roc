@@ -31,9 +31,9 @@ pub unsafe fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
 pub unsafe fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
     use roc_gen_llvm::llvm::build::PanicTagId;
 
-    use libc::c_char;
     use std::convert::TryFrom;
     use std::ffi::CStr;
+    use std::os::raw::c_char;
 
     match PanicTagId::try_from(tag_id) {
         Ok(PanicTagId::NullTerminatedString) => {

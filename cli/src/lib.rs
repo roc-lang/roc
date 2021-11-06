@@ -119,7 +119,7 @@ pub fn build_app<'a>() -> App<'a> {
             )
         .subcommand(
             App::new(CMD_DOCS)
-                .about("Generate documentation for Roc modules")
+                .about("Generate documentation for Roc modules (Work In Progress)")
                 .arg(Arg::with_name(DIRECTORY_OR_FILES)
                     .index(1)
                     .multiple(true)
@@ -217,7 +217,6 @@ pub enum BuildConfig {
     BuildAndRun { roc_file_arg_index: usize },
 }
 
-#[cfg(feature = "llvm")]
 pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     use build::build_file;
     use std::str::FromStr;

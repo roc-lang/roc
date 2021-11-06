@@ -434,8 +434,8 @@ fn wasm_roc_panic(address: u32, tag_id: u32) {
                 let width = 100;
                 let c_ptr = (ptr.deref(memory, 0, width)).unwrap();
 
-                use libc::c_char;
                 use std::ffi::CStr;
+                use std::os::raw::c_char;
                 let slice = unsafe { CStr::from_ptr(c_ptr as *const _ as *const c_char) };
                 string = slice.to_str().unwrap();
             });
