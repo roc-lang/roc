@@ -3368,27 +3368,20 @@ dependencies = [
  "bumpalo",
  "im",
  "im-rc",
- "indoc",
- "libloading 0.7.1",
  "object 0.26.2",
- "roc_build",
  "roc_builtins",
  "roc_can",
  "roc_collections",
- "roc_constrain",
- "roc_load",
  "roc_module",
  "roc_mono",
  "roc_parse",
  "roc_problem",
  "roc_region",
- "roc_reporting",
  "roc_solve",
  "roc_std",
  "roc_types",
  "roc_unify",
  "target-lexicon",
- "tempfile",
 ]
 
 [[package]]
@@ -4083,6 +4076,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2dfed899f0eb03f32ee8c6a0aabdb8a7949659e3466561fc0adf54e26d88c5f4"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "test_dev"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "indoc",
+ "libloading 0.7.1",
+ "roc_build",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_constrain",
+ "roc_gen_dev",
+ "roc_load",
+ "roc_mono",
+ "roc_parse",
+ "roc_problem",
+ "roc_reporting",
+ "roc_std",
+ "target-lexicon",
+ "tempfile",
 ]
 
 [[package]]

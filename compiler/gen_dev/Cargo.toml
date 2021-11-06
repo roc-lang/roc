@@ -28,16 +28,9 @@ object = { version = "0.26", features = ["write"] }
 
 [dev-dependencies]
 roc_can = { path = "../can" }
-roc_build = { path = "../build" }
 roc_parse = { path = "../parse" }
-roc_reporting = { path = "../reporting" }
-roc_load = { path = "../load" }
-roc_constrain = { path = "../constrain" }
 roc_std = { path = "../../roc_std" }
-indoc = "1.0"
 bumpalo = { version = "3.6.1", features = ["collections"] }
-tempfile = "3.1.0"
-libloading = "0.7"
 
 [features]
 target-aarch64 = []
