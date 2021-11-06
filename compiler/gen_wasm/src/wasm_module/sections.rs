@@ -107,9 +107,9 @@ pub struct TypeSection<'a> {
 }
 
 impl<'a> TypeSection<'a> {
-    pub fn new(arena: &'a Bump) -> Self {
+    pub fn new(arena: &'a Bump, capacity: usize) -> Self {
         TypeSection {
-            signatures: Vec::with_capacity_in(8, arena),
+            signatures: Vec::with_capacity_in(capacity, arena),
         }
     }
 
@@ -229,13 +229,12 @@ pub struct FunctionSection<'a> {
 }
 
 impl<'a> FunctionSection<'a> {
-    pub fn new(arena: &'a Bump) -> Self {
+    pub fn new(arena: &'a Bump, capacity: usize) -> Self {
         FunctionSection {
-            signature_indices: Vec::with_capacity_in(8, arena),
+            signature_indices: Vec::with_capacity_in(capacity, arena),
         }
     }
 }
-
 impl<'a> Serialize for FunctionSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         serialize_vector_section(buffer, SectionId::Function, &self.signature_indices);
@@ -373,14 +372,6 @@ pub struct GlobalSection<'a> {
     pub entries: Vec<'a, Global>,
 }
 
-impl<'a> GlobalSection<'a> {
-    pub fn new(arena: &'a Bump) -> Self {
-        GlobalSection {
-            entries: Vec::with_capacity_in(1, arena),
-        }
-    }
-}
-
 impl<'a> Serialize for GlobalSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         serialize_vector_section(buffer, SectionId::Global, &self.entries);
@@ -507,12 +498,6 @@ pub struct DataSection<'a> {
 }
 
 impl<'a> DataSection<'a> {
-    pub fn new(arena: &'a Bump) -> Self {
-        DataSection {
-            segments: Vec::with_capacity_in(1, arena),
-        }
-    }
-
     fn is_empty(&self) -> bool {
         self.segments.is_empty() || self.segments.iter().all(|seg| seg.init.is_empty())
     }

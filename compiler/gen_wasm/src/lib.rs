@@ -9,6 +9,7 @@ use bumpalo::{self, collections::Vec, Bump};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::ir::{Proc, ProcLayout};
+use roc_mono::layout::LayoutIds;
 
 use crate::backend::WasmBackend;
 use crate::wasm_module::{
@@ -42,45 +43,44 @@ pub fn build_module_help<'a>(
     env: &'a Env,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Result<WasmModule<'a>, String> {
-    let proc_symbols = Vec::from_iter_in(procedures.keys().map(|(sym, _)| *sym), env.arena);
-    let mut backend = WasmBackend::new(env, proc_symbols);
+    let mut layout_ids = LayoutIds::default();
+    let mut proc_symbols = Vec::with_capacity_in(procedures.len(), env.arena);
+    let mut linker_symbols = Vec::with_capacity_in(procedures.len() * 2, env.arena);
+    let mut exports = Vec::with_capacity_in(procedures.len(), env.arena);
 
-    let mut symbol_table_entries = Vec::with_capacity_in(procedures.len(), env.arena);
+    // Collect the symbols & names for the procedures
+    for (i, (sym, layout)) in procedures.keys().enumerate() {
+        proc_symbols.push(*sym);
 
-    for (i, ((sym, layout), proc)) in procedures.into_iter().enumerate() {
-        let proc_name = backend
-            .layout_ids
-            .get(proc.name, &proc.ret_layout)
-            .to_symbol_string(proc.name, &env.interns);
-        symbol_table_entries.push(SymInfo::for_function(i as u32, proc_name));
+        let fn_name = layout_ids
+            .get_toplevel(*sym, layout)
+            .to_symbol_string(*sym, &env.interns);
 
-        backend.build_proc(proc, sym)?;
-
-        if env.exposed_to_host.contains(&sym) {
-            let fn_name = backend
-                .layout_ids
-                .get_toplevel(sym, &layout)
-                .to_symbol_string(sym, &env.interns);
-
-            backend.module.export.entries.push(Export {
-                name: fn_name,
+        if env.exposed_to_host.contains(sym) {
+            exports.push(Export {
+                name: fn_name.clone(),
                 ty: ExportType::Func,
                 index: i as u32,
             });
         }
+
+        let linker_sym = SymInfo::for_function(i as u32, fn_name);
+        linker_symbols.push(linker_sym);
     }
 
-    let mut data_symbols_and_indices = Vec::from_iter_in(backend.strings.values(), env.arena);
-    data_symbols_and_indices.sort_by_key(|(idx, _)| *idx);
-    let data_syminfos = data_symbols_and_indices
-        .iter()
-        .map(|(_, data_symbol)| SymInfo::for_data(data_symbol.clone()));
-    symbol_table_entries.extend(data_syminfos);
+    // Main loop: Build the Wasm module
+    let (mut module, linker_symbols) = {
+        let mut backend = WasmBackend::new(env, layout_ids, proc_symbols, linker_symbols, exports);
+        for ((sym, _), proc) in procedures.into_iter() {
+            backend.build_proc(proc, sym)?;
+        }
+        (backend.module, backend.linker_symbols)
+    };
 
-    let symbol_table = LinkingSubSection::SymbolTable(symbol_table_entries);
-    backend.module.linking.subsections.push(symbol_table);
+    let symbol_table = LinkingSubSection::SymbolTable(linker_symbols);
+    module.linking.subsections.push(symbol_table);
 
-    Ok(backend.module)
+    Ok(module)
 }
 
 pub struct CopyMemoryConfig {
