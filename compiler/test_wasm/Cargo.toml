@@ -9,7 +9,7 @@ edition = "2018"
 # roc_module = { path = "../module" }
 # roc_mono = { path = "../mono" }
 
-wasmer = { version = "2.0.0", default-features = false, features = ["default-llvm", "default-universal"] }
+wasmer = { version = "2.0.0", default-features = false, features = ["default-cranelift", "default-universal"] }
 wasmer-wasi = "2.0.0"
 
 roc_collections = { path = "../collections" }
