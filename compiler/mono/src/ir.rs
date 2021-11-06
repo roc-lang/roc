@@ -35,9 +35,10 @@ macro_rules! return_on_layout_error {
 macro_rules! return_on_layout_error_help {
     ($env:expr, $error:expr) => {
         match $error {
-            LayoutProblem::UnresolvedTypeVar(_) => {
+            LayoutProblem::UnresolvedTypeVar(v) => {
                 return Stmt::RuntimeError($env.arena.alloc(format!(
-                    "UnresolvedTypeVar {} line {}",
+                    "UnresolvedTypeVar: {} at {} line {}",
+                    v.index(),
                     file!(),
                     line!()
                 )));

@@ -86,6 +86,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_PRODUCT => list_product,
         LIST_PREPEND => list_prepend,
         LIST_JOIN => list_join,
+        LIST_JOIN_MAP => list_join_map,
         LIST_MAP => list_map,
         LIST_MAP2 => list_map2,
         LIST_MAP3 => list_map3,
@@ -2173,6 +2174,72 @@ fn list_walk_backwards(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// List.walkUntil : List elem, state, (state, elem -> [ Continue state, Stop state ]) -> state
 fn list_walk_until(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_3(symbol, LowLevel::ListWalkUntil, var_store)
+}
+
+/// List.joinMap : List a -> (a -> List b) -> List b
+fn list_join_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let b = var_store.fresh();
+    let list_a = var_store.fresh();
+    let list_b = var_store.fresh();
+    let a2list_b = var_store.fresh();
+    let list_list_b = var_store.fresh();
+    dbg!("list_list_b: {}", list_list_b.index());
+
+    let concat_clos_var = var_store.fresh();
+    let num_var = var_store.fresh();
+    let num_precision_var = var_store.fresh();
+
+    let mapped = RunLowLevel {
+        op: LowLevel::ListMap,
+        args: vec![
+            // [a]
+            (list_a, Var(Symbol::ARG_1)),
+            // a -> [b]
+            (a2list_b, Var(Symbol::ARG_2)),
+        ],
+        // List (List b)
+        ret_var: list_b,
+    };
+    let walk = RunLowLevel {
+        op: LowLevel::ListWalk,
+        args: vec![
+            // List (List b)
+            (list_b, mapped),
+            // []: List b
+            (
+                list_b,
+                List {
+                    elem_var: b,
+                    loc_elems: vec![],
+                },
+            ),
+            // \a, b -> List.concat a b
+            (
+                concat_clos_var,
+                // List.concat a b
+                defn_help(
+                    Symbol::LIST_JOIN_MAP_CONCAT,
+                    vec![(list_b, Symbol::ARG_3), (list_b, Symbol::ARG_4)],
+                    var_store,
+                    RunLowLevel {
+                        op: LowLevel::ListConcat,
+                        args: vec![(list_b, Var(Symbol::ARG_3)), (list_b, Var(Symbol::ARG_4))],
+                        ret_var: list_b,
+                    },
+                    list_b,
+                ),
+            ),
+        ],
+        ret_var: list_b,
+    };
+
+    defn(
+        symbol,
+        vec![(list_a, Symbol::ARG_1), (a2list_b, Symbol::ARG_2)],
+        var_store,
+        walk,
+        list_b,
+    )
 }
 
 // min :  List (Num a) -> Result (Num a) [ ListWasEmpty ]*

@@ -2210,3 +2210,21 @@ fn empty_list_of_function_type() {
         RocStr
     );
 }
+
+#[test]
+fn list_join_map() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.joinMap ["guava,apple", "bailey,cyrus"] (\s -> Str.split s ",")
+            "#
+        ),
+        RocList::from_slice(&[
+            RocStr::from_slice("guava".as_bytes()),
+            RocStr::from_slice("apple".as_bytes()),
+            RocStr::from_slice("bailey".as_bytes()),
+            RocStr::from_slice("cyrus".as_bytes()),
+        ]),
+        RocList<RocStr>
+    );
+}
