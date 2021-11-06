@@ -122,7 +122,7 @@ pub fn build_app<'a>() -> App<'a> {
                 .about("Generate documentation for Roc modules (Work In Progress)")
                 .arg(Arg::new(DIRECTORY_OR_FILES)
                     .index(1)
-                    .multiple(true)
+                    .multiple_values(true)
                     .required(false)
                     .about("The directory or files to build documentation for")
 
@@ -185,7 +185,7 @@ pub fn build_app<'a>() -> App<'a> {
             Arg::new(ARGS_FOR_APP)
                 .about("Arguments to pass into the app being run")
                 .requires(ROC_FILE)
-                .multiple(true),
+                .multiple_values(true),
         );
 
     if cfg!(feature = "editor") {
@@ -193,7 +193,7 @@ pub fn build_app<'a>() -> App<'a> {
             App::new(CMD_EDIT).about("Launch the Roc editor").arg(
                 Arg::new(DIRECTORY_OR_FILES)
                     .index(1)
-                    .multiple(true)
+                    .multiple_values(true)
                     .required(false)
                     .about("(optional) The directory or files to open on launch."),
             ),
