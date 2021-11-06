@@ -811,7 +811,7 @@ fn link_macos(
             "-arch",
             &arch,
             "-macos_version_min",
-            "10.15",
+            &get_macos_version(),
         ])
         .args(input_paths);
 
@@ -850,6 +850,23 @@ fn link_macos(
         }
         _ => Ok((ld_child, output_path)),
     }
+}
+
+fn get_macos_version() -> String {
+    let cmd_stdout = Command::new("sw_vers")
+        .arg("-productVersion")
+        .output()
+        .expect("Failed to execute command 'sw_vers -productVersion'")
+        .stdout;
+
+    let full_version_string = String::from_utf8(cmd_stdout)
+        .expect("Failed to convert output of command 'sw_vers -productVersion' into a utf8 string");
+
+    full_version_string
+        .split('.')
+        .take(2)
+        .collect::<Vec<&str>>()
+        .join(".")
 }
 
 fn link_wasm32(
