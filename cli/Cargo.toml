@@ -82,6 +82,8 @@ wasmer = { version = "2.0.0", optional = true, default-features = false, feature
 wasmer-wasi = { version = "2.0.0", optional = true}
 
 [dev-dependencies]
+wasmer = { version = "2.0.0", default-features = false, features = ["default-singlepass", "default-universal"]}
+wasmer-wasi = "2.0.0"
 pretty_assertions = "1.0"
 indoc = "1.0"
 serial_test = "0.5"
