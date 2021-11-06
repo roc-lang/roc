@@ -77,6 +77,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
             })
             .await
             .expect(r#"Request adapter
@@ -275,12 +276,11 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                         label: Some("Redraw"),
                     });
 
-                let frame = surface
-                    .get_current_frame()
-                    .expect("Failed to acquire next SwapChainFrame")
-                    .output;
+                let surface_texture = surface
+                    .get_current_texture()
+                    .expect("Failed to acquire next SwapChainTexture");
 
-                let view = frame
+                let view = surface_texture
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -375,6 +375,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
 
                 staging_belt.finish();
                 cmd_queue.submit(Some(encoder.finish()));
+                surface_texture.present();
 
                 // Recall unused staging buffers
                 use futures::task::SpawnExt;

@@ -788,7 +788,7 @@ fn canonicalize_pending_def<'a>(
                 output.references.referenced_aliases.insert(symbol);
             }
 
-            aliases.extend(ann.aliases.iter().cloned());
+            aliases.extend(ann.aliases.clone());
 
             output.introduced_variables.union(&ann.introduced_variables);
 

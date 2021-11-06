@@ -9,20 +9,18 @@ edition = "2018"
 # roc_module = { path = "../module" }
 # roc_mono = { path = "../mono" }
 
-wasmer = "2.0.0"
+wasmer = { version = "2.0.0", default-features = false, features = ["default-cranelift", "default-universal"] }
 wasmer-wasi = "2.0.0"
 
 roc_collections = { path = "../collections" }
 roc_std = { path = "../../roc_std" }
-bumpalo = { version = "3.6.1", features = ["collections"] }
+bumpalo = { version = "3.8.0", features = ["collections"] }
 roc_gen_wasm = { path = "../gen_wasm" }
 roc_can = { path = "../can" }
 roc_builtins = { path = "../builtins" }
 roc_load = { path = "../load" }
 roc_types = { path = "../types" }
 roc_module = { path = "../module" }
-indoc = "0.3.3"
-pretty_assertions = "0.5.1"
-libc = "0.2"
+indoc = "1.0.3"
+libc = "0.2.106"
 target-lexicon = "0.12.2"
-tempfile = "3.1.0"

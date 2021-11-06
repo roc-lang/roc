@@ -10,4 +10,4 @@ readme = "README.md"
 keywords = ["unification", "union-find"]
 
 [dependencies]
-log = "0.4"
+log = "0.4.14"

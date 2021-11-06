@@ -63,11 +63,11 @@ impl Scope {
         }
     }
 
-    pub fn idents(&self) -> impl Iterator<Item = &(Ident, (Symbol, Region))> {
+    pub fn idents(&self) -> impl Iterator<Item = (&Ident, &(Symbol, Region))> {
         self.idents.iter()
     }
 
-    pub fn symbols(&self) -> impl Iterator<Item = &(Symbol, Region)> {
+    pub fn symbols(&self) -> impl Iterator<Item = (&Symbol, &Region)> {
         self.symbols.iter()
     }
 

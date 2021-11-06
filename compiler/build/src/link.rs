@@ -945,7 +945,7 @@ pub fn module_to_dylib(
     // Load the dylib
     let path = dylib_path.as_path().to_str().unwrap();
 
-    Library::new(path)
+    unsafe { Library::new(path) }
 }
 
 fn validate_output(file_name: &str, cmd_name: &str, output: Output) {
