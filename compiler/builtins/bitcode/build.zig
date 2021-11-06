@@ -80,6 +80,15 @@ pub fn build(b: *Builder) void {
     const obj_step = b.step("object", "Build object file for linking");
     obj_step.dependOn(&obj.step);
 
+    const wasm_obj = b.addObject("builtins-wasm32", main_path);
+    wasm_obj.setBuildMode(mode);
+    wasm_obj.linkSystemLibrary("c");
+    wasm_obj.setOutputDir(".");
+    wasm_obj.strip = true;
+    wasm_obj.target = wasm32_target;
+    const wasm_obj_step = b.step("wasm32-object", "Build object file for linking");
+    wasm_obj_step.dependOn(&wasm_obj.step);
+
     b.default_step = ir;
     removeInstallSteps(b);
 }
