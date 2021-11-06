@@ -411,6 +411,7 @@ fn roc_run(cmd: &mut Command) -> io::Result<i32> {
     }
 }
 
+#[cfg(feature = "run-wasm32")]
 fn run_with_wasmer(wasm_path: &std::path::Path, args: &[String]) {
     use wasmer::{Instance, Module, Store};
 
@@ -439,6 +440,11 @@ fn run_with_wasmer(wasm_path: &std::path::Path, args: &[String]) {
             other => panic!("Wasmer error: {:?}", other),
         },
     }
+}
+
+#[cfg(not(feature = "run-wasm32"))]
+fn run_with_wasmer(_wasm_path: &std::path::Path, _args: &[String]) {
+    println!("Running wasm files not support");
 }
 
 enum Backend {
