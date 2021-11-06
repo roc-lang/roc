@@ -1,4 +1,4 @@
-use palette::{Hsv, Srgb, FromColor};
+use palette::{FromColor, Hsv, Srgb};
 
 pub type RgbaTup = (f32, f32, f32, f32);
 pub const WHITE: RgbaTup = (1.0, 1.0, 1.0, 1.0);

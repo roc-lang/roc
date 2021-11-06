@@ -280,7 +280,9 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                     .get_current_texture()
                     .expect("Failed to acquire next SwapChainTexture");
 
-                let view = surface_texture.texture.create_view(&wgpu::TextureViewDescriptor::default());
+                let view = surface_texture
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default());
 
                 if let Some(ref mut ed_model) = app_model.ed_model_opt {
                     if rendered_wgpu_opt.is_none() || ed_model.dirty {
