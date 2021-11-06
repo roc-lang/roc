@@ -23,11 +23,11 @@ morphic_lib = { path = "../../vendor/morphic_lib" }
 ven_pretty = { path = "../../vendor/pretty" }
 bumpalo = { version = "3.6.1", features = ["collections"] }
 parking_lot = { version = "0.11", features = ["deadlock_detection"] }
-crossbeam = "0.7"
+crossbeam = "0.8"
 num_cpus = "1"
 
 [dev-dependencies]
 tempfile = "3.1.0"
-pretty_assertions = "0.5.1"
+pretty_assertions = "1.0"
 maplit = "1.0.1"
-indoc = "0.3.3"
+indoc = "1.0"

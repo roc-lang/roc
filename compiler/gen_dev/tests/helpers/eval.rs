@@ -205,7 +205,7 @@ pub fn helper<'a>(
 
     // std::fs::copy(&path, "/tmp/libapp.so").unwrap();
 
-    let lib = Library::new(path).expect("failed to load shared library");
+    let lib = unsafe { Library::new(path) }.expect("failed to load shared library");
 
     (main_fn_name, delayed_errors, lib)
 }

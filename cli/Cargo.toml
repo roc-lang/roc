@@ -63,14 +63,14 @@ roc_fmt = { path = "../compiler/fmt" }
 roc_reporting = { path = "../compiler/reporting" }
 roc_editor = { path = "../editor", optional = true }
 roc_linker = { path = "../linker" }
-clap = "= 3.0.0-beta.1"
+clap = "= 3.0.0-beta.5"
 const_format = "0.2"
 rustyline = { git = "https://github.com/rtfeldman/rustyline", tag = "prompt-fix" }
 rustyline-derive = { git = "https://github.com/rtfeldman/rustyline", tag = "prompt-fix" }
-im    = "14" # im and im-rc should always have the same version!
-im-rc = "14" # im and im-rc should always have the same version!
+im    = "15" # im and im-rc should always have the same version!
+im-rc = "15" # im and im-rc should always have the same version!
 bumpalo = { version = "3.2", features = ["collections"] }
-libloading = "0.6"
+libloading = "0.7"
 mimalloc = { version = "0.1.26", default-features = false }
 
 inkwell = { path = "../vendor/inkwell", optional = true }
@@ -81,8 +81,8 @@ wasmer = "2.0.0"
 wasmer-wasi = "2.0.0"
 
 [dev-dependencies]
-pretty_assertions = "0.5.1"
-indoc = "0.3.3"
+pretty_assertions = "1.0"
+indoc = "1.0"
 serial_test = "0.5"
 tempfile = "3.1.0"
 criterion = { git = "https://github.com/Anton-4/criterion.rs"}

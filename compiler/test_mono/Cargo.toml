@@ -13,6 +13,6 @@ roc_load = { path = "../load" }
 roc_can = { path = "../can" }
 roc_mono = { path = "../mono" }
 test_mono_macros = { path = "../test_mono_macros" }
-pretty_assertions = "0.5.1"
+pretty_assertions = "1.0"
 bumpalo = { version = "3.6.1", features = ["collections"] }
-indoc = "0.3.3"
+indoc = "1.0"

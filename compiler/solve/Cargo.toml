@@ -19,7 +19,7 @@ roc_builtins = { path = "../builtins" }
 roc_problem = { path = "../problem" }
 roc_parse = { path = "../parse" }
 roc_solve = { path = "../solve" }
-pretty_assertions = "0.5.1"
-indoc = "0.3.3"
+pretty_assertions = "1.0"
+indoc = "1.0"
 tempfile = "3.1.0"
 bumpalo = { version = "3.6.1", features = ["collections"] }

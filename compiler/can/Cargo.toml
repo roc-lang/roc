@@ -14,10 +14,10 @@ roc_problem = { path = "../problem" }
 roc_types = { path = "../types" }
 roc_builtins = { path = "../builtins" }
 ven_graph = { path = "../../vendor/pathfinding" }
-im    = "14" # im and im-rc should always have the same version!
-im-rc = "14" # im and im-rc should always have the same version!
+im    = "15" # im and im-rc should always have the same version!
+im-rc = "15" # im and im-rc should always have the same version!
 bumpalo = { version = "3.6.1", features = ["collections"] }
 
 [dev-dependencies]
-pretty_assertions = "0.5.1"
-indoc = "0.3.3"
+pretty_assertions = "1.0"
+indoc = "1.0"

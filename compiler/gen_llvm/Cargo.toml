@@ -18,8 +18,8 @@ roc_solve = { path = "../solve" }
 roc_mono = { path = "../mono" }
 roc_std = { path = "../../roc_std" }
 morphic_lib = { path = "../../vendor/morphic_lib" }
-im    = "14" # im and im-rc should always have the same version!
-im-rc = "14" # im and im-rc should always have the same version!
+im    = "15" # im and im-rc should always have the same version!
+im-rc = "15" # im and im-rc should always have the same version!
 bumpalo = { version = "3.6.1", features = ["collections"] }
 inkwell = { path = "../../vendor/inkwell" }
 target-lexicon = "0.12.2"

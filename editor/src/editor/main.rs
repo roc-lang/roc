@@ -77,6 +77,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
             })
             .await
             .expect(r#"Request adapter
@@ -275,14 +276,12 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                         label: Some("Redraw"),
                     });
 
-                let frame = surface
-                    .get_current_frame()
-                    .expect("Failed to acquire next SwapChainFrame")
-                    .output;
+                let texture = &surface
+                    .get_current_texture()
+                    .expect("Failed to acquire next SwapChainTexture")
+                    .texture;
 
-                let view = frame
-                    .texture
-                    .create_view(&wgpu::TextureViewDescriptor::default());
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
                 if let Some(ref mut ed_model) = app_model.ed_model_opt {
                     if rendered_wgpu_opt.is_none() || ed_model.dirty {

@@ -16,11 +16,15 @@ roc_builtins = { path = "../builtins" }
 roc_unify = { path = "../unify" }
 roc_solve = { path = "../solve" }
 roc_mono = { path = "../mono" }
-im    = "14" # im and im-rc should always have the same version!
-im-rc = "14" # im and im-rc should always have the same version!
+im    = "15" # im and im-rc should always have the same version!
+im-rc = "15" # im and im-rc should always have the same version!
 bumpalo = { version = "3.6.1", features = ["collections"] }
 target-lexicon = "0.12.2"
-object = { version = "0.24", features = ["write"] }
+# TODO: Deal with the update of object to 0.27.
+# It looks like it breaks linking the generated objects.
+# Probably just need to specify an extra field that used to be implicit or something.
+# When fixed also update the version of object in the linker.
+object = { version = "0.26", features = ["write"] }
 
 [dev-dependencies]
 roc_can = { path = "../can" }
@@ -30,10 +34,10 @@ roc_reporting = { path = "../reporting" }
 roc_load = { path = "../load" }
 roc_constrain = { path = "../constrain" }
 roc_std = { path = "../../roc_std" }
-indoc = "0.3.3"
+indoc = "1.0"
 bumpalo = { version = "3.6.1", features = ["collections"] }
 tempfile = "3.1.0"
-libloading = "0.6"
+libloading = "0.7"
 
 [features]
 target-aarch64 = []

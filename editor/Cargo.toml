@@ -34,25 +34,27 @@ bumpalo = { version = "3.6.1", features = ["collections"] }
 arraystring = "0.3.0"
 libc = "0.2"
 page_size = "0.4"
-winit = "0.24"
-wgpu = "0.10"
+winit = "0.25"
+wgpu = "0.11"
+wgpu_glyph = "0.15"
 glyph_brush = "0.7"
 log = "0.4"
-env_logger = "0.8"
+env_logger = "0.9"
 futures = "0.3"
-wgpu_glyph = "0.14"
 cgmath = "0.18.0"
 snafu = { version = "0.6", features = ["backtraces"] }
 colored = "2"
 pest = "2.1"
 pest_derive = "2.1"
 copypasta = "0.7.1"
+# TODO: look into upgrading to 0.6.
+# Runs into issues converting HSV to LinSrgb.
 palette = "0.5"
 confy = { git = 'https://github.com/rust-cli/confy', features = [
   "yaml_conf"
 ], default-features = false }
 serde = { version = "1.0.123", features = ["derive"] }
-nonempty = "0.6.0"
+nonempty = "0.7"
 fs_extra = "1.2.0"
 rodio = "0.14.0"
 threadpool = "1.8.1"

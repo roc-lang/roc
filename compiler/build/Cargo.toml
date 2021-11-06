@@ -21,13 +21,13 @@ roc_mono = { path = "../mono" }
 roc_load = { path = "../load" }
 roc_gen_llvm = { path = "../gen_llvm", optional = true }
 roc_gen_wasm = { path = "../gen_wasm", optional = true }
-roc_gen_dev = { path = "../gen_dev", default-features = false, optional = true }
+roc_gen_dev = { path = "../gen_dev", default-features = false }
 roc_reporting = { path = "../reporting" }
 roc_std = { path = "../../roc_std" }
-im    = "14" # im and im-rc should always have the same version!
-im-rc = "14" # im and im-rc should always have the same version!
+im    = "15" # im and im-rc should always have the same version!
+im-rc = "15" # im and im-rc should always have the same version!
 bumpalo = { version = "3.6.1", features = ["collections"] }
-libloading = "0.6"
+libloading = "0.7"
 tempfile = "3.1.0"
 inkwell = { path = "../../vendor/inkwell", optional = true }
 target-lexicon = "0.12.2"

@@ -17,7 +17,7 @@ roc_module = { path = "../../compiler/module" }
 bumpalo = { version = "3.6.1", features = ["collections"] }
 criterion = { git = "https://github.com/Anton-4/criterion.rs"}
 serde = { version = "1.0", features = ["derive"] }
-serde-xml-rs = "0.4"
+serde-xml-rs = "0.5"
 strip-ansi-escapes = "0.1"
 tempfile = "3.1.0"
 rlimit = "0.6.2"
