@@ -23,7 +23,7 @@ roc_build = { path = "../compiler/build", default-features = false }
 roc_collections = { path = "../compiler/collections" }
 bumpalo = { version = "3.6", features = ["collections"] }
 clap = "= 3.0.0-beta.5"
-iced-x86 = "1.14"
+iced-x86 = { version = "1.14", default-features = false, features = ["std", "decoder", "op_code_info", "instr_info"]}
 memmap2 = "0.5"
 object = { version = "0.26", features = ["read", "write"] }
 serde = { version = "1.0", features = ["derive"] }
