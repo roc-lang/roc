@@ -12,7 +12,7 @@ roc_mono = { path = "../mono" }
 bumpalo = { version = "3.6.1", features = ["collections"] }
 
 roc_std = { path = "../../roc_std" }
-wasmer = "2.0.0"
+wasmer = { version = "2.0.0", default-features = false, features = ["default-singlepass", "default-universal"]}
 
 [dev-dependencies]
 roc_can = { path = "../can" }
