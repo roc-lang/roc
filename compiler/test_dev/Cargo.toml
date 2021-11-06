@@ -18,8 +18,8 @@ roc_gen_dev = { path = "../gen_dev" }
 roc_mono = { path = "../mono" }
 roc_problem = { path = "../problem" }
 roc_builtins = { path = "../builtins" }
-indoc = "1.0"
-bumpalo = { version = "3.6.1", features = ["collections"] }
-tempfile = "3.1.0"
-libloading = "0.7"
+indoc = "1.0.3"
+bumpalo = { version = "3.8.0", features = ["collections"] }
+tempfile = "3.2.0"
+libloading = "0.7.1"
 target-lexicon = "0.12.2"

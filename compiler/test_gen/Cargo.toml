@@ -24,21 +24,21 @@ roc_parse = { path = "../parse" }
 roc_build = { path = "../build" }
 roc_std = { path = "../../roc_std" }
 roc_gen_wasm = { path = "../gen_wasm" }
-im    = "15" # im and im-rc should always have the same version!
-im-rc = "15" # im and im-rc should always have the same version!
-bumpalo = { version = "3.6.1", features = ["collections"] }
+im    = "15.0.0"
+im-rc = "15.0.0"
+bumpalo = { version = "3.8.0", features = ["collections"] }
 either = "1.6.1"
-libc = "0.2"
+libc = "0.2.106"
 inkwell = { path = "../../vendor/inkwell" }
 target-lexicon = "0.12.2"
-libloading = "0.7"
-wasmer = { version = "2.0.0", default-features = false, features = ["default-singlepass", "default-universal"]}
+libloading = "0.7.1"
+wasmer = { version = "2.0.0", default-features = false, features = ["default-singlepass", "default-universal"] }
 wasmer-wasi = "2.0.0"
-tempfile = "3.1.0"
+tempfile = "3.2.0"
 
 [dev-dependencies]
-bumpalo = { version = "3.6.1", features = ["collections"] }
-indoc = "1.0"
+bumpalo = { version = "3.8.0", features = ["collections"] }
+indoc = "1.0.3"
 
 [features]
 default = []

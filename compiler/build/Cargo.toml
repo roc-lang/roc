@@ -24,11 +24,11 @@ roc_gen_wasm = { path = "../gen_wasm", optional = true }
 roc_gen_dev = { path = "../gen_dev", default-features = false }
 roc_reporting = { path = "../reporting" }
 roc_std = { path = "../../roc_std" }
-im    = "15" # im and im-rc should always have the same version!
-im-rc = "15" # im and im-rc should always have the same version!
-bumpalo = { version = "3.6.1", features = ["collections"] }
-libloading = "0.7"
-tempfile = "3.1.0"
+im    = "15.0.0"
+im-rc = "15.0.0"
+bumpalo = { version = "3.8.0", features = ["collections"] }
+libloading = "0.7.1"
+tempfile = "3.2.0"
 inkwell = { path = "../../vendor/inkwell", optional = true }
 target-lexicon = "0.12.2"
 

@@ -17,7 +17,7 @@ roc_std = { path = "../../roc_std" }
 roc_problem = { path = "../problem" }
 ven_pretty = { path = "../../vendor/pretty" }
 morphic_lib = { path = "../../vendor/morphic_lib" }
-bumpalo = { version = "3.6.1", features = ["collections"] }
+bumpalo = { version = "3.8.0", features = ["collections"] }
 hashbrown = { version = "0.11.2", features = [ "bumpalo" ] }
 ven_ena = { path = "../../vendor/ena" }
 ven_graph = { path = "../../vendor/pathfinding" }
