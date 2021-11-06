@@ -20,8 +20,8 @@ fn promote_expr_to_module(src: &str) -> String {
 }
 
 #[allow(dead_code)]
-pub fn helper<'a>(
-    arena: &'a bumpalo::Bump,
+pub fn helper(
+    arena: &bumpalo::Bump,
     src: &str,
     stdlib: roc_builtins::std::StdLib,
     _leak: bool,
