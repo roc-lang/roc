@@ -3108,7 +3108,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
     return_layout: Layout<'a>,
     c_function_name: &str,
 ) -> FunctionValue<'ctx> {
-    // NOTE we ingore env.is_gen_test here
+    // NOTE we ignore env.is_gen_test here
     let wrapper_return_type = roc_function.get_type().get_return_type().unwrap();
 
     let mut cc_argument_types = Vec::with_capacity_in(arguments.len(), env.arena);
@@ -3765,7 +3765,7 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
     // our exposed main function adheres to the C calling convention
     wrapper_function.set_call_conventions(FAST_CALL_CONV);
 
-    // invoke instead of call, so that we can catch any exeptions thrown in Roc code
+    // invoke instead of call, so that we can catch any exceptions thrown in Roc code
     let arguments = wrapper_function.get_params();
 
     let basic_block = context.append_basic_block(wrapper_function, "entry");

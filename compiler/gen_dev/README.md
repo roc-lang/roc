@@ -53,7 +53,7 @@ Here are example implementations for [arm](https://github.com/rtfeldman/roc/blob
 
 ### CallConv
 
-[CallConv](https://github.com/rtfeldman/roc/blob/trunk/compiler/gen_dev/src/generic64/mod.rs) is the abstaction over caling conventions.
+[CallConv](https://github.com/rtfeldman/roc/blob/trunk/compiler/gen_dev/src/generic64/mod.rs) is the abstraction over calling conventions.
 It deals with register and stack specific information related to passing and returning arguments.
 Here are example implementations for [arm](https://github.com/rtfeldman/roc/blob/trunk/compiler/gen_dev/src/generic64/aarch64.rs) and [x86_64](https://github.com/rtfeldman/roc/blob/trunk/compiler/gen_dev/src/generic64/x86_64.rs).
 
@@ -74,7 +74,7 @@ This is the general procedure I follow with some helpful links:
 1. Uncomment the code to print out procedures [from here](https://github.com/rtfeldman/roc/blob/trunk/compiler/gen_dev/tests/helpers/eval.rs) and run the test.
    It should fail and print out the mono ir for this test case.
    Seeing the actual mono ir tends to be very helpful for complex additions.
-1. Generally it will fail in one of the match statments in the [Backend](https://github.com/rtfeldman/roc/blob/trunk/compiler/gen_dev/src/lib.rs) trait.
+1. Generally it will fail in one of the match statements in the [Backend](https://github.com/rtfeldman/roc/blob/trunk/compiler/gen_dev/src/lib.rs) trait.
    Add the correct pattern matching and likely new function for your new builtin.
    This will break the compile until you add the same function to places that implement the trait,
    like [Backend64Bit](https://github.com/rtfeldman/roc/blob/trunk/compiler/gen_dev/src/generic64/mod.rs).

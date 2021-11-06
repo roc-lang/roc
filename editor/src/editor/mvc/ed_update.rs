@@ -1441,7 +1441,7 @@ pub mod test_ed_update {
         assert_insert_no_pre(ovec!["┃"], ';')?;
         assert_insert_no_pre(ovec!["┃"], '-')?;
         assert_insert_no_pre(ovec!["┃"], '_')?;
-        // extra space because of Expr2::Blank placholder
+        // extra space because of Expr2::Blank placeholder
         assert_insert_in_def_nls(ovec!["┃ "], ';')?;
         assert_insert_in_def_nls(ovec!["┃ "], '-')?;
         assert_insert_in_def_nls(ovec!["┃ "], '_')?;
@@ -1664,7 +1664,7 @@ pub mod test_ed_update {
             ovec!["val = { a┃ }"],
             ovec!["val = { ab┃: RunTimeError }"],
             'b',
-        )?; // TODO: remove RunTimeError, see isue #1649
+        )?; // TODO: remove RunTimeError, see issue #1649
         assert_insert_nls(
             ovec!["val = { a┃ }"],
             ovec!["val = { a1┃: RunTimeError }"],
@@ -3476,7 +3476,7 @@ pub mod test_ed_update {
         // Blank is inserted when root of Expr2 is deleted
         assert_ctrl_shift_single_up_backspace_nls(ovec!["val = {┃  }"], ovec!["val = ┃ "])?;
 
-        // TODO: uncomment tests, once isue #1649 is fixed
+        // TODO: uncomment tests, once issue #1649 is fixed
         //assert_ctrl_shift_single_up_backspace(ovec!["{ a┃ }"], ovec!["┃ "])?;
         //assert_ctrl_shift_single_up_backspace(ovec!["{ a: { b }┃ }"], ovec!["┃ "])?;
         assert_ctrl_shift_single_up_backspace_nls(

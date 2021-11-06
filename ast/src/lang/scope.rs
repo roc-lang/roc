@@ -162,7 +162,7 @@ impl Scope {
 
             let alias = Alias {
                 actual,
-                /// We know that builtin aliases have no hiddden variables (e.g. in closures)
+                /// We know that builtin aliases have no hidden variables (e.g. in closures)
                 hidden_variables: PoolVec::empty(pool),
                 targs: variables,
             };

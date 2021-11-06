@@ -56,7 +56,7 @@ There is also an improvement on Relooper called ["Stackifier"](https://medium.co
 
 ## Stack machine vs register machine
 
-Wasm's instruction set is based on a stack-machine VM. Whereas CPU instructions have named registers that they operate on, Wasm has no named registers at all. The instructions don't contain register names. Instructions can oly operate on whatever data is at the top of the stack.
+Wasm's instruction set is based on a stack-machine VM. Whereas CPU instructions have named registers that they operate on, Wasm has no named registers at all. The instructions don't contain register names. Instructions can only operate on whatever data is at the top of the stack.
 
 For example the instruction `i64.add` takes two operands. It pops the top two arguments off the VM stack and pushes the result back.
 

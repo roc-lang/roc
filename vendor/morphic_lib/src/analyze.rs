@@ -438,7 +438,7 @@ impl<'a> ForwardState<'a> {
                 }
                 let mut arg_aliases = HashSet::new();
                 for (heap_cell, slot_indices) in &heap_cell_slots {
-                    // Wire up to ocurrences of the same heap cell in the argument slots
+                    // Wire up to occurrences of the same heap cell in the argument slots
                     for (i, &slot_i) in slot_indices.iter().enumerate() {
                         for &slot_j in &slot_indices[..i] {
                             arg_aliases.insert(NormPair::new(slot_i, slot_j));
