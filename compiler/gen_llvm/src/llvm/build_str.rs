@@ -11,7 +11,7 @@ use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
 
-use super::build::load_symbol;
+use super::build::{intwidth_from_builtin, load_symbol, load_symbol_and_layout};
 
 pub static CHAR_LAYOUT: Layout = Layout::Builtin(Builtin::Int8);
 
@@ -265,9 +265,33 @@ pub fn str_from_int<'a, 'ctx, 'env>(
     scope: &Scope<'a, 'ctx>,
     int_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
-    let int = load_symbol(scope, &int_symbol);
+    let (int, int_layout) = load_symbol_and_layout(scope, &int_symbol);
 
-    call_bitcode_fn(env, &[int], bitcode::STR_FROM_INT)
+    match int_layout {
+        Layout::Builtin(builtin) => match builtin {
+            Builtin::Usize
+            | Builtin::Int128
+            | Builtin::Int64
+            | Builtin::Int32
+            | Builtin::Int16
+            | Builtin::Int8 => {
+                let intwidth = intwidth_from_builtin(*builtin, env.ptr_bytes);
+                call_bitcode_fn(env, &[int], &bitcode::STR_FROM_INT[intwidth])
+            }
+            _ => {
+                unreachable!(
+                    "Compiler bug: tried to convert numeric on invalid builtin layout: ({:?})",
+                    int_layout
+                );
+            }
+        },
+        _ => {
+            unreachable!(
+                "Compiler bug: tried to convert numeric on invalid layout: {:?}",
+                int_layout
+            );
+        }
+    }
 }
 
 /// Str.toUtf8 : Str -> List U8

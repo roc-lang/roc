@@ -4,6 +4,7 @@ const utils = @import("utils.zig");
 
 const ROC_BUILTINS = "roc_builtins";
 const NUM = "num";
+const STR = "str";
 
 // Dec Module
 const dec = @import("dec.zig");
@@ -115,7 +116,6 @@ comptime {
     exportStrFn(str.strConcatC, "concat");
     exportStrFn(str.strJoinWithC, "joinWith");
     exportStrFn(str.strNumberOfBytes, "number_of_bytes");
-    exportStrFn(str.strFromIntC, "from_int");
     exportStrFn(str.strFromFloatC, "from_float");
     exportStrFn(str.strEqual, "equal");
     exportStrFn(str.strToUtf8C, "to_utf8");
@@ -123,6 +123,10 @@ comptime {
     exportStrFn(str.fromUtf8RangeC, "from_utf8_range");
     exportStrFn(str.repeat, "repeat");
     exportStrFn(str.strTrim, "trim");
+
+    inline for (INTEGERS) |T| {
+        str.exportFromInt(T, ROC_BUILTINS ++ "." ++ STR ++ ".from_int.");
+    }
 }
 
 // Utils

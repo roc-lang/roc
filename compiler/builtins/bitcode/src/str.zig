@@ -413,9 +413,14 @@ pub fn strNumberOfBytes(string: RocStr) callconv(.C) usize {
 }
 
 // Str.fromInt
-pub fn strFromIntC(int: i64) callconv(.C) RocStr {
-    // prepare for having multiple integer types in the future
-    return @call(.{ .modifier = always_inline }, strFromIntHelp, .{ i64, int });
+pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(int: T) callconv(.C) RocStr {
+            return @call(.{ .modifier = always_inline }, strFromIntHelp, .{ T, int });
+        }
+    }.func;
+
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
 }
 
 fn strFromIntHelp(comptime T: type, int: T) RocStr {
