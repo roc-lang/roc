@@ -11,9 +11,7 @@ roc_ast = { path = "../ast" }
 roc_module = { path = "../compiler/module" }
 roc_utils = { path = "../utils" }
 serde = { version = "1.0.123", features = ["derive"] }
-# TODO: look into upgrading to 0.6.
-# Runs into issues converting HSV to LinSrgb.
-palette = "0.5"
+palette = "0.6"
 snafu = { version = "0.6", features = ["backtraces"] }
 bumpalo = { version = "3.2", features = ["collections"] }
 itertools = "0.10.1"

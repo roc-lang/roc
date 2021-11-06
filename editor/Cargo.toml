@@ -47,9 +47,7 @@ colored = "2"
 pest = "2.1"
 pest_derive = "2.1"
 copypasta = "0.7.1"
-# TODO: look into upgrading to 0.6.
-# Runs into issues converting HSV to LinSrgb.
-palette = "0.5"
+palette = "0.6"
 confy = { git = 'https://github.com/rust-cli/confy', features = [
   "yaml_conf"
 ], default-features = false }

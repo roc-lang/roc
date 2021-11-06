@@ -276,12 +276,11 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                         label: Some("Redraw"),
                     });
 
-                let texture = &surface
+                let surface_texture = surface
                     .get_current_texture()
-                    .expect("Failed to acquire next SwapChainTexture")
-                    .texture;
+                    .expect("Failed to acquire next SwapChainTexture");
 
-                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                let view = surface_texture.texture.create_view(&wgpu::TextureViewDescriptor::default());
 
                 if let Some(ref mut ed_model) = app_model.ed_model_opt {
                     if rendered_wgpu_opt.is_none() || ed_model.dirty {
@@ -374,6 +373,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
 
                 staging_belt.finish();
                 cmd_queue.submit(Some(encoder.finish()));
+                surface_texture.present();
 
                 // Recall unused staging buffers
                 use futures::task::SpawnExt;
