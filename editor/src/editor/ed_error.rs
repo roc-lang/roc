@@ -16,7 +16,7 @@ use snafu::{Backtrace, ErrorCompat, Snafu};
 #[snafu(visibility(pub))]
 pub enum EdError {
     #[snafu(display(
-        "ASTNodeIdWithoutDefId: The expr_id_opt in ASTNode({:?}) was `None` but I was expexting `Some(DefId)` .",
+        "ASTNodeIdWithoutDefId: The expr_id_opt in ASTNode({:?}) was `None` but I was expecting `Some(DefId)` .",
         ast_node_id
     ))]
     ASTNodeIdWithoutDefId {
@@ -25,7 +25,7 @@ pub enum EdError {
     },
 
     #[snafu(display(
-        "ASTNodeIdWithoutExprId: The expr_id_opt in ASTNode({:?}) was `None` but I was expexting `Some(ExprId)` .",
+        "ASTNodeIdWithoutExprId: The expr_id_opt in ASTNode({:?}) was `None` but I was expecting `Some(ExprId)` .",
         ast_node_id
     ))]
     ASTNodeIdWithoutExprId {

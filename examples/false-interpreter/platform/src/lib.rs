@@ -180,7 +180,7 @@ pub extern "C" fn roc_fx_getFileLine(br_ptr: *mut BufReader<File>) -> RocStr {
 #[no_mangle]
 pub extern "C" fn roc_fx_getFileBytes(br_ptr: *mut BufReader<File>) -> RocList<u8> {
     let br = unsafe { &mut *br_ptr };
-    let mut buffer = [0; 0x10 /* This is intentially small to ensure correct implementation */];
+    let mut buffer = [0; 0x10 /* This is intentionally small to ensure correct implementation */];
 
     let count = br
         .read(&mut buffer[..])
