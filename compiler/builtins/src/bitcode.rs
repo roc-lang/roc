@@ -1,8 +1,8 @@
 use std::ops::Index;
 
 pub const OBJ_PATH: &str = env!(
-    "BUILTINS_O",
-    "Env var BUILTINS_O not found. Is there a problem with the build script?"
+    "BUILTINS_HOST_O",
+    "Env var BUILTINS_HOST_O not found. Is there a problem with the build script?"
 );
 
 #[derive(Debug, Default)]
