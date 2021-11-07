@@ -7,6 +7,8 @@ If you already know [Elm](https://elm-lang.org/), then [Roc for Elm Programmers]
 If you're curious about where the language's name and logo came from,
 [here's an explanation](https://github.com/rtfeldman/roc/blob/trunk/name-and-logo.md).
 
+You can get help and discuss with other people on the [Roc Zulip chat](https://roc.zulipchat.com).
+
 ## State of Roc
 
 Roc is not ready for production yet. You are likely to encounter bugs. Publishing packages or documentation is not yet supported.
@@ -105,5 +107,4 @@ never done anything with Rust and also never worked on a compiler, but we've
 been able to find beginner-friendly projects to get people up to speed gradually.)
 
 If you're interested in getting involved, check out
-[CONTRIBUTING.md](https://github.com/rtfeldman/roc/blob/trunk/CONTRIBUTING.md) which has more info
-and a link to our Zulip chat!
+[CONTRIBUTING.md](https://github.com/rtfeldman/roc/blob/trunk/CONTRIBUTING.md)!
