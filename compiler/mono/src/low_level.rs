@@ -47,6 +47,9 @@ pub enum HigherOrder {
     ListSortWith {
         xs: Symbol,
     },
+    ListAny {
+        xs: Symbol,
+    },
     DictWalk {
         xs: Symbol,
         state: Symbol,
@@ -69,6 +72,7 @@ impl HigherOrder {
             HigherOrder::ListKeepErrs { .. } => 1,
             HigherOrder::ListSortWith { .. } => 2,
             HigherOrder::DictWalk { .. } => 2,
+            HigherOrder::ListAny { .. } => 1,
         }
     }
 }

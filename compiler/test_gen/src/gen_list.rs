@@ -2161,6 +2161,25 @@ fn list_sort_with() {
 }
 
 #[test]
+fn list_any() {
+    assert_evals_to!("List.any [] (\\e -> e > 3)", false, bool);
+    assert_evals_to!("List.any [ 1, 2, 3 ] (\\e -> e > 3)", false, bool);
+    assert_evals_to!("List.any [ 1, 2, 4 ] (\\e -> e > 3)", true, bool);
+}
+
+#[test]
+#[ignore]
+fn list_any_empty_with_unknown_element_type() {
+    // Segfaults with invalid memory reference. Running this as a stand-alone
+    // Roc program, generates the following error message:
+    //
+    //     Application crashed with message
+    //     UnresolvedTypeVar compiler/mono/src/ir.rs line 3775
+    //     Shutting down
+    assert_evals_to!("List.any [] (\\_ -> True)", false, bool);
+}
+
+#[test]
 #[should_panic(expected = r#"Roc failed with message: "invalid ret_layout""#)]
 fn lists_with_incompatible_type_param_in_if() {
     assert_evals_to!(

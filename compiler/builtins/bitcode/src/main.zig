@@ -49,6 +49,7 @@ comptime {
     exportListFn(list.listSet, "set");
     exportListFn(list.listSetInPlace, "set_in_place");
     exportListFn(list.listSwap, "swap");
+    exportListFn(list.listAny, "any");
 }
 
 // Dict Module
