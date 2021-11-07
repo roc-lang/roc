@@ -4868,7 +4868,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             let (function, closure, closure_layout) = function_details!();
 
             match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                Layout::Builtin(Builtin::EmptyList) => env.context.bool_type().const_zero().into(),
                 Layout::Builtin(Builtin::List(element_layout)) => {
                     let argument_layouts = &[**element_layout];
 
