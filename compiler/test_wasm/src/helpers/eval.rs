@@ -2,10 +2,10 @@ use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+use crate::helpers::from_wasm32_memory::FromWasm32Memory;
 use crate::helpers::wasm32_test_result::Wasm32TestResult;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
-use roc_gen_wasm::from_wasm32_memory::FromWasm32Memory;
 
 const TEST_WRAPPER_NAME: &str = "test_wrapper";
 

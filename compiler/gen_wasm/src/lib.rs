@@ -1,5 +1,4 @@
 mod backend;
-pub mod from_wasm32_memory;
 mod layout;
 mod storage;
 pub mod wasm_module;
