@@ -20,7 +20,7 @@ roc_mono = { path = "../mono" }
 roc_reporting = { path = "../reporting" }
 roc_load = { path = "../load" }
 roc_can = { path = "../can" }
-roc_parse = { path = "../parse" }
+roc_parse = { path = "../parse" , features = []}
 roc_build = { path = "../build" }
 roc_std = { path = "../../roc_std" }
 roc_gen_wasm = { path = "../gen_wasm" }
@@ -43,6 +43,7 @@ quickcheck = "0.8"
 quickcheck_macros = "0.8"
 tokio = { version = "0.2", features = ["blocking", "fs", "sync", "rt-threaded"] }
 bumpalo = { version = "3.6.1", features = ["collections"] }
+roc_parse = { path = "../parse" , features = ["keep_shadowed_builtins"]}
 
 [features]
 default = []

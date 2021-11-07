@@ -1080,9 +1080,7 @@ define_builtins! {
         7 DICT_INSERT: "insert"
         8 DICT_LEN: "len"
 
-        // This should not be exposed to users, its for testing the
-        // hash function ONLY
-        9 DICT_TEST_HASH: "hashTestOnly"
+        9 DICT_TEST_HASH: "#hashTestOnly" // for testing the hash function ONLY
 
         10 DICT_REMOVE: "remove"
         11 DICT_CONTAINS: "contains"
