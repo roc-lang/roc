@@ -58,34 +58,34 @@ pub fn build_app<'a>() -> App<'a> {
             App::new(CMD_PREPROCESS)
                 .about("Preprocesses a dynamically linked platform to prepare for linking.")
                 .arg(
-                    Arg::with_name(EXEC)
+                    Arg::new(EXEC)
                         .about("The dynamically linked platform executable")
                         .required(true),
                 )
                 .arg(
-                    Arg::with_name(METADATA)
+                    Arg::new(METADATA)
                         .about("Where to save the metadata from preprocessing")
                         .required(true),
                 )
                 .arg(
-                    Arg::with_name(OUT)
+                    Arg::new(OUT)
                         .about("The modified version of the dynamically linked platform executable")
                         .required(true),
                 )
                 .arg(
-                    Arg::with_name(SHARED_LIB)
+                    Arg::new(SHARED_LIB)
                         .about("The name of the shared library used in building the platform")
                         .default_value("libapp.so"),
                 )
                 .arg(
-                    Arg::with_name(FLAG_VERBOSE)
+                    Arg::new(FLAG_VERBOSE)
                         .long(FLAG_VERBOSE)
                         .short('v')
                         .about("Enable verbose printing")
                         .required(false),
                 )
                 .arg(
-                    Arg::with_name(FLAG_TIME)
+                    Arg::new(FLAG_TIME)
                         .long(FLAG_TIME)
                         .short('t')
                         .about("Print timing information")
@@ -96,17 +96,17 @@ pub fn build_app<'a>() -> App<'a> {
             App::new(CMD_SURGERY)
                 .about("Links a preprocessed platform with a Roc application.")
                 .arg(
-                    Arg::with_name(APP)
+                    Arg::new(APP)
                         .about("The Roc application object file waiting to be linked")
                         .required(true),
                 )
                 .arg(
-                    Arg::with_name(METADATA)
+                    Arg::new(METADATA)
                         .about("The metadata created by preprocessing the platform")
                         .required(true),
                 )
                 .arg(
-                    Arg::with_name(OUT)
+                    Arg::new(OUT)
                         .about(
                             "The modified version of the dynamically linked platform. \
                                 It will be consumed to make linking faster.",
@@ -114,14 +114,14 @@ pub fn build_app<'a>() -> App<'a> {
                         .required(true),
                 )
                 .arg(
-                    Arg::with_name(FLAG_VERBOSE)
+                    Arg::new(FLAG_VERBOSE)
                         .long(FLAG_VERBOSE)
                         .short('v')
                         .about("Enable verbose printing")
                         .required(false),
                 )
                 .arg(
-                    Arg::with_name(FLAG_TIME)
+                    Arg::new(FLAG_TIME)
                         .long(FLAG_TIME)
                         .short('t')
                         .about("Print timing information")

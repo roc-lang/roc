@@ -485,7 +485,7 @@ impl Type {
                 ext.substitute(substitutions);
             }
             Record(fields, ext) => {
-                for x in fields.iter_mut() {
+                for (_, x) in fields.iter_mut() {
                     x.substitute(substitutions);
                 }
                 ext.substitute(substitutions);
@@ -550,7 +550,7 @@ impl Type {
                 ext.substitute_alias(rep_symbol, actual);
             }
             Record(fields, ext) => {
-                for x in fields.iter_mut() {
+                for (_, x) in fields.iter_mut() {
                     x.substitute_alias(rep_symbol, actual);
                 }
                 ext.substitute_alias(rep_symbol, actual);
@@ -702,7 +702,7 @@ impl Type {
                 ext.instantiate_aliases(region, aliases, var_store, introduced);
             }
             Record(fields, ext) => {
-                for x in fields.iter_mut() {
+                for (_, x) in fields.iter_mut() {
                     x.instantiate_aliases(region, aliases, var_store, introduced);
                 }
                 ext.instantiate_aliases(region, aliases, var_store, introduced);

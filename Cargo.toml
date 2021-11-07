@@ -23,6 +23,7 @@ members = [
     "compiler/gen_wasm",
     "compiler/build",
     "compiler/arena_pool",
+    "compiler/test_dev",
     "compiler/test_gen",
     "compiler/test_wasm",
     "vendor/ena",

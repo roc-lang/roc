@@ -16,17 +16,15 @@ roc_can = { path = "../can" }
 roc_solve = { path = "../solve" }
 roc_mono = { path = "../mono" }
 ven_pretty = { path = "../../vendor/pretty" }
-im    = "14" # im and im-rc should always have the same version!
-im-rc = "14" # im and im-rc should always have the same version!
+im    = "15.0.0"
+im-rc = "15.0.0"
 distance = "0.4.0"
-bumpalo = { version = "3.6.1", features = ["collections"] }
+bumpalo = { version = "3.8.0", features = ["collections"] }
 
 [dev-dependencies]
 roc_constrain = { path = "../constrain" }
 roc_builtins = { path = "../builtins" }
 roc_problem = { path = "../problem" }
 roc_parse = { path = "../parse" }
-pretty_assertions = "0.5.1"
-indoc = "0.3.3"
-quickcheck = "0.8"
-quickcheck_macros = "0.8"
+pretty_assertions = "1.0.0"
+indoc = "1.0.3"

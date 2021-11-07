@@ -27,6 +27,7 @@ impl Serialize for u32 {
 
 // Unit is used as a placeholder in parts of the Wasm spec we don't use yet
 impl Serialize for () {
+    #[inline(always)]
     fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {}
 }
 

@@ -44,24 +44,24 @@ pub fn build_app<'a>() -> App<'a> {
         .subcommand(App::new(CMD_BUILD)
             .about("Build a binary from the given .roc file, but don't run it")
             .arg(
-                Arg::with_name(ROC_FILE)
+                Arg::new(ROC_FILE)
                     .about("The .roc file to build")
                     .required(true),
             )
             .arg(
-                Arg::with_name(FLAG_OPTIMIZE)
+                Arg::new(FLAG_OPTIMIZE)
                     .long(FLAG_OPTIMIZE)
                     .about("Optimize your compiled Roc program to run faster. (Optimization takes time to complete.)")
                     .required(false),
             )
             .arg(
-                Arg::with_name(FLAG_DEV)
+                Arg::new(FLAG_DEV)
                     .long(FLAG_DEV)
                     .about("Make compilation as fast as possible. (Runtime performance may suffer)")
                     .required(false),
             )
             .arg(
-                Arg::with_name(FLAG_BACKEND)
+                Arg::new(FLAG_BACKEND)
                     .long(FLAG_BACKEND)
                     .about("Choose a different backend")
                     // .requires(BACKEND)
@@ -70,31 +70,31 @@ pub fn build_app<'a>() -> App<'a> {
                     .required(false),
             )
             .arg(
-                Arg::with_name(FLAG_LIB)
+                Arg::new(FLAG_LIB)
                     .long(FLAG_LIB)
                     .about("Build a C library instead of an executable.")
                     .required(false),
             )
             .arg(
-                Arg::with_name(FLAG_DEBUG)
+                Arg::new(FLAG_DEBUG)
                     .long(FLAG_DEBUG)
                     .about("Store LLVM debug information in the generated program")
                     .required(false),
             )
             .arg(
-                Arg::with_name(FLAG_TIME)
+                Arg::new(FLAG_TIME)
                     .long(FLAG_TIME)
                     .about("Prints detailed compilation time information.")
                     .required(false),
             )
             .arg(
-                Arg::with_name(FLAG_LINK)
+                Arg::new(FLAG_LINK)
                     .long(FLAG_LINK)
                     .about("Uses the roc linker instead of the system linker.")
                     .required(false),
             )
             .arg(
-                Arg::with_name(FLAG_PRECOMPILED)
+                Arg::new(FLAG_PRECOMPILED)
                     .long(FLAG_PRECOMPILED)
                     .about("Assumes the host has been precompiled and skips recompiling the host.")
                     .required(false),
@@ -106,13 +106,13 @@ pub fn build_app<'a>() -> App<'a> {
         .subcommand(App::new(CMD_CHECK)
             .about("Build a binary from the given .roc file, but don't run it")
             .arg(
-                Arg::with_name(FLAG_TIME)
+                Arg::new(FLAG_TIME)
                     .long(FLAG_TIME)
                     .about("Prints detailed compilation time information.")
                     .required(false),
             )
             .arg(
-                Arg::with_name(ROC_FILE)
+                Arg::new(ROC_FILE)
                     .about("The .roc file of an app to run")
                     .required(true),
             )
@@ -120,9 +120,9 @@ pub fn build_app<'a>() -> App<'a> {
         .subcommand(
             App::new(CMD_DOCS)
                 .about("Generate documentation for Roc modules (Work In Progress)")
-                .arg(Arg::with_name(DIRECTORY_OR_FILES)
+                .arg(Arg::new(DIRECTORY_OR_FILES)
                     .index(1)
-                    .multiple(true)
+                    .multiple_values(true)
                     .required(false)
                     .about("The directory or files to build documentation for")
 
@@ -130,45 +130,45 @@ pub fn build_app<'a>() -> App<'a> {
         )
         .setting(AppSettings::TrailingVarArg)
         .arg(
-            Arg::with_name(FLAG_OPTIMIZE)
+            Arg::new(FLAG_OPTIMIZE)
                 .long(FLAG_OPTIMIZE)
                 .about("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
                 .requires(ROC_FILE)
                 .required(false),
         )
             .arg(
-                Arg::with_name(FLAG_DEV)
+                Arg::new(FLAG_DEV)
                     .long(FLAG_DEV)
                     .about("Make compilation as fast as possible. (Runtime performance may suffer)")
                     .required(false),
             )
         .arg(
-            Arg::with_name(FLAG_DEBUG)
+            Arg::new(FLAG_DEBUG)
                 .long(FLAG_DEBUG)
                 .about("Store LLVM debug information in the generated program")
                 .requires(ROC_FILE)
                 .required(false),
         )
         .arg(
-            Arg::with_name(FLAG_TIME)
+            Arg::new(FLAG_TIME)
                 .long(FLAG_TIME)
                 .about("Prints detailed compilation time information.")
                     .required(false),
         )
         .arg(
-            Arg::with_name(FLAG_LINK)
+            Arg::new(FLAG_LINK)
                 .long(FLAG_LINK)
                 .about("Uses the roc linker instead of the system linker.")
                 .required(false),
         )
         .arg(
-            Arg::with_name(FLAG_PRECOMPILED)
+            Arg::new(FLAG_PRECOMPILED)
                 .long(FLAG_PRECOMPILED)
                 .about("Assumes the host has been precompiled and skips recompiling the host.")
                 .required(false),
         )
         .arg(
-            Arg::with_name(FLAG_BACKEND)
+            Arg::new(FLAG_BACKEND)
                 .long(FLAG_BACKEND)
                 .about("Choose a different backend")
                 // .requires(BACKEND)
@@ -177,23 +177,23 @@ pub fn build_app<'a>() -> App<'a> {
                 .required(false),
         )
         .arg(
-            Arg::with_name(ROC_FILE)
+            Arg::new(ROC_FILE)
                 .about("The .roc file of an app to build and run")
                 .required(false),
         )
         .arg(
-            Arg::with_name(ARGS_FOR_APP)
+            Arg::new(ARGS_FOR_APP)
                 .about("Arguments to pass into the app being run")
                 .requires(ROC_FILE)
-                .multiple(true),
+                .multiple_values(true),
         );
 
     if cfg!(feature = "editor") {
         app.subcommand(
             App::new(CMD_EDIT).about("Launch the Roc editor").arg(
-                Arg::with_name(DIRECTORY_OR_FILES)
+                Arg::new(DIRECTORY_OR_FILES)
                     .index(1)
-                    .multiple(true)
+                    .multiple_values(true)
                     .required(false)
                     .about("(optional) The directory or files to open on launch."),
             ),
@@ -411,6 +411,7 @@ fn roc_run(cmd: &mut Command) -> io::Result<i32> {
     }
 }
 
+#[cfg(feature = "run-wasm32")]
 fn run_with_wasmer(wasm_path: &std::path::Path, args: &[String]) {
     use wasmer::{Instance, Module, Store};
 
@@ -439,6 +440,11 @@ fn run_with_wasmer(wasm_path: &std::path::Path, args: &[String]) {
             other => panic!("Wasmer error: {:?}", other),
         },
     }
+}
+
+#[cfg(not(feature = "run-wasm32"))]
+fn run_with_wasmer(_wasm_path: &std::path::Path, _args: &[String]) {
+    println!("Running wasm files not support");
 }
 
 enum Backend {

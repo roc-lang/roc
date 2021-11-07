@@ -5,7 +5,7 @@ use std::fmt::Debug;
 
 use roc_module::symbol::Symbol;
 
-use super::linking::{IndexRelocType, RelocationEntry};
+use super::linking::{IndexRelocType, OffsetRelocType, RelocationEntry};
 use super::opcodes::*;
 use super::serialize::{SerialBuffer, Serialize};
 use crate::{round_up_to_alignment, FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID};
@@ -378,7 +378,7 @@ impl<'a> CodeBuilder<'a> {
     }
 
     /// Serialize all byte vectors in the right order
-    /// Also update relocation offsets relative to the provided base offset in the buffer
+    /// Also update relocation offsets relative to the base offset (code section body start)
     pub fn serialize_with_relocs<T: SerialBuffer>(
         &self,
         buffer: &mut T,
@@ -395,7 +395,10 @@ impl<'a> CodeBuilder<'a> {
 
         loop {
             let next_insert = insert_iter.next();
-            let next_pos = next_insert.map(|i| i.at).unwrap_or_else(|| self.code.len());
+            let next_pos = match next_insert {
+                Some(Insertion { at, .. }) => *at,
+                None => self.code.len(),
+            };
 
             // Relocation offset needs to be an index into the body of the code section, but
             // at this point it is an index into self.code. Need to adjust for all previous functions
@@ -456,6 +459,16 @@ impl<'a> CodeBuilder<'a> {
         self.inst(opcode, pops, push);
         self.code.push(align as u8);
         self.code.encode_u32(offset);
+    }
+
+    /// Insert a linker relocation for a memory address
+    pub fn insert_memory_relocation(&mut self, symbol_index: u32) {
+        self.relocations.push(RelocationEntry::Offset {
+            type_id: OffsetRelocType::MemoryAddrLeb,
+            offset: self.code.len() as u32,
+            symbol_index,
+            addend: 0,
+        });
     }
 
     /**********************************************************
