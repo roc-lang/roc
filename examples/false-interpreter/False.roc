@@ -7,7 +7,7 @@ app "false"
 # An interpreter for the False programming language: https://strlen.com/false-language/
 # This is just a silly example to test this variety of program.
 # In general think of this as a program that parses a number of files and prints some output.
-# It has some extra contraints:
+# It has some extra constraints:
 # 1) The input files are considered too large to just read in at once. Instead it is read via buffer or line.
 # 2) The output is also considered too large to generate in memory. It must be printed as we go via buffer or line.
 
@@ -15,7 +15,7 @@ app "false"
 # What I mean by that is we build a chain of all Tasks period and return that to the host.
 # In something like the elm architecture you return a single step with one Task.
 # The huge difference here is when it comes to things like stack overflows.
-# In an imperative language, a few of these peices would be in while loops and it would basically never overflow.
+# In an imperative language, a few of these pieces would be in while loops and it would basically never overflow.
 # This implementation is easy to overflow, either make the input long enough or make a false while loop run long enough.
 # I assume all of the Task.awaits are the cause of this, but I am not 100% sure.
 

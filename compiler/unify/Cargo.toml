@@ -9,10 +9,3 @@ edition = "2018"
 roc_collections = { path = "../collections" }
 roc_module = { path = "../module" }
 roc_types = { path = "../types" }
-
-[dev-dependencies]
-pretty_assertions = "0.5.1"
-maplit = "1.0.1"
-indoc = "0.3.3"
-quickcheck = "0.8"
-quickcheck_macros = "0.8"

@@ -18,12 +18,11 @@ roc_types = { path = "../compiler/types" }
 roc_unify = { path = "../compiler/unify"}
 roc_load = { path = "../compiler/load" }
 arraystring = "0.3.0"
-bumpalo = { version = "3.6.1", features = ["collections"] }
-libc = "0.2"
-page_size = "0.4"
-snafu = { version = "0.6", features = ["backtraces"] }
+bumpalo = { version = "3.8.0", features = ["collections"] }
+libc = "0.2.106"
+page_size = "0.4.2"
+snafu = { version = "0.6.10", features = ["backtraces"] }
 ven_graph = { path = "../vendor/pathfinding" }
-indoc = "1.0"
 
 [dev-dependencies]
-pretty_assertions = "0.6"
+indoc = "1.0.3"

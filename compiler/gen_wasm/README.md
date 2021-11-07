@@ -56,7 +56,7 @@ There is also an improvement on Relooper called ["Stackifier"](https://medium.co
 
 ## Stack machine vs register machine
 
-Wasm's instruction set is based on a stack-machine VM. Whereas CPU instructions have named registers that they operate on, Wasm has no named registers at all. The instructions don't contain register names. Instructions can oly operate on whatever data is at the top of the stack.
+Wasm's instruction set is based on a stack-machine VM. Whereas CPU instructions have named registers that they operate on, Wasm has no named registers at all. The instructions don't contain register names. Instructions can only operate on whatever data is at the top of the stack.
 
 For example the instruction `i64.add` takes two operands. It pops the top two arguments off the VM stack and pushes the result back.
 
@@ -225,6 +225,4 @@ The Module is a _specification_ for how to create an Instance of the program. Th
 
 A WebAssembly module is equivalent to an executable file. It doesn't normally need relocations since at the WebAssembly layer, there is no Address Space Layout Randomisation. If it has relocations then it's an object file.
 
-The [official spec](https://webassembly.github.io/spec/core/binary/modules.html#sections) lists the sections that are part of the final module. It doesn't mention any sections for relocations or symbol names, but it has room for "custom sections" that in practice seem to be used for that.
-
-The WebAssembly `tool-conventions` repo has a document on [linking](https://github.com/WebAssembly/tool-conventions/blob/main/Linking.md), and the `parity_wasm` crate supports "name" and "relocation" [sections](https://docs.rs/parity-wasm/0.42.2/parity_wasm/elements/enum.Section.html).
+The [official spec](https://webassembly.github.io/spec/core/binary/modules.html#sections) lists the sections that are part of the final module. It doesn't mention any sections for relocations or symbol names, but it does support "custom" sections. Conventions to use those for linking are documented in the WebAssembly `tool-conventions` repo [here](https://github.com/WebAssembly/tool-conventions/blob/main/Linking.md) and it mentions that LLVM is using those conventions.

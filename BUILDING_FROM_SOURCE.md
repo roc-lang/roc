@@ -82,8 +82,6 @@ There are also alternative installation options at http://releases.llvm.org/down
 
 ## Using Nix
 
-:exclamation: **Our Nix setup is not yet working on MacOS, you'll have to install manually for now** :exclamation:
-
 ### Install
 
 Using [nix](https://nixos.org/download.html) is a quick way to get an environment bootstrapped with a single command.
@@ -120,10 +118,11 @@ You should be in a repl now. Have fun!
 
 ### Extra tips
 
-If you plan on using `nix-shell` regularly, check out [direnv](https://direnv.net/) and [lorri](https://github.com/nix-community/lorri). Whenever you `cd` into `roc/`, they will automatically load the Nix dependecies into your current shell, so you never have to run nix-shell directly!
+If you plan on using `nix-shell` regularly, check out [direnv](https://direnv.net/) and [lorri](https://github.com/nix-community/lorri). Whenever you `cd` into `roc/`, they will automatically load the Nix dependencies into your current shell, so you never have to run nix-shell directly!
 
 ### Editor
 
+The editor is a WIP and not ready yet to replace your favorite editor, although if you want to try it out on nix, read on.
 `cargo run edit` should work from NixOS, if you use a nix-shell from inside another OS, follow the instructions below.
 
 #### Nvidia GPU

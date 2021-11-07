@@ -384,7 +384,7 @@ oks : List (Result elem *) -> List elem
 ## ## Performance Details
 ##
 ## [List.keepIf] always returns a list that takes up exactly the same amount
-## of memory as the original, even if its length decreases. This is becase it
+## of memory as the original, even if its length decreases. This is because it
 ## can't know in advance exactly how much space it will need, and if it guesses a
 ## length that's too low, it would have to re-allocate.
 ##

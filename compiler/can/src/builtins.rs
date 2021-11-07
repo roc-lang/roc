@@ -1,5 +1,5 @@
 use crate::def::Def;
-use crate::expr::Expr::*;
+use crate::expr::{ClosureData, Expr::*};
 use crate::expr::{Expr, Recursive, WhenBranch};
 use crate::pattern::Pattern;
 use roc_collections::all::SendMap;
@@ -92,6 +92,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_MAP4 => list_map4,
         LIST_DROP => list_drop,
         LIST_DROP_AT => list_drop_at,
+        LIST_DROP_FIRST => list_drop_first,
         LIST_DROP_LAST => list_drop_last,
         LIST_SWAP => list_swap,
         LIST_MAP_WITH_INDEX => list_map_with_index,
@@ -2049,6 +2050,30 @@ fn list_drop_at(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
+fn list_drop_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
+    let index_var = var_store.fresh();
+    let num_var = Variable::NAT;
+    let num_precision_var = Variable::NATURAL;
+
+    let body = RunLowLevel {
+        op: LowLevel::ListDropAt,
+        args: vec![
+            (list_var, Var(Symbol::ARG_1)),
+            (index_var, int(num_var, num_precision_var, 0)),
+        ],
+        ret_var: list_var,
+    };
+
+    defn(
+        symbol,
+        vec![(list_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        list_var,
+    )
+}
+
 /// List.dropLast: List elem -> List elem
 fn list_drop_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
@@ -2930,7 +2955,7 @@ fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
         CalledVia::Space,
     );
 
-    let wrapper = Closure {
+    let wrapper = Closure(ClosureData {
         function_type: wrapper_var,
         closure_type: var_store.fresh(),
         closure_ext_var: var_store.fresh(),
@@ -2944,7 +2969,7 @@ fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
             (Variable::EMPTY_RECORD, no_region(Pattern::Underscore)),
         ],
         loc_body: Box::new(no_region(call_func)),
-    };
+    });
 
     let body = RunLowLevel {
         op: LowLevel::DictWalk,
@@ -3959,7 +3984,7 @@ fn defn_help(
         .map(|(var, symbol)| (var, no_region(Identifier(symbol))))
         .collect();
 
-    Closure {
+    Closure(ClosureData {
         function_type: var_store.fresh(),
         closure_type: var_store.fresh(),
         closure_ext_var: var_store.fresh(),
@@ -3969,7 +3994,7 @@ fn defn_help(
         recursive: Recursive::NotRecursive,
         arguments: closure_args,
         loc_body: Box::new(no_region(body)),
-    }
+    })
 }
 
 #[inline(always)]

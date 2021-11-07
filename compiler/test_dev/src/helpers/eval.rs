@@ -20,8 +20,8 @@ fn promote_expr_to_module(src: &str) -> String {
 }
 
 #[allow(dead_code)]
-pub fn helper<'a>(
-    arena: &'a bumpalo::Bump,
+pub fn helper(
+    arena: &bumpalo::Bump,
     src: &str,
     stdlib: roc_builtins::std::StdLib,
     _leak: bool,
@@ -205,7 +205,7 @@ pub fn helper<'a>(
 
     // std::fs::copy(&path, "/tmp/libapp.so").unwrap();
 
-    let lib = Library::new(path).expect("failed to load shared library");
+    let lib = unsafe { Library::new(path) }.expect("failed to load shared library");
 
     (main_fn_name, delayed_errors, lib)
 }

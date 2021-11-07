@@ -1,6 +1,6 @@
 use crate::def::{canonicalize_defs, sort_can_defs, Declaration, Def};
 use crate::env::Env;
-use crate::expr::{Expr, Output};
+use crate::expr::{ClosureData, Expr, Output};
 use crate::operator::desugar_def;
 use crate::pattern::Pattern;
 use crate::scope::Scope;
@@ -416,13 +416,13 @@ fn fix_values_captured_in_closure_expr(
             fix_values_captured_in_closure_expr(&mut loc_expr.value, no_capture_symbols);
         }
 
-        Closure {
+        Closure(ClosureData {
             captured_symbols,
             name,
             arguments,
             loc_body,
             ..
-        } => {
+        }) => {
             captured_symbols.retain(|(s, _)| !no_capture_symbols.contains(s));
             captured_symbols.retain(|(s, _)| s != name);
 
@@ -502,7 +502,7 @@ fn fix_values_captured_in_closure_expr(
         | Update {
             updates: fields, ..
         } => {
-            for field in fields.iter_mut() {
+            for (_, field) in fields.iter_mut() {
                 fix_values_captured_in_closure_expr(&mut field.loc_expr.value, no_capture_symbols);
             }
         }

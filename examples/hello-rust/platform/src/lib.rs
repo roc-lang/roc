@@ -1,9 +1,9 @@
 #![allow(non_snake_case)]
 
 use core::ffi::c_void;
-use libc::c_char;
 use roc_std::RocStr;
 use std::ffi::CStr;
+use std::os::raw::c_char;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed"]

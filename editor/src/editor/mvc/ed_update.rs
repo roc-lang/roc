@@ -22,6 +22,7 @@ use crate::editor::mvc::string_update::start_new_string;
 use crate::editor::mvc::string_update::update_small_string;
 use crate::editor::mvc::string_update::update_string;
 use crate::editor::mvc::tld_value_update::{start_new_tld_value, update_tld_val_name};
+#[cfg(feature = "with_sound")]
 use crate::editor::sound::play_sound;
 use crate::ui::text::caret_w_select::CaretWSelect;
 use crate::ui::text::lines::MoveCaretFun;
@@ -521,7 +522,7 @@ impl<'a> EdModel<'a> {
         &mut self,
         modifiers: &Modifiers,
         virtual_keycode: VirtualKeyCode,
-        sound_thread_pool: &mut ThreadPool,
+        _sound_thread_pool: &mut ThreadPool,
     ) -> EdResult<()> {
         match virtual_keycode {
             Left => self.move_caret_left(modifiers)?,
@@ -560,7 +561,8 @@ impl<'a> EdModel<'a> {
                 self.dirty = true;
             }
             F12 => {
-                sound_thread_pool.execute(move || {
+                #[cfg(feature = "with_sound")]
+                _sound_thread_pool.execute(move || {
                     play_sound("./editor/src/editor/resources/sounds/bell_sound.mp3");
                 });
             }
@@ -1441,7 +1443,7 @@ pub mod test_ed_update {
         assert_insert_no_pre(ovec!["┃"], ';')?;
         assert_insert_no_pre(ovec!["┃"], '-')?;
         assert_insert_no_pre(ovec!["┃"], '_')?;
-        // extra space because of Expr2::Blank placholder
+        // extra space because of Expr2::Blank placeholder
         assert_insert_in_def_nls(ovec!["┃ "], ';')?;
         assert_insert_in_def_nls(ovec!["┃ "], '-')?;
         assert_insert_in_def_nls(ovec!["┃ "], '_')?;
@@ -1664,7 +1666,7 @@ pub mod test_ed_update {
             ovec!["val = { a┃ }"],
             ovec!["val = { ab┃: RunTimeError }"],
             'b',
-        )?; // TODO: remove RunTimeError, see isue #1649
+        )?; // TODO: remove RunTimeError, see issue #1649
         assert_insert_nls(
             ovec!["val = { a┃ }"],
             ovec!["val = { a1┃: RunTimeError }"],
@@ -3476,7 +3478,7 @@ pub mod test_ed_update {
         // Blank is inserted when root of Expr2 is deleted
         assert_ctrl_shift_single_up_backspace_nls(ovec!["val = {┃  }"], ovec!["val = ┃ "])?;
 
-        // TODO: uncomment tests, once isue #1649 is fixed
+        // TODO: uncomment tests, once issue #1649 is fixed
         //assert_ctrl_shift_single_up_backspace(ovec!["{ a┃ }"], ovec!["┃ "])?;
         //assert_ctrl_shift_single_up_backspace(ovec!["{ a: { b }┃ }"], ovec!["┃ "])?;
         assert_ctrl_shift_single_up_backspace_nls(

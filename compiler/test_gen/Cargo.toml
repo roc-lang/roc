@@ -24,25 +24,21 @@ roc_parse = { path = "../parse" , features = []}
 roc_build = { path = "../build" }
 roc_std = { path = "../../roc_std" }
 roc_gen_wasm = { path = "../gen_wasm" }
-im    = "14" # im and im-rc should always have the same version!
-im-rc = "14" # im and im-rc should always have the same version!
-bumpalo = { version = "3.6.1", features = ["collections"] }
+im    = "15.0.0"
+im-rc = "15.0.0"
+bumpalo = { version = "3.8.0", features = ["collections"] }
 either = "1.6.1"
-indoc = "0.3.3"
-libc = "0.2"
+libc = "0.2.106"
 inkwell = { path = "../../vendor/inkwell" }
 target-lexicon = "0.12.2"
-libloading = "0.6"
-wasmer = "2.0.0"
+libloading = "0.7.1"
+wasmer = { version = "2.0.0", default-features = false, features = ["default-cranelift", "default-universal"] }
 wasmer-wasi = "2.0.0"
-tempfile = "3.1.0"
+tempfile = "3.2.0"
 
 [dev-dependencies]
-maplit = "1.0.1"
-quickcheck = "0.8"
-quickcheck_macros = "0.8"
-tokio = { version = "0.2", features = ["blocking", "fs", "sync", "rt-threaded"] }
-bumpalo = { version = "3.6.1", features = ["collections"] }
+bumpalo = { version = "3.8.0", features = ["collections"] }
+indoc = "1.0.3"
 roc_parse = { path = "../parse" , features = ["keep_shadowed_builtins"]}
 
 [features]
