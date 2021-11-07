@@ -45,6 +45,7 @@ pub enum LowLevel {
     ListDrop,
     ListDropAt,
     ListSwap,
+    ListAny,
     DictSize,
     DictEmpty,
     DictInsert,
@@ -221,6 +222,7 @@ macro_rules! higher_order {
             | ListKeepOks
             | ListKeepErrs
             | ListSortWith
+            | ListAny
             | DictWalk
     };
 }
@@ -254,6 +256,7 @@ impl LowLevel {
             ListKeepOks => 1,
             ListKeepErrs => 1,
             ListSortWith => 1,
+            ListAny => 1,
             DictWalk => 2,
         }
     }

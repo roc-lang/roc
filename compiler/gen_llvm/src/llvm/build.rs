@@ -8,7 +8,7 @@ use crate::llvm::build_dict::{
 };
 use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
-    self, allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat,
+    self, allocate_list, empty_list, empty_polymorphic_list, list_any, list_append, list_concat,
     list_contains, list_drop, list_drop_at, list_get_unsafe, list_join, list_keep_errs,
     list_keep_if, list_keep_oks, list_len, list_map, list_map2, list_map3, list_map4,
     list_map_with_index, list_prepend, list_range, list_repeat, list_reverse, list_set,
@@ -4863,6 +4863,30 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!("invalid list layout"),
             }
         }
+        ListAny { xs } => {
+            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
+            let (function, closure, closure_layout) = function_details!();
+
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => env.context.bool_type().const_zero().into(),
+                Layout::Builtin(Builtin::List(element_layout)) => {
+                    let argument_layouts = &[**element_layout];
+
+                    let roc_function_call = roc_function_call(
+                        env,
+                        layout_ids,
+                        function,
+                        closure,
+                        closure_layout,
+                        function_owns_closure_data,
+                        argument_layouts,
+                    );
+
+                    list_any(env, roc_function_call, list, element_layout)
+                }
+                _ => unreachable!("invalid list layout"),
+            }
+        }
         DictWalk { xs, state } => {
             let (dict, dict_layout) = load_symbol_and_layout(scope, &xs);
             let (default, default_layout) = load_symbol_and_layout(scope, &state);
@@ -5713,7 +5737,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
         ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk
         | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith
-        | DictWalk => unreachable!("these are higher order, and are handled elsewhere"),
+        | ListAny | DictWalk => unreachable!("these are higher order, and are handled elsewhere"),
     }
 }
 

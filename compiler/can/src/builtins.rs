@@ -105,6 +105,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_WALK_BACKWARDS => list_walk_backwards,
         LIST_WALK_UNTIL => list_walk_until,
         LIST_SORT_WITH => list_sort_with,
+        LIST_ANY => list_any,
         DICT_TEST_HASH => dict_hash_test_only,
         DICT_LEN => dict_len,
         DICT_EMPTY => dict_empty,
@@ -2693,6 +2694,11 @@ fn list_map4(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// List.sortWith : List a, (a, a -> Ordering) -> List a
 fn list_sort_with(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::ListSortWith, var_store)
+}
+
+/// List.any: List elem, (elem -> Bool) -> Bool
+fn list_any(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::ListAny, var_store)
 }
 
 /// Dict.hashTestOnly : k, v -> Nat
