@@ -1805,57 +1805,58 @@ fn diff_record<'b>(
     fields2: SendMap<Lowercase, RecordField<ErrorType>>,
     ext2: TypeExt,
 ) -> Diff<RocDocBuilder<'b>> {
-    let to_overlap_docs =
-        |(field, (t1, t2)): &(Lowercase, (RecordField<ErrorType>, RecordField<ErrorType>))| {
-            let diff = to_diff(
-                alloc,
-                Parens::Unnecessary,
-                t1.clone().into_inner(),
-                t2.clone().into_inner(),
-            );
+    let to_overlap_docs = |(field, (t1, t2)): (
+        &Lowercase,
+        &(RecordField<ErrorType>, RecordField<ErrorType>),
+    )| {
+        let diff = to_diff(
+            alloc,
+            Parens::Unnecessary,
+            t1.clone().into_inner(),
+            t2.clone().into_inner(),
+        );
 
-            Diff {
-                left: (
-                    field.clone(),
-                    alloc.string(field.as_str().to_string()),
-                    match t1 {
-                        RecordField::Optional(_) => RecordField::Optional(diff.left),
-                        RecordField::Required(_) => RecordField::Required(diff.left),
-                        RecordField::Demanded(_) => RecordField::Demanded(diff.left),
-                    },
-                ),
-                right: (
-                    field.clone(),
-                    alloc.string(field.as_str().to_string()),
-                    match t2 {
-                        RecordField::Optional(_) => RecordField::Optional(diff.right),
-                        RecordField::Required(_) => RecordField::Required(diff.right),
-                        RecordField::Demanded(_) => RecordField::Demanded(diff.right),
-                    },
-                ),
-                status: {
-                    match (&t1, &t2) {
-                        (RecordField::Demanded(_), RecordField::Optional(_))
-                        | (RecordField::Optional(_), RecordField::Demanded(_)) => match diff.status
-                        {
-                            Status::Similar => {
-                                Status::Different(vec![Problem::OptionalRequiredMismatch(
-                                    field.clone(),
-                                )])
-                            }
-                            Status::Different(mut problems) => {
-                                problems.push(Problem::OptionalRequiredMismatch(field.clone()));
-
-                                Status::Different(problems)
-                            }
-                        },
-                        _ => diff.status,
-                    }
+        Diff {
+            left: (
+                field.clone(),
+                alloc.string(field.as_str().to_string()),
+                match t1 {
+                    RecordField::Optional(_) => RecordField::Optional(diff.left),
+                    RecordField::Required(_) => RecordField::Required(diff.left),
+                    RecordField::Demanded(_) => RecordField::Demanded(diff.left),
                 },
-            }
-        };
+            ),
+            right: (
+                field.clone(),
+                alloc.string(field.as_str().to_string()),
+                match t2 {
+                    RecordField::Optional(_) => RecordField::Optional(diff.right),
+                    RecordField::Required(_) => RecordField::Required(diff.right),
+                    RecordField::Demanded(_) => RecordField::Demanded(diff.right),
+                },
+            ),
+            status: {
+                match (&t1, &t2) {
+                    (RecordField::Demanded(_), RecordField::Optional(_))
+                    | (RecordField::Optional(_), RecordField::Demanded(_)) => match diff.status {
+                        Status::Similar => {
+                            Status::Different(vec![Problem::OptionalRequiredMismatch(
+                                field.clone(),
+                            )])
+                        }
+                        Status::Different(mut problems) => {
+                            problems.push(Problem::OptionalRequiredMismatch(field.clone()));
 
-    let to_unknown_docs = |(field, tipe): &(Lowercase, RecordField<ErrorType>)| {
+                            Status::Different(problems)
+                        }
+                    },
+                    _ => diff.status,
+                }
+            },
+        }
+    };
+
+    let to_unknown_docs = |(field, tipe): (&Lowercase, &RecordField<ErrorType>)| {
         (
             field.clone(),
             alloc.string(field.as_str().to_string()),
@@ -1979,7 +1980,7 @@ fn diff_tag_union<'b>(
             status: diff.status,
         }
     };
-    let to_unknown_docs = |(field, args): &(TagName, Vec<ErrorType>)| {
+    let to_unknown_docs = |(field, args): (&TagName, &Vec<ErrorType>)| {
         (
             field.clone(),
             alloc.tag_name(field.clone()),

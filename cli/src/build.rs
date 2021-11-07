@@ -3,7 +3,6 @@ use roc_build::{
     link::{link, rebuild_host, LinkType},
     program,
 };
-#[cfg(feature = "llvm")]
 use roc_builtins::bitcode;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
@@ -12,7 +11,6 @@ use roc_mono::ir::OptLevel;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 use target_lexicon::Triple;
-#[cfg(feature = "llvm")]
 use tempfile::Builder;
 
 fn report_timing(buf: &mut String, label: &str, duration: Duration) {
@@ -45,7 +43,6 @@ pub struct BuiltFile {
     pub total_time: Duration,
 }
 
-#[cfg(feature = "llvm")]
 #[allow(clippy::too_many_arguments)]
 pub fn build_file<'a>(
     arena: &'a Bump,
@@ -179,20 +176,15 @@ pub fn build_file<'a>(
     program::report_problems_monomorphized(&mut loaded);
     let loaded = loaded;
 
-    let code_gen_timing = match opt_level {
-        OptLevel::Normal | OptLevel::Optimize => program::gen_from_mono_module_llvm(
-            arena,
-            loaded,
-            &roc_file_path,
-            target,
-            app_o_file,
-            opt_level,
-            emit_debug_info,
-        ),
-        OptLevel::Development => {
-            program::gen_from_mono_module_dev(arena, loaded, target, app_o_file)
-        }
-    };
+    let code_gen_timing = program::gen_from_mono_module(
+        arena,
+        loaded,
+        &roc_file_path,
+        target,
+        app_o_file,
+        opt_level,
+        emit_debug_info,
+    );
 
     buf.push('\n');
     buf.push_str("    ");

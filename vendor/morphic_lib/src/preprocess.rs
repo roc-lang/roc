@@ -42,7 +42,7 @@ pub(crate) enum ErrorKind {
     ExpectedTupleType(String),
     #[error("expected union type, found type '{0}'")]
     ExpectedUnionType(String),
-    #[error("expected named type, foudn type '{0}'")]
+    #[error("expected named type, found type '{0}'")]
     ExpectedNamedType(String),
     #[error("tuple field index {0} out of range")]
     TupleFieldOutOfRange(u32),

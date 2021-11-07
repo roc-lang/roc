@@ -3922,7 +3922,7 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
     // our exposed main function adheres to the C calling convention
     wrapper_function.set_call_conventions(FAST_CALL_CONV);
 
-    // invoke instead of call, so that we can catch any exeptions thrown in Roc code
+    // invoke instead of call, so that we can catch any exceptions thrown in Roc code
     let arguments = wrapper_function.get_params();
 
     let basic_block = context.append_basic_block(wrapper_function, "entry");

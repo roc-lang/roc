@@ -322,40 +322,50 @@ impl Serialize for GlobalType {
     }
 }
 
-pub enum GlobalInitValue {
+/// Constant expression for initialising globals or data segments
+/// Note: This is restricted for simplicity, but the spec allows arbitrary constant expressions
+pub enum ConstExpr {
     I32(i32),
     I64(i64),
     F32(f32),
     F64(f64),
 }
 
+impl Serialize for ConstExpr {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        match self {
+            ConstExpr::I32(x) => {
+                buffer.append_u8(opcodes::I32CONST);
+                buffer.encode_i32(*x);
+            }
+            ConstExpr::I64(x) => {
+                buffer.append_u8(opcodes::I64CONST);
+                buffer.encode_i64(*x);
+            }
+            ConstExpr::F32(x) => {
+                buffer.append_u8(opcodes::F32CONST);
+                buffer.encode_f32(*x);
+            }
+            ConstExpr::F64(x) => {
+                buffer.append_u8(opcodes::F64CONST);
+                buffer.encode_f64(*x);
+            }
+        }
+        buffer.append_u8(opcodes::END);
+    }
+}
+
 pub struct Global {
+    /// Type and mutability of the global
     pub ty: GlobalType,
-    pub init_value: GlobalInitValue,
+    /// Initial value of the global.
+    pub init: ConstExpr,
 }
 
 impl Serialize for Global {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         self.ty.serialize(buffer);
-        match self.init_value {
-            GlobalInitValue::I32(x) => {
-                buffer.append_u8(opcodes::I32CONST);
-                buffer.encode_i32(x);
-            }
-            GlobalInitValue::I64(x) => {
-                buffer.append_u8(opcodes::I64CONST);
-                buffer.encode_i64(x);
-            }
-            GlobalInitValue::F32(x) => {
-                buffer.append_u8(opcodes::F32CONST);
-                buffer.encode_f32(x);
-            }
-            GlobalInitValue::F64(x) => {
-                buffer.append_u8(opcodes::F64CONST);
-                buffer.encode_f64(x);
-            }
-        }
-        buffer.append_u8(opcodes::END);
+        self.init.serialize(buffer);
     }
 }
 
@@ -442,19 +452,112 @@ impl<'a> CodeSection<'a> {
     }
 
     /// Serialize the code builders for all functions, and get code relocations with final offsets
-    pub fn serialize_mut<T: SerialBuffer>(
-        &mut self,
+    pub fn serialize_with_relocs<T: SerialBuffer>(
+        &self,
         buffer: &mut T,
         relocations: &mut Vec<'a, RelocationEntry>,
     ) {
         let header_indices = write_section_header(buffer, SectionId::Code);
         buffer.encode_u32(self.code_builders.len() as u32);
 
-        for code_builder in self.code_builders.iter_mut() {
+        for code_builder in self.code_builders.iter() {
             code_builder.serialize_with_relocs(buffer, relocations, header_indices.body_index);
         }
 
         update_section_size(buffer, header_indices);
+    }
+}
+
+/*******************************************************************
+ *
+ * Data section
+ *
+ *******************************************************************/
+
+pub enum DataMode {
+    /// A data segment that auto-loads into memory on instantiation
+    Active { offset: ConstExpr },
+    /// A data segment that can be loaded with the `memory.init` instruction
+    Passive,
+}
+
+pub struct DataSegment<'a> {
+    pub mode: DataMode,
+    pub init: Vec<'a, u8>,
+}
+
+impl Serialize for DataSegment<'_> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        match &self.mode {
+            DataMode::Active { offset } => {
+                buffer.append_u8(0);
+                offset.serialize(buffer);
+            }
+            DataMode::Passive => {
+                buffer.append_u8(1);
+            }
+        }
+
+        self.init.serialize(buffer);
+    }
+}
+
+pub struct DataSection<'a> {
+    pub segments: Vec<'a, DataSegment<'a>>,
+}
+
+impl<'a> DataSection<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
+        DataSection {
+            segments: Vec::with_capacity_in(1, arena),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.segments.is_empty() || self.segments.iter().all(|seg| seg.init.is_empty())
+    }
+}
+
+impl Serialize for DataSection<'_> {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        if !self.is_empty() {
+            serialize_vector_section(buffer, SectionId::Data, &self.segments);
+        }
+    }
+}
+
+/*******************************************************************
+ *
+ * Data Count section
+ *
+ * Pre-declares the number of segments in the Data section.
+ * This helps the runtime to validate the module in a single pass.
+ * The order of sections is DataCount -> Code -> Data
+ *
+ *******************************************************************/
+
+struct DataCountSection {
+    count: u32,
+}
+
+impl DataCountSection {
+    fn new(data_section: &DataSection<'_>) -> Self {
+        let count = data_section
+            .segments
+            .iter()
+            .filter(|seg| !seg.init.is_empty())
+            .count() as u32;
+        DataCountSection { count }
+    }
+}
+
+impl Serialize for DataCountSection {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        if self.count > 0 {
+            let header_indices = write_section_header(buffer, SectionId::DataCount);
+            buffer.encode_u32(self.count);
+            update_section_size(buffer, header_indices);
+        }
     }
 }
 
@@ -465,6 +568,36 @@ impl<'a> CodeSection<'a> {
  * https://webassembly.github.io/spec/core/binary/modules.html
  *
  *******************************************************************/
+
+/// Helper struct to count non-empty sections.
+/// Needed to generate linking data, which refers to target sections by index.
+struct SectionCounter {
+    buffer_size: usize,
+    section_index: u32,
+}
+
+impl SectionCounter {
+    /// Update the section counter if buffer size increased since last call
+    #[inline]
+    fn update<SB: SerialBuffer>(&mut self, buffer: &mut SB) {
+        let new_size = buffer.size();
+        if new_size > self.buffer_size {
+            self.section_index += 1;
+            self.buffer_size = new_size;
+        }
+    }
+
+    #[inline]
+    fn serialize_and_count<SB: SerialBuffer, S: Serialize>(
+        &mut self,
+        buffer: &mut SB,
+        section: &S,
+    ) {
+        section.serialize(buffer);
+        self.update(buffer);
+    }
+}
+
 pub struct WasmModule<'a> {
     pub types: TypeSection<'a>,
     pub import: ImportSection<'a>,
@@ -478,11 +611,8 @@ pub struct WasmModule<'a> {
     pub start: (),
     /// Dummy placeholder for table elements. Roc does not use tables.
     pub element: (),
-    /// Dummy placeholder for data count section, not yet implemented
-    pub data_count: (),
     pub code: CodeSection<'a>,
-    /// Dummy placeholder for data section, not yet implemented
-    pub data: (),
+    pub data: DataSection<'a>,
     pub linking: LinkingSection<'a>,
     pub reloc_code: RelocationSection<'a>,
     pub reloc_data: RelocationSection<'a>,
@@ -490,26 +620,6 @@ pub struct WasmModule<'a> {
 
 impl<'a> WasmModule<'a> {
     pub const WASM_VERSION: u32 = 1;
-
-    pub fn new(arena: &'a Bump) -> Self {
-        WasmModule {
-            types: TypeSection::new(arena),
-            import: ImportSection::new(arena),
-            function: FunctionSection::new(arena),
-            table: (), // Unused in Roc (mainly for function pointers)
-            memory: MemorySection::new(1024 * 1024),
-            global: GlobalSection::new(arena),
-            export: ExportSection::new(arena),
-            start: (),      // Entry function. In Roc this would be part of the platform.
-            element: (),    // Unused in Roc (related to table section)
-            data_count: (), // TODO, related to data section
-            code: CodeSection::new(arena),
-            data: (), // TODO: program constants (e.g. string literals)
-            linking: LinkingSection::new(arena),
-            reloc_code: RelocationSection::new(arena, "reloc.CODE"),
-            reloc_data: RelocationSection::new(arena, "reloc.DATA"),
-        }
-    }
 
     /// Create entries in the Type and Function sections for a function signature
     pub fn add_function_signature(&mut self, signature: Signature<'a>) {
@@ -523,56 +633,43 @@ impl<'a> WasmModule<'a> {
         buffer.append_slice("asm".as_bytes());
         buffer.write_unencoded_u32(Self::WASM_VERSION);
 
-        let mut index: u32 = 0;
-        let mut prev_size = buffer.size();
+        // Keep track of (non-empty) section indices for linking
+        let mut counter = SectionCounter {
+            buffer_size: buffer.size(),
+            section_index: 0,
+        };
 
-        self.types.serialize(buffer);
-        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
+        counter.serialize_and_count(buffer, &self.types);
+        counter.serialize_and_count(buffer, &self.import);
+        counter.serialize_and_count(buffer, &self.function);
+        counter.serialize_and_count(buffer, &self.table);
+        counter.serialize_and_count(buffer, &self.memory);
+        counter.serialize_and_count(buffer, &self.global);
+        counter.serialize_and_count(buffer, &self.export);
+        counter.serialize_and_count(buffer, &self.start);
+        counter.serialize_and_count(buffer, &self.element);
 
-        self.import.serialize(buffer);
-        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
+        // Data Count section forward-declares the size of the Data section
+        // so that Code section can be validated in one pass
+        let data_count_section = DataCountSection::new(&self.data);
+        counter.serialize_and_count(buffer, &data_count_section);
 
-        self.function.serialize(buffer);
-        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-        self.table.serialize(buffer);
-        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-        self.memory.serialize(buffer);
-        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-        self.global.serialize(buffer);
-        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-        self.export.serialize(buffer);
-        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-        self.start.serialize(buffer);
-        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-        self.element.serialize(buffer);
-        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-        self.data_count.serialize(buffer);
-        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-        self.reloc_code.target_section_index = Some(index);
+        // Code section mutates its linker relocation data during serialization
+        let code_section_index = counter.section_index;
         self.code
-            .serialize_mut(buffer, &mut self.reloc_code.entries);
-        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
+            .serialize_with_relocs(buffer, &mut self.reloc_code.entries);
+        counter.update(buffer);
 
+        // Data section is the last one before linking, so we can stop counting
+        let data_section_index = counter.section_index;
         self.data.serialize(buffer);
-        self.reloc_data.target_section_index = Some(index);
 
         self.linking.serialize(buffer);
-        self.reloc_code.serialize(buffer);
-        self.reloc_data.serialize(buffer);
-    }
-}
 
-fn maybe_increment_section(size: usize, prev_size: &mut usize, index: &mut u32) {
-    if size > *prev_size {
-        *index += 1;
-        *prev_size = size;
+        self.reloc_code.target_section_index = Some(code_section_index);
+        self.reloc_code.serialize(buffer);
+
+        self.reloc_data.target_section_index = Some(data_section_index);
+        self.reloc_data.serialize(buffer);
     }
 }

@@ -5,7 +5,7 @@ authors = ["William Brandon", "Wilson Berkow", "Frank Dai", "Benjamin Driscoll"]
 edition = "2018"
 
 [dependencies]
-thiserror = "1.0"
-sha2 = "0.9.4"
-smallvec = "1.6"
-typed-arena = "2.0"
+thiserror = "1.0.30"
+sha2 = "0.9.8"
+smallvec = "1.7.0"
+typed-arena = "2.0.1"

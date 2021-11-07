@@ -4,12 +4,13 @@ use roc_gen_llvm::llvm::build::module_from_builtins;
 pub use roc_gen_llvm::llvm::build::FunctionIterator;
 use roc_load::file::{LoadedModule, MonomorphizedModule};
 use roc_module::symbol::{Interns, ModuleId};
-#[cfg(feature = "llvm")]
 use roc_mono::ir::OptLevel;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use roc_collections::all::{MutMap, MutSet};
+use roc_collections::all::MutMap;
+#[cfg(feature = "target-wasm32")]
+use roc_collections::all::MutSet;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CodeGenTiming {
@@ -19,6 +20,7 @@ pub struct CodeGenTiming {
 
 // TODO: If modules besides this one start needing to know which version of
 // llvm we're using, consider moving me somewhere else.
+#[cfg(feature = "llvm")]
 const LLVM_VERSION: &str = "12";
 
 // TODO instead of finding exhaustiveness problems in monomorphization, find
@@ -169,6 +171,50 @@ fn report_problems_help(
     }
 
     problems_reported
+}
+
+#[cfg(not(feature = "llvm"))]
+pub fn gen_from_mono_module(
+    arena: &bumpalo::Bump,
+    loaded: MonomorphizedModule,
+    _roc_file_path: &Path,
+    target: &target_lexicon::Triple,
+    app_o_file: &Path,
+    opt_level: OptLevel,
+    _emit_debug_info: bool,
+) -> CodeGenTiming {
+    match opt_level {
+        OptLevel::Optimize => {
+            todo!("Return this error message in a better way: optimized builds not supported without llvm backend");
+        }
+        OptLevel::Normal | OptLevel::Development => {
+            gen_from_mono_module_dev(arena, loaded, target, app_o_file)
+        }
+    }
+}
+
+#[cfg(feature = "llvm")]
+pub fn gen_from_mono_module(
+    arena: &bumpalo::Bump,
+    loaded: MonomorphizedModule,
+    roc_file_path: &Path,
+    target: &target_lexicon::Triple,
+    app_o_file: &Path,
+    opt_level: OptLevel,
+    emit_debug_info: bool,
+) -> CodeGenTiming {
+    match opt_level {
+        OptLevel::Normal | OptLevel::Optimize => gen_from_mono_module_llvm(
+            arena,
+            loaded,
+            roc_file_path,
+            target,
+            app_o_file,
+            opt_level,
+            emit_debug_info,
+        ),
+        OptLevel::Development => gen_from_mono_module_dev(arena, loaded, target, app_o_file),
+    }
 }
 
 // TODO how should imported modules factor into this? What if those use builtins too?
@@ -404,7 +450,7 @@ pub fn gen_from_mono_module_llvm(
         emit_o_file,
     }
 }
-
+#[cfg(feature = "target-wasm32")]
 pub fn gen_from_mono_module_dev(
     arena: &bumpalo::Bump,
     loaded: MonomorphizedModule,
@@ -415,13 +461,31 @@ pub fn gen_from_mono_module_dev(
 
     match target.architecture {
         Architecture::Wasm32 => gen_from_mono_module_dev_wasm32(arena, loaded, app_o_file),
-        Architecture::X86_64 => {
+        Architecture::X86_64 | Architecture::Aarch64(_) => {
             gen_from_mono_module_dev_assembly(arena, loaded, target, app_o_file)
         }
         _ => todo!(),
     }
 }
 
+#[cfg(not(feature = "target-wasm32"))]
+pub fn gen_from_mono_module_dev(
+    arena: &bumpalo::Bump,
+    loaded: MonomorphizedModule,
+    target: &target_lexicon::Triple,
+    app_o_file: &Path,
+) -> CodeGenTiming {
+    use target_lexicon::Architecture;
+
+    match target.architecture {
+        Architecture::X86_64 | Architecture::Aarch64(_) => {
+            gen_from_mono_module_dev_assembly(arena, loaded, target, app_o_file)
+        }
+        _ => todo!(),
+    }
+}
+
+#[cfg(feature = "target-wasm32")]
 fn gen_from_mono_module_dev_wasm32(
     arena: &bumpalo::Bump,
     loaded: MonomorphizedModule,

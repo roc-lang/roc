@@ -328,7 +328,7 @@ enum Mode {
     Dec,
 }
 
-/// a functin that accepts two arguments: the value to increment, and an amount to increment by
+/// a function that accepts two arguments: the value to increment, and an amount to increment by
 pub fn build_inc_n_wrapper<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -337,7 +337,7 @@ pub fn build_inc_n_wrapper<'a, 'ctx, 'env>(
     build_rc_wrapper(env, layout_ids, layout, Mode::IncN)
 }
 
-/// a functin that accepts two arguments: the value to increment; increments by 1
+/// a function that accepts two arguments: the value to increment; increments by 1
 pub fn build_inc_wrapper<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
