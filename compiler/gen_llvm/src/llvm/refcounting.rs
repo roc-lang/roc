@@ -765,7 +765,15 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
             );
         };
 
-        incrementing_elem_loop(env, parent, ptr, len, "modify_rc_index", loop_fn);
+        incrementing_elem_loop(
+            env,
+            parent,
+            *element_layout,
+            ptr,
+            len,
+            "modify_rc_index",
+            loop_fn,
+        );
     }
 
     let refcount_ptr = PointerToRefcount::from_list_wrapper(env, original_wrapper);
@@ -1616,7 +1624,6 @@ fn modify_refcount_union<'a, 'ctx, 'env>(
         None => {
             let basic_type = basic_type_from_layout_1(env, &layout);
             let function_value = build_header(env, basic_type, mode, &fn_name);
-            dbg!(function_value);
 
             modify_refcount_union_help(
                 env,
@@ -1667,8 +1674,6 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
     let parent = fn_val;
 
     let before_block = env.builder.get_insert_block().expect("to be in a function");
-
-    dbg!(fn_val, arg_ptr);
 
     // read the tag_id
     let tag_id_ptr = env
@@ -1729,7 +1734,11 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
                     .build_struct_gep(cast_tag_data_pointer, i as u32, "modify_tag_field")
                     .unwrap();
 
-                let field_value = env.builder.build_load(field_ptr, "field_value");
+                let field_value = if field_layout.is_passed_by_reference() {
+                    field_ptr.into()
+                } else {
+                    env.builder.build_load(field_ptr, "field_value")
+                };
 
                 modify_refcount_layout_help(
                     env,

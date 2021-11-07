@@ -2372,6 +2372,25 @@ fn list_literal<'a, 'ctx, 'env>(
     }
 }
 
+pub fn load_roc_value<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout: Layout<'a>,
+    source: PointerValue<'ctx>,
+    name: &str,
+) -> BasicValueEnum<'ctx> {
+    if layout.is_passed_by_reference() {
+        let alloca = env
+            .builder
+            .build_alloca(basic_type_from_layout(env, &layout), name);
+
+        store_roc_value(env, layout, alloca, source.into());
+
+        alloca.into()
+    } else {
+        env.builder.build_load(source, name)
+    }
+}
+
 pub fn store_roc_value_opaque<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout: Layout<'a>,
@@ -3318,7 +3337,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
         .unwrap()
         .into_pointer_value();
 
-    builder.build_store(output_arg, call_result);
+    store_roc_value(env, return_layout, output_arg, call_result);
     builder.build_return(None);
 
     c_function
@@ -4218,8 +4237,10 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
 
     // NOTE this may be incorrect in the long run
     // here we load any argument that is a pointer
-    for param in evaluator_arguments.iter_mut() {
-        if param.is_pointer_value() {
+    let closure_layout = lambda_set.runtime_representation();
+    let layouts_it = arguments.iter().chain(std::iter::once(&closure_layout));
+    for (param, layout) in evaluator_arguments.iter_mut().zip(layouts_it) {
+        if param.is_pointer_value() && !layout.is_passed_by_reference() {
             *param = builder.build_load(param.into_pointer_value(), "load_param");
         }
     }

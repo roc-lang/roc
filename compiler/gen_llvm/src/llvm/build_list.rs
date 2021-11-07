@@ -17,6 +17,8 @@ use morphic_lib::UpdateMode;
 use roc_builtins::bitcode;
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
+use super::build::load_roc_value;
+
 pub fn pass_update_mode<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     update_mode: UpdateMode,
@@ -216,10 +218,15 @@ pub fn list_get_unsafe<'a, 'ctx, 'env>(
 
             // Assume the bounds have already been checked earlier
             // (e.g. by List.get or List.first, which wrap List.#getUnsafe)
-            let elem_ptr =
-                unsafe { builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "elem") };
+            let elem_ptr = unsafe {
+                builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "list_get_element")
+            };
 
-            let result = builder.build_load(elem_ptr, "List.get");
+            let result = if elem_layout.is_passed_by_reference() {
+                elem_ptr.into()
+            } else {
+                builder.build_load(elem_ptr, "list_get_load_element")
+            };
 
             increment_refcount_layout(env, parent, layout_ids, 1, result, elem_layout);
 
@@ -975,6 +982,7 @@ where
 pub fn incrementing_elem_loop<'a, 'ctx, 'env, LoopFn>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
+    element_layout: Layout<'a>,
     ptr: PointerValue<'ctx>,
     len: IntValue<'ctx>,
     index_name: &str,
@@ -987,9 +995,14 @@ where
 
     incrementing_index_loop(env, parent, len, index_name, |index| {
         // The pointer to the element in the list
-        let elem_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index], "load_index") };
+        let element_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index], "load_index") };
 
-        let elem = builder.build_load(elem_ptr, "get_elem");
+        let elem = load_roc_value(
+            env,
+            element_layout,
+            element_ptr,
+            "incrementing_element_loop_load",
+        );
 
         loop_fn(index, elem);
     })
