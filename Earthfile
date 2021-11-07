@@ -79,7 +79,10 @@ test-rust:
     # not pre-compiling the host can cause race conditions
     RUN echo "4" | cargo run --release examples/benchmarks/NQueens.roc
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test --release --features with_sound && sccache --show-stats
+        cargo test --release --features with_sound --workspace --exclude test_wasm && sccache --show-stats
+    # test_wasm has some multithreading problems to do with the wasmer runtime. Run it single-threaded as a separate job
+    RUN --mount=type=cache,target=$SCCACHE_DIR \
+        cargo test --release --package test_wasm -- --test-threads=1 && sccache --show-stats
     # run i386 (32-bit linux) cli tests
     RUN echo "4" | cargo run --release --features="target-x86" -- --backend=x86_32 examples/benchmarks/NQueens.roc
     RUN --mount=type=cache,target=$SCCACHE_DIR \
