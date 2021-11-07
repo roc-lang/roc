@@ -1084,7 +1084,6 @@ pub fn listAny(
     data: Opaque,
     inc_n_data: IncN,
     data_is_owned: bool,
-    alignment: u32,
     element_width: usize,
 ) callconv(.C) bool {
     if (list.bytes) |source_ptr| {
