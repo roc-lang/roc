@@ -1088,9 +1088,13 @@ pub fn listAny(
 ) callconv(.C) bool {
     if (list.bytes) |source_ptr| {
         const size = list.len();
+
+        if (data_is_owned) {
+            inc_n_data(data, size);
+        }
+
         var i: usize = 0;
         var satisfied = false;
-
         while (i < size) : (i += 1) {
             const element = source_ptr + i * element_width;
             caller(data, element, @ptrCast(?[*]u8, &satisfied));
