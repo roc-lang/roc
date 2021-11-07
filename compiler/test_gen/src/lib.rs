@@ -6,6 +6,7 @@
 
 pub mod gen_compare;
 pub mod gen_dict;
+pub mod gen_hash;
 pub mod gen_list;
 pub mod gen_num;
 pub mod gen_primitives;
