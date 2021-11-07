@@ -452,15 +452,15 @@ impl<'a> CodeSection<'a> {
     }
 
     /// Serialize the code builders for all functions, and get code relocations with final offsets
-    pub fn serialize_mut<T: SerialBuffer>(
-        &mut self,
+    pub fn serialize_with_relocs<T: SerialBuffer>(
+        &self,
         buffer: &mut T,
         relocations: &mut Vec<'a, RelocationEntry>,
     ) {
         let header_indices = write_section_header(buffer, SectionId::Code);
         buffer.encode_u32(self.code_builders.len() as u32);
 
-        for code_builder in self.code_builders.iter_mut() {
+        for code_builder in self.code_builders.iter() {
             code_builder.serialize_with_relocs(buffer, relocations, header_indices.body_index);
         }
 
@@ -526,11 +526,38 @@ impl Serialize for DataSection<'_> {
     }
 }
 
-fn write_data_count_section<'a, T: SerialBuffer>(buffer: &mut T, data_section: &DataSection<'a>) {
-    if !data_section.is_empty() {
-        let header_indices = write_section_header(buffer, SectionId::DataCount);
-        buffer.encode_u32(data_section.segments.len() as u32);
-        update_section_size(buffer, header_indices);
+/*******************************************************************
+ *
+ * Data Count section
+ *
+ * Pre-declares the number of segments in the Data section.
+ * This helps the runtime to validate the module in a single pass.
+ * The order of sections is DataCount -> Code -> Data
+ *
+ *******************************************************************/
+
+struct DataCountSection {
+    count: u32,
+}
+
+impl DataCountSection {
+    fn new(data_section: &DataSection<'_>) -> Self {
+        let count = data_section
+            .segments
+            .iter()
+            .filter(|seg| !seg.init.is_empty())
+            .count() as u32;
+        DataCountSection { count }
+    }
+}
+
+impl Serialize for DataCountSection {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        if self.count > 0 {
+            let header_indices = write_section_header(buffer, SectionId::DataCount);
+            buffer.encode_u32(self.count);
+            update_section_size(buffer, header_indices);
+        }
     }
 }
 
@@ -541,6 +568,36 @@ fn write_data_count_section<'a, T: SerialBuffer>(buffer: &mut T, data_section: &
  * https://webassembly.github.io/spec/core/binary/modules.html
  *
  *******************************************************************/
+
+/// Helper struct to count non-empty sections.
+/// Needed to generate linking data, which refers to target sections by index.
+struct SectionCounter {
+    buffer_size: usize,
+    section_index: u32,
+}
+
+impl SectionCounter {
+    /// Update the section counter if buffer size increased since last call
+    #[inline]
+    fn update<SB: SerialBuffer>(&mut self, buffer: &mut SB) {
+        let new_size = buffer.size();
+        if new_size > self.buffer_size {
+            self.section_index += 1;
+            self.buffer_size = new_size;
+        }
+    }
+
+    #[inline]
+    fn serialize_and_count<SB: SerialBuffer, S: Serialize>(
+        &mut self,
+        buffer: &mut SB,
+        section: &S,
+    ) {
+        section.serialize(buffer);
+        self.update(buffer);
+    }
+}
+
 pub struct WasmModule<'a> {
     pub types: TypeSection<'a>,
     pub import: ImportSection<'a>,
@@ -576,58 +633,43 @@ impl<'a> WasmModule<'a> {
         buffer.append_slice("asm".as_bytes());
         buffer.write_unencoded_u32(Self::WASM_VERSION);
 
-        let mut index: u32 = 0;
-        let mut prev_size = buffer.size();
+        // Keep track of (non-empty) section indices for linking
+        let mut counter = SectionCounter {
+            buffer_size: buffer.size(),
+            section_index: 0,
+        };
 
-        self.types.serialize(buffer);
-        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
+        counter.serialize_and_count(buffer, &self.types);
+        counter.serialize_and_count(buffer, &self.import);
+        counter.serialize_and_count(buffer, &self.function);
+        counter.serialize_and_count(buffer, &self.table);
+        counter.serialize_and_count(buffer, &self.memory);
+        counter.serialize_and_count(buffer, &self.global);
+        counter.serialize_and_count(buffer, &self.export);
+        counter.serialize_and_count(buffer, &self.start);
+        counter.serialize_and_count(buffer, &self.element);
 
-        self.import.serialize(buffer);
-        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
+        // Data Count section forward-declares the size of the Data section
+        // so that Code section can be validated in one pass
+        let data_count_section = DataCountSection::new(&self.data);
+        counter.serialize_and_count(buffer, &data_count_section);
 
-        self.function.serialize(buffer);
-        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-        self.table.serialize(buffer);
-        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-        self.memory.serialize(buffer);
-        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-        self.global.serialize(buffer);
-        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-        self.export.serialize(buffer);
-        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-        self.start.serialize(buffer);
-        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-        self.element.serialize(buffer);
-        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-        // Data count section has no independent data, just helps the runtime
-        // to validate code references to the data section in a single pass
-        write_data_count_section(buffer, &self.data);
-        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
-
-        self.reloc_code.target_section_index = Some(index);
+        // Code section mutates its linker relocation data during serialization
+        let code_section_index = counter.section_index;
         self.code
-            .serialize_mut(buffer, &mut self.reloc_code.entries);
-        maybe_increment_section(buffer.size(), &mut prev_size, &mut index);
+            .serialize_with_relocs(buffer, &mut self.reloc_code.entries);
+        counter.update(buffer);
 
+        // Data section is the last one before linking, so we can stop counting
+        let data_section_index = counter.section_index;
         self.data.serialize(buffer);
-        self.reloc_data.target_section_index = Some(index);
 
         self.linking.serialize(buffer);
-        self.reloc_code.serialize(buffer);
-        self.reloc_data.serialize(buffer);
-    }
-}
 
-fn maybe_increment_section(size: usize, prev_size: &mut usize, index: &mut u32) {
-    if size > *prev_size {
-        *index += 1;
-        *prev_size = size;
+        self.reloc_code.target_section_index = Some(code_section_index);
+        self.reloc_code.serialize(buffer);
+
+        self.reloc_data.target_section_index = Some(data_section_index);
+        self.reloc_data.serialize(buffer);
     }
 }
