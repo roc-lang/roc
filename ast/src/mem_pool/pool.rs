@@ -194,6 +194,7 @@ impl Pool {
     fn get_ptr<T>(&self, node_id: NodeId<T>) -> *mut MaybeUninit<T> {
         let node_offset = unsafe { self.nodes.offset(node_id.index as isize) };
 
+        // This checks if the node_offset is aligned to T
         assert!(0 == (node_offset as usize) & (align_of::<T>() - 1));
 
         node_offset as *mut MaybeUninit<T>
