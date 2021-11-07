@@ -530,7 +530,8 @@ impl<'a> Context<'a> {
                     ListMap { xs }
                     | ListKeepIf { xs }
                     | ListKeepOks { xs }
-                    | ListKeepErrs { xs } => {
+                    | ListKeepErrs { xs }
+                    | ListAny { xs } => {
                         let borrows = [function_ps[0].borrow, FUNCTION, CLOSURE_DATA];
 
                         let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
