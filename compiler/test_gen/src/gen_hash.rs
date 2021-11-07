@@ -25,7 +25,11 @@ fn hash_str_with_seed() {
 
 #[test]
 fn hash_record() {
-    assert_evals_to!("Dict.#hashTestOnly 1 { x: \"a\" } ", 0xbed235177f41d328, u64);
+    assert_evals_to!(
+        "Dict.#hashTestOnly 1 { x: \"a\" } ",
+        0xbed235177f41d328,
+        u64
+    );
     assert_evals_to!(
         "Dict.#hashTestOnly 1 { x: 42, y: 3.14 } ",
         5348189196103430707,
