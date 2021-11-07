@@ -222,11 +222,7 @@ pub fn list_get_unsafe<'a, 'ctx, 'env>(
                 builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "list_get_element")
             };
 
-            let result = if elem_layout.is_passed_by_reference() {
-                elem_ptr.into()
-            } else {
-                builder.build_load(elem_ptr, "list_get_load_element")
-            };
+            let result = load_roc_value(env, **elem_layout, elem_ptr, "list_get_load_element");
 
             increment_refcount_layout(env, parent, layout_ids, 1, result, elem_layout);
 

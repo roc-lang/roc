@@ -1536,7 +1536,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
             // store the tag id
             let tag_id_ptr = env
                 .builder
-                .build_struct_gep(result_alloca, TAG_ID_INDEX, "get_opaque_data")
+                .build_struct_gep(result_alloca, TAG_ID_INDEX, "tag_id_ptr")
                 .unwrap();
 
             let tag_id_intval = tag_id_type.const_int(tag_id as u64, false);
@@ -1549,7 +1549,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
 
             let struct_opaque_ptr = env
                 .builder
-                .build_struct_gep(result_alloca, TAG_DATA_INDEX, "get_opaque_data")
+                .build_struct_gep(result_alloca, TAG_DATA_INDEX, "opaque_data_ptr")
                 .unwrap();
             let struct_ptr = env.builder.build_pointer_cast(
                 struct_opaque_ptr,
