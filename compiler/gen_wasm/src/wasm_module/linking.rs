@@ -283,34 +283,47 @@ pub const WASM_SYM_EXPLICIT_NAME: u32 = 0x40; // use the name from the symbol ta
 /// linker output, regardless of whether it is used by the program.
 pub const WASM_SYM_NO_STRIP: u32 = 0x80;
 
+#[derive(Clone, Debug)]
 pub enum WasmObjectSymbol {
-    Defined { index: u32, name: String },
-    Imported { index: u32 },
+    Defined {
+        flags: u32,
+        index: u32,
+        name: String,
+    },
+    Imported {
+        flags: u32,
+        index: u32,
+    },
 }
 
 impl Serialize for WasmObjectSymbol {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         match self {
-            Self::Defined { index, name } => {
+            Self::Defined { flags, index, name } => {
+                buffer.encode_u32(*flags);
                 buffer.encode_u32(*index);
                 buffer.encode_u32(name.len() as u32);
                 buffer.append_slice(name.as_bytes());
             }
-            Self::Imported { index } => {
+            Self::Imported { flags, index } => {
+                buffer.encode_u32(*flags);
                 buffer.encode_u32(*index);
             }
         }
     }
 }
 
+#[derive(Clone, Debug)]
 pub enum DataSymbol {
     Defined {
+        flags: u32,
         name: String,
-        index: u32,
-        offset: u32,
+        segment_index: u32,
+        segment_offset: u32,
         size: u32,
     },
     Imported {
+        flags: u32,
         name: String,
     },
 }
@@ -319,18 +332,21 @@ impl Serialize for DataSymbol {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         match self {
             Self::Defined {
+                flags,
                 name,
-                index,
-                offset,
+                segment_index,
+                segment_offset,
                 size,
             } => {
+                buffer.encode_u32(*flags);
                 buffer.encode_u32(name.len() as u32);
                 buffer.append_slice(name.as_bytes());
-                buffer.encode_u32(*index);
-                buffer.encode_u32(*offset);
+                buffer.encode_u32(*segment_index);
+                buffer.encode_u32(*segment_offset);
                 buffer.encode_u32(*size);
             }
-            Self::Imported { name } => {
+            Self::Imported { flags, name } => {
+                buffer.encode_u32(*flags);
                 buffer.encode_u32(name.len() as u32);
                 buffer.append_slice(name.as_bytes());
             }
@@ -339,56 +355,56 @@ impl Serialize for DataSymbol {
 }
 
 /// section index (not section id!)
-#[derive(Clone, Copy, Debug)]
-pub struct SectionIndex(u32);
+#[derive(Clone, Debug)]
+pub struct SectionSymbol {
+    flags: u32,
+    index: u32,
+}
 
-pub enum SymInfoFields {
+impl Serialize for SectionSymbol {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        self.flags.serialize(buffer);
+        self.index.serialize(buffer);
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum SymInfo {
     Function(WasmObjectSymbol),
     Data(DataSymbol),
     Global(WasmObjectSymbol),
-    Section(SectionIndex),
+    Section(SectionSymbol),
     Event(WasmObjectSymbol),
     Table(WasmObjectSymbol),
 }
 
-pub struct SymInfo {
-    flags: u32,
-    info: SymInfoFields,
-}
-
 impl SymInfo {
     pub fn for_function(wasm_function_index: u32, name: String) -> Self {
-        let linking_symbol = WasmObjectSymbol::Defined {
+        SymInfo::Function(WasmObjectSymbol::Defined {
+            flags: 0,
             index: wasm_function_index,
             name,
-        };
-        SymInfo {
-            flags: 0,
-            info: SymInfoFields::Function(linking_symbol),
-        }
+        })
     }
 }
 
 impl Serialize for SymInfo {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        buffer.append_u8(match self.info {
-            SymInfoFields::Function(_) => 0,
-            SymInfoFields::Data(_) => 1,
-            SymInfoFields::Global(_) => 2,
-            SymInfoFields::Section(_) => 3,
-            SymInfoFields::Event(_) => 4,
-            SymInfoFields::Table(_) => 5,
+        buffer.append_u8(match self {
+            Self::Function(_) => 0,
+            Self::Data(_) => 1,
+            Self::Global(_) => 2,
+            Self::Section(_) => 3,
+            Self::Event(_) => 4,
+            Self::Table(_) => 5,
         });
-        buffer.encode_u32(self.flags);
-        match &self.info {
-            SymInfoFields::Function(x) => x.serialize(buffer),
-            SymInfoFields::Data(x) => x.serialize(buffer),
-            SymInfoFields::Global(x) => x.serialize(buffer),
-            SymInfoFields::Section(SectionIndex(x)) => {
-                buffer.encode_u32(*x);
-            }
-            SymInfoFields::Event(x) => x.serialize(buffer),
-            SymInfoFields::Table(x) => x.serialize(buffer),
+        match self {
+            Self::Function(x) => x.serialize(buffer),
+            Self::Data(x) => x.serialize(buffer),
+            Self::Global(x) => x.serialize(buffer),
+            Self::Section(x) => x.serialize(buffer),
+            Self::Event(x) => x.serialize(buffer),
+            Self::Table(x) => x.serialize(buffer),
         };
     }
 }

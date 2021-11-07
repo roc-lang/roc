@@ -107,9 +107,9 @@ pub struct TypeSection<'a> {
 }
 
 impl<'a> TypeSection<'a> {
-    pub fn new(arena: &'a Bump) -> Self {
+    pub fn new(arena: &'a Bump, capacity: usize) -> Self {
         TypeSection {
-            signatures: Vec::with_capacity_in(8, arena),
+            signatures: Vec::with_capacity_in(capacity, arena),
         }
     }
 
@@ -229,13 +229,12 @@ pub struct FunctionSection<'a> {
 }
 
 impl<'a> FunctionSection<'a> {
-    pub fn new(arena: &'a Bump) -> Self {
+    pub fn new(arena: &'a Bump, capacity: usize) -> Self {
         FunctionSection {
-            signature_indices: Vec::with_capacity_in(8, arena),
+            signature_indices: Vec::with_capacity_in(capacity, arena),
         }
     }
 }
-
 impl<'a> Serialize for FunctionSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         serialize_vector_section(buffer, SectionId::Function, &self.signature_indices);
@@ -373,14 +372,6 @@ pub struct GlobalSection<'a> {
     pub entries: Vec<'a, Global>,
 }
 
-impl<'a> GlobalSection<'a> {
-    pub fn new(arena: &'a Bump) -> Self {
-        GlobalSection {
-            entries: Vec::with_capacity_in(1, arena),
-        }
-    }
-}
-
 impl<'a> Serialize for GlobalSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         serialize_vector_section(buffer, SectionId::Global, &self.entries);
@@ -507,12 +498,6 @@ pub struct DataSection<'a> {
 }
 
 impl<'a> DataSection<'a> {
-    pub fn new(arena: &'a Bump) -> Self {
-        DataSection {
-            segments: Vec::with_capacity_in(1, arena),
-        }
-    }
-
     fn is_empty(&self) -> bool {
         self.segments.is_empty() || self.segments.iter().all(|seg| seg.init.is_empty())
     }
@@ -614,8 +599,7 @@ pub struct WasmModule<'a> {
     pub code: CodeSection<'a>,
     pub data: DataSection<'a>,
     pub linking: LinkingSection<'a>,
-    pub reloc_code: RelocationSection<'a>,
-    pub reloc_data: RelocationSection<'a>,
+    pub relocations: RelocationSection<'a>,
 }
 
 impl<'a> WasmModule<'a> {
@@ -654,22 +638,16 @@ impl<'a> WasmModule<'a> {
         let data_count_section = DataCountSection::new(&self.data);
         counter.serialize_and_count(buffer, &data_count_section);
 
-        // Code section mutates its linker relocation data during serialization
+        // Code section is the only one with relocations so we can stop counting
         let code_section_index = counter.section_index;
         self.code
-            .serialize_with_relocs(buffer, &mut self.reloc_code.entries);
-        counter.update(buffer);
+            .serialize_with_relocs(buffer, &mut self.relocations.entries);
 
-        // Data section is the last one before linking, so we can stop counting
-        let data_section_index = counter.section_index;
         self.data.serialize(buffer);
 
         self.linking.serialize(buffer);
 
-        self.reloc_code.target_section_index = Some(code_section_index);
-        self.reloc_code.serialize(buffer);
-
-        self.reloc_data.target_section_index = Some(data_section_index);
-        self.reloc_data.serialize(buffer);
+        self.relocations.target_section_index = Some(code_section_index);
+        self.relocations.serialize(buffer);
     }
 }
