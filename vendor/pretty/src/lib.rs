@@ -34,7 +34,7 @@ pub enum Doc<'a, T: DocPtr<'a, A>, A = ()> {
     Nesting(T::ColumnFn),
 }
 
-pub type SmallText = arrayvec::ArrayString<[u8; 22]>;
+pub type SmallText = arrayvec::ArrayString<22>;
 
 impl<'a, T, A> fmt::Debug for Doc<'a, T, A>
 where

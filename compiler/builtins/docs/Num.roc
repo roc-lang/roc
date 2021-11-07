@@ -395,7 +395,7 @@ Nat : Int [ @Natural ]
 ##
 ## A common use for #Nat is to store the length ("len" for short) of a
 ## collection like #List, #Set, or #Map. 64-bit systems can represent longer
-## lists in memory than 32-bit sytems can, which is why the length of a list
+## lists in memory than 32-bit systems can, which is why the length of a list
 ## is represented as a #Nat in Roc.
 ##
 ## If any operation would result in an #Int that is either too big

@@ -6,6 +6,3 @@ license = "UPL-1.0"
 repository = "https://github.com/rtfeldman/roc"
 edition = "2018"
 description = "A CLI for Roc"
-
-[dev-dependencies]
-pretty_assertions = "0.5.1"

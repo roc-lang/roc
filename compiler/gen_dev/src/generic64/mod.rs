@@ -553,7 +553,7 @@ impl<
                 let jmp_offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678);
                 ret_jumps.push((jmp_location, jmp_offset));
 
-                // Overwite the original jne with the correct offset.
+                // Overwrite the original jne with the correct offset.
                 let end_offset = self.buf.len();
                 let jne_offset = end_offset - start_offset;
                 ASM::jne_reg64_imm64_imm32(&mut tmp, cond_reg, *val, jne_offset as i32);
@@ -664,7 +664,7 @@ impl<
                 },
             }));
 
-        // Overwite the original jump with the correct offset.
+        // Overwrite the original jump with the correct offset.
         let mut tmp = bumpalo::vec![in self.env.arena];
         self.update_jmp_imm32_offset(
             &mut tmp,
@@ -1296,7 +1296,7 @@ impl<
         match val {
             Some(SymbolStorage::GeneralReg(reg)) => {
                 let offset = self.claim_stack_size(8)?;
-                // For base addresssing, use the negative offset - 8.
+                // For base addressing, use the negative offset - 8.
                 ASM::mov_base32_reg64(&mut self.buf, offset, reg);
                 self.symbol_storage_map.insert(
                     *sym,
@@ -1310,7 +1310,7 @@ impl<
             }
             Some(SymbolStorage::FloatReg(reg)) => {
                 let offset = self.claim_stack_size(8)?;
-                // For base addresssing, use the negative offset.
+                // For base addressing, use the negative offset.
                 ASM::mov_base32_freg64(&mut self.buf, offset, reg);
                 self.symbol_storage_map.insert(
                     *sym,

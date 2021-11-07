@@ -502,7 +502,7 @@ fn fix_values_captured_in_closure_expr(
         | Update {
             updates: fields, ..
         } => {
-            for field in fields.iter_mut() {
+            for (_, field) in fields.iter_mut() {
                 fix_values_captured_in_closure_expr(&mut field.loc_expr.value, no_capture_symbols);
             }
         }

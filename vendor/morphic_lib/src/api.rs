@@ -279,7 +279,7 @@ forward_trait! {
         /// Add a const ref expression to a block.
         ///
         /// This conceptually represents a fetch of a global constant value with static lifetime,
-        /// initialiazed at the beginning of the program.  It is considered unsafe to perform an
+        /// initialized at the beginning of the program.  It is considered unsafe to perform an
         /// in-place update on any heap cell reachable from a value returned from a const ref.
         fn add_const_ref(
             &mut self,
@@ -317,7 +317,7 @@ forward_trait! {
         /// a value of any type is expected).
         fn add_terminate(&mut self, block: BlockId, result_type: TypeId) -> Result<ValueId>;
 
-        /// Add an expresion which creates a fresh heap cell to a block.
+        /// Add an expression which creates a fresh heap cell to a block.
         fn add_new_heap_cell(&mut self, block: BlockId) -> Result<ValueId>;
 
         /// Add a 'touch' expression to a block.

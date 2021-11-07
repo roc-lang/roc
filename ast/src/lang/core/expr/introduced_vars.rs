@@ -5,7 +5,7 @@ use roc_types::subs::Variable;
 
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct IntroducedVariables {
-    // Rigids must be unique within a type annoation.
+    // Rigids must be unique within a type annotation.
     // E.g. in `identity : a -> a`, there should only be one
     // variable (a rigid one, with name "a").
     // Hence `rigids : Map<Lowercase, Variable>`

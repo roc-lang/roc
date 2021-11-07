@@ -65,6 +65,9 @@ let
     # note: niv manages its own nixpkgs so it doesn't need pkgs.callPackage. Do
     # `cachix use niv` to get cached builds!
     (import sources.niv { }).niv
+
+    # tools for development environment
+    less
   ];
 in pkgs.mkShell {
   buildInputs = inputs ++ darwinInputs ++ linuxInputs;

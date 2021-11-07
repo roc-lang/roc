@@ -8,7 +8,9 @@ use roc_mono::ir::OptLevel;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use roc_collections::all::{MutMap, MutSet};
+use roc_collections::all::MutMap;
+#[cfg(feature = "target-wasm32")]
+use roc_collections::all::MutSet;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CodeGenTiming {
