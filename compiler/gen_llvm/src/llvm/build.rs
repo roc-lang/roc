@@ -619,8 +619,8 @@ pub fn construct_optimization_passes<'a>(
     mpm.add_always_inliner_pass();
 
     // tail-call elimination is always on
-    // fpm.add_instruction_combining_pass();
-    // fpm.add_tail_call_elimination_pass();
+    fpm.add_instruction_combining_pass();
+    fpm.add_tail_call_elimination_pass();
 
     let pmb = PassManagerBuilder::create();
     match opt_level {
@@ -1460,6 +1460,36 @@ fn build_wrapped_tag<'a, 'ctx, 'env>(
     }
 }
 
+pub fn tag_alloca<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    type_: BasicTypeEnum<'ctx>,
+    name: &str,
+) -> PointerValue<'ctx> {
+    let result_alloca = env.builder.build_alloca(type_, name);
+
+    // Initialize all memory of the alloca. This _should_ not be required, but currently
+    // LLVM can access uninitialized memory after applying some optimizations. Hopefully
+    // we can in the future adjust code gen so this is no longer an issue.
+    //
+    // An example is
+    //
+    // main : Task.Task {} []
+    // main =
+    //     when List.len [ Ok "foo", Err 42, Ok "spam" ] is
+    //         n -> Task.putLine (Str.fromInt n)
+    //
+    // Here the decrement function of result must first check it's an Ok tag,
+    // then defers to string decrement, which must check is the string is small or large
+    //
+    // After inlining, those checks are combined. That means that even if the tag is Err,
+    // a check is done on the "string" to see if it is big or small, which will touch the
+    // uninitialized memory.
+    let all_zeros = type_.const_zero();
+    env.builder.build_store(result_alloca, all_zeros);
+
+    result_alloca
+}
+
 pub fn build_tag<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
@@ -1482,27 +1512,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
             let wrapper_type = env
                 .context
                 .struct_type(&[internal_type, tag_id_type.into()], false);
-            let result_alloca = env.builder.build_alloca(wrapper_type, "tag_opaque");
-
-            // Initialize all memory of the alloca. This _should_ not be required, but currently
-            // LLVM can access uninitialized memory after applying some optimizations. Hopefully
-            // we can in the future adjust code gen so this is no longer an issue.
-            //
-            // An example is
-            //
-            // main : Task.Task {} []
-            // main =
-            //     when List.len [ Ok "foo", Err 42, Ok "spam" ] is
-            //         n -> Task.putLine (Str.fromInt n)
-            //
-            // Here the decrement function of result must first check it's an Ok tag,
-            // then defers to string decrement, which must check is the string is small or large
-            //
-            // After inlining, those checks are combined. That means that even if the tag is Err,
-            // a check is done on the "string" to see if it is big or small, which will touch the
-            // uninitialized memory.
-            let all_zeros = wrapper_type.const_zero();
-            env.builder.build_store(result_alloca, all_zeros);
+            let result_alloca = tag_alloca(env, wrapper_type.into(), "opaque_tag");
 
             // Determine types
             let num_fields = arguments.len() + 1;
@@ -2031,7 +2041,7 @@ fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
         let field_type = basic_type_from_layout(env, &field_layout);
 
         let align_bytes = field_layout.alignment_bytes(env.ptr_bytes);
-        let alloca = env.builder.build_alloca(field_type, "copied_tag");
+        let alloca = tag_alloca(env, field_type, "copied_tag");
         if align_bytes > 0 {
             let size = env
                 .ptr_int()
@@ -2379,9 +2389,7 @@ pub fn load_roc_value<'a, 'ctx, 'env>(
     name: &str,
 ) -> BasicValueEnum<'ctx> {
     if layout.is_passed_by_reference() {
-        let alloca = env
-            .builder
-            .build_alloca(basic_type_from_layout(env, &layout), name);
+        let alloca = tag_alloca(env, basic_type_from_layout(env, &layout), name);
 
         store_roc_value(env, layout, alloca, source.into());
 
@@ -2509,7 +2517,20 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     let out_parameter = parameters.last().unwrap();
                     debug_assert!(out_parameter.is_pointer_value());
 
-                    store_roc_value(env, *layout, out_parameter.into_pointer_value(), value);
+                    // store_roc_value(env, *layout, out_parameter.into_pointer_value(), value);
+
+                    let destination = out_parameter.into_pointer_value();
+                    if layout.is_passed_by_reference() {
+                        let align_bytes = layout.alignment_bytes(env.ptr_bytes);
+
+                        if align_bytes > 0 {
+                            let value_ptr = value.into_pointer_value();
+
+                            value_ptr.replace_all_uses_with(destination);
+                        }
+                    } else {
+                        env.builder.build_store(destination, value);
+                    }
 
                     if let Some(block) = env.builder.get_insert_block() {
                         match block.get_terminator() {
@@ -4569,7 +4590,7 @@ pub fn call_roc_function<'a, 'ctx, 'env>(
             let mut arguments = Vec::from_iter_in(arguments.iter().copied(), env.arena);
 
             let result_type = basic_type_from_layout(env, result_layout);
-            let result_alloca = env.builder.build_alloca(result_type, "result_value");
+            let result_alloca = tag_alloca(env, result_type, "result_value");
 
             arguments.push(result_alloca.into());
 

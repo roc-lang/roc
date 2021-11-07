@@ -243,7 +243,7 @@ where
 
     match opt_level {
         OptLevel::Development | OptLevel::Normal => morphic_lib::solve_trivial(program),
-        OptLevel::Optimize => morphic_lib::solve(program),
+        OptLevel::Optimize => morphic_lib::solve_trivial(program),
     }
 }
 
