@@ -91,6 +91,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_MAP2 => list_map2,
         LIST_MAP3 => list_map3,
         LIST_MAP4 => list_map4,
+        LIST_TAKE_FIRST => list_take_first,
         LIST_DROP => list_drop,
         LIST_DROP_AT => list_drop_at,
         LIST_DROP_FIRST => list_drop_first,
@@ -2000,6 +2001,29 @@ fn list_swap(symbol: Symbol, var_store: &mut VarStore) -> Def {
             (index1_var, Symbol::ARG_2),
             (index2_var, Symbol::ARG_3),
         ],
+        var_store,
+        body,
+        list_var,
+    )
+}
+
+/// List.takeFirst : List elem, Nat -> List elem
+fn list_take_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
+    let len_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::ListTakeFirst,
+        args: vec![
+            (list_var, Var(Symbol::ARG_1)),
+            (len_var, Var(Symbol::ARG_2)),
+        ],
+        ret_var: list_var,
+    };
+
+    defn(
+        symbol,
+        vec![(list_var, Symbol::ARG_1), (len_var, Symbol::ARG_2)],
         var_store,
         body,
         list_var,
