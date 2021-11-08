@@ -10,7 +10,7 @@ use roc_module::symbol::Symbol;
 use roc_mono::ir::OptLevel;
 use roc_types::subs::VarStore;
 use target_lexicon::Triple;
-use test_wasm::helpers::from_wasm32_memory::FromWasm32Memory;
+use test_wasm_util::from_wasm32_memory::FromWasm32Memory;
 
 fn promote_expr_to_module(src: &str) -> String {
     let mut buffer = String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");

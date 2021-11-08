@@ -8,7 +8,7 @@ edition = "2018"
 name = "test_dev"
 path = "src/tests.rs"
 
-[dependencies]
+[dev-dependencies]
 roc_collections = { path = "../collections" }
 roc_can = { path = "../can" }
 roc_build = { path = "../build" }
