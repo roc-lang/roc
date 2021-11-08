@@ -2281,7 +2281,7 @@ fn list_join_map() {
             RocStr::from_slice("cyrus".as_bytes()),
         ]),
         RocList<RocStr>
-    );
+    )
 }
 
 #[test]
@@ -2294,5 +2294,64 @@ fn list_join_map_empty() {
         ),
         RocList::from_slice(&[]),
         RocList<RocStr>
+    )
+}
+
+#[test]
+fn list_find() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when List.find ["a", "bc", "def"] (\s -> Str.countGraphemes s > 1) is
+                Ok v -> v
+                Err _ -> "not found"
+            "#
+        ),
+        RocStr::from_slice(b"bc"),
+        RocStr
+    );
+}
+
+#[test]
+fn list_find_not_found() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when List.find ["a", "bc", "def"] (\s -> Str.countGraphemes s > 5) is
+                Ok v -> v
+                Err _ -> "not found"
+            "#
+        ),
+        RocStr::from_slice(b"not found"),
+        RocStr
+    );
+}
+
+#[test]
+fn list_find_empty_typed_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when List.find [] (\s -> Str.countGraphemes s > 5) is
+                Ok v -> v
+                Err _ -> "not found"
+            "#
+        ),
+        RocStr::from_slice(b"not found"),
+        RocStr
+    );
+}
+
+#[test]
+#[ignore = "Fails because monomorphization can't be done if we don't have a concrete element type!"]
+fn list_find_empty_layout() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.find [] (\_ -> True)
+            "#
+        ),
+        0,
+        i64
     );
 }
