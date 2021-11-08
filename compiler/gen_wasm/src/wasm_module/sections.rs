@@ -1,7 +1,9 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 
-use super::linking::{LinkingSection, RelocationEntry, RelocationSection};
+use super::linking::{
+    IndexRelocType, LinkingSection, RelocationEntry, RelocationSection, SymInfo, WasmObjectSymbol,
+};
 use super::opcodes;
 use super::serialize::{SerialBuffer, Serialize};
 use super::{CodeBuilder, ValueType};
@@ -115,7 +117,7 @@ impl<'a> TypeSection<'a> {
     }
 
     /// Find a matching signature or insert a new one. Return the index.
-    fn insert(&mut self, signature: Signature<'a>) -> u32 {
+    pub fn insert(&mut self, signature: Signature<'a>) -> u32 {
         // Using linear search because we need to preserve indices stored in
         // the Function section. (Also for practical sizes it's fast)
         let maybe_index = self.signatures.iter().position(|s| *s == signature);
@@ -172,7 +174,7 @@ pub enum ImportDesc {
 
 #[derive(Debug)]
 pub struct Import {
-    pub module: String,
+    pub module: &'static str,
     pub name: String,
     pub description: ImportDesc,
 }
@@ -204,7 +206,7 @@ impl Serialize for Import {
 
 #[derive(Debug)]
 pub struct ImportSection<'a> {
-    entries: Vec<'a, Import>,
+    pub entries: Vec<'a, Import>,
 }
 
 impl<'a> ImportSection<'a> {
@@ -212,6 +214,13 @@ impl<'a> ImportSection<'a> {
         ImportSection {
             entries: bumpalo::vec![in arena],
         }
+    }
+
+    pub fn function_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|import| matches!(import.description, ImportDesc::Func { .. }))
+            .count()
     }
 }
 
@@ -424,14 +433,6 @@ pub struct ExportSection<'a> {
     pub entries: Vec<'a, Export>,
 }
 
-impl<'a> ExportSection<'a> {
-    pub fn new(arena: &'a Bump) -> Self {
-        ExportSection {
-            entries: bumpalo::vec![in arena],
-        }
-    }
-}
-
 impl<'a> Serialize for ExportSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         serialize_vector_section(buffer, SectionId::Export, &self.entries);
@@ -455,7 +456,7 @@ impl<'a> CodeSection<'a> {
         &self,
         buffer: &mut T,
         relocations: &mut Vec<'a, RelocationEntry>,
-    ) {
+    ) -> usize {
         let header_indices = write_section_header(buffer, SectionId::Code);
         buffer.encode_u32(self.code_builders.len() as u32);
 
@@ -463,7 +464,9 @@ impl<'a> CodeSection<'a> {
             code_builder.serialize_with_relocs(buffer, relocations, header_indices.body_index);
         }
 
+        let code_section_body_index = header_indices.body_index;
         update_section_size(buffer, header_indices);
+        code_section_body_index
     }
 }
 
@@ -624,8 +627,10 @@ impl<'a> WasmModule<'a> {
         self.function.signature_indices.push(index);
     }
 
+    /// Serialize the module to bytes
+    /// (Mutates some data related to linking)
     #[allow(clippy::unit_arg)]
-    pub fn serialize<T: SerialBuffer>(&mut self, buffer: &mut T) {
+    pub fn serialize_mut<T: SerialBuffer>(&mut self, buffer: &mut T) {
         buffer.append_u8(0);
         buffer.append_slice("asm".as_bytes());
         buffer.write_unencoded_u32(Self::WASM_VERSION);
@@ -635,6 +640,13 @@ impl<'a> WasmModule<'a> {
             buffer_size: buffer.size(),
             section_index: 0,
         };
+
+        // If we have imports, then references to other functions need to be re-indexed.
+        // Modify exports before serializing them, since we don't have linker data for them
+        let n_imported_fns = self.import.function_count() as u32;
+        if n_imported_fns > 0 {
+            self.finalize_exported_fn_indices(n_imported_fns);
+        }
 
         counter.serialize_and_count(buffer, &self.types);
         counter.serialize_and_count(buffer, &self.import);
@@ -653,8 +665,15 @@ impl<'a> WasmModule<'a> {
 
         // Code section is the only one with relocations so we can stop counting
         let code_section_index = counter.section_index;
-        self.code
+        let code_section_body_index = self
+            .code
             .serialize_with_relocs(buffer, &mut self.relocations.entries);
+
+        // If we have imports, references to other functions need to be re-indexed.
+        // Simplest to do after serialization, using linker data
+        if n_imported_fns > 0 {
+            self.finalize_code_fn_indices(buffer, code_section_body_index, n_imported_fns);
+        }
 
         self.data.serialize(buffer);
 
@@ -662,5 +681,53 @@ impl<'a> WasmModule<'a> {
 
         self.relocations.target_section_index = Some(code_section_index);
         self.relocations.serialize(buffer);
+    }
+
+    /// Shift indices of exported functions to make room for imported functions,
+    /// which come first in the function index space.
+    /// Must be called after traversing the full IR, but before export section is serialized.
+    fn finalize_exported_fn_indices(&mut self, n_imported_fns: u32) {
+        for export in self.export.entries.iter_mut() {
+            if export.ty == ExportType::Func {
+                export.index += n_imported_fns;
+            }
+        }
+    }
+
+    /// Re-index internally-defined functions to make room for imported functions.
+    /// We do this after serialization, when all buffers in all CodeBuilders have been combined.
+    /// That makes the code simpler and avoids spreading it across multiple impl's and files.
+    fn finalize_code_fn_indices<T: SerialBuffer>(
+        &mut self,
+        buffer: &mut T,
+        code_section_body_index: usize,
+        n_imported_fns: u32,
+    ) {
+        // Modify symbol table entries
+        let symbol_table = self.linking.symbol_table_mut();
+        let mut target_symbol_indices = std::vec::Vec::with_capacity(symbol_table.len());
+        for (i, sym_info) in symbol_table.iter_mut().enumerate() {
+            if let SymInfo::Function(WasmObjectSymbol::Defined { index, .. }) = sym_info {
+                target_symbol_indices.push(i as u32);
+                *index += n_imported_fns;
+            }
+        }
+
+        // Modify call instructions, using linker data
+        for reloc in &self.relocations.entries {
+            if let RelocationEntry::Index {
+                type_id: IndexRelocType::FunctionIndexLeb,
+                offset,
+                symbol_index,
+            } = reloc
+            {
+                if target_symbol_indices.contains(symbol_index) {
+                    let orig_fn_index = *symbol_index; // trick: we know these were the first symbols we created
+                    let new_fn_index = orig_fn_index + n_imported_fns;
+                    let buffer_index = code_section_body_index + (*offset as usize);
+                    buffer.overwrite_padded_u32(buffer_index, new_fn_index);
+                }
+            }
+        }
     }
 }

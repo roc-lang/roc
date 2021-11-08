@@ -470,6 +470,18 @@ impl<'a> LinkingSection<'a> {
             subsections: Vec::with_capacity_in(1, arena),
         }
     }
+
+    pub fn symbol_table_mut(&mut self) -> &mut Vec<'a, SymInfo> {
+        for sub in self.subsections.iter_mut() {
+            match sub {
+                LinkingSubSection::SymbolTable(syminfos) => {
+                    return syminfos;
+                }
+                _ => {}
+            }
+        }
+        panic!("Symbol table not found");
+    }
 }
 
 impl<'a> Serialize for LinkingSection<'a> {

@@ -1,6 +1,7 @@
 use bumpalo::{self, collections::Vec};
 
 use code_builder::Align;
+use roc_builtins::bitcode::{self, FloatWidth};
 use roc_collections::all::MutMap;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
@@ -9,10 +10,12 @@ use roc_mono::layout::{Layout, LayoutIds};
 
 use crate::layout::WasmLayout;
 use crate::storage::{Storage, StoredValue, StoredValueKind};
-use crate::wasm_module::linking::{DataSymbol, LinkingSection, RelocationSection};
+use crate::wasm_module::linking::{
+    DataSymbol, LinkingSection, RelocationSection, WasmObjectSymbol, WASM_SYM_UNDEFINED,
+};
 use crate::wasm_module::sections::{
     CodeSection, DataMode, DataSection, DataSegment, ExportSection, FunctionSection, GlobalSection,
-    ImportSection, MemorySection, TypeSection, WasmModule,
+    Import, ImportDesc, ImportSection, MemorySection, TypeSection, WasmModule,
 };
 use crate::wasm_module::{
     code_builder, BlockType, CodeBuilder, ConstExpr, Export, ExportType, Global, GlobalType,
@@ -28,6 +31,8 @@ const CONST_SEGMENT_BASE_ADDR: u32 = 1024;
 /// Index of the data segment where we store constants
 const CONST_SEGMENT_INDEX: usize = 0;
 
+const IMPORT_MODULE_BUILTINS: &'static str = "builtins";
+
 pub struct WasmBackend<'a> {
     env: &'a Env<'a>,
 
@@ -35,6 +40,7 @@ pub struct WasmBackend<'a> {
     pub module: WasmModule<'a>,
     layout_ids: LayoutIds<'a>,
     constant_sym_index_map: MutMap<&'a str, usize>,
+    builtin_sym_index_map: MutMap<&'a str, usize>,
     proc_symbols: Vec<'a, Symbol>,
     pub linker_symbols: Vec<'a, SymInfo>,
 
@@ -52,7 +58,7 @@ impl<'a> WasmBackend<'a> {
         env: &'a Env<'a>,
         layout_ids: LayoutIds<'a>,
         proc_symbols: Vec<'a, Symbol>,
-        linker_symbols: Vec<'a, SymInfo>,
+        mut linker_symbols: Vec<'a, SymInfo>,
         mut exports: Vec<'a, Export>,
     ) -> Self {
         const MEMORY_INIT_SIZE: u32 = 1024 * 1024;
@@ -60,7 +66,7 @@ impl<'a> WasmBackend<'a> {
         let num_procs = proc_symbols.len();
 
         exports.push(Export {
-            name: "memory".to_string(),
+            name: "__linear_memory".to_string(),
             ty: ExportType::Mem,
             index: 0,
         });
@@ -72,6 +78,11 @@ impl<'a> WasmBackend<'a> {
             },
             init: ConstExpr::I32(MEMORY_INIT_SIZE as i32),
         };
+        linker_symbols.push(SymInfo::Global(WasmObjectSymbol::Defined {
+            flags: 0,
+            index: 0,
+            name: "__stack_pointer".to_string(),
+        }));
 
         let const_segment = DataSegment {
             mode: DataMode::Active {
@@ -110,6 +121,7 @@ impl<'a> WasmBackend<'a> {
 
             layout_ids,
             constant_sym_index_map: MutMap::default(),
+            builtin_sym_index_map: MutMap::default(),
             proc_symbols,
             linker_symbols,
 
@@ -652,29 +664,24 @@ impl<'a> WasmBackend<'a> {
     ) -> Result<(), String> {
         self.storage.load_symbols(&mut self.code_builder, args);
         let wasm_layout = WasmLayout::new(return_layout);
-        let return_value_type = wasm_layout.value_type();
+        let ret_type = wasm_layout.value_type();
 
-        let panic_ret_type = || {
-            panic!(
-                "Invalid return type for {:?}: {:?}",
-                lowlevel, return_value_type
-            )
-        };
+        let panic_ret_type = || panic!("Invalid return type for {:?}: {:?}", lowlevel, ret_type);
 
         match lowlevel {
-            LowLevel::NumAdd => match return_value_type {
+            LowLevel::NumAdd => match ret_type {
                 ValueType::I32 => self.code_builder.i32_add(),
                 ValueType::I64 => self.code_builder.i64_add(),
                 ValueType::F32 => self.code_builder.f32_add(),
                 ValueType::F64 => self.code_builder.f64_add(),
             },
-            LowLevel::NumSub => match return_value_type {
+            LowLevel::NumSub => match ret_type {
                 ValueType::I32 => self.code_builder.i32_sub(),
                 ValueType::I64 => self.code_builder.i64_sub(),
                 ValueType::F32 => self.code_builder.f32_sub(),
                 ValueType::F64 => self.code_builder.f64_sub(),
             },
-            LowLevel::NumMul => match return_value_type {
+            LowLevel::NumMul => match ret_type {
                 ValueType::I32 => self.code_builder.i32_mul(),
                 ValueType::I64 => self.code_builder.i64_mul(),
                 ValueType::F32 => self.code_builder.f32_mul(),
@@ -692,7 +699,7 @@ impl<'a> WasmBackend<'a> {
                 ValueType::F32 => self.code_builder.f32_eq(),
                 ValueType::F64 => self.code_builder.f64_eq(),
             },
-            LowLevel::NumNeg => match return_value_type {
+            LowLevel::NumNeg => match ret_type {
                 ValueType::I32 => {
                     self.code_builder.i32_const(-1);
                     self.code_builder.i32_mul();
@@ -704,6 +711,14 @@ impl<'a> WasmBackend<'a> {
                 ValueType::F32 => self.code_builder.f32_neg(),
                 ValueType::F64 => self.code_builder.f64_neg(),
             },
+            LowLevel::NumAtan => {
+                let name = match ret_type {
+                    ValueType::F32 => &bitcode::NUM_ATAN[FloatWidth::F32],
+                    ValueType::F64 => &bitcode::NUM_ATAN[FloatWidth::F64],
+                    _ => panic_ret_type(),
+                };
+                self.call_imported_builtin(name, &[ret_type], Some(ret_type));
+            }
             _ => {
                 return Err(format!("unsupported low-level op {:?}", lowlevel));
             }
@@ -718,5 +733,53 @@ impl<'a> WasmBackend<'a> {
             debug_assert!(self.storage.get(arg).value_type() == value_type);
         }
         value_type
+    }
+
+    fn call_imported_builtin(
+        &mut self,
+        name: &'a str,
+        arg_types: &[ValueType],
+        ret_type: Option<ValueType>,
+    ) {
+        let (fn_index, linker_symbol_index) = match self.builtin_sym_index_map.get(name) {
+            Some(sym_idx) => match &self.linker_symbols[*sym_idx] {
+                SymInfo::Function(WasmObjectSymbol::Imported { index, .. }) => {
+                    (*index, *sym_idx as u32)
+                }
+                x => unreachable!("Invalid linker symbol for builtin {}: {:?}", name, x),
+            },
+
+            None => {
+                let mut param_types = Vec::with_capacity_in(arg_types.len(), self.env.arena);
+                param_types.extend_from_slice(arg_types);
+                let signature_index = self.module.types.insert(Signature {
+                    param_types,
+                    ret_type,
+                });
+
+                let import_index = self.module.import.entries.len() as u32;
+                let import = Import {
+                    module: IMPORT_MODULE_BUILTINS,
+                    name: name.to_string(),
+                    description: ImportDesc::Func { signature_index },
+                };
+                self.module.import.entries.push(import);
+
+                let sym_idx = self.linker_symbols.len() as u32;
+                let sym_info = SymInfo::Function(WasmObjectSymbol::Imported {
+                    flags: WASM_SYM_UNDEFINED,
+                    index: import_index,
+                });
+                self.linker_symbols.push(sym_info);
+
+                (import_index, sym_idx)
+            }
+        };
+        self.code_builder.call(
+            fn_index,
+            linker_symbol_index,
+            arg_types.len(),
+            ret_type.is_some(),
+        );
     }
 }
