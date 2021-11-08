@@ -652,20 +652,15 @@ impl<'a> WasmBackend<'a> {
     ) -> Result<(), String> {
         self.storage.load_symbols(&mut self.code_builder, args);
         let wasm_layout = WasmLayout::new(return_layout);
-        self.build_instructions_lowlevel(lowlevel, wasm_layout.value_type())?;
-        Ok(())
-    }
+        let return_value_type = wasm_layout.value_type();
 
-    fn build_instructions_lowlevel(
-        &mut self,
-        lowlevel: &LowLevel,
-        return_value_type: ValueType,
-    ) -> Result<(), String> {
-        // TODO:  Find a way to organise all the lowlevel ops and layouts! There's lots!
-        //
-        // Some Roc low-level ops care about wrapping, clipping, sign-extending...
-        // For those, we'll need to pre-process each argument before the main op,
-        // so simple arrays of instructions won't work. But there are common patterns.
+        let panic_ret_type = || {
+            panic!(
+                "Invalid return type for {:?}: {:?}",
+                lowlevel, return_value_type
+            )
+        };
+
         match lowlevel {
             LowLevel::NumAdd => match return_value_type {
                 ValueType::I32 => self.code_builder.i32_add(),
@@ -685,14 +680,43 @@ impl<'a> WasmBackend<'a> {
                 ValueType::F32 => self.code_builder.f32_mul(),
                 ValueType::F64 => self.code_builder.f64_mul(),
             },
-            LowLevel::NumGt => {
-                // needs layout of the argument to be implemented fully
-                self.code_builder.i32_gt_s()
-            }
+            LowLevel::NumGt => match self.get_uniform_arg_type(args) {
+                ValueType::I32 => self.code_builder.i32_gt_s(),
+                ValueType::I64 => self.code_builder.i64_gt_s(),
+                ValueType::F32 => self.code_builder.f32_gt(),
+                ValueType::F64 => self.code_builder.f64_gt(),
+            },
+            LowLevel::Eq => match self.get_uniform_arg_type(args) {
+                ValueType::I32 => self.code_builder.i32_eq(),
+                ValueType::I64 => self.code_builder.i64_eq(),
+                ValueType::F32 => self.code_builder.f32_eq(),
+                ValueType::F64 => self.code_builder.f64_eq(),
+            },
+            LowLevel::NumNeg => match return_value_type {
+                ValueType::I32 => {
+                    self.code_builder.i32_const(-1);
+                    self.code_builder.i32_mul();
+                }
+                ValueType::I64 => {
+                    self.code_builder.i64_const(-1);
+                    self.code_builder.i64_mul();
+                }
+                ValueType::F32 => self.code_builder.f32_neg(),
+                ValueType::F64 => self.code_builder.f64_neg(),
+            },
             _ => {
                 return Err(format!("unsupported low-level op {:?}", lowlevel));
             }
         };
         Ok(())
+    }
+
+    /// Get the ValueType for a set of arguments that are required to have the same type
+    fn get_uniform_arg_type(&self, args: &'a [Symbol]) -> ValueType {
+        let value_type = self.storage.get(&args[0]).value_type();
+        for arg in args.iter().skip(1) {
+            debug_assert!(self.storage.get(arg).value_type() == value_type);
+        }
+        value_type
     }
 }

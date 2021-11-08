@@ -338,28 +338,28 @@ fn i64_force_stack() {
 //     assert_evals_to!("Num.abs -9_000_000_000_000", 9_000_000_000_000, i64);
 // }
 
-// #[test]
-// fn gen_int_eq() {
-//     assert_evals_to!(
-//         indoc!(
-//             r#"
-//                 4 == 4
-//             "#
-//         ),
-//         true,
-//         bool
-//     );
+#[test]
+fn gen_int_eq() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                4 == 4
+            "#
+        ),
+        true,
+        bool
+    );
 
-//     assert_evals_to!(
-//         indoc!(
-//             r#"
-//                 3 == 4
-//             "#
-//         ),
-//         false,
-//         bool
-//     );
-// }
+    assert_evals_to!(
+        indoc!(
+            r#"
+                3 == 4
+            "#
+        ),
+        false,
+        bool
+    );
+}
 
 #[test]
 fn gen_basic_fn() {
@@ -502,18 +502,18 @@ fn gen_wrap_add_nums_force_stack() {
 //     );
 // }
 
-// #[test]
-// fn gen_float_eq() {
-//     assert_evals_to!(
-//         indoc!(
-//             r#"
-//                 1.0 == 1.0
-//             "#
-//         ),
-//         true,
-//         bool
-//     );
-// }
+#[test]
+fn gen_float_eq() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                1.0 == 1.0
+            "#
+        ),
+        true,
+        bool
+    );
+}
 
 // #[test]
 // fn gen_div_f64() {
@@ -722,13 +722,13 @@ fn gen_sub_f64() {
 //     assert_evals_to!("0 <= 0", true, bool);
 // }
 
-// #[test]
-// fn gt_i64() {
-//     assert_evals_to!("2 > 1", true, bool);
-//     assert_evals_to!("2 > 2", false, bool);
-//     assert_evals_to!("1 > 1", false, bool);
-//     assert_evals_to!("0 > 0", false, bool);
-// }
+#[test]
+fn gt_i64() {
+    assert_evals_to!("2 > 1", true, bool);
+    assert_evals_to!("2 > 2", false, bool);
+    assert_evals_to!("1 > 1", false, bool);
+    assert_evals_to!("0 > 0", false, bool);
+}
 
 // #[test]
 // fn gte_i64() {
@@ -754,13 +754,13 @@ fn gen_sub_f64() {
 //     assert_evals_to!("0.0 <= 0.0", true, bool);
 // }
 
-// #[test]
-// fn gt_f64() {
-//     assert_evals_to!("2.2 > 1.1", true, bool);
-//     assert_evals_to!("2.2 > 2.2", false, bool);
-//     assert_evals_to!("1.1 > 2.2", false, bool);
-//     assert_evals_to!("0.0 > 0.0", false, bool);
-// }
+#[test]
+fn gt_f64() {
+    assert_evals_to!("2.2 > 1.1", true, bool);
+    assert_evals_to!("2.2 > 2.2", false, bool);
+    assert_evals_to!("1.1 > 2.2", false, bool);
+    assert_evals_to!("0.0 > 0.0", false, bool);
+}
 
 // #[test]
 // fn gte_f64() {
@@ -832,43 +832,43 @@ fn gen_order_of_arithmetic_ops_complex_float() {
 //     );
 // }
 
-// #[test]
-// fn tail_call_elimination() {
-//     assert_evals_to!(
-//         indoc!(
-//             r#"
-//                 sum = \n, accum ->
-//                     when n is
-//                         0 -> accum
-//                         _ -> sum (n - 1) (n + accum)
+#[test]
+fn tail_call_elimination() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                sum = \n, accum ->
+                    when n is
+                        0 -> accum
+                        _ -> sum (n - 1) (n + accum)
 
-//                 sum 1_000_000 0
-//             "#
-//         ),
-//         500000500000,
-//         i64
-//     );
-// }
+                sum 1_000_000 0
+            "#
+        ),
+        500000500000,
+        i64
+    );
+}
 
-// #[test]
-// fn int_negate() {
-//     assert_evals_to!("Num.neg 123", -123, i64);
-// }
+#[test]
+fn int_negate() {
+    assert_evals_to!("Num.neg 123", -123, i64);
+}
 
-// #[test]
-// fn gen_wrap_int_neg() {
-//     assert_evals_to!(
-//         indoc!(
-//             r#"
-//                 wrappedNeg = \num -> -num
+#[test]
+fn gen_wrap_int_neg() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                wrappedNeg = \num -> -num
 
-//                 wrappedNeg 3
-//             "#
-//         ),
-//         -3,
-//         i64
-//     );
-// }
+                wrappedNeg 3
+            "#
+        ),
+        -3,
+        i64
+    );
+}
 
 // #[test]
 // fn int_to_float() {
