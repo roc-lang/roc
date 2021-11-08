@@ -4,8 +4,11 @@ version = "0.1.0"
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[[test]]
+name = "test_wasm"
+path = "src/tests.rs"
 
-[dependencies]
+[dev-dependencies]
 # roc_module = { path = "../module" }
 # roc_mono = { path = "../mono" }
 
@@ -21,6 +24,7 @@ roc_builtins = { path = "../builtins" }
 roc_load = { path = "../load" }
 roc_types = { path = "../types" }
 roc_module = { path = "../module" }
+test_wasm_util = { path = "../test_wasm_util" }
 indoc = "1.0.3"
 libc = "0.2.106"
 target-lexicon = "0.12.2"

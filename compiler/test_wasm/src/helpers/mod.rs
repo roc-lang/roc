@@ -1,6 +1,5 @@
 #[macro_use]
 pub mod eval;
-pub mod from_wasm32_memory;
 pub mod wasm32_test_result;
 
 /// Used in the with_larger_debug_stack() function, for tests that otherwise

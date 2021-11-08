@@ -18,4 +18,3 @@ roc_can = { path = "../can" }
 roc_builtins = { path = "../builtins" }
 roc_types = { path = "../types" }
 roc_module = { path = "../module" }
-target-lexicon = "0.12.2"

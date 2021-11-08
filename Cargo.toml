@@ -15,7 +15,6 @@ members = [
     "compiler/reporting",
     "compiler/fmt",
     "compiler/mono",
-    "compiler/test_mono_macros",
     "compiler/test_mono",
     "compiler/load",
     "compiler/gen_llvm",
@@ -33,14 +32,20 @@ members = [
     "editor",
     "ast",
     "cli",
-    "cli/cli_utils",
     "code_markup",
     "roc_std",
     "utils",
     "docs",
     "linker",
 ]
-exclude = [ "ci/bench-runner" ]
+exclude = [
+    "ci/bench-runner",
+    # Ignore building these normally. They are only imported by tests.
+    # The tests will still correctly build them.
+    "cli_utils",
+    "compiler/test_mono_macros",
+    "compiler/test_wasm_util",
+]
 # Needed to be able to run `cargo run -p roc_cli --no-default-features` -
 # see www/build.sh for more.
 #

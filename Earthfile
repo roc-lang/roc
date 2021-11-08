@@ -47,7 +47,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
 
 copy-dirs:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
-    COPY --dir cli compiler docs editor ast code_markup utils roc_std vendor examples linker Cargo.toml Cargo.lock version.txt ./
+    COPY --dir cli cli_utils compiler docs editor ast code_markup utils roc_std vendor examples linker Cargo.toml Cargo.lock version.txt ./
 
 test-zig:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
@@ -67,7 +67,7 @@ check-rustfmt:
 
 check-typos:
     RUN cargo install typos-cli --version 1.0.11 # version set to prevent confusion if the version is updated automatically
-    COPY --dir .github ci cli compiler docs editor examples ast code_markup utils linker nightly_benches packages roc_std www *.md LEGAL_DETAILS shell.nix version.txt ./
+    COPY --dir .github ci cli cli_utils compiler docs editor examples ast code_markup utils linker nightly_benches packages roc_std www *.md LEGAL_DETAILS shell.nix version.txt ./
     RUN typos
 
 test-rust:
