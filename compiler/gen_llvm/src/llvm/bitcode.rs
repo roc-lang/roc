@@ -1,7 +1,7 @@
 /// Helpers for interacting with the zig that generates bitcode
 use crate::debug_info_init;
 use crate::llvm::build::{struct_from_fields, Env, C_CALL_CONV, FAST_CALL_CONV, TAG_DATA_INDEX};
-use crate::llvm::convert::{basic_type_from_layout, basic_type_from_layout_1};
+use crate::llvm::convert::basic_type_from_layout;
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_n_refcount_layout, increment_refcount_layout,
 };

@@ -1,8 +1,8 @@
 use crate::debug_info_init;
 use crate::llvm::bitcode::call_void_bitcode_fn;
 use crate::llvm::build::{
-    add_func, cast_basic_basic, get_tag_id, tag_pointer_clear_tag_id, Env, FAST_CALL_CONV,
-    TAG_DATA_INDEX, TAG_ID_INDEX,
+    add_func, cast_basic_basic, get_tag_id, tag_pointer_clear_tag_id, use_roc_value, Env,
+    FAST_CALL_CONV, TAG_DATA_INDEX, TAG_ID_INDEX,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
 use crate::llvm::convert::{basic_type_from_layout, basic_type_from_layout_1, ptr_int};
@@ -354,17 +354,12 @@ fn modify_refcount_struct_help<'a, 'ctx, 'env>(
                 .build_extract_value(wrapper_struct, i as u32, "decrement_struct_field")
                 .unwrap();
 
-            let field_value = if field_layout.is_passed_by_reference() {
-                let field_type = basic_type_from_layout(env, field_layout);
-                let alloca = env
-                    .builder
-                    .build_alloca(field_type, "load_struct_tag_field_for_decrement");
-                env.builder.build_store(alloca, raw_value);
-
-                alloca.into()
-            } else {
-                raw_value
-            };
+            let field_value = use_roc_value(
+                env,
+                *field_layout,
+                raw_value,
+                "load_struct_tag_field_for_decrement",
+            );
 
             modify_refcount_layout_help(
                 env,

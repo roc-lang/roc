@@ -2,7 +2,7 @@ use crate::debug_info_init;
 use crate::llvm::bitcode::call_bitcode_fn;
 use crate::llvm::build::tag_pointer_clear_tag_id;
 use crate::llvm::build::Env;
-use crate::llvm::build::{cast_block_of_memory_to_tag, get_tag_id, FAST_CALL_CONV, TAG_DATA_INDEX};
+use crate::llvm::build::{get_tag_id, FAST_CALL_CONV, TAG_DATA_INDEX};
 use crate::llvm::build_str;
 use crate::llvm::convert::{basic_type_from_layout, basic_type_from_layout_1};
 use bumpalo::collections::Vec;

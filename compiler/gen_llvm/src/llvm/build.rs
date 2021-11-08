@@ -1194,17 +1194,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         .unwrap();
 
                     let field_layout = fields[*index as usize];
-                    if field_layout.is_passed_by_reference() {
-                        let alloca = env.builder.build_alloca(
-                            basic_type_from_layout(env, &field_layout),
-                            "struct_field_tag",
-                        );
-                        env.builder.build_store(alloca, field_value);
-
-                        alloca.into()
-                    } else {
-                        field_value
-                    }
+                    use_roc_value(env, field_layout, field_value, "struct_field_tag")
                 }
                 (
                     PointerValue(argument),
@@ -1253,8 +1243,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             index,
             union_layout,
         } => {
-            let builder = env.builder;
-
             // cast the argument bytes into the desired shape for this tag
             let (argument, _structure_layout) = load_symbol_and_layout(scope, structure);
 
@@ -2399,6 +2387,23 @@ pub fn load_roc_value<'a, 'ctx, 'env>(
     }
 }
 
+pub fn use_roc_value<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout: Layout<'a>,
+    source: BasicValueEnum<'ctx>,
+    name: &str,
+) -> BasicValueEnum<'ctx> {
+    if layout.is_passed_by_reference() {
+        let alloca = tag_alloca(env, basic_type_from_layout(env, &layout), name);
+
+        env.builder.build_store(alloca, source);
+
+        alloca.into()
+    } else {
+        source
+    }
+}
+
 pub fn store_roc_value_opaque<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout: Layout<'a>,
@@ -2526,7 +2531,23 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                         if align_bytes > 0 {
                             let value_ptr = value.into_pointer_value();
 
-                            value_ptr.replace_all_uses_with(destination);
+                            if true {
+                                value_ptr.replace_all_uses_with(destination);
+                            } else {
+                                let size = env
+                                    .ptr_int()
+                                    .const_int(layout.stack_size(env.ptr_bytes) as u64, false);
+
+                                env.builder
+                                    .build_memcpy(
+                                        destination,
+                                        align_bytes,
+                                        value.into_pointer_value(),
+                                        align_bytes,
+                                        size,
+                                    )
+                                    .unwrap();
+                            }
                         }
                     } else {
                         env.builder.build_store(destination, value);
@@ -2792,20 +2813,6 @@ pub fn load_symbol_and_lambda_set<'a, 'ctx, 'b>(
         Some((other, ptr)) => panic!("Not a lambda set: {:?}, {:?}", other, ptr),
         None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
     }
-}
-
-fn access_index_struct_value<'ctx>(
-    builder: &Builder<'ctx>,
-    from_value: StructValue<'ctx>,
-    to_type: StructType<'ctx>,
-) -> StructValue<'ctx> {
-    complex_bitcast(
-        builder,
-        from_value.into(),
-        to_type.into(),
-        "access_index_struct_value",
-    )
-    .into_struct_value()
 }
 
 /// Cast a value to another value of the same (or smaller?) size
@@ -4660,6 +4667,7 @@ pub struct RocFunctionCall<'ctx> {
     pub data_is_owned: IntValue<'ctx>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn roc_function_call<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,

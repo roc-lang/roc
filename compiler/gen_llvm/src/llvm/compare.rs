@@ -884,8 +884,15 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 let block = env.context.append_basic_block(parent, "tag_id_modify");
                 env.builder.position_at_end(block);
 
-                let answer =
-                    eq_ptr_to_struct(env, layout_ids, union_layout, field_layouts, tag1, tag2);
+                let answer = eq_ptr_to_struct(
+                    env,
+                    layout_ids,
+                    union_layout,
+                    Some(when_recursive.clone()),
+                    field_layouts,
+                    tag1,
+                    tag2,
+                );
 
                 env.builder.build_return(Some(&answer));
 
@@ -941,8 +948,15 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 let block = env.context.append_basic_block(parent, "tag_id_modify");
                 env.builder.position_at_end(block);
 
-                let answer =
-                    eq_ptr_to_struct(env, layout_ids, union_layout, field_layouts, tag1, tag2);
+                let answer = eq_ptr_to_struct(
+                    env,
+                    layout_ids,
+                    union_layout,
+                    None,
+                    field_layouts,
+                    tag1,
+                    tag2,
+                );
 
                 env.builder.build_return(Some(&answer));
 
@@ -998,6 +1012,7 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 env,
                 layout_ids,
                 union_layout,
+                None,
                 other_fields,
                 tag1.into_pointer_value(),
                 tag2.into_pointer_value(),
@@ -1088,8 +1103,15 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 let block = env.context.append_basic_block(parent, "tag_id_modify");
                 env.builder.position_at_end(block);
 
-                let answer =
-                    eq_ptr_to_struct(env, layout_ids, union_layout, field_layouts, tag1, tag2);
+                let answer = eq_ptr_to_struct(
+                    env,
+                    layout_ids,
+                    union_layout,
+                    None,
+                    field_layouts,
+                    tag1,
+                    tag2,
+                );
 
                 env.builder.build_return(Some(&answer));
 
@@ -1123,6 +1145,7 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 env,
                 layout_ids,
                 union_layout,
+                None,
                 field_layouts,
                 tag1.into_pointer_value(),
                 tag2.into_pointer_value(),
@@ -1137,6 +1160,7 @@ fn eq_ptr_to_struct<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     union_layout: &UnionLayout<'a>,
+    opt_when_recursive: Option<WhenRecursive<'a>>,
     field_layouts: &'a [Layout<'a>],
     tag1: PointerValue<'ctx>,
     tag2: PointerValue<'ctx>,
@@ -1179,7 +1203,7 @@ fn eq_ptr_to_struct<'a, 'ctx, 'env>(
         env,
         layout_ids,
         field_layouts,
-        WhenRecursive::Loop(*union_layout),
+        opt_when_recursive.unwrap_or(WhenRecursive::Loop(*union_layout)),
         struct1,
         struct2,
     )

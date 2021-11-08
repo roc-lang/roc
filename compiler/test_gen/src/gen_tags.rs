@@ -3,7 +3,6 @@
 use crate::assert_evals_to;
 // use crate::assert_wasm_evals_to as assert_evals_to;
 use indoc::indoc;
-use roc_mono::layout::LambdaSet;
 use roc_std::{RocList, RocStr};
 
 #[test]

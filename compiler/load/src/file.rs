@@ -2152,7 +2152,7 @@ fn update<'a>(
                     println!("{}", result);
                 }
 
-                Proc::insert_refcount_operations(arena, &mut state.procedures);
+                // Proc::insert_refcount_operations(arena, &mut state.procedures);
 
                 // This is not safe with the new non-recursive RC updates that we do for tag unions
                 //
