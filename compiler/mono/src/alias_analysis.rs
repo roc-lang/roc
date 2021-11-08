@@ -1101,7 +1101,6 @@ fn call_spec(
                     // Since `bag_get` assumes items are picked non-deterministically, this is
                     // (probably?) enough to express that usage.
                     let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
-                    let cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
                     let element = builder.add_bag_get(block, bag)?;
                     let _bool = call_function!(builder, block, [element]);
 
