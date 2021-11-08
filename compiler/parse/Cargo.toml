@@ -5,11 +5,6 @@ authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2018"
 
-[features]
-# If enabled, parser accepts `Dict.#hashTestOnly` etc.
-# For development puporpse.
-keep_shadowed_builtins = []
-
 [dependencies]
 roc_collections = { path = "../collections" }
 roc_region = { path = "../region" }

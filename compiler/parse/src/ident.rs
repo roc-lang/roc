@@ -220,10 +220,6 @@ pub enum BadIdent {
     BadPrivateTag(Row, Col),
 }
 
-fn chomp_lowercase_part_keep_shadowed_builtins(buffer: &[u8]) -> Result<&str, Progress> {
-    chomp_part(|c: char| c.is_lowercase() || c == '#', buffer)
-}
-
 fn chomp_lowercase_part(buffer: &[u8]) -> Result<&str, Progress> {
     chomp_part(|c: char| c.is_lowercase(), buffer)
 }
@@ -503,24 +499,19 @@ fn chomp_access_chain<'a>(buffer: &'a [u8], parts: &mut Vec<'a, &'a str>) -> Res
 
     while let Some(b'.') = buffer.get(chomped) {
         match &buffer.get(chomped + 1..) {
-            Some(slice) => {
-                let res = match cfg!(feature = "keep_shadowed_builtins") {
-                    true => chomp_lowercase_part_keep_shadowed_builtins(slice),
-                    false => chomp_lowercase_part(slice),
-                };
-                match res {
-                    Ok(name) => {
-                        let value = unsafe {
-                            std::str::from_utf8_unchecked(
-                                &buffer[chomped + 1..chomped + 1 + name.len()],
-                            )
-                        };
-                        parts.push(value);
-                        chomped += name.len() + 1;
-                    }
-                    Err(_) => return Err(chomped as u16 + 1),
+            Some(slice) => match chomp_lowercase_part(slice) {
+                Ok(name) => {
+                    let value = unsafe {
+                        std::str::from_utf8_unchecked(
+                            &buffer[chomped + 1..chomped + 1 + name.len()],
+                        )
+                    };
+                    parts.push(value);
+
+                    chomped += name.len() + 1;
                 }
-            }
+                Err(_) => return Err(chomped as u16 + 1),
+            },
             None => return Err(chomped as u16 + 1),
         }
     }

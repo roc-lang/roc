@@ -24,7 +24,7 @@ roc_mono = { path = "../mono" }
 roc_reporting = { path = "../reporting" }
 roc_load = { path = "../load" }
 roc_can = { path = "../can" }
-roc_parse = { path = "../parse" , features = []}
+roc_parse = { path = "../parse" }
 roc_build = { path = "../build" }
 roc_std = { path = "../../roc_std" }
 test_wasm_util = { path = "../test_wasm_util" }
@@ -40,7 +40,6 @@ wasmer = { version = "2.0.0", default-features = false, features = ["default-cra
 wasmer-wasi = "2.0.0"
 tempfile = "3.2.0"
 indoc = "1.0.3"
-roc_parse = { path = "../parse" , features = ["keep_shadowed_builtins"]}
 
 [features]
 default = []
