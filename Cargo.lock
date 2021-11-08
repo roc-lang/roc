@@ -3402,13 +3402,10 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "roc_builtins",
- "roc_can",
  "roc_collections",
  "roc_module",
  "roc_mono",
  "roc_std",
- "roc_types",
- "target-lexicon",
 ]
 
 [[package]]
