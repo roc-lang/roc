@@ -3408,7 +3408,6 @@ dependencies = [
  "roc_mono",
  "roc_std",
  "roc_types",
- "target-lexicon",
 ]
 
 [[package]]
