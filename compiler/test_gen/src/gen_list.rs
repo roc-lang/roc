@@ -2161,6 +2161,25 @@ fn list_sort_with() {
 }
 
 #[test]
+fn list_any() {
+    assert_evals_to!("List.any [] (\\e -> e > 3)", false, bool);
+    assert_evals_to!("List.any [ 1, 2, 3 ] (\\e -> e > 3)", false, bool);
+    assert_evals_to!("List.any [ 1, 2, 4 ] (\\e -> e > 3)", true, bool);
+}
+
+#[test]
+#[ignore]
+fn list_any_empty_with_unknown_element_type() {
+    // Segfaults with invalid memory reference. Running this as a stand-alone
+    // Roc program, generates the following error message:
+    //
+    //     Application crashed with message
+    //     UnresolvedTypeVar compiler/mono/src/ir.rs line 3775
+    //     Shutting down
+    assert_evals_to!("List.any [] (\\_ -> True)", false, bool);
+}
+
+#[test]
 #[should_panic(expected = r#"Roc failed with message: "invalid ret_layout""#)]
 fn lists_with_incompatible_type_param_in_if() {
     assert_evals_to!(
@@ -2219,5 +2238,37 @@ fn empty_list_of_function_type() {
         ),
         RocStr::from_slice(b"bar"),
         RocStr
+    );
+}
+
+#[test]
+fn list_join_map() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.joinMap ["guava,apple,pear", "bailey,cyrus"] (\s -> Str.split s ",")
+            "#
+        ),
+        RocList::from_slice(&[
+            RocStr::from_slice("guava".as_bytes()),
+            RocStr::from_slice("apple".as_bytes()),
+            RocStr::from_slice("pear".as_bytes()),
+            RocStr::from_slice("bailey".as_bytes()),
+            RocStr::from_slice("cyrus".as_bytes()),
+        ]),
+        RocList<RocStr>
+    );
+}
+
+#[test]
+fn list_join_map_empty() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.joinMap [] (\s -> Str.split s ",")
+            "#
+        ),
+        RocList::from_slice(&[]),
+        RocList<RocStr>
     );
 }

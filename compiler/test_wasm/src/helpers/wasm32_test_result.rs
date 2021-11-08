@@ -1,11 +1,11 @@
 use bumpalo::collections::Vec;
 
-use roc_gen_wasm::from_wasm32_memory::FromWasm32Memory;
 use roc_gen_wasm::wasm_module::opcodes;
 use roc_gen_wasm::wasm_module::{
     Align, CodeBuilder, Export, ExportType, LocalId, Signature, ValueType, WasmModule,
 };
 use roc_std::{RocDec, RocList, RocOrder, RocStr};
+use test_wasm_util::from_wasm32_memory::FromWasm32Memory;
 
 pub trait Wasm32TestResult {
     fn insert_test_wrapper<'a>(

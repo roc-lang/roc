@@ -877,6 +877,19 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(list_type(int_type(flex(TVAR1)))),
     );
 
+    // joinMap : List before, (before -> List after) -> List after
+    {
+        let_tvars! { cvar, before, after }
+        add_top_level_function_type!(
+            Symbol::LIST_JOIN_MAP,
+            vec![
+                list_type(flex(before)),
+                closure(vec![flex(before)], cvar, Box::new(list_type(flex(after)))),
+            ],
+            Box::new(list_type(flex(after))),
+        );
+    }
+
     // map : List before, (before -> after) -> List after
     add_top_level_function_type!(
         Symbol::LIST_MAP,
@@ -1040,6 +1053,16 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Symbol::LIST_IS_EMPTY,
         vec![list_type(flex(TVAR1))],
         Box::new(bool_type())
+    );
+
+    // any: List elem, (elem -> Bool) -> Bool
+    add_top_level_function_type!(
+        Symbol::LIST_ANY,
+        vec![
+            list_type(flex(TVAR1)),
+            closure(vec![flex(TVAR1)], TVAR2, Box::new(bool_type())),
+        ],
+        Box::new(bool_type()),
     );
 
     // sortWith : List a, (a, a -> Ordering) -> List a

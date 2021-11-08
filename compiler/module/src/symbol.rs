@@ -1062,6 +1062,9 @@ define_builtins! {
         39 LIST_MAX_GT: "#maxGt"
         40 LIST_MAP4: "map4"
         41 LIST_DROP_FIRST: "dropFirst"
+        42 LIST_JOIN_MAP: "joinMap"
+        43 LIST_JOIN_MAP_CONCAT: "#joinMapConcat"
+        44 LIST_ANY: "any"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias
