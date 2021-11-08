@@ -1105,8 +1105,7 @@ fn call_spec(
                     let _bool = call_function!(builder, block, [element]);
 
                     // ListFindUnsafe returns { value: v, found: Bool=Int1 }
-                    let output_layouts =
-                        vec![arg_layouts[0].clone(), Layout::Builtin(Builtin::Int1)];
+                    let output_layouts = vec![arg_layouts[0], Layout::Builtin(Builtin::Int1)];
                     let output_layout = Layout::Struct(&output_layouts);
                     let output_type = layout_spec(builder, &output_layout)?;
 
