@@ -5166,6 +5166,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
+                        Layout::Builtin(Builtin::Int1),
                     );
 
                     list_any(env, roc_function_call, list, element_layout)
