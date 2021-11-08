@@ -297,6 +297,25 @@ pub fn list_swap<'a, 'ctx, 'env>(
     )
 }
 
+/// List.takeFirst : List elem, Nat -> List elem
+pub fn list_take_first<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    original_wrapper: StructValue<'ctx>,
+    count: IntValue<'ctx>,
+    element_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    call_bitcode_fn_returns_list(
+        env,
+        &[
+            pass_list_cc(env, original_wrapper.into()),
+            env.alignment_intvalue(element_layout),
+            layout_width(env, element_layout),
+            count.into(),
+        ],
+        bitcode::LIST_TAKE_FIRST,
+    )
+}
+
 /// List.drop : List elem, Nat -> List elem
 pub fn list_drop<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,

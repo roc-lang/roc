@@ -177,6 +177,7 @@ pub const LIST_CONTAINS: &str = "roc_builtins.list.contains";
 pub const LIST_REPEAT: &str = "roc_builtins.list.repeat";
 pub const LIST_APPEND: &str = "roc_builtins.list.append";
 pub const LIST_PREPEND: &str = "roc_builtins.list.prepend";
+pub const LIST_TAKE_FIRST: &str = "roc_builtins.list.take_first";
 pub const LIST_DROP: &str = "roc_builtins.list.drop";
 pub const LIST_DROP_AT: &str = "roc_builtins.list.drop_at";
 pub const LIST_SWAP: &str = "roc_builtins.list.swap";

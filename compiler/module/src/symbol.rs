@@ -1065,6 +1065,7 @@ define_builtins! {
         42 LIST_JOIN_MAP: "joinMap"
         43 LIST_JOIN_MAP_CONCAT: "#joinMapConcat"
         44 LIST_ANY: "any"
+        45 LIST_TAKE_FIRST: "takeFirst"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

@@ -42,6 +42,7 @@ pub enum LowLevel {
     ListKeepOks,
     ListKeepErrs,
     ListSortWith,
+    ListTakeFirst,
     ListDrop,
     ListDropAt,
     ListSwap,
@@ -131,6 +132,7 @@ macro_rules! first_order {
             | ListLen
             | ListGetUnsafe
             | ListSet
+            | ListTakeFirst
             | ListDrop
             | ListDropAt
             | ListSingle

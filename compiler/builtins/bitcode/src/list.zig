@@ -862,6 +862,32 @@ pub fn listSwap(
     return newList;
 }
 
+pub fn listTakeFirst(
+    list: RocList,
+    alignment: u32,
+    element_width: usize,
+    take_count: usize,
+) callconv(.C) RocList {
+    if (list.bytes) |source_ptr| {
+        if (take_count == 0) {
+            return RocList.empty();
+        }
+        const in_len = list.len();
+        const out_len = std.math.min(take_count, in_len);
+
+        const output = RocList.allocate(alignment, out_len, element_width);
+        const target_ptr = output.bytes orelse unreachable;
+
+        @memcpy(target_ptr, source_ptr, out_len * element_width);
+
+        utils.decref(list.bytes, in_len * element_width, alignment);
+
+        return output;
+    } else {
+        return RocList.empty();
+    }
+}
+
 pub fn listDrop(
     list: RocList,
     alignment: u32,
