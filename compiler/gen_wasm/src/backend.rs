@@ -92,7 +92,9 @@ impl<'a> WasmBackend<'a> {
             export: ExportSection { entries: exports },
             start: (),
             element: (),
-            code: CodeSection::new(arena),
+            code: CodeSection {
+                code_builders: Vec::with_capacity_in(num_procs, arena),
+            },
             data: DataSection {
                 segments: bumpalo::vec![in arena; const_segment],
             },

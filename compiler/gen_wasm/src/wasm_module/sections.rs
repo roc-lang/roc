@@ -436,12 +436,6 @@ pub struct CodeSection<'a> {
 }
 
 impl<'a> CodeSection<'a> {
-    pub fn new(arena: &'a Bump) -> Self {
-        CodeSection {
-            code_builders: Vec::with_capacity_in(8, arena),
-        }
-    }
-
     /// Serialize the code builders for all functions, and get code relocations with final offsets
     pub fn serialize_with_relocs<T: SerialBuffer>(
         &self,
