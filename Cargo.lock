@@ -4125,7 +4125,7 @@ dependencies = [
  "roc_unify",
  "target-lexicon",
  "tempfile",
- "test_wasm",
+ "test_wasm_util",
  "wasmer",
  "wasmer-wasi",
 ]
@@ -4171,8 +4171,17 @@ dependencies = [
  "roc_std",
  "roc_types",
  "target-lexicon",
+ "test_wasm_util",
  "wasmer",
  "wasmer-wasi",
+]
+
+[[package]]
+name = "test_wasm_util"
+version = "0.1.0"
+dependencies = [
+ "roc_std",
+ "wasmer",
 ]
 
 [[package]]
