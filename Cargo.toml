@@ -42,7 +42,7 @@ exclude = [
     "ci/bench-runner",
     # Ignore building these normally. They are only imported by tests.
     # The tests will still correctly build them.
-    "cli/cli_utils",
+    "cli_utils",
     "compiler/test_mono_macros",
     "compiler/test_wasm_util",
 ]
