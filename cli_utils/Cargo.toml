@@ -10,10 +10,10 @@ description = "Shared code for cli tests and benchmarks"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-roc_cli = { path = "../../cli" }
-roc_collections = { path = "../../compiler/collections" }
-roc_load = { path = "../../compiler/load" }
-roc_module = { path = "../../compiler/module" }
+roc_cli = { path = "../cli" }
+roc_collections = { path = "../compiler/collections" }
+roc_load = { path = "../compiler/load" }
+roc_module = { path = "../compiler/module" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
 criterion = { git = "https://github.com/Anton-4/criterion.rs"}
 serde = { version = "1.0.130", features = ["derive"] }

@@ -1,8 +1,8 @@
 use std::ops::Index;
 
 pub const OBJ_PATH: &str = env!(
-    "BUILTINS_O",
-    "Env var BUILTINS_O not found. Is there a problem with the build script?"
+    "BUILTINS_HOST_O",
+    "Env var BUILTINS_HOST_O not found. Is there a problem with the build script?"
 );
 
 #[derive(Debug, Default)]
@@ -135,7 +135,7 @@ pub const STR_STARTS_WITH: &str = "roc_builtins.str.starts_with";
 pub const STR_STARTS_WITH_CODE_PT: &str = "roc_builtins.str.starts_with_code_point";
 pub const STR_ENDS_WITH: &str = "roc_builtins.str.ends_with";
 pub const STR_NUMBER_OF_BYTES: &str = "roc_builtins.str.number_of_bytes";
-pub const STR_FROM_INT: &str = "roc_builtins.str.from_int";
+pub const STR_FROM_INT: IntrinsicName = int_intrinsic!("roc_builtins.str.from_int");
 pub const STR_FROM_FLOAT: &str = "roc_builtins.str.from_float";
 pub const STR_EQUAL: &str = "roc_builtins.str.equal";
 pub const STR_TO_UTF8: &str = "roc_builtins.str.to_utf8";
@@ -188,6 +188,7 @@ pub const LIST_SORT_WITH: &str = "roc_builtins.list.sort_with";
 pub const LIST_CONCAT: &str = "roc_builtins.list.concat";
 pub const LIST_SET: &str = "roc_builtins.list.set";
 pub const LIST_SET_IN_PLACE: &str = "roc_builtins.list.set_in_place";
+pub const LIST_ANY: &str = "roc_builtins.list.any";
 
 pub const DEC_FROM_F64: &str = "roc_builtins.dec.from_f64";
 pub const DEC_EQ: &str = "roc_builtins.dec.eq";

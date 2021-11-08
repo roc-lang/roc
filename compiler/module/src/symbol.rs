@@ -1062,6 +1062,9 @@ define_builtins! {
         39 LIST_MAX_GT: "#maxGt"
         40 LIST_MAP4: "map4"
         41 LIST_DROP_FIRST: "dropFirst"
+        42 LIST_JOIN_MAP: "joinMap"
+        43 LIST_JOIN_MAP_CONCAT: "#joinMapConcat"
+        44 LIST_ANY: "any"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias
@@ -1081,18 +1084,14 @@ define_builtins! {
         7 DICT_INSERT: "insert"
         8 DICT_LEN: "len"
 
-        // This should not be exposed to users, its for testing the
-        // hash function ONLY
-        9 DICT_TEST_HASH: "hashTestOnly"
+        9 DICT_REMOVE: "remove"
+        10 DICT_CONTAINS: "contains"
+        11 DICT_KEYS: "keys"
+        12 DICT_VALUES: "values"
 
-        10 DICT_REMOVE: "remove"
-        11 DICT_CONTAINS: "contains"
-        12 DICT_KEYS: "keys"
-        13 DICT_VALUES: "values"
-
-        14 DICT_UNION: "union"
-        15 DICT_INTERSECTION: "intersection"
-        16 DICT_DIFFERENCE: "difference"
+        13 DICT_UNION: "union"
+        14 DICT_INTERSECTION: "intersection"
+        15 DICT_DIFFERENCE: "difference"
     }
     7 SET: "Set" => {
         0 SET_SET: "Set" imported // the Set.Set type alias
