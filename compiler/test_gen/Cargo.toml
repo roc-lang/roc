@@ -5,6 +5,10 @@ authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2018"
 
+[[test]]
+name = "test_gen"
+path = "src/tests.rs"
+
 [dependencies]
 roc_gen_llvm = { path = "../gen_llvm" }
 roc_collections = { path = "../collections" }
