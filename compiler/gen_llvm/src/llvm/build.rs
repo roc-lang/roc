@@ -5165,12 +5165,11 @@ fn run_low_level<'a, 'ctx, 'env>(
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
                 Layout::Builtin(Builtin::List(element_layout)) => list_take_first(
                     env,
-                    layout_ids,
                     original_wrapper,
                     count.into_int_value(),
                     element_layout,
                 ),
-                _ => unreachable!("Invalid layout {:?} in List.drop", list_layout),
+                _ => unreachable!("Invalid layout {:?} in List.takeFirst", list_layout),
             }
         }
         ListDrop => {

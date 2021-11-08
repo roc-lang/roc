@@ -867,7 +867,6 @@ pub fn listTakeFirst(
     alignment: u32,
     element_width: usize,
     take_count: usize,
-    dec: Dec,
 ) callconv(.C) RocList {
     if (list.bytes) |source_ptr| {
         if (take_count == 0) {
