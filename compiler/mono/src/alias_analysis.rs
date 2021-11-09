@@ -1096,36 +1096,37 @@ fn call_spec(
                 ListFindUnsafe { xs } => {
                     let list = env.symbols[xs];
 
-                    // Mark the list as being used by the "find" predicate function.
-                    // It may be the case that all elements in the list are used by the predicate.
-                    // Since `bag_get` assumes items are picked non-deterministically, this is
-                    // (probably?) enough to express that usage.
-                    let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
-                    let element = builder.add_bag_get(block, bag)?;
-                    let _bool = call_function!(builder, block, [element]);
-
                     // ListFindUnsafe returns { value: v, found: Bool=Int1 }
                     let output_layouts = vec![arg_layouts[0], Layout::Builtin(Builtin::Int1)];
                     let output_layout = Layout::Struct(&output_layouts);
                     let output_type = layout_spec(builder, &output_layout)?;
 
-                    // We may or may not use the element we got from the list in the output struct,
-                    // depending on whether we found the element to satisfy the "find" predicate.
-                    let found_branch = builder.add_block();
-                    let output_with_element =
-                        builder.add_unknown_with(found_branch, &[element], output_type)?;
+                    let loop_body = |builder: &mut FuncDefBuilder, block, output| {
+                        let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
+                        let element = builder.add_bag_get(block, bag)?;
+                        let _is_found = call_function!(builder, block, [element]);
 
-                    let not_found_branch = builder.add_block();
-                    let output_without_element =
-                        builder.add_unknown_with(not_found_branch, &[], output_type)?;
+                        // We may or may not use the element we got from the list in the output struct,
+                        // depending on whether we found the element to satisfy the "find" predicate.
+                        // If we did find the element, our output "changes" to be a record including that element.
+                        let found_branch = builder.add_block();
+                        let new_output =
+                            builder.add_unknown_with(block, &[element], output_type)?;
 
-                    builder.add_choice(
-                        block,
-                        &[
-                            BlockExpr(found_branch, output_with_element),
-                            BlockExpr(not_found_branch, output_without_element),
-                        ],
-                    )
+                        let not_found_branch = builder.add_block();
+
+                        builder.add_choice(
+                            block,
+                            &[
+                                BlockExpr(found_branch, new_output),
+                                BlockExpr(not_found_branch, output),
+                            ],
+                        )
+                    };
+
+                    // Assume the output is initially { found: False, value: \empty }
+                    let output_state = builder.add_unknown_with(block, &[], output_type)?;
+                    add_loop(builder, block, output_type, output_state, loop_body)
                 }
             }
         }
