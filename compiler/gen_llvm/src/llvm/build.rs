@@ -17,7 +17,7 @@ use crate::llvm::build_list::{
 use crate::llvm::build_str::{
     empty_str, str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int,
     str_from_utf8, str_from_utf8_range, str_join_with, str_number_of_bytes, str_repeat, str_split,
-    str_starts_with, str_starts_with_code_point, str_to_utf8, str_trim, str_trim_left
+    str_starts_with, str_starts_with_code_point, str_to_utf8, str_trim, str_trim_left,
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
