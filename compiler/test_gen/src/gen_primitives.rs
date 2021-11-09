@@ -20,6 +20,7 @@ use crate::helpers::wasm::assert_evals_to;
 // use crate::helpers::wasm::assert_evals_to as assert_non_opt_evals_to;
 
 use indoc::indoc;
+#[allow(unused_imports)]
 use roc_std::RocStr;
 
 #[test]
