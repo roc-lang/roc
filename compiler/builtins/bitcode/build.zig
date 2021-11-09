@@ -75,6 +75,7 @@ fn generateObjectFile(
     obj.setOutputDir(".");
     obj.strip = true;
     obj.target = target;
+    obj.link_function_sections = true;
     const obj_step = b.step(step_name, "Build object file for linking");
     obj_step.dependOn(&obj.step);
 }
