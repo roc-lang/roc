@@ -2,10 +2,10 @@ use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+use crate::helpers::from_wasm32_memory::FromWasm32Memory;
 use crate::helpers::wasm32_test_result::Wasm32TestResult;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
-use test_wasm_util::from_wasm32_memory::FromWasm32Memory;
 
 const TEST_WRAPPER_NAME: &str = "test_wrapper";
 
@@ -169,7 +169,7 @@ where
     // NOTE the stdlib must be in the arena; just taking a reference will segfault
     let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
 
-    let instance = crate::helpers::eval::helper_wasm(&arena, src, stdlib, &expected);
+    let instance = crate::helpers::wasm::helper_wasm(&arena, src, stdlib, &expected);
 
     let memory = instance.exports.get_memory("memory").unwrap();
 
@@ -190,10 +190,10 @@ where
     }
 }
 
-#[macro_export]
+#[allow(unused_macros)]
 macro_rules! assert_wasm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        match $crate::helpers::eval::assert_wasm_evals_to_help::<$ty>($src, $expected) {
+        match $crate::helpers::wasm::assert_wasm_evals_to_help::<$ty>($src, $expected) {
             Err(msg) => panic!("{:?}", msg),
             Ok(actual) => {
                 assert_eq!($transform(actual), $expected)
@@ -202,23 +202,28 @@ macro_rules! assert_wasm_evals_to {
     };
 
     ($src:expr, $expected:expr, $ty:ty) => {
-        $crate::assert_wasm_evals_to!($src, $expected, $ty, $crate::helpers::eval::identity);
+        $crate::helpers::wasm::assert_wasm_evals_to!(
+            $src,
+            $expected,
+            $ty,
+            $crate::helpers::wasm::identity
+        );
     };
 
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        $crate::assert_wasm_evals_to!($src, $expected, $ty, $transform);
+        $crate::helpers::wasm::assert_wasm_evals_to!($src, $expected, $ty, $transform);
     };
 }
 
-#[macro_export]
+#[allow(unused_macros)]
 macro_rules! assert_evals_to {
     ($src:expr, $expected:expr, $ty:ty) => {{
-        assert_evals_to!($src, $expected, $ty, $crate::helpers::eval::identity);
+        assert_evals_to!($src, $expected, $ty, $crate::helpers::wasm::identity);
     }};
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
         // Same as above, except with an additional transformation argument.
         {
-            $crate::assert_wasm_evals_to!($src, $expected, $ty, $transform);
+            $crate::helpers::wasm::assert_wasm_evals_to!($src, $expected, $ty, $transform);
         }
     };
 }
@@ -227,3 +232,8 @@ macro_rules! assert_evals_to {
 pub fn identity<T>(value: T) -> T {
     value
 }
+
+#[allow(unused_imports)]
+pub(crate) use assert_evals_to;
+#[allow(unused_imports)]
+pub(crate) use assert_wasm_evals_to;
