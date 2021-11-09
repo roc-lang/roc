@@ -259,7 +259,7 @@ pub fn str_trim<'a, 'ctx, 'env>(
     call_bitcode_fn(env, &[str_i128.into()], bitcode::STR_TRIM)
 }
 
-/// Str.trim : Str -> Str
+/// Str.trimLeft : Str -> Str
 pub fn str_trim_left<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,

@@ -632,7 +632,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(str_type())
     );
 
-    // trimLeft: Str -> Str
+    // trimLeft : Str -> Str
     add_top_level_function_type!(
         Symbol::STR_TRIM_LEFT,
         vec![str_type()],

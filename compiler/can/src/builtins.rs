@@ -1285,6 +1285,7 @@ fn str_trim(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::StrTrim, var_store)
 }
 
+/// Str.trimLeft : Str -> Str
 fn str_trim_left(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::StrTrimLeft, var_store)
 }

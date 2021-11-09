@@ -48,6 +48,7 @@ impl<'a> RawFunctionLayout<'a> {
                 Self::new_help(env, structure, structure_content.clone())
             }
             Structure(flat_type) => Self::layout_from_flat_type(env, flat_type),
+
             // Ints
             Alias(Symbol::NUM_I128, args, _) => {
                 debug_assert!(args.is_empty());
