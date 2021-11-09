@@ -240,7 +240,7 @@ pub fn build_file<'a>(
             app_o_file.to_str().unwrap(),
         ];
         if matches!(opt_level, OptLevel::Development) {
-            inputs.push(bitcode::OBJ_PATH);
+            inputs.push(bitcode::BUILTINS_HOST_OBJ_PATH);
         }
 
         let (mut child, _) =  // TODO use lld

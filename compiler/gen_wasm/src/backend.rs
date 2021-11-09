@@ -78,6 +78,7 @@ impl<'a> WasmBackend<'a> {
             },
             init: ConstExpr::I32(MEMORY_INIT_SIZE as i32),
         };
+
         linker_symbols.push(SymInfo::Global(WasmObjectSymbol::Defined {
             flags: 0,
             index: 0,

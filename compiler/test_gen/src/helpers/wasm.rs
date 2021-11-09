@@ -4,8 +4,11 @@ use std::hash::{Hash, Hasher};
 
 use crate::helpers::from_wasm32_memory::FromWasm32Memory;
 use crate::helpers::wasm32_test_result::Wasm32TestResult;
+use roc_builtins::bitcode;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
+
+use tempfile::tempdir;
 
 const TEST_WRAPPER_NAME: &str = "test_wrapper";
 
@@ -143,8 +146,52 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     use wasmer::{Instance, Module, Store};
 
     let store = Store::default();
-    // let module = Module::from_file(&store, &test_wasm_path).unwrap();
-    let wasmer_module = Module::from_binary(&store, &module_bytes).unwrap();
+
+    // let wasmer_module = Module::from_binary(&store, &module_bytes).unwrap();
+
+    let wasmer_module = if false {
+        let dir = tempdir().unwrap();
+        // let dirpath = dir.path();
+        let dirpath = PathBuf::from("/home/folkertdev/roc/wasm");
+        let app_o_file = dirpath.join("app.wasm");
+        let final_wasm_file = dirpath.join("final.wasm");
+
+        std::fs::write(&app_o_file, &module_bytes).unwrap();
+
+        dbg!(bitcode::BUILTINS_WASM32_OBJ_PATH);
+        dbg!(&final_wasm_file);
+
+        dbg!(std::process::Command::new("zig")
+            .args(&[
+                "wasm-ld",
+                // input files
+                app_o_file.to_str().unwrap(),
+                bitcode::BUILTINS_WASM32_OBJ_PATH,
+                // output
+                "-o",
+                final_wasm_file.to_str().unwrap(),
+                // we don't define `_start`
+                "--no-entry",
+                // If you only specify test_wrapper, it will stop at the call to UserApp_main_1
+                // But if you specify both exports, you get all the dependencies.
+                //
+                // It seems that it will not write out an export you didn't explicitly specify,
+                // even if it's a dependency of another export!
+                // In our case we always export main and test_wrapper so that's OK.
+                "--export",
+                "test_wrapper",
+                "--export",
+                "#UserApp_main_1",
+                // "--export",
+                // "__linear_memory",
+            ])
+            .output())
+        .unwrap();
+
+        Module::from_file(&store, &final_wasm_file).unwrap()
+    } else {
+        Module::from_binary(&store, &module_bytes).unwrap()
+    };
 
     // First, we create the `WasiEnv`
     use wasmer_wasi::WasiState;
