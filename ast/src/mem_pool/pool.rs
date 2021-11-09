@@ -10,10 +10,11 @@
 ///
 /// Pages also use the node value 0 (all 0 bits) to mark nodes as unoccupied.
 /// This is important for performance.
-use libc::{c_void, MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
+use libc::{MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
 use std::any::type_name;
+use std::ffi::c_void;
 use std::marker::PhantomData;
-use std::mem::size_of;
+use std::mem::{align_of, size_of, MaybeUninit};
 use std::ptr::null;
 
 pub const NODE_BYTES: usize = 32;
@@ -84,7 +85,7 @@ impl<T> Copy for NodeId<T> {}
 
 #[derive(Debug)]
 pub struct Pool {
-    pub(super) nodes: *mut [u8; NODE_BYTES],
+    pub(super) nodes: *mut [MaybeUninit<u8>; NODE_BYTES],
     num_nodes: u32,
     capacity: u32,
     // free_1node_slots: Vec<NodeId<T>>,
@@ -115,7 +116,7 @@ impl Pool {
                 0,
                 0,
             )
-        } as *mut [u8; NODE_BYTES];
+        } as *mut [MaybeUninit<u8>; NODE_BYTES];
 
         // This is our actual capacity, in nodes.
         // It might be higher than the requested capacity due to rounding up
@@ -140,9 +141,10 @@ impl Pool {
         );
 
         let node_id = self.reserve(1);
-        let node_ptr = unsafe { self.nodes.offset(node_id.index as isize) } as *mut T;
 
-        unsafe { *node_ptr = node };
+        let node_ptr = self.get_ptr(node_id);
+
+        unsafe { node_ptr.write(MaybeUninit::new(node)) };
 
         node_id
     }
@@ -167,7 +169,7 @@ impl Pool {
 
     pub fn get<'a, 'b, T>(&'a self, node_id: NodeId<T>) -> &'b T {
         unsafe {
-            let node_ptr = self.nodes.offset(node_id.index as isize) as *const T;
+            let node_ptr = self.get_ptr(node_id) as *const T;
 
             &*node_ptr
         }
@@ -175,7 +177,7 @@ impl Pool {
 
     pub fn get_mut<T>(&mut self, node_id: NodeId<T>) -> &mut T {
         unsafe {
-            let node_ptr = self.nodes.offset(node_id.index as isize) as *mut T;
+            let node_ptr = self.get_ptr(node_id) as *mut T;
 
             &mut *node_ptr
         }
@@ -183,10 +185,19 @@ impl Pool {
 
     pub fn set<T>(&mut self, node_id: NodeId<T>, element: T) {
         unsafe {
-            let node_ptr = self.nodes.offset(node_id.index as isize) as *mut T;
+            let node_ptr = self.get_ptr(node_id);
 
-            *node_ptr = element;
+            node_ptr.write(MaybeUninit::new(element));
         }
+    }
+
+    fn get_ptr<T>(&self, node_id: NodeId<T>) -> *mut MaybeUninit<T> {
+        let node_offset = unsafe { self.nodes.offset(node_id.index as isize) };
+
+        // This checks if the node_offset is aligned to T
+        assert!(0 == (node_offset as usize) & (align_of::<T>() - 1));
+
+        node_offset as *mut MaybeUninit<T>
     }
 
     // A node is available iff its bytes are all zeroes

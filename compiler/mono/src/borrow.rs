@@ -617,7 +617,9 @@ impl<'a> BorrowInfState<'a> {
                     ListMap { xs }
                     | ListKeepIf { xs }
                     | ListKeepOks { xs }
-                    | ListKeepErrs { xs } => {
+                    | ListKeepErrs { xs }
+                    | ListAny { xs }
+                    | ListFindUnsafe { xs } => {
                         // own the list if the function wants to own the element
                         if !function_ps[0].borrow {
                             self.own_var(*xs);
@@ -649,6 +651,21 @@ impl<'a> BorrowInfState<'a> {
                         }
                         if !function_ps[2].borrow {
                             self.own_var(*zs);
+                        }
+                    }
+                    ListMap4 { xs, ys, zs, ws } => {
+                        // own the lists if the function wants to own the element
+                        if !function_ps[0].borrow {
+                            self.own_var(*xs);
+                        }
+                        if !function_ps[1].borrow {
+                            self.own_var(*ys);
+                        }
+                        if !function_ps[2].borrow {
+                            self.own_var(*zs);
+                        }
+                        if !function_ps[3].borrow {
+                            self.own_var(*ws);
                         }
                     }
                     ListSortWith { xs } => {
@@ -905,7 +922,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
     use LowLevel::*;
 
     // TODO is true or false more efficient for non-refcounted layouts?
-    let irrelevant = BORROWED;
+    let irrelevant = OWNED;
     let function = irrelevant;
     let closure_data = irrelevant;
     let owned = OWNED;
@@ -922,6 +939,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         ListGetUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         ListConcat => arena.alloc_slice_copy(&[owned, owned]),
         StrConcat => arena.alloc_slice_copy(&[owned, borrowed]),
+        StrTrim => arena.alloc_slice_copy(&[owned]),
         StrSplit => arena.alloc_slice_copy(&[borrowed, borrowed]),
         ListSingle => arena.alloc_slice_copy(&[irrelevant]),
         ListRepeat => arena.alloc_slice_copy(&[irrelevant, borrowed]),
@@ -932,7 +950,8 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         ListMap | ListMapWithIndex => arena.alloc_slice_copy(&[owned, function, closure_data]),
         ListMap2 => arena.alloc_slice_copy(&[owned, owned, function, closure_data]),
         ListMap3 => arena.alloc_slice_copy(&[owned, owned, owned, function, closure_data]),
-        ListKeepIf | ListKeepOks | ListKeepErrs => {
+        ListMap4 => arena.alloc_slice_copy(&[owned, owned, owned, owned, function, closure_data]),
+        ListKeepIf | ListKeepOks | ListKeepErrs | ListAny => {
             arena.alloc_slice_copy(&[owned, function, closure_data])
         }
         ListContains => arena.alloc_slice_copy(&[borrowed, irrelevant]),
@@ -941,10 +960,13 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
             arena.alloc_slice_copy(&[owned, owned, function, closure_data])
         }
         ListSortWith => arena.alloc_slice_copy(&[owned, function, closure_data]),
+        ListFindUnsafe => arena.alloc_slice_copy(&[owned, function, closure_data]),
 
         // TODO when we have lists with capacity (if ever)
         // List.append should own its first argument
         ListAppend => arena.alloc_slice_copy(&[owned, owned]),
+        ListTakeFirst => arena.alloc_slice_copy(&[owned, irrelevant]),
+        ListTakeLast => arena.alloc_slice_copy(&[owned, irrelevant]),
         ListDrop => arena.alloc_slice_copy(&[owned, irrelevant]),
         ListDropAt => arena.alloc_slice_copy(&[owned, irrelevant]),
         ListSwap => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),

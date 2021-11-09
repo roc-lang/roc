@@ -25,6 +25,7 @@ interface List
             map,
             map2,
             map3,
+            map4,
             mapWithIndex,
             mapOrDrop,
             mapJoin,
@@ -34,6 +35,7 @@ interface List
             sortWith,
             drop,
             dropAt,
+            dropLast,
             swap
         ]
     imports []
@@ -270,6 +272,11 @@ map2 : List a, List b, (a, b -> c) -> List c
 ## Repeat until a list runs out of elements.
 map3 : List a, List b, List c, (a, b, c -> d) -> List d
 
+## Run a transformation function on the first element of each list,
+## and use that as the first element in the returned list.
+## Repeat until a list runs out of elements.
+map4 : List a, List b, List c, List d, (a, b, c, d -> e) -> List e
+
 ## This works like [List.map], except it also passes the index
 ## of the element to the conversion function.
 mapWithIndex : List before, (before, Nat -> after) -> List after
@@ -379,7 +386,7 @@ oks : List (Result elem *) -> List elem
 ## ## Performance Details
 ##
 ## [List.keepIf] always returns a list that takes up exactly the same amount
-## of memory as the original, even if its length decreases. This is becase it
+## of memory as the original, even if its length decreases. This is because it
 ## can't know in advance exactly how much space it will need, and if it guesses a
 ## length that's too low, it would have to re-allocate.
 ##
@@ -440,6 +447,9 @@ drop : List elem, Nat -> List elem
 ##
 ## To replace the element at a given index, instead of dropping it, see [List.set].
 dropAt : List elem, Nat -> List elem
+
+## Drops the last element in a List.
+dropLast : List elem -> List elem
 
 ## Adds a new element to the end of the list.
 ##
@@ -679,4 +689,10 @@ endsWith : List elem, List elem -> Bool
 
 all : List elem, (elem -> Bool) -> Bool
 
+## Run the given predicate on each element of the list, returning `True` if
+## any of the elements satisfy it.
 any : List elem, (elem -> Bool) -> Bool
+
+## Returns the first element of the list satisfying a predicate function.
+## If no satisfying element is found, an `Err NotFound` is returned.
+find : List elem, (elem -> Bool) -> Result elem [ NotFound ]*

@@ -102,17 +102,7 @@ pub enum Expr {
         ret_var: Variable,
     },
 
-    Closure {
-        function_type: Variable,
-        closure_type: Variable,
-        closure_ext_var: Variable,
-        return_type: Variable,
-        name: Symbol,
-        captured_symbols: Vec<(Symbol, Variable)>,
-        recursive: Recursive,
-        arguments: Vec<(Variable, Located<Pattern>)>,
-        loc_body: Box<Located<Expr>>,
-    },
+    Closure(ClosureData),
 
     // Product Types
     Record {
@@ -172,6 +162,18 @@ pub enum Expr {
 
     // Compiles, but will crash if reached
     RuntimeError(RuntimeError),
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClosureData {
+    pub function_type: Variable,
+    pub closure_type: Variable,
+    pub closure_ext_var: Variable,
+    pub return_type: Variable,
+    pub name: Symbol,
+    pub captured_symbols: Vec<(Symbol, Variable)>,
+    pub recursive: Recursive,
+    pub arguments: Vec<(Variable, Located<Pattern>)>,
+    pub loc_body: Box<Located<Expr>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -550,7 +552,7 @@ pub fn canonicalize_expr<'a>(
 
                     // We shouldn't ultimately count arguments as referenced locals. Otherwise,
                     // we end up with weird conclusions like the expression (\x -> x + 1)
-                    // references the (nonexistant) local variable x!
+                    // references the (nonexistent) local variable x!
                     output.references.lookups.remove(sub_symbol);
                 }
             }
@@ -572,7 +574,7 @@ pub fn canonicalize_expr<'a>(
             }
 
             (
-                Closure {
+                Closure(ClosureData {
                     function_type: var_store.fresh(),
                     closure_type: var_store.fresh(),
                     closure_ext_var: var_store.fresh(),
@@ -582,7 +584,7 @@ pub fn canonicalize_expr<'a>(
                     recursive: Recursive::NotRecursive,
                     arguments: can_args,
                     loc_body: Box::new(loc_body_expr),
-                },
+                }),
                 output,
             )
         }
@@ -1403,7 +1405,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             LetNonRec(Box::new(def), Box::new(loc_expr), var)
         }
 
-        Closure {
+        Closure(ClosureData {
             function_type,
             closure_type,
             closure_ext_var,
@@ -1413,14 +1415,14 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             captured_symbols,
             arguments,
             loc_body,
-        } => {
+        }) => {
             let loc_expr = *loc_body;
             let loc_expr = Located {
                 value: inline_calls(var_store, scope, loc_expr.value),
                 region: loc_expr.region,
             };
 
-            Closure {
+            Closure(ClosureData {
                 function_type,
                 closure_type,
                 closure_ext_var,
@@ -1430,7 +1432,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 captured_symbols,
                 arguments,
                 loc_body: Box::new(loc_expr),
-            }
+            })
         }
 
         Record { record_var, fields } => {
@@ -1492,12 +1494,12 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                         loc_expr:
                             Located {
                                 value:
-                                    Closure {
+                                    Closure(ClosureData {
                                         recursive,
                                         arguments: params,
                                         loc_body: boxed_body,
                                         ..
-                                    },
+                                    }),
                                 ..
                             },
                         ..
@@ -1681,7 +1683,7 @@ fn flatten_str_lines<'a>(
     (desugar_str_segments(var_store, segments), output)
 }
 
-/// Resolve stirng interpolations by desugaring a sequence of StrSegments
+/// Resolve string interpolations by desugaring a sequence of StrSegments
 /// into nested calls to Str.concat
 fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> Expr {
     use StrSegment::*;

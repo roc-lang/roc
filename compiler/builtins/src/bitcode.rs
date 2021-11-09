@@ -1,8 +1,8 @@
 use std::ops::Index;
 
 pub const OBJ_PATH: &str = env!(
-    "BUILTINS_O",
-    "Env var BUILTINS_O not found. Is there a problem with the build script?"
+    "BUILTINS_HOST_O",
+    "Env var BUILTINS_HOST_O not found. Is there a problem with the build script?"
 );
 
 #[derive(Debug, Default)]
@@ -135,13 +135,14 @@ pub const STR_STARTS_WITH: &str = "roc_builtins.str.starts_with";
 pub const STR_STARTS_WITH_CODE_PT: &str = "roc_builtins.str.starts_with_code_point";
 pub const STR_ENDS_WITH: &str = "roc_builtins.str.ends_with";
 pub const STR_NUMBER_OF_BYTES: &str = "roc_builtins.str.number_of_bytes";
-pub const STR_FROM_INT: &str = "roc_builtins.str.from_int";
+pub const STR_FROM_INT: IntrinsicName = int_intrinsic!("roc_builtins.str.from_int");
 pub const STR_FROM_FLOAT: &str = "roc_builtins.str.from_float";
 pub const STR_EQUAL: &str = "roc_builtins.str.equal";
 pub const STR_TO_UTF8: &str = "roc_builtins.str.to_utf8";
 pub const STR_FROM_UTF8: &str = "roc_builtins.str.from_utf8";
 pub const STR_FROM_UTF8_RANGE: &str = "roc_builtins.str.from_utf8_range";
 pub const STR_REPEAT: &str = "roc_builtins.str.repeat";
+pub const STR_TRIM: &str = "roc_builtins.str.trim";
 
 pub const DICT_HASH: &str = "roc_builtins.dict.hash";
 pub const DICT_HASH_STR: &str = "roc_builtins.dict.hash_str";
@@ -164,6 +165,7 @@ pub const SET_FROM_LIST: &str = "roc_builtins.dict.set_from_list";
 pub const LIST_MAP: &str = "roc_builtins.list.map";
 pub const LIST_MAP2: &str = "roc_builtins.list.map2";
 pub const LIST_MAP3: &str = "roc_builtins.list.map3";
+pub const LIST_MAP4: &str = "roc_builtins.list.map4";
 pub const LIST_MAP_WITH_INDEX: &str = "roc_builtins.list.map_with_index";
 pub const LIST_KEEP_IF: &str = "roc_builtins.list.keep_if";
 pub const LIST_KEEP_OKS: &str = "roc_builtins.list.keep_oks";
@@ -175,6 +177,8 @@ pub const LIST_CONTAINS: &str = "roc_builtins.list.contains";
 pub const LIST_REPEAT: &str = "roc_builtins.list.repeat";
 pub const LIST_APPEND: &str = "roc_builtins.list.append";
 pub const LIST_PREPEND: &str = "roc_builtins.list.prepend";
+pub const LIST_TAKE_FIRST: &str = "roc_builtins.list.take_first";
+pub const LIST_TAKE_LAST: &str = "roc_builtins.list.take_last";
 pub const LIST_DROP: &str = "roc_builtins.list.drop";
 pub const LIST_DROP_AT: &str = "roc_builtins.list.drop_at";
 pub const LIST_SWAP: &str = "roc_builtins.list.swap";
@@ -186,6 +190,8 @@ pub const LIST_SORT_WITH: &str = "roc_builtins.list.sort_with";
 pub const LIST_CONCAT: &str = "roc_builtins.list.concat";
 pub const LIST_SET: &str = "roc_builtins.list.set";
 pub const LIST_SET_IN_PLACE: &str = "roc_builtins.list.set_in_place";
+pub const LIST_ANY: &str = "roc_builtins.list.any";
+pub const LIST_FIND_UNSAFE: &str = "roc_builtins.list.find_unsafe";
 
 pub const DEC_FROM_F64: &str = "roc_builtins.dec.from_f64";
 pub const DEC_EQ: &str = "roc_builtins.dec.eq";

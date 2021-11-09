@@ -5,35 +5,18 @@ authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2018"
 
-[dependencies]
-roc_collections = { path = "../collections" }
-roc_region = { path = "../region" }
-roc_module = { path = "../module" }
-roc_problem = { path = "../problem" }
-roc_types = { path = "../types" }
-roc_builtins = { path = "../builtins" }
-roc_constrain = { path = "../constrain" }
-roc_unify = { path = "../unify" }
-roc_solve = { path = "../solve" }
-roc_reporting = { path = "../reporting" }
-roc_load = { path = "../load" }
-roc_can = { path = "../can" }
-roc_parse = { path = "../parse" }
-roc_build = { path = "../build" }
-roc_mono = { path = "../mono" }
-test_mono_macros = { path = "../test_mono_macros" }
-im    = "14" # im and im-rc should always have the same version!
-im-rc = "14" # im and im-rc should always have the same version!
-bumpalo = { version = "3.6.1", features = ["collections"] }
-either = "1.6.1"
-indoc = "0.3.3"
-libc = "0.2"
-target-lexicon = "0.12.2"
-libloading = "0.6"
+[[test]]
+name = "test_mono"
+path = "src/tests.rs"
 
 [dev-dependencies]
-pretty_assertions = "0.5.1"
-indoc = "0.3.3"
-quickcheck = "0.8"
-quickcheck_macros = "0.8"
-bumpalo = { version = "3.6.1", features = ["collections"] }
+roc_collections = { path = "../collections" }
+roc_module = { path = "../module" }
+roc_builtins = { path = "../builtins" }
+roc_load = { path = "../load" }
+roc_can = { path = "../can" }
+roc_mono = { path = "../mono" }
+test_mono_macros = { path = "../test_mono_macros" }
+pretty_assertions = "1.0.0"
+bumpalo = { version = "3.8.0", features = ["collections"] }
+indoc = "1.0.3"

@@ -15,12 +15,13 @@ extern fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignmen
 // This should never be passed a null pointer.
 extern fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void;
 
-// Signals to the host that the program has paniced
+// Signals to the host that the program has panicked
 extern fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void;
 
 comptime {
+    const builtin = @import("builtin");
     // During tetsts, use the testing allocators to satisfy these functions.
-    if (std.builtin.is_test) {
+    if (builtin.is_test) {
         @export(testing_roc_alloc, .{ .name = "roc_alloc", .linkage = .Strong });
         @export(testing_roc_realloc, .{ .name = "roc_realloc", .linkage = .Strong });
         @export(testing_roc_dealloc, .{ .name = "roc_dealloc", .linkage = .Strong });
@@ -49,7 +50,7 @@ fn testing_roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
     _ = c_ptr;
     _ = tag_id;
 
-    @panic("Roc paniced");
+    @panic("Roc panicked");
 }
 
 pub fn alloc(size: usize, alignment: u32) [*]u8 {
@@ -69,7 +70,7 @@ pub fn panic(c_ptr: *c_void, alignment: u32) callconv(.C) void {
     return @call(.{ .modifier = always_inline }, roc_panic, .{ c_ptr, alignment });
 }
 
-// indirection because otherwise zig creats an alias to the panic function which our LLVM code
+// indirection because otherwise zig creates an alias to the panic function which our LLVM code
 // does not know how to deal with
 pub fn test_panic(c_ptr: *c_void, alignment: u32) callconv(.C) void {
     _ = c_ptr;
@@ -257,7 +258,7 @@ pub const Ordering = enum(u8) {
     LT = 2,
 };
 
-pub const UpdateMode = extern enum(u8) {
+pub const UpdateMode = enum(u8) {
     Immutable = 0,
     InPlace = 1,
 };

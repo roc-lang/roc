@@ -1,7 +1,7 @@
 use roc_cli::build::check_file;
 use roc_cli::{
     build_app, docs, repl, BuildConfig, CMD_BUILD, CMD_CHECK, CMD_DOCS, CMD_EDIT, CMD_REPL,
-    CMD_RUN, DIRECTORY_OR_FILES, FLAG_TIME, ROC_FILE,
+    DIRECTORY_OR_FILES, FLAG_TIME, ROC_FILE,
 };
 use roc_load::file::LoadingProblem;
 use std::fs::{self, FileType};
@@ -13,13 +13,7 @@ static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use std::ffi::{OsStr, OsString};
 
-#[cfg(feature = "llvm")]
 use roc_cli::build;
-
-#[cfg(not(feature = "llvm"))]
-fn build(_matches: &clap::ArgMatches, _config: BuildConfig) -> io::Result<i32> {
-    panic!("Building without LLVM is not currently supported.");
-}
 
 fn main() -> io::Result<()> {
     let matches = build_app().get_matches();
@@ -44,17 +38,6 @@ fn main() -> io::Result<()> {
             matches.subcommand_matches(CMD_BUILD).unwrap(),
             BuildConfig::BuildOnly,
         )?),
-        Some(CMD_RUN) => {
-            // TODO remove CMD_RUN altogether if it is currently September 2021 or later.
-            println!(
-                r#"`roc run` is deprecated!
-If you're using a prebuilt binary, you no longer need the `run` - just do `roc [FILE]` instead of `roc run [FILE]`.
-If you're building the compiler from source you'll want to do `cargo run [FILE]` instead of `cargo run run [FILE]`.
-"#
-            );
-
-            Ok(1)
-        }
         Some(CMD_CHECK) => {
             let arena = bumpalo::Bump::new();
 

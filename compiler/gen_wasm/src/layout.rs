@@ -1,7 +1,6 @@
-use parity_wasm::elements::ValueType;
 use roc_mono::layout::{Layout, UnionLayout};
 
-use crate::{PTR_SIZE, PTR_TYPE};
+use crate::{wasm_module::ValueType, PTR_SIZE, PTR_TYPE};
 
 // See README for background information on Wasm locals, memory and function calls
 #[derive(Debug, Clone)]
@@ -72,11 +71,7 @@ impl WasmLayout {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn stack_memory(&self) -> u32 {
-        match self {
-            Self::StackMemory { size, .. } => *size,
-            _ => 0,
-        }
+    pub fn is_stack_memory(&self) -> bool {
+        matches!(self, Self::StackMemory { .. })
     }
 }

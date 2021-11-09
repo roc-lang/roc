@@ -3734,6 +3734,54 @@ mod solve_expr {
     }
 
     #[test]
+    fn str_trim() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Str.trim
+                "#
+            ),
+            "Str -> Str",
+        );
+    }
+
+    #[test]
+    fn list_take_first() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                List.takeFirst
+                "#
+            ),
+            "List a, Nat -> List a",
+        );
+    }
+
+    #[test]
+    fn list_take_last() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                List.takeLast
+                "#
+            ),
+            "List a, Nat -> List a",
+        );
+    }
+
+    #[test]
+    fn list_drop_last() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                List.dropLast
+                "#
+            ),
+            "List a -> List a",
+        );
+    }
+
+    #[test]
     fn function_that_captures_nothing_is_not_captured() {
         // we should make sure that a function that doesn't capture anything it not itself captured
         // such functions will be lifted to the top-level, and are thus globally available!

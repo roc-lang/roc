@@ -416,9 +416,41 @@ mod test_parse {
         assert_parses_to(&string, Float(&string));
     }
 
+    #[test]
+    fn pos_inf_float() {
+        assert_parses_to(
+            "inf",
+            Var {
+                module_name: "",
+                ident: "inf",
+            },
+        );
+    }
+
+    #[test]
+    fn neg_inf_float() {
+        let arena = Bump::new();
+        let loc_op = Located::new(0, 0, 0, 1, UnaryOp::Negate);
+        let inf_expr = Var {
+            module_name: "",
+            ident: "inf",
+        };
+        let loc_inf_expr = Located::new(0, 0, 1, 4, inf_expr);
+        assert_parses_to("-inf", UnaryOp(arena.alloc(loc_inf_expr), loc_op));
+    }
+
     #[quickcheck]
     fn all_f64_values_parse(num: f64) {
-        assert_parses_to(num.to_string().as_str(), Float(num.to_string().as_str()));
+        let string = num.to_string();
+        if string.contains(".") {
+            assert_parses_to(&string, Float(&string));
+        } else if num.is_nan() {
+            assert_parses_to(&string, Expr::GlobalTag(&string));
+        } else if num.is_finite() {
+            // These are whole numbers. Add the `.0` back to make float.
+            let float_string = format!("{}.0", string);
+            assert_parses_to(&float_string, Float(&float_string));
+        }
     }
 
     // RECORD LITERALS

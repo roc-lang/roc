@@ -4,7 +4,8 @@ use roc_ast::ast_error::ASTError;
 use roc_ast::lang::core::ast::ASTNodeId;
 use roc_code_markup::markup_error::MarkError;
 use roc_code_markup::slow_pool::MarkNodeId;
-use snafu::{Backtrace, ErrorCompat, NoneError, ResultExt, Snafu};
+use roc_module::module_err::ModuleError;
+use snafu::{Backtrace, ErrorCompat, Snafu};
 
 //import errors as follows:
 // `use crate::error::OutOfBounds;`
@@ -15,7 +16,7 @@ use snafu::{Backtrace, ErrorCompat, NoneError, ResultExt, Snafu};
 #[snafu(visibility(pub))]
 pub enum EdError {
     #[snafu(display(
-        "ASTNodeIdWithoutDefId: The expr_id_opt in ASTNode({:?}) was `None` but I was expexting `Some(DefId)` .",
+        "ASTNodeIdWithoutDefId: The expr_id_opt in ASTNode({:?}) was `None` but I was expecting `Some(DefId)` .",
         ast_node_id
     ))]
     ASTNodeIdWithoutDefId {
@@ -24,7 +25,7 @@ pub enum EdError {
     },
 
     #[snafu(display(
-        "ASTNodeIdWithoutExprId: The expr_id_opt in ASTNode({:?}) was `None` but I was expexting `Some(ExprId)` .",
+        "ASTNodeIdWithoutExprId: The expr_id_opt in ASTNode({:?}) was `None` but I was expecting `Some(ExprId)` .",
         ast_node_id
     ))]
     ASTNodeIdWithoutExprId {
@@ -42,16 +43,22 @@ pub enum EdError {
     },
 
     #[snafu(display("ClipboardReadFailed: could not get clipboard contents: {}", err_msg))]
-    ClipboardReadFailed { err_msg: String },
+    ClipboardReadFailed {
+        err_msg: String,
+    },
 
     #[snafu(display("ClipboardWriteFailed: could not set clipboard contents: {}", err_msg))]
-    ClipboardWriteFailed { err_msg: String },
+    ClipboardWriteFailed {
+        err_msg: String,
+    },
 
     #[snafu(display(
         "ClipboardInitFailed: could not initialize ClipboardContext: {}.",
         err_msg
     ))]
-    ClipboardInitFailed { err_msg: String },
+    ClipboardInitFailed {
+        err_msg: String,
+    },
 
     #[snafu(display(
         "ExpectedTextNode: the function {} expected a Text node, got {} instead.",
@@ -67,7 +74,9 @@ pub enum EdError {
     #[snafu(display(
         "EmptyCodeString: I need to have a code string (code_str) that contains either an app, interface or Package-Config header. The code string was empty.",
     ))]
-    EmptyCodeString { backtrace: Backtrace },
+    EmptyCodeString {
+        backtrace: Backtrace,
+    },
 
     #[snafu(display("FailedToUpdateIdentIdName: {}", err_str))]
     FailedToUpdateIdentIdName {
@@ -76,7 +85,9 @@ pub enum EdError {
     },
 
     #[snafu(display("GetContentOnNestedNode: tried to get string content from Nested MarkupNode. Can only get content from Text or Blank nodes."))]
-    GetContentOnNestedNode { backtrace: Backtrace },
+    GetContentOnNestedNode {
+        backtrace: Backtrace,
+    },
 
     #[snafu(display(
         "IndexOfFailed: Element {} was not found in collection {}.",
@@ -107,7 +118,9 @@ pub enum EdError {
     #[snafu(display(
         "MissingSelection: ed_model.selected_expr2_id was Some(ExprId) but ed_model.caret_w_sel_vec did not contain any Some(Selection)."
     ))]
-    MissingSelection { backtrace: Backtrace },
+    MissingSelection {
+        backtrace: Backtrace,
+    },
 
     #[snafu(display("NestedNodeMissingChild: expected to find child with id {} in Nested MarkupNode, but it was missing. Id's of the children are {:?}.", node_id, children_ids))]
     NestedNodeMissingChild {
@@ -138,7 +151,9 @@ pub enum EdError {
     },
 
     #[snafu(display("NodeWithoutAttributes: expected to have a node with attributes. This is a Nested MarkupNode, only Text and Blank nodes have attributes."))]
-    NodeWithoutAttributes { backtrace: Backtrace },
+    NodeWithoutAttributes {
+        backtrace: Backtrace,
+    },
 
     #[snafu(display(
         "NodeIdNotInGridNodeMap: MarkNodeId {} was not found in ed_model.grid_node_map.",
@@ -159,6 +174,41 @@ pub enum EdError {
     },
 
     #[snafu(display(
+        "OutOfBounds: index {} was out of bounds for {} with length {}.",
+        index,
+        collection_name,
+        len
+    ))]
+    OutOfBounds {
+        index: usize,
+        collection_name: String,
+        len: usize,
+        backtrace: Backtrace,
+    },
+
+    #[snafu(display("RecordWithoutFields: expected record to have at least one field because it is not an EmptyRecord."))]
+    RecordWithoutFields {
+        backtrace: Backtrace,
+    },
+
+    #[snafu(display(
+        "RocCheckFailed: `cargo run check`/`roc check` detected errors(see terminal)."
+    ))]
+    RocCheckFailed,
+
+    #[snafu(display("ParseError: Failed to parse AST: SyntaxError: {}.", syntax_err))]
+    SrcParseError {
+        syntax_err: String,
+        backtrace: Backtrace,
+    },
+
+    #[snafu(display("StringParseError: {}", msg))]
+    StringParseError {
+        msg: String,
+        backtrace: Backtrace,
+    },
+
+    #[snafu(display(
         "UnexpectedASTNode: required a {} at this position, node was a {}.",
         required_node_type,
         encountered_node_type
@@ -166,6 +216,15 @@ pub enum EdError {
     UnexpectedASTNode {
         required_node_type: String,
         encountered_node_type: String,
+        backtrace: Backtrace,
+    },
+
+    #[snafu(display(
+        "UnexpectedEmptyPoolVec: expected PoolVec {} to have at least one element.",
+        descriptive_vec_name
+    ))]
+    UnexpectedEmptyPoolVec {
+        descriptive_vec_name: String,
         backtrace: Backtrace,
     },
 
@@ -180,46 +239,40 @@ pub enum EdError {
         backtrace: Backtrace,
     },
 
-    #[snafu(display(
-        "UnexpectedEmptyPoolVec: expected PoolVec {} to have at least one element.",
-        descriptive_vec_name
-    ))]
-    UnexpectedEmptyPoolVec {
-        descriptive_vec_name: String,
-        backtrace: Backtrace,
-    },
-
-    #[snafu(display(
-        "OutOfBounds: index {} was out of bounds for {} with length {}.",
-        index,
-        collection_name,
-        len
-    ))]
-    OutOfBounds {
-        index: usize,
-        collection_name: String,
-        len: usize,
-        backtrace: Backtrace,
-    },
-
-    #[snafu(display("ParseError: Failed to parse AST: SyntaxError: {}.", syntax_err))]
-    SrcParseError {
-        syntax_err: String,
-        backtrace: Backtrace,
-    },
-
-    #[snafu(display("RecordWithoutFields: expected record to have at least one field because it is not an EmptyRecord."))]
-    RecordWithoutFields { backtrace: Backtrace },
-
-    #[snafu(display("StringParseError: {}", msg))]
-    StringParseError { msg: String, backtrace: Backtrace },
-
     #[snafu(display("ASTError: {}", msg))]
-    ASTErrorBacktrace { msg: String, backtrace: Backtrace },
+    ASTErrorBacktrace {
+        msg: String,
+        backtrace: Backtrace,
+    },
     #[snafu(display("UIError: {}", msg))]
-    UIErrorBacktrace { msg: String, backtrace: Backtrace },
+    UIErrorBacktrace {
+        msg: String,
+        backtrace: Backtrace,
+    },
     #[snafu(display("MarkError: {}", msg))]
-    MarkErrorBacktrace { msg: String, backtrace: Backtrace },
+    MarkErrorBacktrace {
+        msg: String,
+        backtrace: Backtrace,
+    },
+    WrapASTError {
+        #[snafu(backtrace)]
+        source: ASTError,
+    },
+    WrapUIError {
+        #[snafu(backtrace)]
+        source: UIError,
+    },
+    WrapMarkError {
+        #[snafu(backtrace)]
+        source: MarkError,
+    },
+    WrapModuleError {
+        #[snafu(backtrace)]
+        source: ModuleError,
+    },
+    WrapIoError {
+        source: std::io::Error,
+    },
 }
 
 pub type EdResult<T, E = EdError> = std::result::Result<T, E>;
@@ -283,30 +336,30 @@ use crate::ui::ui_error::UIError;
 
 impl From<UIError> for EdError {
     fn from(ui_err: UIError) -> Self {
-        let msg = format!("{}", ui_err);
-
-        // hack to handle EdError derive
-        let dummy_res: Result<(), NoneError> = Err(NoneError {});
-        dummy_res.context(UIErrorBacktrace { msg }).unwrap_err()
+        Self::WrapUIError { source: ui_err }
     }
 }
 
 impl From<MarkError> for EdError {
     fn from(mark_err: MarkError) -> Self {
-        let msg = format!("{}", mark_err);
-
-        // hack to handle EdError derive
-        let dummy_res: Result<(), NoneError> = Err(NoneError {});
-        dummy_res.context(MarkErrorBacktrace { msg }).unwrap_err()
+        Self::WrapMarkError { source: mark_err }
     }
 }
 
 impl From<ASTError> for EdError {
     fn from(ast_err: ASTError) -> Self {
-        let msg = format!("{}", ast_err);
+        Self::WrapASTError { source: ast_err }
+    }
+}
 
-        // hack to handle EdError derive
-        let dummy_res: Result<(), NoneError> = Err(NoneError {});
-        dummy_res.context(ASTErrorBacktrace { msg }).unwrap_err()
+impl From<ModuleError> for EdError {
+    fn from(module_err: ModuleError) -> Self {
+        Self::WrapModuleError { source: module_err }
+    }
+}
+
+impl From<std::io::Error> for EdError {
+    fn from(io_err: std::io::Error) -> Self {
+        Self::WrapIoError { source: io_err }
     }
 }

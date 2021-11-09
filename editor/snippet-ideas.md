@@ -37,7 +37,7 @@ Fish hooks are used when subvariants should be created e.g.: <collection> means 
     + example: empty dict >> `{::}`
 - command: <common algorithm>
     + example: sieve of erathostenes >> `inserts function for sieve of erathostenes`
-    + common algorithms: sieve of erathostenes, greatest common divisior, prime factorisation, A* path finding, Dijkstra's algorithm, Breadth First Search...
+    + common algorithms: sieve of erathostenes, greatest common divisor, prime factorisation, A* path finding, Dijkstra's algorithm, Breadth First Search...
 - command: current date/datetime
     + example: current datetime >> `now <- Time.now\n`
 - command: list range 1 to 5

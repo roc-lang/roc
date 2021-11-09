@@ -4,6 +4,7 @@ const utils = @import("utils.zig");
 
 const ROC_BUILTINS = "roc_builtins";
 const NUM = "num";
+const STR = "str";
 
 // Dec Module
 const dec = @import("dec.zig");
@@ -26,6 +27,7 @@ comptime {
     exportListFn(list.listMap, "map");
     exportListFn(list.listMap2, "map2");
     exportListFn(list.listMap3, "map3");
+    exportListFn(list.listMap4, "map4");
     exportListFn(list.listMapWithIndex, "map_with_index");
     exportListFn(list.listKeepIf, "keep_if");
     exportListFn(list.listWalk, "walk");
@@ -43,11 +45,15 @@ comptime {
     exportListFn(list.listReverse, "reverse");
     exportListFn(list.listSortWith, "sort_with");
     exportListFn(list.listConcat, "concat");
+    exportListFn(list.listTakeFirst, "take_first");
+    exportListFn(list.listTakeLast, "take_last");
     exportListFn(list.listDrop, "drop");
     exportListFn(list.listDropAt, "drop_at");
     exportListFn(list.listSet, "set");
     exportListFn(list.listSetInPlace, "set_in_place");
     exportListFn(list.listSwap, "swap");
+    exportListFn(list.listAny, "any");
+    exportListFn(list.listFindUnsafe, "find_unsafe");
 }
 
 // Dict Module
@@ -114,13 +120,17 @@ comptime {
     exportStrFn(str.strConcatC, "concat");
     exportStrFn(str.strJoinWithC, "joinWith");
     exportStrFn(str.strNumberOfBytes, "number_of_bytes");
-    exportStrFn(str.strFromIntC, "from_int");
     exportStrFn(str.strFromFloatC, "from_float");
     exportStrFn(str.strEqual, "equal");
     exportStrFn(str.strToUtf8C, "to_utf8");
     exportStrFn(str.fromUtf8C, "from_utf8");
     exportStrFn(str.fromUtf8RangeC, "from_utf8_range");
     exportStrFn(str.repeat, "repeat");
+    exportStrFn(str.strTrim, "trim");
+
+    inline for (INTEGERS) |T| {
+        str.exportFromInt(T, ROC_BUILTINS ++ "." ++ STR ++ ".from_int.");
+    }
 }
 
 // Utils
@@ -159,7 +169,8 @@ fn exportUtilsFn(comptime func: anytype, comptime func_name: []const u8) void {
 
 // Custom panic function, as builtin Zig version errors during LLVM verification
 pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace) noreturn {
-    if (std.builtin.is_test) {
+    const builtin = @import("builtin");
+    if (builtin.is_test) {
         std.debug.print("{s}: {?}", .{ message, stacktrace });
     } else {
         _ = message;
@@ -185,7 +196,7 @@ test "" {
 //
 // Thank you Zig Contributors!
 
-// Export it as weak incase it is alreadly linked in by something else.
+// Export it as weak incase it is already linked in by something else.
 comptime {
     @export(__muloti4, .{ .name = "__muloti4", .linkage = .Weak });
 }

@@ -3,15 +3,16 @@ use smallvec::SmallVec;
 use std::collections::{btree_map::Entry, BTreeMap};
 use std::rc::Rc;
 
-use crate::analyze;
 use crate::preprocess;
 use crate::render_api_ir;
+use crate::type_cache::TypeCache;
 use crate::util::blocks::Blocks;
 use crate::util::id_bi_map::IdBiMap;
 use crate::util::id_type::Count;
 use crate::util::id_vec::IdVec;
 use crate::util::op_graph::OpGraph;
 use crate::util::replace_none::replace_none;
+use crate::{analyze, ir};
 
 #[derive(Clone, thiserror::Error, Debug)]
 #[non_exhaustive]
@@ -278,7 +279,7 @@ forward_trait! {
         /// Add a const ref expression to a block.
         ///
         /// This conceptually represents a fetch of a global constant value with static lifetime,
-        /// initialiazed at the beginning of the program.  It is considered unsafe to perform an
+        /// initialized at the beginning of the program.  It is considered unsafe to perform an
         /// in-place update on any heap cell reachable from a value returned from a const ref.
         fn add_const_ref(
             &mut self,
@@ -316,7 +317,7 @@ forward_trait! {
         /// a value of any type is expected).
         fn add_terminate(&mut self, block: BlockId, result_type: TypeId) -> Result<ValueId>;
 
-        /// Add an expresion which creates a fresh heap cell to a block.
+        /// Add an expression which creates a fresh heap cell to a block.
         fn add_new_heap_cell(&mut self, block: BlockId) -> Result<ValueId>;
 
         /// Add a 'touch' expression to a block.
@@ -1533,6 +1534,8 @@ impl Solutions {
     }
 }
 
+// TODO: Remove this; it's only used in obsolete logic for populating const definitions with trivial
+// solutions
 fn populate_specs(
     callee_spec_var_ids: Count<CalleeSpecVarId>,
     vals: &OpGraph<ValueId, Op>,
@@ -1555,11 +1558,14 @@ fn populate_specs(
     results.into_mapped(|_, spec| spec.unwrap())
 }
 
-pub fn solve(api_program: Program) -> Result<Solutions> {
+fn solve_with(
+    api_program: Program,
+    analysis: impl for<'a> FnOnce(TypeCache, &'a ir::Program) -> analyze::ProgramSolutions,
+) -> Result<Solutions> {
     let (nc, tc, program) =
         preprocess::preprocess(&api_program).map_err(ErrorKind::PreprocessError)?;
 
-    let mut solutions = analyze::analyze(tc, &program);
+    let mut solutions = analysis(tc, &program);
 
     Ok(Solutions {
         mods: api_program
@@ -1600,6 +1606,8 @@ pub fn solve(api_program: Program) -> Result<Solutions> {
                         .const_defs
                         .into_iter()
                         .map(|(const_name, const_def)| {
+                            // TODO: This is left over from the original stub implementation, and
+                            // generates incorrect callee specialization hashes!
                             let callee_specs = populate_specs(
                                 const_def.builder.expr_builder.callee_spec_vars.count(),
                                 &const_def.builder.expr_builder.vals,
@@ -1629,12 +1637,29 @@ pub fn solve(api_program: Program) -> Result<Solutions> {
     })
 }
 
+/// Solve for optimized update modes and function specializations
+pub fn solve(api_program: Program) -> Result<Solutions> {
+    solve_with(api_program, analyze::analyze)
+}
+
+/// Return a "trivial" solution for the program, setting every update mode to `Immutable`.
+///
+/// This function does not perform any expensive analysis, but it does typecheck the input program,
+/// so it can be useful for verifying the correctness of a generated program.
+pub fn solve_trivial(api_program: Program) -> Result<Solutions> {
+    solve_with(api_program, |_, program| analyze::analyze_trivial(program))
+}
+
+// TODO: Remove this; it's only used in obsolete logic for populating const definitions with trivial
+// solutions
 fn hash_bstr(hasher: &mut Sha256, bstr: &[u8]) {
     let header = (bstr.len() as u64).to_le_bytes();
     hasher.update(&header);
     hasher.update(bstr);
 }
 
+// TODO: Remove this; it's only used in obsolete logic for populating const definitions with trivial
+// solutions
 fn hash_func_name(mod_: ModName, func: FuncName) -> FuncSpec {
     let mut hasher = Sha256::new();
     hash_bstr(&mut hasher, mod_.0);

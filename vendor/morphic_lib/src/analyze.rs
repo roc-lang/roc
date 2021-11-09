@@ -438,7 +438,7 @@ impl<'a> ForwardState<'a> {
                 }
                 let mut arg_aliases = HashSet::new();
                 for (heap_cell, slot_indices) in &heap_cell_slots {
-                    // Wire up to ocurrences of the same heap cell in the argument slots
+                    // Wire up to occurrences of the same heap cell in the argument slots
                     for (i, &slot_i) in slot_indices.iter().enumerate() {
                         for &slot_j in &slot_indices[..i] {
                             arg_aliases.insert(NormPair::new(slot_i, slot_j));
@@ -1766,5 +1766,58 @@ pub(crate) fn analyze(tc: TypeCache, program: &ir::Program) -> ProgramSolutions 
     ProgramSolutions {
         funcs: func_solutions,
         entry_points: entry_point_solutions,
+    }
+}
+
+// Utilities for producing "trivial" solutions, in which each function has exactly one
+// specialization and all update modes are `Immutable`:
+
+fn hash_func_id_trivial(func_id: FuncId) -> api::FuncSpec {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(&func_id.0.to_le_bytes());
+    api::FuncSpec(hasher.finalize().into())
+}
+
+fn func_solution_trivial(func_def: &ir::FuncDef) -> FuncSolution {
+    let update_modes = IdVec::filled_with(func_def.graph.update_mode_vars(), || {
+        api::UpdateMode::Immutable
+    });
+    let mut callee_specs = IdVec::filled_with(func_def.graph.callee_spec_vars(), || None);
+    for val_id in func_def.graph.values().count().iter() {
+        if let ir::ValueKind::Op(ir::OpKind::Call {
+            callee_spec_var,
+            callee,
+        }) = &func_def.graph.values().node(val_id).op.kind
+        {
+            replace_none(
+                &mut callee_specs[callee_spec_var],
+                hash_func_id_trivial(*callee),
+            )
+            .unwrap();
+        }
+    }
+    FuncSolution {
+        update_modes,
+        callee_specs: callee_specs.into_mapped(|_, spec| spec.unwrap()),
+    }
+}
+
+pub(crate) fn analyze_trivial(program: &ir::Program) -> ProgramSolutions {
+    let funcs = FuncSolutions {
+        solutions: program.funcs.map(|func_id, func_def| {
+            std::iter::once((
+                hash_func_id_trivial(func_id),
+                Some(func_solution_trivial(func_def)),
+            ))
+            .collect()
+        }),
+    };
+    let entry_points = program
+        .entry_points
+        .map(|_, &func_id| hash_func_id_trivial(func_id));
+    ProgramSolutions {
+        funcs,
+        entry_points,
     }
 }

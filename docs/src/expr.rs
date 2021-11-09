@@ -5,7 +5,7 @@ use roc_ast::{
     lang::{self, core::expr::expr_to_expr2::expr_to_expr2},
     mem_pool::pool::Pool,
 };
-use roc_code_markup::{markup::nodes::expr2_to_markup, slow_pool::SlowPool};
+use roc_code_markup::{markup::convert::from_expr2::expr2_to_markup, slow_pool::SlowPool};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
 use roc_parse::ast::Expr;
 use roc_region::all::Region;
@@ -63,6 +63,7 @@ fn write_expr_to_bump_str_html<'a, 'b>(
         expr2_id,
         &mut mark_node_pool,
         interns,
+        0,
     )?;
 
     let expr2_markup_node = mark_node_pool.get(expr2_markup_id);

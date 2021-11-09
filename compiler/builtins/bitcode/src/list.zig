@@ -140,6 +140,7 @@ const Caller0 = fn (?[*]u8, ?[*]u8) callconv(.C) void;
 const Caller1 = fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 const Caller2 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 const Caller3 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
+const Caller4 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 
 pub fn listReverse(list: RocList, alignment: u32, element_width: usize, update_mode: UpdateMode) callconv(.C) RocList {
     if (list.bytes) |source_ptr| {
@@ -341,6 +342,70 @@ pub fn listMap3(
                 }
 
                 return output;
+            } else {
+                return RocList.empty();
+            }
+        } else {
+            return RocList.empty();
+        }
+    } else {
+        return RocList.empty();
+    }
+}
+
+pub fn listMap4(
+    list1: RocList,
+    list2: RocList,
+    list3: RocList,
+    list4: RocList,
+    caller: Caller4,
+    data: Opaque,
+    inc_n_data: IncN,
+    data_is_owned: bool,
+    alignment: u32,
+    a_width: usize,
+    b_width: usize,
+    c_width: usize,
+    d_width: usize,
+    e_width: usize,
+    dec_a: Dec,
+    dec_b: Dec,
+    dec_c: Dec,
+    dec_d: Dec,
+) callconv(.C) RocList {
+    const output_length = std.math.min(std.math.min(list1.len(), list2.len()), std.math.min(list3.len(), list4.len()));
+
+    decrementTail(list1, output_length, a_width, dec_a);
+    decrementTail(list2, output_length, b_width, dec_b);
+    decrementTail(list3, output_length, c_width, dec_c);
+    decrementTail(list4, output_length, d_width, dec_d);
+
+    if (data_is_owned) {
+        inc_n_data(data, output_length);
+    }
+
+    if (list1.bytes) |source_a| {
+        if (list2.bytes) |source_b| {
+            if (list3.bytes) |source_c| {
+                if (list4.bytes) |source_d| {
+                    const output = RocList.allocate(alignment, output_length, e_width);
+                    const target_ptr = output.bytes orelse unreachable;
+
+                    var i: usize = 0;
+                    while (i < output_length) : (i += 1) {
+                        const element_a = source_a + i * a_width;
+                        const element_b = source_b + i * b_width;
+                        const element_c = source_c + i * c_width;
+                        const element_d = source_d + i * d_width;
+                        const target = target_ptr + i * e_width;
+
+                        caller(data, element_a, element_b, element_c, element_d, target);
+                    }
+
+                    return output;
+                } else {
+                    return RocList.empty();
+                }
             } else {
                 return RocList.empty();
             }
@@ -797,6 +862,60 @@ pub fn listSwap(
     return newList;
 }
 
+pub fn listTakeFirst(
+    list: RocList,
+    alignment: u32,
+    element_width: usize,
+    take_count: usize,
+) callconv(.C) RocList {
+    if (list.bytes) |source_ptr| {
+        if (take_count == 0) {
+            return RocList.empty();
+        }
+        const in_len = list.len();
+        const out_len = std.math.min(take_count, in_len);
+
+        const output = RocList.allocate(alignment, out_len, element_width);
+        const target_ptr = output.bytes orelse unreachable;
+
+        @memcpy(target_ptr, source_ptr, out_len * element_width);
+
+        utils.decref(list.bytes, in_len * element_width, alignment);
+
+        return output;
+    } else {
+        return RocList.empty();
+    }
+}
+
+pub fn listTakeLast(
+    list: RocList,
+    alignment: u32,
+    element_width: usize,
+    take_count: usize,
+    dec: Dec,
+) callconv(.C) RocList {
+    if (take_count == 0) {
+        return RocList.empty();
+    }
+    if (list.bytes) |source_ptr| {
+        const size = list.len();
+        if (size <= take_count) {
+            return list;
+        }
+        const drop_count = size - take_count;
+        return listDrop(
+            list,
+            alignment,
+            element_width,
+            drop_count,
+            dec,
+        );
+    } else {
+        return RocList.empty();
+    }
+}
+
 pub fn listDrop(
     list: RocList,
     alignment: u32,
@@ -1013,6 +1132,36 @@ pub fn listSortWith(
     return list;
 }
 
+pub fn listAny(
+    list: RocList,
+    caller: Caller1,
+    data: Opaque,
+    inc_n_data: IncN,
+    data_is_owned: bool,
+    element_width: usize,
+) callconv(.C) bool {
+    if (list.bytes) |source_ptr| {
+        const size = list.len();
+
+        if (data_is_owned) {
+            inc_n_data(data, size);
+        }
+
+        var i: usize = 0;
+        var satisfied = false;
+        while (i < size) : (i += 1) {
+            const element = source_ptr + i * element_width;
+            caller(data, element, @ptrCast(?[*]u8, &satisfied));
+
+            if (satisfied) {
+                return satisfied;
+            }
+        }
+    }
+
+    return false;
+}
+
 // SWAP ELEMENTS
 
 inline fn swapHelp(width: usize, temporary: [*]u8, ptr1: [*]u8, ptr2: [*]u8) void {
@@ -1211,4 +1360,40 @@ inline fn listSetImmutable(
 
     //return list;
     return new_bytes;
+}
+
+pub fn listFindUnsafe(
+    list: RocList,
+    caller: Caller1,
+    data: Opaque,
+    inc_n_data: IncN,
+    data_is_owned: bool,
+    alignment: u32,
+    element_width: usize,
+    inc: Inc,
+    dec: Dec,
+) callconv(.C) extern struct { value: Opaque, found: bool } {
+    if (list.bytes) |source_ptr| {
+        const size = list.len();
+        if (data_is_owned) {
+            inc_n_data(data, size);
+        }
+
+        var i: usize = 0;
+        while (i < size) : (i += 1) {
+            var theOne = false;
+            const element = source_ptr + (i * element_width);
+            inc(element);
+            caller(data, element, @ptrCast(?[*]u8, &theOne));
+
+            if (theOne) {
+                return .{ .value = element, .found = true };
+            } else {
+                dec(element);
+            }
+        }
+        return .{ .value = null, .found = false };
+    } else {
+        return .{ .value = null, .found = false };
+    }
 }

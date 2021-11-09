@@ -58,8 +58,6 @@ impl<'a, 'i> Env<'a, 'i> {
     fn unique_symbol(&mut self) -> Symbol {
         let ident_id = self.ident_ids.gen_unique();
 
-        self.home.register_debug_idents(self.ident_ids);
-
         Symbol::new(self.home, ident_id)
     }
 }
