@@ -4071,29 +4071,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "test_dev"
-version = "0.1.0"
-dependencies = [
- "bumpalo",
- "indoc",
- "libloading 0.7.1",
- "roc_build",
- "roc_builtins",
- "roc_can",
- "roc_collections",
- "roc_constrain",
- "roc_gen_dev",
- "roc_load",
- "roc_mono",
- "roc_parse",
- "roc_problem",
- "roc_reporting",
- "roc_std",
- "target-lexicon",
- "tempfile",
-]
-
-[[package]]
 name = "test_gen"
 version = "0.1.0"
 dependencies = [
@@ -4110,7 +4087,9 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_constrain",
+ "roc_gen_dev",
  "roc_gen_llvm",
+ "roc_gen_wasm",
  "roc_load",
  "roc_module",
  "roc_mono",
@@ -4124,7 +4103,6 @@ dependencies = [
  "roc_unify",
  "target-lexicon",
  "tempfile",
- "test_wasm_util",
  "wasmer",
  "wasmer-wasi",
 ]
@@ -4152,35 +4130,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "test_wasm"
-version = "0.1.0"
-dependencies = [
- "bumpalo",
- "indoc",
- "libc",
- "roc_builtins",
- "roc_can",
- "roc_collections",
- "roc_gen_wasm",
- "roc_load",
- "roc_module",
- "roc_std",
- "roc_types",
- "target-lexicon",
- "test_wasm_util",
- "wasmer",
- "wasmer-wasi",
-]
-
-[[package]]
-name = "test_wasm_util"
-version = "0.1.0"
-dependencies = [
- "roc_std",
- "wasmer",
 ]
 
 [[package]]
