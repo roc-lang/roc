@@ -34,7 +34,7 @@ pub fn build_module<'a>(
 ) -> Result<std::vec::Vec<u8>, String> {
     let mut wasm_module = build_module_help(env, procedures)?;
     let mut buffer = std::vec::Vec::with_capacity(4096);
-    wasm_module.serialize(&mut buffer);
+    wasm_module.serialize_mut(&mut buffer);
     Ok(buffer)
 }
 

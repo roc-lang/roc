@@ -595,7 +595,7 @@ fn gen_if_fn() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_float_eq() {
     assert_evals_to!(
         indoc!(
@@ -699,7 +699,7 @@ fn gen_div_dec() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn gen_int_eq() {
     assert_evals_to!(
         indoc!(
@@ -1075,7 +1075,7 @@ fn lte_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gt_i64() {
     assert_evals_to!("2 > 1", true, bool);
     assert_evals_to!("2 > 2", false, bool);
@@ -1111,7 +1111,7 @@ fn lte_f64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gt_f64() {
     assert_evals_to!("2.2 > 1.1", true, bool);
     assert_evals_to!("2.2 > 2.2", false, bool);
@@ -1195,7 +1195,7 @@ fn if_guard_bind_variable_true() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn tail_call_elimination() {
     assert_evals_to!(
         indoc!(
@@ -1214,7 +1214,7 @@ fn tail_call_elimination() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_negate() {
     assert_evals_to!("Num.neg 123", -123, i64);
     assert_evals_to!("Num.neg Num.maxInt", -i64::MAX, i64);
@@ -1239,7 +1239,7 @@ fn neg_min_int_overflow() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_wrap_int_neg() {
     assert_evals_to!(
         indoc!(

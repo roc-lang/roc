@@ -350,11 +350,9 @@ impl<'a> CodeBuilder<'a> {
         self.set_global(STACK_POINTER_GLOBAL_ID);
     }
 
-    /// Finalize the function
-    /// Generate all the "extra" bytes: local declarations, stack frame push/pop code, and function length
-    /// After this, bytes will have been _generated_, but not yet _serialized_ into a single stream.
-    /// Returns the final number of bytes the function will occupy in the target binary
-    pub fn finalize(
+    /// Build the function header: local declarations, stack frame push/pop code, and function length
+    /// After this, all bytes have been generated (but not yet serialized) and we know the final size.
+    pub fn build_fn_header(
         &mut self,
         local_types: &[ValueType],
         frame_size: i32,

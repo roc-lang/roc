@@ -112,7 +112,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     );
 
     let mut module_bytes = std::vec::Vec::with_capacity(4096);
-    wasm_module.serialize(&mut module_bytes);
+    wasm_module.serialize_mut(&mut module_bytes);
 
     // for debugging (e.g. with wasm2wat or wasm-objdump)
     if false {
@@ -171,7 +171,7 @@ where
 
     let instance = crate::helpers::wasm::helper_wasm(&arena, src, stdlib, &expected);
 
-    let memory = instance.exports.get_memory("memory").unwrap();
+    let memory = instance.exports.get_memory("__linear_memory").unwrap();
 
     let test_wrapper = instance.exports.get_function(TEST_WRAPPER_NAME).unwrap();
 
