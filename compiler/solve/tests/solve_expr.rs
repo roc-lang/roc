@@ -3750,7 +3750,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Str.trim
+                Str.trimLeft
                 "#
             ),
             "Str -> Str",
