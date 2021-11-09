@@ -1569,11 +1569,9 @@ pub fn strTrimLeft(string: RocStr) callconv(.C) RocStr {
         if (leading_bytes > 0) {
             var i: usize = 0;
             while (i < new_len) : (i += 1) {
-                if (i >= leading_bytes - 1) {
-                    const dest = bytes_ptr + i;
-                    const source = dest + leading_bytes;
-                    @memcpy(dest, source, 1);
-                }
+                const dest = bytes_ptr + i;
+                const source = dest + leading_bytes;
+                @memcpy(dest, source, 1);
             }
         }
 
