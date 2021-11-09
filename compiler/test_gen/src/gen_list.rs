@@ -189,6 +189,27 @@ fn list_take_first() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn list_take_last() {
+    assert_evals_to!(
+        "List.takeLast [1, 2, 3] 2",
+        RocList::from_slice(&[2, 3]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.takeLast [1, 2, 3] 0",
+        RocList::from_slice(&[]),
+        RocList<i64>
+    );
+    assert_evals_to!("List.takeLast [] 1", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!(
+        "List.takeLast [1,2] 5",
+        RocList::from_slice(&[1, 2]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn list_drop() {
     assert_evals_to!(
         "List.drop [1,2,3] 2",

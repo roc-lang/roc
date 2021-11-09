@@ -888,6 +888,34 @@ pub fn listTakeFirst(
     }
 }
 
+pub fn listTakeLast(
+    list: RocList,
+    alignment: u32,
+    element_width: usize,
+    take_count: usize,
+    dec: Dec,
+) callconv(.C) RocList {
+    if (take_count == 0) {
+        return RocList.empty();
+    }
+    if (list.bytes) |source_ptr| {
+        const size = list.len();
+        if (size <= take_count) {
+            return list;
+        }
+        const drop_count = size - take_count;
+        return listDrop(
+            list,
+            alignment,
+            element_width,
+            drop_count,
+            dec,
+        );
+    } else {
+        return RocList.empty();
+    }
+}
+
 pub fn listDrop(
     list: RocList,
     alignment: u32,
