@@ -53,6 +53,7 @@ comptime {
     exportListFn(list.listSetInPlace, "set_in_place");
     exportListFn(list.listSwap, "swap");
     exportListFn(list.listAny, "any");
+    exportListFn(list.listFindUnsafe, "find_unsafe");
 }
 
 // Dict Module
