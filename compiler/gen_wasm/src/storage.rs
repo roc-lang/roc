@@ -51,7 +51,16 @@ pub enum StoredValue {
         size: u32,
         alignment_bytes: u32,
     },
-    // TODO: const data storage (fixed address)
+}
+
+impl StoredValue {
+    pub fn value_type(&self) -> ValueType {
+        match self {
+            Self::VirtualMachineStack { value_type, .. } => *value_type,
+            Self::Local { value_type, .. } => *value_type,
+            Self::StackMemory { .. } => ValueType::I32,
+        }
+    }
 }
 
 /// Helper structure for WasmBackend, to keep track of how values are stored,
