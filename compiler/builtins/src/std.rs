@@ -5,7 +5,7 @@ use roc_region::all::Region;
 use roc_types::builtin_aliases::{
     bool_type, dict_type, float_type, i128_type, int_type, list_type, nat_type, num_type,
     ordering_type, result_type, set_type, str_type, str_utf8_byte_problem_type, u16_type, u32_type,
-    u64_type, u8_type,
+    u8_type,
 };
 use roc_types::solved_types::SolvedType;
 use roc_types::subs::VarId;
@@ -877,6 +877,19 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(list_type(int_type(flex(TVAR1)))),
     );
 
+    // joinMap : List before, (before -> List after) -> List after
+    {
+        let_tvars! { cvar, before, after }
+        add_top_level_function_type!(
+            Symbol::LIST_JOIN_MAP,
+            vec![
+                list_type(flex(before)),
+                closure(vec![flex(before)], cvar, Box::new(list_type(flex(after)))),
+            ],
+            Box::new(list_type(flex(after))),
+        );
+    }
+
     // map : List before, (before -> after) -> List after
     add_top_level_function_type!(
         Symbol::LIST_MAP,
@@ -955,6 +968,20 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_top_level_function_type!(
         Symbol::LIST_APPEND,
         vec![list_type(flex(TVAR1)), flex(TVAR1)],
+        Box::new(list_type(flex(TVAR1))),
+    );
+
+    // takeFirst : List elem, Nat -> List elem
+    add_top_level_function_type!(
+        Symbol::LIST_TAKE_FIRST,
+        vec![list_type(flex(TVAR1)), nat_type()],
+        Box::new(list_type(flex(TVAR1))),
+    );
+
+    // takeLast : List elem, Nat -> List elem
+    add_top_level_function_type!(
+        Symbol::LIST_TAKE_LAST,
+        vec![list_type(flex(TVAR1)), nat_type()],
         Box::new(list_type(flex(TVAR1))),
     );
 
@@ -1042,6 +1069,16 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(bool_type())
     );
 
+    // any: List elem, (elem -> Bool) -> Bool
+    add_top_level_function_type!(
+        Symbol::LIST_ANY,
+        vec![
+            list_type(flex(TVAR1)),
+            closure(vec![flex(TVAR1)], TVAR2, Box::new(bool_type())),
+        ],
+        Box::new(bool_type()),
+    );
+
     // sortWith : List a, (a, a -> Ordering) -> List a
     add_top_level_function_type!(
         Symbol::LIST_SORT_WITH,
@@ -1056,14 +1093,24 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(list_type(flex(TVAR1))),
     );
 
-    // Dict module
+    // find : List elem, (elem -> Bool) -> Result elem [ NotFound ]*
+    {
+        let not_found = SolvedType::TagUnion(
+            vec![(TagName::Global("NotFound".into()), vec![])],
+            Box::new(SolvedType::Wildcard),
+        );
+        let (elem, cvar) = (TVAR1, TVAR2);
+        add_top_level_function_type!(
+            Symbol::LIST_FIND,
+            vec![
+                list_type(flex(elem)),
+                closure(vec![flex(elem)], cvar, Box::new(bool_type())),
+            ],
+            Box::new(result_type(flex(elem), not_found)),
+        )
+    }
 
-    // Dict.hashTestOnly : U64, v -> U64
-    add_top_level_function_type!(
-        Symbol::DICT_TEST_HASH,
-        vec![u64_type(), flex(TVAR2)],
-        Box::new(u64_type())
-    );
+    // Dict module
 
     // len : Dict * * -> Nat
     add_top_level_function_type!(

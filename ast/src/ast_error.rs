@@ -9,7 +9,7 @@ use crate::lang::core::ast::ASTNodeId;
 #[snafu(visibility(pub))]
 pub enum ASTError {
     #[snafu(display(
-        "ASTNodeIdWithoutExprId: The expr_id_opt in ASTNode({:?}) was `None` but I was expexting `Some(ExprId)` .",
+        "ASTNodeIdWithoutExprId: The expr_id_opt in ASTNode({:?}) was `None` but I was expecting `Some(ExprId)` .",
         ast_node_id
     ))]
     ASTNodeIdWithoutExprId {

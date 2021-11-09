@@ -42,9 +42,13 @@ pub enum LowLevel {
     ListKeepOks,
     ListKeepErrs,
     ListSortWith,
+    ListTakeFirst,
+    ListTakeLast,
     ListDrop,
     ListDropAt,
     ListSwap,
+    ListAny,
+    ListFindUnsafe,
     DictSize,
     DictEmpty,
     DictInsert,
@@ -130,6 +134,8 @@ macro_rules! first_order {
             | ListLen
             | ListGetUnsafe
             | ListSet
+            | ListTakeFirst
+            | ListTakeLast
             | ListDrop
             | ListDropAt
             | ListSingle
@@ -221,6 +227,8 @@ macro_rules! higher_order {
             | ListKeepOks
             | ListKeepErrs
             | ListSortWith
+            | ListAny
+            | ListFindUnsafe
             | DictWalk
     };
 }
@@ -254,6 +262,8 @@ impl LowLevel {
             ListKeepOks => 1,
             ListKeepErrs => 1,
             ListSortWith => 1,
+            ListAny => 1,
+            ListFindUnsafe => 1,
             DictWalk => 2,
         }
     }

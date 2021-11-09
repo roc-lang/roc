@@ -86,10 +86,13 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_PRODUCT => list_product,
         LIST_PREPEND => list_prepend,
         LIST_JOIN => list_join,
+        LIST_JOIN_MAP => list_join_map,
         LIST_MAP => list_map,
         LIST_MAP2 => list_map2,
         LIST_MAP3 => list_map3,
         LIST_MAP4 => list_map4,
+        LIST_TAKE_FIRST => list_take_first,
+        LIST_TAKE_LAST => list_take_last,
         LIST_DROP => list_drop,
         LIST_DROP_AT => list_drop_at,
         LIST_DROP_FIRST => list_drop_first,
@@ -104,7 +107,8 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_WALK_BACKWARDS => list_walk_backwards,
         LIST_WALK_UNTIL => list_walk_until,
         LIST_SORT_WITH => list_sort_with,
-        DICT_TEST_HASH => dict_hash_test_only,
+        LIST_ANY => list_any,
+        LIST_FIND => list_find,
         DICT_LEN => dict_len,
         DICT_EMPTY => dict_empty,
         DICT_SINGLE => dict_single,
@@ -2004,6 +2008,52 @@ fn list_swap(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
+/// List.takeFirst : List elem, Nat -> List elem
+fn list_take_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
+    let len_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::ListTakeFirst,
+        args: vec![
+            (list_var, Var(Symbol::ARG_1)),
+            (len_var, Var(Symbol::ARG_2)),
+        ],
+        ret_var: list_var,
+    };
+
+    defn(
+        symbol,
+        vec![(list_var, Symbol::ARG_1), (len_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        list_var,
+    )
+}
+
+/// List.takeLast : List elem, Nat -> List elem
+fn list_take_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
+    let len_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::ListTakeLast,
+        args: vec![
+            (list_var, Var(Symbol::ARG_1)),
+            (len_var, Var(Symbol::ARG_2)),
+        ],
+        ret_var: list_var,
+    };
+
+    defn(
+        symbol,
+        vec![(list_var, Symbol::ARG_1), (len_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        list_var,
+    )
+}
+
 /// List.drop : List elem, Nat -> List elem
 fn list_drop(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
@@ -2198,6 +2248,83 @@ fn list_walk_backwards(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// List.walkUntil : List elem, state, (state, elem -> [ Continue state, Stop state ]) -> state
 fn list_walk_until(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_3(symbol, LowLevel::ListWalkUntil, var_store)
+}
+
+/// List.joinMap : List before, (before -> List after) -> List after
+fn list_join_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let before = var_store.fresh();
+    let list_before = var_store.fresh();
+    let after = var_store.fresh();
+    let list_after = var_store.fresh();
+    let before2list_after = var_store.fresh();
+    let t_concat_clos = var_store.fresh();
+    let mapper_lambda_set = var_store.fresh();
+
+    // \state, elem -> List.concat state (mapper elem)
+    let concat_clos = Closure(ClosureData {
+        function_type: t_concat_clos,
+        closure_type: var_store.fresh(),
+        closure_ext_var: var_store.fresh(),
+        return_type: list_after,
+        name: Symbol::LIST_JOIN_MAP_CONCAT,
+        recursive: Recursive::NotRecursive,
+        captured_symbols: vec![(Symbol::ARG_2, before2list_after)],
+        arguments: vec![
+            (list_after, no_region(Pattern::Identifier(Symbol::ARG_3))),
+            (before, no_region(Pattern::Identifier(Symbol::ARG_4))),
+        ],
+        loc_body: {
+            let mapper = Box::new((
+                before2list_after,
+                no_region(Var(Symbol::ARG_2)),
+                mapper_lambda_set,
+                list_after, // return type
+            ));
+            // (mapper elem)
+            let mapper_elem = Call(
+                mapper,
+                vec![(before, no_region(Var(Symbol::ARG_4)))],
+                CalledVia::Space,
+            );
+            Box::new(no_region(RunLowLevel {
+                op: LowLevel::ListConcat,
+                args: vec![(list_after, Var(Symbol::ARG_3)), (list_after, mapper_elem)],
+                ret_var: list_after,
+            }))
+        },
+    });
+
+    // List.joinMap = \input_list, mapper ->
+    //   List.walk [] input_list (\state, elem -> List.concat state (mapper elem))
+    let body = RunLowLevel {
+        op: LowLevel::ListWalk,
+        args: vec![
+            // input_list : List before
+            (list_before, Var(Symbol::ARG_1)),
+            // [] : List after
+            (
+                list_after,
+                List {
+                    elem_var: after,
+                    loc_elems: vec![],
+                },
+            ),
+            // \state, elem -> List.concat state (mapper elem)
+            (t_concat_clos, concat_clos),
+        ],
+        ret_var: list_after,
+    };
+
+    defn(
+        symbol,
+        vec![
+            (list_before, Symbol::ARG_1),
+            (before2list_after, Symbol::ARG_2),
+        ],
+        var_store,
+        body,
+        list_after,
+    )
 }
 
 // min :  List (Num a) -> Result (Num a) [ ListWasEmpty ]*
@@ -2617,9 +2744,90 @@ fn list_sort_with(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::ListSortWith, var_store)
 }
 
-/// Dict.hashTestOnly : k, v -> Nat
-fn dict_hash_test_only(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    lowlevel_2(symbol, LowLevel::Hash, var_store)
+/// List.any: List elem, (elem -> Bool) -> Bool
+fn list_any(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::ListAny, var_store)
+}
+
+/// List.find : List elem, (elem -> Bool) -> Result elem [ NotFound ]*
+fn list_find(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list = Symbol::ARG_1;
+    let find_predicate = Symbol::ARG_2;
+
+    let find_result = Symbol::LIST_FIND_RESULT;
+
+    let t_list = var_store.fresh();
+    let t_pred_fn = var_store.fresh();
+    let t_bool = var_store.fresh();
+    let t_found = var_store.fresh();
+    let t_value = var_store.fresh();
+    let t_ret = var_store.fresh();
+    let t_find_result = var_store.fresh();
+    let t_ext_var1 = var_store.fresh();
+    let t_ext_var2 = var_store.fresh();
+
+    // ListFindUnsafe returns { value: elem, found: Bool }.
+    // When `found` is true, the value was found. Otherwise `List.find` should return `Err ...`
+    let find_result_def = Def {
+        annotation: None,
+        expr_var: t_find_result,
+        loc_expr: no_region(RunLowLevel {
+            op: LowLevel::ListFindUnsafe,
+            args: vec![(t_list, Var(list)), (t_pred_fn, Var(find_predicate))],
+            ret_var: t_find_result,
+        }),
+        loc_pattern: no_region(Pattern::Identifier(find_result)),
+        pattern_vars: Default::default(),
+    };
+
+    let get_value = Access {
+        record_var: t_find_result,
+        ext_var: t_ext_var1,
+        field_var: t_value,
+        loc_expr: Box::new(no_region(Var(find_result))),
+        field: "value".into(),
+    };
+
+    let get_found = Access {
+        record_var: t_find_result,
+        ext_var: t_ext_var2,
+        field_var: t_found,
+        loc_expr: Box::new(no_region(Var(find_result))),
+        field: "found".into(),
+    };
+
+    let make_ok = tag("Ok", vec![get_value], var_store);
+
+    let make_err = tag(
+        "Err",
+        vec![tag("NotFound", Vec::new(), var_store)],
+        var_store,
+    );
+
+    let inspect = If {
+        cond_var: t_bool,
+        branch_var: t_ret,
+        branches: vec![(
+            // if-condition
+            no_region(get_found),
+            no_region(make_ok),
+        )],
+        final_else: Box::new(no_region(make_err)),
+    };
+
+    let body = LetNonRec(
+        Box::new(find_result_def),
+        Box::new(no_region(inspect)),
+        t_ret,
+    );
+
+    defn(
+        symbol,
+        vec![(t_list, Symbol::ARG_1), (t_pred_fn, Symbol::ARG_2)],
+        var_store,
+        body,
+        t_ret,
+    )
 }
 
 /// Dict.len : Dict * * -> Nat

@@ -454,7 +454,7 @@ pub fn expr_to_expr2<'a>(
 
                     // We shouldn't ultimately count arguments as referenced locals. Otherwise,
                     // we end up with weird conclusions like the expression (\x -> x + 1)
-                    // references the (nonexistant) local variable x!
+                    // references the (nonexistent) local variable x!
                     output.references.lookups.remove(&sub_symbol);
                 }
             }

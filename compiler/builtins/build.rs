@@ -8,12 +8,7 @@ use std::process::Command;
 use std::str;
 
 fn main() {
-    let out_dir = env::var_os("OUT_DIR").unwrap();
-    let dest_obj_path = Path::new(&out_dir).join("builtins.o");
-    let dest_obj = dest_obj_path.to_str().expect("Invalid dest object path");
-
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rustc-env=BUILTINS_O={}", dest_obj);
 
     // When we build on Netlify, zig is not installed (but also not used,
     // since all we're doing is generating docs), so we can skip the steps
@@ -28,70 +23,38 @@ fn main() {
     let build_script_dir_path = fs::canonicalize(Path::new(".")).unwrap();
     let bitcode_path = build_script_dir_path.join("bitcode");
 
-    let src_obj_path = bitcode_path.join("builtins-host.o");
-    let src_obj = src_obj_path.to_str().expect("Invalid src object path");
+    // LLVM .bc FILES
 
-    let dest_ir_path = bitcode_path.join("builtins-wasm32.ll");
-    let dest_ir_wasm32 = dest_ir_path.to_str().expect("Invalid dest ir path");
+    generate_bc_file(&bitcode_path, &build_script_dir_path, "ir", "builtins-host");
 
-    let dest_ir_path = bitcode_path.join("builtins-i386.ll");
-    let dest_ir_i386 = dest_ir_path.to_str().expect("Invalid dest ir path");
-
-    let dest_ir_path = bitcode_path.join("builtins-host.ll");
-    let dest_ir_host = dest_ir_path.to_str().expect("Invalid dest ir path");
-
-    println!("Compiling zig object to: {}", src_obj);
-    run_command(&bitcode_path, "zig", &["build", "object", "-Drelease=true"]);
-
-    println!("Compiling host ir to: {}", dest_ir_host);
-    run_command(&bitcode_path, "zig", &["build", "ir", "-Drelease=true"]);
-
-    println!("Compiling 32-bit i386 ir to: {}", dest_ir_i386);
-    run_command(
+    generate_bc_file(
         &bitcode_path,
-        "zig",
-        &["build", "ir-i386", "-Drelease=true"],
+        &build_script_dir_path,
+        "ir-wasm32",
+        "builtins-wasm32",
     );
 
-    println!("Compiling 32-bit wasm32 ir to: {}", dest_ir_wasm32);
-    run_command(
+    generate_bc_file(
         &bitcode_path,
-        "zig",
-        &["build", "ir-wasm32", "-Drelease=true"],
+        &build_script_dir_path,
+        "ir-i386",
+        "builtins-i386",
     );
 
-    println!("Moving zig object to: {}", dest_obj);
+    // OBJECT FILES
 
-    run_command(&bitcode_path, "mv", &[src_obj, dest_obj]);
-
-    let dest_bc_path = bitcode_path.join("builtins-i386.bc");
-    let dest_bc_32bit = dest_bc_path.to_str().expect("Invalid dest bc path");
-    println!("Compiling 32-bit bitcode to: {}", dest_bc_32bit);
-
-    run_command(
-        &build_script_dir_path,
-        "llvm-as",
-        &[dest_ir_i386, "-o", dest_bc_32bit],
+    generate_object_file(
+        &bitcode_path,
+        "BUILTINS_HOST_O",
+        "object",
+        "builtins-host.o",
     );
 
-    let dest_bc_path = bitcode_path.join("builtins-wasm32.bc");
-    let dest_bc_32bit = dest_bc_path.to_str().expect("Invalid dest bc path");
-    println!("Compiling 32-bit bitcode to: {}", dest_bc_32bit);
-
-    run_command(
-        &build_script_dir_path,
-        "llvm-as",
-        &[dest_ir_wasm32, "-o", dest_bc_32bit],
-    );
-
-    let dest_bc_path = bitcode_path.join("builtins-host.bc");
-    let dest_bc_64bit = dest_bc_path.to_str().expect("Invalid dest bc path");
-    println!("Compiling 64-bit bitcode to: {}", dest_bc_64bit);
-
-    run_command(
-        &build_script_dir_path,
-        "llvm-as",
-        &[dest_ir_host, "-o", dest_bc_64bit],
+    generate_object_file(
+        &bitcode_path,
+        "BUILTINS_WASM32_O",
+        "wasm32-object",
+        "builtins-wasm32.o",
     );
 
     get_zig_files(bitcode_path.as_path(), &|path| {
@@ -102,6 +65,69 @@ fn main() {
         );
     })
     .unwrap();
+}
+
+fn generate_object_file(
+    bitcode_path: &Path,
+    env_var_name: &str,
+    zig_object: &str,
+    object_file_name: &str,
+) {
+    let out_dir = env::var_os("OUT_DIR").unwrap();
+
+    let dest_obj_path = Path::new(&out_dir).join(object_file_name);
+    let dest_obj = dest_obj_path.to_str().expect("Invalid dest object path");
+
+    // set the variable (e.g. BUILTINS_HOST_O) that is later used in
+    // `compiler/builtins/src/bitcode.rs` to load the object file
+    println!("cargo:rustc-env={}={}", env_var_name, dest_obj);
+
+    let src_obj_path = bitcode_path.join(object_file_name);
+    let src_obj = src_obj_path.to_str().expect("Invalid src object path");
+
+    println!("Compiling zig object `{}` to: {}", zig_object, src_obj);
+
+    run_command(
+        &bitcode_path,
+        "zig",
+        &["build", zig_object, "-Drelease=true"],
+    );
+
+    println!("Moving zig object `{}` to: {}", zig_object, dest_obj);
+
+    // we store this .o file in rust's `target` folder
+    run_command(&bitcode_path, "mv", &[src_obj, dest_obj]);
+}
+
+fn generate_bc_file(
+    bitcode_path: &Path,
+    build_script_dir_path: &Path,
+    zig_object: &str,
+    file_name: &str,
+) {
+    let mut ll_path = bitcode_path.join(file_name);
+    ll_path.set_extension("ll");
+    let dest_ir_host = ll_path.to_str().expect("Invalid dest ir path");
+
+    println!("Compiling host ir to: {}", dest_ir_host);
+
+    run_command(
+        &bitcode_path,
+        "zig",
+        &["build", zig_object, "-Drelease=true"],
+    );
+
+    let mut bc_path = bitcode_path.join(file_name);
+    bc_path.set_extension("bc");
+    let dest_bc_64bit = bc_path.to_str().expect("Invalid dest bc path");
+
+    println!("Compiling 64-bit bitcode to: {}", dest_bc_64bit);
+
+    run_command(
+        &build_script_dir_path,
+        "llvm-as",
+        &[dest_ir_host, "-o", dest_bc_64bit],
+    );
 }
 
 fn run_command<S, I, P: AsRef<Path>>(path: P, command_str: &str, args: I)

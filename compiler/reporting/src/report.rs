@@ -398,7 +398,7 @@ impl<'a> RocDocAllocator<'a> {
         debug_assert!(region.contains(&sub_region2));
 
         // if true, the final line of the snippet will be some ^^^ that point to the region where
-        // the problem is. Otherwise, the snippet will have a > on the lines that are in the regon
+        // the problem is. Otherwise, the snippet will have a > on the lines that are in the region
         // where the problem is.
         let error_highlight_line = region.start_line == region.end_line;
 
@@ -505,7 +505,7 @@ impl<'a> RocDocAllocator<'a> {
         }
 
         // if true, the final line of the snippet will be some ^^^ that point to the region where
-        // the problem is. Otherwise, the snippet will have a > on the lines that are in the regon
+        // the problem is. Otherwise, the snippet will have a > on the lines that are in the region
         // where the problem is.
         let error_highlight_line = sub_region.start_line == region.end_line;
 

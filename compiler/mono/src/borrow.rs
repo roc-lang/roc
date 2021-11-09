@@ -617,7 +617,9 @@ impl<'a> BorrowInfState<'a> {
                     ListMap { xs }
                     | ListKeepIf { xs }
                     | ListKeepOks { xs }
-                    | ListKeepErrs { xs } => {
+                    | ListKeepErrs { xs }
+                    | ListAny { xs }
+                    | ListFindUnsafe { xs } => {
                         // own the list if the function wants to own the element
                         if !function_ps[0].borrow {
                             self.own_var(*xs);
@@ -949,7 +951,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         ListMap2 => arena.alloc_slice_copy(&[owned, owned, function, closure_data]),
         ListMap3 => arena.alloc_slice_copy(&[owned, owned, owned, function, closure_data]),
         ListMap4 => arena.alloc_slice_copy(&[owned, owned, owned, owned, function, closure_data]),
-        ListKeepIf | ListKeepOks | ListKeepErrs => {
+        ListKeepIf | ListKeepOks | ListKeepErrs | ListAny => {
             arena.alloc_slice_copy(&[owned, function, closure_data])
         }
         ListContains => arena.alloc_slice_copy(&[borrowed, irrelevant]),
@@ -958,10 +960,13 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
             arena.alloc_slice_copy(&[owned, owned, function, closure_data])
         }
         ListSortWith => arena.alloc_slice_copy(&[owned, function, closure_data]),
+        ListFindUnsafe => arena.alloc_slice_copy(&[owned, function, closure_data]),
 
         // TODO when we have lists with capacity (if ever)
         // List.append should own its first argument
         ListAppend => arena.alloc_slice_copy(&[owned, owned]),
+        ListTakeFirst => arena.alloc_slice_copy(&[owned, irrelevant]),
+        ListTakeLast => arena.alloc_slice_copy(&[owned, irrelevant]),
         ListDrop => arena.alloc_slice_copy(&[owned, irrelevant]),
         ListDropAt => arena.alloc_slice_copy(&[owned, irrelevant]),
         ListSwap => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),

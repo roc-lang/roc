@@ -1379,7 +1379,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
     ) {
         debug_assert_eq!(cases.len(), 1);
 
-        // in this case, don't switch, because the `else` branch below would try to read the (nonexistant) tag id
+        // in this case, don't switch, because the `else` branch below would try to read the (nonexistent) tag id
         let (_, only_branch) = cases.pop().unwrap();
         env.builder.build_unconditional_branch(only_branch);
     } else {

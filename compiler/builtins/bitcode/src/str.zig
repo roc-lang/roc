@@ -264,7 +264,7 @@ pub const RocStr = extern struct {
     }
 
     // Returns (@sizeOf(RocStr) - 1) for small strings and the empty string.
-    // Returns 0 for refcounted stirngs and immortal strings.
+    // Returns 0 for refcounted strings and immortal strings.
     // Returns the stored capacity value for all other strings.
     pub fn capacity(self: RocStr) usize {
         const length = self.len();
@@ -413,9 +413,14 @@ pub fn strNumberOfBytes(string: RocStr) callconv(.C) usize {
 }
 
 // Str.fromInt
-pub fn strFromIntC(int: i64) callconv(.C) RocStr {
-    // prepare for having multiple integer types in the future
-    return @call(.{ .modifier = always_inline }, strFromIntHelp, .{ i64, int });
+pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(int: T) callconv(.C) RocStr {
+            return @call(.{ .modifier = always_inline }, strFromIntHelp, .{ T, int });
+        }
+    }.func;
+
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
 }
 
 fn strFromIntHelp(comptime T: type, int: T) RocStr {

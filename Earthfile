@@ -47,7 +47,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
 
 copy-dirs:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
-    COPY --dir cli compiler docs editor ast code_markup utils roc_std vendor examples linker Cargo.toml Cargo.lock version.txt ./
+    COPY --dir cli cli_utils compiler docs editor ast code_markup utils roc_std vendor examples linker Cargo.toml Cargo.lock version.txt ./
 
 test-zig:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
@@ -67,7 +67,7 @@ check-rustfmt:
 
 check-typos:
     RUN cargo install typos-cli --version 1.0.11 # version set to prevent confusion if the version is updated automatically
-    COPY --dir .github ci cli compiler docs editor examples ast code_markup utils linker nightly_benches packages roc_std www *.md LEGAL_DETAILS shell.nix version.txt ./
+    COPY --dir .github ci cli cli_utils compiler docs editor examples ast code_markup utils linker nightly_benches packages roc_std www *.md LEGAL_DETAILS shell.nix version.txt ./
     RUN typos
 
 test-rust:
@@ -79,11 +79,17 @@ test-rust:
     # not pre-compiling the host can cause race conditions
     RUN echo "4" | cargo run --release examples/benchmarks/NQueens.roc
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test --release && sccache --show-stats
+        cargo test --release --features with_sound --workspace && sccache --show-stats
+    # test the dev and wasm backend: they require an explicit feature flag.
+    RUN --mount=type=cache,target=$SCCACHE_DIR \
+        cargo test --release --package test_gen --no-default-features --features gen-dev && sccache --show-stats
+    # gen-wasm has some multithreading problems to do with the wasmer runtime. Run it single-threaded as a separate job
+    RUN --mount=type=cache,target=$SCCACHE_DIR \
+        cargo test --release --package test_gen --no-default-features --features gen-wasm -- --test-threads=1 && sccache --show-stats
     # run i386 (32-bit linux) cli tests
     RUN echo "4" | cargo run --release --features="target-x86" -- --backend=x86_32 examples/benchmarks/NQueens.roc
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test --release --test cli_run i386 --features="i386-cli-run" && sccache --show-stats
+        cargo test --release --features with_sound --test cli_run i386 --features="i386-cli-run" && sccache --show-stats
 
 verify-no-git-changes:
     FROM +test-rust
@@ -109,7 +115,7 @@ build-nightly-release:
     # version.txt is used by the CLI: roc --version
     RUN printf "nightly pre-release, built from commit " > version.txt
     RUN git log --pretty=format:'%h' -n 1 >> version.txt
-    RUN cargo build --release
+    RUN cargo build --features with_sound --release
     RUN cd ./target/release && tar -czvf roc_linux_x86_64.tar.gz ./roc
     SAVE ARTIFACT ./target/release/roc_linux_x86_64.tar.gz AS LOCAL roc_linux_x86_64.tar.gz
 

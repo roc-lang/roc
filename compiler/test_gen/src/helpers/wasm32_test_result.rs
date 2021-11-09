@@ -1,6 +1,6 @@
 use bumpalo::collections::Vec;
 
-use roc_gen_wasm::from_wasm32_memory::FromWasm32Memory;
+use crate::helpers::from_wasm32_memory::FromWasm32Memory;
 use roc_gen_wasm::wasm_module::opcodes;
 use roc_gen_wasm::wasm_module::{
     Align, CodeBuilder, Export, ExportType, LocalId, Signature, ValueType, WasmModule,
@@ -101,6 +101,7 @@ wasm_test_result_primitive!(u32, i32_store, Align::Bytes4);
 wasm_test_result_primitive!(i32, i32_store, Align::Bytes4);
 wasm_test_result_primitive!(u64, i64_store, Align::Bytes8);
 wasm_test_result_primitive!(i64, i64_store, Align::Bytes8);
+wasm_test_result_primitive!(usize, i32_store, Align::Bytes4);
 
 wasm_test_result_primitive!(f32, f32_store, Align::Bytes8);
 wasm_test_result_primitive!(f64, f64_store, Align::Bytes8);
