@@ -3746,6 +3746,19 @@ mod solve_expr {
     }
 
     #[test]
+    fn str_trim_left() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Str.trim
+                "#
+            ),
+            "Str -> Str",
+        );
+    }
+
+
+    #[test]
     fn list_take_first() {
         infer_eq_without_problem(
             indoc!(

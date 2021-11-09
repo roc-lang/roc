@@ -18,6 +18,7 @@ pub enum LowLevel {
     StrRepeat,
     StrFromFloat,
     StrTrim,
+    StrTrimLeft,
     ListLen,
     ListGetUnsafe,
     ListSet,
@@ -128,6 +129,7 @@ macro_rules! first_order {
             | StrToUtf8
             | StrRepeat
             | StrTrim
+            | StrTrimLeft
             | StrFromFloat
             | ListLen
             | ListGetUnsafe
