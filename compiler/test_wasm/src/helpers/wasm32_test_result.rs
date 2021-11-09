@@ -47,7 +47,7 @@ macro_rules! build_wrapper_body_primitive {
             code_builder.$store_instruction($align, 0);
             code_builder.get_local(frame_pointer_id);
 
-            code_builder.finalize(local_types, frame_size, frame_pointer);
+            code_builder.build_fn_header(local_types, frame_size, frame_pointer);
         }
     };
 }
@@ -73,7 +73,7 @@ fn build_wrapper_body_stack_memory(
     // Raw "call" instruction. Don't bother with symbol & relocation since we're not going to link.
     code_builder.inst_imm32(opcodes::CALL, 0, true, main_function_index);
     code_builder.get_local(local_id);
-    code_builder.finalize(local_types, size as i32, frame_pointer);
+    code_builder.build_fn_header(local_types, size as i32, frame_pointer);
 }
 
 macro_rules! wasm_test_result_stack_memory {

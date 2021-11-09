@@ -183,7 +183,7 @@ impl<'a> WasmBackend<'a> {
         self.end_block();
 
         // Write local declarations and stack frame push/pop code
-        self.code_builder.finalize(
+        self.code_builder.build_fn_header(
             &self.storage.local_types,
             self.storage.stack_frame_size,
             self.storage.stack_frame_pointer,
