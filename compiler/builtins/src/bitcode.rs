@@ -177,6 +177,7 @@ pub const LIST_CONTAINS: &str = "roc_builtins.list.contains";
 pub const LIST_REPEAT: &str = "roc_builtins.list.repeat";
 pub const LIST_APPEND: &str = "roc_builtins.list.append";
 pub const LIST_PREPEND: &str = "roc_builtins.list.prepend";
+pub const LIST_TAKE_FIRST: &str = "roc_builtins.list.take_first";
 pub const LIST_DROP: &str = "roc_builtins.list.drop";
 pub const LIST_DROP_AT: &str = "roc_builtins.list.drop_at";
 pub const LIST_SWAP: &str = "roc_builtins.list.swap";
@@ -189,6 +190,7 @@ pub const LIST_CONCAT: &str = "roc_builtins.list.concat";
 pub const LIST_SET: &str = "roc_builtins.list.set";
 pub const LIST_SET_IN_PLACE: &str = "roc_builtins.list.set_in_place";
 pub const LIST_ANY: &str = "roc_builtins.list.any";
+pub const LIST_FIND_UNSAFE: &str = "roc_builtins.list.find_unsafe";
 
 pub const DEC_FROM_F64: &str = "roc_builtins.dec.from_f64";
 pub const DEC_EQ: &str = "roc_builtins.dec.eq";

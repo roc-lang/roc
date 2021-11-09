@@ -5,8 +5,14 @@ authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2018"
 
-[dependencies]
+[[test]]
+name = "test_gen"
+path = "src/tests.rs"
+
+[dev-dependencies]
 roc_gen_llvm = { path = "../gen_llvm" }
+roc_gen_dev = { path = "../gen_dev" }
+roc_gen_wasm = { path = "../gen_wasm" }
 roc_collections = { path = "../collections" }
 roc_region = { path = "../region" }
 roc_module = { path = "../module" }
@@ -23,7 +29,6 @@ roc_can = { path = "../can" }
 roc_parse = { path = "../parse" }
 roc_build = { path = "../build" }
 roc_std = { path = "../../roc_std" }
-test_wasm = { path = "../test_wasm" }
 im    = "15.0.0"
 im-rc = "15.0.0"
 bumpalo = { version = "3.8.0", features = ["collections"] }
@@ -35,11 +40,11 @@ libloading = "0.7.1"
 wasmer = { version = "2.0.0", default-features = false, features = ["default-cranelift", "default-universal"] }
 wasmer-wasi = "2.0.0"
 tempfile = "3.2.0"
-
-[dev-dependencies]
-bumpalo = { version = "3.8.0", features = ["collections"] }
 indoc = "1.0.3"
 
 [features]
-default = []
+default = ["gen-llvm"]
+gen-llvm = []
+gen-dev = []
+gen-wasm = []
 wasm-cli-run = []

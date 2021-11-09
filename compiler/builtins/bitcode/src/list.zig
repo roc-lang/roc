@@ -862,6 +862,32 @@ pub fn listSwap(
     return newList;
 }
 
+pub fn listTakeFirst(
+    list: RocList,
+    alignment: u32,
+    element_width: usize,
+    take_count: usize,
+) callconv(.C) RocList {
+    if (list.bytes) |source_ptr| {
+        if (take_count == 0) {
+            return RocList.empty();
+        }
+        const in_len = list.len();
+        const out_len = std.math.min(take_count, in_len);
+
+        const output = RocList.allocate(alignment, out_len, element_width);
+        const target_ptr = output.bytes orelse unreachable;
+
+        @memcpy(target_ptr, source_ptr, out_len * element_width);
+
+        utils.decref(list.bytes, in_len * element_width, alignment);
+
+        return output;
+    } else {
+        return RocList.empty();
+    }
+}
+
 pub fn listDrop(
     list: RocList,
     alignment: u32,
@@ -1306,4 +1332,40 @@ inline fn listSetImmutable(
 
     //return list;
     return new_bytes;
+}
+
+pub fn listFindUnsafe(
+    list: RocList,
+    caller: Caller1,
+    data: Opaque,
+    inc_n_data: IncN,
+    data_is_owned: bool,
+    alignment: u32,
+    element_width: usize,
+    inc: Inc,
+    dec: Dec,
+) callconv(.C) extern struct { value: Opaque, found: bool } {
+    if (list.bytes) |source_ptr| {
+        const size = list.len();
+        if (data_is_owned) {
+            inc_n_data(data, size);
+        }
+
+        var i: usize = 0;
+        while (i < size) : (i += 1) {
+            var theOne = false;
+            const element = source_ptr + (i * element_width);
+            inc(element);
+            caller(data, element, @ptrCast(?[*]u8, &theOne));
+
+            if (theOne) {
+                return .{ .value = element, .found = true };
+            } else {
+                dec(element);
+            }
+        }
+        return .{ .value = null, .found = false };
+    } else {
+        return .{ .value = null, .found = false };
+    }
 }
