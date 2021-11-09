@@ -87,7 +87,7 @@ fn serialize_vector_section<B: SerialBuffer, T: Serialize>(
  *
  *******************************************************************/
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Debug)]
 pub struct Signature<'a> {
     pub param_types: Vec<'a, ValueType>,
     pub ret_type: Option<ValueType>,
@@ -101,6 +101,7 @@ impl<'a> Serialize for Signature<'a> {
     }
 }
 
+#[derive(Debug)]
 pub struct TypeSection<'a> {
     /// Private. See WasmModule::add_function_signature
     signatures: Vec<'a, Signature<'a>>,
@@ -148,6 +149,7 @@ pub enum RefType {
     Extern = 0x6f,
 }
 
+#[derive(Debug)]
 pub struct TableType {
     pub ref_type: RefType,
     pub limits: Limits,
@@ -160,6 +162,7 @@ impl Serialize for TableType {
     }
 }
 
+#[derive(Debug)]
 pub enum ImportDesc {
     Func { signature_index: u32 },
     Table { ty: TableType },
@@ -167,6 +170,7 @@ pub enum ImportDesc {
     Global { ty: GlobalType },
 }
 
+#[derive(Debug)]
 pub struct Import {
     pub module: String,
     pub name: String,
@@ -198,6 +202,7 @@ impl Serialize for Import {
     }
 }
 
+#[derive(Debug)]
 pub struct ImportSection<'a> {
     entries: Vec<'a, Import>,
 }
@@ -223,6 +228,7 @@ impl<'a> Serialize for ImportSection<'a> {
  *
  *******************************************************************/
 
+#[derive(Debug)]
 pub struct FunctionSection<'a> {
     /// Private. See WasmModule::add_function_signature
     signature_indices: Vec<'a, u32>,
@@ -247,6 +253,7 @@ impl<'a> Serialize for FunctionSection<'a> {
  *
  *******************************************************************/
 
+#[derive(Debug)]
 pub enum Limits {
     Min(u32),
     MinMax(u32, u32),
@@ -268,6 +275,7 @@ impl Serialize for Limits {
     }
 }
 
+#[derive(Debug)]
 pub struct MemorySection(Option<Limits>);
 
 impl MemorySection {
@@ -309,6 +317,7 @@ impl Serialize for MemorySection {
  *
  *******************************************************************/
 
+#[derive(Debug)]
 pub struct GlobalType {
     pub value_type: ValueType,
     pub is_mutable: bool,
@@ -323,6 +332,7 @@ impl Serialize for GlobalType {
 
 /// Constant expression for initialising globals or data segments
 /// Note: This is restricted for simplicity, but the spec allows arbitrary constant expressions
+#[derive(Debug)]
 pub enum ConstExpr {
     I32(i32),
     I64(i64),
@@ -354,6 +364,7 @@ impl Serialize for ConstExpr {
     }
 }
 
+#[derive(Debug)]
 pub struct Global {
     /// Type and mutability of the global
     pub ty: GlobalType,
@@ -368,6 +379,7 @@ impl Serialize for Global {
     }
 }
 
+#[derive(Debug)]
 pub struct GlobalSection<'a> {
     pub entries: Vec<'a, Global>,
 }
@@ -393,6 +405,7 @@ pub enum ExportType {
     Global = 3,
 }
 
+#[derive(Debug)]
 pub struct Export {
     pub name: String,
     pub ty: ExportType,
@@ -406,6 +419,7 @@ impl Serialize for Export {
     }
 }
 
+#[derive(Debug)]
 pub struct ExportSection<'a> {
     pub entries: Vec<'a, Export>,
 }
@@ -459,6 +473,7 @@ impl<'a> CodeSection<'a> {
  *
  *******************************************************************/
 
+#[derive(Debug)]
 pub enum DataMode {
     /// A data segment that auto-loads into memory on instantiation
     Active { offset: ConstExpr },
@@ -466,6 +481,7 @@ pub enum DataMode {
     Passive,
 }
 
+#[derive(Debug)]
 pub struct DataSegment<'a> {
     pub mode: DataMode,
     pub init: Vec<'a, u8>,
@@ -487,6 +503,7 @@ impl Serialize for DataSegment<'_> {
     }
 }
 
+#[derive(Debug)]
 pub struct DataSection<'a> {
     pub segments: Vec<'a, DataSegment<'a>>,
 }
@@ -515,6 +532,7 @@ impl Serialize for DataSection<'_> {
  *
  *******************************************************************/
 
+#[derive(Debug)]
 struct DataCountSection {
     count: u32,
 }
@@ -577,6 +595,7 @@ impl SectionCounter {
     }
 }
 
+#[derive(Debug)]
 pub struct WasmModule<'a> {
     pub types: TypeSection<'a>,
     pub import: ImportSection<'a>,
