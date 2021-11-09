@@ -4158,16 +4158,12 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "indoc",
- "libc",
  "roc_builtins",
  "roc_can",
  "roc_collections",
  "roc_gen_wasm",
  "roc_load",
- "roc_module",
  "roc_std",
- "roc_types",
- "target-lexicon",
  "wasmer",
  "wasmer-wasi",
 ]
