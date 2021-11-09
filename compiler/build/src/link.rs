@@ -186,7 +186,7 @@ pub fn build_zig_host_native(
             "build-exe",
             "-fPIE",
             shared_lib_path.to_str().unwrap(),
-            bitcode::OBJ_PATH,
+            bitcode::BUILTINS_HOST_OBJ_PATH,
         ]);
     } else {
         command.args(&["build-obj", "-fPIC"]);
