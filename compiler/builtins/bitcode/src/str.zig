@@ -1753,7 +1753,7 @@ test "strTrim: small to small" {
 }
 
 test "strTrimLeft: empty" {
-    const trimmedEmpty = strTrim(RocStr.empty());
+    const trimmedEmpty = strTrimLeft(RocStr.empty());
     try expect(trimmedEmpty.eq(RocStr.empty()));
 }
 
@@ -1762,7 +1762,7 @@ test "strTrimLeft: blank" {
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.deinit();
 
-    const trimmed = strTrim(original);
+    const trimmed = strTrimLeft(original);
 
     try expect(trimmed.eq(RocStr.empty()));
 }
@@ -1780,7 +1780,7 @@ test "strTrimLeft: large to large" {
 
     try expect(!expected.isSmallStr());
 
-    const trimmed = strTrim(original);
+    const trimmed = strTrimLeft(original);
 
     try expect(trimmed.eq(expected));
 }
@@ -1798,7 +1798,7 @@ test "strTrimLeft: large to small" {
 
     try expect(expected.isSmallStr());
 
-    const trimmed = strTrim(original);
+    const trimmed = strTrimLeft(original);
 
     try expect(trimmed.eq(expected));
     try expect(trimmed.isSmallStr());
@@ -1817,7 +1817,7 @@ test "strTrimLeft: small to small" {
 
     try expect(expected.isSmallStr());
 
-    const trimmed = strTrim(original);
+    const trimmed = strTrimLeft(original);
 
     try expect(trimmed.eq(expected));
     try expect(trimmed.isSmallStr());
