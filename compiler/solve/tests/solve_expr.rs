@@ -3756,8 +3756,7 @@ mod solve_expr {
             "Str -> Str",
         );
     }
-
-
+    
     #[test]
     fn list_take_first() {
         infer_eq_without_problem(
