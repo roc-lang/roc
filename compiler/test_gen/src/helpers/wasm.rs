@@ -148,21 +148,16 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
 
     let store = Store::default();
 
-    // let wasmer_module = Module::from_binary(&store, &module_bytes).unwrap();
-
-    let wasmer_module = if false {
+    let wasmer_module = {
         let dir = tempdir().unwrap();
-        // let dirpath = dir.path();
-        let dirpath = PathBuf::from("/home/folkertdev/roc/wasm");
-        let app_o_file = dirpath.join("app.wasm");
+        let dirpath = dir.path();
         let final_wasm_file = dirpath.join("final.wasm");
+        let app_o_file = dirpath.join("app.o");
 
+        // write the module to a file so the linker can access it
         std::fs::write(&app_o_file, &module_bytes).unwrap();
 
-        dbg!(bitcode::BUILTINS_WASM32_OBJ_PATH);
-        dbg!(&final_wasm_file);
-
-        dbg!(std::process::Command::new("zig")
+        std::process::Command::new("zig")
             .args(&[
                 "wasm-ld",
                 // input files
@@ -183,15 +178,11 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
                 "test_wrapper",
                 "--export",
                 "#UserApp_main_1",
-                // "--export",
-                // "__linear_memory",
             ])
-            .output())
-        .unwrap();
+            .output()
+            .unwrap();
 
         Module::from_file(&store, &final_wasm_file).unwrap()
-    } else {
-        Module::from_binary(&store, &module_bytes).unwrap()
     };
 
     // First, we create the `WasiEnv`
