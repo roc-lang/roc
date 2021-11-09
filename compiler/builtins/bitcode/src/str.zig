@@ -1586,7 +1586,6 @@ pub fn strTrimLeft(string: RocStr) callconv(.C) RocStr {
     return RocStr.empty();
 }
 
-
 fn countLeadingWhitespaceBytes(string: RocStr) usize {
     var byte_count: usize = 0;
 
