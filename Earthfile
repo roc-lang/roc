@@ -79,8 +79,8 @@ test-rust:
     # not pre-compiling the host can cause race conditions
     RUN echo "4" | cargo run --release examples/benchmarks/NQueens.roc
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test --release --features with_sound --workspace --exclude test_wasm && sccache --show-stats
-    # test the dev and wasm backend they require an explicit feature flag.
+        cargo test --release --features with_sound --workspace && sccache --show-stats
+    # test the dev and wasm backend: they require an explicit feature flag.
     RUN --mount=type=cache,target=$SCCACHE_DIR \
         cargo test --release --package test_gen --no-default-features --features gen-dev && sccache --show-stats
     # gen-wasm has some multithreading problems to do with the wasmer runtime. Run it single-threaded as a separate job
