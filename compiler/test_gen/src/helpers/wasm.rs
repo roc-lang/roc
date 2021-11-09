@@ -7,6 +7,7 @@ use crate::helpers::wasm32_test_result::Wasm32TestResult;
 use roc_builtins::bitcode;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
+use roc_gen_wasm::MEMORY_NAME;
 
 use tempfile::tempdir;
 
@@ -218,7 +219,7 @@ where
 
     let instance = crate::helpers::wasm::helper_wasm(&arena, src, stdlib, &expected);
 
-    let memory = instance.exports.get_memory("__linear_memory").unwrap();
+    let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
 
     let test_wrapper = instance.exports.get_function(TEST_WRAPPER_NAME).unwrap();
 

@@ -11,7 +11,8 @@ use roc_mono::layout::{Layout, LayoutIds};
 use crate::layout::WasmLayout;
 use crate::storage::{Storage, StoredValue, StoredValueKind};
 use crate::wasm_module::linking::{
-    DataSymbol, LinkingSection, RelocationSection, WasmObjectSymbol, WASM_SYM_UNDEFINED,
+    DataSymbol, LinkingSection, RelocationSection, WasmObjectSymbol, WASM_SYM_BINDING_WEAK,
+    WASM_SYM_UNDEFINED,
 };
 use crate::wasm_module::sections::{
     CodeSection, DataMode, DataSection, DataSegment, ExportSection, FunctionSection, GlobalSection,
@@ -21,7 +22,10 @@ use crate::wasm_module::{
     code_builder, BlockType, CodeBuilder, ConstExpr, Export, ExportType, Global, GlobalType,
     LocalId, Signature, SymInfo, ValueType,
 };
-use crate::{copy_memory, CopyMemoryConfig, Env, PTR_TYPE};
+use crate::{
+    copy_memory, CopyMemoryConfig, Env, BUILTINS_IMPORT_MODULE_NAME, MEMORY_NAME, PTR_TYPE,
+    STACK_POINTER_NAME,
+};
 
 /// The memory address where the constants data will be loaded during module instantiation.
 /// We avoid address zero and anywhere near it. They're valid addresses but maybe bug-prone.
@@ -30,8 +34,6 @@ const CONST_SEGMENT_BASE_ADDR: u32 = 1024;
 
 /// Index of the data segment where we store constants
 const CONST_SEGMENT_INDEX: usize = 0;
-
-const IMPORT_MODULE_BUILTINS: &str = "builtins";
 
 pub struct WasmBackend<'a> {
     env: &'a Env<'a>,
@@ -66,7 +68,7 @@ impl<'a> WasmBackend<'a> {
         let num_procs = proc_symbols.len();
 
         exports.push(Export {
-            name: "__linear_memory".to_string(),
+            name: MEMORY_NAME.to_string(),
             ty: ExportType::Mem,
             index: 0,
         });
@@ -79,10 +81,16 @@ impl<'a> WasmBackend<'a> {
             init: ConstExpr::I32(MEMORY_INIT_SIZE as i32),
         };
 
-        linker_symbols.push(SymInfo::Global(WasmObjectSymbol::Defined {
-            flags: 0,
+        exports.push(Export {
+            name: STACK_POINTER_NAME.to_string(),
+            ty: ExportType::Global,
             index: 0,
-            name: "__stack_pointer".to_string(),
+        });
+
+        linker_symbols.push(SymInfo::Global(WasmObjectSymbol::Defined {
+            flags: WASM_SYM_BINDING_WEAK,
+            index: 0,
+            name: STACK_POINTER_NAME.to_string(),
         }));
 
         let const_segment = DataSegment {
@@ -760,7 +768,7 @@ impl<'a> WasmBackend<'a> {
 
                 let import_index = self.module.import.entries.len() as u32;
                 let import = Import {
-                    module: IMPORT_MODULE_BUILTINS,
+                    module: BUILTINS_IMPORT_MODULE_NAME,
                     name: name.to_string(),
                     description: ImportDesc::Func { signature_index },
                 };
