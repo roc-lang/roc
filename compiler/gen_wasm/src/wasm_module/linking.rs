@@ -473,11 +473,8 @@ impl<'a> LinkingSection<'a> {
 
     pub fn symbol_table_mut(&mut self) -> &mut Vec<'a, SymInfo> {
         for sub in self.subsections.iter_mut() {
-            match sub {
-                LinkingSubSection::SymbolTable(syminfos) => {
-                    return syminfos;
-                }
-                _ => {}
+            if let LinkingSubSection::SymbolTable(syminfos) = sub {
+                return syminfos;
             }
         }
         panic!("Symbol table not found");

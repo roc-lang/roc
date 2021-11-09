@@ -31,7 +31,7 @@ const CONST_SEGMENT_BASE_ADDR: u32 = 1024;
 /// Index of the data segment where we store constants
 const CONST_SEGMENT_INDEX: usize = 0;
 
-const IMPORT_MODULE_BUILTINS: &'static str = "builtins";
+const IMPORT_MODULE_BUILTINS: &str = "builtins";
 
 pub struct WasmBackend<'a> {
     env: &'a Env<'a>,
