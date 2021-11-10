@@ -1,5 +1,8 @@
 use roc_cli::build::check_file;
-use roc_cli::{BuildConfig, CMD_BUILD, CMD_CHECK, CMD_DOCS, CMD_EDIT, CMD_REPL, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_TIME, ROC_FILE, build_app, docs, repl};
+use roc_cli::{
+    build_app, docs, repl, BuildConfig, CMD_BUILD, CMD_CHECK, CMD_DOCS, CMD_EDIT, CMD_REPL,
+    CMD_VERSION, DIRECTORY_OR_FILES, FLAG_TIME, ROC_FILE,
+};
 use roc_load::file::LoadingProblem;
 use std::fs::{self, FileType};
 use std::io;

@@ -194,13 +194,15 @@ pub fn build_app<'a>() -> App<'a> {
 
     if cfg!(feature = "editor") {
         app.subcommand(
-            App::new(CMD_EDIT).about("Launch the Roc editor (Work In Progress)").arg(
-                Arg::new(DIRECTORY_OR_FILES)
-                    .index(1)
-                    .multiple_values(true)
-                    .required(false)
-                    .about("(optional) The directory or files to open on launch."),
-            ),
+            App::new(CMD_EDIT)
+                .about("Launch the Roc editor (Work In Progress)")
+                .arg(
+                    Arg::new(DIRECTORY_OR_FILES)
+                        .index(1)
+                        .multiple_values(true)
+                        .required(false)
+                        .about("(optional) The directory or files to open on launch."),
+                ),
         )
     } else {
         app
