@@ -439,6 +439,7 @@ impl<'a> CodeBuilder<'a> {
         if push {
             self.vm_stack.push(Symbol::WASM_ANONYMOUS_STACK_VALUE);
         }
+
         self.code.push(opcode);
     }
 

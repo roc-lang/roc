@@ -71,6 +71,14 @@ impl WasmLayout {
         }
     }
 
+    pub fn size(&self) -> u32 {
+        match self {
+            Self::Primitive(_, size) => *size,
+            Self::StackMemory { size, .. } => *size,
+            Self::HeapMemory => PTR_SIZE,
+        }
+    }
+
     pub fn is_stack_memory(&self) -> bool {
         matches!(self, Self::StackMemory { .. })
     }

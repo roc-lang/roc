@@ -127,7 +127,15 @@ pub fn copy_memory(code_builder: &mut CodeBuilder, config: CopyMemoryConfig) {
 
 /// Round up to alignment_bytes (which must be a power of 2)
 pub fn round_up_to_alignment(unaligned: i32, alignment_bytes: i32) -> i32 {
-    debug_assert!(alignment_bytes.count_ones() == 1);
+    if alignment_bytes <= 1 {
+        return unaligned;
+    }
+    if alignment_bytes.count_ones() != 1 {
+        panic!(
+            "Cannot align to {} bytes. Not a power of 2.",
+            alignment_bytes
+        );
+    }
     let mut aligned = unaligned;
     aligned += alignment_bytes - 1; // if lower bits are non-zero, push it over the next boundary
     aligned &= -alignment_bytes; // mask with a flag that has upper bits 1, lower bits 0

@@ -499,7 +499,7 @@ impl<'a> WasmBackend<'a> {
                     use LowlevelBuildResult::*;
 
                     match build_result {
-                        WasmInstructions => Ok(()),
+                        Done => Ok(()),
                         BuiltinCall(name) => {
                             self.call_imported_builtin(name, arguments, &return_layout);
                             Ok(())
