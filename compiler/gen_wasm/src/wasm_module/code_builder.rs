@@ -202,10 +202,10 @@ impl<'a> CodeBuilder<'a> {
         true
     }
 
-    fn add_insertion(&mut self, insert_at: usize, opcode: u8, immediate: u32) {
+    fn add_insertion(&mut self, insert_at: usize, opcode: OpCode, immediate: u32) {
         let start = self.insert_bytes.len();
 
-        self.insert_bytes.push(opcode);
+        self.insert_bytes.push(opcode as u8);
         self.insert_bytes.encode_u32(immediate);
 
         self.insertions.push(Insertion {
@@ -213,6 +213,8 @@ impl<'a> CodeBuilder<'a> {
             start,
             end: self.insert_bytes.len(),
         });
+
+        // println!("insert {:?} {} at byte offset {} ", opcode, immediate, insert_at);
     }
 
     /// Load a Symbol that is stored in the VM stack
@@ -244,14 +246,14 @@ impl<'a> CodeBuilder<'a> {
                     // Symbol is not on top of the stack. Find it.
                     if let Some(found_index) = self.vm_stack.iter().rposition(|&s| s == symbol) {
                         // Insert a local.set where the value was created
-                        self.add_insertion(pushed_at, SETLOCAL as u8, next_local_id.0);
+                        self.add_insertion(pushed_at, SETLOCAL, next_local_id.0);
 
                         // Take the value out of the stack where local.set was inserted
                         self.vm_stack.remove(found_index);
 
                         // Insert a local.get at the current position
                         self.get_local(next_local_id);
-                        self.vm_stack.push(symbol);
+                        self.set_top_symbol(symbol);
 
                         // This Symbol is no longer stored in the VM stack, but in a local
                         None
@@ -267,11 +269,11 @@ impl<'a> CodeBuilder<'a> {
             Popped { pushed_at } => {
                 // This Symbol is being used for a second time
                 // Insert a local.tee where it was pushed, so we don't interfere with the first usage
-                self.add_insertion(pushed_at, TEELOCAL as u8, next_local_id.0);
+                self.add_insertion(pushed_at, TEELOCAL, next_local_id.0);
 
                 // Insert a local.get at the current position
                 self.get_local(next_local_id);
-                self.vm_stack.push(symbol);
+                self.set_top_symbol(symbol);
 
                 // This symbol has been promoted to a Local
                 // Tell the caller it no longer has a VirtualMachineSymbolState
@@ -441,6 +443,8 @@ impl<'a> CodeBuilder<'a> {
         }
 
         self.code.push(opcode as u8);
+
+        // println!("{:10}\t{:?}", format!("{:?}", opcode), &self.vm_stack);
     }
 
     fn inst_imm8(&mut self, opcode: OpCode, pops: usize, push: bool, immediate: u8) {
@@ -528,6 +532,8 @@ impl<'a> CodeBuilder<'a> {
             self.vm_stack.push(Symbol::WASM_ANONYMOUS_STACK_VALUE);
         }
         self.code.push(CALL as u8);
+
+        // println!("CALL      \t{:?}", &self.vm_stack);
 
         // Write the index of the function to be called.
         // Also make a RelocationEntry so the linker can see that this byte offset relates to a function by name.

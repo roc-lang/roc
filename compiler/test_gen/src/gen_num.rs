@@ -571,7 +571,7 @@ fn abs_min_int_overflow() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn gen_if_fn() {
     assert_evals_to!(
         indoc!(
