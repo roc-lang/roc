@@ -171,12 +171,16 @@ pub fn build_call_low_level<'a>(
         NumCos => return NotImplemented,
         NumSqrtUnchecked => return NotImplemented,
         NumLogUnchecked => return NotImplemented,
-        NumRound => match ret_layout.value_type() {
-            I32 => code_builder.f32_nearest(),
-            I64 => code_builder.f64_nearest(),
-            F32 => {}
-            F64 => {}
-        },
+        NumRound => {
+            // FIXME
+            // thread 'gen_num::f64_round' panicked at 'called `Result::unwrap()` on an `Err` value:
+            // Io(Os { code: 2, kind: NotFound, message: "No such file or directory" })',
+            // compiler/test_gen/src/helpers/wasm.rs:185:53
+            // Note: Wasm has a `nearest` op, but it does round-to-even when fraction is exactly 0.5
+            // which fails tests. Will this do? Or is specific behaviour important?
+            let width = float_width_from_layout(ret_layout);
+            return BuiltinCall(&bitcode::NUM_ROUND[width]);
+        }
         NumToFloat => match (ret_layout.value_type(), storage.get(&args[0]).value_type()) {
             (F32, I32) => code_builder.f32_convert_s_i32(),
             (F32, I64) => code_builder.f32_convert_s_i64(),
