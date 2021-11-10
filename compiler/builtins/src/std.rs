@@ -985,6 +985,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(list_type(flex(TVAR1))),
     );
 
+    // takeLast : List elem, Nat -> List elem
+    add_top_level_function_type!(
+        Symbol::LIST_TAKE_LAST,
+        vec![list_type(flex(TVAR1)), nat_type()],
+        Box::new(list_type(flex(TVAR1))),
+    );
+
     // drop : List elem, Nat -> List elem
     add_top_level_function_type!(
         Symbol::LIST_DROP,
@@ -1092,6 +1099,23 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ],
         Box::new(list_type(flex(TVAR1))),
     );
+
+    // find : List elem, (elem -> Bool) -> Result elem [ NotFound ]*
+    {
+        let not_found = SolvedType::TagUnion(
+            vec![(TagName::Global("NotFound".into()), vec![])],
+            Box::new(SolvedType::Wildcard),
+        );
+        let (elem, cvar) = (TVAR1, TVAR2);
+        add_top_level_function_type!(
+            Symbol::LIST_FIND,
+            vec![
+                list_type(flex(elem)),
+                closure(vec![flex(elem)], cvar, Box::new(bool_type())),
+            ],
+            Box::new(result_type(flex(elem), not_found)),
+        )
+    }
 
     // Dict module
 

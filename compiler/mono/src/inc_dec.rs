@@ -531,7 +531,8 @@ impl<'a> Context<'a> {
                     | ListKeepIf { xs }
                     | ListKeepOks { xs }
                     | ListKeepErrs { xs }
-                    | ListAny { xs } => {
+                    | ListAny { xs }
+                    | ListFindUnsafe { xs } => {
                         let borrows = [function_ps[0].borrow, FUNCTION, CLOSURE_DATA];
 
                         let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);

@@ -9,10 +9,11 @@ use crate::llvm::build_dict::{
 use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
     self, allocate_list, empty_list, empty_polymorphic_list, list_any, list_append, list_concat,
-    list_contains, list_drop, list_drop_at, list_get_unsafe, list_join, list_keep_errs,
-    list_keep_if, list_keep_oks, list_len, list_map, list_map2, list_map3, list_map4,
-    list_map_with_index, list_prepend, list_range, list_repeat, list_reverse, list_set,
-    list_single, list_sort_with, list_swap, list_take_first,
+    list_contains, list_drop, list_drop_at, list_find_trivial_not_found, list_find_unsafe,
+    list_get_unsafe, list_join, list_keep_errs, list_keep_if, list_keep_oks, list_len, list_map,
+    list_map2, list_map3, list_map4, list_map_with_index, list_prepend, list_range, list_repeat,
+    list_reverse, list_set, list_single, list_sort_with, list_swap, list_take_first,
+    list_take_last,
 };
 use crate::llvm::build_str::{
     empty_str, str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int,
@@ -4887,6 +4888,37 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!("invalid list layout"),
             }
         }
+        ListFindUnsafe { xs } => {
+            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
+
+            let (function, closure, closure_layout) = function_details!();
+
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => {
+                    // Returns { found: False, elem: \empty }, where the `elem` field is zero-sized.
+                    // NB: currently we never hit this case, since the only caller of this
+                    // lowlevel, namely List.find, will fail during monomorphization when there is no
+                    // concrete list element type. This is because List.find returns a
+                    // `Result elem [ NotFound ]*`, and we can't figure out the size of that if
+                    // `elem` is not concrete.
+                    list_find_trivial_not_found(env)
+                }
+                Layout::Builtin(Builtin::List(element_layout)) => {
+                    let argument_layouts = &[**element_layout];
+                    let roc_function_call = roc_function_call(
+                        env,
+                        layout_ids,
+                        function,
+                        closure,
+                        closure_layout,
+                        function_owns_closure_data,
+                        argument_layouts,
+                    );
+                    list_find_unsafe(env, layout_ids, roc_function_call, list, element_layout)
+                }
+                _ => unreachable!("invalid list layout"),
+            }
+        }
         DictWalk { xs, state } => {
             let (dict, dict_layout) = load_symbol_and_layout(scope, &xs);
             let (default, default_layout) = load_symbol_and_layout(scope, &state);
@@ -5176,6 +5208,27 @@ fn run_low_level<'a, 'ctx, 'env>(
                     element_layout,
                 ),
                 _ => unreachable!("Invalid layout {:?} in List.takeFirst", list_layout),
+            }
+        }
+        ListTakeLast => {
+            // List.takeLast : List elem, Nat -> List elem
+            debug_assert_eq!(args.len(), 2);
+
+            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let original_wrapper = list.into_struct_value();
+
+            let count = load_symbol(scope, &args[1]);
+
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                Layout::Builtin(Builtin::List(element_layout)) => list_take_last(
+                    env,
+                    layout_ids,
+                    original_wrapper,
+                    count.into_int_value(),
+                    element_layout,
+                ),
+                _ => unreachable!("Invalid layout {:?} in List.takeLast", list_layout),
             }
         }
         ListDrop => {
@@ -5763,7 +5816,9 @@ fn run_low_level<'a, 'ctx, 'env>(
 
         ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk
         | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith
-        | ListAny | DictWalk => unreachable!("these are higher order, and are handled elsewhere"),
+        | ListAny | ListFindUnsafe | DictWalk => {
+            unreachable!("these are higher order, and are handled elsewhere")
+        }
     }
 }
 
