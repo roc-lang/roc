@@ -4,7 +4,7 @@ use bumpalo::Bump;
 use super::linking::{
     IndexRelocType, LinkingSection, RelocationEntry, RelocationSection, SymInfo, WasmObjectSymbol,
 };
-use super::opcodes;
+use super::opcodes::OpCode;
 use super::serialize::{SerialBuffer, Serialize};
 use super::{CodeBuilder, ValueType};
 
@@ -353,23 +353,23 @@ impl Serialize for ConstExpr {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         match self {
             ConstExpr::I32(x) => {
-                buffer.append_u8(opcodes::I32CONST);
+                buffer.append_u8(OpCode::I32CONST as u8);
                 buffer.encode_i32(*x);
             }
             ConstExpr::I64(x) => {
-                buffer.append_u8(opcodes::I64CONST);
+                buffer.append_u8(OpCode::I64CONST as u8);
                 buffer.encode_i64(*x);
             }
             ConstExpr::F32(x) => {
-                buffer.append_u8(opcodes::F32CONST);
+                buffer.append_u8(OpCode::F32CONST as u8);
                 buffer.encode_f32(*x);
             }
             ConstExpr::F64(x) => {
-                buffer.append_u8(opcodes::F64CONST);
+                buffer.append_u8(OpCode::F64CONST as u8);
                 buffer.encode_f64(*x);
             }
         }
-        buffer.append_u8(opcodes::END);
+        buffer.append_u8(OpCode::END as u8);
     }
 }
 
