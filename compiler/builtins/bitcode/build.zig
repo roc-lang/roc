@@ -59,8 +59,9 @@ fn generateLlvmIrFile(
 
 // Generate Object File
 // TODO: figure out how to get this to emit symbols that are only scoped to linkage (global but hidden).
-// Also, zig has -ffunction-sections, but I am not sure how to add it here.
-// With both of those changes, unused zig functions will be cleaned up by the linker saving around 100k.
+// @bhansconnect: I believe anything with global scope will still be preserved by the linker even if it
+// is never called. I think it could theoretically be called by a dynamic lib that links to the executable
+// or something similar.
 fn generateObjectFile(
     b: *Builder,
     mode: std.builtin.Mode,
