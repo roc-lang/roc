@@ -1,12 +1,15 @@
 use roc_cli::build::check_file;
 use roc_cli::{
     build_app, docs, repl, BuildConfig, CMD_BUILD, CMD_CHECK, CMD_DOCS, CMD_EDIT, CMD_REPL,
-    DIRECTORY_OR_FILES, FLAG_TIME, ROC_FILE,
+    CMD_VERSION, DIRECTORY_OR_FILES, FLAG_TIME, ROC_FILE,
 };
 use roc_load::file::LoadingProblem;
 use std::fs::{self, FileType};
 use std::io;
 use std::path::{Path, PathBuf};
+
+#[macro_use]
+extern crate const_format;
 
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -119,6 +122,11 @@ fn main() -> io::Result<()> {
             }
 
             docs(roc_files);
+
+            Ok(0)
+        }
+        Some(CMD_VERSION) => {
+            println!("roc {}", concatcp!(include_str!("../../version.txt"), "\n"));
 
             Ok(0)
         }
