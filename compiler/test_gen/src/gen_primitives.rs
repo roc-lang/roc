@@ -85,7 +85,7 @@ fn branch_third_float() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn branch_first_int() {
     assert_evals_to!(
         indoc!(
@@ -101,7 +101,7 @@ fn branch_first_int() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn branch_second_int() {
     assert_evals_to!(
         indoc!(
@@ -134,7 +134,7 @@ fn branch_third_int() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn branch_store_variable() {
     assert_evals_to!(
         indoc!(
@@ -504,7 +504,7 @@ fn gen_multiple_defs() {
 //    }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn factorial() {
     assert_evals_to!(
         indoc!(
