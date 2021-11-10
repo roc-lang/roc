@@ -370,40 +370,6 @@ impl<'a> Proc<'a> {
         }
     }
 
-    pub fn optimize_refcount_operations<'i, T>(
-        arena: &'a Bump,
-        home: ModuleId,
-        ident_ids: &'i mut IdentIds,
-        procs: &mut MutMap<T, Proc<'a>>,
-    ) {
-        use crate::expand_rc;
-
-        let deferred = expand_rc::Deferred {
-            inc_dec_map: Default::default(),
-            assignments: Vec::new_in(arena),
-            decrefs: Vec::new_in(arena),
-        };
-
-        let mut env = expand_rc::Env {
-            home,
-            arena,
-            ident_ids,
-            layout_map: Default::default(),
-            alias_map: Default::default(),
-            constructor_map: Default::default(),
-            deferred,
-        };
-
-        for (_, proc) in procs.iter_mut() {
-            let b = expand_rc::expand_and_cancel_proc(
-                &mut env,
-                arena.alloc(proc.body.clone()),
-                proc.args,
-            );
-            proc.body = b.clone();
-        }
-    }
-
     fn make_tail_recursive(&mut self, env: &mut Env<'a, '_>) {
         let mut args = Vec::with_capacity_in(self.args.len(), env.arena);
         let mut proc_args = Vec::with_capacity_in(self.args.len(), env.arena);

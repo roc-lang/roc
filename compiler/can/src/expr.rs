@@ -952,7 +952,7 @@ pub fn local_successors<'a>(
     references: &'a References,
     closures: &'a MutMap<Symbol, References>,
 ) -> ImSet<Symbol> {
-    let mut answer = im_rc::hashset::HashSet::clone(&references.lookups);
+    let mut answer = references.lookups.clone();
 
     for call_symbol in references.calls.iter() {
         answer = answer.union(call_successors(*call_symbol, closures));
@@ -962,7 +962,7 @@ pub fn local_successors<'a>(
 }
 
 fn call_successors(call_symbol: Symbol, closures: &MutMap<Symbol, References>) -> ImSet<Symbol> {
-    let mut answer = im_rc::hashset::HashSet::default();
+    let mut answer = ImSet::default();
     let mut seen = MutSet::default();
     let mut queue = vec![call_symbol];
 

@@ -14,8 +14,6 @@ roc_problem = { path = "../problem" }
 roc_types = { path = "../types" }
 roc_builtins = { path = "../builtins" }
 ven_graph = { path = "../../vendor/pathfinding" }
-im    = "15.0.0"
-im-rc = "15.0.0"
 bumpalo = { version = "3.8.0", features = ["collections"] }
 
 [dev-dependencies]

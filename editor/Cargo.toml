@@ -32,8 +32,6 @@ roc_unify = { path = "../compiler/unify" }
 roc_reporting = { path = "../compiler/reporting" }
 roc_solve = { path = "../compiler/solve" }
 ven_graph = { path = "../vendor/pathfinding" }
-im = "15.0.0"
-im-rc = "15.0.0"
 bumpalo = { version = "3.8.0", features = ["collections"] }
 arraystring = "0.3.0"
 libc = "0.2.106"
