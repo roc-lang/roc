@@ -1,8 +1,13 @@
 use std::ops::Index;
 
-pub const OBJ_PATH: &str = env!(
+pub const BUILTINS_HOST_OBJ_PATH: &str = env!(
     "BUILTINS_HOST_O",
     "Env var BUILTINS_HOST_O not found. Is there a problem with the build script?"
+);
+
+pub const BUILTINS_WASM32_OBJ_PATH: &str = env!(
+    "BUILTINS_WASM32_O",
+    "Env var BUILTINS_WASM32_O not found. Is there a problem with the build script?"
 );
 
 #[derive(Debug, Default)]

@@ -367,7 +367,7 @@ pub fn helper_wasm<'a>(
 
     use std::process::Command;
 
-    Command::new("zig9")
+    Command::new("zig")
         .current_dir(dir_path)
         .args(&[
             "wasm-ld",
