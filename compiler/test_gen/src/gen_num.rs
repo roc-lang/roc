@@ -1330,7 +1330,7 @@ fn pow_int() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn atan() {
     assert_evals_to!("Num.atan 10", 1.4711276743037347, f64);
 }
