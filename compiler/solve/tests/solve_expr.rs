@@ -3777,7 +3777,7 @@ mod solve_expr {
                 List.sublist
                 "#
             ),
-            "List a, { start : Nat, len : Nat } -> List a",
+            "List a, { len : Nat, start : Nat } -> List a",
         );
     }
 
