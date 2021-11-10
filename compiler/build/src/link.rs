@@ -878,7 +878,7 @@ fn link_wasm32(
     let zig_str_path = find_zig_str_path();
     let wasi_libc_path = find_wasi_libc_path();
 
-    let child = Command::new("zig9")
+    let child = Command::new("zig")
         // .env_clear()
         // .env("PATH", &env_path)
         .args(&["build-exe"])
