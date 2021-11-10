@@ -3782,6 +3782,18 @@ mod solve_expr {
     }
 
     #[test]
+    fn list_sublist() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                List.sublist
+                "#
+            ),
+            "List a, { len : Nat, start : Nat } -> List a",
+        );
+    }
+
+    #[test]
     fn list_drop_last() {
         infer_eq_without_problem(
             indoc!(
