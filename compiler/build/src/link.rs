@@ -97,7 +97,7 @@ pub fn build_zig_host_native(
             "build-exe",
             "-fPIE",
             shared_lib_path.to_str().unwrap(),
-            bitcode::OBJ_PATH,
+            bitcode::BUILTINS_HOST_OBJ_PATH,
         ]);
     } else {
         command.args(&["build-obj", "-fPIC"]);
@@ -186,7 +186,7 @@ pub fn build_zig_host_native(
             "build-exe",
             "-fPIE",
             shared_lib_path.to_str().unwrap(),
-            bitcode::OBJ_PATH,
+            bitcode::BUILTINS_HOST_OBJ_PATH,
         ]);
     } else {
         command.args(&["build-obj", "-fPIC"]);
@@ -282,7 +282,7 @@ pub fn build_c_host_native(
     if let Some(shared_lib_path) = shared_lib_path {
         command.args(&[
             shared_lib_path.to_str().unwrap(),
-            bitcode::OBJ_PATH,
+            bitcode::BUILTINS_HOST_OBJ_PATH,
             "-fPIE",
             "-pie",
             "-lm",
@@ -878,7 +878,7 @@ fn link_wasm32(
     let zig_str_path = find_zig_str_path();
     let wasi_libc_path = find_wasi_libc_path();
 
-    let child = Command::new("zig9")
+    let child = Command::new("zig")
         // .env_clear()
         // .env("PATH", &env_path)
         .args(&["build-exe"])

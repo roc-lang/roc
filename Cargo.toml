@@ -22,9 +22,7 @@ members = [
     "compiler/gen_wasm",
     "compiler/build",
     "compiler/arena_pool",
-    "compiler/test_dev",
     "compiler/test_gen",
-    "compiler/test_wasm",
     "vendor/ena",
     "vendor/inkwell",
     "vendor/pathfinding",
@@ -44,7 +42,6 @@ exclude = [
     # The tests will still correctly build them.
     "cli_utils",
     "compiler/test_mono_macros",
-    "compiler/test_wasm_util",
 ]
 # Needed to be able to run `cargo run -p roc_cli --no-default-features` -
 # see www/build.sh for more.

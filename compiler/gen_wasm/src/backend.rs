@@ -1,6 +1,7 @@
 use bumpalo::{self, collections::Vec};
 
 use code_builder::Align;
+use roc_builtins::bitcode::{self, FloatWidth};
 use roc_collections::all::MutMap;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
@@ -9,16 +10,22 @@ use roc_mono::layout::{Layout, LayoutIds};
 
 use crate::layout::WasmLayout;
 use crate::storage::{Storage, StoredValue, StoredValueKind};
-use crate::wasm_module::linking::{DataSymbol, LinkingSection, RelocationSection};
+use crate::wasm_module::linking::{
+    DataSymbol, LinkingSection, RelocationSection, WasmObjectSymbol, WASM_SYM_BINDING_WEAK,
+    WASM_SYM_UNDEFINED,
+};
 use crate::wasm_module::sections::{
     CodeSection, DataMode, DataSection, DataSegment, ExportSection, FunctionSection, GlobalSection,
-    ImportSection, MemorySection, TypeSection, WasmModule,
+    Import, ImportDesc, ImportSection, MemorySection, TypeSection, WasmModule,
 };
 use crate::wasm_module::{
     code_builder, BlockType, CodeBuilder, ConstExpr, Export, ExportType, Global, GlobalType,
     LocalId, Signature, SymInfo, ValueType,
 };
-use crate::{copy_memory, CopyMemoryConfig, Env, PTR_TYPE};
+use crate::{
+    copy_memory, CopyMemoryConfig, Env, BUILTINS_IMPORT_MODULE_NAME, MEMORY_NAME, PTR_TYPE,
+    STACK_POINTER_NAME,
+};
 
 /// The memory address where the constants data will be loaded during module instantiation.
 /// We avoid address zero and anywhere near it. They're valid addresses but maybe bug-prone.
@@ -35,6 +42,7 @@ pub struct WasmBackend<'a> {
     pub module: WasmModule<'a>,
     layout_ids: LayoutIds<'a>,
     constant_sym_index_map: MutMap<&'a str, usize>,
+    builtin_sym_index_map: MutMap<&'a str, usize>,
     proc_symbols: Vec<'a, Symbol>,
     pub linker_symbols: Vec<'a, SymInfo>,
 
@@ -52,7 +60,7 @@ impl<'a> WasmBackend<'a> {
         env: &'a Env<'a>,
         layout_ids: LayoutIds<'a>,
         proc_symbols: Vec<'a, Symbol>,
-        linker_symbols: Vec<'a, SymInfo>,
+        mut linker_symbols: Vec<'a, SymInfo>,
         mut exports: Vec<'a, Export>,
     ) -> Self {
         const MEMORY_INIT_SIZE: u32 = 1024 * 1024;
@@ -60,7 +68,7 @@ impl<'a> WasmBackend<'a> {
         let num_procs = proc_symbols.len();
 
         exports.push(Export {
-            name: "memory".to_string(),
+            name: MEMORY_NAME.to_string(),
             ty: ExportType::Mem,
             index: 0,
         });
@@ -72,6 +80,18 @@ impl<'a> WasmBackend<'a> {
             },
             init: ConstExpr::I32(MEMORY_INIT_SIZE as i32),
         };
+
+        exports.push(Export {
+            name: STACK_POINTER_NAME.to_string(),
+            ty: ExportType::Global,
+            index: 0,
+        });
+
+        linker_symbols.push(SymInfo::Global(WasmObjectSymbol::Defined {
+            flags: WASM_SYM_BINDING_WEAK,
+            index: 0,
+            name: STACK_POINTER_NAME.to_string(),
+        }));
 
         let const_segment = DataSegment {
             mode: DataMode::Active {
@@ -92,7 +112,9 @@ impl<'a> WasmBackend<'a> {
             export: ExportSection { entries: exports },
             start: (),
             element: (),
-            code: CodeSection::new(arena),
+            code: CodeSection {
+                code_builders: Vec::with_capacity_in(num_procs, arena),
+            },
             data: DataSection {
                 segments: bumpalo::vec![in arena; const_segment],
             },
@@ -108,6 +130,7 @@ impl<'a> WasmBackend<'a> {
 
             layout_ids,
             constant_sym_index_map: MutMap::default(),
+            builtin_sym_index_map: MutMap::default(),
             proc_symbols,
             linker_symbols,
 
@@ -181,7 +204,7 @@ impl<'a> WasmBackend<'a> {
         self.end_block();
 
         // Write local declarations and stack frame push/pop code
-        self.code_builder.finalize(
+        self.code_builder.build_fn_header(
             &self.storage.local_types,
             self.storage.stack_frame_size,
             self.storage.stack_frame_pointer,
@@ -650,47 +673,122 @@ impl<'a> WasmBackend<'a> {
     ) -> Result<(), String> {
         self.storage.load_symbols(&mut self.code_builder, args);
         let wasm_layout = WasmLayout::new(return_layout);
-        self.build_instructions_lowlevel(lowlevel, wasm_layout.value_type())?;
-        Ok(())
-    }
+        let ret_type = wasm_layout.value_type();
 
-    fn build_instructions_lowlevel(
-        &mut self,
-        lowlevel: &LowLevel,
-        return_value_type: ValueType,
-    ) -> Result<(), String> {
-        // TODO:  Find a way to organise all the lowlevel ops and layouts! There's lots!
-        //
-        // Some Roc low-level ops care about wrapping, clipping, sign-extending...
-        // For those, we'll need to pre-process each argument before the main op,
-        // so simple arrays of instructions won't work. But there are common patterns.
+        let panic_ret_type = || panic!("Invalid return type for {:?}: {:?}", lowlevel, ret_type);
+
         match lowlevel {
-            LowLevel::NumAdd => match return_value_type {
+            LowLevel::NumAdd => match ret_type {
                 ValueType::I32 => self.code_builder.i32_add(),
                 ValueType::I64 => self.code_builder.i64_add(),
                 ValueType::F32 => self.code_builder.f32_add(),
                 ValueType::F64 => self.code_builder.f64_add(),
             },
-            LowLevel::NumSub => match return_value_type {
+            LowLevel::NumSub => match ret_type {
                 ValueType::I32 => self.code_builder.i32_sub(),
                 ValueType::I64 => self.code_builder.i64_sub(),
                 ValueType::F32 => self.code_builder.f32_sub(),
                 ValueType::F64 => self.code_builder.f64_sub(),
             },
-            LowLevel::NumMul => match return_value_type {
+            LowLevel::NumMul => match ret_type {
                 ValueType::I32 => self.code_builder.i32_mul(),
                 ValueType::I64 => self.code_builder.i64_mul(),
                 ValueType::F32 => self.code_builder.f32_mul(),
                 ValueType::F64 => self.code_builder.f64_mul(),
             },
-            LowLevel::NumGt => {
-                // needs layout of the argument to be implemented fully
-                self.code_builder.i32_gt_s()
+            LowLevel::NumGt => match self.get_uniform_arg_type(args) {
+                ValueType::I32 => self.code_builder.i32_gt_s(),
+                ValueType::I64 => self.code_builder.i64_gt_s(),
+                ValueType::F32 => self.code_builder.f32_gt(),
+                ValueType::F64 => self.code_builder.f64_gt(),
+            },
+            LowLevel::Eq => match self.get_uniform_arg_type(args) {
+                ValueType::I32 => self.code_builder.i32_eq(),
+                ValueType::I64 => self.code_builder.i64_eq(),
+                ValueType::F32 => self.code_builder.f32_eq(),
+                ValueType::F64 => self.code_builder.f64_eq(),
+            },
+            LowLevel::NumNeg => match ret_type {
+                ValueType::I32 => {
+                    self.code_builder.i32_const(-1);
+                    self.code_builder.i32_mul();
+                }
+                ValueType::I64 => {
+                    self.code_builder.i64_const(-1);
+                    self.code_builder.i64_mul();
+                }
+                ValueType::F32 => self.code_builder.f32_neg(),
+                ValueType::F64 => self.code_builder.f64_neg(),
+            },
+            LowLevel::NumAtan => {
+                let name = match ret_type {
+                    ValueType::F32 => &bitcode::NUM_ATAN[FloatWidth::F32],
+                    ValueType::F64 => &bitcode::NUM_ATAN[FloatWidth::F64],
+                    _ => panic_ret_type(),
+                };
+                self.call_imported_builtin(name, &[ret_type], Some(ret_type));
             }
             _ => {
                 return Err(format!("unsupported low-level op {:?}", lowlevel));
             }
         };
         Ok(())
+    }
+
+    /// Get the ValueType for a set of arguments that are required to have the same type
+    fn get_uniform_arg_type(&self, args: &'a [Symbol]) -> ValueType {
+        let value_type = self.storage.get(&args[0]).value_type();
+        for arg in args.iter().skip(1) {
+            debug_assert!(self.storage.get(arg).value_type() == value_type);
+        }
+        value_type
+    }
+
+    fn call_imported_builtin(
+        &mut self,
+        name: &'a str,
+        arg_types: &[ValueType],
+        ret_type: Option<ValueType>,
+    ) {
+        let (fn_index, linker_symbol_index) = match self.builtin_sym_index_map.get(name) {
+            Some(sym_idx) => match &self.linker_symbols[*sym_idx] {
+                SymInfo::Function(WasmObjectSymbol::Imported { index, .. }) => {
+                    (*index, *sym_idx as u32)
+                }
+                x => unreachable!("Invalid linker symbol for builtin {}: {:?}", name, x),
+            },
+
+            None => {
+                let mut param_types = Vec::with_capacity_in(arg_types.len(), self.env.arena);
+                param_types.extend_from_slice(arg_types);
+                let signature_index = self.module.types.insert(Signature {
+                    param_types,
+                    ret_type,
+                });
+
+                let import_index = self.module.import.entries.len() as u32;
+                let import = Import {
+                    module: BUILTINS_IMPORT_MODULE_NAME,
+                    name: name.to_string(),
+                    description: ImportDesc::Func { signature_index },
+                };
+                self.module.import.entries.push(import);
+
+                let sym_idx = self.linker_symbols.len() as u32;
+                let sym_info = SymInfo::Function(WasmObjectSymbol::Imported {
+                    flags: WASM_SYM_UNDEFINED,
+                    index: import_index,
+                });
+                self.linker_symbols.push(sym_info);
+
+                (import_index, sym_idx)
+            }
+        };
+        self.code_builder.call(
+            fn_index,
+            linker_symbol_index,
+            arg_types.len(),
+            ret_type.is_some(),
+        );
     }
 }

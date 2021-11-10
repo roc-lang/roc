@@ -88,7 +88,9 @@ Using [nix](https://nixos.org/download.html) is a quick way to get an environmen
 
 Anyone having trouble installing the proper version of LLVM themselves might also prefer this method.
 
-First, install nix:
+If you are running ArchLinux or a derivative like Manjaro, you'll need to run `sudo sysctl -w kernel.unprivileged_userns_clone=1` before installing nix.
+
+Install nix:
 
 `curl -L https://nixos.org/nix/install | sh`
 

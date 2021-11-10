@@ -193,7 +193,10 @@ pub fn helper(
         app_o_file.clone(),
         // Long term we probably want a smarter way to link in zig builtins.
         // With the current method all methods are kept and it adds about 100k to all outputs.
-        &[app_o_file.to_str().unwrap(), bitcode::OBJ_PATH],
+        &[
+            app_o_file.to_str().unwrap(),
+            bitcode::BUILTINS_HOST_OBJ_PATH,
+        ],
         LinkType::Dylib,
     )
     .expect("failed to link dynamic library");
@@ -210,7 +213,7 @@ pub fn helper(
     (main_fn_name, delayed_errors, lib)
 }
 
-#[macro_export]
+#[allow(unused_macros)]
 macro_rules! assert_evals_to {
     ($src:expr, $expected:expr, $ty:ty) => {{
         assert_evals_to!($src, $expected, $ty, (|val| val));
@@ -237,7 +240,7 @@ macro_rules! assert_evals_to {
 
         let arena = Bump::new();
         let (main_fn_name, errors, lib) =
-            $crate::helpers::eval::helper(&arena, $src, stdlib, $leak, $lazy_literals);
+            $crate::helpers::dev::helper(&arena, $src, stdlib, $leak, $lazy_literals);
 
         let transform = |success| {
             let expected = $expected;
@@ -247,3 +250,6 @@ macro_rules! assert_evals_to {
         run_jit_function_raw!(lib, main_fn_name, $ty, transform, errors)
     };
 }
+
+#[allow(unused_imports)]
+pub(crate) use assert_evals_to;

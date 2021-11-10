@@ -1018,6 +1018,7 @@ define_builtins! {
         18 STR_FROM_UTF8_RANGE: "fromUtf8Range"
         19 STR_REPEAT: "repeat"
         20 STR_TRIM: "trim"
+        21 STR_TRIM_LEFT: "trimLeft"
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
@@ -1065,6 +1066,10 @@ define_builtins! {
         42 LIST_JOIN_MAP: "joinMap"
         43 LIST_JOIN_MAP_CONCAT: "#joinMapConcat"
         44 LIST_ANY: "any"
+        45 LIST_TAKE_FIRST: "takeFirst"
+        46 LIST_TAKE_LAST: "takeLast"
+        47 LIST_FIND: "find"
+        48 LIST_FIND_RESULT: "#find_result" // symbol used in the definition of List.find
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

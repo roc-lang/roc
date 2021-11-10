@@ -2,10 +2,14 @@ use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+use crate::helpers::from_wasm32_memory::FromWasm32Memory;
 use crate::helpers::wasm32_test_result::Wasm32TestResult;
+use roc_builtins::bitcode;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
-use test_wasm_util::from_wasm32_memory::FromWasm32Memory;
+use roc_gen_wasm::MEMORY_NAME;
+
+use tempfile::tempdir;
 
 const TEST_WRAPPER_NAME: &str = "test_wrapper";
 
@@ -112,7 +116,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     );
 
     let mut module_bytes = std::vec::Vec::with_capacity(4096);
-    wasm_module.serialize(&mut module_bytes);
+    wasm_module.serialize_mut(&mut module_bytes);
 
     // for debugging (e.g. with wasm2wat or wasm-objdump)
     if false {
@@ -143,8 +147,43 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     use wasmer::{Instance, Module, Store};
 
     let store = Store::default();
-    // let module = Module::from_file(&store, &test_wasm_path).unwrap();
-    let wasmer_module = Module::from_binary(&store, &module_bytes).unwrap();
+
+    let wasmer_module = {
+        let dir = tempdir().unwrap();
+        let dirpath = dir.path();
+        let final_wasm_file = dirpath.join("final.wasm");
+        let app_o_file = dirpath.join("app.o");
+
+        // write the module to a file so the linker can access it
+        std::fs::write(&app_o_file, &module_bytes).unwrap();
+
+        std::process::Command::new("zig")
+            .args(&[
+                "wasm-ld",
+                // input files
+                app_o_file.to_str().unwrap(),
+                bitcode::BUILTINS_WASM32_OBJ_PATH,
+                // output
+                "-o",
+                final_wasm_file.to_str().unwrap(),
+                // we don't define `_start`
+                "--no-entry",
+                // If you only specify test_wrapper, it will stop at the call to UserApp_main_1
+                // But if you specify both exports, you get all the dependencies.
+                //
+                // It seems that it will not write out an export you didn't explicitly specify,
+                // even if it's a dependency of another export!
+                // In our case we always export main and test_wrapper so that's OK.
+                "--export",
+                "test_wrapper",
+                "--export",
+                "#UserApp_main_1",
+            ])
+            .output()
+            .unwrap();
+
+        Module::from_file(&store, &final_wasm_file).unwrap()
+    };
 
     // First, we create the `WasiEnv`
     use wasmer_wasi::WasiState;
@@ -169,9 +208,9 @@ where
     // NOTE the stdlib must be in the arena; just taking a reference will segfault
     let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
 
-    let instance = crate::helpers::eval::helper_wasm(&arena, src, stdlib, &expected);
+    let instance = crate::helpers::wasm::helper_wasm(&arena, src, stdlib, &expected);
 
-    let memory = instance.exports.get_memory("memory").unwrap();
+    let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
 
     let test_wrapper = instance.exports.get_function(TEST_WRAPPER_NAME).unwrap();
 
@@ -190,10 +229,10 @@ where
     }
 }
 
-#[macro_export]
+#[allow(unused_macros)]
 macro_rules! assert_wasm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        match $crate::helpers::eval::assert_wasm_evals_to_help::<$ty>($src, $expected) {
+        match $crate::helpers::wasm::assert_wasm_evals_to_help::<$ty>($src, $expected) {
             Err(msg) => panic!("{:?}", msg),
             Ok(actual) => {
                 assert_eq!($transform(actual), $expected)
@@ -202,23 +241,28 @@ macro_rules! assert_wasm_evals_to {
     };
 
     ($src:expr, $expected:expr, $ty:ty) => {
-        $crate::assert_wasm_evals_to!($src, $expected, $ty, $crate::helpers::eval::identity);
+        $crate::helpers::wasm::assert_wasm_evals_to!(
+            $src,
+            $expected,
+            $ty,
+            $crate::helpers::wasm::identity
+        );
     };
 
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        $crate::assert_wasm_evals_to!($src, $expected, $ty, $transform);
+        $crate::helpers::wasm::assert_wasm_evals_to!($src, $expected, $ty, $transform);
     };
 }
 
-#[macro_export]
+#[allow(unused_macros)]
 macro_rules! assert_evals_to {
     ($src:expr, $expected:expr, $ty:ty) => {{
-        assert_evals_to!($src, $expected, $ty, $crate::helpers::eval::identity);
+        assert_evals_to!($src, $expected, $ty, $crate::helpers::wasm::identity);
     }};
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
         // Same as above, except with an additional transformation argument.
         {
-            $crate::assert_wasm_evals_to!($src, $expected, $ty, $transform);
+            $crate::helpers::wasm::assert_wasm_evals_to!($src, $expected, $ty, $transform);
         }
     };
 }
@@ -227,3 +271,8 @@ macro_rules! assert_evals_to {
 pub fn identity<T>(value: T) -> T {
     value
 }
+
+#[allow(unused_imports)]
+pub(crate) use assert_evals_to;
+#[allow(unused_imports)]
+pub(crate) use assert_wasm_evals_to;
