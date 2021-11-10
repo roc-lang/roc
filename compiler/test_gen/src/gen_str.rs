@@ -1070,11 +1070,13 @@ fn str_trim_small_to_small_shared() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_trim_left_small_blank_string() {
     assert_evals_to!(indoc!(r#"Str.trimLeft " ""#), RocStr::from(""), RocStr);
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_trim_left_small_to_small() {
     assert_evals_to!(
         indoc!(r#"Str.trimLeft "  hello world  ""#),
@@ -1084,6 +1086,7 @@ fn str_trim_left_small_to_small() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_trim_left_large_to_large_unique() {
     assert_evals_to!(
         indoc!(r#"Str.trimLeft (Str.concat "    " "hello world from a large string ")"#),
@@ -1093,6 +1096,7 @@ fn str_trim_left_large_to_large_unique() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_trim_left_large_to_small_unique() {
     assert_evals_to!(
         indoc!(r#"Str.trimLeft (Str.concat "  " "hello world        ")"#),
@@ -1102,6 +1106,7 @@ fn str_trim_left_large_to_small_unique() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_trim_left_large_to_large_shared() {
     assert_evals_to!(
         indoc!(
@@ -1121,6 +1126,7 @@ fn str_trim_left_large_to_large_shared() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_trim_left_large_to_small_shared() {
     assert_evals_to!(
         indoc!(
@@ -1140,6 +1146,7 @@ fn str_trim_left_large_to_small_shared() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_trim_left_small_to_small_shared() {
     assert_evals_to!(
         indoc!(
