@@ -2341,7 +2341,7 @@ fn list_any() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-#[ignore]
+#[should_panic(expected = r#"Roc failed with message: "UnresolvedTypeVar"#)]
 fn list_any_empty_with_unknown_element_type() {
     // Segfaults with invalid memory reference. Running this as a stand-alone
     // Roc program, generates the following error message:

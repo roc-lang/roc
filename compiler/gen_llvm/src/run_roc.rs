@@ -1,22 +1,23 @@
 use std::ffi::CString;
+use std::mem::MaybeUninit;
 use std::os::raw::c_char;
-use RocCallResult::*;
 
 /// This must have the same size as the repr() of RocCallResult!
 pub const ROC_CALL_RESULT_DISCRIMINANT_SIZE: usize = std::mem::size_of::<u64>();
 
-#[repr(u64)]
-pub enum RocCallResult<T> {
-    Success(T),
-    Failure(*mut c_char),
+#[repr(C)]
+pub struct RocCallResult<T> {
+    tag: u64,
+    error_msg: *mut c_char,
+    value: MaybeUninit<T>,
 }
 
 impl<T: Sized> From<RocCallResult<T>> for Result<T, String> {
     fn from(call_result: RocCallResult<T>) -> Self {
-        match call_result {
-            Success(value) => Ok(value),
-            Failure(failure) => Err({
-                let raw = unsafe { CString::from_raw(failure) };
+        match call_result.tag {
+            0 => Ok(unsafe { call_result.value.assume_init() }),
+            _ => Err({
+                let raw = unsafe { CString::from_raw(call_result.error_msg) };
 
                 let result = format!("{:?}", raw);
 
