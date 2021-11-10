@@ -10,7 +10,7 @@ use std::process::Command;
 use build::{BuildOutcome, BuiltFile};
 use bumpalo::Bump;
 use clap::{App, AppSettings, Arg, ArgMatches};
-use target_lexicon::{Architecture};
+use target_lexicon::Architecture;
 
 use roc_build::link::LinkType;
 use roc_load::file::LoadingProblem;
@@ -41,9 +41,7 @@ pub const BACKEND: &str = "BACKEND";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
 pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 
-pub fn build_app<'a>() -> App<'a> {
-    let all_backends: Vec<&str> = ALL_BACKENDS.iter().map(|s| s.as_ref()).collect();
-
+pub fn build_app<'a>(default_backend: &'a str, all_backends: &'a Vec<String>) -> App<'a> {
     let app = App::new("roc")
         .version(concatcp!(include_str!("../../version.txt"), "\n"))
         .about("Runs the given .roc file. Use one of the SUBCOMMANDS below to do something else!")
@@ -67,13 +65,16 @@ pub fn build_app<'a>() -> App<'a> {
                     .required(false),
             )
             .arg(
-                Arg::new(FLAG_BACKEND)
-                    .long(FLAG_BACKEND)
-                    .about("Choose a different backend")
-                    // .requires(BACKEND)
-                    .default_value(&*DEFAULT_BACKEND)
-                    .possible_values(&all_backends)
-                    .required(false),
+                {
+                    let arg_backend = Arg::with_name(FLAG_BACKEND)
+                        .long(FLAG_BACKEND)
+                        .about("Choose a different backend")
+                        // .requires(BACKEND)
+                        .default_value(default_backend)
+                        .required(false);
+                    // add more backends
+                    add_all_backends(arg_backend, all_backends)
+                }
             )
             .arg(
                 Arg::new(FLAG_LIB)
@@ -174,13 +175,15 @@ pub fn build_app<'a>() -> App<'a> {
                 .required(false),
         )
         .arg(
-            Arg::new(FLAG_BACKEND)
-                .long(FLAG_BACKEND)
-                .about("Choose a different backend")
-                // .requires(BACKEND)
-                .default_value(&*DEFAULT_BACKEND)
-                .possible_values(&all_backends)
-                .required(false),
+            {
+                let arg = Arg::with_name(FLAG_BACKEND)
+                    .long(FLAG_BACKEND)
+                    .about("Choose a different backend")
+                    // .requires(BACKEND)
+                    .default_value(&default_backend)
+                    .required(false);
+                add_all_backends(arg, all_backends)
+            }
         )
         .arg(
             Arg::new(ROC_FILE)
@@ -207,6 +210,12 @@ pub fn build_app<'a>() -> App<'a> {
     } else {
         app
     }
+}
+
+fn add_all_backends<'a>(arg_backend: Arg<'a>, all_backends: &'a Vec<String>) -> Arg<'a> {
+    all_backends.iter().fold(arg_backend, |arg, backend| {
+        arg.possible_value(backend)
+    })
 }
 
 pub fn docs(files: Vec<PathBuf>) {

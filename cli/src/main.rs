@@ -1,9 +1,11 @@
+use roc_cli::backend::Backend;
 use roc_cli::build::check_file;
 use roc_cli::{
     build_app, docs, repl, BuildConfig, CMD_BUILD, CMD_CHECK, CMD_DOCS, CMD_EDIT, CMD_REPL,
     DIRECTORY_OR_FILES, FLAG_TIME, ROC_FILE,
 };
 use roc_load::file::LoadingProblem;
+use strum::IntoEnumIterator;
 use std::fs::{self, FileType};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -16,7 +18,9 @@ use std::ffi::{OsStr, OsString};
 use roc_cli::build;
 
 fn main() -> io::Result<()> {
-    let matches = build_app().get_matches();
+    let default_backend = Backend::default().to_string();
+    let all_backends: Vec<String> = Backend::iter().map(|b| b.to_string()).collect();
+    let matches = build_app(&default_backend, &all_backends).get_matches();
 
     let exit_code = match matches.subcommand_name() {
         None => {

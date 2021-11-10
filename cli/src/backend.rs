@@ -1,5 +1,4 @@
 use parse_display::{Display, FromStr};
-use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use target_lexicon::{Architecture, BinaryFormat, OperatingSystem, Triple, X86_32Architecture};
 
@@ -19,14 +18,6 @@ impl Default for Backend {
     fn default() -> Self {
         Backend::Host
     }
-}
-
-use lazy_static::lazy_static;
-
-lazy_static! {
-    pub static ref ALL_BACKENDS: Vec<String> = Backend::iter().map(|b| b.to_string()).collect();
-
-    pub static ref DEFAULT_BACKEND: String = Backend::default().to_string();
 }
 
 impl Backend {
