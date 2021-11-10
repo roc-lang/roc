@@ -26,6 +26,7 @@ rustc --version
 # We set ROC_DOCS_ROOT_DIR=builtins so that links will be generated relative to
 # "/builtins/" rather than "/" - which is what we want based on how the server
 # is set up to serve them.
-RUSTFLAGS=-Awarnings ROC_DOCS_URL_ROOT=builtins cargo run -p roc_cli --no-default-features docs compiler/builtins/docs/*.roc
-mv generated-docs/ www/build/builtins
+# TODO uncomment the two lines below once docs generation is fixed (PR #1806)
+# RUSTFLAGS=-Awarnings ROC_DOCS_URL_ROOT=builtins cargo run -p roc_cli --no-default-features docs compiler/builtins/docs/*.roc
+# mv generated-docs/ www/build/builtins
 popd
