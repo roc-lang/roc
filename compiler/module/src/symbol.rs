@@ -1018,6 +1018,7 @@ define_builtins! {
         18 STR_FROM_UTF8_RANGE: "fromUtf8Range"
         19 STR_REPEAT: "repeat"
         20 STR_TRIM: "trim"
+        21 STR_TRIM_LEFT: "trimLeft"
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias

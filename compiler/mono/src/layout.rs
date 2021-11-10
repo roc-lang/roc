@@ -1116,7 +1116,6 @@ impl<'a> LayoutCache<'a> {
             seen: Vec::new_in(arena),
             ptr_bytes: self.ptr_bytes,
         };
-
         RawFunctionLayout::from_var(&mut env, var)
     }
 
