@@ -26,7 +26,8 @@ fn tag_union_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, TT
             min_indent,
             TTagUnion::Open,
             TTagUnion::Space,
-            TTagUnion::IndentEnd
+            TTagUnion::IndentEnd,
+            Tag::SpaceBefore
         )
         .parse(arena, state)?;
 
@@ -276,7 +277,8 @@ fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, TReco
             min_indent,
             TRecord::Open,
             TRecord::Space,
-            TRecord::IndentEnd
+            TRecord::IndentEnd,
+            AssignedField::SpaceBefore
         )
         .parse(arena, state)?;
 
