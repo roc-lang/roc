@@ -3227,8 +3227,6 @@ dependencies = [
  "indoc",
  "inkwell 0.1.0",
  "libloading 0.7.1",
- "libc",
- "maplit",
  "mimalloc",
  "parse-display",
  "pretty_assertions",

@@ -66,7 +66,7 @@ pub fn build_app<'a>(default_backend: &'a str, all_backends: &'a Vec<String>) ->
             )
             .arg(
                 {
-                    let arg_backend = Arg::with_name(FLAG_BACKEND)
+                    let arg_backend = Arg::new(FLAG_BACKEND)
                         .long(FLAG_BACKEND)
                         .about("Choose a different backend")
                         // .requires(BACKEND)
@@ -176,7 +176,7 @@ pub fn build_app<'a>(default_backend: &'a str, all_backends: &'a Vec<String>) ->
         )
         .arg(
             {
-                let arg = Arg::with_name(FLAG_BACKEND)
+                let arg = Arg::new(FLAG_BACKEND)
                     .long(FLAG_BACKEND)
                     .about("Choose a different backend")
                     // .requires(BACKEND)
@@ -214,7 +214,7 @@ pub fn build_app<'a>(default_backend: &'a str, all_backends: &'a Vec<String>) ->
 
 fn add_all_backends<'a>(arg_backend: Arg<'a>, all_backends: &'a Vec<String>) -> Arg<'a> {
     all_backends.iter().fold(arg_backend, |arg, backend| {
-        arg.possible_value(backend)
+        arg.possible_value(backend.as_str())
     })
 }
 
@@ -455,4 +455,9 @@ fn run_with_wasmer(wasm_path: &std::path::Path, args: &[String]) {
             other => panic!("Wasmer error: {:?}", other),
         },
     }
+}
+
+#[cfg(not(feature = "run-wasm32"))]
+fn run_with_wasmer(_wasm_path: &std::path::Path, _args: &[String]) {
+    panic!("Wasm supported isn't enabled")
 }
