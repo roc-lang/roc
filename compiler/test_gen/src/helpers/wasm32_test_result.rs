@@ -1,33 +1,42 @@
 use bumpalo::collections::Vec;
 
 use crate::helpers::from_wasm32_memory::FromWasm32Memory;
-use roc_gen_wasm::wasm_module::opcodes;
 use roc_gen_wasm::wasm_module::{
-    Align, CodeBuilder, Export, ExportType, LocalId, Signature, ValueType, WasmModule,
+    linking::SymInfo, linking::WasmObjectSymbol, Align, CodeBuilder, Export, ExportType, LocalId,
+    Signature, ValueType, WasmModule,
 };
 use roc_std::{RocDec, RocList, RocOrder, RocStr};
 
 pub trait Wasm32TestResult {
     fn insert_test_wrapper<'a>(
         arena: &'a bumpalo::Bump,
-        wasm_module: &mut WasmModule<'a>,
+        module: &mut WasmModule<'a>,
         wrapper_name: &str,
         main_function_index: u32,
     ) {
-        wasm_module.add_function_signature(Signature {
+        let index = module.code.code_builders.len() as u32;
+
+        module.add_function_signature(Signature {
             param_types: Vec::with_capacity_in(0, arena),
             ret_type: Some(ValueType::I32),
         });
 
-        wasm_module.export.entries.push(Export {
+        module.export.entries.push(Export {
             name: wrapper_name.to_string(),
             ty: ExportType::Func,
-            index: wasm_module.code.code_builders.len() as u32,
+            index,
         });
+
+        let symbol_table = module.linking.symbol_table_mut();
+        symbol_table.push(SymInfo::Function(WasmObjectSymbol::Defined {
+            flags: 0,
+            index,
+            name: wrapper_name.to_string(),
+        }));
 
         let mut code_builder = CodeBuilder::new(arena);
         Self::build_wrapper_body(&mut code_builder, main_function_index);
-        wasm_module.code.code_builders.push(code_builder);
+        module.code.code_builders.push(code_builder);
     }
 
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32);
@@ -40,14 +49,15 @@ macro_rules! build_wrapper_body_primitive {
             let frame_pointer = Some(frame_pointer_id);
             let local_types = &[ValueType::I32];
             let frame_size = 8;
+            // Main's symbol index is the same as its function index, since the first symbols we created were for procs
+            let main_symbol_index = main_function_index;
 
             code_builder.get_local(frame_pointer_id);
-            // Raw "call" instruction. Don't bother with symbol & relocation since we're not going to link.
-            code_builder.inst_imm32(opcodes::CALL, 0, true, main_function_index);
+            code_builder.call(main_function_index, main_symbol_index, 0, true);
             code_builder.$store_instruction($align, 0);
             code_builder.get_local(frame_pointer_id);
 
-            code_builder.finalize(local_types, frame_size, frame_pointer);
+            code_builder.build_fn_header(local_types, frame_size, frame_pointer);
         }
     };
 }
@@ -68,12 +78,13 @@ fn build_wrapper_body_stack_memory(
     let local_id = LocalId(0);
     let local_types = &[ValueType::I32];
     let frame_pointer = Some(local_id);
+    // Main's symbol index is the same as its function index, since the first symbols we created were for procs
+    let main_symbol_index = main_function_index;
 
     code_builder.get_local(local_id);
-    // Raw "call" instruction. Don't bother with symbol & relocation since we're not going to link.
-    code_builder.inst_imm32(opcodes::CALL, 0, true, main_function_index);
+    code_builder.call(main_function_index, main_symbol_index, 0, true);
     code_builder.get_local(local_id);
-    code_builder.finalize(local_types, size as i32, frame_pointer);
+    code_builder.build_fn_header(local_types, size as i32, frame_pointer);
 }
 
 macro_rules! wasm_test_result_stack_memory {

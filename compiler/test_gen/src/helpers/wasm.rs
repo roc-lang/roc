@@ -4,8 +4,12 @@ use std::hash::{Hash, Hasher};
 
 use crate::helpers::from_wasm32_memory::FromWasm32Memory;
 use crate::helpers::wasm32_test_result::Wasm32TestResult;
+use roc_builtins::bitcode;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
+use roc_gen_wasm::MEMORY_NAME;
+
+use tempfile::tempdir;
 
 const TEST_WRAPPER_NAME: &str = "test_wrapper";
 
@@ -112,7 +116,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     );
 
     let mut module_bytes = std::vec::Vec::with_capacity(4096);
-    wasm_module.serialize(&mut module_bytes);
+    wasm_module.serialize_mut(&mut module_bytes);
 
     // for debugging (e.g. with wasm2wat or wasm-objdump)
     if false {
@@ -143,8 +147,43 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     use wasmer::{Instance, Module, Store};
 
     let store = Store::default();
-    // let module = Module::from_file(&store, &test_wasm_path).unwrap();
-    let wasmer_module = Module::from_binary(&store, &module_bytes).unwrap();
+
+    let wasmer_module = {
+        let dir = tempdir().unwrap();
+        let dirpath = dir.path();
+        let final_wasm_file = dirpath.join("final.wasm");
+        let app_o_file = dirpath.join("app.o");
+
+        // write the module to a file so the linker can access it
+        std::fs::write(&app_o_file, &module_bytes).unwrap();
+
+        std::process::Command::new("zig")
+            .args(&[
+                "wasm-ld",
+                // input files
+                app_o_file.to_str().unwrap(),
+                bitcode::BUILTINS_WASM32_OBJ_PATH,
+                // output
+                "-o",
+                final_wasm_file.to_str().unwrap(),
+                // we don't define `_start`
+                "--no-entry",
+                // If you only specify test_wrapper, it will stop at the call to UserApp_main_1
+                // But if you specify both exports, you get all the dependencies.
+                //
+                // It seems that it will not write out an export you didn't explicitly specify,
+                // even if it's a dependency of another export!
+                // In our case we always export main and test_wrapper so that's OK.
+                "--export",
+                "test_wrapper",
+                "--export",
+                "#UserApp_main_1",
+            ])
+            .output()
+            .unwrap();
+
+        Module::from_file(&store, &final_wasm_file).unwrap()
+    };
 
     // First, we create the `WasiEnv`
     use wasmer_wasi::WasiState;
@@ -171,7 +210,7 @@ where
 
     let instance = crate::helpers::wasm::helper_wasm(&arena, src, stdlib, &expected);
 
-    let memory = instance.exports.get_memory("memory").unwrap();
+    let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
 
     let test_wrapper = instance.exports.get_function(TEST_WRAPPER_NAME).unwrap();
 

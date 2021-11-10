@@ -21,6 +21,9 @@ const PTR_TYPE: ValueType = ValueType::I32;
 
 pub const STACK_POINTER_GLOBAL_ID: u32 = 0;
 pub const FRAME_ALIGNMENT_BYTES: i32 = 16;
+pub const MEMORY_NAME: &str = "memory";
+pub const BUILTINS_IMPORT_MODULE_NAME: &str = "builtins";
+pub const STACK_POINTER_NAME: &str = "__stack_pointer";
 
 pub struct Env<'a> {
     pub arena: &'a Bump,
@@ -34,7 +37,7 @@ pub fn build_module<'a>(
 ) -> Result<std::vec::Vec<u8>, String> {
     let mut wasm_module = build_module_help(env, procedures)?;
     let mut buffer = std::vec::Vec::with_capacity(4096);
-    wasm_module.serialize(&mut buffer);
+    wasm_module.serialize_mut(&mut buffer);
     Ok(buffer)
 }
 
