@@ -18,8 +18,6 @@ roc_solve = { path = "../solve" }
 roc_mono = { path = "../mono" }
 roc_std = { path = "../../roc_std" }
 morphic_lib = { path = "../../vendor/morphic_lib" }
-im    = "15.0.0"
-im-rc = "15.0.0"
 bumpalo = { version = "3.8.0", features = ["collections"] }
 inkwell = { path = "../../vendor/inkwell" }
 target-lexicon = "0.12.2"
