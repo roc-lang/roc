@@ -24,7 +24,7 @@ use crate::wasm_module::{
 };
 use crate::{
     copy_memory, CopyMemoryConfig, Env, BUILTINS_IMPORT_MODULE_NAME, MEMORY_NAME, PTR_TYPE,
-    STACK_POINTER_NAME,
+    STACK_POINTER_GLOBAL_ID, STACK_POINTER_NAME,
 };
 
 /// The memory address where the constants data will be loaded during module instantiation.
@@ -84,12 +84,12 @@ impl<'a> WasmBackend<'a> {
         exports.push(Export {
             name: STACK_POINTER_NAME.to_string(),
             ty: ExportType::Global,
-            index: 0,
+            index: STACK_POINTER_GLOBAL_ID,
         });
 
         linker_symbols.push(SymInfo::Global(WasmObjectSymbol::Defined {
-            flags: WASM_SYM_BINDING_WEAK,
-            index: 0,
+            flags: WASM_SYM_BINDING_WEAK, // TODO: this works but means external .o files decide how much stack we have!
+            index: STACK_POINTER_GLOBAL_ID,
             name: STACK_POINTER_NAME.to_string(),
         }));
 
