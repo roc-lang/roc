@@ -1194,6 +1194,30 @@ mod test_parse {
     }
 
     #[test]
+    fn newline_inside_empty_list() {
+        let arena = Bump::new();
+        let expected = List {
+            items: &[],
+            final_comments: &[Newline],
+        };
+        let actual = parse_expr_with(&arena, "[\n]");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn comment_inside_empty_list() {
+        let arena = Bump::new();
+        let expected = List {
+            items: &[],
+            final_comments: &[LineComment("comment")],
+        };
+        let actual = parse_expr_with(&arena, "[#comment\n]");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
     fn packed_singleton_list() {
         let arena = Bump::new();
         let items = &[&*arena.alloc(Located::new(0, 0, 1, 2, Num("1")))];
@@ -1215,6 +1239,24 @@ mod test_parse {
             final_comments: &[],
         };
         let actual = parse_expr_with(&arena, "[ 1 ]");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn newline_singleton_list() {
+        let arena = Bump::new();
+        let item = &*arena.alloc(Expr::SpaceAfter(
+            arena.alloc(Num("1")),
+            arena.alloc([Newline]),
+        ));
+        let item = Expr::SpaceBefore(item, arena.alloc([Newline]));
+        let items = [&*arena.alloc(Located::new(1, 1, 0, 1, item))];
+        let expected = List {
+            items: &items,
+            final_comments: &[],
+        };
+        let actual = parse_expr_with(&arena, "[\n1\n]");
 
         assert_eq!(Ok(expected), actual);
     }

@@ -2159,7 +2159,8 @@ fn list_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, List<'a>>
             min_indent,
             List::Open,
             List::Space,
-            List::IndentEnd
+            List::IndentEnd,
+            Expr::SpaceBefore
         )
         .parse(arena, state)?;
 
