@@ -632,6 +632,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(str_type())
     );
 
+    // trimLeft : Str -> Str
+    add_top_level_function_type!(
+        Symbol::STR_TRIM_LEFT,
+        vec![str_type()],
+        Box::new(str_type())
+    );
+
     // trim : Str -> Str
     add_top_level_function_type!(Symbol::STR_TRIM, vec![str_type()], Box::new(str_type()));
 
@@ -982,6 +989,22 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_top_level_function_type!(
         Symbol::LIST_TAKE_LAST,
         vec![list_type(flex(TVAR1)), nat_type()],
+        Box::new(list_type(flex(TVAR1))),
+    );
+
+    // sublist : List elem, { start : Nat, len : Nat } -> List elem
+    add_top_level_function_type!(
+        Symbol::LIST_SUBLIST,
+        vec![
+            list_type(flex(TVAR1)),
+            SolvedType::Record {
+                fields: vec![
+                    ("start".into(), RecordField::Required(nat_type())),
+                    ("len".into(), RecordField::Required(nat_type())),
+                ],
+                ext: Box::new(SolvedType::EmptyRecord),
+            },
+        ],
         Box::new(list_type(flex(TVAR1))),
     );
 

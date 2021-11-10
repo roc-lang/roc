@@ -3746,6 +3746,18 @@ mod solve_expr {
     }
 
     #[test]
+    fn str_trim_left() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Str.trimLeft
+                "#
+            ),
+            "Str -> Str",
+        );
+    }
+
+    #[test]
     fn list_take_first() {
         infer_eq_without_problem(
             indoc!(
@@ -3766,6 +3778,18 @@ mod solve_expr {
                 "#
             ),
             "List a, Nat -> List a",
+        );
+    }
+
+    #[test]
+    fn list_sublist() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                List.sublist
+                "#
+            ),
+            "List a, { len : Nat, start : Nat } -> List a",
         );
     }
 

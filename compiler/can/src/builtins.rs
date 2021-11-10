@@ -68,6 +68,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_FROM_FLOAT=> str_from_float,
         STR_REPEAT => str_repeat,
         STR_TRIM => str_trim,
+        STR_TRIM_LEFT => str_trim_left,
         LIST_LEN => list_len,
         LIST_GET => list_get,
         LIST_SET => list_set,
@@ -93,6 +94,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_MAP4 => list_map4,
         LIST_TAKE_FIRST => list_take_first,
         LIST_TAKE_LAST => list_take_last,
+        LIST_SUBLIST => list_sublist,
         LIST_DROP => list_drop,
         LIST_DROP_AT => list_drop_at,
         LIST_DROP_FIRST => list_drop_first,
@@ -1286,6 +1288,11 @@ fn str_trim(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::StrTrim, var_store)
 }
 
+/// Str.trimLeft : Str -> Str
+fn str_trim_left(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::StrTrimLeft, var_store)
+}
+
 /// Str.repeat : Str, Nat -> Str
 fn str_repeat(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let str_var = var_store.fresh();
@@ -2050,6 +2057,54 @@ fn list_take_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
         vec![(list_var, Symbol::ARG_1), (len_var, Symbol::ARG_2)],
         var_store,
         body,
+        list_var,
+    )
+}
+
+/// List.sublist : List elem, { start : Nat, len : Nat } -> List elem
+fn list_sublist(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
+    let rec_var = var_store.fresh();
+
+    let sym_list = Symbol::ARG_1;
+    let sym_rec = Symbol::ARG_2;
+
+    let start_var = var_store.fresh();
+    let len_var = var_store.fresh();
+
+    let get_start = Access {
+        record_var: rec_var,
+        ext_var: var_store.fresh(),
+        field_var: var_store.fresh(),
+        loc_expr: Box::new(no_region(Var(sym_rec))),
+        field: "start".into(),
+    };
+
+    let get_len = Access {
+        record_var: rec_var,
+        ext_var: var_store.fresh(),
+        field_var: var_store.fresh(),
+        loc_expr: Box::new(no_region(Var(sym_rec))),
+        field: "len".into(),
+    };
+
+    let body_drop = RunLowLevel {
+        op: LowLevel::ListDrop,
+        args: vec![(list_var, Var(sym_list)), (start_var, get_start)],
+        ret_var: list_var,
+    };
+
+    let body_take = RunLowLevel {
+        op: LowLevel::ListTakeFirst,
+        args: vec![(list_var, body_drop), (len_var, get_len)],
+        ret_var: list_var,
+    };
+
+    defn(
+        symbol,
+        vec![(list_var, sym_list), (rec_var, sym_rec)],
+        var_store,
+        body_take,
         list_var,
     )
 }

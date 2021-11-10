@@ -1151,3 +1151,96 @@ fn str_trim_small_to_small_shared() {
         (RocStr, RocStr)
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_left_small_blank_string() {
+    assert_evals_to!(indoc!(r#"Str.trimLeft " ""#), RocStr::from(""), RocStr);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_left_small_to_small() {
+    assert_evals_to!(
+        indoc!(r#"Str.trimLeft "  hello world  ""#),
+        RocStr::from("hello world  "),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_left_large_to_large_unique() {
+    assert_evals_to!(
+        indoc!(r#"Str.trimLeft (Str.concat "    " "hello world from a large string ")"#),
+        RocStr::from("hello world from a large string "),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_left_large_to_small_unique() {
+    assert_evals_to!(
+        indoc!(r#"Str.trimLeft (Str.concat "  " "hello world        ")"#),
+        RocStr::from("hello world        "),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_left_large_to_large_shared() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+               original : Str
+               original = " hello world world "
+
+               { trimmed: Str.trimLeft original, original: original }
+               "#
+        ),
+        (
+            RocStr::from(" hello world world "),
+            RocStr::from("hello world world "),
+        ),
+        (RocStr, RocStr)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_left_large_to_small_shared() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+               original : Str
+               original = " hello world             "
+
+               { trimmed: Str.trimLeft original, original: original }
+               "#
+        ),
+        (
+            RocStr::from(" hello world             "),
+            RocStr::from("hello world             "),
+        ),
+        (RocStr, RocStr)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_left_small_to_small_shared() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+               original : Str
+               original = " hello world "
+
+               { trimmed: Str.trimLeft original, original: original }
+               "#
+        ),
+        (RocStr::from(" hello world "), RocStr::from("hello world "),),
+        (RocStr, RocStr)
+    );
+}
