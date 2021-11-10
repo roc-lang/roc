@@ -87,7 +87,7 @@ macro_rules! run_jit_function_dynamic_type {
                 .ok_or(format!("Unable to JIT compile `{}`", $main_fn_name))
                 .expect("errored");
 
-            let size = roc_gen_llvm::run_roc::ROC_CALL_RESULT_DISCRIMINANT_SIZE + $bytes;
+            let size = std::mem::size_of::<RocCallResult<()>>() + $bytes;
             let layout = std::alloc::Layout::array::<u8>(size).unwrap();
             let result = std::alloc::alloc(layout);
             main(result);
@@ -95,7 +95,7 @@ macro_rules! run_jit_function_dynamic_type {
             let flag = *result;
 
             if flag == 0 {
-                $transform(result.offset(8) as *const u8)
+                $transform(result.add(std::mem::size_of::<RocCallResult<()>>()) as *const u8)
             } else {
                 use std::ffi::CString;
                 use std::os::raw::c_char;
