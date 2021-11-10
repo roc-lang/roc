@@ -6,7 +6,7 @@ use std::fmt::Debug;
 use roc_module::symbol::Symbol;
 
 use super::linking::{IndexRelocType, OffsetRelocType, RelocationEntry};
-use super::opcodes::*;
+use super::opcodes::{OpCode, OpCode::*};
 use super::serialize::{SerialBuffer, Serialize};
 use crate::{round_up_to_alignment, FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID};
 
@@ -244,7 +244,7 @@ impl<'a> CodeBuilder<'a> {
                     // Symbol is not on top of the stack. Find it.
                     if let Some(found_index) = self.vm_stack.iter().rposition(|&s| s == symbol) {
                         // Insert a local.set where the value was created
-                        self.add_insertion(pushed_at, SETLOCAL, next_local_id.0);
+                        self.add_insertion(pushed_at, SETLOCAL as u8, next_local_id.0);
 
                         // Take the value out of the stack where local.set was inserted
                         self.vm_stack.remove(found_index);
@@ -267,7 +267,7 @@ impl<'a> CodeBuilder<'a> {
             Popped { pushed_at } => {
                 // This Symbol is being used for a second time
                 // Insert a local.tee where it was pushed, so we don't interfere with the first usage
-                self.add_insertion(pushed_at, TEELOCAL, next_local_id.0);
+                self.add_insertion(pushed_at, TEELOCAL as u8, next_local_id.0);
 
                 // Insert a local.get at the current position
                 self.get_local(next_local_id);
@@ -331,14 +331,14 @@ impl<'a> CodeBuilder<'a> {
     fn build_stack_frame_push(&mut self, frame_size: i32, frame_pointer: LocalId) {
         // Can't use the usual instruction methods because they push to self.code.
         // This is the only case where we push instructions somewhere different.
-        self.preamble.push(GETGLOBAL);
+        self.preamble.push(GETGLOBAL as u8);
         self.preamble.encode_u32(STACK_POINTER_GLOBAL_ID);
-        self.preamble.push(I32CONST);
+        self.preamble.push(I32CONST as u8);
         self.preamble.encode_i32(frame_size);
-        self.preamble.push(I32SUB);
-        self.preamble.push(TEELOCAL);
+        self.preamble.push(I32SUB as u8);
+        self.preamble.push(TEELOCAL as u8);
         self.preamble.encode_u32(frame_pointer.0);
-        self.preamble.push(SETGLOBAL);
+        self.preamble.push(SETGLOBAL as u8);
         self.preamble.encode_u32(STACK_POINTER_GLOBAL_ID);
     }
 
@@ -366,7 +366,7 @@ impl<'a> CodeBuilder<'a> {
             self.build_stack_frame_pop(aligned_size, frame_ptr_id);
         }
 
-        self.code.push(END);
+        self.code.push(END as u8);
 
         let inner_len = self.preamble.len() + self.code.len() + self.insert_bytes.len();
         self.inner_length.encode_u32(inner_len as u32);
@@ -433,27 +433,28 @@ impl<'a> CodeBuilder<'a> {
 
     /// Base method for generating instructions
     /// Emits the opcode and simulates VM stack push/pop
-    fn inst(&mut self, opcode: u8, pops: usize, push: bool) {
+    fn inst(&mut self, opcode: OpCode, pops: usize, push: bool) {
         let new_len = self.vm_stack.len() - pops as usize;
         self.vm_stack.truncate(new_len);
         if push {
             self.vm_stack.push(Symbol::WASM_ANONYMOUS_STACK_VALUE);
         }
-        self.code.push(opcode);
+
+        self.code.push(opcode as u8);
     }
 
-    fn inst_imm8(&mut self, opcode: u8, pops: usize, push: bool, immediate: u8) {
+    fn inst_imm8(&mut self, opcode: OpCode, pops: usize, push: bool, immediate: u8) {
         self.inst(opcode, pops, push);
         self.code.push(immediate);
     }
 
     // public for use in test code
-    pub fn inst_imm32(&mut self, opcode: u8, pops: usize, push: bool, immediate: u32) {
+    pub fn inst_imm32(&mut self, opcode: OpCode, pops: usize, push: bool, immediate: u32) {
         self.inst(opcode, pops, push);
         self.code.encode_u32(immediate);
     }
 
-    fn inst_mem(&mut self, opcode: u8, pops: usize, push: bool, align: Align, offset: u32) {
+    fn inst_mem(&mut self, opcode: OpCode, pops: usize, push: bool, align: Align, offset: u32) {
         self.inst(opcode, pops, push);
         self.code.push(align as u8);
         self.code.encode_u32(offset);
@@ -526,7 +527,7 @@ impl<'a> CodeBuilder<'a> {
         if has_return_val {
             self.vm_stack.push(Symbol::WASM_ANONYMOUS_STACK_VALUE);
         }
-        self.code.push(CALL);
+        self.code.push(CALL as u8);
 
         // Write the index of the function to be called.
         // Also make a RelocationEntry so the linker can see that this byte offset relates to a function by name.
