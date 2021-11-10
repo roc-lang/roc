@@ -713,7 +713,7 @@ fn gen_int_eq() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_int_neq() {
     assert_evals_to!(
         indoc!(
@@ -1066,7 +1066,7 @@ fn lt_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn lte_i64() {
     assert_evals_to!("1 <= 1", true, bool);
     assert_evals_to!("2 <= 1", false, bool);
@@ -1944,7 +1944,7 @@ fn when_on_i32() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn when_on_i16() {
     assert_evals_to!(
         indoc!(
