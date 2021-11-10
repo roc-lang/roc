@@ -1,6 +1,16 @@
-#![cfg(test)]
+// Wasm pointers are only 32bit. This effects RocStr.
+// These are versions of the str tests assuming 32bit pointers.
+#![cfg(not(feature = "gen-dev"))]
 
-use crate::assert_evals_to;
+// TODO: We need to make these tests work with the llvm wasm backend.
+
+// #[cfg(feature = "gen-llvm")]
+// use crate::helpers::llvm::assert_wasm_evals_to as assert_evals_to;
+
+#[cfg(feature = "gen-wasm")]
+use crate::helpers::wasm::assert_evals_to;
+
+#[allow(unused_imports)]
 use indoc::indoc;
 // use roc_std::RocStr;
 
@@ -228,6 +238,7 @@ use indoc::indoc;
 // }
 
 #[test]
+#[cfg(any(feature = "gen-wasm"))]
 fn small_str_literal() {
     assert_evals_to!(
         "\"JJJJJJJ\"",
@@ -237,6 +248,7 @@ fn small_str_literal() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-wasm"))]
 fn small_str_zeroed_literal() {
     // Verifies that we zero out unused bytes in the string.
     // This is important so that string equality tests don't randomly

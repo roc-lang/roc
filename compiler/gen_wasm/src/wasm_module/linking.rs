@@ -174,6 +174,7 @@ impl<'a> Serialize for RelocationSection<'a> {
  *******************************************************************/
 
 /// Linking metadata for data segments
+#[derive(Debug)]
 pub struct LinkingSegment {
     pub name: String,
     pub alignment: Align,
@@ -187,6 +188,7 @@ impl Serialize for LinkingSegment {
 }
 
 /// Linking metadata for init (start) functions
+#[derive(Debug)]
 pub struct LinkingInitFunc {
     pub priority: u32,
     pub symbol_index: u32, // index in the symbol table, not the function index
@@ -213,6 +215,7 @@ pub enum ComdatSymKind {
     Section = 5,
 }
 
+#[derive(Debug)]
 pub struct ComdatSym {
     pub kind: ComdatSymKind,
     pub index: u32,
@@ -229,6 +232,7 @@ impl Serialize for ComdatSym {
 /// The linker will include all of these elements with a given group name from one object file,
 /// and will exclude any element with this group name from all other object files.
 #[allow(dead_code)]
+#[derive(Debug)]
 pub struct LinkingComdat<'a> {
     name: String,
     flags: u32,
@@ -413,6 +417,7 @@ impl Serialize for SymInfo {
 //  Linking subsections
 //----------------------------------------------------------------
 
+#[derive(Debug)]
 pub enum LinkingSubSection<'a> {
     /// Extra metadata about the data segments.
     SegmentInfo(Vec<'a, LinkingSegment>),
@@ -454,6 +459,7 @@ impl<'a> Serialize for LinkingSubSection<'a> {
 
 const LINKING_VERSION: u8 = 2;
 
+#[derive(Debug)]
 pub struct LinkingSection<'a> {
     pub subsections: Vec<'a, LinkingSubSection<'a>>,
 }
@@ -463,6 +469,15 @@ impl<'a> LinkingSection<'a> {
         LinkingSection {
             subsections: Vec::with_capacity_in(1, arena),
         }
+    }
+
+    pub fn symbol_table_mut(&mut self) -> &mut Vec<'a, SymInfo> {
+        for sub in self.subsections.iter_mut() {
+            if let LinkingSubSection::SymbolTable(syminfos) = sub {
+                return syminfos;
+            }
+        }
+        panic!("Symbol table not found");
     }
 }
 

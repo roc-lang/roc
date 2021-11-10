@@ -1067,6 +1067,9 @@ define_builtins! {
         43 LIST_JOIN_MAP_CONCAT: "#joinMapConcat"
         44 LIST_ANY: "any"
         45 LIST_TAKE_FIRST: "takeFirst"
+        46 LIST_TAKE_LAST: "takeLast"
+        47 LIST_FIND: "find"
+        48 LIST_FIND_RESULT: "#find_result" // symbol used in the definition of List.find
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias
