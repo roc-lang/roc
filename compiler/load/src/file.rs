@@ -2609,7 +2609,7 @@ fn parse_header<'a>(
                 header_src,
                 packages: &[],
                 exposes: header.exposes.into_bump_slice(),
-                imports: header.imports.into_bump_slice(),
+                imports: header.imports.items,
                 to_platform: None,
             };
 
@@ -2643,7 +2643,7 @@ fn parse_header<'a>(
                 header_src,
                 packages,
                 exposes: header.provides.into_bump_slice(),
-                imports: header.imports.into_bump_slice(),
+                imports: header.imports.items,
                 to_platform: Some(header.to.value.clone()),
             };
 
@@ -3421,7 +3421,7 @@ fn fabricate_pkg_config_module<'a>(
         packages: &[],
         provides,
         requires: arena.alloc([header.requires.signature.clone()]),
-        imports: header.imports.clone().into_bump_slice(),
+        imports: header.imports.items,
     };
 
     send_header_two(

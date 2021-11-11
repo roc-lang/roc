@@ -220,11 +220,11 @@ fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, EHeader<'a>> {
         #[allow(clippy::type_complexity)]
         let opt_imports: Option<(
             (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-            Vec<'a, Located<ImportsEntry<'a>>>,
+            Collection<'a, Located<ImportsEntry<'a>>>,
         )> = opt_imports;
 
         let ((before_imports, after_imports), imports) =
-            opt_imports.unwrap_or_else(|| ((&[] as _, &[] as _), Vec::new_in(arena)));
+            opt_imports.unwrap_or_else(|| ((&[] as _, &[] as _), Collection::empty()));
         let provides: ProvidesTo<'a> = provides; // rustc must be told the type here
 
         let header = AppHeader {
@@ -631,7 +631,7 @@ fn imports<'a>() -> impl Parser<
     'a,
     (
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-        Vec<'a, Located<ImportsEntry<'a>>>,
+        Collection<'a, Located<ImportsEntry<'a>>>,
     ),
     EImports,
 > {
@@ -646,14 +646,16 @@ fn imports<'a>() -> impl Parser<
             EImports::IndentImports,
             EImports::IndentListStart
         ),
-        collection_e!(
+        collection_trailing_sep_e!(
             word1(b'[', EImports::ListStart),
             loc!(imports_entry()),
             word1(b',', EImports::ListEnd),
             word1(b']', EImports::ListEnd),
             min_indent,
+            EImports::Open,
             EImports::Space,
-            EImports::IndentListEnd
+            EImports::IndentListEnd,
+            ImportsEntry::SpaceBefore
         )
     )
 }
