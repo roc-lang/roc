@@ -1734,7 +1734,7 @@ fn update<'a>(
                 let mut shorthands = (*state.arc_shorthands).lock();
 
                 for (shorthand, package_or_path) in header.packages.iter() {
-                    shorthands.insert(shorthand, package_or_path.clone());
+                    shorthands.insert(shorthand, *package_or_path);
                 }
 
                 if let PkgConfig {
@@ -2273,7 +2273,7 @@ fn finish_specialization(
         let package_or_path = match platform_path {
             Valid(To::ExistingPackage(shorthand)) => {
                 match (*state.arc_shorthands).lock().get(shorthand) {
-                    Some(p_or_p) => p_or_p.clone(),
+                    Some(p_or_p) => *p_or_p,
                     None => unreachable!(),
                 }
             }
@@ -2978,7 +2978,7 @@ fn send_header<'a>(
                 package_or_path,
                 ..
             } => {
-                package_entries.insert(*shorthand, package_or_path.value.clone());
+                package_entries.insert(*shorthand, package_or_path.value);
             }
             SpaceBefore(inner, _) | SpaceAfter(inner, _) => {
                 parse_entries.push(inner);
@@ -3211,7 +3211,7 @@ fn send_header_two<'a>(
                 package_or_path,
                 ..
             } => {
-                package_entries.insert(*shorthand, package_or_path.value.clone());
+                package_entries.insert(*shorthand, package_or_path.value);
             }
             SpaceBefore(inner, _) | SpaceAfter(inner, _) => {
                 parse_entries.push(inner);
