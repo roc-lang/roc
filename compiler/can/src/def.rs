@@ -872,7 +872,7 @@ fn canonicalize_pending_def<'a>(
                             // TODO try to remove this .clone()!
                             value: loc_can_expr.value.clone(),
                         },
-                        pattern_vars: im::HashMap::clone(&vars_by_symbol),
+                        pattern_vars: vars_by_symbol.clone(),
                         annotation: Some(Annotation {
                             signature: typ.clone(),
                             introduced_variables: output.introduced_variables.clone(),
@@ -1093,7 +1093,7 @@ fn canonicalize_pending_def<'a>(
                             // TODO try to remove this .clone()!
                             value: loc_can_expr.value.clone(),
                         },
-                        pattern_vars: im::HashMap::clone(&vars_by_symbol),
+                        pattern_vars: vars_by_symbol.clone(),
                         annotation: Some(Annotation {
                             signature: typ.clone(),
                             introduced_variables: output.introduced_variables.clone(),
@@ -1231,7 +1231,7 @@ fn canonicalize_pending_def<'a>(
                             region: loc_can_expr.region,
                             value: loc_can_expr.value.clone(),
                         },
-                        pattern_vars: im::HashMap::clone(&vars_by_symbol),
+                        pattern_vars: vars_by_symbol.clone(),
                         annotation: None,
                     },
                 );

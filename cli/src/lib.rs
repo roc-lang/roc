@@ -23,6 +23,7 @@ pub const CMD_REPL: &str = "repl";
 pub const CMD_EDIT: &str = "edit";
 pub const CMD_DOCS: &str = "docs";
 pub const CMD_CHECK: &str = "check";
+pub const CMD_VERSION: &str = "version";
 
 pub const FLAG_DEBUG: &str = "debug";
 pub const FLAG_DEV: &str = "dev";
@@ -103,8 +104,11 @@ pub fn build_app<'a>() -> App<'a> {
         .subcommand(App::new(CMD_REPL)
             .about("Launch the interactive Read Eval Print Loop (REPL)")
         )
+        .subcommand(App::new(CMD_VERSION)
+            .about("Print version information")
+        )
         .subcommand(App::new(CMD_CHECK)
-            .about("Build a binary from the given .roc file, but don't run it")
+            .about("When developing, it's recommended to run `check` before `build`. It may provide a useful error message in cases where `build` panics")
             .arg(
                 Arg::new(FLAG_TIME)
                     .long(FLAG_TIME)
@@ -190,13 +194,15 @@ pub fn build_app<'a>() -> App<'a> {
 
     if cfg!(feature = "editor") {
         app.subcommand(
-            App::new(CMD_EDIT).about("Launch the Roc editor").arg(
-                Arg::new(DIRECTORY_OR_FILES)
-                    .index(1)
-                    .multiple_values(true)
-                    .required(false)
-                    .about("(optional) The directory or files to open on launch."),
-            ),
+            App::new(CMD_EDIT)
+                .about("Launch the Roc editor (Work In Progress)")
+                .arg(
+                    Arg::new(DIRECTORY_OR_FILES)
+                        .index(1)
+                        .multiple_values(true)
+                        .required(false)
+                        .about("(optional) The directory or files to open on launch."),
+                ),
         )
     } else {
         app

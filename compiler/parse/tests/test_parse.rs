@@ -3224,6 +3224,62 @@ mod test_parse {
     }
 
     #[test]
+    fn full_app_header_trailing_commas() {
+        use ExposesEntry::Exposed;
+        use PackageOrPath::Path;
+
+        let newlines = &[Newline];
+        let pkg_entry = PackageEntry::Entry {
+            shorthand: "base",
+            spaces_after_shorthand: &[],
+            package_or_path: Located::new(1, 1, 21, 33, Path(PlainLine("./platform"))),
+        };
+        let loc_pkg_entry = Located::new(1, 1, 15, 33, pkg_entry);
+        let arena = Bump::new();
+        let packages = bumpalo::vec![in &arena; loc_pkg_entry];
+        let import = ImportsEntry::Package("foo", ModuleName::new("Bar.Baz"), Vec::new_in(&arena));
+        let loc_import = Located::new(2, 2, 14, 25, import);
+        let imports = bumpalo::vec![in &arena; loc_import];
+        let provide_entry = Located::new(3, 3, 15, 24, Exposed("quicksort"));
+        let provides = bumpalo::vec![in &arena; provide_entry];
+        let module_name = StrLiteral::PlainLine("quicksort");
+
+        let header = AppHeader {
+            before_header: &[],
+            name: Located::new(0, 0, 4, 15, module_name),
+            packages,
+            imports,
+            provides,
+            to: Located::new(3, 3, 30, 34, To::ExistingPackage("base")),
+            after_app_keyword: &[],
+            before_packages: newlines,
+            after_packages: &[],
+            before_imports: newlines,
+            after_imports: &[],
+            before_provides: newlines,
+            after_provides: &[],
+            before_to: &[],
+            after_to: &[],
+        };
+
+        let expected = roc_parse::ast::Module::App { header };
+
+        let src = indoc!(
+            r#"
+                app "quicksort"
+                    packages { base: "./platform", }
+                    imports [ foo.Bar.Baz ]
+                    provides [ quicksort ] to base
+            "#
+        );
+
+        let actual = roc_parse::module::parse_header(&arena, State::new(src.as_bytes()))
+            .map(|tuple| tuple.0);
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
     fn empty_platform_header() {
         let pkg_name = PackageName {
             account: "rtfeldman",

@@ -1,8 +1,46 @@
+/// UNUSED
+///
+/// but kept for future reference
+///
+///
+//    pub fn optimize_refcount_operations<'i, T>(
+//        arena: &'a Bump,
+//        home: ModuleId,
+//        ident_ids: &'i mut IdentIds,
+//        procs: &mut MutMap<T, Proc<'a>>,
+//    ) {
+//        use crate::expand_rc;
+//
+//        let deferred = expand_rc::Deferred {
+//            inc_dec_map: Default::default(),
+//            assignments: Vec::new_in(arena),
+//            decrefs: Vec::new_in(arena),
+//        };
+//
+//        let mut env = expand_rc::Env {
+//            home,
+//            arena,
+//            ident_ids,
+//            layout_map: Default::default(),
+//            alias_map: Default::default(),
+//            constructor_map: Default::default(),
+//            deferred,
+//        };
+//
+//        for (_, proc) in procs.iter_mut() {
+//            let b = expand_rc::expand_and_cancel_proc(
+//                &mut env,
+//                arena.alloc(proc.body.clone()),
+//                proc.args,
+//            );
+//            proc.body = b.clone();
+//        }
+//    }
 use crate::ir::{BranchInfo, Expr, ModifyRc, Stmt};
 use crate::layout::{Layout, UnionLayout};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use linked_hash_map::LinkedHashMap;
+// use linked_hash_map::LinkedHashMap;
 use roc_collections::all::MutMap;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 

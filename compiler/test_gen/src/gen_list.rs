@@ -210,6 +210,46 @@ fn list_take_last() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn list_sublist() {
+    assert_evals_to!(
+        "List.sublist [1, 2, 3] { start: 0 , len: 2 } ",
+        RocList::from_slice(&[1, 2]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.sublist [1, 2, 3] { start: 1 , len: 2 } ",
+        RocList::from_slice(&[2, 3]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.sublist [1, 2, 3] { start: 2 , len: 2 } ",
+        RocList::from_slice(&[3]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.sublist [1, 2, 3] { start: 3 , len: 2 } ",
+        RocList::from_slice(&[]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.sublist [] { start: 1 , len: 1 } ",
+        RocList::from_slice(&[]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.sublist [1, 2, 3] { start: 1 , len: 0 } ",
+        RocList::from_slice(&[]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.sublist [1, 2, 3] { start: 0 , len: 5 } ",
+        RocList::from_slice(&[1, 2, 3]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn list_drop() {
     assert_evals_to!(
         "List.drop [1,2,3] 2",
@@ -2301,7 +2341,7 @@ fn list_any() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-#[ignore]
+#[should_panic(expected = r#"Roc failed with message: "UnresolvedTypeVar"#)]
 fn list_any_empty_with_unknown_element_type() {
     // Segfaults with invalid memory reference. Running this as a stand-alone
     // Roc program, generates the following error message:

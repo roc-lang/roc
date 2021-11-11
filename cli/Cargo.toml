@@ -68,8 +68,6 @@ clap = { version = "= 3.0.0-beta.5", default-features = false, features = ["std"
 const_format = "0.2.22"
 rustyline = { git = "https://github.com/rtfeldman/rustyline", tag = "prompt-fix" }
 rustyline-derive = { git = "https://github.com/rtfeldman/rustyline", tag = "prompt-fix" }
-im    = "15.0.0"
-im-rc = "15.0.0"
 bumpalo = { version = "3.8.0", features = ["collections"] }
 libloading = "0.7.1"
 mimalloc = { version = "0.1.26", default-features = false }
