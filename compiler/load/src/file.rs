@@ -3886,7 +3886,7 @@ fn exposed_from_import<'a>(entry: &ImportsEntry<'a>) -> (QualifiedModuleName<'a>
         Module(module_name, exposes) => {
             let mut exposed = Vec::with_capacity(exposes.len());
 
-            for loc_entry in exposes {
+            for loc_entry in exposes.iter() {
                 exposed.push(ident_from_exposed(&loc_entry.value));
             }
 
@@ -3901,7 +3901,7 @@ fn exposed_from_import<'a>(entry: &ImportsEntry<'a>) -> (QualifiedModuleName<'a>
         Package(package_name, module_name, exposes) => {
             let mut exposed = Vec::with_capacity(exposes.len());
 
-            for loc_entry in exposes {
+            for loc_entry in exposes.iter() {
                 exposed.push(ident_from_exposed(&loc_entry.value));
             }
 

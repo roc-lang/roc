@@ -768,7 +768,7 @@ fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>, EImports> {
 
     type Temp<'a> = (
         (Option<&'a str>, ModuleName<'a>),
-        Option<Vec<'a, Located<ExposesEntry<'a, &'a str>>>>,
+        Option<Collection<'a, Located<ExposesEntry<'a, &'a str>>>>,
     );
 
     map_with_arena!(
@@ -785,19 +785,21 @@ fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>, EImports> {
             // e.g. `.{ Task, after}`
             maybe!(skip_first!(
                 word1(b'.', EImports::ExposingDot),
-                collection_e!(
+                collection_trailing_sep_e!(
                     word1(b'{', EImports::SetStart),
                     exposes_entry(EImports::Identifier),
                     word1(b',', EImports::SetEnd),
                     word1(b'}', EImports::SetEnd),
                     min_indent,
+                    EImports::Open,
                     EImports::Space,
-                    EImports::IndentSetEnd
+                    EImports::IndentSetEnd,
+                    ExposesEntry::SpaceBefore
                 )
             ))
         ),
-        |arena, ((opt_shortname, module_name), opt_values): Temp<'a>| {
-            let exposed_values = opt_values.unwrap_or_else(|| Vec::new_in(arena));
+        |_arena, ((opt_shortname, module_name), opt_values): Temp<'a>| {
+            let exposed_values = opt_values.unwrap_or_else(|| Collection::empty());
 
             match opt_shortname {
                 Some(shortname) => ImportsEntry::Package(shortname, module_name, exposed_values),

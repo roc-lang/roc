@@ -3166,7 +3166,7 @@ mod test_parse {
         let loc_pkg_entry = Located::new(1, 1, 15, 33, pkg_entry);
         let arena = Bump::new();
         let packages = Collection::with_items(arena.alloc([loc_pkg_entry]));
-        let import = ImportsEntry::Package("foo", ModuleName::new("Bar.Baz"), Vec::new_in(&arena));
+        let import = ImportsEntry::Package("foo", ModuleName::new("Bar.Baz"), Collection::empty());
         let loc_import = Located::new(2, 2, 14, 25, import);
         let imports = bumpalo::vec![in &arena; loc_import];
         let provide_entry = Located::new(3, 3, 15, 24, Exposed("quicksort"));
@@ -3222,10 +3222,39 @@ mod test_parse {
         let loc_pkg_entry = Located::new(1, 1, 15, 33, pkg_entry);
         let arena = Bump::new();
         let packages = Collection::with_items(arena.alloc([loc_pkg_entry]));
-        let import = ImportsEntry::Package("foo", ModuleName::new("Bar.Baz"), Vec::new_in(&arena));
-        let loc_import = Located::new(2, 2, 14, 25, import);
+        let import = ImportsEntry::Package(
+            "foo",
+            ModuleName::new("Bar"),
+            Collection::with_items_and_comments(
+                &arena,
+                arena.alloc([
+                    Located::new(
+                        3,
+                        3,
+                        8,
+                        11,
+                        ExposesEntry::SpaceBefore(
+                            arena.alloc(ExposesEntry::Exposed("Baz")),
+                            arena.alloc([Newline]),
+                        ),
+                    ),
+                    Located::new(
+                        4,
+                        4,
+                        8,
+                        17,
+                        ExposesEntry::SpaceBefore(
+                            arena.alloc(ExposesEntry::Exposed("FourtyTwo")),
+                            arena.alloc([Newline]),
+                        ),
+                    ),
+                ]),
+                arena.alloc([Newline, LineComment(" I'm a happy comment")]),
+            ),
+        );
+        let loc_import = Located::new(2, 6, 14, 5, import);
         let imports = bumpalo::vec![in &arena; loc_import];
-        let provide_entry = Located::new(3, 3, 15, 24, Exposed("quicksort"));
+        let provide_entry = Located::new(7, 7, 15, 24, Exposed("quicksort"));
         let provides = bumpalo::vec![in &arena; provide_entry];
         let module_name = StrLiteral::PlainLine("quicksort");
 
@@ -3235,7 +3264,7 @@ mod test_parse {
             packages,
             imports,
             provides,
-            to: Located::new(3, 3, 30, 34, To::ExistingPackage("base")),
+            to: Located::new(7, 7, 30, 34, To::ExistingPackage("base")),
             after_app_keyword: &[],
             before_packages: newlines,
             after_packages: &[],
@@ -3253,7 +3282,11 @@ mod test_parse {
             r#"
                 app "quicksort"
                     packages { base: "./platform", }
-                    imports [ foo.Bar.Baz ]
+                    imports [ foo.Bar.{
+                        Baz,
+                        FourtyTwo,
+                        # I'm a happy comment
+                    } ]
                     provides [ quicksort ] to base
             "#
         );

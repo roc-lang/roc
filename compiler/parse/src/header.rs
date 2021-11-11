@@ -177,7 +177,7 @@ pub struct Effects<'a> {
     pub entries: &'a [Loc<TypedIdent<'a>>],
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum ExposesEntry<'a, T> {
     /// e.g. `Task`
     Exposed(T),
@@ -199,13 +199,16 @@ impl<'a, T> Spaceable<'a> for ExposesEntry<'a, T> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ImportsEntry<'a> {
     /// e.g. `Task` or `Task.{ Task, after }`
-    Module(ModuleName<'a>, Vec<'a, Loc<ExposesEntry<'a, &'a str>>>),
+    Module(
+        ModuleName<'a>,
+        Collection<'a, Loc<ExposesEntry<'a, &'a str>>>,
+    ),
 
     /// e.g. `base.Task` or `base.Task.{ after }` or `base.{ Task.{ Task, after } }`
     Package(
         &'a str,
         ModuleName<'a>,
-        Vec<'a, Loc<ExposesEntry<'a, &'a str>>>,
+        Collection<'a, Loc<ExposesEntry<'a, &'a str>>>,
     ),
 
     // Spaces

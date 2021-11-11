@@ -315,6 +315,7 @@ pub enum EEffects<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EImports {
+    Open(Row, Col),
     Imports(Row, Col),
     IndentImports(Row, Col),
     IndentListStart(Row, Col),
