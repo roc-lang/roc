@@ -1,4 +1,4 @@
-use crate::ast::{AssignedField, Tag, TypeAnnotation};
+use crate::ast::{AssignedField, Tag, TypeAnnotation, Collection};
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::keyword;
 use crate::parser::{
@@ -18,7 +18,7 @@ pub fn located_help<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotati
 #[inline(always)]
 fn tag_union_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, TTagUnion<'a>> {
     move |arena, state| {
-        let (_, (tags, final_comments), state) = collection_trailing_sep_e!(
+        let (_, tags, state) = collection_trailing_sep_e!(
             word1(b'[', TTagUnion::Open),
             loc!(tag_type(min_indent)),
             word1(b',', TTagUnion::End),
@@ -37,9 +37,9 @@ fn tag_union_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, TT
                 .parse(arena, state)?;
 
         let result = TypeAnnotation::TagUnion {
-            tags: tags.into_bump_slice(),
+            tags: tags.items,
             ext,
-            final_comments,
+            final_comments: tags.final_comments,
         };
 
         Ok((MadeProgress, result, state))
@@ -267,7 +267,7 @@ fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, TReco
     use crate::type_annotation::TypeAnnotation::*;
 
     move |arena, state| {
-        let (_, (fields, final_comments), state) = collection_trailing_sep_e!(
+        let (_, fields, state) = collection_trailing_sep_e!(
             // word1_check_indent!(b'{', TRecord::Open, min_indent, TRecord::IndentOpen),
             word1(b'{', TRecord::Open),
             loc!(record_type_field(min_indent)),
@@ -286,9 +286,11 @@ fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, TReco
         let (_, ext, state) = optional(allocated(field_term)).parse(arena, state)?;
 
         let result = Record {
-            fields: fields.into_bump_slice(),
+            fields: Collection {
+                items: fields.items,
+                final_comments: fields.final_comments,
+            },
             ext,
-            final_comments,
         };
 
         Ok((MadeProgress, result, state))

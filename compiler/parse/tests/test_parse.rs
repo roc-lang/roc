@@ -23,7 +23,7 @@ mod test_parse {
     use roc_parse::ast::Pattern::{self, *};
     use roc_parse::ast::StrLiteral::{self, *};
     use roc_parse::ast::StrSegment::*;
-    use roc_parse::ast::{self, Def, EscapedChar, Spaceable, TypeAnnotation, WhenBranch};
+    use roc_parse::ast::{self, Def, EscapedChar, Spaceable, TypeAnnotation, WhenBranch, Collection};
     use roc_parse::header::{
         AppHeader, Effects, ExposesEntry, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
         PackageName, PackageOrPath, PlatformHeader, PlatformRequires, PlatformRigid, To,
@@ -2281,9 +2281,8 @@ mod test_parse {
                             6,
                             TypeAnnotation::SpaceBefore(
                                 &TypeAnnotation::Record {
-                                    fields: &[],
+                                    fields: Collection::empty(),
                                     ext: None,
-                                    final_comments: &[],
                                 },
                                 &[Newline],
                             ),
@@ -2320,9 +2319,8 @@ mod test_parse {
                             6,
                             TypeAnnotation::SpaceBefore(
                                 &TypeAnnotation::Record {
-                                    fields: &[],
+                                    fields: Collection::empty(),
                                     ext: None,
-                                    final_comments: &[],
                                 },
                                 &[LineComment(" comment")],
                             ),
@@ -3309,9 +3307,8 @@ mod test_parse {
                         ann: Located::at(
                             region2,
                             TypeAnnotation::Record {
-                                fields: &[],
+                                fields: Collection::empty(),
                                 ext: None,
-                                final_comments: &[],
                             },
                         ),
                     },
@@ -3395,9 +3392,8 @@ mod test_parse {
                         ann: Located::at(
                             region2,
                             TypeAnnotation::Record {
-                                fields: &[],
+                                fields: Collection::empty(),
                                 ext: None,
-                                final_comments: &[],
                             },
                         ),
                     },
