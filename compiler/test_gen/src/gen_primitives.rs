@@ -221,7 +221,7 @@ fn gen_when_one_branch() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_large_when_int() {
     assert_evals_to!(
         indoc!(
@@ -243,31 +243,31 @@ fn gen_large_when_int() {
     );
 }
 
-// #[test]
-// #[cfg(any(feature = "gen-llvm"))]
-// fn gen_large_when_float() {
-//     assert_evals_to!(
-//         indoc!(
-//             r#"
-//                 foo = \num ->
-//                     when num is
-//                         0.5 -> 200.1
-//                         -3.6 -> 111.2 # TODO adding more negative numbers reproduces parsing bugs here
-//                         3.6 -> 789.5
-//                         1.7 -> 123.3
-//                         2.8 -> 456.4
-//                         _ -> 1000.6
+#[test]
+#[cfg(any(feature = "gen-wasm"))]
+fn gen_large_when_float() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                foo = \num ->
+                    when num is
+                        0.5 -> 200.1
+                        -3.6 -> 111.2 # TODO adding more negative numbers reproduces parsing bugs here
+                        3.6 -> 789.5
+                        1.7 -> 123.3
+                        2.8 -> 456.4
+                        _ -> 1000.6
 
-//                 foo -3.6
-//             "#
-//         ),
-//         111.2,
-//         f64
-//     );
-// }
+                foo -3.6
+            "#
+        ),
+        111.2,
+        f64
+    );
+}
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn or_pattern() {
     assert_evals_to!(
         indoc!(
@@ -337,7 +337,7 @@ fn return_unnamed_fn() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_when_fn() {
     assert_evals_to!(
         indoc!(

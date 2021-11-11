@@ -303,7 +303,7 @@ impl<'a> WasmBackend<'a> {
 
             Stmt::Switch {
                 cond_symbol,
-                cond_layout: _,
+                cond_layout,
                 branches,
                 default_branch,
                 ret_layout: _,
@@ -326,16 +326,32 @@ impl<'a> WasmBackend<'a> {
                     self.start_block(BlockType::NoResult)
                 }
 
+                let cond_type = WasmLayout::new(cond_layout).value_type();
+
                 // then, we jump whenever the value under scrutiny is equal to the value of a branch
                 for (i, (value, _, _)) in branches.iter().enumerate() {
                     // put the cond_symbol on the top of the stack
                     self.storage
                         .load_symbols(&mut self.code_builder, &[*cond_symbol]);
 
-                    self.code_builder.i32_const(*value as i32);
-
-                    // compare the 2 topmost values
-                    self.code_builder.i32_eq();
+                    match cond_type {
+                        ValueType::I32 => {
+                            self.code_builder.i32_const(*value as i32);
+                            self.code_builder.i32_eq();
+                        }
+                        ValueType::I64 => {
+                            self.code_builder.i64_const(*value as i64);
+                            self.code_builder.i64_eq();
+                        }
+                        ValueType::F32 => {
+                            self.code_builder.f32_const(f32::from_bits(*value as u32));
+                            self.code_builder.f32_eq();
+                        }
+                        ValueType::F64 => {
+                            self.code_builder.f64_const(f64::from_bits(*value as u64));
+                            self.code_builder.f64_eq();
+                        }
+                    }
 
                     // "break" out of `i` surrounding blocks
                     self.code_builder.br_if(i as u32);
