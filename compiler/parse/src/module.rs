@@ -586,6 +586,7 @@ struct Packages<'a> {
 
     before_packages_keyword: &'a [CommentOrNewline<'a>],
     after_packages_keyword: &'a [CommentOrNewline<'a>],
+    final_comments: &'a [CommentOrNewline<'a>],
 }
 
 #[inline(always)]
@@ -602,21 +603,24 @@ fn packages<'a>() -> impl Parser<'a, Packages<'a>, EPackages<'a>> {
                 EPackages::IndentPackages,
                 EPackages::IndentListStart
             ),
-            collection_e!(
+            collection_trailing_sep_e!(
                 word1(b'{', EPackages::ListStart),
                 specialize(EPackages::PackageEntry, loc!(package_entry())),
                 word1(b',', EPackages::ListEnd),
                 word1(b'}', EPackages::ListEnd),
                 min_indent,
+                EPackages::Open,
                 EPackages::Space,
-                EPackages::IndentListEnd
+                EPackages::IndentListEnd,
+                PackageEntry::SpaceBefore
             )
         ),
-        |((before_packages_keyword, after_packages_keyword), entries)| {
+        |((before_packages_keyword, after_packages_keyword), (entries, final_comments))| {
             Packages {
                 entries,
                 before_packages_keyword,
                 after_packages_keyword,
+                final_comments,
             }
         }
     )

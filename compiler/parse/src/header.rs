@@ -9,13 +9,13 @@ use crate::string_literal;
 use bumpalo::collections::Vec;
 use roc_region::all::Loc;
 
-#[derive(Clone, PartialEq, Eq, Debug, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 pub struct PackageName<'a> {
     pub account: &'a str,
     pub pkg: &'a str,
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 pub enum Version<'a> {
     Exact(&'a str),
     Range {
@@ -32,7 +32,7 @@ pub enum VersionComparison {
     DisallowsEqual,
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Copy, Clone, PartialEq, Debug)]
 pub enum PackageOrPath<'a> {
     Package(PackageName<'a>, Version<'a>),
     Path(StrLiteral<'a>),
@@ -240,7 +240,7 @@ pub enum TypedIdent<'a> {
     SpaceAfter(&'a TypedIdent<'a>, &'a [CommentOrNewline<'a>]),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum PackageEntry<'a> {
     Entry {
         shorthand: &'a str,
