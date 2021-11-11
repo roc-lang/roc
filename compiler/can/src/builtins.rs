@@ -192,6 +192,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         RESULT_MAP_ERR => result_map_err,
         RESULT_AFTER => result_after,
         RESULT_WITH_DEFAULT => result_with_default,
+        RESULT_IS_OK => result_is_ok,
     }
 }
 
@@ -3988,6 +3989,29 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         ret_var,
+    )
+}
+
+fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let arg_var = var_store.fresh();
+    let bool_var = var_store.fresh();
+
+    // placeholder for actual implementation
+    let body = RunLowLevel {
+        op: LowLevel::Eq,
+        args: vec![
+            (arg_var, Var(Symbol::ARG_1)),
+            (arg_var, Var(Symbol::ARG_1)),
+        ],
+        ret_var: bool_var,
+    };
+
+    defn(
+        symbol,
+        vec![(arg_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        bool_var,
     )
 }
 
