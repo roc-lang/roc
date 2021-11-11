@@ -154,18 +154,11 @@ fn build_has_tag_id_help<'a, 'ctx, 'env>(
             );
 
             let tag_data_ptr = {
-                let data_index = env
-                    .context
-                    .i64_type()
-                    .const_int(TAG_DATA_INDEX as u64, false);
+                let ptr = env
+                    .builder
+                    .build_struct_gep(tag_value, TAG_DATA_INDEX, "get_data_ptr")
+                    .unwrap();
 
-                let ptr = unsafe {
-                    env.builder.build_gep(
-                        tag_value_ptr.into_pointer_value(),
-                        &[data_index],
-                        "get_data_ptr",
-                    )
-                };
                 env.builder.build_bitcast(ptr, i8_ptr_type, "to_opaque")
             };
 

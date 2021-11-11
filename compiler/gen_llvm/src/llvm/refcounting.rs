@@ -139,8 +139,10 @@ impl<'ctx> PointerToRefcount<'ctx> {
         let block = env.builder.get_insert_block().expect("to be in a function");
         let parent = block.get_parent().unwrap();
 
-        let modify_block = env.context.append_basic_block(parent, "inc_str_modify");
-        let cont_block = env.context.append_basic_block(parent, "inc_str_cont");
+        let modify_block = env
+            .context
+            .append_basic_block(parent, "inc_refcount_modify");
+        let cont_block = env.context.append_basic_block(parent, "inc_refcount_cont");
 
         env.builder
             .build_conditional_branch(is_static_allocation, cont_block, modify_block);
@@ -1718,12 +1720,25 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
             "cast_to_concrete_tag",
         );
 
-        // let wrapper_struct = cast_block_of_memory_to_tag(env.builder, data_bytes, wrapper_type);
-
         for (i, field_layout) in field_layouts.iter().enumerate() {
             if let Layout::RecursivePointer = field_layout {
                 panic!("non-recursive tag unions cannot contain naked recursion pointers!");
             } else if field_layout.contains_refcounted() {
+                // crazy hack
+                match field_layout {
+                    Layout::Builtin(Builtin::Str | Builtin::List(_)) => {
+                        use inkwell::attributes::{Attribute, AttributeLoc};
+                        let kind_id = Attribute::get_named_enum_kind_id("noinline");
+                        debug_assert!(kind_id > 0);
+                        let enum_attr = env.context.create_enum_attribute(kind_id, 1);
+
+                        fn_val.add_attribute(AttributeLoc::Function, enum_attr);
+                    }
+                    _ => {
+                        // do nothing
+                    }
+                }
+
                 let field_ptr = env
                     .builder
                     .build_struct_gep(cast_tag_data_pointer, i as u32, "modify_tag_field")

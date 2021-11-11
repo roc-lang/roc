@@ -2532,7 +2532,10 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                         if align_bytes > 0 {
                             let value_ptr = value.into_pointer_value();
 
-                            if true {
+                            // We can only do this if the function itself writes data into this
+                            // pointer. If the pointer is passed as an argument, then we must copy
+                            // from one pointer to our destination pointer
+                            if value_ptr.get_first_use().is_some() {
                                 value_ptr.replace_all_uses_with(destination);
                             } else {
                                 let size = env
@@ -3382,8 +3385,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
     // a tagged union to indicate to the test loader that a panic occurred.
     // especially when running 32-bit binaries on a 64-bit machine, there
     // does not seem to be a smarter solution
-    let wrapper_return_type =
-        roc_result_type(env, roc_function.get_type().get_return_type().unwrap());
+    let wrapper_return_type = roc_result_type(env, basic_type_from_layout(env, &return_layout));
 
     let mut cc_argument_types = Vec::with_capacity_in(arguments.len(), env.arena);
     for layout in arguments {
@@ -3861,7 +3863,7 @@ fn make_good_roc_result<'a, 'ctx, 'env>(
     let context = env.context;
     let builder = env.builder;
 
-    let v1 = roc_result_type(env, return_value.get_type()).const_zero();
+    let v1 = roc_result_type(env, basic_type_from_layout(env, &return_layout)).const_zero();
 
     let v2 = builder
         .build_insert_value(v1, context.i64_type().const_zero(), 0, "set_no_error")
@@ -3906,8 +3908,7 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
         }
     };
 
-    let wrapper_return_type =
-        roc_result_type(env, roc_function.get_type().get_return_type().unwrap());
+    let wrapper_return_type = roc_result_type(env, basic_type_from_layout(env, &return_layout));
 
     // argument_types.push(wrapper_return_type.ptr_type(AddressSpace::Generic).into());
 
