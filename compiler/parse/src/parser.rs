@@ -265,6 +265,7 @@ pub enum ETypedIdent<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EPackages<'a> {
+    Open(Row, Col),
     Space(BadInputError, Row, Col),
     Packages(Row, Col),
     IndentPackages(Row, Col),
