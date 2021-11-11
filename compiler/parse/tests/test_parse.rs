@@ -3264,7 +3264,7 @@ mod test_parse {
             packages,
             imports,
             provides,
-            to: Located::new(7, 7, 30, 34, To::ExistingPackage("base")),
+            to: Located::new(7, 7, 31, 35, To::ExistingPackage("base")),
             after_app_keyword: &[],
             before_packages: newlines,
             after_packages: &[],
@@ -3287,7 +3287,7 @@ mod test_parse {
                         FourtyTwo,
                         # I'm a happy comment
                     } ]
-                    provides [ quicksort ] to base
+                    provides [ quicksort, ] to base
             "#
         );
 

@@ -270,7 +270,7 @@ fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>> {
         let (_, ((before_imports, after_imports), imports), state) =
             specialize(EHeader::Imports, imports()).parse(arena, state)?;
 
-        let (_, ((before_provides, after_provides), provides), state) =
+        let (_, ((before_provides, after_provides), (provides, provides_final_comments)), state) =
             specialize(EHeader::Provides, provides_without_to()).parse(arena, state)?;
 
         let (_, effects, state) = specialize(EHeader::Effects, effects()).parse(arena, state)?;
@@ -342,7 +342,7 @@ fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>, EProvides<'a>> {
             )
         ),
         |(
-            ((before_provides_keyword, after_provides_keyword), entries),
+            ((before_provides_keyword, after_provides_keyword), (entries, final_comments)),
             ((before_to_keyword, after_to_keyword), to),
         )| {
             ProvidesTo {
@@ -362,7 +362,10 @@ fn provides_without_to<'a>() -> impl Parser<
     'a,
     (
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-        Vec<'a, Located<ExposesEntry<'a, &'a str>>>,
+        (
+            Vec<'a, Located<ExposesEntry<'a, &'a str>>>,
+            &'a [CommentOrNewline<'a>],
+        ),
     ),
     EProvides<'a>,
 > {
@@ -376,14 +379,16 @@ fn provides_without_to<'a>() -> impl Parser<
             EProvides::IndentProvides,
             EProvides::IndentListStart
         ),
-        collection_e!(
+        collection_trailing_sep_e!(
             word1(b'[', EProvides::ListStart),
             exposes_entry(EProvides::Identifier),
             word1(b',', EProvides::ListEnd),
             word1(b']', EProvides::ListEnd),
             min_indent,
+            EProvides::Open,
             EProvides::Space,
-            EProvides::IndentListEnd
+            EProvides::IndentListEnd,
+            ExposesEntry::SpaceBefore
         )
     )
 }

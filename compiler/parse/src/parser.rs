@@ -214,6 +214,7 @@ pub enum EHeader<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EProvides<'a> {
     Provides(Row, Col),
+    Open(Row, Col),
     To(Row, Col),
     IndentProvides(Row, Col),
     IndentTo(Row, Col),
