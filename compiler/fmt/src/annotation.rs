@@ -1,6 +1,6 @@
 use crate::spaces::{fmt_comments_only, fmt_spaces, newline, NewlineAt, INDENT};
 use bumpalo::collections::String;
-use roc_parse::ast::{AssignedField, Expr, Tag, TypeAnnotation};
+use roc_parse::ast::{AssignedField, Collection, Expr, Tag, TypeAnnotation};
 use roc_region::all::Located;
 
 /// Does an AST node need parens around it?
@@ -183,17 +183,13 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
             Apply(_, _, args) => args.iter().any(|loc_arg| loc_arg.value.is_multiline()),
             As(lhs, _, rhs) => lhs.value.is_multiline() || rhs.value.is_multiline(),
 
-            Record {
-                fields,
-                ext,
-                final_comments: _,
-            } => {
+            Record { fields, ext } => {
                 match ext {
                     Some(ann) if ann.value.is_multiline() => return true,
                     _ => {}
                 }
 
-                fields.iter().any(|field| field.value.is_multiline())
+                fields.items.iter().any(|field| field.value.is_multiline())
             }
 
             TagUnion {
@@ -296,16 +292,19 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
             }
 
             Record {
-                fields,
+                fields:
+                    Collection {
+                        items,
+                        final_comments,
+                    },
                 ext,
-                final_comments,
             } => {
                 format_sequence!(
                     buf,
                     indent,
                     '{',
                     '}',
-                    fields,
+                    items,
                     final_comments,
                     newlines,
                     AssignedField

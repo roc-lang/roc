@@ -186,6 +186,7 @@ pub fn update_str_expr(
 
     let insert_either = match str_expr {
         Expr2::SmallStr(arr_string) => {
+            // TODO make sure this works for unicode "characters"
             let insert_res = arr_string.try_insert(insert_index as u8, new_char);
 
             match insert_res {

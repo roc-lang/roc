@@ -2149,7 +2149,7 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
 
 fn list_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, List<'a>> {
     move |arena, state| {
-        let (_, (parsed_elems, final_comments), state) = collection_trailing_sep_e!(
+        let (_, elements, state) = collection_trailing_sep_e!(
             word1(b'[', List::Open),
             specialize_ref(List::Expr, move |a, s| parse_loc_expr_no_multi_backpassing(
                 min_indent, a, s
@@ -2164,15 +2164,15 @@ fn list_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, List<'a>>
         )
         .parse(arena, state)?;
 
-        let mut allocated = Vec::with_capacity_in(parsed_elems.len(), arena);
+        let mut allocated = Vec::with_capacity_in(elements.items.len(), arena);
 
-        for parsed_elem in parsed_elems {
-            allocated.push(&*arena.alloc(parsed_elem));
+        for parsed_elem in elements.items {
+            allocated.push(parsed_elem);
         }
 
         let expr = Expr::List {
             items: allocated.into_bump_slice(),
-            final_comments,
+            final_comments: elements.final_comments,
         };
 
         Ok((MadeProgress, expr, state))
