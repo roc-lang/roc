@@ -13,7 +13,17 @@ pub struct Collection<'a, T> {
 
 impl<'a, T> Collection<'a, T> {
     pub fn empty() -> Collection<'a, T> {
-        Collection { items: &[], final_comments: &[] }
+        Collection {
+            items: &[],
+            final_comments: &[],
+        }
+    }
+
+    pub fn with_items(items: &'a [T]) -> Collection<'a, T> {
+        Collection {
+            items,
+            final_comments: &[],
+        }
     }
 }
 

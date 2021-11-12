@@ -1,4 +1,4 @@
-use crate::ast::{CommentOrNewline, Def, Module};
+use crate::ast::{Collection, CommentOrNewline, Def, Module};
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::header::{
     package_entry, package_name, package_or_path, AppHeader, Effects, ExposesEntry, ImportsEntry,
@@ -203,7 +203,7 @@ fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, EHeader<'a>> {
         let (_, provides, state) =
             specialize(EHeader::Provides, provides_to()).parse(arena, state)?;
 
-        let (before_packages, after_packages, package_entries) = match opt_pkgs {
+        let (before_packages, after_packages, packages) = match opt_pkgs {
             Some(pkgs) => {
                 let pkgs: Packages<'a> = pkgs; // rustc must be told the type here
 
@@ -213,7 +213,7 @@ fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, EHeader<'a>> {
                     pkgs.entries,
                 )
             }
-            None => (&[] as _, &[] as _, Vec::new_in(arena)),
+            None => (&[] as _, &[] as _, Collection::empty()),
         };
 
         // rustc must be told the type here
@@ -229,7 +229,7 @@ fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, EHeader<'a>> {
 
         let header = AppHeader {
             name,
-            packages: package_entries,
+            packages,
             imports,
             provides: provides.entries,
             to: provides.to,
@@ -582,11 +582,9 @@ where
 
 #[derive(Debug)]
 struct Packages<'a> {
-    entries: Vec<'a, Located<PackageEntry<'a>>>,
-
+    entries: Collection<'a, Located<PackageEntry<'a>>>,
     before_packages_keyword: &'a [CommentOrNewline<'a>],
     after_packages_keyword: &'a [CommentOrNewline<'a>],
-    final_comments: &'a [CommentOrNewline<'a>],
 }
 
 #[inline(always)]
@@ -615,12 +613,11 @@ fn packages<'a>() -> impl Parser<'a, Packages<'a>, EPackages<'a>> {
                 PackageEntry::SpaceBefore
             )
         ),
-        |((before_packages_keyword, after_packages_keyword), (entries, final_comments))| {
+        |((before_packages_keyword, after_packages_keyword), entries): ((_, _), Collection<'a, _>)| {
             Packages {
                 entries,
                 before_packages_keyword,
                 after_packages_keyword,
-                final_comments,
             }
         }
     )

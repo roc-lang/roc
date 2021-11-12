@@ -293,10 +293,7 @@ fn type_to_docs(in_func_type_ann: bool, type_annotation: ast::TypeAnnotation) ->
 
             Apply { name, parts }
         }
-        ast::TypeAnnotation::Record {
-            fields,
-            ext,
-        } => {
+        ast::TypeAnnotation::Record { fields, ext } => {
             let mut doc_fields = Vec::new();
 
             let mut any_fields_include_private_tags = false;
