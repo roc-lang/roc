@@ -439,7 +439,7 @@ impl<'a> CodeBuilder<'a> {
         let new_len = self.vm_stack.len() - pops as usize;
         self.vm_stack.truncate(new_len);
         if push {
-            self.vm_stack.push(Symbol::WASM_ANONYMOUS_STACK_VALUE);
+            self.vm_stack.push(Symbol::WASM_TMP);
         }
 
         self.code.push(opcode as u8);
