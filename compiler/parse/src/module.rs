@@ -613,7 +613,10 @@ fn packages<'a>() -> impl Parser<'a, Packages<'a>, EPackages<'a>> {
                 PackageEntry::SpaceBefore
             )
         ),
-        |((before_packages_keyword, after_packages_keyword), entries): ((_, _), Collection<'a, _>)| {
+        |((before_packages_keyword, after_packages_keyword), entries): (
+            (_, _),
+            Collection<'a, _>
+        )| {
             Packages {
                 entries,
                 before_packages_keyword,
