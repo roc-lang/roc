@@ -132,13 +132,22 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
         let path = format!("{}/test-{:016x}.wasm", dir, src_hash);
 
         // Print out filename (appears just after test name)
-        println!("dumping file {:?}", path);
+        println!("dumping file {:?}", &path);
 
-        match std::fs::File::create(path) {
+        match std::fs::File::create(&path) {
             Err(e) => eprintln!("Problem creating wasm debug file: {:?}", e),
             Ok(mut file) => {
                 file.write_all(&module_bytes).unwrap();
             }
+        }
+
+        if false {
+            let output = std::process::Command::new("wasm-objdump")
+                .args(&["-xd", &path])
+                .output()
+                .unwrap();
+
+            std::io::stderr().write_all(&output.stdout).unwrap();
         }
     }
 
