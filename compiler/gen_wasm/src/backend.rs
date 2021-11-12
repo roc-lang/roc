@@ -294,9 +294,10 @@ impl<'a> WasmBackend<'a> {
 
                     _ => {
                         self.storage.load_symbols(&mut self.code_builder, &[*sym]);
-                        self.code_builder.br(self.block_depth); // jump to end of function (for stack frame pop)
                     }
                 }
+                // jump to the "stack frame pop" code at the end of the function
+                self.code_builder.br(self.block_depth - 1);
 
                 Ok(())
             }
@@ -321,7 +322,7 @@ impl<'a> WasmBackend<'a> {
                     cond_storage,
                 );
 
-                // create (number_of_branches - 1) new blocks.
+                // create a block for each branch except the default
                 for _ in 0..branches.len() {
                     self.start_block(BlockType::NoResult)
                 }
