@@ -6,7 +6,7 @@ use roc_module::ident::ModuleName;
 use roc_module::operator::BinOp::Pizza;
 use roc_module::operator::{BinOp, CalledVia};
 use roc_parse::ast::Expr::{self, *};
-use roc_parse::ast::{AssignedField, Def, WhenBranch};
+use roc_parse::ast::{AssignedField, Collection, Def, WhenBranch};
 use roc_region::all::{Located, Region};
 
 // BinOp precedence logic adapted from Gluon by Markus Westerlind
@@ -164,10 +164,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 value,
             })
         }
-        Record {
-            fields,
-            final_comments,
-        } => {
+        Record(fields) => {
             let mut new_fields = Vec::with_capacity_in(fields.len(), arena);
 
             for field in fields.iter() {
@@ -183,18 +180,14 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
 
             arena.alloc(Located {
                 region: loc_expr.region,
-                value: Record {
-                    fields: new_fields,
-                    final_comments,
-                },
+                value: Record(Collection {
+                    items: new_fields,
+                    final_comments: fields.final_comments,
+                }),
             })
         }
 
-        RecordUpdate {
-            fields,
-            update,
-            final_comments,
-        } => {
+        RecordUpdate { fields, update } => {
             // NOTE the `update` field is always a `Var { .. }` and does not need to be desugared
             let mut new_fields = Vec::with_capacity_in(fields.len(), arena);
 
@@ -213,8 +206,10 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 region: loc_expr.region,
                 value: RecordUpdate {
                     update: *update,
-                    fields: new_fields,
-                    final_comments,
+                    fields: Collection {
+                        items: new_fields,
+                        final_comments: fields.final_comments,
+                    },
                 },
             })
         }

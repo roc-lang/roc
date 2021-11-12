@@ -228,14 +228,11 @@ pub fn canonicalize_expr<'a>(
 
             (answer, Output::default())
         }
-        ast::Expr::Record {
-            fields,
-            final_comments: _,
-        } => {
+        ast::Expr::Record(fields) => {
             if fields.is_empty() {
                 (EmptyRecord, Output::default())
             } else {
-                match canonicalize_fields(env, var_store, scope, region, fields) {
+                match canonicalize_fields(env, var_store, scope, region, fields.items) {
                     Ok((can_fields, output)) => (
                         Record {
                             record_var: var_store.fresh(),
@@ -261,12 +258,11 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::RecordUpdate {
             fields,
             update: loc_update,
-            final_comments: _,
         } => {
             let (can_update, update_out) =
                 canonicalize_expr(env, var_store, scope, loc_update.region, &loc_update.value);
             if let Var(symbol) = &can_update.value {
-                match canonicalize_fields(env, var_store, scope, region, fields) {
+                match canonicalize_fields(env, var_store, scope, region, fields.items) {
                     Ok((can_fields, mut output)) => {
                         output.references = output.references.union(update_out.references);
 

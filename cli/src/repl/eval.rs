@@ -7,7 +7,7 @@ use roc_module::operator::CalledVia;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::ProcLayout;
 use roc_mono::layout::{union_sorted_tags_help, Builtin, Layout, UnionLayout, UnionVariant};
-use roc_parse::ast::{AssignedField, Expr, StrLiteral};
+use roc_parse::ast::{AssignedField, Collection, Expr, StrLiteral};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{Content, FlatType, GetSubsSlice, RecordFields, Subs, UnionTags, Variable};
 
@@ -621,10 +621,7 @@ fn struct_to_ast<'a>(
 
         let output = env.arena.alloc([loc_field]);
 
-        Expr::Record {
-            fields: output,
-            final_comments: &[],
-        }
+        Expr::Record(Collection::with_items(output))
     } else {
         debug_assert_eq!(sorted_fields.len(), field_layouts.len());
 
@@ -658,10 +655,7 @@ fn struct_to_ast<'a>(
 
         let output = output.into_bump_slice();
 
-        Expr::Record {
-            fields: output,
-            final_comments: &[],
-        }
+        Expr::Record(Collection::with_items(output))
     }
 }
 
@@ -735,10 +729,7 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
                         region: Region::zero(),
                     };
 
-                    Expr::Record {
-                        fields: arena.alloc([loc_assigned_field]),
-                        final_comments: arena.alloc([]),
-                    }
+                    Expr::Record(Collection::with_items(arena.alloc([loc_assigned_field])))
                 }
                 FlatType::TagUnion(tags, _) if tags.len() == 1 => {
                     let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
@@ -850,10 +841,7 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
                         region: Region::zero(),
                     };
 
-                    Expr::Record {
-                        fields: arena.alloc([loc_assigned_field]),
-                        final_comments: &[],
-                    }
+                    Expr::Record(Collection::with_items(arena.alloc([loc_assigned_field])))
                 }
                 FlatType::TagUnion(tags, _) if tags.len() == 1 => {
                     let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
@@ -972,10 +960,7 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
                         region: Region::zero(),
                     };
 
-                    Expr::Record {
-                        fields: arena.alloc([loc_assigned_field]),
-                        final_comments: arena.alloc([]),
-                    }
+                    Expr::Record(Collection::with_items(arena.alloc([loc_assigned_field])))
                 }
                 FlatType::TagUnion(tags, _) => {
                     // This was a single-tag union that got unwrapped at runtime.

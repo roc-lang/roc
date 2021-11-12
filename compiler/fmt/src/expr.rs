@@ -5,7 +5,9 @@ use crate::spaces::{add_spaces, fmt_comments_only, fmt_spaces, newline, NewlineA
 use bumpalo::collections::String;
 use roc_module::operator::{self, BinOp};
 use roc_parse::ast::StrSegment;
-use roc_parse::ast::{AssignedField, Base, CommentOrNewline, Expr, Pattern, WhenBranch};
+use roc_parse::ast::{
+    AssignedField, Base, Collection, CommentOrNewline, Expr, Pattern, WhenBranch,
+};
 use roc_region::all::Located;
 
 impl<'a> Formattable<'a> for Expr<'a> {
@@ -98,7 +100,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
                         .any(|loc_pattern| loc_pattern.is_multiline())
             }
 
-            Record { fields, .. } => fields.iter().any(|loc_field| loc_field.is_multiline()),
+            Record(fields) => fields.iter().any(|loc_field| loc_field.is_multiline()),
             RecordUpdate { fields, .. } => fields.iter().any(|loc_field| loc_field.is_multiline()),
         }
     }
@@ -250,18 +252,11 @@ impl<'a> Formattable<'a> for Expr<'a> {
 
                 buf.push_str(string);
             }
-            Record {
-                fields,
-                final_comments,
-            } => {
-                fmt_record(buf, None, fields, final_comments, indent);
+            Record(fields) => {
+                fmt_record(buf, None, *fields, indent);
             }
-            RecordUpdate {
-                fields,
-                update,
-                final_comments,
-            } => {
-                fmt_record(buf, Some(*update), fields, final_comments, indent);
+            RecordUpdate { update, fields } => {
+                fmt_record(buf, Some(*update), *fields, indent);
             }
             Closure(loc_patterns, loc_ret) => {
                 fmt_closure(buf, loc_patterns, loc_ret, indent);
@@ -917,10 +912,11 @@ fn fmt_backpassing<'a>(
 fn fmt_record<'a>(
     buf: &mut String<'a>,
     update: Option<&'a Located<Expr<'a>>>,
-    loc_fields: &[Located<AssignedField<'a, Expr<'a>>>],
-    final_comments: &'a [CommentOrNewline<'a>],
+    fields: Collection<'a, Located<AssignedField<'a, Expr<'a>>>>,
     indent: u16,
 ) {
+    let loc_fields = fields.items;
+    let final_comments = fields.final_comments;
     if loc_fields.is_empty() && final_comments.iter().all(|c| c.is_newline()) {
         buf.push_str("{}");
     } else {

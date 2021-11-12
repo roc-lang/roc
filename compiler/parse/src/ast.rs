@@ -25,6 +25,18 @@ impl<'a, T> Collection<'a, T> {
             final_comments: &[],
         }
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = &'a T> {
+        self.items.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -122,14 +134,10 @@ pub enum Expr<'a> {
 
     RecordUpdate {
         update: &'a Loc<Expr<'a>>,
-        fields: &'a [Loc<AssignedField<'a, Expr<'a>>>],
-        final_comments: &'a &'a [CommentOrNewline<'a>],
+        fields: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
     },
 
-    Record {
-        fields: &'a [Loc<AssignedField<'a, Expr<'a>>>],
-        final_comments: &'a [CommentOrNewline<'a>],
-    },
+    Record(Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>),
 
     // Lookups
     Var {
@@ -257,7 +265,6 @@ pub enum TypeAnnotation<'a> {
         /// The row type variable in an open record, e.g. the `r` in `{ name: Str }r`.
         /// This is None if it's a closed record annotation like `{ name: Str }`.
         ext: Option<&'a Loc<TypeAnnotation<'a>>>,
-        // final_comments: &'a [CommentOrNewline<'a>],
     },
 
     /// A tag union, e.g. `[
@@ -357,10 +364,11 @@ pub enum Pattern<'a> {
     GlobalTag(&'a str),
     PrivateTag(&'a str),
     Apply(&'a Loc<Pattern<'a>>, &'a [Loc<Pattern<'a>>]),
+
     /// This is Loc<Pattern> rather than Loc<str> so we can record comments
     /// around the destructured names, e.g. { x ### x does stuff ###, y }
     /// In practice, these patterns will always be Identifier
-    RecordDestructure(&'a [Loc<Pattern<'a>>]),
+    RecordDestructure(Collection<'a, Loc<Pattern<'a>>>),
 
     /// A required field pattern, e.g. { x: Just 0 } -> ...
     /// Can only occur inside of a RecordDestructure
