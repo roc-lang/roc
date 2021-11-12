@@ -520,27 +520,14 @@ impl<'a> CodeBuilder<'a> {
         n_args: usize,
         has_return_val: bool,
     ) {
-        let stack_depth = self.vm_stack.len();
-        if n_args > stack_depth {
-            panic!(
-                "Trying to call to call function {:?} with {:?} values but only {:?} on the VM stack\n{:?}",
-                function_index, n_args, stack_depth, self
-            );
-        }
-        self.vm_stack.truncate(stack_depth - n_args);
-        if has_return_val {
-            self.vm_stack.push(Symbol::WASM_ANONYMOUS_STACK_VALUE);
-        }
-        self.code.push(CALL as u8);
+        self.inst(CALL, n_args, has_return_val);
 
-        // println!("CALL      \t{:?}", &self.vm_stack);
-
-        // Write the index of the function to be called.
-        // Also make a RelocationEntry so the linker can see that this byte offset relates to a function by name.
-        // Here we initialise the offset to an index of self.code. After completing the function, we'll add
-        // other factors to make it relative to the code section. (All insertions will be known then.)
         let offset = self.code.len() as u32;
         self.code.encode_padded_u32(function_index);
+
+        // Make a RelocationEntry so the linker can see that this byte offset relates to a function by name.
+        // Here we initialise the offset to an index of self.code. After completing the function, we'll add
+        // other factors to make it relative to the code section. (All insertions will be known then.)
         self.relocations.push(RelocationEntry::Index {
             type_id: IndexRelocType::FunctionIndexLeb,
             offset,
