@@ -3466,7 +3466,7 @@ fn fabricate_effects_module<'a>(
     {
         let mut module_ids = (*module_ids).lock();
 
-        for exposed in header.exposes {
+        for exposed in header.exposes.iter() {
             if let ExposesEntry::Exposed(module_name) = exposed.value {
                 module_ids.get_or_insert(&PQModuleName::Qualified(
                     shorthand,

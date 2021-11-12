@@ -545,7 +545,7 @@ fn exposes_modules<'a>() -> impl Parser<
     'a,
     (
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-        Vec<'a, Located<ExposesEntry<'a, ModuleName<'a>>>>,
+        Collection<'a, Located<ExposesEntry<'a, ModuleName<'a>>>>,
     ),
     EExposes,
 > {
@@ -560,14 +560,16 @@ fn exposes_modules<'a>() -> impl Parser<
             EExposes::IndentExposes,
             EExposes::IndentListStart
         ),
-        collection_e!(
+        collection_trailing_sep_e!(
             word1(b'[', EExposes::ListStart),
             exposes_module(EExposes::Identifier),
             word1(b',', EExposes::ListEnd),
             word1(b']', EExposes::ListEnd),
             min_indent,
+            EExposes::Open,
             EExposes::Space,
-            EExposes::IndentListEnd
+            EExposes::IndentListEnd,
+            ExposesEntry::SpaceBefore
         )
     )
 }

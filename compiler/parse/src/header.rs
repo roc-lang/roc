@@ -145,7 +145,7 @@ pub struct PlatformRequires<'a> {
 pub struct PlatformHeader<'a> {
     pub name: Loc<PackageName<'a>>,
     pub requires: PlatformRequires<'a>,
-    pub exposes: Vec<'a, Loc<ExposesEntry<'a, ModuleName<'a>>>>,
+    pub exposes: Collection<'a, Loc<ExposesEntry<'a, ModuleName<'a>>>>,
     pub packages: Collection<'a, Loc<PackageEntry<'a>>>,
     pub imports: Collection<'a, Loc<ImportsEntry<'a>>>,
     pub provides: Collection<'a, Loc<ExposesEntry<'a, &'a str>>>,
