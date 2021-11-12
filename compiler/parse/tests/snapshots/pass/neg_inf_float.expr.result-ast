@@ -1,1 +1,4 @@
-Ok(UnaryOp(|L 0-0, C 1-4| Var { module_name: "", ident: "inf" }, |L 0-0, C 0-1| Negate))
+UnaryOp(
+    |L 0-0, C 1-4| Var { module_name: "", ident: "inf" },
+    |L 0-0, C 0-1| Negate,
+)

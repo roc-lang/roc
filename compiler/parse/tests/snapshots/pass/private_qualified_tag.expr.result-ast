@@ -1,1 +1,7 @@
-Ok(MalformedIdent("@One.Two.Whee", BadPrivateTag(0, 4)))
+MalformedIdent(
+    "@One.Two.Whee",
+    BadPrivateTag(
+        0,
+        4,
+    ),
+)

@@ -1,1 +1,4 @@
-Ok(UnaryOp(|L 0-0, C 1-11| Access(Var { module_name: "", ident: "rec1" }, "field"), |L 0-0, C 0-1| Negate))
+UnaryOp(
+    |L 0-0, C 1-11| Access(Var { module_name: "", ident: "rec1" }, "field"),
+    |L 0-0, C 0-1| Negate,
+)

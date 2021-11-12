@@ -1,1 +1,6 @@
-Ok(Closure([|L 0-0, C 1-2| Underscore("")], |L 0-0, C 6-8| Num("42")))
+Closure(
+    [
+        |L 0-0, C 1-2| Underscore(""),
+    ],
+    |L 0-0, C 6-8| Num("42"),
+)

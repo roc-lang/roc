@@ -1,1 +1,4 @@
-Ok(Var { module_name: "", ident: "whenever" })
+Var {
+    module_name: "",
+    ident: "whenever",
+}

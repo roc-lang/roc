@@ -68,7 +68,7 @@ mod test_parse {
                 $(
                     #[test]
                     fn $expr_test_name() {
-
+                        super::snapshot_expr_test(stringify!($expr_test_name));
                     }
                 )*
             }
@@ -201,6 +201,28 @@ mod test_parse {
         }
     }
 
+    fn snapshot_expr_test(name: &str) {
+        let ty = "expr";
+        let mut parent = std::path::PathBuf::from("tests");
+        parent.push("snapshots");
+        parent.push("pass");
+        let input_path = parent.join(&format!("{}.{}.roc", name, ty));
+        let result_path = parent.join(&format!("{}.{}.result-ast", name, ty));
+
+        let input = std::fs::read_to_string(&input_path).unwrap();
+        let expected_result = std::fs::read_to_string(&result_path).unwrap();
+
+        let arena = Bump::new();
+        let actual_ast = parse_expr_with(&arena, input.trim()).unwrap();
+        let actual_result = format!("{:#?}\n", actual_ast);
+
+        if std::env::var("ROC_PARSER_SNAPSHOT_TEST_OVERWRITE").is_ok() {
+            std::fs::write(&result_path, actual_result).unwrap();
+        } else {
+            assert_eq!(expected_result, actual_result);
+        }
+    }
+
     fn save_snapshot(name: &str, ty: &str, input: &str, result: &str) {
         let mut parent = std::path::PathBuf::from("tests");
         parent.push("snapshots");
@@ -218,7 +240,7 @@ mod test_parse {
 
     fn save_parse_expr_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Expr<'a>, SyntaxError<'a>> {
         let actual = parse_expr_with(&arena, input.trim());
-        let result = format!("{:?}", actual);
+        let result = format!("{:#?}\n", actual.as_ref().unwrap());
 
         save_snapshot(&test_name(), "expr", input, &result);
         actual
@@ -227,7 +249,8 @@ mod test_parse {
     fn assert_parses_to<'a>(input: &'a str, expected_expr: Expr<'a>) {
         let arena = Bump::new();
         let actual = parse_expr_with(&arena, input.trim());
-
+        let result = format!("{:#?}\n", actual.as_ref().unwrap());
+        save_snapshot(&test_name(), "expr", input, &result);
         assert_eq!(Ok(expected_expr), actual);
     }
 

@@ -1,1 +1,7 @@
-Ok(Access(Var { module_name: "", ident: "rec" }, "field"))
+Access(
+    Var {
+        module_name: "",
+        ident: "rec",
+    },
+    "field",
+)

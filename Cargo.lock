@@ -3475,7 +3475,9 @@ dependencies = [
 name = "roc_parse"
 version = "0.1.0"
 dependencies = [
+ "ansi_term",
  "bumpalo",
+ "diff",
  "encode_unicode",
  "indoc",
  "pretty_assertions",

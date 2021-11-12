@@ -1,1 +1,3 @@
-Ok(GlobalTag("Whee"))
+GlobalTag(
+    "Whee",
+)

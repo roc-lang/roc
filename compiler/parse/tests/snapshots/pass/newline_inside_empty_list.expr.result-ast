@@ -1,1 +1,8 @@
-Ok(List(Collection { items: [], final_comments: [Newline] }))
+List(
+    Collection {
+        items: [],
+        final_comments: [
+            Newline,
+        ],
+    },
+)

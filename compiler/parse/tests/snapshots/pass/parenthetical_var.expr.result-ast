@@ -1,1 +1,6 @@
-Ok(ParensAround(Var { module_name: "", ident: "whee" }))
+ParensAround(
+    Var {
+        module_name: "",
+        ident: "whee",
+    },
+)

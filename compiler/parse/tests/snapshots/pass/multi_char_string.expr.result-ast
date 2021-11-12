@@ -1,1 +1,5 @@
-Ok(Str(PlainLine("foo")))
+Str(
+    PlainLine(
+        "foo",
+    ),
+)
