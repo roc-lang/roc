@@ -37,6 +37,193 @@ mod test_parse {
     use roc_region::all::{Located, Region};
     use std::{f64, i64};
 
+    macro_rules! snapshot_tests {
+        (
+            expr => {
+                $($expr_test_name:ident),*
+            }
+        ) => {
+            #[test]
+            fn no_extra_snapshot_test_files() {
+                let tests = &[
+                    $(concat!(stringify!($expr_test_name), ".expr")),*
+                ].iter().map(|t| *t).collect::<std::collections::HashSet<&str>>();
+
+                let mut base = std::path::PathBuf::from("tests");
+                base.push("snapshots");
+                base.push("pass");
+                let files = std::fs::read_dir(&base).unwrap().map(|f| f.unwrap().file_name().to_str().unwrap().to_string()).collect::<std::vec::Vec<_>>();
+                for file in files {
+                    if let Some(file) = file.strip_suffix(".roc") {
+                        assert!(tests.contains(file));
+                    } else if let Some(file) = file.strip_suffix(".result-ast") {
+                        assert!(tests.contains(file));
+                    } else {
+                        panic!("unexpected test file found: {}", file);
+                    }
+                }                
+            }
+
+            mod _preview_tests {
+                $(
+                    #[test]
+                    fn $expr_test_name() {
+
+                    }
+                )*
+            }
+        };
+    }
+
+    snapshot_tests! {
+        expr => {
+            add_var_with_spaces,
+            add_with_spaces,
+            all_f64_values_parse,
+            all_i64_values_parse,
+            apply_global_tag,
+            apply_parenthetical_global_tag_args,
+            apply_private_tag,
+            apply_three_args,
+            apply_two_args,
+            apply_unary_negation,
+            apply_unary_not,
+            basic_apply,
+            basic_docs,
+            basic_field,
+            basic_global_tag,
+            basic_private_tag,
+            basic_var,
+            closure_with_underscores,
+            comment_after_op,
+            comment_before_op,
+            comment_inside_empty_list,
+            comment_with_non_ascii,
+            empty_list,
+            empty_record,
+            empty_string,
+            equals,
+            equals_with_spaces,
+            expect,
+            float_with_underscores,
+            highest_float,
+            highest_int,
+            if_def,
+            int_with_underscore,
+            lowest_float,
+            lowest_int,
+            malformed_ident_due_to_underscore,
+            malformed_pattern_field_access,
+            malformed_pattern_module_name,
+            minus_twelve_minus_five,
+            mixed_docs,
+            multi_backpassing,
+            multi_char_string,
+            multiline_type_signature,
+            multiline_type_signature_with_comment,
+            multiple_fields,
+            multiple_operators,
+            neg_inf_float,
+            negative_float,
+            negative_int,
+            newline_after_equals,
+            newline_after_mul,
+            newline_after_sub,
+            newline_and_spaces_before_less_than,
+            newline_before_add,
+            newline_before_sub,
+            newline_inside_empty_list,
+            newline_singleton_list,
+            not_docs,
+            one_backpassing,
+            one_char_string,
+            one_def,
+            one_minus_two,
+            one_plus_two,
+            one_spaced_def,
+            ops_with_newlines,
+            packed_singleton_list,
+            parenthetical_apply,
+            parenthetical_basic_field,
+            parenthetical_field_qualified_var,
+            parenthetical_var,
+            parse_alias,
+            parse_as_ann,
+            pattern_with_space_in_parens,
+            pos_inf_float,
+            positive_float,
+            positive_int,
+            private_qualified_tag,
+            qualified_field,
+            qualified_global_tag,
+            qualified_var,
+            record_destructure_def,
+            record_update,
+            record_with_if,
+            single_arg_closure,
+            single_underscore_closure,
+            space_only_after_minus,
+            spaced_singleton_list,
+            spaces_inside_empty_list,
+            string_without_escape,
+            sub_var_with_spaces,
+            sub_with_spaces,
+            tag_pattern,
+            ten_times_eleven,
+            three_arg_closure,
+            two_arg_closure,
+            two_backpassing,
+            two_branch_when,
+            two_spaced_def,
+            unary_negation,
+            unary_negation_access,
+            unary_negation_arg,
+            unary_negation_with_parens,
+            unary_not,
+            unary_not_with_parens,
+            underscore_backpassing,
+            var_else,
+            var_if,
+            var_is,
+            var_minus_two,
+            var_then,
+            var_when,
+            when_if_guard,
+            when_in_parens,
+            when_in_parens_indented,
+            when_with_alternative_patterns,
+            when_with_function_application,
+            when_with_negative_numbers,
+            when_with_numbers,
+            when_with_records,
+            zero_float,
+            zero_int
+        }
+    }
+
+    fn save_snapshot(name: &str, ty: &str, input: &str, result: &str) {
+        let mut parent = std::path::PathBuf::from("tests");
+        parent.push("snapshots");
+        parent.push("pass");
+        let input_path = parent.join(&format!("{}.{}.roc", name, ty));
+        let result_path = parent.join(&format!("{}.{}.result-ast", name, ty));
+        std::fs::create_dir_all(parent).unwrap();
+        std::fs::write(input_path, input).unwrap();
+        std::fs::write(result_path, result).unwrap();
+    }
+
+    fn test_name() -> String {
+        std::thread::current().name().unwrap().strip_prefix("test_parse::").unwrap().to_string()
+    }
+
+    fn save_parse_expr_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Expr<'a>, SyntaxError<'a>> {
+        let actual = parse_expr_with(&arena, input.trim());
+        let result = format!("{:?}", actual);
+
+        save_snapshot(&test_name(), "expr", input, &result);
+        actual
+    }
+
     fn assert_parses_to<'a>(input: &'a str, expected_expr: Expr<'a>) {
         let arena = Bump::new();
         let actual = parse_expr_with(&arena, input.trim());
@@ -459,11 +646,9 @@ mod test_parse {
 
     #[test]
     fn empty_record() {
-        let arena = Bump::new();
         let expected = Record(Collection::empty());
-        let actual = parse_expr_with(&arena, "{}");
 
-        assert_eq!(Ok(expected), actual);
+        assert_parses_to("{}", expected);
     }
 
     #[test]
@@ -493,7 +678,7 @@ mod test_parse {
             fields: Collection::with_items(fields),
         };
 
-        let actual = parse_expr_with(&arena, "{ Foo.Bar.baz & x: 5, y: 0 }");
+        let actual = save_parse_expr_with(&arena, "{ Foo.Bar.baz & x: 5, y: 0 }");
         assert_eq!(Ok(expected), actual);
     }
 
@@ -524,7 +709,7 @@ mod test_parse {
         ];
         let expected = Record(Collection::with_items(fields));
 
-        let actual = parse_expr_with(&arena, "{x : if True then 1 else 2, y: 3 }");
+        let actual = save_parse_expr_with(&arena, "{x : if True then 1 else 2, y: 3 }");
         assert_eq!(Ok(expected), actual);
     }
 
@@ -550,7 +735,7 @@ mod test_parse {
 
         let expected = Expect(arena.alloc(loc_condition), arena.alloc(loc_continuation));
 
-        let actual = parse_expr_with(
+        let actual = save_parse_expr_with(
             &arena,
             indoc!(
                 r#"
@@ -574,7 +759,7 @@ mod test_parse {
             Located::new(0, 0, 2, 3, Num("2")),
         );
         let expected = single_binop(&arena, tuple);
-        let actual = parse_expr_with(&arena, "1+2");
+        let actual = save_parse_expr_with(&arena, "1+2");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -588,7 +773,7 @@ mod test_parse {
             Located::new(0, 0, 2, 3, Num("2")),
         );
         let expected = single_binop(&arena, tuple);
-        let actual = parse_expr_with(&arena, "1-2");
+        let actual = save_parse_expr_with(&arena, "1-2");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -611,7 +796,7 @@ mod test_parse {
             Located::new(0, 0, 2, 3, Num("2")),
         );
         let expected = single_binop(&arena, tuple);
-        let actual = parse_expr_with(&arena, "x-2");
+        let actual = save_parse_expr_with(&arena, "x-2");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -625,7 +810,7 @@ mod test_parse {
             Located::new(0, 0, 7, 8, Num("2")),
         );
         let expected = single_binop(&arena, tuple);
-        let actual = parse_expr_with(&arena, "1  +   2");
+        let actual = save_parse_expr_with(&arena, "1  +   2");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -639,7 +824,7 @@ mod test_parse {
             Located::new(0, 0, 7, 8, Num("2")),
         );
         let expected = single_binop(&arena, tuple);
-        let actual = parse_expr_with(&arena, "1  -   2");
+        let actual = save_parse_expr_with(&arena, "1  -   2");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -662,7 +847,7 @@ mod test_parse {
             Located::new(0, 0, 4, 5, Num("2")),
         );
         let expected = single_binop(&arena, tuple);
-        let actual = parse_expr_with(&arena, "x + 2");
+        let actual = save_parse_expr_with(&arena, "x + 2");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -684,7 +869,7 @@ mod test_parse {
             Located::new(0, 0, 4, 5, Num("2")),
         );
         let expected = single_binop(&arena, tuple);
-        let actual = parse_expr_with(&arena, "x - 2");
+        let actual = save_parse_expr_with(&arena, "x - 2");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -699,7 +884,7 @@ mod test_parse {
             Located::new(1, 1, 2, 3, Num("4")),
         );
         let expected = single_binop(&arena, tuple);
-        let actual = parse_expr_with(&arena, "3  \n+ 4");
+        let actual = save_parse_expr_with(&arena, "3  \n+ 4");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -714,7 +899,7 @@ mod test_parse {
             Located::new(1, 1, 2, 3, Num("4")),
         );
         let expected = single_binop(&arena, tuple);
-        let actual = parse_expr_with(&arena, "3  \n- 4");
+        let actual = save_parse_expr_with(&arena, "3  \n- 4");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -729,7 +914,7 @@ mod test_parse {
             Located::new(1, 1, 2, 3, spaced_int),
         );
         let expected = single_binop(&arena, tuple);
-        let actual = parse_expr_with(&arena, "3  *\n  4");
+        let actual = save_parse_expr_with(&arena, "3  *\n  4");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -744,7 +929,7 @@ mod test_parse {
             Located::new(1, 1, 2, 3, spaced_int),
         );
         let expected = single_binop(&arena, tuple);
-        let actual = parse_expr_with(&arena, "3  -\n  4");
+        let actual = save_parse_expr_with(&arena, "3  -\n  4");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -771,7 +956,7 @@ mod test_parse {
         let expected = Defs(defs, arena.alloc(loc_ret));
 
         // let expected = single_binop(&arena, tuple);
-        let actual = parse_expr_with(&arena, "x = 1\n    < 2\n\n42");
+        let actual = save_parse_expr_with(&arena, "x = 1\n    < 2\n\n42");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -786,7 +971,7 @@ mod test_parse {
             Located::new(1, 1, 2, 3, Num("4")),
         );
         let expected = single_binop(&arena, tuple);
-        let actual = parse_expr_with(&arena, "3  # 2 × 2\n+ 4");
+        let actual = save_parse_expr_with(&arena, "3  # 2 × 2\n+ 4");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -801,7 +986,7 @@ mod test_parse {
             Located::new(1, 1, 2, 3, Num("4")),
         );
         let expected = single_binop(&arena, tuple);
-        let actual = parse_expr_with(&arena, "3  # test!\n+ 4");
+        let actual = save_parse_expr_with(&arena, "3  # test!\n+ 4");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -816,7 +1001,7 @@ mod test_parse {
             Located::new(1, 1, 1, 3, spaced_int),
         );
         let expected = single_binop(&arena, tuple);
-        let actual = parse_expr_with(&arena, "12  * # test!\n 92");
+        let actual = save_parse_expr_with(&arena, "12  * # test!\n 92");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -832,7 +1017,7 @@ mod test_parse {
             Located::new(3, 3, 2, 3, spaced_int2),
         );
         let expected = single_binop(&arena, tuple);
-        let actual = parse_expr_with(&arena, "3  \n+ \n\n  4");
+        let actual = save_parse_expr_with(&arena, "3  \n+ \n\n  4");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -856,7 +1041,7 @@ mod test_parse {
             Located::new(0, 0, 3, 4, var2),
         );
         let expected = single_binop(&arena, tuple);
-        let actual = parse_expr_with(&arena, "x- y");
+        let actual = save_parse_expr_with(&arena, "x- y");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -870,7 +1055,7 @@ mod test_parse {
             Located::new(0, 0, 4, 5, Num("5")),
         );
         let expected = single_binop(&arena, tuple);
-        let actual = parse_expr_with(&arena, "-12-5");
+        let actual = save_parse_expr_with(&arena, "-12-5");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -884,7 +1069,7 @@ mod test_parse {
             Located::new(0, 0, 3, 5, Num("11")),
         );
         let expected = single_binop(&arena, tuple);
-        let actual = parse_expr_with(&arena, "10*11");
+        let actual = save_parse_expr_with(&arena, "10*11");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -906,7 +1091,7 @@ mod test_parse {
         let right = Located::new(0, 0, 6, 9, Num("534"));
 
         let expected = BinOps(&lefts, &right);
-        let actual = parse_expr_with(&arena, "31*42+534");
+        let actual = save_parse_expr_with(&arena, "31*42+534");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -928,7 +1113,7 @@ mod test_parse {
             Located::new(0, 0, 3, 4, var2),
         );
         let expected = single_binop(&arena, tuple);
-        let actual = parse_expr_with(&arena, "x==y");
+        let actual = save_parse_expr_with(&arena, "x==y");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -950,7 +1135,7 @@ mod test_parse {
             Located::new(0, 0, 5, 6, var2),
         );
         let expected = single_binop(&arena, tuple);
-        let actual = parse_expr_with(&arena, "x == y");
+        let actual = save_parse_expr_with(&arena, "x == y");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -964,7 +1149,7 @@ mod test_parse {
             module_name: "",
             ident: "whee",
         };
-        let actual = parse_expr_with(&arena, "whee");
+        let actual = save_parse_expr_with(&arena, "whee");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -977,7 +1162,7 @@ mod test_parse {
             module_name: "",
             ident: "whenever",
         };
-        let actual = parse_expr_with(&arena, "whenever");
+        let actual = save_parse_expr_with(&arena, "whenever");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -990,7 +1175,7 @@ mod test_parse {
             module_name: "",
             ident: "isnt",
         };
-        let actual = parse_expr_with(&arena, "isnt");
+        let actual = save_parse_expr_with(&arena, "isnt");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1003,7 +1188,7 @@ mod test_parse {
             module_name: "",
             ident: "iffy",
         };
-        let actual = parse_expr_with(&arena, "iffy");
+        let actual = save_parse_expr_with(&arena, "iffy");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1016,7 +1201,7 @@ mod test_parse {
             module_name: "",
             ident: "thenever",
         };
-        let actual = parse_expr_with(&arena, "thenever");
+        let actual = save_parse_expr_with(&arena, "thenever");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1029,7 +1214,7 @@ mod test_parse {
             module_name: "",
             ident: "elsewhere",
         };
-        let actual = parse_expr_with(&arena, "elsewhere");
+        let actual = save_parse_expr_with(&arena, "elsewhere");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1041,7 +1226,7 @@ mod test_parse {
             module_name: "",
             ident: "whee",
         }));
-        let actual = parse_expr_with(&arena, "(whee)");
+        let actual = save_parse_expr_with(&arena, "(whee)");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1053,7 +1238,7 @@ mod test_parse {
             module_name: "One.Two",
             ident: "whee",
         };
-        let actual = parse_expr_with(&arena, "One.Two.whee");
+        let actual = save_parse_expr_with(&arena, "One.Two.whee");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1064,7 +1249,7 @@ mod test_parse {
     fn basic_global_tag() {
         let arena = Bump::new();
         let expected = Expr::GlobalTag("Whee");
-        let actual = parse_expr_with(&arena, "Whee");
+        let actual = save_parse_expr_with(&arena, "Whee");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1073,7 +1258,7 @@ mod test_parse {
     fn basic_private_tag() {
         let arena = Bump::new();
         let expected = Expr::PrivateTag("@Whee");
-        let actual = parse_expr_with(&arena, "@Whee");
+        let actual = save_parse_expr_with(&arena, "@Whee");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1089,7 +1274,7 @@ mod test_parse {
             args,
             CalledVia::Space,
         );
-        let actual = parse_expr_with(&arena, "@Whee 12 34");
+        let actual = save_parse_expr_with(&arena, "@Whee 12 34");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1105,7 +1290,7 @@ mod test_parse {
             args,
             CalledVia::Space,
         );
-        let actual = parse_expr_with(&arena, "Whee 12 34");
+        let actual = save_parse_expr_with(&arena, "Whee 12 34");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1123,7 +1308,7 @@ mod test_parse {
             args,
             CalledVia::Space,
         );
-        let actual = parse_expr_with(&arena, "Whee (12) (34)");
+        let actual = save_parse_expr_with(&arena, "Whee (12) (34)");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1134,7 +1319,7 @@ mod test_parse {
 
         let arena = Bump::new();
         let expected = Expr::MalformedIdent("One.Two.Whee", BadIdent::QualifiedTag(0, 12));
-        let actual = parse_expr_with(&arena, "One.Two.Whee");
+        let actual = save_parse_expr_with(&arena, "One.Two.Whee");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1145,7 +1330,7 @@ mod test_parse {
 
         let arena = Bump::new();
         let expected = Expr::MalformedIdent("@One.Two.Whee", BadIdent::BadPrivateTag(0, 4));
-        let actual = parse_expr_with(&arena, "@One.Two.Whee");
+        let actual = save_parse_expr_with(&arena, "@One.Two.Whee");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1156,7 +1341,7 @@ mod test_parse {
         let pattern = Located::new(0, 0, 1, 6, Pattern::GlobalTag("Thing"));
         let patterns = &[pattern];
         let expected = Closure(patterns, arena.alloc(Located::new(0, 0, 10, 12, Num("42"))));
-        let actual = parse_expr_with(&arena, "\\Thing -> 42");
+        let actual = save_parse_expr_with(&arena, "\\Thing -> 42");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1167,7 +1352,7 @@ mod test_parse {
     fn empty_list() {
         let arena = Bump::new();
         let expected = List(Collection::empty());
-        let actual = parse_expr_with(&arena, "[]");
+        let actual = save_parse_expr_with(&arena, "[]");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1177,7 +1362,7 @@ mod test_parse {
         // This is a regression test!
         let arena = Bump::new();
         let expected = List(Collection::empty());
-        let actual = parse_expr_with(&arena, "[  ]");
+        let actual = save_parse_expr_with(&arena, "[  ]");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1186,7 +1371,7 @@ mod test_parse {
     fn newline_inside_empty_list() {
         let arena = Bump::new();
         let expected = List(Collection::with_items_and_comments(&arena, &[], &[Newline]));
-        let actual = parse_expr_with(&arena, "[\n]");
+        let actual = save_parse_expr_with(&arena, "[\n]");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1199,7 +1384,7 @@ mod test_parse {
             &[],
             &[LineComment("comment")],
         ));
-        let actual = parse_expr_with(&arena, "[#comment\n]");
+        let actual = save_parse_expr_with(&arena, "[#comment\n]");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1209,7 +1394,7 @@ mod test_parse {
         let arena = Bump::new();
         let items = &[&*arena.alloc(Located::new(0, 0, 1, 2, Num("1")))];
         let expected = List(Collection::with_items(items));
-        let actual = parse_expr_with(&arena, "[1]");
+        let actual = save_parse_expr_with(&arena, "[1]");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1219,7 +1404,7 @@ mod test_parse {
         let arena = Bump::new();
         let items = &[&*arena.alloc(Located::new(0, 0, 2, 3, Num("1")))];
         let expected = List(Collection::with_items(items));
-        let actual = parse_expr_with(&arena, "[ 1 ]");
+        let actual = save_parse_expr_with(&arena, "[ 1 ]");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1234,7 +1419,7 @@ mod test_parse {
         let item = Expr::SpaceBefore(item, arena.alloc([Newline]));
         let items = [&*arena.alloc(Located::new(1, 1, 0, 1, item))];
         let expected = List(Collection::with_items(&items));
-        let actual = parse_expr_with(&arena, "[\n1\n]");
+        let actual = save_parse_expr_with(&arena, "[\n1\n]");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1249,7 +1434,7 @@ mod test_parse {
             ident: "rec",
         };
         let expected = Access(arena.alloc(var), "field");
-        let actual = parse_expr_with(&arena, "rec.field");
+        let actual = save_parse_expr_with(&arena, "rec.field");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1262,7 +1447,7 @@ mod test_parse {
             ident: "rec",
         }));
         let expected = Access(arena.alloc(paren_var), "field");
-        let actual = parse_expr_with(&arena, "(rec).field");
+        let actual = save_parse_expr_with(&arena, "(rec).field");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1275,7 +1460,7 @@ mod test_parse {
             ident: "rec",
         }));
         let expected = Access(arena.alloc(paren_var), "field");
-        let actual = parse_expr_with(&arena, "(One.Two.rec).field");
+        let actual = save_parse_expr_with(&arena, "(One.Two.rec).field");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1291,7 +1476,7 @@ mod test_parse {
             arena.alloc(Access(arena.alloc(Access(arena.alloc(var), "abc")), "def")),
             "ghi",
         );
-        let actual = parse_expr_with(&arena, "rec.abc.def.ghi");
+        let actual = save_parse_expr_with(&arena, "rec.abc.def.ghi");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1307,7 +1492,7 @@ mod test_parse {
             arena.alloc(Access(arena.alloc(Access(arena.alloc(var), "abc")), "def")),
             "ghi",
         );
-        let actual = parse_expr_with(&arena, "One.Two.rec.abc.def.ghi");
+        let actual = save_parse_expr_with(&arena, "One.Two.rec.abc.def.ghi");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1328,7 +1513,7 @@ mod test_parse {
             args,
             CalledVia::Space,
         );
-        let actual = parse_expr_with(&arena, "whee 1");
+        let actual = save_parse_expr_with(&arena, "whee 1");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1353,7 +1538,7 @@ mod test_parse {
             args,
             CalledVia::Space,
         );
-        let actual = parse_expr_with(&arena, "whee  12  34");
+        let actual = save_parse_expr_with(&arena, "whee  12  34");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1406,7 +1591,7 @@ mod test_parse {
             args,
             CalledVia::Space,
         );
-        let actual = parse_expr_with(&arena, "a b c d");
+        let actual = save_parse_expr_with(&arena, "a b c d");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1425,7 +1610,7 @@ mod test_parse {
             args,
             CalledVia::Space,
         );
-        let actual = parse_expr_with(&arena, "(whee) 1");
+        let actual = save_parse_expr_with(&arena, "(whee) 1");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1442,7 +1627,7 @@ mod test_parse {
         };
         let loc_arg1_expr = Located::new(0, 0, 1, 4, arg1_expr);
         let expected = UnaryOp(arena.alloc(loc_arg1_expr), loc_op);
-        let actual = parse_expr_with(&arena, "-foo");
+        let actual = save_parse_expr_with(&arena, "-foo");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1457,7 +1642,7 @@ mod test_parse {
         };
         let loc_arg1_expr = Located::new(0, 0, 1, 5, arg1_expr);
         let expected = UnaryOp(arena.alloc(loc_arg1_expr), loc_op);
-        let actual = parse_expr_with(&arena, "!blah");
+        let actual = save_parse_expr_with(&arena, "!blah");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1490,7 +1675,7 @@ mod test_parse {
         );
         let unary = Located::new(0, 0, 0, 5, UnaryOp(arena.alloc(function), loc_op));
         let expected = Expr::Apply(arena.alloc(unary), args, CalledVia::Space);
-        let actual = parse_expr_with(&arena, "-whee  12 foo");
+        let actual = save_parse_expr_with(&arena, "-whee  12 foo");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1524,7 +1709,7 @@ mod test_parse {
         );
         let unary = Located::new(0, 0, 0, 5, UnaryOp(arena.alloc(function), loc_op));
         let expected = Expr::Apply(arena.alloc(unary), args, CalledVia::Space);
-        let actual = parse_expr_with(&arena, "!whee  12 foo");
+        let actual = save_parse_expr_with(&arena, "!whee  12 foo");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1560,7 +1745,7 @@ mod test_parse {
             CalledVia::Space,
         )));
         let expected = UnaryOp(arena.alloc(Located::new(0, 0, 2, 14, apply_expr)), loc_op);
-        let actual = parse_expr_with(&arena, "-(whee  12 foo)");
+        let actual = save_parse_expr_with(&arena, "-(whee  12 foo)");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1596,7 +1781,7 @@ mod test_parse {
             CalledVia::Space,
         )));
         let expected = UnaryOp(arena.alloc(Located::new(0, 0, 2, 14, apply_expr)), loc_op);
-        let actual = parse_expr_with(&arena, "!(whee  12 foo)");
+        let actual = save_parse_expr_with(&arena, "!(whee  12 foo)");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1623,7 +1808,7 @@ mod test_parse {
             args,
             CalledVia::Space,
         );
-        let actual = parse_expr_with(&arena, "whee  12 -foo");
+        let actual = save_parse_expr_with(&arena, "whee  12 -foo");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1640,7 +1825,7 @@ mod test_parse {
         let access = Access(arena.alloc(var), "field");
         let loc_access = Located::new(0, 0, 1, 11, access);
         let expected = UnaryOp(arena.alloc(loc_access), loc_op);
-        let actual = parse_expr_with(&arena, "-rec1.field");
+        let actual = save_parse_expr_with(&arena, "-rec1.field");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1653,7 +1838,7 @@ mod test_parse {
         let pattern = Located::new(0, 0, 1, 2, Identifier("a"));
         let patterns = &[pattern];
         let expected = Closure(patterns, arena.alloc(Located::new(0, 0, 6, 8, Num("42"))));
-        let actual = parse_expr_with(&arena, "\\a -> 42");
+        let actual = save_parse_expr_with(&arena, "\\a -> 42");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1664,7 +1849,7 @@ mod test_parse {
         let pattern = Located::new(0, 0, 1, 2, Pattern::Underscore(""));
         let patterns = &[pattern];
         let expected = Closure(patterns, arena.alloc(Located::new(0, 0, 6, 8, Num("42"))));
-        let actual = parse_expr_with(&arena, "\\_ -> 42");
+        let actual = save_parse_expr_with(&arena, "\\_ -> 42");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1687,7 +1872,7 @@ mod test_parse {
         let expr = Located::new(0, 0, 15, 17, Expr::Num("42"));
 
         let expected = Closure(patterns, &expr);
-        let actual = parse_expr_with(&arena, "\\the_answer -> 42");
+        let actual = save_parse_expr_with(&arena, "\\the_answer -> 42");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1699,7 +1884,7 @@ mod test_parse {
         let arg2 = Located::new(0, 0, 4, 5, Identifier("b"));
         let patterns = &[arg1, arg2];
         let expected = Closure(patterns, arena.alloc(Located::new(0, 0, 9, 11, Num("42"))));
-        let actual = parse_expr_with(&arena, "\\a, b -> 42");
+        let actual = save_parse_expr_with(&arena, "\\a, b -> 42");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1715,7 +1900,7 @@ mod test_parse {
             arena.alloc(patterns),
             arena.alloc(Located::new(0, 0, 12, 14, Num("42"))),
         );
-        let actual = parse_expr_with(&arena, "\\a, b, c -> 42");
+        let actual = save_parse_expr_with(&arena, "\\a, b, c -> 42");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1730,7 +1915,7 @@ mod test_parse {
             arena.alloc(patterns),
             arena.alloc(Located::new(0, 0, 13, 15, Num("42"))),
         );
-        let actual = parse_expr_with(&arena, "\\_, _name -> 42");
+        let actual = save_parse_expr_with(&arena, "\\_, _name -> 42");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2624,7 +2809,7 @@ mod test_parse {
         };
         let loc_cond = Located::new(0, 0, 5, 6, var);
         let expected = Expr::When(arena.alloc(loc_cond), branches);
-        let actual = parse_expr_with(
+        let actual = save_parse_expr_with(
             &arena,
             indoc!(
                 r#"
@@ -2668,7 +2853,7 @@ mod test_parse {
         };
         let loc_cond = Located::new(0, 0, 5, 6, var);
         let expected = Expr::When(arena.alloc(loc_cond), branches);
-        let actual = parse_expr_with(
+        let actual = save_parse_expr_with(
             &arena,
             indoc!(
                 r#"
@@ -2712,7 +2897,7 @@ mod test_parse {
         };
         let loc_cond = Located::new(0, 0, 5, 6, var);
         let expected = Expr::When(arena.alloc(loc_cond), branches);
-        let actual = parse_expr_with(
+        let actual = save_parse_expr_with(
             &arena,
             indoc!(
                 r#"
@@ -2772,7 +2957,7 @@ mod test_parse {
         };
         let loc_cond = Located::new(0, 0, 5, 6, var);
         let expected = Expr::When(arena.alloc(loc_cond), branches);
-        let actual = parse_expr_with(
+        let actual = save_parse_expr_with(
             &arena,
             indoc!(
                 r#"
@@ -2858,7 +3043,7 @@ mod test_parse {
         };
         let loc_cond = Located::new(0, 0, 5, 6, var);
         let expected = Expr::When(arena.alloc(loc_cond), branches);
-        let actual = parse_expr_with(
+        let actual = save_parse_expr_with(
             &arena,
             indoc!(
                 r#"
@@ -2910,7 +3095,7 @@ mod test_parse {
         let loc_cond = Located::new(0, 0, 6, 7, var);
         let when = Expr::When(arena.alloc(loc_cond), branches);
         let expected = Expr::ParensAround(&when);
-        let actual = parse_expr_with(
+        let actual = save_parse_expr_with(
             &arena,
             indoc!(
                 r#"
@@ -2965,7 +3150,7 @@ mod test_parse {
         };
         let loc_cond = Located::new(0, 0, 5, 6, var);
         let expected = Expr::When(arena.alloc(loc_cond), branches);
-        let actual = parse_expr_with(
+        let actual = save_parse_expr_with(
             &arena,
             indoc!(
                 r#"
@@ -3006,7 +3191,7 @@ mod test_parse {
         let when = Expr::When(arena.alloc(loc_cond), branches);
         let spaced = Expr::SpaceAfter(&when, &[Newline]);
         let expected = Expr::ParensAround(&spaced);
-        let actual = parse_expr_with(
+        let actual = save_parse_expr_with(
             &arena,
             indoc!(
                 r#"
@@ -3056,7 +3241,7 @@ mod test_parse {
         };
         let loc_cond = Located::new(0, 0, 5, 6, var);
         let expected = Expr::When(arena.alloc(loc_cond), branches);
-        let actual = parse_expr_with(
+        let actual = save_parse_expr_with(
             &arena,
             indoc!(
                 r#"
@@ -3874,7 +4059,7 @@ mod test_parse {
         };
         let loc_cond = Located::new(0, 0, 5, 6, var);
         let expected = Expr::When(arena.alloc(loc_cond), branches);
-        let actual = parse_expr_with(
+        let actual = save_parse_expr_with(
             &arena,
             indoc!(
                 r#"
@@ -3919,7 +4104,7 @@ mod test_parse {
         };
         let loc_cond = Located::new(0, 0, 5, 6, var);
         let expected = Expr::When(arena.alloc(loc_cond), branches);
-        let actual = parse_expr_with(
+        let actual = save_parse_expr_with(
             &arena,
             indoc!(
                 r#"
@@ -3937,7 +4122,7 @@ mod test_parse {
     fn pattern_with_space_in_parens() {
         // https://github.com/rtfeldman/roc/issues/929
         let arena = Bump::new();
-        let actual = parse_expr_with(
+        let actual = save_parse_expr_with(
             &arena,
             indoc!(
                 r#"
