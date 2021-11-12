@@ -305,6 +305,7 @@ pub enum EPackageEntry<'a> {
 pub enum EEffects<'a> {
     Space(BadInputError, Row, Col),
     Effects(Row, Col),
+    Open(Row, Col),
     IndentEffects(Row, Col),
     ListStart(Row, Col),
     ListEnd(Row, Col),

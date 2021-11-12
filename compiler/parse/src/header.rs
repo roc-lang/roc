@@ -227,7 +227,7 @@ impl<'a> ExposesEntry<'a, &'a str> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum TypedIdent<'a> {
     /// e.g.
     ///

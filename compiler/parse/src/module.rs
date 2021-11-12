@@ -697,14 +697,16 @@ fn effects<'a>() -> impl Parser<'a, Effects<'a>, EEffects<'a>> {
             space0_e(min_indent, EEffects::Space, EEffects::IndentListStart)
         )
         .parse(arena, state)?;
-        let (_, entries, state) = collection_e!(
+        let (_, entries, state) = collection_trailing_sep_e!(
             word1(b'{', EEffects::ListStart),
             specialize(EEffects::TypedIdent, loc!(typed_ident())),
             word1(b',', EEffects::ListEnd),
             word1(b'}', EEffects::ListEnd),
             min_indent,
+            EEffects::Open,
             EEffects::Space,
-            EEffects::IndentListEnd
+            EEffects::IndentListEnd,
+            TypedIdent::SpaceBefore
         )
         .parse(arena, state)?;
 
@@ -716,7 +718,7 @@ fn effects<'a>() -> impl Parser<'a, Effects<'a>, EEffects<'a>> {
                 spaces_after_type_name,
                 effect_shortname: type_shortname,
                 effect_type_name: type_name,
-                entries: entries.into_bump_slice(),
+                entries: entries.items,
             },
             state,
         ))
