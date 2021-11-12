@@ -23,7 +23,9 @@ mod test_parse {
     use roc_parse::ast::Pattern::{self, *};
     use roc_parse::ast::StrLiteral::{self, *};
     use roc_parse::ast::StrSegment::*;
-    use roc_parse::ast::{self, Def, EscapedChar, Spaceable, TypeAnnotation, WhenBranch};
+    use roc_parse::ast::{
+        self, Collection, Def, EscapedChar, Spaceable, TypeAnnotation, WhenBranch,
+    };
     use roc_parse::header::{
         AppHeader, Effects, ExposesEntry, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
         PackageName, PackageOrPath, PlatformHeader, PlatformRequires, PlatformRigid, To,
@@ -2281,9 +2283,8 @@ mod test_parse {
                             6,
                             TypeAnnotation::SpaceBefore(
                                 &TypeAnnotation::Record {
-                                    fields: &[],
+                                    fields: Collection::empty(),
                                     ext: None,
-                                    final_comments: &[],
                                 },
                                 &[Newline],
                             ),
@@ -2320,9 +2321,8 @@ mod test_parse {
                             6,
                             TypeAnnotation::SpaceBefore(
                                 &TypeAnnotation::Record {
-                                    fields: &[],
+                                    fields: Collection::empty(),
                                     ext: None,
-                                    final_comments: &[],
                                 },
                                 &[LineComment(" comment")],
                             ),
@@ -3091,7 +3091,7 @@ mod test_parse {
     #[test]
     fn empty_app_header() {
         let arena = Bump::new();
-        let packages = Vec::new_in(&arena);
+        let packages = Collection::empty();
         let imports = Vec::new_in(&arena);
         let provides = Vec::new_in(&arena);
         let module_name = StrLiteral::PlainLine("test-app");
@@ -3131,7 +3131,7 @@ mod test_parse {
         use PackageOrPath::Path;
 
         let arena = Bump::new();
-        let packages = Vec::new_in(&arena);
+        let packages = Collection::empty();
         let imports = Vec::new_in(&arena);
         let provides = Vec::new_in(&arena);
         let module_name = StrLiteral::PlainLine("test-app");
@@ -3180,7 +3180,7 @@ mod test_parse {
         };
         let loc_pkg_entry = Located::new(1, 1, 15, 33, pkg_entry);
         let arena = Bump::new();
-        let packages = bumpalo::vec![in &arena; loc_pkg_entry];
+        let packages = Collection::with_items(arena.alloc([loc_pkg_entry]));
         let import = ImportsEntry::Package("foo", ModuleName::new("Bar.Baz"), Vec::new_in(&arena));
         let loc_import = Located::new(2, 2, 14, 25, import);
         let imports = bumpalo::vec![in &arena; loc_import];
@@ -3236,7 +3236,7 @@ mod test_parse {
         };
         let loc_pkg_entry = Located::new(1, 1, 15, 33, pkg_entry);
         let arena = Bump::new();
-        let packages = bumpalo::vec![in &arena; loc_pkg_entry];
+        let packages = Collection::with_items(arena.alloc([loc_pkg_entry]));
         let import = ImportsEntry::Package("foo", ModuleName::new("Bar.Baz"), Vec::new_in(&arena));
         let loc_import = Located::new(2, 2, 14, 25, import);
         let imports = bumpalo::vec![in &arena; loc_import];
@@ -3309,9 +3309,8 @@ mod test_parse {
                         ann: Located::at(
                             region2,
                             TypeAnnotation::Record {
-                                fields: &[],
+                                fields: Collection::empty(),
                                 ext: None,
-                                final_comments: &[],
                             },
                         ),
                     },
@@ -3324,7 +3323,7 @@ mod test_parse {
             name: Located::new(0, 0, 9, 23, pkg_name),
             requires,
             exposes: Vec::new_in(&arena),
-            packages: Vec::new_in(&arena),
+            packages: Collection::empty(),
             imports: Vec::new_in(&arena),
             provides: Vec::new_in(&arena),
             effects,
@@ -3367,7 +3366,7 @@ mod test_parse {
         };
         let loc_pkg_entry = Located::new(3, 3, 15, 27, pkg_entry);
         let arena = Bump::new();
-        let packages = bumpalo::vec![in &arena; loc_pkg_entry];
+        let packages = Collection::with_items(arena.alloc([loc_pkg_entry]));
         let imports = Vec::new_in(&arena);
         let provide_entry = Located::new(5, 5, 15, 26, Exposed("mainForHost"));
         let provides = bumpalo::vec![in &arena; provide_entry];
@@ -3395,9 +3394,8 @@ mod test_parse {
                         ann: Located::at(
                             region2,
                             TypeAnnotation::Record {
-                                fields: &[],
+                                fields: Collection::empty(),
                                 ext: None,
-                                final_comments: &[],
                             },
                         ),
                     },

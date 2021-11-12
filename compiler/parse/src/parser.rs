@@ -1300,7 +1300,12 @@ macro_rules! collection_trailing_sep_e {
                     }
                 }
 
-                Ok((MadeProgress, (parsed_elems, final_comments), state))
+                let collection = $crate::ast::Collection {
+                    items: parsed_elems.into_bump_slice(),
+                    final_comments,
+                };
+
+                Ok((MadeProgress, collection, state))
             }
         )
     };
