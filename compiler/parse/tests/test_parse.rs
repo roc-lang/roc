@@ -42,11 +42,19 @@ mod test_parse {
             expr => {
                 $($expr_test_name:ident),*
             }
+            header => {
+                $($header_test_name:ident),*
+            }
+            module => {
+                $($module_test_name:ident),*
+            }
         ) => {
             #[test]
             fn no_extra_snapshot_test_files() {
                 let tests = &[
-                    $(concat!(stringify!($expr_test_name), ".expr")),*
+                    $(concat!(stringify!($expr_test_name), ".expr")),*,
+                    $(concat!(stringify!($header_test_name), ".header")),*,
+                    $(concat!(stringify!($module_test_name), ".module")),*,
                 ].iter().map(|t| *t).collect::<std::collections::HashSet<&str>>();
 
                 let mut base = std::path::PathBuf::from("tests");
@@ -67,7 +75,36 @@ mod test_parse {
             $(
                 #[test]
                 fn $expr_test_name() {
-                    snapshot_expr_test(stringify!($expr_test_name));
+                    snapshot_test(stringify!($expr_test_name), "expr", |input| {
+                        let arena = Bump::new();
+                        let actual_ast = parse_expr_with(&arena, input.trim()).unwrap();
+                        format!("{:#?}\n", actual_ast)
+                    });
+                }
+            )*
+
+            $(
+                #[test]
+                fn $header_test_name() {
+                    snapshot_test(stringify!($header_test_name), "header", |input| {
+                        let arena = Bump::new();
+                        let actual_ast = roc_parse::module::parse_header(&arena, State::new(input.as_bytes()))
+                            .map(|tuple| tuple.0).unwrap();
+                        format!("{:#?}\n", actual_ast)
+                    });
+                }
+            )*
+
+            $(
+                #[test]
+                fn $module_test_name() {
+                    snapshot_test(stringify!($module_test_name), "module", |input| {
+                        let arena = Bump::new();
+                        let actual_ast = module_defs()
+                            .parse(&arena, State::new(input.as_bytes()))
+                            .map(|tuple| tuple.1).unwrap();
+                        format!("{:#?}\n", actual_ast)
+                    });
                 }
             )*
         };
@@ -195,10 +232,22 @@ mod test_parse {
             zero_float,
             zero_int
         }
+        header => {
+            empty_app_header,
+            empty_interface_header,
+            empty_platform_header,
+            full_app_header,
+            full_app_header_trailing_commas,
+            minimal_app_header,
+            nested_module,
+            nonempty_platform_header
+        }
+        module => {
+            standalone_module_defs
+        }
     }
 
-    fn snapshot_expr_test(name: &str) {
-        let ty = "expr";
+    fn snapshot_test(name: &str, ty: &str, func: impl Fn(&str) -> String) {
         let mut parent = std::path::PathBuf::from("tests");
         parent.push("snapshots");
         parent.push("pass");
@@ -208,9 +257,7 @@ mod test_parse {
         let input = std::fs::read_to_string(&input_path).unwrap();
         let expected_result = std::fs::read_to_string(&result_path).unwrap();
 
-        let arena = Bump::new();
-        let actual_ast = parse_expr_with(&arena, input.trim()).unwrap();
-        let actual_result = format!("{:#?}\n", actual_ast);
+        let actual_result = func(&input);
 
         if std::env::var("ROC_PARSER_SNAPSHOT_TEST_OVERWRITE").is_ok() {
             std::fs::write(&result_path, actual_result).unwrap();
@@ -788,467 +835,6 @@ mod test_parse {
     //     );
     // }
 
-    // MODULE
-
-    #[test]
-    fn empty_app_header() {
-        let arena = Bump::new();
-        let packages = Collection::empty();
-        let imports = Collection::empty();
-        let provides = Collection::empty();
-        let module_name = StrLiteral::PlainLine("test-app");
-        let header = AppHeader {
-            name: Located::new(0, 0, 4, 14, module_name),
-            packages,
-            imports,
-            provides,
-            to: Located::new(0, 0, 53, 57, To::ExistingPackage("blah")),
-            before_header: &[],
-            after_app_keyword: &[],
-            before_packages: &[],
-            after_packages: &[],
-            before_imports: &[],
-            after_imports: &[],
-            before_provides: &[],
-            after_provides: &[],
-            before_to: &[],
-            after_to: &[],
-        };
-
-        let expected = roc_parse::ast::Module::App { header };
-
-        let src = indoc!(
-            r#"
-                app "test-app" packages {} imports [] provides [] to blah
-            "#
-        );
-        let actual = roc_parse::module::parse_header(&arena, State::new(src.as_bytes()))
-            .map(|tuple| tuple.0);
-
-        assert_eq!(Ok(expected), actual);
-    }
-
-    #[test]
-    fn minimal_app_header() {
-        use PackageOrPath::Path;
-
-        let arena = Bump::new();
-        let packages = Collection::empty();
-        let imports = Collection::empty();
-        let provides = Collection::empty();
-        let module_name = StrLiteral::PlainLine("test-app");
-        let header = AppHeader {
-            before_header: &[],
-            name: Located::new(0, 0, 4, 14, module_name),
-            packages,
-            imports,
-            provides,
-            to: Located::new(0, 0, 30, 38, To::NewPackage(Path(PlainLine("./blah")))),
-            after_app_keyword: &[],
-            before_packages: &[],
-            after_packages: &[],
-            before_imports: &[],
-            after_imports: &[],
-            before_provides: &[],
-            after_provides: &[],
-            before_to: &[],
-            after_to: &[],
-        };
-
-        let expected = roc_parse::ast::Module::App { header };
-
-        let src = indoc!(
-            r#"
-                app "test-app" provides [] to "./blah"
-            "#
-        );
-
-        let actual = roc_parse::module::parse_header(&arena, State::new(src.as_bytes()))
-            .map(|tuple| tuple.0);
-
-        assert_eq!(Ok(expected), actual);
-    }
-
-    #[test]
-    fn full_app_header() {
-        use ExposesEntry::Exposed;
-        use PackageOrPath::Path;
-
-        let newlines = &[Newline];
-        let pkg_entry = PackageEntry::Entry {
-            shorthand: "base",
-            spaces_after_shorthand: &[],
-            package_or_path: Located::new(1, 1, 21, 33, Path(PlainLine("./platform"))),
-        };
-        let loc_pkg_entry = Located::new(1, 1, 15, 33, pkg_entry);
-        let arena = Bump::new();
-        let packages = Collection::with_items(arena.alloc([loc_pkg_entry]));
-        let import = ImportsEntry::Package("foo", ModuleName::new("Bar.Baz"), Collection::empty());
-        let loc_import = Located::new(2, 2, 14, 25, import);
-        let imports = Collection::with_items(arena.alloc([loc_import]));
-        let provide_entry = Located::new(3, 3, 15, 24, Exposed("quicksort"));
-        let provides = Collection::with_items(arena.alloc([provide_entry]));
-        let module_name = StrLiteral::PlainLine("quicksort");
-
-        let header = AppHeader {
-            before_header: &[],
-            name: Located::new(0, 0, 4, 15, module_name),
-            packages,
-            imports,
-            provides,
-            to: Located::new(3, 3, 30, 34, To::ExistingPackage("base")),
-            after_app_keyword: &[],
-            before_packages: newlines,
-            after_packages: &[],
-            before_imports: newlines,
-            after_imports: &[],
-            before_provides: newlines,
-            after_provides: &[],
-            before_to: &[],
-            after_to: &[],
-        };
-
-        let expected = roc_parse::ast::Module::App { header };
-
-        let src = indoc!(
-            r#"
-                app "quicksort"
-                    packages { base: "./platform" }
-                    imports [ foo.Bar.Baz ]
-                    provides [ quicksort ] to base
-            "#
-        );
-
-        let actual = roc_parse::module::parse_header(&arena, State::new(src.as_bytes()))
-            .map(|tuple| tuple.0);
-
-        assert_eq!(Ok(expected), actual);
-    }
-
-    #[test]
-    fn full_app_header_trailing_commas() {
-        use ExposesEntry::Exposed;
-        use PackageOrPath::Path;
-
-        let newlines = &[Newline];
-        let pkg_entry = PackageEntry::Entry {
-            shorthand: "base",
-            spaces_after_shorthand: &[],
-            package_or_path: Located::new(1, 1, 21, 33, Path(PlainLine("./platform"))),
-        };
-        let loc_pkg_entry = Located::new(1, 1, 15, 33, pkg_entry);
-        let arena = Bump::new();
-        let packages = Collection::with_items(arena.alloc([loc_pkg_entry]));
-        let import = ImportsEntry::Package(
-            "foo",
-            ModuleName::new("Bar"),
-            Collection::with_items_and_comments(
-                &arena,
-                arena.alloc([
-                    Located::new(
-                        3,
-                        3,
-                        8,
-                        11,
-                        ExposesEntry::SpaceBefore(
-                            arena.alloc(ExposesEntry::Exposed("Baz")),
-                            arena.alloc([Newline]),
-                        ),
-                    ),
-                    Located::new(
-                        4,
-                        4,
-                        8,
-                        17,
-                        ExposesEntry::SpaceBefore(
-                            arena.alloc(ExposesEntry::Exposed("FourtyTwo")),
-                            arena.alloc([Newline]),
-                        ),
-                    ),
-                ]),
-                arena.alloc([Newline, LineComment(" I'm a happy comment")]),
-            ),
-        );
-        let loc_import = Located::new(2, 6, 14, 5, import);
-        let imports = Collection::with_items(arena.alloc([loc_import]));
-        let provide_entry = Located::new(7, 7, 15, 24, Exposed("quicksort"));
-        let provides = Collection::with_items(arena.alloc([provide_entry]));
-        let module_name = StrLiteral::PlainLine("quicksort");
-
-        let header = AppHeader {
-            before_header: &[],
-            name: Located::new(0, 0, 4, 15, module_name),
-            packages,
-            imports,
-            provides,
-            to: Located::new(7, 7, 31, 35, To::ExistingPackage("base")),
-            after_app_keyword: &[],
-            before_packages: newlines,
-            after_packages: &[],
-            before_imports: newlines,
-            after_imports: &[],
-            before_provides: newlines,
-            after_provides: &[],
-            before_to: &[],
-            after_to: &[],
-        };
-
-        let expected = roc_parse::ast::Module::App { header };
-
-        let src = indoc!(
-            r#"
-                app "quicksort"
-                    packages { base: "./platform", }
-                    imports [ foo.Bar.{
-                        Baz,
-                        FourtyTwo,
-                        # I'm a happy comment
-                    } ]
-                    provides [ quicksort, ] to base
-            "#
-        );
-
-        let actual = roc_parse::module::parse_header(&arena, State::new(src.as_bytes()))
-            .map(|tuple| tuple.0);
-
-        assert_eq!(Ok(expected), actual);
-    }
-
-    #[test]
-    fn empty_platform_header() {
-        let pkg_name = PackageName {
-            account: "rtfeldman",
-            pkg: "blah",
-        };
-        let arena = Bump::new();
-        let effects = Effects {
-            effect_type_name: "Blah",
-            effect_shortname: "fx",
-            entries: &[],
-            spaces_before_effects_keyword: &[],
-            spaces_after_effects_keyword: &[],
-            spaces_after_type_name: &[],
-        };
-
-        let requires = {
-            let region1 = Region::new(0, 0, 38, 47);
-            let region2 = Region::new(0, 0, 45, 47);
-
-            PlatformRequires {
-                rigids: Collection::empty(),
-                signature: Located::at(
-                    region1,
-                    TypedIdent::Entry {
-                        ident: Located::new(0, 0, 38, 42, "main"),
-                        spaces_before_colon: &[],
-                        ann: Located::at(
-                            region2,
-                            TypeAnnotation::Record {
-                                fields: Collection::empty(),
-                                ext: None,
-                            },
-                        ),
-                    },
-                ),
-            }
-        };
-
-        let header = PlatformHeader {
-            before_header: &[],
-            name: Located::new(0, 0, 9, 23, pkg_name),
-            requires,
-            exposes: Collection::empty(),
-            packages: Collection::empty(),
-            imports: Collection::empty(),
-            provides: Collection::empty(),
-            effects,
-            after_platform_keyword: &[],
-            before_requires: &[],
-            after_requires: &[],
-            before_exposes: &[],
-            after_exposes: &[],
-            before_packages: &[],
-            after_packages: &[],
-            before_imports: &[],
-            after_imports: &[],
-            before_provides: &[],
-            after_provides: &[],
-        };
-
-        let expected = roc_parse::ast::Module::Platform { header };
-
-        let src = "platform rtfeldman/blah requires {} { main : {} } exposes [] packages {} imports [] provides [] effects fx.Blah {}";
-        let actual = roc_parse::module::parse_header(&arena, State::new(src.as_bytes()))
-            .map(|tuple| tuple.0);
-
-        assert_eq!(Ok(expected), actual);
-    }
-
-    #[test]
-    fn nonempty_platform_header() {
-        use ExposesEntry::Exposed;
-        use PackageOrPath::Path;
-
-        let newlines = &[Newline];
-        let pkg_name = PackageName {
-            account: "foo",
-            pkg: "barbaz",
-        };
-        let pkg_entry = PackageEntry::Entry {
-            shorthand: "foo",
-            spaces_after_shorthand: &[],
-            package_or_path: Located::new(3, 3, 20, 27, Path(PlainLine("./foo"))),
-        };
-        let loc_pkg_entry = Located::new(3, 3, 15, 27, pkg_entry);
-        let arena = Bump::new();
-        let packages = Collection::with_items(arena.alloc([loc_pkg_entry]));
-        let imports = Collection::empty();
-        let provide_entry = Located::new(5, 5, 15, 26, Exposed("mainForHost"));
-        let provides = Collection::with_items(arena.alloc([provide_entry]));
-        let effects = Effects {
-            effect_type_name: "Effect",
-            effect_shortname: "fx",
-            entries: &[],
-            spaces_before_effects_keyword: newlines,
-            spaces_after_effects_keyword: &[],
-            spaces_after_type_name: &[],
-        };
-
-        let requires = {
-            let region1 = Region::new(1, 1, 30, 39);
-            let region2 = Region::new(1, 1, 37, 39);
-            let region3 = Region::new(1, 1, 14, 26);
-
-            PlatformRequires {
-                rigids: Collection::with_items(arena.alloc([Located::at(
-                    region3,
-                    PlatformRigid::Entry {
-                        alias: "Model",
-                        rigid: "model",
-                    },
-                )])),
-                signature: Located::at(
-                    region1,
-                    TypedIdent::Entry {
-                        ident: Located::new(1, 1, 30, 34, "main"),
-                        spaces_before_colon: &[],
-                        ann: Located::at(
-                            region2,
-                            TypeAnnotation::Record {
-                                fields: Collection::empty(),
-                                ext: None,
-                            },
-                        ),
-                    },
-                ),
-            }
-        };
-
-        let header = PlatformHeader {
-            before_header: &[],
-            name: Located::new(0, 0, 9, 19, pkg_name),
-            requires,
-            exposes: Collection::empty(),
-            packages,
-            imports,
-            provides,
-            effects,
-            after_platform_keyword: &[],
-            before_requires: newlines,
-            after_requires: &[],
-            before_exposes: newlines,
-            after_exposes: &[],
-            before_packages: newlines,
-            after_packages: &[],
-            before_imports: newlines,
-            after_imports: &[],
-            before_provides: newlines,
-            after_provides: &[],
-        };
-
-        let expected = roc_parse::ast::Module::Platform { header };
-
-        let src = indoc!(
-            r#"
-                platform foo/barbaz
-                    requires {model=>Model} { main : {} }
-                    exposes []
-                    packages { foo: "./foo" }
-                    imports []
-                    provides [ mainForHost ]
-                    effects fx.Effect {}
-            "#
-        );
-        let actual = roc_parse::module::parse_header(&arena, State::new(src.as_bytes()))
-            .map(|tuple| tuple.0);
-
-        assert_eq!(Ok(expected), actual);
-    }
-
-    #[test]
-    fn empty_interface_header() {
-        let arena = Bump::new();
-        let exposes = Collection::empty();
-        let imports = Collection::empty();
-        let module_name = ModuleName::new("Foo");
-        let header = InterfaceHeader {
-            before_header: &[],
-            name: Located::new(0, 0, 10, 13, module_name),
-            exposes,
-            imports,
-
-            after_interface_keyword: &[],
-            before_exposes: &[],
-            after_exposes: &[],
-            before_imports: &[],
-            after_imports: &[],
-        };
-
-        let expected = roc_parse::ast::Module::Interface { header };
-
-        let src = indoc!(
-            r#"
-                interface Foo exposes [] imports []
-            "#
-        );
-        let actual = roc_parse::module::parse_header(&arena, State::new(src.as_bytes()))
-            .map(|tuple| tuple.0);
-
-        assert_eq!(Ok(expected), actual);
-    }
-
-    #[test]
-    fn nested_module() {
-        let arena = Bump::new();
-        let exposes = Collection::empty();
-        let imports = Collection::empty();
-        let module_name = ModuleName::new("Foo.Bar.Baz");
-        let header = InterfaceHeader {
-            before_header: &[],
-            name: Located::new(0, 0, 10, 21, module_name),
-            exposes,
-            imports,
-
-            after_interface_keyword: &[],
-            before_exposes: &[],
-            after_exposes: &[],
-            before_imports: &[],
-            after_imports: &[],
-        };
-
-        let expected = roc_parse::ast::Module::Interface { header };
-
-        let src = indoc!(
-            r#"
-                interface Foo.Bar.Baz exposes [] imports []
-            "#
-        );
-        let actual = roc_parse::module::parse_header(&arena, State::new(src.as_bytes()))
-            .map(|tuple| tuple.0);
-
-        assert_eq!(Ok(expected), actual);
-    }
-
     #[test]
     fn repro_keyword_bug() {
         // Reproducing this bug requires a bizarre set of things to all be true:
@@ -1278,64 +864,6 @@ mod test_parse {
         let occurrences = format!("{:?}", actual).split("isTest").count() - 1;
 
         assert_eq!(occurrences, 2);
-    }
-
-    #[test]
-    fn standalone_module_defs() {
-        use Def::*;
-
-        let arena = Bump::new();
-        let pattern1 = Identifier("foo");
-        let pattern2 = Identifier("bar");
-        let pattern3 = Identifier("baz");
-        let def1 = SpaceBefore(
-            arena.alloc(Body(
-                arena.alloc(Located::new(1, 1, 0, 3, pattern1)),
-                arena.alloc(Located::new(1, 1, 6, 7, Num("1"))),
-            )),
-            &[LineComment(" comment 1")],
-        );
-        let def2 = SpaceBefore(
-            arena.alloc(Body(
-                arena.alloc(Located::new(4, 4, 0, 3, pattern2)),
-                arena.alloc(Located::new(4, 4, 6, 10, Str(PlainLine("hi")))),
-            )),
-            &[Newline, Newline, LineComment(" comment 2")],
-        );
-        let def3 = SpaceAfter(
-            arena.alloc(SpaceBefore(
-                arena.alloc(Body(
-                    arena.alloc(Located::new(5, 5, 0, 3, pattern3)),
-                    arena.alloc(Located::new(5, 5, 6, 13, Str(PlainLine("stuff")))),
-                )),
-                &[Newline],
-            )),
-            &[Newline, LineComment(" comment n")],
-        );
-
-        let expected = bumpalo::vec![in &arena;
-            Located::new(1,1, 0, 7, def1),
-            Located::new(4,4, 0, 10, def2),
-            Located::new(5,5, 0, 13, def3),
-        ];
-
-        let src = indoc!(
-            r#"
-                # comment 1
-                foo = 1
-
-                # comment 2
-                bar = "hi"
-                baz = "stuff"
-                # comment n
-            "#
-        );
-
-        let actual = module_defs()
-            .parse(&arena, State::new(src.as_bytes()))
-            .map(|tuple| tuple.1);
-
-        assert_eq!(Ok(expected), actual);
     }
 
     #[test]
