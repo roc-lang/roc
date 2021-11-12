@@ -3993,25 +3993,79 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
 }
 
 fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let arg_var = var_store.fresh();
-    let bool_var = var_store.fresh();
+    let ret_var = var_store.fresh();
+    let result_var = var_store.fresh();
 
-    // placeholder for actual implementation
-    let body = RunLowLevel {
-        op: LowLevel::Eq,
-        args: vec![
-            (arg_var, Var(Symbol::ARG_1)),
-            (arg_var, Var(Symbol::ARG_1)),
-        ],
-        ret_var: bool_var,
+    let mut branches = vec![];
+
+    {
+        // ok branch
+        let tag_name = TagName::Global("Ok".into());
+
+        let pattern = Pattern::AppliedTag {
+            whole_var: result_var,
+            ext_var: var_store.fresh(),
+            tag_name,
+            arguments: vec![(var_store.fresh(), no_region(Pattern::Underscore))],
+        };
+
+        let true_expr = Tag {
+            variant_var: var_store.fresh(),
+            ext_var: var_store.fresh(),
+            name: TagName::Global("True".into()),
+            arguments: vec![],
+        };
+
+        let branch = WhenBranch {
+            patterns: vec![no_region(pattern)],
+            value: no_region(true_expr),
+            guard: None,
+        };
+
+        branches.push(branch);
+    }
+
+    {
+        // err branch
+        let tag_name = TagName::Global("Err".into());
+
+        let pattern = Pattern::AppliedTag {
+            whole_var: result_var,
+            ext_var: var_store.fresh(),
+            tag_name,
+            arguments: vec![(var_store.fresh(), no_region(Pattern::Underscore))],
+        };
+
+        let false_expr = Tag {
+            variant_var: var_store.fresh(),
+            ext_var: var_store.fresh(),
+            name: TagName::Global("False".into()),
+            arguments: vec![],
+        };
+
+        let branch = WhenBranch {
+            patterns: vec![no_region(pattern)],
+            value: no_region(false_expr),
+            guard: None,
+        };
+
+        branches.push(branch);
+    }
+
+    let body = When {
+        cond_var: result_var,
+        expr_var: ret_var,
+        region: Region::zero(),
+        loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
+        branches,
     };
 
     defn(
         symbol,
-        vec![(arg_var, Symbol::ARG_1)],
+        vec![(result_var, Symbol::ARG_1)],
         var_store,
         body,
-        bool_var,
+        ret_var,
     )
 }
 
