@@ -2173,10 +2173,10 @@ fn list_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EList<'a>
             allocated.push(parsed_elem);
         }
 
-        let expr = Expr::List {
+        let expr = Expr::List(Collection {
             items: allocated.into_bump_slice(),
             final_comments: elements.final_comments,
-        };
+        });
 
         Ok((MadeProgress, expr, state))
     }

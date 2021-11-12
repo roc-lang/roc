@@ -41,7 +41,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
             // These expressions always have newlines
             Defs(_, _) | When(_, _) => true,
 
-            List { items, .. } => items.iter().any(|loc_expr| loc_expr.is_multiline()),
+            List(items) => items.iter().any(|loc_expr| loc_expr.is_multiline()),
 
             Str(literal) => {
                 use roc_parse::ast::StrLiteral::*;
@@ -290,11 +290,8 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 fmt_if(buf, branches, final_else, self.is_multiline(), indent);
             }
             When(loc_condition, branches) => fmt_when(buf, loc_condition, branches, indent),
-            List {
-                items,
-                final_comments,
-            } => {
-                fmt_list(buf, items, final_comments, indent);
+            List(items) => {
+                fmt_list(buf, *items, indent);
             }
             BinOps(lefts, right) => fmt_bin_ops(buf, lefts, right, false, parens, indent),
             UnaryOp(sub_expr, unary_op) => {
@@ -411,12 +408,9 @@ fn fmt_bin_ops<'a>(
     loc_right_side.format_with_options(buf, apply_needs_parens, Newlines::Yes, indent);
 }
 
-fn fmt_list<'a>(
-    buf: &mut String<'a>,
-    loc_items: &[&Located<Expr<'a>>],
-    final_comments: &'a [CommentOrNewline<'a>],
-    indent: u16,
-) {
+fn fmt_list<'a>(buf: &mut String<'a>, items: Collection<'a, &Located<Expr<'a>>>, indent: u16) {
+    let loc_items = items.items;
+    let final_comments = items.final_comments;
     if loc_items.is_empty() && final_comments.iter().all(|c| c.is_newline()) {
         buf.push_str("[]");
     } else {

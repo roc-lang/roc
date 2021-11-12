@@ -132,7 +132,7 @@ pub fn expr_to_expr2<'a>(
 
         Str(literal) => flatten_str_literal(env, scope, literal),
 
-        List { items, .. } => {
+        List(items) => {
             let mut output = Output::default();
             let output_ref = &mut output;
 

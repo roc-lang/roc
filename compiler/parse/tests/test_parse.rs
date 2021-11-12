@@ -1166,10 +1166,7 @@ mod test_parse {
     #[test]
     fn empty_list() {
         let arena = Bump::new();
-        let expected = List {
-            items: &[],
-            final_comments: &[],
-        };
+        let expected = List(Collection::empty());
         let actual = parse_expr_with(&arena, "[]");
 
         assert_eq!(Ok(expected), actual);
@@ -1179,10 +1176,7 @@ mod test_parse {
     fn spaces_inside_empty_list() {
         // This is a regression test!
         let arena = Bump::new();
-        let expected = List {
-            items: &[],
-            final_comments: &[],
-        };
+        let expected = List(Collection::empty());
         let actual = parse_expr_with(&arena, "[  ]");
 
         assert_eq!(Ok(expected), actual);
@@ -1191,10 +1185,10 @@ mod test_parse {
     #[test]
     fn newline_inside_empty_list() {
         let arena = Bump::new();
-        let expected = List {
+        let expected = List(Collection {
             items: &[],
             final_comments: &[Newline],
-        };
+        });
         let actual = parse_expr_with(&arena, "[\n]");
 
         assert_eq!(Ok(expected), actual);
@@ -1203,10 +1197,10 @@ mod test_parse {
     #[test]
     fn comment_inside_empty_list() {
         let arena = Bump::new();
-        let expected = List {
+        let expected = List(Collection {
             items: &[],
             final_comments: &[LineComment("comment")],
-        };
+        });
         let actual = parse_expr_with(&arena, "[#comment\n]");
 
         assert_eq!(Ok(expected), actual);
@@ -1216,10 +1210,7 @@ mod test_parse {
     fn packed_singleton_list() {
         let arena = Bump::new();
         let items = &[&*arena.alloc(Located::new(0, 0, 1, 2, Num("1")))];
-        let expected = List {
-            items,
-            final_comments: &[],
-        };
+        let expected = List(Collection::with_items(items));
         let actual = parse_expr_with(&arena, "[1]");
 
         assert_eq!(Ok(expected), actual);
@@ -1229,10 +1220,7 @@ mod test_parse {
     fn spaced_singleton_list() {
         let arena = Bump::new();
         let items = &[&*arena.alloc(Located::new(0, 0, 2, 3, Num("1")))];
-        let expected = List {
-            items,
-            final_comments: &[],
-        };
+        let expected = List(Collection::with_items(items));
         let actual = parse_expr_with(&arena, "[ 1 ]");
 
         assert_eq!(Ok(expected), actual);
@@ -1247,10 +1235,7 @@ mod test_parse {
         ));
         let item = Expr::SpaceBefore(item, arena.alloc([Newline]));
         let items = [&*arena.alloc(Located::new(1, 1, 0, 1, item))];
-        let expected = List {
-            items: &items,
-            final_comments: &[],
-        };
+        let expected = List(Collection::with_items(&items));
         let actual = parse_expr_with(&arena, "[\n1\n]");
 
         assert_eq!(Ok(expected), actual);
@@ -2111,8 +2096,8 @@ mod test_parse {
         let apply = Expr::Apply(
             arena.alloc(Located::new(0, 0, 8, 17, var_list_map2)),
             bumpalo::vec![ in &arena;
-                &*arena.alloc(Located::new(0, 0, 18, 20, Expr::List{ items: &[], final_comments: &[] })),
-                &*arena.alloc(Located::new(0, 0, 21, 23, Expr::List{ items: &[], final_comments: &[] })),
+                &*arena.alloc(Located::new(0, 0, 18, 20, Expr::List(Collection::empty()))),
+                &*arena.alloc(Located::new(0, 0, 21, 23, Expr::List(Collection::empty()))),
             ]
             .into_bump_slice(),
             CalledVia::Space,

@@ -144,20 +144,17 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
 
             arena.alloc(Located { region, value })
         }
-        List {
-            items,
-            final_comments,
-        } => {
+        List(items) => {
             let mut new_items = Vec::with_capacity_in(items.len(), arena);
 
             for item in items.iter() {
                 new_items.push(desugar_expr(arena, item));
             }
             let new_items = new_items.into_bump_slice();
-            let value: Expr<'a> = List {
+            let value: Expr<'a> = List(Collection {
                 items: new_items,
-                final_comments,
-            };
+                final_comments: items.final_comments,
+            });
 
             arena.alloc(Located {
                 region: loc_expr.region,
