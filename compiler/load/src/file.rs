@@ -2630,7 +2630,7 @@ fn parse_header<'a>(
                 std::str::from_utf8_unchecked(&src_bytes[..chomped])
             };
 
-            let packages = header.packages.into_bump_slice();
+            let packages = header.packages.items;
 
             let info = HeaderInfo {
                 loc_name: Located {

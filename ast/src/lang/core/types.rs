@@ -395,7 +395,8 @@ pub fn to_type2<'a>(
             Type2::Variable(var)
         }
         Record { fields, ext, .. } => {
-            let field_types_map = can_assigned_fields(env, scope, references, fields, region);
+            let field_types_map =
+                can_assigned_fields(env, scope, references, &fields.items, region);
 
             let field_types = PoolVec::with_capacity(field_types_map.len() as u32, env.pool);
 

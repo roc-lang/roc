@@ -1,4 +1,4 @@
-use crate::ast::{CommentOrNewline, Spaceable, StrLiteral, TypeAnnotation};
+use crate::ast::{Collection, CommentOrNewline, Spaceable, StrLiteral, TypeAnnotation};
 use crate::blankspace::space0_e;
 use crate::ident::lowercase_ident;
 use crate::parser::Progress::{self, *};
@@ -81,7 +81,7 @@ pub enum To<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AppHeader<'a> {
     pub name: Loc<StrLiteral<'a>>,
-    pub packages: Vec<'a, Loc<PackageEntry<'a>>>,
+    pub packages: Collection<'a, Loc<PackageEntry<'a>>>,
     pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
     pub provides: Vec<'a, Loc<ExposesEntry<'a, &'a str>>>,
     pub to: Loc<To<'a>>,
@@ -146,7 +146,7 @@ pub struct PlatformHeader<'a> {
     pub name: Loc<PackageName<'a>>,
     pub requires: PlatformRequires<'a>,
     pub exposes: Vec<'a, Loc<ExposesEntry<'a, ModuleName<'a>>>>,
-    pub packages: Vec<'a, Loc<PackageEntry<'a>>>,
+    pub packages: Collection<'a, Loc<PackageEntry<'a>>>,
     pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
     pub provides: Vec<'a, Loc<ExposesEntry<'a, &'a str>>>,
     pub effects: Effects<'a>,
