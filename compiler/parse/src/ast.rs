@@ -266,11 +266,10 @@ pub enum TypeAnnotation<'a> {
 
     /// A tag union, e.g. `[
     TagUnion {
-        tags: &'a [Loc<Tag<'a>>],
         /// The row type variable in an open tag union, e.g. the `a` in `[ Foo, Bar ]a`.
         /// This is None if it's a closed tag union like `[ Foo, Bar]`.
         ext: Option<&'a Loc<TypeAnnotation<'a>>>,
-        final_comments: &'a [CommentOrNewline<'a>],
+        tags: Collection<'a, Loc<Tag<'a>>>,
     },
 
     /// The `*` type variable, e.g. in (List *)

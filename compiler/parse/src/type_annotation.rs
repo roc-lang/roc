@@ -40,11 +40,7 @@ fn tag_union_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, ET
         )))
         .parse(arena, state)?;
 
-        let result = TypeAnnotation::TagUnion {
-            tags: tags.items,
-            ext,
-            final_comments: tags.final_comments,
-        };
+        let result = TypeAnnotation::TagUnion { tags, ext };
 
         Ok((MadeProgress, result, state))
     }
