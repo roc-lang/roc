@@ -270,7 +270,7 @@ fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>> {
         let (_, ((before_imports, after_imports), imports), state) =
             specialize(EHeader::Imports, imports()).parse(arena, state)?;
 
-        let (_, ((before_provides, after_provides), (provides, provides_final_comments)), state) =
+        let (_, ((before_provides, after_provides), provides), state) =
             specialize(EHeader::Provides, provides_without_to()).parse(arena, state)?;
 
         let (_, effects, state) = specialize(EHeader::Effects, effects()).parse(arena, state)?;
@@ -303,7 +303,7 @@ fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>> {
 
 #[derive(Debug)]
 struct ProvidesTo<'a> {
-    entries: Vec<'a, Located<ExposesEntry<'a, &'a str>>>,
+    entries: Collection<'a, Located<ExposesEntry<'a, &'a str>>>,
     to: Located<To<'a>>,
 
     before_provides_keyword: &'a [CommentOrNewline<'a>],
@@ -342,7 +342,7 @@ fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>, EProvides<'a>> {
             )
         ),
         |(
-            ((before_provides_keyword, after_provides_keyword), (entries, final_comments)),
+            ((before_provides_keyword, after_provides_keyword), entries),
             ((before_to_keyword, after_to_keyword), to),
         )| {
             ProvidesTo {
@@ -362,10 +362,7 @@ fn provides_without_to<'a>() -> impl Parser<
     'a,
     (
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-        (
-            Vec<'a, Located<ExposesEntry<'a, &'a str>>>,
-            &'a [CommentOrNewline<'a>],
-        ),
+        Collection<'a, Located<ExposesEntry<'a, &'a str>>>,
     ),
     EProvides<'a>,
 > {

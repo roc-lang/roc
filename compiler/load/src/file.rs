@@ -2642,7 +2642,7 @@ fn parse_header<'a>(
                 opt_shorthand,
                 header_src,
                 packages,
-                exposes: header.provides.into_bump_slice(),
+                exposes: header.provides.items,
                 imports: header.imports.items,
                 to_platform: Some(header.to.value.clone()),
             };
@@ -3410,7 +3410,7 @@ fn fabricate_pkg_config_module<'a>(
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
     let provides: &'a [Located<ExposesEntry<'a, &'a str>>] =
-        header.provides.clone().into_bump_slice();
+        header.provides.items;
 
     let info = PlatformHeaderInfo {
         filename,

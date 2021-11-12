@@ -3078,7 +3078,7 @@ mod test_parse {
         let arena = Bump::new();
         let packages = Collection::empty();
         let imports = Collection::empty();
-        let provides = Vec::new_in(&arena);
+        let provides = Collection::empty();
         let module_name = StrLiteral::PlainLine("test-app");
         let header = AppHeader {
             name: Located::new(0, 0, 4, 14, module_name),
@@ -3118,7 +3118,7 @@ mod test_parse {
         let arena = Bump::new();
         let packages = Collection::empty();
         let imports = Collection::empty();
-        let provides = Vec::new_in(&arena);
+        let provides = Collection::empty();
         let module_name = StrLiteral::PlainLine("test-app");
         let header = AppHeader {
             before_header: &[],
@@ -3170,7 +3170,7 @@ mod test_parse {
         let loc_import = Located::new(2, 2, 14, 25, import);
         let imports = Collection::with_items(arena.alloc([loc_import]));
         let provide_entry = Located::new(3, 3, 15, 24, Exposed("quicksort"));
-        let provides = bumpalo::vec![in &arena; provide_entry];
+        let provides = Collection::with_items(arena.alloc([provide_entry]));
         let module_name = StrLiteral::PlainLine("quicksort");
 
         let header = AppHeader {
@@ -3255,7 +3255,7 @@ mod test_parse {
         let loc_import = Located::new(2, 6, 14, 5, import);
         let imports = Collection::with_items(arena.alloc([loc_import]));
         let provide_entry = Located::new(7, 7, 15, 24, Exposed("quicksort"));
-        let provides = bumpalo::vec![in &arena; provide_entry];
+        let provides = Collection::with_items(arena.alloc([provide_entry]));
         let module_name = StrLiteral::PlainLine("quicksort");
 
         let header = AppHeader {
@@ -3343,7 +3343,7 @@ mod test_parse {
             exposes: Vec::new_in(&arena),
             packages: Collection::empty(),
             imports: Collection::empty(),
-            provides: Vec::new_in(&arena),
+            provides: Collection::empty(),
             effects,
             after_platform_keyword: &[],
             before_requires: &[],
@@ -3387,7 +3387,7 @@ mod test_parse {
         let packages = Collection::with_items(arena.alloc([loc_pkg_entry]));
         let imports = Collection::empty();
         let provide_entry = Located::new(5, 5, 15, 26, Exposed("mainForHost"));
-        let provides = bumpalo::vec![in &arena; provide_entry];
+        let provides = Collection::with_items(arena.alloc([provide_entry]));
         let effects = Effects {
             effect_type_name: "Effect",
             effect_shortname: "fx",

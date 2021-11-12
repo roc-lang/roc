@@ -83,7 +83,7 @@ pub struct AppHeader<'a> {
     pub name: Loc<StrLiteral<'a>>,
     pub packages: Collection<'a, Loc<PackageEntry<'a>>>,
     pub imports: Collection<'a, Loc<ImportsEntry<'a>>>,
-    pub provides: Vec<'a, Loc<ExposesEntry<'a, &'a str>>>,
+    pub provides: Collection<'a, Loc<ExposesEntry<'a, &'a str>>>,
     pub to: Loc<To<'a>>,
 
     // Potential comments and newlines - these will typically all be empty.
@@ -148,7 +148,7 @@ pub struct PlatformHeader<'a> {
     pub exposes: Vec<'a, Loc<ExposesEntry<'a, ModuleName<'a>>>>,
     pub packages: Collection<'a, Loc<PackageEntry<'a>>>,
     pub imports: Collection<'a, Loc<ImportsEntry<'a>>>,
-    pub provides: Vec<'a, Loc<ExposesEntry<'a, &'a str>>>,
+    pub provides: Collection<'a, Loc<ExposesEntry<'a, &'a str>>>,
     pub effects: Effects<'a>,
 
     // Potential comments and newlines - these will typically all be empty.
