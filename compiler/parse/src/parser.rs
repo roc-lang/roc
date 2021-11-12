@@ -243,6 +243,7 @@ pub enum EExposes {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ERequires<'a> {
     Requires(Row, Col),
+    Open(Row, Col),
     IndentRequires(Row, Col),
     IndentListStart(Row, Col),
     IndentListEnd(Row, Col),

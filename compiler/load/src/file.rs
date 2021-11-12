@@ -3409,8 +3409,7 @@ fn fabricate_pkg_config_module<'a>(
     header_src: &'a str,
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
-    let provides: &'a [Located<ExposesEntry<'a, &'a str>>] =
-        header.provides.items;
+    let provides: &'a [Located<ExposesEntry<'a, &'a str>>] = header.provides.items;
 
     let info = PlatformHeaderInfo {
         filename,

@@ -444,15 +444,17 @@ fn platform_requires<'a>() -> impl Parser<'a, PlatformRequires<'a>, ERequires<'a
 #[inline(always)]
 fn requires_rigids<'a>(
     min_indent: u16,
-) -> impl Parser<'a, Vec<'a, Located<PlatformRigid<'a>>>, ERequires<'a>> {
-    collection_e!(
+) -> impl Parser<'a, Collection<'a, Located<PlatformRigid<'a>>>, ERequires<'a>> {
+    collection_trailing_sep_e!(
         word1(b'{', ERequires::ListStart),
         specialize(|_, r, c| ERequires::Rigid(r, c), loc!(requires_rigid())),
         word1(b',', ERequires::ListEnd),
         word1(b'}', ERequires::ListEnd),
         min_indent,
+        ERequires::Open,
         ERequires::Space,
-        ERequires::IndentListEnd
+        ERequires::IndentListEnd,
+        PlatformRigid::SpaceBefore
     )
 }
 

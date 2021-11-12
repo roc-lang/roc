@@ -3318,7 +3318,7 @@ mod test_parse {
             let region2 = Region::new(0, 0, 45, 47);
 
             PlatformRequires {
-                rigids: Vec::new_in(&arena),
+                rigids: Collection::empty(),
                 signature: Located::at(
                     region1,
                     TypedIdent::Entry {
@@ -3403,7 +3403,13 @@ mod test_parse {
             let region3 = Region::new(1, 1, 14, 26);
 
             PlatformRequires {
-                rigids: bumpalo::vec![ in &arena; Located::at(region3, PlatformRigid::Entry { alias: "Model", rigid: "model" }) ],
+                rigids: Collection::with_items(arena.alloc([Located::at(
+                    region3,
+                    PlatformRigid::Entry {
+                        alias: "Model",
+                        rigid: "model",
+                    },
+                )])),
                 signature: Located::at(
                     region1,
                     TypedIdent::Entry {

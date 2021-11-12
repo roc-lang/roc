@@ -117,7 +117,7 @@ pub struct PackageHeader<'a> {
     pub after_imports: &'a [CommentOrNewline<'a>],
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum PlatformRigid<'a> {
     Entry { rigid: &'a str, alias: &'a str },
 
@@ -137,7 +137,7 @@ impl<'a> Spaceable<'a> for PlatformRigid<'a> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlatformRequires<'a> {
-    pub rigids: Vec<'a, Loc<PlatformRigid<'a>>>,
+    pub rigids: Collection<'a, Loc<PlatformRigid<'a>>>,
     pub signature: Loc<TypedIdent<'a>>,
 }
 
