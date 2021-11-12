@@ -389,7 +389,7 @@ fn can_annotation_help(
         Record { fields, ext, .. } => {
             let field_types = can_assigned_fields(
                 env,
-                fields,
+                &fields.items,
                 region,
                 scope,
                 var_store,
