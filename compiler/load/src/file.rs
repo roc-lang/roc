@@ -2608,7 +2608,7 @@ fn parse_header<'a>(
                 opt_shorthand,
                 header_src,
                 packages: &[],
-                exposes: header.exposes.into_bump_slice(),
+                exposes: header.exposes.items,
                 imports: header.imports.items,
                 to_platform: None,
             };

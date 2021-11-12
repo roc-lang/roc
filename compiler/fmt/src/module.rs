@@ -1,5 +1,5 @@
 use crate::spaces::{fmt_spaces, INDENT};
-use bumpalo::collections::{String, Vec};
+use bumpalo::collections::String;
 use roc_parse::ast::{Collection, Module};
 use roc_parse::header::{AppHeader, ExposesEntry, ImportsEntry, InterfaceHeader, PlatformHeader};
 use roc_region::all::Located;
@@ -112,7 +112,7 @@ fn fmt_imports<'a>(
 
 fn fmt_exposes<'a>(
     buf: &mut String<'a>,
-    loc_entries: &'a Vec<'a, Located<ExposesEntry<'a, &'a str>>>,
+    loc_entries: &'a Collection<'a, Located<ExposesEntry<'a, &'a str>>>,
     indent: u16,
 ) {
     buf.push('[');

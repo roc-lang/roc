@@ -231,6 +231,7 @@ pub enum EProvides<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EExposes {
     Exposes(Row, Col),
+    Open(Row, Col),
     IndentExposes(Row, Col),
     IndentListStart(Row, Col),
     IndentListEnd(Row, Col),

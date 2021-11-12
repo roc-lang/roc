@@ -3471,7 +3471,7 @@ mod test_parse {
     #[test]
     fn empty_interface_header() {
         let arena = Bump::new();
-        let exposes = Vec::new_in(&arena);
+        let exposes = Collection::empty();
         let imports = Collection::empty();
         let module_name = ModuleName::new("Foo");
         let header = InterfaceHeader {
@@ -3503,7 +3503,7 @@ mod test_parse {
     #[test]
     fn nested_module() {
         let arena = Bump::new();
-        let exposes = Vec::new_in(&arena);
+        let exposes = Collection::empty();
         let imports = Collection::empty();
         let module_name = ModuleName::new("Foo.Bar.Baz");
         let header = InterfaceHeader {

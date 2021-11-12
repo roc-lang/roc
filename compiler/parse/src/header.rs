@@ -60,7 +60,7 @@ impl<'a> ModuleName<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct InterfaceHeader<'a> {
     pub name: Loc<ModuleName<'a>>,
-    pub exposes: Vec<'a, Loc<ExposesEntry<'a, &'a str>>>,
+    pub exposes: Collection<'a, Loc<ExposesEntry<'a, &'a str>>>,
     pub imports: Collection<'a, Loc<ImportsEntry<'a>>>,
 
     // Potential comments and newlines - these will typically all be empty.
