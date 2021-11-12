@@ -243,7 +243,9 @@ mod test_parse {
             nonempty_platform_header
         }
         module => {
-            standalone_module_defs
+            standalone_module_defs,
+            module_def_newline,
+            nested_def_annotation
         }
     }
 
@@ -864,48 +866,6 @@ mod test_parse {
         let occurrences = format!("{:?}", actual).split("isTest").count() - 1;
 
         assert_eq!(occurrences, 2);
-    }
-
-    #[test]
-    fn module_def_newline() {
-        let arena = Bump::new();
-
-        let src = indoc!(
-            r#"
-                main =
-                    i = 64
-
-                    i
-            "#
-        );
-
-        let actual = module_defs()
-            .parse(&arena, State::new(src.as_bytes()))
-            .map(|tuple| tuple.0);
-
-        assert!(actual.is_ok());
-    }
-
-    #[test]
-    fn nested_def_annotation() {
-        let arena = Bump::new();
-
-        let src = indoc!(
-            r#"
-            main =
-                wrappedNotEq : a, a -> Bool
-                wrappedNotEq = \num1, num2 ->
-                    num1 != num2
-
-                wrappedNotEq 2 3
-            "#
-        );
-
-        let actual = module_defs()
-            .parse(&arena, State::new(src.as_bytes()))
-            .map(|tuple| tuple.0);
-
-        assert!(actual.is_ok());
     }
 
     #[test]
