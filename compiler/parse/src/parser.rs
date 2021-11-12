@@ -186,7 +186,7 @@ pub enum SyntaxError<'a> {
     ArgumentsBeforeEquals(Region),
     NotYetImplemented(String),
     Todo,
-    Type(Type<'a>),
+    Type(EType<'a>),
     Pattern(EPattern<'a>),
     Expr(EExpr<'a>),
     Header(EHeader<'a>),
@@ -258,7 +258,7 @@ pub enum ETypedIdent<'a> {
     HasType(Row, Col),
     IndentHasType(Row, Col),
     Name(Row, Col),
-    Type(Type<'a>, Row, Col),
+    Type(EType<'a>, Row, Col),
     IndentType(Row, Col),
     Identifier(Row, Col),
 }
@@ -394,7 +394,7 @@ pub enum EExpr<'a> {
 
     DefMissingFinalExpr(Row, Col),
     DefMissingFinalExpr2(&'a EExpr<'a>, Row, Col),
-    Type(Type<'a>, Row, Col),
+    Type(EType<'a>, Row, Col),
     Pattern(&'a EPattern<'a>, Row, Col),
     IndentDefBody(Row, Col),
     IndentEquals(Row, Col),
@@ -409,10 +409,10 @@ pub enum EExpr<'a> {
     BackpassComma(Row, Col),
     BackpassArrow(Row, Col),
 
-    When(When<'a>, Row, Col),
-    If(If<'a>, Row, Col),
+    When(EWhen<'a>, Row, Col),
+    If(EIf<'a>, Row, Col),
 
-    Expect(Expect<'a>, Row, Col),
+    Expect(EExpect<'a>, Row, Col),
 
     Lambda(ELambda<'a>, Row, Col),
     Underscore(Row, Col),
@@ -420,15 +420,15 @@ pub enum EExpr<'a> {
     InParens(EInParens<'a>, Row, Col),
     Record(ERecord<'a>, Row, Col),
     Str(EString<'a>, Row, Col),
-    Number(Number, Row, Col),
-    List(List<'a>, Row, Col),
+    Number(ENumber, Row, Col),
+    List(EList<'a>, Row, Col),
 
     IndentStart(Row, Col),
     IndentEnd(Row, Col),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Number {
+pub enum ENumber {
     End,
     LineTooLong,
 }
@@ -502,7 +502,7 @@ pub enum ELambda<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum List<'a> {
+pub enum EList<'a> {
     Open(Row, Col),
     End(Row, Col),
     Space(BadInputError, Row, Col),
@@ -514,7 +514,7 @@ pub enum List<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum When<'a> {
+pub enum EWhen<'a> {
     Space(BadInputError, Row, Col),
     When(Row, Col),
     Is(Row, Col),
@@ -538,7 +538,7 @@ pub enum When<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum If<'a> {
+pub enum EIf<'a> {
     Space(BadInputError, Row, Col),
     If(Row, Col),
     Then(Row, Col),
@@ -557,7 +557,7 @@ pub enum If<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Expect<'a> {
+pub enum EExpect<'a> {
     Space(BadInputError, Row, Col),
     Expect(Row, Col),
     Condition(&'a EExpr<'a>, Row, Col),
@@ -575,7 +575,7 @@ pub enum EPattern<'a> {
     Space(BadInputError, Row, Col),
 
     PInParens(PInParens<'a>, Row, Col),
-    NumLiteral(Number, Row, Col),
+    NumLiteral(ENumber, Row, Col),
 
     IndentStart(Row, Col),
     IndentEnd(Row, Col),
@@ -614,11 +614,11 @@ pub enum PInParens<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Type<'a> {
-    TRecord(TRecord<'a>, Row, Col),
-    TTagUnion(TTagUnion<'a>, Row, Col),
-    TInParens(TInParens<'a>, Row, Col),
-    TApply(TApply, Row, Col),
+pub enum EType<'a> {
+    TRecord(ETypeRecord<'a>, Row, Col),
+    TTagUnion(ETypeTagUnion<'a>, Row, Col),
+    TInParens(ETypeInParens<'a>, Row, Col),
+    TApply(ETypeApply, Row, Col),
     TBadTypeVariable(Row, Col),
     TWildcard(Row, Col),
     ///
@@ -633,14 +633,14 @@ pub enum Type<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TRecord<'a> {
+pub enum ETypeRecord<'a> {
     End(Row, Col),
     Open(Row, Col),
 
     Field(Row, Col),
     Colon(Row, Col),
     Optional(Row, Col),
-    Type(&'a Type<'a>, Row, Col),
+    Type(&'a EType<'a>, Row, Col),
 
     Space(BadInputError, Row, Col),
 
@@ -651,11 +651,11 @@ pub enum TRecord<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TTagUnion<'a> {
+pub enum ETypeTagUnion<'a> {
     End(Row, Col),
     Open(Row, Col),
 
-    Type(&'a Type<'a>, Row, Col),
+    Type(&'a EType<'a>, Row, Col),
 
     Space(BadInputError, Row, Col),
 
@@ -664,11 +664,11 @@ pub enum TTagUnion<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TInParens<'a> {
+pub enum ETypeInParens<'a> {
     End(Row, Col),
     Open(Row, Col),
     ///
-    Type(&'a Type<'a>, Row, Col),
+    Type(&'a EType<'a>, Row, Col),
 
     ///
     Space(BadInputError, Row, Col),
@@ -678,7 +678,7 @@ pub enum TInParens<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TApply {
+pub enum ETypeApply {
     ///
     StartNotUppercase(Row, Col),
     End(Row, Col),
