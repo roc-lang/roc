@@ -1079,6 +1079,7 @@ define_builtins! {
         3 RESULT_WITH_DEFAULT: "withDefault"
         4 RESULT_AFTER: "after"
         5 RESULT_IS_OK: "isOk"
+        6 RESULT_IS_ERR: "isErr"
     }
     6 DICT: "Dict" => {
         0 DICT_DICT: "Dict" imported // the Dict.Dict type alias
