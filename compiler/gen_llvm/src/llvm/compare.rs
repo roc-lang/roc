@@ -1,10 +1,8 @@
 use crate::llvm::bitcode::call_bitcode_fn;
-use crate::llvm::build::{
-    cast_block_of_memory_to_tag, get_tag_id, tag_pointer_clear_tag_id, Env, FAST_CALL_CONV,
-};
+use crate::llvm::build::{get_tag_id, tag_pointer_clear_tag_id, Env, FAST_CALL_CONV};
 use crate::llvm::build_list::{list_len, load_list_ptr};
 use crate::llvm::build_str::str_equal;
-use crate::llvm::convert::basic_type_from_layout;
+use crate::llvm::convert::{basic_type_from_layout, basic_type_from_layout_1};
 use bumpalo::collections::Vec;
 use inkwell::types::BasicType;
 use inkwell::values::{
@@ -751,7 +749,7 @@ fn build_tag_eq<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let arg_type = basic_type_from_layout(env, tag_layout);
+            let arg_type = basic_type_from_layout_1(env, tag_layout);
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
@@ -844,8 +842,28 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
     match union_layout {
         NonRecursive(tags) => {
+            let ptr_equal = env.builder.build_int_compare(
+                IntPredicate::EQ,
+                env.builder
+                    .build_ptr_to_int(tag1.into_pointer_value(), env.ptr_int(), "pti"),
+                env.builder
+                    .build_ptr_to_int(tag2.into_pointer_value(), env.ptr_int(), "pti"),
+                "compare_pointers",
+            );
+
+            let compare_tag_ids = ctx.append_basic_block(parent, "compare_tag_ids");
+
+            env.builder
+                .build_conditional_branch(ptr_equal, return_true, compare_tag_ids);
+
+            env.builder.position_at_end(compare_tag_ids);
+
             let id1 = get_tag_id(env, parent, union_layout, tag1);
             let id2 = get_tag_id(env, parent, union_layout, tag2);
+
+            // clear the tag_id so we get a pointer to the actual data
+            let tag1 = tag1.into_pointer_value();
+            let tag2 = tag2.into_pointer_value();
 
             let compare_tag_fields = ctx.append_basic_block(parent, "compare_tag_fields");
 
@@ -866,30 +884,14 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 let block = env.context.append_basic_block(parent, "tag_id_modify");
                 env.builder.position_at_end(block);
 
-                // TODO drop tag id?
-                let struct_layout = Layout::Struct(field_layouts);
-
-                let wrapper_type = basic_type_from_layout(env, &struct_layout);
-                debug_assert!(wrapper_type.is_struct_type());
-
-                let struct1 = cast_block_of_memory_to_tag(
-                    env.builder,
-                    tag1.into_struct_value(),
-                    wrapper_type,
-                );
-                let struct2 = cast_block_of_memory_to_tag(
-                    env.builder,
-                    tag2.into_struct_value(),
-                    wrapper_type,
-                );
-
-                let answer = build_struct_eq(
+                let answer = eq_ptr_to_struct(
                     env,
                     layout_ids,
+                    union_layout,
+                    Some(when_recursive.clone()),
                     field_layouts,
-                    when_recursive.clone(),
-                    struct1,
-                    struct2,
+                    tag1,
+                    tag2,
                 );
 
                 env.builder.build_return(Some(&answer));
@@ -946,8 +948,15 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 let block = env.context.append_basic_block(parent, "tag_id_modify");
                 env.builder.position_at_end(block);
 
-                let answer =
-                    eq_ptr_to_struct(env, layout_ids, union_layout, field_layouts, tag1, tag2);
+                let answer = eq_ptr_to_struct(
+                    env,
+                    layout_ids,
+                    union_layout,
+                    None,
+                    field_layouts,
+                    tag1,
+                    tag2,
+                );
 
                 env.builder.build_return(Some(&answer));
 
@@ -1003,6 +1012,7 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 env,
                 layout_ids,
                 union_layout,
+                None,
                 other_fields,
                 tag1.into_pointer_value(),
                 tag2.into_pointer_value(),
@@ -1093,8 +1103,15 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 let block = env.context.append_basic_block(parent, "tag_id_modify");
                 env.builder.position_at_end(block);
 
-                let answer =
-                    eq_ptr_to_struct(env, layout_ids, union_layout, field_layouts, tag1, tag2);
+                let answer = eq_ptr_to_struct(
+                    env,
+                    layout_ids,
+                    union_layout,
+                    None,
+                    field_layouts,
+                    tag1,
+                    tag2,
+                );
 
                 env.builder.build_return(Some(&answer));
 
@@ -1128,6 +1145,7 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 env,
                 layout_ids,
                 union_layout,
+                None,
                 field_layouts,
                 tag1.into_pointer_value(),
                 tag2.into_pointer_value(),
@@ -1142,6 +1160,7 @@ fn eq_ptr_to_struct<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     union_layout: &UnionLayout<'a>,
+    opt_when_recursive: Option<WhenRecursive<'a>>,
     field_layouts: &'a [Layout<'a>],
     tag1: PointerValue<'ctx>,
     tag2: PointerValue<'ctx>,
@@ -1184,7 +1203,7 @@ fn eq_ptr_to_struct<'a, 'ctx, 'env>(
         env,
         layout_ids,
         field_layouts,
-        WhenRecursive::Loop(*union_layout),
+        opt_when_recursive.unwrap_or(WhenRecursive::Loop(*union_layout)),
         struct1,
         struct2,
     )
