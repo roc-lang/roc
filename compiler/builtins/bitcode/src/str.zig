@@ -1584,6 +1584,42 @@ pub fn strTrimLeft(string: RocStr) callconv(.C) RocStr {
     return RocStr.empty();
 }
 
+pub fn strTrimRight(string: RocStr) callconv(.C) RocStr {
+    if (string.str_bytes) |bytes_ptr| {
+        const leading_bytes = countLeadingWhitespaceBytes(string);
+        const trailing_bytes = countTrailingWhitespaceBytes(string);
+        const original_len = string.len();
+
+        if (original_len == trailing_bytes) {
+            string.deinit();
+            return RocStr.empty();
+        }
+
+        const new_len = original_len - trailing_bytes;
+
+        const small_or_shared = new_len <= SMALL_STR_MAX_LENGTH or !string.isRefcountOne();
+        if (small_or_shared) {
+            return RocStr.init(string.asU8ptr(), new_len);
+        }
+
+        // nonempty, large, and unique:
+
+        var i: usize = 0;
+        while (i < new_len) : (i += 1) {
+            const dest = bytes_ptr + i;
+            const source = dest;
+            @memcpy(dest, source, 1);
+        }
+
+        var new_string = string;
+        new_string.str_len = new_len;
+
+        return new_string;
+    }
+
+    return RocStr.empty();
+}
+
 fn countLeadingWhitespaceBytes(string: RocStr) usize {
     var byte_count: usize = 0;
 
@@ -1815,6 +1851,77 @@ test "strTrimLeft: small to small" {
     try expect(expected.isSmallStr());
 
     const trimmed = strTrimLeft(original);
+
+    try expect(trimmed.eq(expected));
+    try expect(trimmed.isSmallStr());
+}
+
+test "strTrimRight: empty" {
+    const trimmedEmpty = strTrimRight(RocStr.empty());
+    try expect(trimmedEmpty.eq(RocStr.empty()));
+}
+
+test "strTrimRight: blank" {
+    const original_bytes = "   ";
+    const original = RocStr.init(original_bytes, original_bytes.len);
+    defer original.deinit();
+
+    const trimmed = strTrimRight(original);
+
+    try expect(trimmed.eq(RocStr.empty()));
+}
+
+test "strTrimRight: large to large" {
+    const original_bytes = " hello giant world ";
+    const original = RocStr.init(original_bytes, original_bytes.len);
+    defer original.deinit();
+
+    try expect(!original.isSmallStr());
+
+    const expected_bytes = " hello giant world";
+    const expected = RocStr.init(expected_bytes, expected_bytes.len);
+    defer expected.deinit();
+
+    try expect(!expected.isSmallStr());
+
+    const trimmed = strTrimRight(original);
+
+    try expect(trimmed.eq(expected));
+}
+
+test "strTrimRight: large to small" {
+    const original_bytes = " hello world                    ";
+    const original = RocStr.init(original_bytes, original_bytes.len);
+    defer original.deinit();
+
+    try expect(!original.isSmallStr());
+
+    const expected_bytes = " hello world";
+    const expected = RocStr.init(expected_bytes, expected_bytes.len);
+    defer expected.deinit();
+
+    try expect(expected.isSmallStr());
+
+    const trimmed = strTrimRight(original);
+
+    try expect(trimmed.eq(expected));
+    try expect(trimmed.isSmallStr());
+}
+
+test "strTrimRight: small to small" {
+    const original_bytes = " hello world ";
+    const original = RocStr.init(original_bytes, original_bytes.len);
+    defer original.deinit();
+
+    try expect(original.isSmallStr());
+
+    const expected_bytes = " hello world";
+    const expected = RocStr.init(expected_bytes, expected_bytes.len);
+    defer expected.deinit();
+
+    try expect(expected.isSmallStr());
+
+    const trimmed = strTrimRight(original);
 
     try expect(trimmed.eq(expected));
     try expect(trimmed.isSmallStr());

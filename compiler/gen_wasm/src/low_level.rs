@@ -28,7 +28,7 @@ pub fn build_call_low_level<'a>(
 
     match lowlevel {
         StrConcat | StrJoinWith | StrIsEmpty | StrStartsWith | StrStartsWithCodePt
-        | StrEndsWith | StrSplit | StrCountGraphemes | StrFromInt | StrFromUtf8 | StrTrimLeft
+        | StrEndsWith | StrSplit | StrCountGraphemes | StrFromInt | StrFromUtf8 | StrTrimLeft | StrTrimRight
         | StrFromUtf8Range | StrToUtf8 | StrRepeat | StrFromFloat | StrTrim | ListLen
         | ListGetUnsafe | ListSet | ListSingle | ListRepeat | ListReverse | ListConcat
         | ListContains | ListAppend | ListPrepend | ListJoin | ListRange | ListMap | ListMap2
