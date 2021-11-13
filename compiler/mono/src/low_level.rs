@@ -102,6 +102,7 @@ enum FirstOrder {
     ListSet,
     ListTakeFirst,
     ListTakeLast,
+    ListSublist,
     ListDrop,
     ListDropAt,
     ListSingle,

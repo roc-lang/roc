@@ -47,6 +47,7 @@ comptime {
     exportListFn(list.listConcat, "concat");
     exportListFn(list.listTakeFirst, "take_first");
     exportListFn(list.listTakeLast, "take_last");
+    exportListFn(list.listSublist, "sublist");
     exportListFn(list.listDrop, "drop");
     exportListFn(list.listDropAt, "drop_at");
     exportListFn(list.listSet, "set");

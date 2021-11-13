@@ -34,9 +34,10 @@ pub fn build_call_low_level<'a>(
         | ListContains | ListAppend | ListPrepend | ListJoin | ListRange | ListMap | ListMap2
         | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk | ListWalkUntil
         | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith | ListTakeFirst
-        | ListTakeLast | ListDrop | ListDropAt | ListSwap | ListAny | ListFindUnsafe | DictSize
-        | DictEmpty | DictInsert | DictRemove | DictContains | DictGetUnsafe | DictKeys
-        | DictValues | DictUnion | DictIntersection | DictDifference | DictWalk | SetFromList => {
+        | ListTakeLast | ListSublist | ListDrop | ListDropAt | ListSwap | ListAny
+        | ListFindUnsafe | DictSize | DictEmpty | DictInsert | DictRemove | DictContains
+        | DictGetUnsafe | DictKeys | DictValues | DictUnion | DictIntersection | DictDifference
+        | DictWalk | SetFromList => {
             return NotImplemented;
         }
 

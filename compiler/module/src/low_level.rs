@@ -45,6 +45,7 @@ pub enum LowLevel {
     ListSortWith,
     ListTakeFirst,
     ListTakeLast,
+    ListSublist,
     ListDrop,
     ListDropAt,
     ListSwap,
@@ -138,6 +139,7 @@ macro_rules! first_order {
             | ListSet
             | ListTakeFirst
             | ListTakeLast
+            | ListSublist
             | ListDrop
             | ListDropAt
             | ListSingle

@@ -888,6 +888,45 @@ pub fn listTakeFirst(
     }
 }
 
+
+pub fn listSublist(
+    list: RocList,
+    alignment: u32,
+    element_width: usize,
+    rec: extern struct { len: usize, start: usize },
+    dec: Dec,
+) callconv(.C) RocList {
+    const start = rec.start;
+    const len = rec.len;
+    if (list.bytes) |source_ptr| {
+        const size = list.len();
+
+        if (start >= size) {
+            return RocList.empty();
+        }
+
+        const keep_len = std.math.min(len, size - start);
+        const drop_len = std.math.max(start, 0);
+
+        var i: usize = 0;
+        while (i < drop_len) : (i += 1) {
+            const element = source_ptr + i * element_width;
+            dec(element);
+        }
+
+        const output = RocList.allocate(alignment, keep_len, element_width);
+        const target_ptr = output.bytes orelse unreachable;
+
+        @memcpy(target_ptr, source_ptr + start * element_width, keep_len * element_width);
+
+        utils.decref(list.bytes, size * element_width, alignment);
+
+        return output;
+    } else {
+        return RocList.empty();
+    }
+}
+
 pub fn listTakeLast(
     list: RocList,
     alignment: u32,
