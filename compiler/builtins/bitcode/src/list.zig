@@ -894,7 +894,7 @@ pub fn listSublist(
         utils.decref(list.bytes, size * element_width, alignment);
 
         return output;
-    } 
+    }
 
     return RocList.empty();
 }
