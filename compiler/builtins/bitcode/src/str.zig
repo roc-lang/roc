@@ -1586,7 +1586,6 @@ pub fn strTrimLeft(string: RocStr) callconv(.C) RocStr {
 
 pub fn strTrimRight(string: RocStr) callconv(.C) RocStr {
     if (string.str_bytes) |bytes_ptr| {
-        const leading_bytes = countLeadingWhitespaceBytes(string);
         const trailing_bytes = countTrailingWhitespaceBytes(string);
         const original_len = string.len();
 
