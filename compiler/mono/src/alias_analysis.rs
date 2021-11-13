@@ -1477,14 +1477,14 @@ fn expr_spec<'a>(
                 }
                 UnionLayout::Recursive(_) => builder.add_make_tuple(block, &[cell_id, data_id])?,
                 UnionLayout::NullableWrapped { nullable_id, .. } => {
-                    if *tag_id == *nullable_id as u8 {
+                    if *tag_id == *nullable_id as _ {
                         data_id
                     } else {
                         builder.add_make_tuple(block, &[cell_id, data_id])?
                     }
                 }
                 UnionLayout::NullableUnwrapped { nullable_id, .. } => {
-                    if *tag_id == *nullable_id as u8 {
+                    if *tag_id == *nullable_id as _ {
                         data_id
                     } else {
                         builder.add_make_tuple(block, &[cell_id, data_id])?

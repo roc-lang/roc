@@ -57,7 +57,7 @@ use roc_mono::ir::{
     BranchInfo, CallType, EntryPoint, HigherOrderLowLevel, JoinPointId, ListLiteralElement,
     ModifyRc, OptLevel, ProcLayout,
 };
-use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, UnionLayout};
+use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, TagIdIntType, UnionLayout};
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
@@ -1270,9 +1270,9 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     other_tags,
                 } => {
                     debug_assert!(argument.is_pointer_value());
-                    debug_assert_ne!(*tag_id as i64, *nullable_id);
+                    debug_assert_ne!(*tag_id, *nullable_id);
 
-                    let tag_index = if (*tag_id as i64) < *nullable_id {
+                    let tag_index = if *tag_id < *nullable_id {
                         *tag_id
                     } else {
                         tag_id - 1
@@ -1420,7 +1420,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
     union_layout: &UnionLayout<'a>,
-    tag_id: u8,
+    tag_id: TagIdIntType,
     arguments: &[Symbol],
     reuse_allocation: Option<PointerValue<'ctx>>,
     parent: FunctionValue<'ctx>,
@@ -1539,7 +1539,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
                 env,
                 scope,
                 union_layout,
-                tag_id,
+                tag_id as _,
                 arguments,
                 tag_field_layouts,
                 tags,
@@ -1553,7 +1553,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
         } => {
             let tag_field_layouts = {
                 use std::cmp::Ordering::*;
-                match tag_id.cmp(&(*nullable_id as u8)) {
+                match tag_id.cmp(&(*nullable_id as _)) {
                     Equal => {
                         let layout = Layout::Union(*union_layout);
 
@@ -1571,7 +1571,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
                 env,
                 scope,
                 union_layout,
-                tag_id,
+                tag_id as _,
                 arguments,
                 tag_field_layouts,
                 tags,
@@ -1638,7 +1638,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
             let tag_struct_type =
                 block_of_memory_slices(env.context, &[other_fields], env.ptr_bytes);
 
-            if tag_id == *nullable_id as u8 {
+            if tag_id == *nullable_id as _ {
                 let output_type = tag_struct_type.ptr_type(AddressSpace::Generic);
 
                 return output_type.const_null().into();

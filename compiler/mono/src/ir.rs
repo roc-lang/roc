@@ -4,7 +4,7 @@ use self::InProgressProc::*;
 use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
 use crate::layout::{
     Builtin, ClosureRepresentation, LambdaSet, Layout, LayoutCache, LayoutProblem,
-    RawFunctionLayout, UnionLayout, WrappedVariant,
+    RawFunctionLayout, TagIdIntType, UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -28,9 +28,9 @@ pub const PRETTY_PRINT_IR_SYMBOLS: bool = false;
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
 static_assertions::assert_eq_size!([u8; 3 * 8], Literal);
-static_assertions::assert_eq_size!([u8; 11 * 8], Expr);
-static_assertions::assert_eq_size!([u8; 22 * 8], Stmt);
-static_assertions::assert_eq_size!([u8; 7 * 8], ProcLayout);
+static_assertions::assert_eq_size!([u8; 10 * 8], Expr);
+static_assertions::assert_eq_size!([u8; 19 * 8], Stmt);
+static_assertions::assert_eq_size!([u8; 6 * 8], ProcLayout);
 static_assertions::assert_eq_size!([u8; 8 * 8], Call);
 static_assertions::assert_eq_size!([u8; 6 * 8], CallType);
 
@@ -932,7 +932,7 @@ pub enum BranchInfo<'a> {
     Constructor {
         scrutinee: Symbol,
         layout: Layout<'a>,
-        tag_id: u8,
+        tag_id: TagIdIntType,
     },
 }
 
@@ -1180,7 +1180,7 @@ pub enum Expr<'a> {
     Tag {
         tag_layout: UnionLayout<'a>,
         tag_name: TagName,
-        tag_id: u8,
+        tag_id: TagIdIntType,
         arguments: &'a [Symbol],
     },
     Struct(&'a [Symbol]),
@@ -1198,7 +1198,7 @@ pub enum Expr<'a> {
 
     UnionAtIndex {
         structure: Symbol,
-        tag_id: u8,
+        tag_id: TagIdIntType,
         union_layout: UnionLayout<'a>,
         index: u64,
     },
@@ -1215,7 +1215,7 @@ pub enum Expr<'a> {
         // normal Tag fields
         tag_layout: UnionLayout<'a>,
         tag_name: TagName,
-        tag_id: u8,
+        tag_id: TagIdIntType,
         arguments: &'a [Symbol],
     },
     Reset(Symbol),
@@ -4406,7 +4406,7 @@ fn convert_tag_union<'a>(
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
                         tag_name,
-                        tag_id: tag_id as u8,
+                        tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
 
@@ -4429,7 +4429,7 @@ fn convert_tag_union<'a>(
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
                         tag_name,
-                        tag_id: tag_id as u8,
+                        tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
 
@@ -4454,7 +4454,7 @@ fn convert_tag_union<'a>(
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
                         tag_name,
-                        tag_id: tag_id as u8,
+                        tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
 
@@ -4481,7 +4481,7 @@ fn convert_tag_union<'a>(
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
                         tag_name,
-                        tag_id: tag_id as u8,
+                        tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
 
@@ -4499,7 +4499,7 @@ fn convert_tag_union<'a>(
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
                         tag_name,
-                        tag_id: tag_id as u8,
+                        tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
 
@@ -5811,7 +5811,7 @@ fn store_tag_pattern<'a>(
     structure: Symbol,
     union_layout: UnionLayout<'a>,
     arguments: &[(Pattern<'a>, Layout<'a>)],
-    tag_id: u8,
+    tag_id: TagIdIntType,
     mut stmt: Stmt<'a>,
 ) -> StorePattern<'a> {
     use Pattern::*;
@@ -7055,7 +7055,7 @@ pub enum Pattern<'a> {
     },
     AppliedTag {
         tag_name: TagName,
-        tag_id: u8,
+        tag_id: TagIdIntType,
         arguments: Vec<'a, (Pattern<'a>, Layout<'a>)>,
         layout: UnionLayout<'a>,
         union: crate::exhaustive::Union,
@@ -7242,7 +7242,7 @@ fn from_can_pattern_help<'a>(
                     let mut ctors = std::vec::Vec::with_capacity(tag_names.len());
                     for (i, tag_name) in tag_names.into_iter().enumerate() {
                         ctors.push(Ctor {
-                            tag_id: TagId(i as u8),
+                            tag_id: TagId(i as _),
                             name: tag_name,
                             arity: 0,
                         })
@@ -7333,7 +7333,7 @@ fn from_can_pattern_help<'a>(
 
                             for (i, (tag_name, args)) in tags.iter().enumerate() {
                                 ctors.push(Ctor {
-                                    tag_id: TagId(i as u8),
+                                    tag_id: TagId(i as _),
                                     name: tag_name.clone(),
                                     arity: args.len(),
                                 })
@@ -7370,7 +7370,7 @@ fn from_can_pattern_help<'a>(
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
-                                tag_id: tag_id as u8,
+                                tag_id: tag_id as _,
                                 arguments: mono_args,
                                 union,
                                 layout,
@@ -7384,7 +7384,7 @@ fn from_can_pattern_help<'a>(
 
                             for (i, (tag_name, args)) in tags.iter().enumerate() {
                                 ctors.push(Ctor {
-                                    tag_id: TagId(i as u8),
+                                    tag_id: TagId(i as _),
                                     name: tag_name.clone(),
                                     // don't include tag discriminant in arity
                                     arity: args.len() - 1,
@@ -7415,7 +7415,7 @@ fn from_can_pattern_help<'a>(
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
-                                tag_id: tag_id as u8,
+                                tag_id: tag_id as _,
                                 arguments: mono_args,
                                 union,
                                 layout,
@@ -7429,7 +7429,7 @@ fn from_can_pattern_help<'a>(
                             debug_assert_eq!(&w_tag_name, tag_name);
 
                             ctors.push(Ctor {
-                                tag_id: TagId(0_u8),
+                                tag_id: TagId(0 as TagIdIntType),
                                 name: tag_name.clone(),
                                 arity: fields.len(),
                             });
@@ -7458,7 +7458,7 @@ fn from_can_pattern_help<'a>(
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
-                                tag_id: tag_id as u8,
+                                tag_id: tag_id as _,
                                 arguments: mono_args,
                                 union,
                                 layout,
@@ -7476,7 +7476,7 @@ fn from_can_pattern_help<'a>(
                             for (tag_name, args) in tags.iter() {
                                 if i == nullable_id as usize {
                                     ctors.push(Ctor {
-                                        tag_id: TagId(i as u8),
+                                        tag_id: TagId(i as _),
                                         name: nullable_name.clone(),
                                         // don't include tag discriminant in arity
                                         arity: 0,
@@ -7486,7 +7486,7 @@ fn from_can_pattern_help<'a>(
                                 }
 
                                 ctors.push(Ctor {
-                                    tag_id: TagId(i as u8),
+                                    tag_id: TagId(i as _),
                                     name: tag_name.clone(),
                                     // don't include tag discriminant in arity
                                     arity: args.len() - 1,
@@ -7497,7 +7497,7 @@ fn from_can_pattern_help<'a>(
 
                             if i == nullable_id as usize {
                                 ctors.push(Ctor {
-                                    tag_id: TagId(i as u8),
+                                    tag_id: TagId(i as _),
                                     name: nullable_name.clone(),
                                     // don't include tag discriminant in arity
                                     arity: 0,
@@ -7531,7 +7531,7 @@ fn from_can_pattern_help<'a>(
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
-                                tag_id: tag_id as u8,
+                                tag_id: tag_id as _,
                                 arguments: mono_args,
                                 union,
                                 layout,
@@ -7547,13 +7547,13 @@ fn from_can_pattern_help<'a>(
                             debug_assert!(!other_fields.is_empty());
 
                             ctors.push(Ctor {
-                                tag_id: TagId(nullable_id as u8),
+                                tag_id: TagId(nullable_id as _),
                                 name: nullable_name.clone(),
                                 arity: 0,
                             });
 
                             ctors.push(Ctor {
-                                tag_id: TagId(!nullable_id as u8),
+                                tag_id: TagId(!nullable_id as _),
                                 name: nullable_name.clone(),
                                 // FIXME drop tag
                                 arity: other_fields.len() - 1,
@@ -7587,7 +7587,7 @@ fn from_can_pattern_help<'a>(
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
-                                tag_id: tag_id as u8,
+                                tag_id: tag_id as _,
                                 arguments: mono_args,
                                 union,
                                 layout,
