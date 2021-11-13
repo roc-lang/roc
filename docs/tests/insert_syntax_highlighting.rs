@@ -73,19 +73,15 @@ main = "Hello, world!"
             PathBuf::from([Uuid::new_v4().to_string(), ".roc".to_string()].join(""));
         let temp_file_full_path = temp_dir.path().join(temp_file_path_buf);
 
-        let mut file = File::create(temp_file_full_path.clone()).expect(&format!(
-            "Failed to create temporary file for path {:?}",
-            temp_file_full_path
-        ));
+        let mut file = File::create(temp_file_full_path.clone()).unwrap_or_else(|_| panic!("Failed to create temporary file for path {:?}",
+            temp_file_full_path));
 
         let mut full_code_str = HELLO_WORLD.to_owned();
         full_code_str.push_str("\n\n");
         full_code_str.push_str(code_str);
 
-        writeln!(file, "{}", full_code_str).expect(&format!(
-            "Failed to write {:?} to file: {:?}",
-            HELLO_WORLD, file
-        ));
+        writeln!(file, "{}", full_code_str).unwrap_or_else(|_| panic!("Failed to write {:?} to file: {:?}",
+            HELLO_WORLD, file));
 
         load_module(&temp_file_full_path)
     }
