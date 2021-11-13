@@ -966,8 +966,6 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         // TODO when we have lists with capacity (if ever)
         // List.append should own its first argument
         ListAppend => arena.alloc_slice_copy(&[owned, owned]),
-        ListTakeFirst => arena.alloc_slice_copy(&[owned, irrelevant]),
-        ListTakeLast => arena.alloc_slice_copy(&[owned, irrelevant]),
         ListSublist => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
         ListDrop => arena.alloc_slice_copy(&[owned, irrelevant]),
         ListDropAt => arena.alloc_slice_copy(&[owned, irrelevant]),

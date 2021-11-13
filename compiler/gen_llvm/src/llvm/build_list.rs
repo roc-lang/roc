@@ -297,47 +297,6 @@ pub fn list_swap<'a, 'ctx, 'env>(
     )
 }
 
-/// List.takeFirst : List elem, Nat -> List elem
-pub fn list_take_first<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    original_wrapper: StructValue<'ctx>,
-    count: IntValue<'ctx>,
-    element_layout: &Layout<'a>,
-) -> BasicValueEnum<'ctx> {
-    call_bitcode_fn_returns_list(
-        env,
-        &[
-            pass_list_cc(env, original_wrapper.into()),
-            env.alignment_intvalue(element_layout),
-            layout_width(env, element_layout),
-            count.into(),
-        ],
-        bitcode::LIST_TAKE_FIRST,
-    )
-}
-
-/// List.takeLast : List elem, Nat -> List elem
-pub fn list_take_last<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    original_wrapper: StructValue<'ctx>,
-    count: IntValue<'ctx>,
-    element_layout: &Layout<'a>,
-) -> BasicValueEnum<'ctx> {
-    let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
-    call_bitcode_fn_returns_list(
-        env,
-        &[
-            pass_list_cc(env, original_wrapper.into()),
-            env.alignment_intvalue(element_layout),
-            layout_width(env, element_layout),
-            count.into(),
-            dec_element_fn.as_global_value().as_pointer_value().into(),
-        ],
-        bitcode::LIST_TAKE_LAST,
-    )
-}
-
 /// List.sublist : List elem, { start : Nat, len : Nat } -> List elem
 pub fn list_sublist<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
