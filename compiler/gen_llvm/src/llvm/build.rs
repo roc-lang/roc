@@ -4473,7 +4473,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
     match op {
         ListMap { xs } => {
             // List.map : List before, (before -> after) -> List after
-            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
+            let (list, list_layout) = load_symbol_and_layout(scope, xs);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -4501,8 +4501,8 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             }
         }
         ListMap2 { xs, ys } => {
-            let (list1, list1_layout) = load_symbol_and_layout(scope, &xs);
-            let (list2, list2_layout) = load_symbol_and_layout(scope, &ys);
+            let (list1, list1_layout) = load_symbol_and_layout(scope, xs);
+            let (list2, list2_layout) = load_symbol_and_layout(scope, ys);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -4541,9 +4541,9 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             }
         }
         ListMap3 { xs, ys, zs } => {
-            let (list1, list1_layout) = load_symbol_and_layout(scope, &xs);
-            let (list2, list2_layout) = load_symbol_and_layout(scope, &ys);
-            let (list3, list3_layout) = load_symbol_and_layout(scope, &zs);
+            let (list1, list1_layout) = load_symbol_and_layout(scope, xs);
+            let (list2, list2_layout) = load_symbol_and_layout(scope, ys);
+            let (list3, list3_layout) = load_symbol_and_layout(scope, zs);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -4587,10 +4587,10 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             }
         }
         ListMap4 { xs, ys, zs, ws } => {
-            let (list1, list1_layout) = load_symbol_and_layout(scope, &xs);
-            let (list2, list2_layout) = load_symbol_and_layout(scope, &ys);
-            let (list3, list3_layout) = load_symbol_and_layout(scope, &zs);
-            let (list4, list4_layout) = load_symbol_and_layout(scope, &ws);
+            let (list1, list1_layout) = load_symbol_and_layout(scope, xs);
+            let (list2, list2_layout) = load_symbol_and_layout(scope, ys);
+            let (list3, list3_layout) = load_symbol_and_layout(scope, zs);
+            let (list4, list4_layout) = load_symbol_and_layout(scope, ws);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -4649,7 +4649,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
         }
         ListMapWithIndex { xs } => {
             // List.mapWithIndex : List before, (Nat, before -> after) -> List after
-            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
+            let (list, list_layout) = load_symbol_and_layout(scope, xs);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -4678,7 +4678,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
         }
         ListKeepIf { xs } => {
             // List.keepIf : List elem, (elem -> Bool) -> List elem
-            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
+            let (list, list_layout) = load_symbol_and_layout(scope, xs);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -4704,7 +4704,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
         }
         ListKeepOks { xs } => {
             // List.keepOks : List before, (before -> Result after *) -> List after
-            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
+            let (list, list_layout) = load_symbol_and_layout(scope, xs);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -4744,7 +4744,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
         }
         ListKeepErrs { xs } => {
             // List.keepErrs : List before, (before -> Result * after) -> List after
-            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
+            let (list, list_layout) = load_symbol_and_layout(scope, xs);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -4793,7 +4793,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
         }
         ListSortWith { xs } => {
             // List.sortWith : List a, (a, a -> Ordering) -> List a
-            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
+            let (list, list_layout) = load_symbol_and_layout(scope, xs);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -4831,7 +4831,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             }
         }
         ListAny { xs } => {
-            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
+            let (list, list_layout) = load_symbol_and_layout(scope, xs);
             let (function, closure, closure_layout) = function_details!();
 
             match list_layout {
@@ -4855,7 +4855,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             }
         }
         ListFindUnsafe { xs } => {
-            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
+            let (list, list_layout) = load_symbol_and_layout(scope, xs);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -4886,8 +4886,8 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             }
         }
         DictWalk { xs, state } => {
-            let (dict, dict_layout) = load_symbol_and_layout(scope, &xs);
-            let (default, default_layout) = load_symbol_and_layout(scope, &state);
+            let (dict, dict_layout) = load_symbol_and_layout(scope, xs);
+            let (default, default_layout) = load_symbol_and_layout(scope, state);
 
             let (function, closure, closure_layout) = function_details!();
 

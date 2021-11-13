@@ -6596,7 +6596,7 @@ fn call_by_name_help<'a>(
         let call = self::Call {
             call_type: CallType::ByName {
                 name: proc_name,
-                ret_layout: ret_layout,
+                ret_layout,
                 arg_layouts: argument_layouts,
                 specialization_id: env.next_call_specialization_id(),
             },
@@ -6637,7 +6637,7 @@ fn call_by_name_help<'a>(
             let call = self::Call {
                 call_type: CallType::ByName {
                     name: proc_name,
-                    ret_layout: ret_layout,
+                    ret_layout,
                     arg_layouts: argument_layouts,
                     specialization_id: env.next_call_specialization_id(),
                 },
@@ -6691,7 +6691,7 @@ fn call_by_name_help<'a>(
                 let call = self::Call {
                     call_type: CallType::ByName {
                         name: proc_name,
-                        ret_layout: ret_layout,
+                        ret_layout,
                         arg_layouts: argument_layouts,
                         specialization_id: env.next_call_specialization_id(),
                     },
