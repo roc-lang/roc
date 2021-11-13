@@ -33,6 +33,7 @@ pub const FLAG_BACKEND: &str = "backend";
 pub const FLAG_TIME: &str = "time";
 pub const FLAG_LINK: &str = "roc-linker";
 pub const FLAG_PRECOMPILED: &str = "precompiled-host";
+pub const FLAG_VALGRIND: &str = "valgrind";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const BACKEND: &str = "BACKEND";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
@@ -98,6 +99,12 @@ pub fn build_app<'a>() -> App<'a> {
                 Arg::new(FLAG_PRECOMPILED)
                     .long(FLAG_PRECOMPILED)
                     .about("Assumes the host has been precompiled and skips recompiling the host.")
+                    .required(false),
+            )
+            .arg(
+                Arg::new(FLAG_VALGRIND)
+                    .long(FLAG_VALGRIND)
+                    .about("Some assembly instructions are not supported by valgrind, this flag prevents those from being output when building the host.")
                     .required(false),
             )
         )
@@ -258,6 +265,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     };
     let surgically_link = matches.is_present(FLAG_LINK);
     let precompiled = matches.is_present(FLAG_PRECOMPILED);
+
     if surgically_link && !roc_linker::supported(&link_type, &target) {
         panic!(
             "Link type, {:?}, with target, {}, not supported by roc linker",
@@ -287,6 +295,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     });
 
     let src_dir = path.parent().unwrap().canonicalize().unwrap();
+    let target_valgrind = matches.is_present(FLAG_VALGRIND);
     let res_binary_path = build_file(
         &arena,
         &target,
@@ -298,6 +307,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
         link_type,
         surgically_link,
         precompiled,
+        target_valgrind
     );
 
     match res_binary_path {
