@@ -1820,11 +1820,7 @@ fn list_len(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let len_var = var_store.fresh();
     let list_var = var_store.fresh();
 
-    let body = RunLowLevel {
-        op: LowLevel::ListLen,
-        args: vec![(list_var, Var(Symbol::ARG_1))],
-        ret_var: len_var,
-    };
+    let body = run_low_level_list_len(Var(Symbol::ARG_1), list_var, len_var);
 
     defn(
         symbol,
@@ -1833,6 +1829,14 @@ fn list_len(symbol: Symbol, var_store: &mut VarStore) -> Def {
         body,
         len_var,
     )
+}
+
+fn run_low_level_list_len(list_expr: Expr, list_var: Variable, int_var: Variable) -> Expr {
+    RunLowLevel {
+        op: LowLevel::ListLen,
+        args: vec![(list_var, list_expr)],
+        ret_var: int_var,
+    }
 }
 
 /// List.get : List elem, Int -> Result elem [ OutOfBounds ]*
@@ -2048,11 +2052,16 @@ fn list_take_first_2(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let sym_rec = Symbol::LIST_TAKE_3_TEMP;
 
     let int_var = var_store.fresh();
-    let bool_var = var_store.fresh();
+    let captured_var = var_store.fresh();
     let clos_var = var_store.fresh();
     let list_after = var_store.fresh();
 
-    let one = || int(int_var, Variable::NATURAL, 1);
+    let rec_box = Box::new((
+        clos_var,
+        no_region(Var(sym_rec)),
+        var_store.fresh(),
+        list_var,
+    ));
 
     let clos = Closure(ClosureData {
         function_type: clos_var,
@@ -2061,67 +2070,42 @@ fn list_take_first_2(symbol: Symbol, var_store: &mut VarStore) -> Def {
         return_type: list_after,
         name: sym_rec,
         recursive: Recursive::Recursive,
-        captured_symbols: vec![],
+        captured_symbols: vec![(Symbol::ARG_2, captured_var)],
         arguments: vec![(list_after, no_region(Pattern::Identifier(Symbol::ARG_3)))],
         loc_body: {
+            let bool_var = var_store.fresh();
+            let num_var = var_store.fresh();
+            let n = |x| int(num_var, Variable::NATURAL, x);
             Box::new(no_region(If {
-                cond_var: var_store.fresh(),
-                branch_var: var_store.fresh(),
+                cond_var: bool_var,
+                branch_var: list_after,
                 branches: vec![(
                     no_region(RunLowLevel {
                         op: LowLevel::NumLte,
                         args: vec![
                             (
-                                int_var,
-                                RunLowLevel {
-                                    op: LowLevel::ListLen,
-                                    args: vec![(list_after, Var(Symbol::ARG_3))],
-                                    ret_var: int_var,
-                                },
+                                num_var,
+                                run_low_level_list_len(Var(Symbol::ARG_3), list_after, num_var),
                             ),
-                            (int_var, Var(Symbol::ARG_2)),
+                            (num_var, Var(Symbol::ARG_2)),
+                            // (num_var, n(3)),
                         ],
                         ret_var: bool_var,
                     }),
                     no_region(Var(Symbol::ARG_3)),
                 )],
-                final_else: Box::new(no_region(Call(
-                    Box::new((
-                        clos_var,
-                        no_region(Var(sym_rec)),
-                        var_store.fresh(),
-                        list_after,
-                    )),
-                    vec![(
-                        list_after,
-                        no_region(RunLowLevel {
-                            // DropLast
-                            op: LowLevel::ListDrop,
-                            args: vec![
-                                (list_after, Var(Symbol::ARG_3)),
-                                (
-                                    int_var,
-                                    RunLowLevel {
-                                        ret_var: int_var,
-                                        op: LowLevel::NumSubWrap,
-                                        args: vec![
-                                            (
-                                                int_var,
-                                                RunLowLevel {
-                                                    ret_var: int_var,
-                                                    op: LowLevel::ListLen,
-                                                    args: vec![(list_after, Var(Symbol::ARG_3))],
-                                                },
-                                            ),
-                                            (int_var, one()),
-                                        ],
-                                    },
-                                ),
-                            ],
-                            ret_var: list_after,
-                        }),
-                    )],
-                    CalledVia::Space,
+                // final_else: Box::new(no_region(Call(
+                //     rec_box.clone(),
+                //     vec![(
+                //         list_after,
+                //         no_region(run_list_drop_last(Var(Symbol::ARG_3), list_after, var_store)),
+                //     )],
+                //     CalledVia::Space,
+                // ))),
+                final_else: Box::new(no_region(run_list_drop_last(
+                    Var(Symbol::ARG_3),
+                    list_after,
+                    var_store,
                 ))),
             }))
         },
@@ -2135,12 +2119,7 @@ fn list_take_first_2(symbol: Symbol, var_store: &mut VarStore) -> Def {
         pattern_vars: Default::default(),
     };
     let body = Call(
-        Box::new((
-            clos_var,
-            no_region(Var(sym_rec)),
-            var_store.fresh(),
-            list_var,
-        )),
+        rec_box,
         vec![(list_var, no_region(Var(Symbol::ARG_1)))],
         CalledVia::Space,
     );
@@ -2367,19 +2346,17 @@ fn list_drop_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// List.dropLast: List elem -> List elem
-fn list_drop_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let list_var = var_store.fresh();
+fn run_list_drop_last(list_expr: Expr, list_var: Variable, var_store: &mut VarStore) -> Expr {
     let index_var = var_store.fresh();
     let arg_var = var_store.fresh();
     let len_var = Variable::NAT;
     let num_var = len_var;
     let num_precision_var = Variable::NATURAL;
 
-    let body = RunLowLevel {
+    return RunLowLevel {
         op: LowLevel::ListDropAt,
         args: vec![
-            (list_var, Var(Symbol::ARG_1)),
+            (list_var, list_expr.clone()),
             (
                 index_var,
                 // Num.sub (List.len list) 1
@@ -2391,7 +2368,7 @@ fn list_drop_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
                             // List.len list
                             RunLowLevel {
                                 op: LowLevel::ListLen,
-                                args: vec![(list_var, Var(Symbol::ARG_1))],
+                                args: vec![(list_var, list_expr)],
                                 ret_var: len_var,
                             },
                         ),
@@ -2403,6 +2380,12 @@ fn list_drop_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
         ],
         ret_var: list_var,
     };
+}
+
+/// List.dropLast: List elem -> List elem
+fn list_drop_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
+    let body = run_list_drop_last(Var(Symbol::ARG_1), list_var, var_store);
 
     defn(
         symbol,
