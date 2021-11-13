@@ -94,8 +94,6 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_MAP4 => list_map4,
         LIST_TAKE_FIRST => list_take_first,
         LIST_TAKE_LAST => list_take_last,
-        LIST_TAKE_FIRST_2 => list_take_first_2,
-        LIST_TAKE_LAST_2 => list_take_last_2,
         LIST_SUBLIST => list_sublist,
         LIST_DROP => list_drop,
         LIST_DROP_AT => list_drop_at,
@@ -1821,7 +1819,11 @@ fn list_len(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let len_var = var_store.fresh();
     let list_var = var_store.fresh();
 
-    let body = run_low_level_list_len(Var(Symbol::ARG_1), list_var, len_var);
+    let body = RunLowLevel {
+        op: LowLevel::ListLen,
+        args: vec![(list_var, Var(Symbol::ARG_1))],
+        ret_var: len_var,
+    };
 
     defn(
         symbol,
@@ -1830,14 +1832,6 @@ fn list_len(symbol: Symbol, var_store: &mut VarStore) -> Def {
         body,
         len_var,
     )
-}
-
-fn run_low_level_list_len(list_expr: Expr, list_var: Variable, int_var: Variable) -> Expr {
-    RunLowLevel {
-        op: LowLevel::ListLen,
-        args: vec![(list_var, list_expr)],
-        ret_var: int_var,
-    }
 }
 
 /// List.get : List elem, Int -> Result elem [ OutOfBounds ]*
@@ -2045,95 +2039,6 @@ fn list_take_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// List.takeFirst2 : List elem, Nat -> List elem
-fn list_take_first_2(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let list_var = var_store.fresh();
-    let len_var = var_store.fresh();
-
-    let sym_rec = Symbol::LIST_TAKE_3_TEMP;
-
-    let int_var = var_store.fresh();
-    let captured_var = var_store.fresh();
-    let clos_var = var_store.fresh();
-    let list_after = var_store.fresh();
-
-    let rec_box = Box::new((
-        clos_var,
-        no_region(Var(sym_rec)),
-        var_store.fresh(),
-        list_var,
-    ));
-
-    let clos = Closure(ClosureData {
-        function_type: clos_var,
-        closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
-        return_type: list_after,
-        name: sym_rec,
-        recursive: Recursive::Recursive,
-        captured_symbols: vec![(Symbol::ARG_2, captured_var)],
-        arguments: vec![(list_after, no_region(Pattern::Identifier(Symbol::ARG_3)))],
-        loc_body: {
-            let bool_var = var_store.fresh();
-            let num_var = var_store.fresh();
-            let n = |x| int(num_var, Variable::NATURAL, x);
-            Box::new(no_region(If {
-                cond_var: bool_var,
-                branch_var: list_after,
-                branches: vec![(
-                    no_region(RunLowLevel {
-                        op: LowLevel::NumLte,
-                        args: vec![
-                            (
-                                num_var,
-                                run_low_level_list_len(Var(Symbol::ARG_3), list_after, num_var),
-                            ),
-                            (num_var, Var(Symbol::ARG_2)),
-                            // (num_var, n(3)),
-                        ],
-                        ret_var: bool_var,
-                    }),
-                    no_region(Var(Symbol::ARG_3)),
-                )],
-                // final_else: Box::new(no_region(Call(
-                //     rec_box.clone(),
-                //     vec![(
-                //         list_after,
-                //         no_region(run_list_drop_last(Var(Symbol::ARG_3), list_after, var_store)),
-                //     )],
-                //     CalledVia::Space,
-                // ))),
-                final_else: Box::new(no_region(run_list_drop_last(
-                    Var(Symbol::ARG_3),
-                    list_after,
-                    var_store,
-                ))),
-            }))
-        },
-    });
-
-    let def_rec = Def {
-        annotation: None,
-        expr_var: int_var,
-        loc_expr: no_region(clos),
-        loc_pattern: no_region(Pattern::Identifier(sym_rec)),
-        pattern_vars: Default::default(),
-    };
-    let body = Call(
-        rec_box,
-        vec![(list_var, no_region(Var(Symbol::ARG_1)))],
-        CalledVia::Space,
-    );
-
-    defn(
-        symbol,
-        vec![(list_var, Symbol::ARG_1), (len_var, Symbol::ARG_2)],
-        var_store,
-        LetRec(vec![def_rec], Box::new(no_region(body)), list_var),
-        list_var,
-    )
-}
-
 /// List.takeLast : List elem, Nat -> List elem
 fn list_take_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
@@ -2151,78 +2056,6 @@ fn list_take_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
     defn(
         symbol,
         vec![(list_var, Symbol::ARG_1), (len_var, Symbol::ARG_2)],
-        var_store,
-        body,
-        list_var,
-    )
-}
-
-/// List.takeLast2 : List elem, Nat -> List elem
-fn list_take_last_2(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let list_var = var_store.fresh();
-    let len_var = var_store.fresh();
-
-    let sym_list = Symbol::ARG_1;
-    let sym_len = Symbol::ARG_2;
-
-    let drop_len = Symbol::LIST_TAKE_2_TEMP;
-
-    let bool_var = var_store.fresh();
-    let int_var = var_store.fresh();
-
-    let zero = || int(int_var, Variable::NATURAL, 0);
-
-    let def_drop_len = Def {
-        annotation: None,
-        expr_var: int_var,
-        loc_expr: no_region(RunLowLevel {
-            op: LowLevel::NumSubWrap,
-            args: vec![
-                (
-                    int_var,
-                    RunLowLevel {
-                        op: LowLevel::ListLen,
-                        args: vec![(list_var, Var(sym_list))],
-                        ret_var: int_var,
-                    },
-                ),
-                (int_var, Var(sym_len)),
-            ],
-            ret_var: int_var,
-        }),
-        loc_pattern: no_region(Pattern::Identifier(drop_len)),
-        pattern_vars: Default::default(),
-    };
-
-    let get_larger = If {
-        cond_var: bool_var,
-        branch_var: int_var,
-        branches: vec![(
-            no_region(RunLowLevel {
-                op: LowLevel::NumGte,
-                args: vec![(int_var, Var(drop_len)), (int_var, zero())],
-                ret_var: bool_var,
-            }),
-            no_region(Var(drop_len)),
-        )],
-        final_else: Box::new(no_region(zero())),
-    };
-
-    let body_drop = RunLowLevel {
-        op: LowLevel::ListDrop,
-        args: vec![(list_var, Var(sym_list)), (int_var, get_larger)],
-        ret_var: list_var,
-    };
-
-    let body = LetNonRec(
-        Box::new(def_drop_len),
-        Box::new(no_region(body_drop)),
-        list_var,
-    );
-
-    defn(
-        symbol,
-        vec![(list_var, sym_list), (len_var, sym_len)],
         var_store,
         body,
         list_var,
@@ -2347,17 +2180,19 @@ fn list_drop_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-fn run_list_drop_last(list_expr: Expr, list_var: Variable, var_store: &mut VarStore) -> Expr {
+/// List.dropLast: List elem -> List elem
+fn list_drop_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
     let index_var = var_store.fresh();
     let arg_var = var_store.fresh();
     let len_var = Variable::NAT;
     let num_var = len_var;
     let num_precision_var = Variable::NATURAL;
 
-    return RunLowLevel {
+    let body = RunLowLevel {
         op: LowLevel::ListDropAt,
         args: vec![
-            (list_var, list_expr.clone()),
+            (list_var, Var(Symbol::ARG_1)),
             (
                 index_var,
                 // Num.sub (List.len list) 1
@@ -2369,7 +2204,7 @@ fn run_list_drop_last(list_expr: Expr, list_var: Variable, var_store: &mut VarSt
                             // List.len list
                             RunLowLevel {
                                 op: LowLevel::ListLen,
-                                args: vec![(list_var, list_expr)],
+                                args: vec![(list_var, Var(Symbol::ARG_1))],
                                 ret_var: len_var,
                             },
                         ),
@@ -2381,12 +2216,6 @@ fn run_list_drop_last(list_expr: Expr, list_var: Variable, var_store: &mut VarSt
         ],
         ret_var: list_var,
     };
-}
-
-/// List.dropLast: List elem -> List elem
-fn list_drop_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let list_var = var_store.fresh();
-    let body = run_list_drop_last(Var(Symbol::ARG_1), list_var, var_store);
 
     defn(
         symbol,

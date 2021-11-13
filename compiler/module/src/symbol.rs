@@ -1071,10 +1071,6 @@ define_builtins! {
         47 LIST_FIND: "find"
         48 LIST_FIND_RESULT: "#find_result" // symbol used in the definition of List.find
         49 LIST_SUBLIST: "sublist"
-        50 LIST_TAKE_FIRST_2: "takeFirst2"
-        51 LIST_TAKE_LAST_2: "takeLast2"
-        52 LIST_TAKE_2_TEMP: "#take2"
-        53 LIST_TAKE_3_TEMP: "#take3"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

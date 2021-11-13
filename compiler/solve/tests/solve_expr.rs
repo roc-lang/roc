@@ -3770,35 +3770,11 @@ mod solve_expr {
     }
 
     #[test]
-    fn list_take_first_2() {
-        infer_eq_without_problem(
-            indoc!(
-                r#"
-                List.takeFirst2
-                "#
-            ),
-            "List a, Nat -> List a",
-        );
-    }
-
-    #[test]
     fn list_take_last() {
         infer_eq_without_problem(
             indoc!(
                 r#"
                 List.takeLast
-                "#
-            ),
-            "List a, Nat -> List a",
-        );
-    }
-
-    #[test]
-    fn list_take_last_2() {
-        infer_eq_without_problem(
-            indoc!(
-                r#"
-                List.takeLast2
                 "#
             ),
             "List a, Nat -> List a",
