@@ -24,6 +24,16 @@ use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
 pub const PRETTY_PRINT_IR_SYMBOLS: bool = false;
 
+// if your changes cause this number to go down, great!
+// please change it to the lower number.
+// if it went up, maybe check that the change is really required
+static_assertions::assert_eq_size!([u8; 3 * 8], Literal);
+static_assertions::assert_eq_size!([u8; 13 * 8], Expr);
+static_assertions::assert_eq_size!([u8; 22 * 8], Stmt);
+static_assertions::assert_eq_size!([u8; 7 * 8], ProcLayout);
+static_assertions::assert_eq_size!([u8; 12 * 8], Call);
+static_assertions::assert_eq_size!([u8; 10 * 8], CallType);
+
 macro_rules! return_on_layout_error {
     ($env:expr, $layout_result:expr) => {
         match $layout_result {
@@ -1072,11 +1082,11 @@ impl<'a> Call<'a> {
                     .text(format!("lowlevel {:?} ", lowlevel))
                     .append(alloc.intersperse(it, " "))
             }
-            HigherOrderLowLevel { op: lowlevel, .. } => {
+            HigherOrder(higher_order) => {
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
 
                 alloc
-                    .text(format!("lowlevel {:?} ", lowlevel))
+                    .text(format!("lowlevel {:?} ", higher_order.op))
                     .append(alloc.intersperse(it, " "))
             }
             Foreign {
@@ -1130,31 +1140,34 @@ pub enum CallType<'a> {
         op: LowLevel,
         update_mode: UpdateModeId,
     },
-    HigherOrderLowLevel {
-        op: crate::low_level::HigherOrder,
-        /// the layout of the closure argument, if any
-        closure_env_layout: Option<Layout<'a>>,
+    HigherOrder(&'a HigherOrderLowLevel<'a>),
+}
 
-        /// name of the top-level function that is passed as an argument
-        /// e.g. in `List.map xs Num.abs` this would be `Num.abs`
-        function_name: Symbol,
+#[derive(Clone, Debug, PartialEq)]
+pub struct HigherOrderLowLevel<'a> {
+    pub op: crate::low_level::HigherOrder,
+    /// the layout of the closure argument, if any
+    pub closure_env_layout: Option<Layout<'a>>,
 
-        /// Symbol of the environment captured by the function argument
-        function_env: Symbol,
+    /// name of the top-level function that is passed as an argument
+    /// e.g. in `List.map xs Num.abs` this would be `Num.abs`
+    pub function_name: Symbol,
 
-        /// does the function argument need to own the closure data
-        function_owns_closure_data: bool,
+    /// Symbol of the environment captured by the function argument
+    pub function_env: Symbol,
 
-        /// specialization id of the function argument, used for name generation
-        specialization_id: CallSpecId,
+    /// does the function argument need to own the closure data
+    pub function_owns_closure_data: bool,
 
-        /// update mode of the higher order lowlevel itself
-        update_mode: UpdateModeId,
+    /// specialization id of the function argument, used for name generation
+    pub specialization_id: CallSpecId,
 
-        /// function layout, used for name generation
-        arg_layouts: &'a [Layout<'a>],
-        ret_layout: Layout<'a>,
-    },
+    /// update mode of the higher order lowlevel itself
+    pub update_mode: UpdateModeId,
+
+    /// function layout, used for name generation
+    pub arg_layouts: &'a [Layout<'a>],
+    pub ret_layout: Layout<'a>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -3986,8 +3999,8 @@ pub fn with_hole<'a>(
                                 lambda_set,
                                 op,
                                 closure_data_symbol,
-                                |(top_level_function, closure_data, closure_env_layout,  specialization_id, update_mode)| self::Call {
-                                    call_type: CallType::HigherOrderLowLevel {
+                                |(top_level_function, closure_data, closure_env_layout,  specialization_id, update_mode)| {
+                                    let higher_order = HigherOrderLowLevel {
                                         op: crate::low_level::HigherOrder::$ho { $($x,)* },
                                         closure_env_layout,
                                         specialization_id,
@@ -3997,8 +4010,12 @@ pub fn with_hole<'a>(
                                         function_name: top_level_function,
                                         arg_layouts,
                                         ret_layout,
-                                    },
-                                    arguments: arena.alloc([$($x,)* top_level_function, closure_data]),
+                                    };
+
+                                    self::Call {
+                                        call_type: CallType::HigherOrder(arena.alloc(higher_order)),
+                                        arguments: arena.alloc([$($x,)* top_level_function, closure_data]),
+                                    }
                                 },
                                 layout,
                                 assigned,
@@ -5475,7 +5492,7 @@ fn substitute_in_call<'a>(
         }),
         CallType::Foreign { .. } => None,
         CallType::LowLevel { .. } => None,
-        CallType::HigherOrderLowLevel { .. } => None,
+        CallType::HigherOrder { .. } => None,
     };
 
     let mut did_change = false;

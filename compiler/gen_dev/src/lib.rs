@@ -785,7 +785,7 @@ where
         match call_type {
             CallType::ByName { .. } => {}
             CallType::LowLevel { .. } => {}
-            CallType::HigherOrderLowLevel { .. } => {}
+            CallType::HigherOrder { .. } => {}
             CallType::Foreign { .. } => {}
         }
     }

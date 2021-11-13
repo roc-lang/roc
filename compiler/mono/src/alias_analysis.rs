@@ -10,8 +10,8 @@ use roc_module::symbol::Symbol;
 use std::convert::TryFrom;
 
 use crate::ir::{
-    Call, CallType, Expr, HostExposedLayouts, ListLiteralElement, Literal, ModifyRc, OptLevel,
-    Proc, Stmt,
+    Call, CallType, Expr, HigherOrderLowLevel, HostExposedLayouts, ListLiteralElement, Literal,
+    ModifyRc, OptLevel, Proc, Stmt,
 };
 use crate::layout::{Builtin, Layout, ListLayout, RawFunctionLayout, UnionLayout};
 
@@ -688,7 +688,7 @@ fn call_spec(
             *update_mode,
             call.arguments,
         ),
-        HigherOrderLowLevel {
+        HigherOrder(HigherOrderLowLevel {
             specialization_id,
             closure_env_layout,
             update_mode,
@@ -698,7 +698,7 @@ fn call_spec(
             function_name,
             function_env,
             ..
-        } => {
+        }) => {
             use crate::low_level::HigherOrder::*;
 
             let array = specialization_id.to_bytes();

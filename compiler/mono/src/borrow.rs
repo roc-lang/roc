@@ -1,4 +1,4 @@
-use crate::ir::{Expr, JoinPointId, Param, Proc, ProcLayout, Stmt};
+use crate::ir::{Expr, HigherOrderLowLevel, JoinPointId, Param, Proc, ProcLayout, Stmt};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -593,14 +593,14 @@ impl<'a> BorrowInfState<'a> {
                 self.own_args_using_bools(arguments, ps);
             }
 
-            HigherOrderLowLevel {
+            HigherOrder(HigherOrderLowLevel {
                 op,
                 arg_layouts,
                 ret_layout,
                 function_name,
                 function_env,
                 ..
-            } => {
+            }) => {
                 use crate::low_level::HigherOrder::*;
 
                 let closure_layout = ProcLayout {
@@ -1046,7 +1046,7 @@ fn call_info_call<'a>(call: &crate::ir::Call<'a>, info: &mut CallInfo<'a>) {
         }
         Foreign { .. } => {}
         LowLevel { .. } => {}
-        HigherOrderLowLevel { .. } => {}
+        HigherOrder(_) => {}
     }
 }
 

@@ -55,8 +55,8 @@ use roc_collections::all::{ImMap, MutMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{
-    BranchInfo, CallType, EntryPoint, JoinPointId, ListLiteralElement, ModifyRc, OptLevel,
-    ProcLayout,
+    BranchInfo, CallType, EntryPoint, HigherOrderLowLevel, JoinPointId, ListLiteralElement,
+    ModifyRc, OptLevel, ProcLayout,
 };
 use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, UnionLayout};
 use target_lexicon::{Architecture, OperatingSystem, Triple};
@@ -936,33 +936,12 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
             )
         }
 
-        CallType::HigherOrderLowLevel {
-            op,
-            function_owns_closure_data,
-            specialization_id,
-            function_name,
-            function_env,
-            arg_layouts,
-            ret_layout,
-            ..
-        } => {
-            let bytes = specialization_id.to_bytes();
+        CallType::HigherOrder(higher_order) => {
+            let bytes = higher_order.specialization_id.to_bytes();
             let callee_var = CalleeSpecVar(&bytes);
             let func_spec = func_spec_solutions.callee_spec(callee_var).unwrap();
 
-            run_higher_order_low_level(
-                env,
-                layout_ids,
-                scope,
-                layout,
-                *op,
-                func_spec,
-                arg_layouts,
-                ret_layout,
-                *function_owns_closure_data,
-                *function_name,
-                function_env,
-            )
+            run_higher_order_low_level(env, layout_ids, scope, layout, func_spec, higher_order)
         }
 
         CallType::Foreign {
@@ -4418,15 +4397,23 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
     return_layout: &Layout<'a>,
-    op: roc_mono::low_level::HigherOrder,
     func_spec: FuncSpec,
-    argument_layouts: &[Layout<'a>],
-    result_layout: &Layout<'a>,
-    function_owns_closure_data: bool,
-    function_name: Symbol,
-    function_env: &Symbol,
+    higher_order: &HigherOrderLowLevel<'a>,
 ) -> BasicValueEnum<'ctx> {
     use roc_mono::low_level::HigherOrder::*;
+
+    let HigherOrderLowLevel {
+        op,
+        arg_layouts: argument_layouts,
+        ret_layout: result_layout,
+        function_owns_closure_data,
+        function_name,
+        function_env,
+        ..
+    } = higher_order;
+
+    let function_owns_closure_data = *function_owns_closure_data;
+    let function_name = *function_name;
 
     // macros because functions cause lifetime issues related to the `env` or `layout_ids`
     macro_rules! function_details {

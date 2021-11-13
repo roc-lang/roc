@@ -12,6 +12,14 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use ven_pretty::{DocAllocator, DocBuilder};
 
+// if your changes cause this number to go down, great!
+// please change it to the lower number.
+// if it went up, maybe check that the change is really required
+static_assertions::assert_eq_size!([u8; 3 * 8], Builtin);
+static_assertions::assert_eq_size!([u8; 5 * 8], Layout);
+static_assertions::assert_eq_size!([u8; 4 * 8], UnionLayout);
+static_assertions::assert_eq_size!([u8; 3 * 8], LambdaSet);
+
 pub const MAX_ENUM_SIZE: usize = (std::mem::size_of::<u8>() * 8) as usize;
 const GENERATE_NULLABLE: bool = true;
 
