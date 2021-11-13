@@ -4,8 +4,8 @@ use crate::ident::{lowercase_ident, parse_ident, Ident};
 use crate::keyword;
 use crate::parser::{
     self, backtrackable, optional, sep_by1, sep_by1_e, specialize, specialize_ref, then,
-    trailing_sep_by0, word1, word2, EExpr, EInParens, ELambda, EPattern, ERecord, EString, Either,
-    Expect, If, List, Number, ParseResult, Parser, State, Type, When,
+    trailing_sep_by0, word1, word2, EExpect, EExpr, EIf, EInParens, ELambda, EList, ENumber,
+    EPattern, ERecord, EString, EType, EWhen, Either, ParseResult, Parser, State,
 };
 use crate::pattern::loc_closure_param;
 use crate::type_annotation;
@@ -801,7 +801,7 @@ fn parse_defs_end<'a>(
         Err((NoProgress, _, _)) => {
             let start = state.get_position();
 
-            match crate::parser::keyword_e(crate::keyword::EXPECT, Expect::Expect)
+            match crate::parser::keyword_e(crate::keyword::EXPECT, EExpect::Expect)
                 .parse(arena, state)
             {
                 Err((_, _, _)) => {
@@ -861,8 +861,8 @@ fn parse_defs_end<'a>(
                     space0_before_e(
                         type_annotation::located_help(min_indent + 1),
                         min_indent + 1,
-                        Type::TSpace,
-                        Type::TIndentStart,
+                        EType::TSpace,
+                        EType::TIndentStart,
                     ),
                 )
                 .parse(arena, state)?;
@@ -1099,8 +1099,8 @@ fn parse_expr_operator<'a>(
                         space0_before_e(
                             type_annotation::located_help(indented_more),
                             min_indent,
-                            Type::TSpace,
-                            Type::TIndentStart,
+                            EType::TSpace,
+                            EType::TIndentStart,
                         ),
                     )
                     .parse(arena, state)?;
@@ -1126,8 +1126,8 @@ fn parse_expr_operator<'a>(
                                 space0_before_e(
                                     type_annotation::located_help(indented_more),
                                     min_indent,
-                                    Type::TSpace,
-                                    Type::TIndentStart,
+                                    EType::TSpace,
+                                    EType::TIndentStart,
                                 ),
                             );
 
@@ -1651,21 +1651,21 @@ mod when {
     pub fn expr_help<'a>(
         min_indent: u16,
         options: ExprParseOptions,
-    ) -> impl Parser<'a, Expr<'a>, When<'a>> {
+    ) -> impl Parser<'a, Expr<'a>, EWhen<'a>> {
         then(
             and!(
                 when_with_indent(),
                 skip_second!(
                     space0_around_ee(
-                        specialize_ref(When::Condition, move |arena, state| {
+                        specialize_ref(EWhen::Condition, move |arena, state| {
                             parse_loc_expr_with_options(min_indent, options, arena, state)
                         }),
                         min_indent,
-                        When::Space,
-                        When::IndentCondition,
-                        When::IndentIs,
+                        EWhen::Space,
+                        EWhen::IndentCondition,
+                        EWhen::IndentIs,
                     ),
-                    parser::keyword_e(keyword::IS, When::Is)
+                    parser::keyword_e(keyword::IS, EWhen::Is)
                 )
             ),
             move |arena, state, progress, (case_indent, loc_condition)| {
@@ -1673,7 +1673,7 @@ mod when {
                     return Err((
                         progress,
                         // TODO maybe pass case_indent here?
-                        When::PatternAlignment(5, state.line, state.column),
+                        EWhen::PatternAlignment(5, state.line, state.column),
                         state,
                     ));
                 }
@@ -1693,9 +1693,9 @@ mod when {
     }
 
     /// Parsing when with indentation.
-    fn when_with_indent<'a>() -> impl Parser<'a, u16, When<'a>> {
+    fn when_with_indent<'a>() -> impl Parser<'a, u16, EWhen<'a>> {
         move |arena, state: State<'a>| {
-            parser::keyword_e(keyword::WHEN, When::When)
+            parser::keyword_e(keyword::WHEN, EWhen::When)
                 .parse(arena, state)
                 .map(|(progress, (), state)| (progress, state.indent_col, state))
         }
@@ -1704,7 +1704,7 @@ mod when {
     fn branches<'a>(
         min_indent: u16,
         options: ExprParseOptions,
-    ) -> impl Parser<'a, Vec<'a, &'a WhenBranch<'a>>, When<'a>> {
+    ) -> impl Parser<'a, Vec<'a, &'a WhenBranch<'a>>, EWhen<'a>> {
         move |arena, state: State<'a>| {
             let when_indent = state.indent_col;
 
@@ -1741,7 +1741,7 @@ mod when {
                                 let indent = pattern_indent_level - indent_col;
                                 Err((
                                     MadeProgress,
-                                    When::PatternAlignment(indent, state.line, state.column),
+                                    EWhen::PatternAlignment(indent, state.line, state.column),
                                     state,
                                 ))
                             }
@@ -1799,7 +1799,7 @@ mod when {
             (Col, Vec<'a, Located<Pattern<'a>>>),
             Option<Located<Expr<'a>>>,
         ),
-        When<'a>,
+        EWhen<'a>,
     > {
         let options = ExprParseOptions {
             check_for_arrow: false,
@@ -1810,16 +1810,16 @@ mod when {
             one_of![
                 map!(
                     skip_first!(
-                        parser::keyword_e(keyword::IF, When::IfToken),
+                        parser::keyword_e(keyword::IF, EWhen::IfToken),
                         // TODO we should require space before the expression but not after
                         space0_around_ee(
-                            specialize_ref(When::IfGuard, move |arena, state| {
+                            specialize_ref(EWhen::IfGuard, move |arena, state| {
                                 parse_loc_expr_with_options(min_indent + 1, options, arena, state)
                             }),
                             min_indent,
-                            When::Space,
-                            When::IndentIfGuard,
-                            When::IndentArrow,
+                            EWhen::Space,
+                            EWhen::IndentIfGuard,
+                            EWhen::IndentArrow,
                         )
                     ),
                     Some
@@ -1831,17 +1831,17 @@ mod when {
 
     fn branch_single_alternative<'a>(
         min_indent: u16,
-    ) -> impl Parser<'a, Located<Pattern<'a>>, When<'a>> {
+    ) -> impl Parser<'a, Located<Pattern<'a>>, EWhen<'a>> {
         move |arena, state| {
             let (_, spaces, state) =
-                backtrackable(space0_e(min_indent, When::Space, When::IndentPattern))
+                backtrackable(space0_e(min_indent, EWhen::Space, EWhen::IndentPattern))
                     .parse(arena, state)?;
 
             let (_, loc_pattern, state) = space0_after_e(
-                specialize(When::Pattern, crate::pattern::loc_pattern_help(min_indent)),
+                specialize(EWhen::Pattern, crate::pattern::loc_pattern_help(min_indent)),
                 min_indent,
-                When::Space,
-                When::IndentPattern,
+                EWhen::Space,
+                EWhen::IndentPattern,
             )
             .parse(arena, state)?;
 
@@ -1862,12 +1862,12 @@ mod when {
     fn branch_alternatives_help<'a>(
         min_indent: u16,
         pattern_indent_level: Option<u16>,
-    ) -> impl Parser<'a, (Col, Vec<'a, Located<Pattern<'a>>>), When<'a>> {
+    ) -> impl Parser<'a, (Col, Vec<'a, Located<Pattern<'a>>>), EWhen<'a>> {
         move |arena, state: State<'a>| {
             let initial = state;
 
             // put no restrictions on the indent after the spaces; we'll check it manually
-            match space0_e(0, When::Space, When::IndentPattern).parse(arena, state) {
+            match space0_e(0, EWhen::Space, EWhen::IndentPattern).parse(arena, state) {
                 Err((MadeProgress, fail, _)) => Err((NoProgress, fail, initial)),
                 Err((NoProgress, fail, _)) => Err((NoProgress, fail, initial)),
                 Ok((_progress, spaces, state)) => {
@@ -1876,7 +1876,7 @@ mod when {
                             // this branch is indented too much
                             Err((
                                 NoProgress,
-                                When::IndentPattern(state.line, state.column),
+                                EWhen::IndentPattern(state.line, state.column),
                                 initial,
                             ))
                         }
@@ -1884,7 +1884,7 @@ mod when {
                             let indent = wanted - state.column;
                             Err((
                                 NoProgress,
-                                When::PatternAlignment(indent, state.line, state.column),
+                                EWhen::PatternAlignment(indent, state.line, state.column),
                                 initial,
                             ))
                         }
@@ -1896,7 +1896,7 @@ mod when {
                             let pattern_indent_col = state.column;
 
                             let parser = sep_by1(
-                                word1(b'|', When::Bar),
+                                word1(b'|', EWhen::Bar),
                                 branch_single_alternative(pattern_indent + 1),
                             );
 
@@ -1930,16 +1930,16 @@ mod when {
     }
 
     /// Parsing the righthandside of a branch in a when conditional.
-    fn branch_result<'a>(indent: u16) -> impl Parser<'a, Located<Expr<'a>>, When<'a>> {
+    fn branch_result<'a>(indent: u16) -> impl Parser<'a, Located<Expr<'a>>, EWhen<'a>> {
         skip_first!(
-            word2(b'-', b'>', When::Arrow),
+            word2(b'-', b'>', EWhen::Arrow),
             space0_before_e(
-                specialize_ref(When::Branch, move |arena, state| parse_loc_expr(
+                specialize_ref(EWhen::Branch, move |arena, state| parse_loc_expr(
                     indent, arena, state
                 )),
                 indent,
-                When::Space,
-                When::IndentBranch,
+                EWhen::Space,
+                EWhen::IndentBranch,
             )
         )
     }
@@ -1947,38 +1947,38 @@ mod when {
 
 fn if_branch<'a>(
     min_indent: u16,
-) -> impl Parser<'a, (Located<Expr<'a>>, Located<Expr<'a>>), If<'a>> {
+) -> impl Parser<'a, (Located<Expr<'a>>, Located<Expr<'a>>), EIf<'a>> {
     move |arena, state| {
         // NOTE: only parse spaces before the expression
         let (_, cond, state) = space0_around_ee(
-            specialize_ref(If::Condition, move |arena, state| {
+            specialize_ref(EIf::Condition, move |arena, state| {
                 parse_loc_expr(min_indent, arena, state)
             }),
             min_indent,
-            If::Space,
-            If::IndentCondition,
-            If::IndentThenToken,
+            EIf::Space,
+            EIf::IndentCondition,
+            EIf::IndentThenToken,
         )
         .parse(arena, state)
         .map_err(|(_, f, s)| (MadeProgress, f, s))?;
 
-        let (_, _, state) = parser::keyword_e(keyword::THEN, If::Then)
+        let (_, _, state) = parser::keyword_e(keyword::THEN, EIf::Then)
             .parse(arena, state)
             .map_err(|(_, f, s)| (MadeProgress, f, s))?;
 
         let (_, then_branch, state) = space0_around_ee(
-            specialize_ref(If::ThenBranch, move |arena, state| {
+            specialize_ref(EIf::ThenBranch, move |arena, state| {
                 parse_loc_expr(min_indent, arena, state)
             }),
             min_indent,
-            If::Space,
-            If::IndentThenBranch,
-            If::IndentElseToken,
+            EIf::Space,
+            EIf::IndentThenBranch,
+            EIf::IndentElseToken,
         )
         .parse(arena, state)
         .map_err(|(_, f, s)| (MadeProgress, f, s))?;
 
-        let (_, _, state) = parser::keyword_e(keyword::ELSE, If::Else)
+        let (_, _, state) = parser::keyword_e(keyword::ELSE, EIf::Else)
             .parse(arena, state)
             .map_err(|(_, f, s)| (MadeProgress, f, s))?;
 
@@ -1989,26 +1989,26 @@ fn if_branch<'a>(
 fn expect_help<'a>(
     min_indent: u16,
     options: ExprParseOptions,
-) -> impl Parser<'a, Expr<'a>, Expect<'a>> {
+) -> impl Parser<'a, Expr<'a>, EExpect<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
         let start = state.get_position();
 
         let (_, _, state) =
-            parser::keyword_e(keyword::EXPECT, Expect::Expect).parse(arena, state)?;
+            parser::keyword_e(keyword::EXPECT, EExpect::Expect).parse(arena, state)?;
 
         let (_, condition, state) = space0_before_e(
-            specialize_ref(Expect::Condition, move |arena, state| {
+            specialize_ref(EExpect::Condition, move |arena, state| {
                 parse_loc_expr_with_options(start.col + 1, options, arena, state)
             }),
             start.col + 1,
-            Expect::Space,
-            Expect::IndentCondition,
+            EExpect::Space,
+            EExpect::IndentCondition,
         )
         .parse(arena, state)
         .map_err(|(_, f, s)| (MadeProgress, f, s))?;
 
         let parse_cont = specialize_ref(
-            Expect::Continuation,
+            EExpect::Continuation,
             space0_before_e(
                 move |a, s| parse_loc_expr(min_indent, a, s),
                 min_indent,
@@ -2028,9 +2028,9 @@ fn expect_help<'a>(
 fn if_expr_help<'a>(
     min_indent: u16,
     options: ExprParseOptions,
-) -> impl Parser<'a, Expr<'a>, If<'a>> {
+) -> impl Parser<'a, Expr<'a>, EIf<'a>> {
     move |arena: &'a Bump, state| {
-        let (_, _, state) = parser::keyword_e(keyword::IF, If::If).parse(arena, state)?;
+        let (_, _, state) = parser::keyword_e(keyword::IF, EIf::If).parse(arena, state)?;
 
         let mut branches = Vec::with_capacity_in(1, arena);
 
@@ -2044,8 +2044,8 @@ fn if_expr_help<'a>(
             // try to parse another `if`
             // NOTE this drops spaces between the `else` and the `if`
             let optional_if = and!(
-                backtrackable(space0_e(min_indent, If::Space, If::IndentIf)),
-                parser::keyword_e(keyword::IF, If::If)
+                backtrackable(space0_e(min_indent, EIf::Space, EIf::IndentIf)),
+                parser::keyword_e(keyword::IF, EIf::If)
             );
 
             match optional_if.parse(arena, state) {
@@ -2058,12 +2058,12 @@ fn if_expr_help<'a>(
         };
 
         let (_, else_branch, state) = space0_before_e(
-            specialize_ref(If::ElseBranch, move |arena, state| {
+            specialize_ref(EIf::ElseBranch, move |arena, state| {
                 parse_loc_expr_with_options(min_indent, options, arena, state)
             }),
             min_indent,
-            If::Space,
-            If::IndentElseBranch,
+            EIf::Space,
+            EIf::IndentElseBranch,
         )
         .parse(arena, state_final_else)
         .map_err(|(_, f, s)| (MadeProgress, f, s))?;
@@ -2147,32 +2147,33 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
     }
 }
 
-fn list_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, List<'a>> {
+fn list_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EList<'a>> {
     move |arena, state| {
-        let (_, (parsed_elems, final_comments), state) = collection_trailing_sep_e!(
-            word1(b'[', List::Open),
-            specialize_ref(List::Expr, move |a, s| parse_loc_expr_no_multi_backpassing(
-                min_indent, a, s
-            )),
-            word1(b',', List::End),
-            word1(b']', List::End),
+        let (_, elements, state) = collection_trailing_sep_e!(
+            word1(b'[', EList::Open),
+            specialize_ref(
+                EList::Expr,
+                move |a, s| parse_loc_expr_no_multi_backpassing(min_indent, a, s)
+            ),
+            word1(b',', EList::End),
+            word1(b']', EList::End),
             min_indent,
-            List::Open,
-            List::Space,
-            List::IndentEnd,
+            EList::Open,
+            EList::Space,
+            EList::IndentEnd,
             Expr::SpaceBefore
         )
         .parse(arena, state)?;
 
-        let mut allocated = Vec::with_capacity_in(parsed_elems.len(), arena);
+        let mut allocated = Vec::with_capacity_in(elements.items.len(), arena);
 
-        for parsed_elem in parsed_elems {
-            allocated.push(&*arena.alloc(parsed_elem));
+        for parsed_elem in elements.items {
+            allocated.push(parsed_elem);
         }
 
         let expr = Expr::List {
             items: allocated.into_bump_slice(),
-            final_comments,
+            final_comments: elements.final_comments,
         };
 
         Ok((MadeProgress, expr, state))
@@ -2341,7 +2342,7 @@ fn string_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EString<'a>> {
     map!(crate::string_literal::parse(), Expr::Str)
 }
 
-fn positive_number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, Number> {
+fn positive_number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, ENumber> {
     map!(
         crate::number_literal::positive_number_literal(),
         |literal| {
@@ -2364,7 +2365,7 @@ fn positive_number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, Number> {
     )
 }
 
-fn number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, Number> {
+fn number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, ENumber> {
     map!(crate::number_literal::number_literal(), |literal| {
         use crate::number_literal::NumLiteral::*;
 

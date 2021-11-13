@@ -875,8 +875,8 @@ define_builtins! {
         // used by the dev backend to store the pointer to where to store large return types
         23 RET_POINTER: "#ret_pointer"
 
-        // used in wasm dev backend to mark values in the VM stack that have no other Symbol
-        24 WASM_ANONYMOUS_STACK_VALUE: "#wasm_anonymous_stack_value"
+        // used in wasm dev backend to mark temporary values in the VM stack
+        24 WASM_TMP: "#wasm_tmp"
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
@@ -1082,6 +1082,7 @@ define_builtins! {
         2 RESULT_MAP_ERR: "mapErr"
         3 RESULT_WITH_DEFAULT: "withDefault"
         4 RESULT_AFTER: "after"
+        5 RESULT_IS_OK: "isOk"
     }
     6 DICT: "Dict" => {
         0 DICT_DICT: "Dict" imported // the Dict.Dict type alias

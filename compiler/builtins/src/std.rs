@@ -1388,6 +1388,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(flex(TVAR1)),
     );
 
+    // isOk : Result * * -> bool
+    add_top_level_function_type!(
+        Symbol::RESULT_IS_OK,
+        vec![result_type(flex(TVAR1), flex(TVAR3))],
+        Box::new(bool_type()),
+    );
+
     types
 }
 
