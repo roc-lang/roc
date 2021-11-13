@@ -453,7 +453,7 @@ fn result_with_guard_pattern() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn maybe_is_just() {
+fn maybe_is_just_not_nested() {
     assert_evals_to!(
         indoc!(
             r#"
