@@ -198,6 +198,10 @@ fn create_llvm_module<'a>(
         if name.starts_with("roc_builtins.dict") {
             function.add_attribute(AttributeLoc::Function, attr);
         }
+
+        if name.starts_with("roc_builtins.list") {
+            function.add_attribute(AttributeLoc::Function, attr);
+        }
     }
 
     // Compile and add all the Procs before adding main
