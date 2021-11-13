@@ -1,6 +1,7 @@
 use crate::annotation::canonicalize_annotation;
 use crate::annotation::IntroducedVariables;
 use crate::env::Env;
+use crate::expr::ClosureData;
 use crate::expr::Expr::{self, *};
 use crate::expr::{
     canonicalize_expr, local_successors, references_from_call, references_from_local, Output,
@@ -670,10 +671,10 @@ fn group_to_declaration(
                 let mut new_def = can_def.clone();
 
                 // Determine recursivity of closures that are not tail-recursive
-                if let Closure {
+                if let Closure(ClosureData {
                     recursive: recursive @ Recursive::NotRecursive,
                     ..
-                } = &mut new_def.loc_expr.value
+                }) = &mut new_def.loc_expr.value
                 {
                     *recursive = closure_recursivity(*symbol, closures);
                 }
@@ -698,10 +699,10 @@ fn group_to_declaration(
                     let mut new_def = can_def.clone();
 
                     // Determine recursivity of closures that are not tail-recursive
-                    if let Closure {
+                    if let Closure(ClosureData {
                         recursive: recursive @ Recursive::NotRecursive,
                         ..
-                    } = &mut new_def.loc_expr.value
+                    }) = &mut new_def.loc_expr.value
                     {
                         *recursive = closure_recursivity(symbol, closures);
                     }
@@ -787,7 +788,7 @@ fn canonicalize_pending_def<'a>(
                 output.references.referenced_aliases.insert(symbol);
             }
 
-            aliases.extend(ann.aliases.iter().cloned());
+            aliases.extend(ann.aliases.clone());
 
             output.introduced_variables.union(&ann.introduced_variables);
 
@@ -838,7 +839,7 @@ fn canonicalize_pending_def<'a>(
                 };
 
                 Located {
-                    value: Closure {
+                    value: Closure(ClosureData {
                         function_type: var_store.fresh(),
                         closure_type: var_store.fresh(),
                         closure_ext_var: var_store.fresh(),
@@ -848,7 +849,7 @@ fn canonicalize_pending_def<'a>(
                         recursive: Recursive::NotRecursive,
                         arguments: underscores,
                         loc_body: Box::new(body_expr),
-                    },
+                    }),
                     region: loc_ann.region,
                 }
             };
@@ -871,7 +872,7 @@ fn canonicalize_pending_def<'a>(
                             // TODO try to remove this .clone()!
                             value: loc_can_expr.value.clone(),
                         },
-                        pattern_vars: im::HashMap::clone(&vars_by_symbol),
+                        pattern_vars: vars_by_symbol.clone(),
                         annotation: Some(Annotation {
                             signature: typ.clone(),
                             introduced_variables: output.introduced_variables.clone(),
@@ -972,7 +973,7 @@ fn canonicalize_pending_def<'a>(
                 env.tailcallable_symbol = Some(*defined_symbol);
             };
 
-            // regiser the name of this closure, to make sure the closure won't capture it's own name
+            // register the name of this closure, to make sure the closure won't capture it's own name
             if let (Pattern::Identifier(ref defined_symbol), &ast::Expr::Closure(_, _)) =
                 (&loc_can_pattern.value, &loc_expr.value)
             {
@@ -1001,7 +1002,7 @@ fn canonicalize_pending_def<'a>(
             if let (
                 &ast::Pattern::Identifier(_name),
                 &Pattern::Identifier(ref defined_symbol),
-                &Closure {
+                &Closure(ClosureData {
                     function_type,
                     closure_type,
                     closure_ext_var,
@@ -1011,7 +1012,7 @@ fn canonicalize_pending_def<'a>(
                     loc_body: ref body,
                     ref captured_symbols,
                     ..
-                },
+                }),
             ) = (
                 &loc_pattern.value,
                 &loc_can_pattern.value,
@@ -1049,7 +1050,7 @@ fn canonicalize_pending_def<'a>(
                     });
 
                 // renamed_closure_def = Some(&defined_symbol);
-                loc_can_expr.value = Closure {
+                loc_can_expr.value = Closure(ClosureData {
                     function_type,
                     closure_type,
                     closure_ext_var,
@@ -1059,7 +1060,7 @@ fn canonicalize_pending_def<'a>(
                     recursive: is_recursive,
                     arguments: arguments.clone(),
                     loc_body: body.clone(),
-                };
+                });
             }
 
             // Store the referenced locals in the refs_by_symbol map, so we can later figure out
@@ -1092,7 +1093,7 @@ fn canonicalize_pending_def<'a>(
                             // TODO try to remove this .clone()!
                             value: loc_can_expr.value.clone(),
                         },
-                        pattern_vars: im::HashMap::clone(&vars_by_symbol),
+                        pattern_vars: vars_by_symbol.clone(),
                         annotation: Some(Annotation {
                             signature: typ.clone(),
                             introduced_variables: output.introduced_variables.clone(),
@@ -1119,7 +1120,7 @@ fn canonicalize_pending_def<'a>(
                 vars_by_symbol.insert(*defined_symbol, expr_var);
             };
 
-            // regiser the name of this closure, to make sure the closure won't capture it's own name
+            // register the name of this closure, to make sure the closure won't capture it's own name
             if let (Pattern::Identifier(ref defined_symbol), &ast::Expr::Closure(_, _)) =
                 (&loc_can_pattern.value, &loc_expr.value)
             {
@@ -1144,7 +1145,7 @@ fn canonicalize_pending_def<'a>(
             if let (
                 &ast::Pattern::Identifier(_name),
                 &Pattern::Identifier(ref defined_symbol),
-                &Closure {
+                &Closure(ClosureData {
                     function_type,
                     closure_type,
                     closure_ext_var,
@@ -1154,7 +1155,7 @@ fn canonicalize_pending_def<'a>(
                     loc_body: ref body,
                     ref captured_symbols,
                     ..
-                },
+                }),
             ) = (
                 &loc_pattern.value,
                 &loc_can_pattern.value,
@@ -1191,7 +1192,7 @@ fn canonicalize_pending_def<'a>(
                         refs.lookups = refs.lookups.without(defined_symbol);
                     });
 
-                loc_can_expr.value = Closure {
+                loc_can_expr.value = Closure(ClosureData {
                     function_type,
                     closure_type,
                     closure_ext_var,
@@ -1201,7 +1202,7 @@ fn canonicalize_pending_def<'a>(
                     recursive: is_recursive,
                     arguments: arguments.clone(),
                     loc_body: body.clone(),
-                };
+                });
             }
 
             // Store the referenced locals in the refs_by_symbol map, so we can later figure out
@@ -1230,7 +1231,7 @@ fn canonicalize_pending_def<'a>(
                             region: loc_can_expr.region,
                             value: loc_can_expr.value.clone(),
                         },
-                        pattern_vars: im::HashMap::clone(&vars_by_symbol),
+                        pattern_vars: vars_by_symbol.clone(),
                         annotation: None,
                     },
                 );

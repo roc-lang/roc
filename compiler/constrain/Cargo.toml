@@ -13,10 +13,3 @@ roc_parse = { path = "../parse" }
 roc_types = { path = "../types" }
 roc_can = { path = "../can" }
 roc_builtins = { path = "../builtins" }
-
-[dev-dependencies]
-pretty_assertions = "0.5.1"
-maplit = "1.0.1"
-indoc = "0.3.3"
-quickcheck = "0.8"
-quickcheck_macros = "0.8"

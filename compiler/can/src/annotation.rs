@@ -20,7 +20,7 @@ pub struct Annotation {
 pub struct IntroducedVariables {
     // NOTE on rigids
     //
-    // Rigids must be unique within a type annoation.
+    // Rigids must be unique within a type annotation.
     // E.g. in `identity : a -> a`, there should only be one
     // variable (a rigid one, with name "a").
     // Hence `rigids : ImMap<Lowercase, Variable>`
@@ -389,7 +389,7 @@ fn can_annotation_help(
         Record { fields, ext, .. } => {
             let field_types = can_assigned_fields(
                 env,
-                fields,
+                &fields.items,
                 region,
                 scope,
                 var_store,

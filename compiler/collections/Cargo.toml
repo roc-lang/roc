@@ -6,8 +6,8 @@ license = "UPL-1.0"
 edition = "2018"
 
 [dependencies]
-im    = "14" # im and im-rc should always have the same version!
-im-rc = "14" # im and im-rc should always have the same version!
-wyhash = "0.3"
-bumpalo = { version = "3.6.1", features = ["collections"] }
+im    = "15.0.0"
+im-rc = "15.0.0"
+wyhash = "0.5.0"
+bumpalo = { version = "3.8.0", features = ["collections"] }
 hashbrown = { version = "0.11.2", features = [ "bumpalo" ] }

@@ -7,6 +7,6 @@ edition = "2018"
 description = "Utility functions used all over the code base."
 
 [dependencies]
-snafu = { version = "0.6", features = ["backtraces"] }
+snafu = { version = "0.6.10", features = ["backtraces"] }
 
 [dev-dependencies]

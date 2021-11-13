@@ -1,3 +1,4 @@
 *.wasm
 *.wat
 /notes.md
+/tmp

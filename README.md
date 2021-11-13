@@ -7,10 +7,12 @@ If you already know [Elm](https://elm-lang.org/), then [Roc for Elm Programmers]
 If you're curious about where the language's name and logo came from,
 [here's an explanation](https://github.com/rtfeldman/roc/blob/trunk/name-and-logo.md).
 
+You can get help and discuss with other people on the [Roc Zulip chat](https://roc.zulipchat.com).
+
 ## State of Roc
 
 Roc is not ready for production yet. You are likely to encounter bugs. Publishing packages or documentation is not yet supported.
-Many programs can however be compiled correctly. Check out [examples](examples) and [examples/benchmarks](examples/benchmarks). There are minimal platforms for Rust, Zig, C and an HTTP server. We are hard at work to make programming in Roc a delightful experience!
+Many programs can however be compiled correctly. Check out [examples](examples) and [examples/benchmarks](examples/benchmarks). There are minimal platforms for Rust, Zig, C, Swift and an HTTP server. We are hard at work to make programming in Roc a delightful experience!
 
 ## Getting started
 
@@ -64,7 +66,7 @@ By using systems-level programming languages like C and C++, platform authors sa
 Roc is designed to make the "systems-level platform, higher-level application" experience as nice as possible.
 
 * **Application** authors code exclusively in Roc. It's a language designed for nice ergonomics. The syntax resembles Ruby or CoffeeScript, and it has a fast compiler with full type inference.
-* **Platform** authors code almost exclusively in a systems-level language like C, C++, Rust, or [Zig](https://ziglang.org/), except for the thin Roc API they expose to application authors. Roc application code compiles to machine code, and production builds of Roc apps benefit from the same [LLVM](https://llvm.org/) optimizations that C++, Rust, and Zig do. Roc application authors do not need to know this lower-level code exists; all they have to interact with is the platform's API, which is exposed as an ordinary Roc API.
+* **Platform** authors code almost exclusively in a systems-level language like C, C++, Rust, Swift or [Zig](https://ziglang.org/), except for the thin Roc API they expose to application authors. Roc application code compiles to machine code, and production builds of Roc apps benefit from the same [LLVM](https://llvm.org/) optimizations that C++, Rust, Swift and Zig do. Roc application authors do not need to know this lower-level code exists; all they have to interact with is the platform's API, which is exposed as an ordinary Roc API.
 
 Every Roc application is built on top of exactly one Roc platform. There is no such thing as a Roc application that runs without a platform, and there is no default platform. You must choose one!
 
@@ -105,5 +107,4 @@ never done anything with Rust and also never worked on a compiler, but we've
 been able to find beginner-friendly projects to get people up to speed gradually.)
 
 If you're interested in getting involved, check out
-[CONTRIBUTING.md](https://github.com/rtfeldman/roc/blob/trunk/CONTRIBUTING.md) which has more info
-and a link to our Zulip chat!
+[CONTRIBUTING.md](https://github.com/rtfeldman/roc/blob/trunk/CONTRIBUTING.md)!

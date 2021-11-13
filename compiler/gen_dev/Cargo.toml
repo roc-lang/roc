@@ -9,38 +9,27 @@ edition = "2018"
 [dependencies]
 roc_collections = { path = "../collections" }
 roc_region = { path = "../region" }
-roc_load = { path = "../load" }
 roc_module = { path = "../module" }
 roc_problem = { path = "../problem" }
 roc_types = { path = "../types" }
 roc_builtins = { path = "../builtins" }
-roc_constrain = { path = "../constrain" }
 roc_unify = { path = "../unify" }
 roc_solve = { path = "../solve" }
 roc_mono = { path = "../mono" }
-im    = "14" # im and im-rc should always have the same version!
-im-rc = "14" # im and im-rc should always have the same version!
-bumpalo = { version = "3.6.1", features = ["collections"] }
+bumpalo = { version = "3.8.0", features = ["collections"] }
 target-lexicon = "0.12.2"
-libloading = "0.6"
-object = { version = "0.24", features = ["write"] }
+# TODO: Deal with the update of object to 0.27.
+# It looks like it breaks linking the generated objects.
+# Probably just need to specify an extra field that used to be implicit or something.
+# When fixed also update the version of object in the linker.
+object = { version = "0.26.2", features = ["write"] }
 
 [dev-dependencies]
 roc_can = { path = "../can" }
 roc_parse = { path = "../parse" }
-roc_reporting = { path = "../reporting" }
-roc_build = { path = "../build" }
 roc_std = { path = "../../roc_std" }
-pretty_assertions = "0.5.1"
-maplit = "1.0.1"
-indoc = "0.3.3"
-quickcheck = "0.8"
-quickcheck_macros = "0.8"
-tokio = { version = "0.2", features = ["blocking", "fs", "sync", "rt-threaded"] }
-bumpalo = { version = "3.6.1", features = ["collections"] }
-libc = "0.2"
-tempfile = "3.1.0"
-itertools = "0.9"
+bumpalo = { version = "3.8.0", features = ["collections"] }
 
 [features]
-target-aarch64 = ["roc_build/target-aarch64"]
+target-aarch64 = []
+target-x86_64 = []

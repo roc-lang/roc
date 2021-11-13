@@ -157,7 +157,7 @@ fn desugar_str_segments(env: &mut Env, segments: Vec<StrSegment>) -> Expr2 {
 
         let new_call = Expr2::Call {
             args,
-            expr: concat_expr_id,
+            expr_id: concat_expr_id,
             expr_var: var_store.fresh(),
             fn_var: var_store.fresh(),
             closure_var: var_store.fresh(),
@@ -186,6 +186,7 @@ pub fn update_str_expr(
 
     let insert_either = match str_expr {
         Expr2::SmallStr(arr_string) => {
+            // TODO make sure this works for unicode "characters"
             let insert_res = arr_string.try_insert(insert_index as u8, new_char);
 
             match insert_res {

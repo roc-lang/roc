@@ -23,7 +23,9 @@ mod test_parse {
     use roc_parse::ast::Pattern::{self, *};
     use roc_parse::ast::StrLiteral::{self, *};
     use roc_parse::ast::StrSegment::*;
-    use roc_parse::ast::{self, Def, EscapedChar, Spaceable, TypeAnnotation, WhenBranch};
+    use roc_parse::ast::{
+        self, Collection, Def, EscapedChar, Spaceable, TypeAnnotation, WhenBranch,
+    };
     use roc_parse::header::{
         AppHeader, Effects, ExposesEntry, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
         PackageName, PackageOrPath, PlatformHeader, PlatformRequires, PlatformRigid, To,
@@ -416,9 +418,41 @@ mod test_parse {
         assert_parses_to(&string, Float(&string));
     }
 
+    #[test]
+    fn pos_inf_float() {
+        assert_parses_to(
+            "inf",
+            Var {
+                module_name: "",
+                ident: "inf",
+            },
+        );
+    }
+
+    #[test]
+    fn neg_inf_float() {
+        let arena = Bump::new();
+        let loc_op = Located::new(0, 0, 0, 1, UnaryOp::Negate);
+        let inf_expr = Var {
+            module_name: "",
+            ident: "inf",
+        };
+        let loc_inf_expr = Located::new(0, 0, 1, 4, inf_expr);
+        assert_parses_to("-inf", UnaryOp(arena.alloc(loc_inf_expr), loc_op));
+    }
+
     #[quickcheck]
     fn all_f64_values_parse(num: f64) {
-        assert_parses_to(num.to_string().as_str(), Float(num.to_string().as_str()));
+        let string = num.to_string();
+        if string.contains(".") {
+            assert_parses_to(&string, Float(&string));
+        } else if num.is_nan() {
+            assert_parses_to(&string, Expr::GlobalTag(&string));
+        } else if num.is_finite() {
+            // These are whole numbers. Add the `.0` back to make float.
+            let float_string = format!("{}.0", string);
+            assert_parses_to(&float_string, Float(&float_string));
+        }
     }
 
     // RECORD LITERALS
@@ -1162,6 +1196,30 @@ mod test_parse {
     }
 
     #[test]
+    fn newline_inside_empty_list() {
+        let arena = Bump::new();
+        let expected = List {
+            items: &[],
+            final_comments: &[Newline],
+        };
+        let actual = parse_expr_with(&arena, "[\n]");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn comment_inside_empty_list() {
+        let arena = Bump::new();
+        let expected = List {
+            items: &[],
+            final_comments: &[LineComment("comment")],
+        };
+        let actual = parse_expr_with(&arena, "[#comment\n]");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
     fn packed_singleton_list() {
         let arena = Bump::new();
         let items = &[&*arena.alloc(Located::new(0, 0, 1, 2, Num("1")))];
@@ -1183,6 +1241,24 @@ mod test_parse {
             final_comments: &[],
         };
         let actual = parse_expr_with(&arena, "[ 1 ]");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn newline_singleton_list() {
+        let arena = Bump::new();
+        let item = &*arena.alloc(Expr::SpaceAfter(
+            arena.alloc(Num("1")),
+            arena.alloc([Newline]),
+        ));
+        let item = Expr::SpaceBefore(item, arena.alloc([Newline]));
+        let items = [&*arena.alloc(Located::new(1, 1, 0, 1, item))];
+        let expected = List {
+            items: &items,
+            final_comments: &[],
+        };
+        let actual = parse_expr_with(&arena, "[\n1\n]");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2207,9 +2283,8 @@ mod test_parse {
                             6,
                             TypeAnnotation::SpaceBefore(
                                 &TypeAnnotation::Record {
-                                    fields: &[],
+                                    fields: Collection::empty(),
                                     ext: None,
-                                    final_comments: &[],
                                 },
                                 &[Newline],
                             ),
@@ -2246,9 +2321,8 @@ mod test_parse {
                             6,
                             TypeAnnotation::SpaceBefore(
                                 &TypeAnnotation::Record {
-                                    fields: &[],
+                                    fields: Collection::empty(),
                                     ext: None,
-                                    final_comments: &[],
                                 },
                                 &[LineComment(" comment")],
                             ),
@@ -3017,7 +3091,7 @@ mod test_parse {
     #[test]
     fn empty_app_header() {
         let arena = Bump::new();
-        let packages = Vec::new_in(&arena);
+        let packages = Collection::empty();
         let imports = Vec::new_in(&arena);
         let provides = Vec::new_in(&arena);
         let module_name = StrLiteral::PlainLine("test-app");
@@ -3057,7 +3131,7 @@ mod test_parse {
         use PackageOrPath::Path;
 
         let arena = Bump::new();
-        let packages = Vec::new_in(&arena);
+        let packages = Collection::empty();
         let imports = Vec::new_in(&arena);
         let provides = Vec::new_in(&arena);
         let module_name = StrLiteral::PlainLine("test-app");
@@ -3106,7 +3180,7 @@ mod test_parse {
         };
         let loc_pkg_entry = Located::new(1, 1, 15, 33, pkg_entry);
         let arena = Bump::new();
-        let packages = bumpalo::vec![in &arena; loc_pkg_entry];
+        let packages = Collection::with_items(arena.alloc([loc_pkg_entry]));
         let import = ImportsEntry::Package("foo", ModuleName::new("Bar.Baz"), Vec::new_in(&arena));
         let loc_import = Located::new(2, 2, 14, 25, import);
         let imports = bumpalo::vec![in &arena; loc_import];
@@ -3150,6 +3224,62 @@ mod test_parse {
     }
 
     #[test]
+    fn full_app_header_trailing_commas() {
+        use ExposesEntry::Exposed;
+        use PackageOrPath::Path;
+
+        let newlines = &[Newline];
+        let pkg_entry = PackageEntry::Entry {
+            shorthand: "base",
+            spaces_after_shorthand: &[],
+            package_or_path: Located::new(1, 1, 21, 33, Path(PlainLine("./platform"))),
+        };
+        let loc_pkg_entry = Located::new(1, 1, 15, 33, pkg_entry);
+        let arena = Bump::new();
+        let packages = Collection::with_items(arena.alloc([loc_pkg_entry]));
+        let import = ImportsEntry::Package("foo", ModuleName::new("Bar.Baz"), Vec::new_in(&arena));
+        let loc_import = Located::new(2, 2, 14, 25, import);
+        let imports = bumpalo::vec![in &arena; loc_import];
+        let provide_entry = Located::new(3, 3, 15, 24, Exposed("quicksort"));
+        let provides = bumpalo::vec![in &arena; provide_entry];
+        let module_name = StrLiteral::PlainLine("quicksort");
+
+        let header = AppHeader {
+            before_header: &[],
+            name: Located::new(0, 0, 4, 15, module_name),
+            packages,
+            imports,
+            provides,
+            to: Located::new(3, 3, 30, 34, To::ExistingPackage("base")),
+            after_app_keyword: &[],
+            before_packages: newlines,
+            after_packages: &[],
+            before_imports: newlines,
+            after_imports: &[],
+            before_provides: newlines,
+            after_provides: &[],
+            before_to: &[],
+            after_to: &[],
+        };
+
+        let expected = roc_parse::ast::Module::App { header };
+
+        let src = indoc!(
+            r#"
+                app "quicksort"
+                    packages { base: "./platform", }
+                    imports [ foo.Bar.Baz ]
+                    provides [ quicksort ] to base
+            "#
+        );
+
+        let actual = roc_parse::module::parse_header(&arena, State::new(src.as_bytes()))
+            .map(|tuple| tuple.0);
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
     fn empty_platform_header() {
         let pkg_name = PackageName {
             account: "rtfeldman",
@@ -3179,9 +3309,8 @@ mod test_parse {
                         ann: Located::at(
                             region2,
                             TypeAnnotation::Record {
-                                fields: &[],
+                                fields: Collection::empty(),
                                 ext: None,
-                                final_comments: &[],
                             },
                         ),
                     },
@@ -3194,7 +3323,7 @@ mod test_parse {
             name: Located::new(0, 0, 9, 23, pkg_name),
             requires,
             exposes: Vec::new_in(&arena),
-            packages: Vec::new_in(&arena),
+            packages: Collection::empty(),
             imports: Vec::new_in(&arena),
             provides: Vec::new_in(&arena),
             effects,
@@ -3237,7 +3366,7 @@ mod test_parse {
         };
         let loc_pkg_entry = Located::new(3, 3, 15, 27, pkg_entry);
         let arena = Bump::new();
-        let packages = bumpalo::vec![in &arena; loc_pkg_entry];
+        let packages = Collection::with_items(arena.alloc([loc_pkg_entry]));
         let imports = Vec::new_in(&arena);
         let provide_entry = Located::new(5, 5, 15, 26, Exposed("mainForHost"));
         let provides = bumpalo::vec![in &arena; provide_entry];
@@ -3265,9 +3394,8 @@ mod test_parse {
                         ann: Located::at(
                             region2,
                             TypeAnnotation::Record {
-                                fields: &[],
+                                fields: Collection::empty(),
                                 ext: None,
-                                final_comments: &[],
                             },
                         ),
                     },

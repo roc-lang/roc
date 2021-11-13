@@ -1,11 +1,11 @@
 use crate::debug_info_init;
 use crate::llvm::bitcode::call_void_bitcode_fn;
 use crate::llvm::build::{
-    add_func, cast_basic_basic, cast_block_of_memory_to_tag, get_tag_id, get_tag_id_non_recursive,
-    tag_pointer_clear_tag_id, Env, FAST_CALL_CONV, TAG_DATA_INDEX,
+    add_func, cast_basic_basic, get_tag_id, tag_pointer_clear_tag_id, use_roc_value, Env,
+    FAST_CALL_CONV, TAG_DATA_INDEX, TAG_ID_INDEX,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
-use crate::llvm::convert::{basic_type_from_layout, ptr_int};
+use crate::llvm::convert::{basic_type_from_layout, basic_type_from_layout_1, ptr_int};
 use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
 use inkwell::context::Context;
@@ -139,8 +139,10 @@ impl<'ctx> PointerToRefcount<'ctx> {
         let block = env.builder.get_insert_block().expect("to be in a function");
         let parent = block.get_parent().unwrap();
 
-        let modify_block = env.context.append_basic_block(parent, "inc_str_modify");
-        let cont_block = env.context.append_basic_block(parent, "inc_str_cont");
+        let modify_block = env
+            .context
+            .append_basic_block(parent, "inc_refcount_modify");
+        let cont_block = env.context.append_basic_block(parent, "inc_refcount_cont");
 
         env.builder
             .build_conditional_branch(is_static_allocation, cont_block, modify_block);
@@ -349,10 +351,17 @@ fn modify_refcount_struct_help<'a, 'ctx, 'env>(
 
     for (i, field_layout) in layouts.iter().enumerate() {
         if field_layout.contains_refcounted() {
-            let field_ptr = env
+            let raw_value = env
                 .builder
                 .build_extract_value(wrapper_struct, i as u32, "decrement_struct_field")
                 .unwrap();
+
+            let field_value = use_roc_value(
+                env,
+                *field_layout,
+                raw_value,
+                "load_struct_tag_field_for_decrement",
+            );
 
             modify_refcount_layout_help(
                 env,
@@ -360,7 +369,7 @@ fn modify_refcount_struct_help<'a, 'ctx, 'env>(
                 layout_ids,
                 mode.to_call_mode(fn_val),
                 when_recursive,
-                field_ptr,
+                field_value,
                 field_layout,
             );
         }
@@ -753,7 +762,15 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
             );
         };
 
-        incrementing_elem_loop(env, parent, ptr, len, "modify_rc_index", loop_fn);
+        incrementing_elem_loop(
+            env,
+            parent,
+            *element_layout,
+            ptr,
+            len,
+            "modify_rc_index",
+            loop_fn,
+        );
     }
 
     let refcount_ptr = PointerToRefcount::from_list_wrapper(env, original_wrapper);
@@ -1289,7 +1306,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
             .build_bitcast(
                 value_ptr,
                 wrapper_type.ptr_type(AddressSpace::Generic),
-                "opaque_to_correct",
+                "opaque_to_correct_recursive_decrement",
             )
             .into_pointer_value();
 
@@ -1379,7 +1396,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
     ) {
         debug_assert_eq!(cases.len(), 1);
 
-        // in this case, don't switch, because the `else` branch below would try to read the (nonexistant) tag id
+        // in this case, don't switch, because the `else` branch below would try to read the (nonexistent) tag id
         let (_, only_branch) = cases.pop().unwrap();
         env.builder.build_unconditional_branch(only_branch);
     } else {
@@ -1602,7 +1619,7 @@ fn modify_refcount_union<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let basic_type = basic_type_from_layout(env, &layout);
+            let basic_type = basic_type_from_layout_1(env, &layout);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             modify_refcount_union_help(
@@ -1647,18 +1664,24 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
 
     // Add args to scope
     let arg_symbol = Symbol::ARG_1;
-    let arg_val = fn_val.get_param_iter().next().unwrap();
+    let arg_ptr = fn_val.get_param_iter().next().unwrap().into_pointer_value();
 
-    arg_val.set_name(arg_symbol.as_str(&env.interns));
+    arg_ptr.set_name(arg_symbol.as_str(&env.interns));
 
     let parent = fn_val;
 
     let before_block = env.builder.get_insert_block().expect("to be in a function");
 
-    let wrapper_struct = arg_val.into_struct_value();
-
     // read the tag_id
-    let tag_id = get_tag_id_non_recursive(env, wrapper_struct);
+    let tag_id_ptr = env
+        .builder
+        .build_struct_gep(arg_ptr, TAG_ID_INDEX, "tag_id_ptr")
+        .unwrap();
+
+    let tag_id = env
+        .builder
+        .build_load(tag_id_ptr, "load_tag_id")
+        .into_int_value();
 
     let tag_id_u8 = env
         .builder
@@ -1686,12 +1709,16 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
         let wrapper_type = basic_type_from_layout(env, &Layout::Struct(field_layouts));
 
         debug_assert!(wrapper_type.is_struct_type());
-        let data_bytes = env
+        let opaque_tag_data_ptr = env
             .builder
-            .build_extract_value(wrapper_struct, TAG_DATA_INDEX, "read_tag_id")
-            .unwrap()
-            .into_struct_value();
-        let wrapper_struct = cast_block_of_memory_to_tag(env.builder, data_bytes, wrapper_type);
+            .build_struct_gep(arg_ptr, TAG_DATA_INDEX, "field_ptr")
+            .unwrap();
+
+        let cast_tag_data_pointer = env.builder.build_pointer_cast(
+            opaque_tag_data_ptr,
+            wrapper_type.ptr_type(AddressSpace::Generic),
+            "cast_to_concrete_tag",
+        );
 
         for (i, field_layout) in field_layouts.iter().enumerate() {
             if let Layout::RecursivePointer = field_layout {
@@ -1699,8 +1726,14 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
             } else if field_layout.contains_refcounted() {
                 let field_ptr = env
                     .builder
-                    .build_extract_value(wrapper_struct, i as u32, "modify_tag_field")
+                    .build_struct_gep(cast_tag_data_pointer, i as u32, "modify_tag_field")
                     .unwrap();
+
+                let field_value = if field_layout.is_passed_by_reference() {
+                    field_ptr.into()
+                } else {
+                    env.builder.build_load(field_ptr, "field_value")
+                };
 
                 modify_refcount_layout_help(
                     env,
@@ -1708,7 +1741,7 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
                     layout_ids,
                     mode.to_call_mode(fn_val),
                     when_recursive,
-                    field_ptr,
+                    field_value,
                     field_layout,
                 );
             }

@@ -5,6 +5,28 @@ use bumpalo::Bump;
 use roc_module::operator::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct Collection<'a, T> {
+    pub items: &'a [T],
+    pub final_comments: &'a [CommentOrNewline<'a>],
+}
+
+impl<'a, T> Collection<'a, T> {
+    pub fn empty() -> Collection<'a, T> {
+        Collection {
+            items: &[],
+            final_comments: &[],
+        }
+    }
+
+    pub fn with_items(items: &'a [T]) -> Collection<'a, T> {
+        Collection {
+            items,
+            final_comments: &[],
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Module<'a> {
     Interface { header: InterfaceHeader<'a> },
@@ -111,7 +133,7 @@ pub enum Expr<'a> {
 
     // Lookups
     Var {
-        module_name: &'a str,
+        module_name: &'a str, // module_name will only be filled if the original Roc code stated something like `5 + SomeModule.myVar`, module_name will be blank if it was `5 + myVar`
         ident: &'a str,
     },
 
@@ -231,11 +253,11 @@ pub enum TypeAnnotation<'a> {
     ),
 
     Record {
-        fields: &'a [Loc<AssignedField<'a, TypeAnnotation<'a>>>],
+        fields: Collection<'a, Loc<AssignedField<'a, TypeAnnotation<'a>>>>,
         /// The row type variable in an open record, e.g. the `r` in `{ name: Str }r`.
         /// This is None if it's a closed record annotation like `{ name: Str }`.
         ext: Option<&'a Loc<TypeAnnotation<'a>>>,
-        final_comments: &'a [CommentOrNewline<'a>],
+        // final_comments: &'a [CommentOrNewline<'a>],
     },
 
     /// A tag union, e.g. `[

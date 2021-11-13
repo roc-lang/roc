@@ -186,7 +186,7 @@ pub enum SyntaxError<'a> {
     ArgumentsBeforeEquals(Region),
     NotYetImplemented(String),
     Todo,
-    Type(Type<'a>),
+    Type(EType<'a>),
     Pattern(EPattern<'a>),
     Expr(EExpr<'a>),
     Header(EHeader<'a>),
@@ -258,13 +258,14 @@ pub enum ETypedIdent<'a> {
     HasType(Row, Col),
     IndentHasType(Row, Col),
     Name(Row, Col),
-    Type(Type<'a>, Row, Col),
+    Type(EType<'a>, Row, Col),
     IndentType(Row, Col),
     Identifier(Row, Col),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EPackages<'a> {
+    Open(Row, Col),
     Space(BadInputError, Row, Col),
     Packages(Row, Col),
     IndentPackages(Row, Col),
@@ -393,7 +394,7 @@ pub enum EExpr<'a> {
 
     DefMissingFinalExpr(Row, Col),
     DefMissingFinalExpr2(&'a EExpr<'a>, Row, Col),
-    Type(Type<'a>, Row, Col),
+    Type(EType<'a>, Row, Col),
     Pattern(&'a EPattern<'a>, Row, Col),
     IndentDefBody(Row, Col),
     IndentEquals(Row, Col),
@@ -408,10 +409,10 @@ pub enum EExpr<'a> {
     BackpassComma(Row, Col),
     BackpassArrow(Row, Col),
 
-    When(When<'a>, Row, Col),
-    If(If<'a>, Row, Col),
+    When(EWhen<'a>, Row, Col),
+    If(EIf<'a>, Row, Col),
 
-    Expect(Expect<'a>, Row, Col),
+    Expect(EExpect<'a>, Row, Col),
 
     Lambda(ELambda<'a>, Row, Col),
     Underscore(Row, Col),
@@ -419,15 +420,15 @@ pub enum EExpr<'a> {
     InParens(EInParens<'a>, Row, Col),
     Record(ERecord<'a>, Row, Col),
     Str(EString<'a>, Row, Col),
-    Number(Number, Row, Col),
-    List(List<'a>, Row, Col),
+    Number(ENumber, Row, Col),
+    List(EList<'a>, Row, Col),
 
     IndentStart(Row, Col),
     IndentEnd(Row, Col),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Number {
+pub enum ENumber {
     End,
     LineTooLong,
 }
@@ -501,7 +502,7 @@ pub enum ELambda<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum List<'a> {
+pub enum EList<'a> {
     Open(Row, Col),
     End(Row, Col),
     Space(BadInputError, Row, Col),
@@ -513,7 +514,7 @@ pub enum List<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum When<'a> {
+pub enum EWhen<'a> {
     Space(BadInputError, Row, Col),
     When(Row, Col),
     Is(Row, Col),
@@ -537,7 +538,7 @@ pub enum When<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum If<'a> {
+pub enum EIf<'a> {
     Space(BadInputError, Row, Col),
     If(Row, Col),
     Then(Row, Col),
@@ -556,7 +557,7 @@ pub enum If<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Expect<'a> {
+pub enum EExpect<'a> {
     Space(BadInputError, Row, Col),
     Expect(Row, Col),
     Condition(&'a EExpr<'a>, Row, Col),
@@ -574,7 +575,7 @@ pub enum EPattern<'a> {
     Space(BadInputError, Row, Col),
 
     PInParens(PInParens<'a>, Row, Col),
-    NumLiteral(Number, Row, Col),
+    NumLiteral(ENumber, Row, Col),
 
     IndentStart(Row, Col),
     IndentEnd(Row, Col),
@@ -613,11 +614,11 @@ pub enum PInParens<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Type<'a> {
-    TRecord(TRecord<'a>, Row, Col),
-    TTagUnion(TTagUnion<'a>, Row, Col),
-    TInParens(TInParens<'a>, Row, Col),
-    TApply(TApply, Row, Col),
+pub enum EType<'a> {
+    TRecord(ETypeRecord<'a>, Row, Col),
+    TTagUnion(ETypeTagUnion<'a>, Row, Col),
+    TInParens(ETypeInParens<'a>, Row, Col),
+    TApply(ETypeApply, Row, Col),
     TBadTypeVariable(Row, Col),
     TWildcard(Row, Col),
     ///
@@ -632,14 +633,14 @@ pub enum Type<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TRecord<'a> {
+pub enum ETypeRecord<'a> {
     End(Row, Col),
     Open(Row, Col),
 
     Field(Row, Col),
     Colon(Row, Col),
     Optional(Row, Col),
-    Type(&'a Type<'a>, Row, Col),
+    Type(&'a EType<'a>, Row, Col),
 
     Space(BadInputError, Row, Col),
 
@@ -650,11 +651,11 @@ pub enum TRecord<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TTagUnion<'a> {
+pub enum ETypeTagUnion<'a> {
     End(Row, Col),
     Open(Row, Col),
 
-    Type(&'a Type<'a>, Row, Col),
+    Type(&'a EType<'a>, Row, Col),
 
     Space(BadInputError, Row, Col),
 
@@ -663,11 +664,11 @@ pub enum TTagUnion<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TInParens<'a> {
+pub enum ETypeInParens<'a> {
     End(Row, Col),
     Open(Row, Col),
     ///
-    Type(&'a Type<'a>, Row, Col),
+    Type(&'a EType<'a>, Row, Col),
 
     ///
     Space(BadInputError, Row, Col),
@@ -677,7 +678,7 @@ pub enum TInParens<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TApply {
+pub enum ETypeApply {
     ///
     StartNotUppercase(Row, Col),
     End(Row, Col),
@@ -1261,53 +1262,51 @@ macro_rules! collection_trailing_sep {
 
 #[macro_export]
 macro_rules! collection_trailing_sep_e {
-    ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $min_indent:expr, $open_problem:expr, $space_problem:expr, $indent_problem:expr) => {
+    ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $min_indent:expr, $open_problem:expr, $space_problem:expr, $indent_problem:expr, $space_before:expr) => {
         skip_first!(
             $opening_brace,
-            skip_first!(
-                // We specifically allow space characters inside here, so that
-                // `[  ]` can be successfully parsed as an empty list, and then
-                // changed by the formatter back into `[]`.
-                //
-                // We don't allow newlines or comments in the middle of empty
-                // roc_collections because those are normally stored in an Expr,
-                // and there's no Expr in which to store them in an empty collection!
-                //
-                // We could change the AST to add extra storage specifically to
-                // support empty literals containing newlines or comments, but this
-                // does not seem worth even the tiniest regression in compiler performance.
-                zero_or_more!($crate::parser::word1(b' ', |row, col| $space_problem(
-                    crate::parser::BadInputError::LineTooLong,
-                    row,
-                    col
-                ))),
-                |arena, state| {
-                    let (_, elements, state) =
-                                    and!(
-                                        $crate::parser::trailing_sep_by0(
-                                            $delimiter,
-                                            $crate::blankspace::space0_before_optional_after(
-                                                $elem,
-                                                $min_indent,
-                                                $space_problem,
-                                                $indent_problem,
-                                                $indent_problem
-                                            )
-                                        ),
-                                        $crate::blankspace::space0_e($min_indent, $space_problem, $indent_problem)
-                                    ).parse(arena, state)?;
+            |arena, state| {
+                let (_, spaces, state) = space0_e($min_indent, $space_problem, $indent_problem)
+                    .parse(arena, state)?;
 
-                    let (_,_, state) =
-                            if elements.0.is_empty() {
-                                one_of_with_error![$open_problem; $closing_brace].parse(arena, state)?
-                            } else {
-                                $closing_brace.parse(arena, state)?
-                            };
+                let (_, (mut parsed_elems, mut final_comments), state) =
+                                and!(
+                                    $crate::parser::trailing_sep_by0(
+                                        $delimiter,
+                                        $crate::blankspace::space0_before_optional_after(
+                                            $elem,
+                                            $min_indent,
+                                            $space_problem,
+                                            $indent_problem,
+                                            $indent_problem
+                                        )
+                                    ),
+                                    $crate::blankspace::space0_e($min_indent, $space_problem, $indent_problem)
+                                ).parse(arena, state)?;
 
+                let (_,_, state) =
+                        if parsed_elems.is_empty() {
+                            one_of_with_error![$open_problem; $closing_brace].parse(arena, state)?
+                        } else {
+                            $closing_brace.parse(arena, state)?
+                        };
 
-                    Ok((MadeProgress, elements, state))
+                if !spaces.is_empty() {
+                    if let Some(first) = parsed_elems.first_mut() {
+                        first.value = $space_before(arena.alloc(first.value), spaces)
+                    } else {
+                        assert!(final_comments.is_empty());
+                        final_comments = spaces;
+                    }
                 }
-            )
+
+                let collection = $crate::ast::Collection {
+                    items: parsed_elems.into_bump_slice(),
+                    final_comments,
+                };
+
+                Ok((MadeProgress, collection, state))
+            }
         )
     };
 }

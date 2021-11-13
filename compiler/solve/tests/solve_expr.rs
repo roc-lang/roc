@@ -3306,6 +3306,18 @@ mod solve_expr {
     }
 
     #[test]
+    fn div_ceil() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.divCeil
+                "#
+            ),
+            "Int a, Int a -> Result (Int a) [ DivByZero ]*",
+        );
+    }
+
+    #[test]
     fn pow_int() {
         infer_eq_without_problem(
             indoc!(
@@ -3718,6 +3730,78 @@ mod solve_expr {
                 "#
             ),
             "List a, Nat -> List a",
+        );
+    }
+
+    #[test]
+    fn str_trim() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Str.trim
+                "#
+            ),
+            "Str -> Str",
+        );
+    }
+
+    #[test]
+    fn str_trim_left() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Str.trimLeft
+                "#
+            ),
+            "Str -> Str",
+        );
+    }
+
+    #[test]
+    fn list_take_first() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                List.takeFirst
+                "#
+            ),
+            "List a, Nat -> List a",
+        );
+    }
+
+    #[test]
+    fn list_take_last() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                List.takeLast
+                "#
+            ),
+            "List a, Nat -> List a",
+        );
+    }
+
+    #[test]
+    fn list_sublist() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                List.sublist
+                "#
+            ),
+            "List a, { len : Nat, start : Nat } -> List a",
+        );
+    }
+
+    #[test]
+    fn list_drop_last() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                List.dropLast
+                "#
+            ),
+            "List a -> List a",
         );
     }
 

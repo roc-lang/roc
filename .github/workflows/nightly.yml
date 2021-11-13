@@ -1,32 +1,31 @@
 on:
   schedule:
-    - cron:  '0 0 * * *'
+    - cron:  '0 9 * * *'
 
 name: Nightly Release Build
 
 jobs:
   build:
     name: Test and Build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, i5-4690K]
+    timeout-minutes: 90
+    env:
+      FORCE_COLOR: 1 # for earthly logging
     steps:
       - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
+      - name: Earthly print version
+        run: earthly --version
+      - name: install dependencies, build, run tests, build release
+        run: ./ci/safe-earthly.sh +build-nightly-release
+      - name: Create pre-release with test_archive.tar.gz
+        uses: WebFreak001/deploy-nightly@v1.1.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # automatically provided by github actions
         with:
-          profile: minimal
-          toolchain: stable
-          override: true
-      - run: rustup component add rustfmt
-      - uses: actions-rs/cargo@v1
-        name: cargo update (needed for Inkwell)
-        with:
-          command: update
-      - uses: actions-rs/cargo@v1
-        name: cargo test
-        with:
-          command: test
-          args: --release
-      - uses: actions-rs/cargo@v1
-        name: cargo build
-        with:
-          command: build
-          args: --release
+          upload_url: https://uploads.github.com/repos/rtfeldman/roc/releases/51880579/assets{?name,label}
+          release_id: 51880579
+          asset_path: ./roc_linux_x86_64.tar.gz
+          asset_name: roc_nightly-linux_x86_64-$$.tar.gz # $$ to inserts date (YYYYMMDD) and 6 letter commit hash
+          asset_content_type: application/gzip
+          max_releases: 3
+

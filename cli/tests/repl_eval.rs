@@ -7,19 +7,6 @@ extern crate indoc;
 #[cfg(test)]
 mod repl_eval {
     use cli_utils::helpers;
-    use roc_gen_llvm::run_roc::RocCallResult;
-
-    #[test]
-    fn check_discriminant_size() {
-        // tells us if the size of the discriminant has changed. Lots of other code
-        // relies on this size
-        let value: i64 = 1234;
-        assert_eq!(
-            std::mem::size_of_val(&RocCallResult::Success(value)),
-            roc_gen_llvm::run_roc::ROC_CALL_RESULT_DISCRIMINANT_SIZE
-                + std::mem::size_of_val(&value)
-        )
-    }
 
     const ERROR_MESSAGE_START: char = '─';
 
@@ -114,6 +101,11 @@ mod repl_eval {
             "Num.divFloor 4 0",
             "Err DivByZero : Result (Int *) [ DivByZero ]*",
         );
+    }
+
+    #[test]
+    fn num_ceil_division_success() {
+        expect_success("Num.divCeil 4 3", "Ok 2 : Result (Int *) [ DivByZero ]*")
     }
 
     #[test]

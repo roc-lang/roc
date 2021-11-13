@@ -95,7 +95,7 @@ pub enum Expr2 {
     },
     Call {
         args: PoolVec<(Variable, ExprId)>, // 8B
-        expr: ExprId,                      // 4B
+        expr_id: ExprId,                   // 4B
         expr_var: Variable,                // 4B
         fn_var: Variable,                  // 4B
         closure_var: Variable,             // 4B
@@ -108,11 +108,11 @@ pub enum Expr2 {
     },
     Closure {
         args: PoolVec<(Variable, NodeId<Pattern2>)>, // 8B
-        name: Symbol,                                // 8B
-        body: ExprId,                                // 4B
-        function_type: Variable,                     // 4B
-        recursive: Recursive,                        // 1B
-        extra: NodeId<ClosureExtra>,                 // 4B
+        uniq_symbol: Symbol, // 8B This is a globally unique symbol for the closure
+        body_id: ExprId,     // 4B
+        function_type: Variable, // 4B
+        recursive: Recursive, // 1B
+        extra: NodeId<ClosureExtra>, // 4B
     },
     // Product Types
     Record {

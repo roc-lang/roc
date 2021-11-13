@@ -63,7 +63,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
 
     let window = winit::window::WindowBuilder::new()
         .with_inner_size(PhysicalSize::new(1900.0, 1000.0))
-        .with_title("The Roc Editor - very alpha")
+        .with_title("The Roc Editor - Work In Progress")
         .build(&event_loop)
         .unwrap();
 
@@ -77,9 +77,12 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
             })
             .await
-            .expect("Request adapter");
+            .expect(r#"Request adapter
+            If you're running this from inside nix, follow the instructions here to resolve this: https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#editor
+            "#);
 
         adapter
             .request_device(
@@ -273,12 +276,11 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                         label: Some("Redraw"),
                     });
 
-                let frame = surface
-                    .get_current_frame()
-                    .expect("Failed to acquire next SwapChainFrame")
-                    .output;
+                let surface_texture = surface
+                    .get_current_texture()
+                    .expect("Failed to acquire next SwapChainTexture");
 
-                let view = frame
+                let view = surface_texture
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -373,6 +375,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
 
                 staging_belt.finish();
                 cmd_queue.submit(Some(encoder.finish()));
+                surface_texture.present();
 
                 // Recall unused staging buffers
                 use futures::task::SpawnExt;

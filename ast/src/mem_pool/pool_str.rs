@@ -1,6 +1,6 @@
 use super::pool::{NodeId, Pool, NODE_BYTES};
 use super::shallow_clone::ShallowClone;
-use libc::c_void;
+use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::mem::size_of;
 

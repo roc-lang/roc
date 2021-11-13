@@ -5,7 +5,7 @@ use std::process::Stdio;
 
 use crate::editor::code_lines::CodeLines;
 use crate::editor::ed_error::EdResult;
-use crate::editor::ed_error::MissingSelection;
+use crate::editor::ed_error::{MissingSelection, RocCheckFailed};
 use crate::editor::grid_node_map::GridNodeMap;
 use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::mvc::ed_model::EdModel;
@@ -22,6 +22,7 @@ use crate::editor::mvc::string_update::start_new_string;
 use crate::editor::mvc::string_update::update_small_string;
 use crate::editor::mvc::string_update::update_string;
 use crate::editor::mvc::tld_value_update::{start_new_tld_value, update_tld_val_name};
+#[cfg(feature = "with_sound")]
 use crate::editor::sound::play_sound;
 use crate::ui::text::caret_w_select::CaretWSelect;
 use crate::ui::text::lines::MoveCaretFun;
@@ -53,7 +54,6 @@ use roc_code_markup::markup::nodes::MarkupNode;
 use roc_code_markup::markup::nodes::EQUALS;
 use roc_code_markup::slow_pool::MarkNodeId;
 use roc_code_markup::slow_pool::SlowPool;
-use roc_code_markup::syntax_highlight::HighlightStyle;
 use roc_collections::all::MutMap;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
@@ -250,6 +250,7 @@ impl<'a> EdModel<'a> {
         mark_node_pool: &SlowPool,
     ) -> UIResult<()> {
         let mark_node = mark_node_pool.get(mark_node_id);
+
         let node_newlines = mark_node.get_newlines_at_end();
 
         if mark_node.is_nested() {
@@ -277,9 +278,7 @@ impl<'a> EdModel<'a> {
                 code_lines,
             )?;
 
-            if node_newlines == 0 {
-                *col_nr += node_content.len();
-            }
+            *col_nr += node_content.len();
         }
 
         if node_newlines > 0 {
@@ -523,7 +522,7 @@ impl<'a> EdModel<'a> {
         &mut self,
         modifiers: &Modifiers,
         virtual_keycode: VirtualKeyCode,
-        sound_thread_pool: &mut ThreadPool,
+        _sound_thread_pool: &mut ThreadPool,
     ) -> EdResult<()> {
         match virtual_keycode {
             Left => self.move_caret_left(modifiers)?,
@@ -549,6 +548,7 @@ impl<'a> EdModel<'a> {
             }
             R => {
                 if modifiers.cmd_or_ctrl() {
+                    self.check_file()?;
                     self.run_file()?
                 }
             }
@@ -561,7 +561,8 @@ impl<'a> EdModel<'a> {
                 self.dirty = true;
             }
             F12 => {
-                sound_thread_pool.execute(move || {
+                #[cfg(feature = "with_sound")]
+                _sound_thread_pool.execute(move || {
                     play_sound("./editor/src/editor/resources/sounds/bell_sound.mp3");
                 });
             }
@@ -581,7 +582,6 @@ impl<'a> EdModel<'a> {
             let blank_replacement = MarkupNode::Blank {
                 ast_node_id: sel_block.ast_node_id,
                 attributes: Attributes::default(),
-                syn_high_style: HighlightStyle::Blank,
                 parent_id_opt: expr2_level_mark_node.get_parent_id_opt(),
                 newlines_at_end,
             };
@@ -634,8 +634,27 @@ impl<'a> EdModel<'a> {
         Ok(())
     }
 
-    fn run_file(&mut self) -> UIResult<()> {
-        println!("Executing file...");
+    fn check_file(&mut self) -> EdResult<()> {
+        println!("Checking file (cargo run check <file>)...");
+
+        let roc_file_str = path_to_string(self.file_path);
+
+        let cmd_out = Command::new("cargo")
+            .arg("run")
+            .arg("check")
+            .arg(roc_file_str)
+            .stdout(Stdio::inherit())
+            .output()?;
+
+        if !cmd_out.status.success() {
+            RocCheckFailed.fail()?
+        }
+
+        Ok(())
+    }
+
+    fn run_file(&mut self) -> EdResult<()> {
+        println!("Executing file (cargo run <file>)...");
 
         let roc_file_str = path_to_string(self.file_path);
 
@@ -644,8 +663,7 @@ impl<'a> EdModel<'a> {
             .arg(roc_file_str)
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
-            .output()
-            .expect("Failed to run file");
+            .output()?;
 
         Ok(())
     }
@@ -1425,7 +1443,7 @@ pub mod test_ed_update {
         assert_insert_no_pre(ovec!["┃"], ';')?;
         assert_insert_no_pre(ovec!["┃"], '-')?;
         assert_insert_no_pre(ovec!["┃"], '_')?;
-        // extra space because of Expr2::Blank placholder
+        // extra space because of Expr2::Blank placeholder
         assert_insert_in_def_nls(ovec!["┃ "], ';')?;
         assert_insert_in_def_nls(ovec!["┃ "], '-')?;
         assert_insert_in_def_nls(ovec!["┃ "], '_')?;
@@ -1648,7 +1666,7 @@ pub mod test_ed_update {
             ovec!["val = { a┃ }"],
             ovec!["val = { ab┃: RunTimeError }"],
             'b',
-        )?; // TODO: remove RunTimeError, see isue #1649
+        )?; // TODO: remove RunTimeError, see issue #1649
         assert_insert_nls(
             ovec!["val = { a┃ }"],
             ovec!["val = { a1┃: RunTimeError }"],
@@ -3460,7 +3478,7 @@ pub mod test_ed_update {
         // Blank is inserted when root of Expr2 is deleted
         assert_ctrl_shift_single_up_backspace_nls(ovec!["val = {┃  }"], ovec!["val = ┃ "])?;
 
-        // TODO: uncomment tests, once isue #1649 is fixed
+        // TODO: uncomment tests, once issue #1649 is fixed
         //assert_ctrl_shift_single_up_backspace(ovec!["{ a┃ }"], ovec!["┃ "])?;
         //assert_ctrl_shift_single_up_backspace(ovec!["{ a: { b }┃ }"], ovec!["┃ "])?;
         assert_ctrl_shift_single_up_backspace_nls(

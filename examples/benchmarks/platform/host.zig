@@ -29,7 +29,6 @@ extern fn roc__mainForHost_1_Fx_caller(*const u8, [*]u8, [*]u8) void;
 extern fn roc__mainForHost_1_Fx_size() i64;
 extern fn roc__mainForHost_1_Fx_result_size() i64;
 
-
 const Align = 2 * @alignOf(usize);
 extern fn malloc(size: usize) callconv(.C) ?*align(Align) c_void;
 extern fn realloc(c_ptr: [*]align(Align) u8, size: usize) callconv(.C) ?*c_void;
@@ -137,15 +136,8 @@ fn call_the_closure(closure_data_pointer: [*]u8) void {
 
     roc__mainForHost_1_Fx_caller(&flags, closure_data_pointer, output);
 
-    const elements = @ptrCast([*]u64, @alignCast(8, output));
-
-    var flag = elements[0];
-
-    if (flag == 0) {
-        return;
-    } else {
-        unreachable;
-    }
+    // The closure returns result, nothing interesting to do with it
+    return;
 }
 
 pub export fn roc_fx_putInt(int: i64) i64 {

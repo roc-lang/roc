@@ -14,14 +14,14 @@
     - [x] Push and pop stack frames
     - [x] Deal with returning structs
     - [x] Distinguish which variables go in locals, own stack frame, caller stack frame, etc.
-    - [ ] Ensure early Return statements don't skip stack cleanup
-  - [ ] Vendor-in parity_wasm library so that we can use `bumpalo::Vec`
+    - [x] Ensure early Return statements don't skip stack cleanup
+  - [x] Model the stack machine as a storage mechanism, to make generated code "less bad"
+  - [x] Switch vectors to `bumpalo::Vec` where possible
   - [ ] Implement relocations
     - Requires knowing the _byte_ offset of each call site. This is awkward as the backend builds a `Vec<Instruction>` rather than a `Vec<u8>`. It may be worth serialising each instruction as it is inserted.
 
 - Refactor for code sharing with CPU backends
 
-  - [ ] Implement a `scan_ast` pre-pass like `Backend` does, but for reusing Wasm locals rather than CPU registers
   - [ ] Extract a trait from `WasmBackend` that looks as similar as possible to `Backend`, to prepare for code sharing
   - [ ] Refactor to actually share code between `WasmBackend` and `Backend` if it seems feasible
 
@@ -56,7 +56,7 @@ There is also an improvement on Relooper called ["Stackifier"](https://medium.co
 
 ## Stack machine vs register machine
 
-Wasm's instruction set is based on a stack-machine VM. Whereas CPU instructions have named registers that they operate on, Wasm has no named registers at all. The instructions don't contain register names. Instructions can oly operate on whatever data is at the top of the stack.
+Wasm's instruction set is based on a stack-machine VM. Whereas CPU instructions have named registers that they operate on, Wasm has no named registers at all. The instructions don't contain register names. Instructions can only operate on whatever data is at the top of the stack.
 
 For example the instruction `i64.add` takes two operands. It pops the top two arguments off the VM stack and pushes the result back.
 
@@ -88,7 +88,14 @@ main =
     1 + 2 + 4
 ```
 
+
+### Direct translation of Mono IR
+
 The Mono IR contains two functions, `Num.add` and `main`, so we generate two corresponding WebAssembly functions.
+Since it has a Symbol for every expression, the simplest thing is to create a local for each one.
+The code ends up being quite bloated, with lots of `local.set` and `local.get` instructions.
+
+I've added comments on each line to show what is on the stack and in the locals at each point in the program.
 
 ```
   (func (;0;) (param i64 i64) (result i64)   ; declare function index 0 (Num.add) with two i64 parameters and an i64 result
@@ -115,13 +122,10 @@ The Mono IR contains two functions, `Num.add` and `main`, so we generate two cor
     return)                  ; return the value at the top of the stack
 ```
 
-If we run this code through the `wasm-opt` tool from the [binaryen toolkit](https://github.com/WebAssembly/binaryen#tools), the unnecessary locals get optimised away (which is all of them in this example!). The command line below runs the minimum number of passes to achieve this (`--simplify-locals` must come first).
+### Handwritten equivalent
 
-```
-$ wasm-opt --simplify-locals --reorder-locals --vacuum example.wasm > opt.wasm
-```
-
-The optimised functions have no local variables at all for this example. (Of course, this is an oversimplified toy example! It might not be so extreme in a real program.)
+This code doesn't actually require any locals at all.
+(It also doesn't need the `return` instructions, but that's less of a problem.)
 
 ```
   (func (;0;) (param i64 i64) (result i64)
@@ -138,13 +142,36 @@ The optimised functions have no local variables at all for this example. (Of cou
 
 ### Reducing sets and gets
 
-It would be nice to find some cheap optimisation to reduce the number of `local.set` and `local.get` instructions.
+For our example code, we don't need any locals because the WebAssembly virtual machine effectively _stores_ intermediate results in a stack. Since it's already storing those values, there is no need for us to create locals. If you compare the two versions, you'll see that the `local.set` and `local.get` instructions have simply been deleted and the other instructions are in the same order.
 
-We don't need a `local` if the value we want is already at the top of the VM stack. In fact, for our example above, it just so happens that if we simply skip generating the `local.set` instructions, everything _does_ appear on the VM stack in the right order, which means we can skip the `local.get` too. It ends up being very close to the fully optimised version! I assume this is because the Mono IR within the function is in dependency order, but I'm not sure...
+But sometimes we really do need locals! We may need to use the same symbol twice, or values could end up on the stack in the wrong order and need to be swapped around by setting a local and getting it again.
 
-Of course the trick is to do this reliably for more complex dependency graphs. I am investigating whether we can do it by optimistically assuming it's OK not to create a local, and then keeping track of which symbols are at which positions in the VM stack after every instruction. Then when we need to use a symbol we can first check if it's on the VM stack and only create a local if it's not. In cases where we _do_ need to create a local, we need to go back and insert a `local.set` instruction at an earlier point in the program. We can make this fast by waiting to do all of the insertions in one batch when we're finalising the procedure.
+The hard part is knowing when we need a local, and when we don't. For that, the `WasmBackend` needs to have some understanding of the stack machine.
 
-For a while we thought it would be very helpful to reuse the same local for multiple symbols at different points in the program. And we already have similar code in the CPU backends for register allocation. But on further examination, it doesn't actually buy us much! In our example above, we would still have the same number of `local.set` and `local.get` instructions - they'd just be operating on two locals instead of four! That doesn't shrink much code. Only the declaration at the top of the function would shrink from `(local i64 i64 i64 i64)` to `(local i64 i64)`... and in fact that's only smaller in the text format, it's the same size in the binary format! So the `scan_ast` pass doesn't seem worthwhile for Wasm.
+To help with this, the `CodeBuilder` maintains a vector that represents the stack. For every instruction the backend generates, `CodeBuilder` simulates the right number of pushes and pops for that instruction, so that we always know the state of the VM stack at every point in the program.
+
+When the `WasmBackend` generates code for a `Let` statement, it can "label" the top of the stack with the relevant `Symbol`. Then at any later point in the program, when we need to retrieve a list of symbols in a certain order, we can check whether they already happen to be at the top of the stack in that order (as they were in our example above.)
+
+In practice it should be very common for values to appear on the VM stack in the right order, because in the Mono IR, statements occur in dependency order! We should only generate locals when the dependency graph is a little more complicated, and we actually need them.
+
+```
+  ┌─────────────────┐     ┌─────────────┐
+  │                 │     │             │
+  │                 ├─────►   Storage   ├──────┐
+  │                 │     │             │      │
+  │                 │     └─────────────┘      │
+  │                 │     Manage state about   │
+  │                 │     how/where symbol     │ Delegate part of
+  │   WasmBackend   │     values are stored    │ state management
+  │                 │                          │ for values on
+  │                 │                          │ the VM stack
+  │                 │                          │
+  │                 │  Generate       ┌────────▼──────┐
+  │                 │  instructions   │               │
+  │                 ├─────────────────►  CodeBuilder  │
+  │                 │                 │               │
+  └─────────────────┘                 └───────────────┘
+```
 
 ## Memory
 
@@ -198,6 +225,4 @@ The Module is a _specification_ for how to create an Instance of the program. Th
 
 A WebAssembly module is equivalent to an executable file. It doesn't normally need relocations since at the WebAssembly layer, there is no Address Space Layout Randomisation. If it has relocations then it's an object file.
 
-The [official spec](https://webassembly.github.io/spec/core/binary/modules.html#sections) lists the sections that are part of the final module. It doesn't mention any sections for relocations or symbol names, but it has room for "custom sections" that in practice seem to be used for that.
-
-The WebAssembly `tool-conventions` repo has a document on [linking](https://github.com/WebAssembly/tool-conventions/blob/main/Linking.md), and the `parity_wasm` crate supports "name" and "relocation" [sections](https://docs.rs/parity-wasm/0.42.2/parity_wasm/elements/enum.Section.html).
+The [official spec](https://webassembly.github.io/spec/core/binary/modules.html#sections) lists the sections that are part of the final module. It doesn't mention any sections for relocations or symbol names, but it does support "custom" sections. Conventions to use those for linking are documented in the WebAssembly `tool-conventions` repo [here](https://github.com/WebAssembly/tool-conventions/blob/main/Linking.md) and it mentions that LLVM is using those conventions.

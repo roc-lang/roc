@@ -1,0 +1,4 @@
+[alias]
+test-gen-llvm = "test -p test_gen"
+test-gen-dev = "test -p roc_gen_dev -p test_gen --no-default-features --features gen-dev"
+test-gen-wasm = "test -p test_gen --no-default-features --features gen-wasm"

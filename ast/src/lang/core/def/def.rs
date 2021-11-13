@@ -464,7 +464,7 @@ fn canonicalize_pending_def<'a>(
                         env.tailcallable_symbol = Some(*defined_symbol);
                     };
 
-                    // regiser the name of this closure, to make sure the closure won't capture it's own name
+                    // register the name of this closure, to make sure the closure won't capture it's own name
                     if let (Pattern2::Identifier(ref defined_symbol), &ast::Expr::Closure(_, _)) =
                         (&env.pool[loc_can_pattern], &loc_expr.value)
                     {
@@ -488,9 +488,9 @@ fn canonicalize_pending_def<'a>(
                     match loc_can_expr {
                         Expr2::Closure {
                             args: closure_args,
-                            body,
+                            body_id,
                             extra,
-                            name: closure_symbol,
+                            uniq_symbol: closure_symbol,
                             ..
                         } => {
                             let symbol = match env.pool[loc_can_pattern] {
@@ -570,7 +570,7 @@ fn canonicalize_pending_def<'a>(
                                 arguments,
                                 rigids: env.pool.add(rigids),
                                 return_type,
-                                body,
+                                body_id,
                             };
 
                             let def = Def::Function(function_def);
@@ -632,7 +632,7 @@ fn canonicalize_pending_def<'a>(
                 env.tailcallable_symbol = Some(*defined_symbol);
             };
 
-            // regiser the name of this closure, to make sure the closure won't capture it's own name
+            // register the name of this closure, to make sure the closure won't capture it's own name
             if let (Pattern2::Identifier(ref defined_symbol), &ast::Expr::Closure(_, _)) =
                 (&env.pool[loc_can_pattern], &loc_expr.value)
             {
@@ -656,9 +656,9 @@ fn canonicalize_pending_def<'a>(
             match loc_can_expr {
                 Expr2::Closure {
                     args: closure_args,
-                    body,
+                    body_id,
                     extra,
-                    name: closure_symbol,
+                    uniq_symbol: closure_symbol,
                     ..
                 } => {
                     let symbol = match env.pool[loc_can_pattern] {
@@ -703,7 +703,7 @@ fn canonicalize_pending_def<'a>(
                         name: symbol,
                         arguments,
                         return_var: env.var_store.fresh(),
-                        body,
+                        body_id,
                     };
 
                     let def = Def::Function(function_def);
