@@ -127,7 +127,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
         let src_hash = hash_state.finish();
 
         // Filename contains a hash of the Roc test source code. Helpful when comparing across commits.
-        let dir = "/tmp/roc/compiler/gen_wasm/output";
+        let dir = "/tmp/roc/gen_wasm";
         std::fs::create_dir_all(dir).unwrap();
         let path = format!("{}/test-{:016x}.wasm", dir, src_hash);
 
