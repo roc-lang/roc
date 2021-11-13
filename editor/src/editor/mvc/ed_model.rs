@@ -290,10 +290,14 @@ pub mod test_ed_model {
             PathBuf::from([Uuid::new_v4().to_string(), ".roc".to_string()].join(""));
         let temp_file_full_path = temp_dir.path().join(temp_file_path_buf);
 
-        let mut file = File::create(temp_file_full_path.clone()).unwrap_or_else(|_| panic!("Failed to create temporary file for path {:?}",
-            temp_file_full_path));
-        writeln!(file, "{}", clean_code_str).unwrap_or_else(|_| panic!("Failed to write {:?} to file: {:?}",
-            clean_code_str, file));
+        let mut file = File::create(temp_file_full_path.clone()).unwrap_or_else(|_| {
+            panic!(
+                "Failed to create temporary file for path {:?}",
+                temp_file_full_path
+            )
+        });
+        writeln!(file, "{}", clean_code_str)
+            .unwrap_or_else(|_| panic!("Failed to write {:?} to file: {:?}", clean_code_str, file));
 
         let loaded_module = load_module(&temp_file_full_path);
 
