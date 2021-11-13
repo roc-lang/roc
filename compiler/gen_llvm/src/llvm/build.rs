@@ -672,7 +672,7 @@ fn promote_to_main_function<'a, 'ctx, 'env>(
     top_level: ProcLayout<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
     let it = top_level.arguments.iter().copied();
-    let bytes = roc_mono::alias_analysis::func_name_bytes_help(symbol, it, top_level.result);
+    let bytes = roc_mono::alias_analysis::func_name_bytes_help(symbol, it, &top_level.result);
     let func_name = FuncName(&bytes);
     let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
 
@@ -4150,7 +4150,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
                         let bytes = roc_mono::alias_analysis::func_name_bytes_help(
                             symbol,
                             it,
-                            top_level.result,
+                            &top_level.result,
                         );
                         let func_name = FuncName(&bytes);
                         let func_solutions = mod_solutions.func_solutions(func_name).unwrap();

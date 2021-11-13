@@ -560,7 +560,7 @@ impl<'a> BorrowInfState<'a> {
                 arg_layouts,
                 ..
             } => {
-                let top_level = ProcLayout::new(self.arena, arg_layouts, *ret_layout);
+                let top_level = ProcLayout::new(self.arena, arg_layouts, **ret_layout);
 
                 // get the borrow signature of the applied function
                 let ps = param_map
@@ -795,7 +795,7 @@ impl<'a> BorrowInfState<'a> {
             Stmt::Ret(z),
         ) = (v, b)
         {
-            let top_level = ProcLayout::new(self.arena, arg_layouts, *ret_layout);
+            let top_level = ProcLayout::new(self.arena, arg_layouts, **ret_layout);
 
             if self.current_proc == *g && x == *z {
                 // anonymous functions (for which the ps may not be known)

@@ -24,7 +24,7 @@ pub const STATIC_LIST_NAME: ConstName = ConstName(b"THIS IS A STATIC LIST");
 const ENTRY_POINT_NAME: &[u8] = b"mainForHost";
 
 pub fn func_name_bytes(proc: &Proc) -> [u8; SIZE] {
-    func_name_bytes_help(proc.name, proc.args.iter().map(|x| x.0), proc.ret_layout)
+    func_name_bytes_help(proc.name, proc.args.iter().map(|x| x.0), &proc.ret_layout)
 }
 
 const DEBUG: bool = false;
@@ -53,7 +53,7 @@ impl TagUnionId {
 pub fn func_name_bytes_help<'a, I>(
     symbol: Symbol,
     argument_layouts: I,
-    return_layout: Layout<'a>,
+    return_layout: &Layout<'a>,
 ) -> [u8; SIZE]
 where
     I: Iterator<Item = Layout<'a>>,
@@ -162,13 +162,13 @@ where
                     match layout {
                         RawFunctionLayout::Function(_, _, _) => {
                             let it = top_level.arguments.iter().copied();
-                            let bytes = func_name_bytes_help(*symbol, it, top_level.result);
+                            let bytes = func_name_bytes_help(*symbol, it, &top_level.result);
 
                             host_exposed_functions.push((bytes, top_level.arguments));
                         }
                         RawFunctionLayout::ZeroArgumentThunk(_) => {
                             let it = std::iter::once(Layout::Struct(&[]));
-                            let bytes = func_name_bytes_help(*symbol, it, top_level.result);
+                            let bytes = func_name_bytes_help(*symbol, it, &top_level.result);
 
                             host_exposed_functions.push((bytes, top_level.arguments));
                         }
@@ -196,7 +196,7 @@ where
         let roc_main_bytes = func_name_bytes_help(
             entry_point.symbol,
             entry_point.layout.arguments.iter().copied(),
-            entry_point.layout.result,
+            &entry_point.layout.result,
         );
         let roc_main = FuncName(&roc_main_bytes);
 
@@ -660,7 +660,7 @@ fn call_spec(
 
             let arg_value_id = build_tuple_value(builder, env, block, call.arguments)?;
             let it = arg_layouts.iter().copied();
-            let bytes = func_name_bytes_help(*symbol, it, *ret_layout);
+            let bytes = func_name_bytes_help(*symbol, it, ret_layout);
             let name = FuncName(&bytes);
             let module = MOD_APP;
             builder.add_call(block, spec_var, module, name, arg_value_id)
@@ -708,7 +708,7 @@ fn call_spec(
             let update_mode_var = UpdateModeVar(&mode);
 
             let it = arg_layouts.iter().copied();
-            let bytes = func_name_bytes_help(*function_name, it, *ret_layout);
+            let bytes = func_name_bytes_help(*function_name, it, ret_layout);
             let name = FuncName(&bytes);
             let module = MOD_APP;
 

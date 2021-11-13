@@ -667,7 +667,7 @@ impl<'a> Context<'a> {
                 arg_layouts,
                 ..
             } => {
-                let top_level = ProcLayout::new(self.arena, arg_layouts, *ret_layout);
+                let top_level = ProcLayout::new(self.arena, arg_layouts, **ret_layout);
 
                 // get the borrow signature
                 let ps = self
