@@ -4,7 +4,7 @@ use code_builder::Align;
 use roc_collections::all::MutMap;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
-use roc_mono::layout::{Layout, LayoutIds};
+use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
 use crate::layout::WasmLayout;
 use crate::low_level::{build_call_low_level, LowlevelBuildResult};
@@ -294,16 +294,17 @@ impl<'a> WasmBackend<'a> {
 
                     _ => {
                         self.storage.load_symbols(&mut self.code_builder, &[*sym]);
-                        self.code_builder.br(self.block_depth); // jump to end of function (for stack frame pop)
                     }
                 }
+                // jump to the "stack frame pop" code at the end of the function
+                self.code_builder.br(self.block_depth - 1);
 
                 Ok(())
             }
 
             Stmt::Switch {
                 cond_symbol,
-                cond_layout: _,
+                cond_layout,
                 branches,
                 default_branch,
                 ret_layout: _,
@@ -321,10 +322,13 @@ impl<'a> WasmBackend<'a> {
                     cond_storage,
                 );
 
-                // create (number_of_branches - 1) new blocks.
+                // create a block for each branch except the default
                 for _ in 0..branches.len() {
                     self.start_block(BlockType::NoResult)
                 }
+
+                let is_bool = matches!(cond_layout, Layout::Builtin(Builtin::Int1));
+                let cond_type = WasmLayout::new(cond_layout).value_type();
 
                 // then, we jump whenever the value under scrutiny is equal to the value of a branch
                 for (i, (value, _, _)) in branches.iter().enumerate() {
@@ -332,10 +336,31 @@ impl<'a> WasmBackend<'a> {
                     self.storage
                         .load_symbols(&mut self.code_builder, &[*cond_symbol]);
 
-                    self.code_builder.i32_const(*value as i32);
-
-                    // compare the 2 topmost values
-                    self.code_builder.i32_eq();
+                    if is_bool {
+                        // We already have a bool, don't need to compare against a const to get one
+                        if *value == 0 {
+                            self.code_builder.i32_eqz();
+                        }
+                    } else {
+                        match cond_type {
+                            ValueType::I32 => {
+                                self.code_builder.i32_const(*value as i32);
+                                self.code_builder.i32_eq();
+                            }
+                            ValueType::I64 => {
+                                self.code_builder.i64_const(*value as i64);
+                                self.code_builder.i64_eq();
+                            }
+                            ValueType::F32 => {
+                                self.code_builder.f32_const(f32::from_bits(*value as u32));
+                                self.code_builder.f32_eq();
+                            }
+                            ValueType::F64 => {
+                                self.code_builder.f64_const(f64::from_bits(*value as u64));
+                                self.code_builder.f64_eq();
+                            }
+                        }
+                    }
 
                     // "break" out of `i` surrounding blocks
                     self.code_builder.br_if(i as u32);

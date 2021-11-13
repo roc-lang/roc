@@ -159,3 +159,63 @@ fn err_empty_tag_union() {
         i64
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn is_ok() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            result : Result I64 {}
+            result = Ok 2
+
+            Result.isOk result
+            "#
+        ),
+        true,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            result : Result I64 {}
+            result = Err {}
+
+            Result.isOk result
+            "#
+        ),
+        false,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn is_err() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            result : Result I64 {}
+            result = Ok 2
+
+            Result.isErr result
+            "#
+        ),
+        false,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            result : Result I64 {}
+            result = Err {}
+
+            Result.isErr result
+            "#
+        ),
+        true,
+        bool
+    );
+}

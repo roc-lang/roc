@@ -862,58 +862,41 @@ pub fn listSwap(
     return newList;
 }
 
-pub fn listTakeFirst(
+pub fn listSublist(
     list: RocList,
     alignment: u32,
     element_width: usize,
-    take_count: usize,
-) callconv(.C) RocList {
-    if (list.bytes) |source_ptr| {
-        if (take_count == 0) {
-            return RocList.empty();
-        }
-        const in_len = list.len();
-        const out_len = std.math.min(take_count, in_len);
-
-        const output = RocList.allocate(alignment, out_len, element_width);
-        const target_ptr = output.bytes orelse unreachable;
-
-        @memcpy(target_ptr, source_ptr, out_len * element_width);
-
-        utils.decref(list.bytes, in_len * element_width, alignment);
-
-        return output;
-    } else {
-        return RocList.empty();
-    }
-}
-
-pub fn listTakeLast(
-    list: RocList,
-    alignment: u32,
-    element_width: usize,
-    take_count: usize,
+    start: usize,
+    len: usize,
     dec: Dec,
 ) callconv(.C) RocList {
-    if (take_count == 0) {
-        return RocList.empty();
-    }
     if (list.bytes) |source_ptr| {
         const size = list.len();
-        if (size <= take_count) {
-            return list;
+
+        if (start >= size) {
+            return RocList.empty();
         }
-        const drop_count = size - take_count;
-        return listDrop(
-            list,
-            alignment,
-            element_width,
-            drop_count,
-            dec,
-        );
-    } else {
-        return RocList.empty();
+
+        const keep_len = std.math.min(len, size - start);
+        const drop_len = std.math.max(start, 0);
+
+        var i: usize = 0;
+        while (i < drop_len) : (i += 1) {
+            const element = source_ptr + i * element_width;
+            dec(element);
+        }
+
+        const output = RocList.allocate(alignment, keep_len, element_width);
+        const target_ptr = output.bytes orelse unreachable;
+
+        @memcpy(target_ptr, source_ptr + start * element_width, keep_len * element_width);
+
+        utils.decref(list.bytes, size * element_width, alignment);
+
+        return output;
     }
+
+    return RocList.empty();
 }
 
 pub fn listDrop(
