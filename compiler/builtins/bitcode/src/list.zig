@@ -893,11 +893,10 @@ pub fn listSublist(
     list: RocList,
     alignment: u32,
     element_width: usize,
-    rec: extern struct { len: usize, start: usize },
+    start: usize,
+    len: usize,
     dec: Dec,
 ) callconv(.C) RocList {
-    const start = rec.start;
-    const len = rec.len;
     if (list.bytes) |source_ptr| {
         const size = list.len();
 
@@ -922,9 +921,9 @@ pub fn listSublist(
         utils.decref(list.bytes, size * element_width, alignment);
 
         return output;
-    } else {
-        return RocList.empty();
-    }
+    } 
+
+    return RocList.empty();
 }
 
 pub fn listTakeLast(

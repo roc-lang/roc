@@ -343,7 +343,8 @@ pub fn list_sublist<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     original_wrapper: StructValue<'ctx>,
-    len_and_start: StructValue<'ctx>,
+    start: IntValue<'ctx>,
+    len: IntValue<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
     let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
@@ -353,12 +354,8 @@ pub fn list_sublist<'a, 'ctx, 'env>(
             pass_list_cc(env, original_wrapper.into()),
             env.alignment_intvalue(element_layout),
             layout_width(env, element_layout),
-            complex_bitcast(
-                env.builder,
-                len_and_start.into(),
-                env.str_list_c_abi().into(),
-                "to_i128",
-            ),
+            start.into(),
+            len.into(),
             dec_element_fn.as_global_value().as_pointer_value().into(),
         ],
         bitcode::LIST_SUBLIST,

@@ -5212,12 +5212,16 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         ListSublist => {
             // List.sublist : List elem, { start : Nat, len : Nat } -> List elem
-            debug_assert_eq!(args.len(), 2);
+            //
+            // As a low-level, record is destructed
+            // List.sublist : List elem, start : Nat, len : Nat -> List elem
+            debug_assert_eq!(args.len(), 3);
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
             let original_wrapper = list.into_struct_value();
 
-            let rec = load_symbol(scope, &args[1]);
+            let start = load_symbol(scope, &args[1]);
+            let len = load_symbol(scope, &args[2]);
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
@@ -5225,7 +5229,8 @@ fn run_low_level<'a, 'ctx, 'env>(
                     env,
                     layout_ids,
                     original_wrapper,
-                    rec.into_struct_value(),
+                    start.into_int_value(),
+                    len.into_int_value(),
                     element_layout,
                 ),
                 _ => unreachable!("Invalid layout {:?} in List.sublist", list_layout),

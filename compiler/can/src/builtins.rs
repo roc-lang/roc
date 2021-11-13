@@ -2070,9 +2070,32 @@ fn list_sublist(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let sym_list = Symbol::ARG_1;
     let sym_rec = Symbol::ARG_2;
 
+    let start_var = var_store.fresh();
+    let len_var = var_store.fresh();
+
+    let get_start = Access {
+        record_var: rec_var,
+        ext_var: var_store.fresh(),
+        field_var: var_store.fresh(),
+        loc_expr: Box::new(no_region(Var(sym_rec))),
+        field: "start".into(),
+    };
+
+    let get_len = Access {
+        record_var: rec_var,
+        ext_var: var_store.fresh(),
+        field_var: var_store.fresh(),
+        loc_expr: Box::new(no_region(Var(sym_rec))),
+        field: "len".into(),
+    };
+
     let body = RunLowLevel {
         op: LowLevel::ListSublist,
-        args: vec![(list_var, Var(sym_list)), (rec_var, Var(sym_rec))],
+        args: vec![
+            (list_var, Var(sym_list)),
+            (start_var, get_start),
+            (len_var, get_len),
+        ],
         ret_var: list_var,
     };
 
