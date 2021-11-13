@@ -1134,7 +1134,7 @@ pub enum CallType<'a> {
     },
     Foreign {
         foreign_symbol: ForeignSymbol,
-        ret_layout: Layout<'a>,
+        ret_layout: &'a Layout<'a>,
     },
     LowLevel {
         op: LowLevel,
@@ -3947,7 +3947,7 @@ pub fn with_hole<'a>(
             let call = self::Call {
                 call_type: CallType::Foreign {
                     foreign_symbol,
-                    ret_layout: layout,
+                    ret_layout: env.arena.alloc(layout),
                 },
                 arguments: arg_symbols,
             };
