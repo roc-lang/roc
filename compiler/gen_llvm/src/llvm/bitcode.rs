@@ -260,7 +260,7 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
                 .build_pointer_cast(
                     argument_ptr.into_pointer_value(),
                     basic_type,
-                    "cast_ptr_to_tag",
+                    "cast_ptr_to_tag_build_transform_caller_help",
                 )
                 .into()
         } else {
@@ -409,7 +409,7 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
 
             let value = if layout.is_passed_by_reference() {
                 env.builder
-                    .build_pointer_cast(value_ptr, value_type, "cast_ptr_to_tag")
+                    .build_pointer_cast(value_ptr, value_type, "cast_ptr_to_tag_build_rc_wrapper")
                     .into()
             } else {
                 let value_cast = env

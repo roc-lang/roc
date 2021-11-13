@@ -1724,17 +1724,6 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
             if let Layout::RecursivePointer = field_layout {
                 panic!("non-recursive tag unions cannot contain naked recursion pointers!");
             } else if field_layout.contains_refcounted() {
-                // crazy hack: inlining this function when it decrements a list or string results
-                // in many, many valgrind errors in `--optimize` mode. We do not know why.
-                if let Layout::Builtin(Builtin::Str | Builtin::List(_)) = field_layout {
-                    use inkwell::attributes::{Attribute, AttributeLoc};
-                    let kind_id = Attribute::get_named_enum_kind_id("noinline");
-                    debug_assert!(kind_id > 0);
-                    let enum_attr = env.context.create_enum_attribute(kind_id, 1);
-
-                    fn_val.add_attribute(AttributeLoc::Function, enum_attr);
-                }
-
                 let field_ptr = env
                     .builder
                     .build_struct_gep(cast_tag_data_pointer, i as u32, "modify_tag_field")

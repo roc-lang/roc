@@ -17,7 +17,7 @@ use morphic_lib::UpdateMode;
 use roc_builtins::bitcode;
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
-use super::build::load_roc_value;
+use super::build::{load_roc_value, store_roc_value};
 
 pub fn pass_update_mode<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -55,9 +55,13 @@ pub fn call_bitcode_fn_returns_list<'a, 'ctx, 'env>(
 fn pass_element_as_opaque<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     element: BasicValueEnum<'ctx>,
+    layout: Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let element_ptr = env.builder.build_alloca(element.get_type(), "element");
-    env.builder.build_store(element_ptr, element);
+    let element_type = basic_type_from_layout(env, &layout);
+    let element_ptr = env
+        .builder
+        .build_alloca(element_type, "element_to_pass_as_opaque");
+    store_roc_value(env, layout, element_ptr, element);
 
     env.builder.build_bitcast(
         element_ptr,
@@ -108,7 +112,7 @@ pub fn list_single<'a, 'ctx, 'env>(
         env,
         &[
             env.alignment_intvalue(element_layout),
-            pass_element_as_opaque(env, element),
+            pass_element_as_opaque(env, element, *element_layout),
             layout_width(env, element_layout),
         ],
         bitcode::LIST_SINGLE,
@@ -130,7 +134,7 @@ pub fn list_repeat<'a, 'ctx, 'env>(
         &[
             list_len.into(),
             env.alignment_intvalue(element_layout),
-            pass_element_as_opaque(env, element),
+            pass_element_as_opaque(env, element, *element_layout),
             layout_width(env, element_layout),
             inc_element_fn.as_global_value().as_pointer_value().into(),
         ],
@@ -250,7 +254,7 @@ pub fn list_append<'a, 'ctx, 'env>(
         &[
             pass_list_cc(env, original_wrapper.into()),
             env.alignment_intvalue(element_layout),
-            pass_element_as_opaque(env, element),
+            pass_element_as_opaque(env, element, *element_layout),
             layout_width(env, element_layout),
             pass_update_mode(env, update_mode),
         ],
@@ -270,7 +274,7 @@ pub fn list_prepend<'a, 'ctx, 'env>(
         &[
             pass_list_cc(env, original_wrapper.into()),
             env.alignment_intvalue(element_layout),
-            pass_element_as_opaque(env, element),
+            pass_element_as_opaque(env, element, *element_layout),
             layout_width(env, element_layout),
         ],
         bitcode::LIST_PREPEND,
@@ -409,7 +413,7 @@ pub fn list_set<'a, 'ctx, 'env>(
             &[
                 bytes.into(),
                 index.into(),
-                pass_element_as_opaque(env, element),
+                pass_element_as_opaque(env, element, *element_layout),
                 layout_width(env, element_layout),
                 dec_element_fn.as_global_value().as_pointer_value().into(),
             ],
@@ -422,7 +426,7 @@ pub fn list_set<'a, 'ctx, 'env>(
                 length.into(),
                 env.alignment_intvalue(element_layout),
                 index.into(),
-                pass_element_as_opaque(env, element),
+                pass_element_as_opaque(env, element, *element_layout),
                 layout_width(env, element_layout),
                 dec_element_fn.as_global_value().as_pointer_value().into(),
             ],
@@ -598,7 +602,7 @@ pub fn list_contains<'a, 'ctx, 'env>(
         env,
         &[
             pass_list_cc(env, list),
-            pass_element_as_opaque(env, element),
+            pass_element_as_opaque(env, element, *element_layout),
             layout_width(env, element_layout),
             eq_fn,
         ],
