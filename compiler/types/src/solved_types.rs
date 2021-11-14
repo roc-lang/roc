@@ -1,6 +1,6 @@
 use crate::subs::{FlatType, GetSubsSlice, Subs, VarId, VarStore, Variable};
 use crate::types::{Problem, RecordField, Type};
-use roc_collections::all::{ImMap, MutSet, SendMap};
+use roc_collections::all::{MutMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
@@ -302,7 +302,7 @@ pub struct SolvedTypeState {
     pub problems: Vec<Problem>,
 }
 
-impl<'a> std::ops::Index<TypeSlice> for SolvedTypeState {
+impl std::ops::Index<TypeSlice> for SolvedTypeState {
     type Output = [SolvedTypeTag];
 
     fn index(&self, index: TypeSlice) -> &Self::Output {
@@ -310,7 +310,7 @@ impl<'a> std::ops::Index<TypeSlice> for SolvedTypeState {
     }
 }
 
-impl<'a> std::ops::Index<TypeIndex> for SolvedTypeState {
+impl std::ops::Index<TypeIndex> for SolvedTypeState {
     type Output = SolvedTypeTag;
 
     fn index(&self, index: TypeIndex) -> &Self::Output {
@@ -318,18 +318,26 @@ impl<'a> std::ops::Index<TypeIndex> for SolvedTypeState {
     }
 }
 
+impl std::ops::Index<Index<Lowercase>> for SolvedTypeState {
+    type Output = Lowercase;
+
+    fn index(&self, index: Index<Lowercase>) -> &Self::Output {
+        &self.lowercases[index.index as usize]
+    }
+}
+
 type TypeIndex = Index<SolvedTypeTag>;
 
 pub struct Index<T> {
     _marker: std::marker::PhantomData<T>,
-    index: u32,
+    pub index: u32,
 }
 
 impl<T> Clone for Index<T> {
     fn clone(&self) -> Self {
         Self {
-            _marker: self._marker.clone(),
-            index: self.index.clone(),
+            _marker: self._marker,
+            index: self.index,
         }
     }
 }
@@ -340,8 +348,8 @@ type TypeSlice = Slice<SolvedTypeTag>;
 
 pub struct Slice<T> {
     _marker: std::marker::PhantomData<T>,
-    start: u32,
-    length: u16,
+    pub start: u32,
+    pub length: u16,
 }
 
 impl<T> Slice<T> {
@@ -404,10 +412,10 @@ pub enum SolvedTypeTag {
 }
 
 pub struct AliasData {
-    name: Symbol,
-    lambda_set_variables: Vec<SolvedTypeTag>,
-    actual: TypeIndex,
-    arguments: Vec<(Lowercase, SolvedTypeTag)>,
+    pub name: Symbol,
+    pub lambda_set_variables: Vec<SolvedTypeTag>,
+    pub actual: TypeIndex,
+    pub arguments: Vec<(Lowercase, SolvedTypeTag)>,
 }
 
 /// A marker that a given Subs has been solved.
@@ -961,8 +969,8 @@ impl RecursionVars {
 
 #[derive(Debug, Clone, Default)]
 pub struct FreeVars {
-    pub named_vars: ImMap<Lowercase, Variable>,
-    pub unnamed_vars: ImMap<VarId, Variable>,
+    pub named_vars: MutMap<Lowercase, Variable>,
+    pub unnamed_vars: MutMap<VarId, Variable>,
     pub wildcards: Vec<Variable>,
 }
 

@@ -1,3 +1,5 @@
+use std::collections::hash_map::Entry;
+
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::MutMap;
@@ -679,23 +681,237 @@ fn type_tag_to_variable(
 
             register(subs, rank, pools, content)
         }
-        SolvedTypeTag::Rigid(_) => todo!(),
-
-        SolvedTypeTag::Flex(var_id) => {
-            Type::Variable(var_id_to_flex_var(*var_id, free_vars, var_store))
+        SolvedTypeTag::Rigid(lowercase) => {
+            match free_vars.named_vars.entry(state[lowercase].clone()) {
+                Entry::Occupied(occupied) => *occupied.get(),
+                Entry::Vacant(vacant) => {
+                    let var = subs.fresh_unnamed_flex_var();
+                    vacant.insert(var);
+                    var
+                }
+            }
         }
-        SolvedTypeTag::Wildcard => todo!(),
-        SolvedTypeTag::Record { ext, fields } => todo!(),
+
+        SolvedTypeTag::Flex(var_id) => match free_vars.unnamed_vars.entry(var_id) {
+            Entry::Occupied(occupied) => *occupied.get(),
+            Entry::Vacant(vacant) => {
+                let var = subs.fresh_unnamed_flex_var();
+                vacant.insert(var);
+                var
+            }
+        },
+        SolvedTypeTag::Wildcard => {
+            let var = subs.fresh_unnamed_flex_var();
+            free_vars.wildcards.push(var);
+            var
+        }
+        SolvedTypeTag::Record { ext, fields } => {
+            let slice = &state.record_fields[fields.start as usize..][..fields.len()];
+
+            let mut field_vars = Vec::with_capacity(slice.len());
+
+            for (lowercase, record_field) in slice {
+                let record_field = record_field
+                    .map(|tag| type_tag_to_variable(subs, state, free_vars, pools, rank, *tag));
+                field_vars.push((lowercase.clone(), record_field));
+            }
+
+            let ext = state[ext];
+
+            let temp_ext_var = type_tag_to_variable(subs, state, free_vars, pools, rank, ext);
+
+            let (it, new_ext_var) =
+                gather_fields_unsorted_iter(subs, RecordFields::empty(), temp_ext_var);
+
+            let it = it
+                .into_iter()
+                .map(|(field, field_type)| (field.clone(), field_type));
+
+            field_vars.extend(it);
+            field_vars.sort_unstable_by(RecordFields::compare);
+
+            let record_fields = RecordFields::insert_into_subs(subs, field_vars);
+
+            let content = Content::Structure(FlatType::Record(record_fields, new_ext_var));
+
+            register(subs, rank, pools, content)
+        }
         SolvedTypeTag::EmptyRecord => Variable::EMPTY_RECORD,
-        SolvedTypeTag::TagUnion { ext, tags } => todo!(),
-        SolvedTypeTag::FunctionOrTagUnion(_, _, _) => todo!(),
-        SolvedTypeTag::RecursiveTagUnion { ext, rec_var, tags } => todo!(),
+        SolvedTypeTag::TagUnion { ext, tags } => {
+            let (union_tags, ext) = tag_helper(subs, state, free_vars, pools, rank, tags, ext);
+            let content = Content::Structure(FlatType::TagUnion(union_tags, ext));
+
+            register(subs, rank, pools, content)
+        }
+        SolvedTypeTag::FunctionOrTagUnion(tag_name_index, symbol, ext) => {
+            // FunctionOrTagUnion(Index<TagName>, Symbol, Index<SolvedTypeTag>),
+            let temp_ext_var =
+                type_tag_to_variable(subs, state, free_vars, pools, rank, state[ext]);
+            let mut ext_tag_vec = Vec::new();
+            let new_ext_var = match roc_types::pretty_print::chase_ext_tag_union(
+                subs,
+                temp_ext_var,
+                &mut ext_tag_vec,
+            ) {
+                Ok(()) => Variable::EMPTY_TAG_UNION,
+                Err((new, _)) => new,
+            };
+            debug_assert!(ext_tag_vec.is_empty());
+
+            let start = subs.tag_names.len() as u32;
+            subs.tag_names
+                .push(state.tag_names[tag_name_index.index as usize].clone());
+            let slice = SubsIndex::new(start);
+
+            let content =
+                Content::Structure(FlatType::FunctionOrTagUnion(slice, symbol, new_ext_var));
+
+            register(subs, rank, pools, content)
+        }
+        SolvedTypeTag::RecursiveTagUnion {
+            ext,
+            rec_var: rec_var_id,
+            tags,
+        } => {
+            let (union_tags, ext) = tag_helper(subs, state, free_vars, pools, rank, tags, ext);
+
+            let rec_var = match free_vars.unnamed_vars.entry(rec_var_id) {
+                Entry::Occupied(occupied) => *occupied.get(),
+                Entry::Vacant(vacant) => {
+                    let var = subs.fresh_unnamed_flex_var();
+                    vacant.insert(var);
+                    var
+                }
+            };
+
+            let content = Content::Structure(FlatType::RecursiveTagUnion(rec_var, union_tags, ext));
+
+            register(subs, rank, pools, content)
+        }
         SolvedTypeTag::EmptyTagUnion => Variable::EMPTY_TAG_UNION,
-        SolvedTypeTag::Alias(_) => todo!(),
-        SolvedTypeTag::HostExposedAlias(_, _) => todo!(),
+        SolvedTypeTag::Alias(alias_data_index) => {
+            alias_helper(subs, state, free_vars, pools, rank, alias_data_index)
+        }
+        SolvedTypeTag::HostExposedAlias(var_id, alias_data_index) => {
+            let result = alias_helper(subs, state, free_vars, pools, rank, alias_data_index);
+
+            let actual_var = match free_vars.unnamed_vars.entry(var_id) {
+                Entry::Occupied(occupied) => *occupied.get(),
+                Entry::Vacant(vacant) => {
+                    let var = subs.fresh_unnamed_flex_var();
+                    vacant.insert(var);
+                    var
+                }
+            };
+
+            // We only want to unify the actual_var with the alias once
+            // if it's already redirected (and therefore, redundant)
+            // don't do it again
+            if !subs.redundant(actual_var) {
+                let descriptor = subs.get(result);
+                subs.union(result, actual_var, descriptor);
+            }
+
+            result
+        }
         SolvedTypeTag::Erroneous(_) => todo!(),
         SolvedTypeTag::Error => todo!(),
     }
+}
+
+fn alias_helper(
+    subs: &mut Subs,
+    state: &SolvedTypeState,
+    free_vars: &mut FreeVars,
+    pools: &mut Pools,
+    rank: Rank,
+    alias_data_index: roc_types::solved_types::Index<roc_types::solved_types::AliasData>,
+) -> Variable {
+    let alias_data = &state.aliases[alias_data_index.index as usize];
+
+    let mut arg_vars = Vec::with_capacity(alias_data.arguments.len());
+    for (arg, arg_type) in alias_data.arguments.iter() {
+        let arg_var = type_tag_to_variable(subs, state, free_vars, pools, rank, *arg_type);
+
+        arg_vars.push((arg.clone(), arg_var));
+    }
+
+    let lambda_set_variables: Vec<_> = alias_data
+        .lambda_set_variables
+        .iter()
+        .map(|ls| type_tag_to_variable(subs, state, free_vars, pools, rank, *ls))
+        .collect();
+
+    let arg_vars = AliasVariables::insert_into_subs(subs, arg_vars, lambda_set_variables);
+
+    // let alias_var = type_to_variable(subs, rank, pools, cached, alias_type);
+    let alias_var = type_tag_to_variable(
+        subs,
+        state,
+        free_vars,
+        pools,
+        rank,
+        state[alias_data.actual],
+    );
+    let content = Content::Alias(alias_data.name, arg_vars, alias_var);
+
+    register(subs, rank, pools, content)
+}
+
+fn tag_helper(
+    subs: &mut Subs,
+    state: &SolvedTypeState,
+    free_vars: &mut FreeVars,
+    pools: &mut Pools,
+    rank: Rank,
+    tags: roc_types::solved_types::Slice<(TagName, roc_types::solved_types::Slice<SolvedTypeTag>)>,
+    ext: roc_types::solved_types::Index<SolvedTypeTag>,
+) -> (UnionTags, Variable) {
+    let mut tag_vars = Vec::with_capacity(tags.len());
+
+    let mut tag_argument_vars = Vec::new();
+    let tags_slice = &state.tags[tags.start as usize..][..tags.len()];
+    for (tag, tag_argument_types) in tags_slice {
+        for arg_type in state[*tag_argument_types].iter() {
+            let new_var = type_tag_to_variable(subs, state, free_vars, pools, rank, *arg_type);
+
+            tag_argument_vars.push(new_var);
+        }
+
+        let new_slice = VariableSubsSlice::insert_into_subs(subs, tag_argument_vars.drain(..));
+
+        tag_vars.push((tag.clone(), new_slice));
+    }
+
+    let temp_ext_var = type_tag_to_variable(subs, state, free_vars, pools, rank, state[ext]);
+
+    let ext = {
+        let (it, ext) =
+            roc_types::types::gather_tags_unsorted_iter(subs, UnionTags::default(), temp_ext_var);
+
+        tag_vars.extend(it.map(|(n, v)| (n.clone(), v)));
+        tag_vars.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+
+        // deduplicate, keeping the right-most occurrence of a tag name
+        let mut i = 0;
+
+        while i < tag_vars.len() {
+            match (tag_vars.get(i), tag_vars.get(i + 1)) {
+                (Some((t1, _)), Some((t2, _))) => {
+                    if t1 == t2 {
+                        tag_vars.remove(i);
+                    } else {
+                        i += 1;
+                    }
+                }
+                _ => break,
+            }
+        }
+
+        ext
+    };
+
+    (UnionTags::insert_slices_into_subs(subs, tag_vars), ext)
 }
 
 fn type_to_variable(
