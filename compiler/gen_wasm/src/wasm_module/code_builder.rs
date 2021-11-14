@@ -63,11 +63,15 @@ struct VmBlock<'a> {
 
 impl std::fmt::Debug for VmBlock<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("{:?} {}", self.opcode, if self.has_result {
-            "Result"
-        } else {
-            "NoResult"
-        }))
+        f.write_fmt(format_args!(
+            "{:?} {}",
+            self.opcode,
+            if self.has_result {
+                "Result"
+            } else {
+                "NoResult"
+            }
+        ))
     }
 }
 
