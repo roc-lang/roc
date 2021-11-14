@@ -3236,7 +3236,7 @@ fn send_header_two<'a>(
 
     let extra = HeaderFor::PkgConfig {
         config_shorthand: shorthand,
-        platform_main_type: requires[0].value.clone(),
+        platform_main_type: requires[0].value,
         main_for_host,
     };
 
@@ -3419,7 +3419,7 @@ fn fabricate_pkg_config_module<'a>(
         app_module_id,
         packages: &[],
         provides,
-        requires: arena.alloc([header.requires.signature.clone()]),
+        requires: arena.alloc([header.requires.signature]),
         imports: header.imports.items,
     };
 

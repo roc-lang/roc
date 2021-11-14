@@ -811,7 +811,7 @@ fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>, EImports> {
             ))
         ),
         |_arena, ((opt_shortname, module_name), opt_values): Temp<'a>| {
-            let exposed_values = opt_values.unwrap_or_else(|| Collection::empty());
+            let exposed_values = opt_values.unwrap_or_else(Collection::empty);
 
             match opt_shortname {
                 Some(shortname) => ImportsEntry::Package(shortname, module_name, exposed_values),
