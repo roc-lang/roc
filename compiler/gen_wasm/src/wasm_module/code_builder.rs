@@ -63,8 +63,11 @@ struct VmBlock<'a> {
 
 impl std::fmt::Debug for VmBlock<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let result = if self.has_result { "Result" } else { "NoResult" };
-        f.write_fmt(format_args!("{:?} {}", self.opcode, result))
+        f.write_fmt(format_args!("{:?} {}", self.opcode, if self.has_result {
+            "Result"
+        } else {
+            "NoResult"
+        }))
     }
 }
 
@@ -308,7 +311,10 @@ impl<'a> CodeBuilder<'a> {
                             self.add_insertion(pushed_at, SETLOCAL, next_local_id.0);
                         } else {
                             if ENABLE_DEBUG_LOG {
-                                println!("{:?} has been popped implicitly. Leaving it on the stack.", symbol);
+                                println!(
+                                    "{:?} has been popped implicitly. Leaving it on the stack.",
+                                    symbol
+                                );
                             }
                             self.add_insertion(pushed_at, TEELOCAL, next_local_id.0);
                         }
