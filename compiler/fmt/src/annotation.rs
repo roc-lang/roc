@@ -83,7 +83,7 @@ where
 macro_rules! format_sequence {
     ($buf: expr, $indent:expr, $start:expr, $end:expr, $items:expr, $newline:expr, $t:ident) => {
         let is_multiline = $items.iter().any(|item| item.value.is_multiline())
-            || !$items.final_comments.is_empty();
+            || !$items.final_comments().is_empty();
 
         if is_multiline {
             let braces_indent = $indent + INDENT;
@@ -140,7 +140,7 @@ macro_rules! format_sequence {
             }
             fmt_comments_only(
                 $buf,
-                $items.final_comments.iter(),
+                $items.final_comments().iter(),
                 NewlineAt::Top,
                 item_indent,
             );

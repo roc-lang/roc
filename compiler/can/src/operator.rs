@@ -6,7 +6,7 @@ use roc_module::ident::ModuleName;
 use roc_module::operator::BinOp::Pizza;
 use roc_module::operator::{BinOp, CalledVia};
 use roc_parse::ast::Expr::{self, *};
-use roc_parse::ast::{AssignedField, Collection, Def, WhenBranch};
+use roc_parse::ast::{AssignedField, Def, WhenBranch};
 use roc_region::all::{Located, Region};
 
 // BinOp precedence logic adapted from Gluon by Markus Westerlind
@@ -151,62 +151,39 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 new_items.push(desugar_expr(arena, item));
             }
             let new_items = new_items.into_bump_slice();
-            let value: Expr<'a> = List(Collection {
-                items: new_items,
-                final_comments: items.final_comments,
-            });
+            let value: Expr<'a> = List(items.replace_items(new_items));
 
             arena.alloc(Located {
                 region: loc_expr.region,
                 value,
             })
         }
-        Record(fields) => {
-            let mut new_fields = Vec::with_capacity_in(fields.len(), arena);
-
-            for field in fields.iter() {
+        Record(fields) => arena.alloc(Located {
+            region: loc_expr.region,
+            value: Record(fields.map_items(arena, |field| {
                 let value = desugar_field(arena, &field.value);
-
-                new_fields.push(Located {
+                Located {
                     value,
                     region: field.region,
-                });
-            }
-
-            let new_fields = new_fields.into_bump_slice();
-
-            arena.alloc(Located {
-                region: loc_expr.region,
-                value: Record(Collection {
-                    items: new_fields,
-                    final_comments: fields.final_comments,
-                }),
-            })
-        }
+                }
+            })),
+        }),
 
         RecordUpdate { fields, update } => {
             // NOTE the `update` field is always a `Var { .. }` and does not need to be desugared
-            let mut new_fields = Vec::with_capacity_in(fields.len(), arena);
-
-            for field in fields.iter() {
+            let new_fields = fields.map_items(arena, |field| {
                 let value = desugar_field(arena, &field.value);
-
-                new_fields.push(Located {
+                Located {
                     value,
                     region: field.region,
-                });
-            }
-
-            let new_fields = new_fields.into_bump_slice();
+                }
+            });
 
             arena.alloc(Located {
                 region: loc_expr.region,
                 value: RecordUpdate {
                     update: *update,
-                    fields: Collection {
-                        items: new_fields,
-                        final_comments: fields.final_comments,
-                    },
+                    fields: new_fields,
                 },
             })
         }

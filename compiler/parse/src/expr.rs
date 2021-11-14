@@ -1449,19 +1449,13 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         Expr::ParensAround(sub_expr) => expr_to_pattern_help(arena, sub_expr),
 
         Expr::Record(fields) => {
-            let mut loc_patterns = Vec::with_capacity_in(fields.len(), arena);
-
-            for loc_assigned_field in fields.iter() {
+            let patterns = fields.map_items_result(arena, |loc_assigned_field| {
                 let region = loc_assigned_field.region;
                 let value = assigned_expr_field_to_pattern_help(arena, &loc_assigned_field.value)?;
+                Ok(Located { region, value })
+            })?;
 
-                loc_patterns.push(Located { region, value });
-            }
-
-            Ok(Pattern::RecordDestructure(Collection {
-                items: loc_patterns.into_bump_slice(),
-                final_comments: fields.final_comments,
-            }))
+            Ok(Pattern::RecordDestructure(patterns))
         }
 
         Expr::Float(string) => Ok(Pattern::FloatLiteral(string)),
@@ -2167,16 +2161,8 @@ fn list_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EList<'a>
         )
         .parse(arena, state)?;
 
-        let mut allocated = Vec::with_capacity_in(elements.items.len(), arena);
-
-        for parsed_elem in elements.items {
-            allocated.push(parsed_elem);
-        }
-
-        let expr = Expr::List(Collection {
-            items: allocated.into_bump_slice(),
-            final_comments: elements.final_comments,
-        });
+        let elements = elements.ptrify_items(arena);
+        let expr = Expr::List(elements);
 
         Ok((MadeProgress, expr, state))
     }
@@ -2314,15 +2300,17 @@ fn record_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'
             let mut value = match opt_update {
                 Some(update) => Expr::RecordUpdate {
                     update: &*arena.alloc(update),
-                    fields: Collection {
-                        items: loc_assigned_fields_with_comments.value.0.into_bump_slice(),
-                        final_comments: arena.alloc(loc_assigned_fields_with_comments.value.1),
-                    },
+                    fields: Collection::with_items_and_comments(
+                        arena,
+                        loc_assigned_fields_with_comments.value.0.into_bump_slice(),
+                        arena.alloc(loc_assigned_fields_with_comments.value.1),
+                    ),
                 },
-                None => Expr::Record(Collection {
-                    items: loc_assigned_fields_with_comments.value.0.into_bump_slice(),
-                    final_comments: loc_assigned_fields_with_comments.value.1,
-                }),
+                None => Expr::Record(Collection::with_items_and_comments(
+                    arena,
+                    loc_assigned_fields_with_comments.value.0.into_bump_slice(),
+                    loc_assigned_fields_with_comments.value.1,
+                )),
             };
 
             // there can be field access, e.g. `{ x : 4 }.x`

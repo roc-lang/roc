@@ -408,9 +408,9 @@ fn fmt_bin_ops<'a>(
     loc_right_side.format_with_options(buf, apply_needs_parens, Newlines::Yes, indent);
 }
 
-fn fmt_list<'a>(buf: &mut String<'a>, items: Collection<'a, &Located<Expr<'a>>>, indent: u16) {
+fn fmt_list<'a>(buf: &mut String<'a>, items: Collection<'a, &'a Located<Expr<'a>>>, indent: u16) {
     let loc_items = items.items;
-    let final_comments = items.final_comments;
+    let final_comments = items.final_comments();
     if loc_items.is_empty() && final_comments.iter().all(|c| c.is_newline()) {
         buf.push_str("[]");
     } else {
@@ -910,7 +910,7 @@ fn fmt_record<'a>(
     indent: u16,
 ) {
     let loc_fields = fields.items;
-    let final_comments = fields.final_comments;
+    let final_comments = fields.final_comments();
     if loc_fields.is_empty() && final_comments.iter().all(|c| c.is_newline()) {
         buf.push_str("{}");
     } else {

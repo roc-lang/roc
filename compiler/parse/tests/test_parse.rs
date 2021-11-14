@@ -1185,10 +1185,7 @@ mod test_parse {
     #[test]
     fn newline_inside_empty_list() {
         let arena = Bump::new();
-        let expected = List(Collection {
-            items: &[],
-            final_comments: &[Newline],
-        });
+        let expected = List(Collection::with_items_and_comments(&arena, &[], &[Newline]));
         let actual = parse_expr_with(&arena, "[\n]");
 
         assert_eq!(Ok(expected), actual);
@@ -1197,10 +1194,11 @@ mod test_parse {
     #[test]
     fn comment_inside_empty_list() {
         let arena = Bump::new();
-        let expected = List(Collection {
-            items: &[],
-            final_comments: &[LineComment("comment")],
-        });
+        let expected = List(Collection::with_items_and_comments(
+            &arena,
+            &[],
+            &[LineComment("comment")],
+        ));
         let actual = parse_expr_with(&arena, "[#comment\n]");
 
         assert_eq!(Ok(expected), actual);
