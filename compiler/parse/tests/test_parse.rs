@@ -460,10 +460,7 @@ mod test_parse {
     #[test]
     fn empty_record() {
         let arena = Bump::new();
-        let expected = Record {
-            fields: &[],
-            final_comments: &[],
-        };
+        let expected = Record(Collection::empty());
         let actual = parse_expr_with(&arena, "{}");
 
         assert_eq!(Ok(expected), actual);
@@ -493,8 +490,7 @@ mod test_parse {
         let update_target = Located::new(0, 0, 2, 13, var);
         let expected = RecordUpdate {
             update: &*arena.alloc(update_target),
-            fields,
-            final_comments: &(&[] as &[_]),
+            fields: Collection::with_items(fields),
         };
 
         let actual = parse_expr_with(&arena, "{ Foo.Bar.baz & x: 5, y: 0 }");
@@ -526,10 +522,7 @@ mod test_parse {
             Located::new(0, 0, 1, 26, label1),
             Located::new(0, 0, 28, 32, label2),
         ];
-        let expected = Record {
-            fields,
-            final_comments: &[],
-        };
+        let expected = Record(Collection::with_items(fields));
 
         let actual = parse_expr_with(&arena, "{x : if True then 1 else 2, y: 3 }");
         assert_eq!(Ok(expected), actual);
@@ -1173,10 +1166,7 @@ mod test_parse {
     #[test]
     fn empty_list() {
         let arena = Bump::new();
-        let expected = List {
-            items: &[],
-            final_comments: &[],
-        };
+        let expected = List(Collection::empty());
         let actual = parse_expr_with(&arena, "[]");
 
         assert_eq!(Ok(expected), actual);
@@ -1186,10 +1176,7 @@ mod test_parse {
     fn spaces_inside_empty_list() {
         // This is a regression test!
         let arena = Bump::new();
-        let expected = List {
-            items: &[],
-            final_comments: &[],
-        };
+        let expected = List(Collection::empty());
         let actual = parse_expr_with(&arena, "[  ]");
 
         assert_eq!(Ok(expected), actual);
@@ -1198,10 +1185,7 @@ mod test_parse {
     #[test]
     fn newline_inside_empty_list() {
         let arena = Bump::new();
-        let expected = List {
-            items: &[],
-            final_comments: &[Newline],
-        };
+        let expected = List(Collection::with_items_and_comments(&arena, &[], &[Newline]));
         let actual = parse_expr_with(&arena, "[\n]");
 
         assert_eq!(Ok(expected), actual);
@@ -1210,10 +1194,11 @@ mod test_parse {
     #[test]
     fn comment_inside_empty_list() {
         let arena = Bump::new();
-        let expected = List {
-            items: &[],
-            final_comments: &[LineComment("comment")],
-        };
+        let expected = List(Collection::with_items_and_comments(
+            &arena,
+            &[],
+            &[LineComment("comment")],
+        ));
         let actual = parse_expr_with(&arena, "[#comment\n]");
 
         assert_eq!(Ok(expected), actual);
@@ -1223,10 +1208,7 @@ mod test_parse {
     fn packed_singleton_list() {
         let arena = Bump::new();
         let items = &[&*arena.alloc(Located::new(0, 0, 1, 2, Num("1")))];
-        let expected = List {
-            items,
-            final_comments: &[],
-        };
+        let expected = List(Collection::with_items(items));
         let actual = parse_expr_with(&arena, "[1]");
 
         assert_eq!(Ok(expected), actual);
@@ -1236,10 +1218,7 @@ mod test_parse {
     fn spaced_singleton_list() {
         let arena = Bump::new();
         let items = &[&*arena.alloc(Located::new(0, 0, 2, 3, Num("1")))];
-        let expected = List {
-            items,
-            final_comments: &[],
-        };
+        let expected = List(Collection::with_items(items));
         let actual = parse_expr_with(&arena, "[ 1 ]");
 
         assert_eq!(Ok(expected), actual);
@@ -1254,10 +1233,7 @@ mod test_parse {
         ));
         let item = Expr::SpaceBefore(item, arena.alloc([Newline]));
         let items = [&*arena.alloc(Located::new(1, 1, 0, 1, item))];
-        let expected = List {
-            items: &items,
-            final_comments: &[],
-        };
+        let expected = List(Collection::with_items(&items));
         let actual = parse_expr_with(&arena, "[\n1\n]");
 
         assert_eq!(Ok(expected), actual);
@@ -1897,7 +1873,13 @@ mod test_parse {
             Located::new(1, 1, 5, 7, Identifier("y"))
         ];
         let def1 = Def::Body(
-            arena.alloc(Located::new(1, 1, 0, 8, RecordDestructure(&fields))),
+            arena.alloc(Located::new(
+                1,
+                1,
+                0,
+                8,
+                RecordDestructure(Collection::with_items(&fields)),
+            )),
             arena.alloc(Located::new(1, 1, 11, 12, Num("5"))),
         );
         let loc_def1 = &*arena.alloc(Located::new(1, 1, 0, 12, def1));
@@ -2028,10 +2010,7 @@ mod test_parse {
         let inner_backpassing = {
             let identifier_z = Located::new(2, 2, 0, 1, Identifier("z"));
 
-            let empty_record = Record {
-                fields: &[],
-                final_comments: &[],
-            };
+            let empty_record = Record(Collection::empty());
             let loc_empty_record = Located::new(2, 2, 5, 7, empty_record);
 
             let var_x = Var {
@@ -2115,8 +2094,8 @@ mod test_parse {
         let apply = Expr::Apply(
             arena.alloc(Located::new(0, 0, 8, 17, var_list_map2)),
             bumpalo::vec![ in &arena;
-                &*arena.alloc(Located::new(0, 0, 18, 20, Expr::List{ items: &[], final_comments: &[] })),
-                &*arena.alloc(Located::new(0, 0, 21, 23, Expr::List{ items: &[], final_comments: &[] })),
+                &*arena.alloc(Located::new(0, 0, 18, 20, Expr::List(Collection::empty()))),
+                &*arena.alloc(Located::new(0, 0, 21, 23, Expr::List(Collection::empty()))),
             ]
             .into_bump_slice(),
             CalledVia::Space,
@@ -2950,7 +2929,10 @@ mod test_parse {
         let arena = Bump::new();
         let newlines = &[Newline];
         let identifiers1 = &[Located::new(1, 1, 3, 4, Identifier("y"))];
-        let pattern1 = Pattern::SpaceBefore(arena.alloc(RecordDestructure(identifiers1)), newlines);
+        let pattern1 = Pattern::SpaceBefore(
+            arena.alloc(RecordDestructure(Collection::with_items(identifiers1))),
+            newlines,
+        );
         let loc_pattern1 = Located::new(1, 1, 1, 6, pattern1);
         let expr1 = Num("2");
         let loc_expr1 = Located::new(1, 1, 10, 11, expr1);
@@ -2964,7 +2946,10 @@ mod test_parse {
             Located::new(2, 2, 3, 4, Identifier("z")),
             Located::new(2, 2, 6, 7, Identifier("w")),
         ];
-        let pattern2 = Pattern::SpaceBefore(arena.alloc(RecordDestructure(identifiers2)), newlines);
+        let pattern2 = Pattern::SpaceBefore(
+            arena.alloc(RecordDestructure(Collection::with_items(identifiers2))),
+            newlines,
+        );
         let loc_pattern2 = Located::new(2, 2, 1, 9, pattern2);
         let expr2 = Num("4");
         let loc_expr2 = Located::new(2, 2, 13, 14, expr2);

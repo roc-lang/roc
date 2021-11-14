@@ -331,10 +331,7 @@ fn record_pattern_help<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>, PRec
         )
         .parse(arena, state)?;
 
-        // TODO
-        let _unused = fields.final_comments;
-
-        let result = Pattern::RecordDestructure(fields.items);
+        let result = Pattern::RecordDestructure(fields);
 
         Ok((MadeProgress, result, state))
     }
