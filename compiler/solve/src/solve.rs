@@ -788,16 +788,26 @@ fn type_tag_to_variable(
 
             let rec_var = match free_vars.unnamed_vars.entry(rec_var_id) {
                 Entry::Occupied(occupied) => *occupied.get(),
-                Entry::Vacant(vacant) => {
-                    let var = subs.fresh_unnamed_flex_var();
-                    vacant.insert(var);
-                    var
+                Entry::Vacant(_) => {
+                    panic!(
+                        r"based on a previous version of this code, this is not supposed to happen. I am not sure why that is though"
+                    );
                 }
             };
 
             let content = Content::Structure(FlatType::RecursiveTagUnion(rec_var, union_tags, ext));
 
-            register(subs, rank, pools, content)
+            let tag_union_var = register(subs, rank, pools, content);
+
+            subs.set_content(
+                rec_var,
+                Content::RecursionVar {
+                    opt_name: None,
+                    structure: tag_union_var,
+                },
+            );
+
+            tag_union_var
         }
         SolvedTypeTag::EmptyTagUnion => Variable::EMPTY_TAG_UNION,
         SolvedTypeTag::Alias(alias_data_index) => {
@@ -857,13 +867,12 @@ fn alias_helper(
             Symbol::NUM_U16 => return Variable::U16,
             Symbol::NUM_U8 => return Variable::U8,
 
-            Symbol::NUM_NAT => return Variable::NAT,
+            // Symbol::NUM_NAT => return Variable::NAT,
 
-            Symbol::NUM_F32 => return Variable::F32,
-            Symbol::NUM_F64 => return Variable::F64,
+            // Symbol::NUM_F32 => return Variable::F32,
+            // Symbol::NUM_F64 => return Variable::F64,
 
-            Symbol::NUM_DEC => return Variable::DEC,
-
+            // Symbol::NUM_DEC => return Variable::DEC,
             _ => {}
         }
     }

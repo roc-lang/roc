@@ -239,7 +239,9 @@ impl SolvedTypeTag {
             return SolvedTypeTag::Flex(VarId::from_var(var, subs));
         }
 
-        match subs.get_content_without_compacting(var) {
+        let flat_type = subs.get_content_without_compacting(var);
+
+        match flat_type {
             FlexVar(_) => Self::Flex(VarId::from_var(var, subs)),
             RecursionVar { structure, .. } => {
                 // TODO should there be a SolvedType RecursionVar variant?
@@ -1098,10 +1100,15 @@ impl RecursionVars {
     }
 
     fn insert(&mut self, subs: &Subs, var: Variable) {
+        // NOTE we don't care about duplicates. it only means we find a variable faster
         let var = subs.get_root_key_without_compacting(var);
-        debug_assert!(!self.contains(subs, var));
 
-        self.0.push(var);
+        match self.0.iter().find(|v| **v == var) {
+            Some(_) => {}
+            None => {
+                self.0.push(var);
+            }
+        }
     }
 }
 
