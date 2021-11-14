@@ -5,7 +5,7 @@ use roc_collections::all::MutMap;
 use roc_module::symbol::Symbol;
 
 use crate::layout::WasmLayout;
-use crate::wasm_module::{CodeBuilder, LocalId, ValueType, VirtualMachineSymbolState};
+use crate::wasm_module::{CodeBuilder, LocalId, ValueType, VmSymbolState};
 use crate::{copy_memory, round_up_to_alignment, CopyMemoryConfig, PTR_SIZE, PTR_TYPE};
 
 pub enum StoredValueKind {
@@ -33,7 +33,7 @@ impl StackMemoryLocation {
 pub enum StoredValue {
     /// A value stored implicitly in the VM stack (primitives only)
     VirtualMachineStack {
-        vm_state: VirtualMachineSymbolState,
+        vm_state: VmSymbolState,
         value_type: ValueType,
         size: u32,
     },
@@ -126,7 +126,7 @@ impl<'a> Storage<'a> {
                     }
                 }
                 _ => StoredValue::VirtualMachineStack {
-                    vm_state: VirtualMachineSymbolState::NotYetPushed,
+                    vm_state: VmSymbolState::NotYetPushed,
                     value_type: *value_type,
                     size: *size,
                 },
@@ -422,7 +422,7 @@ impl<'a> Storage<'a> {
         } = storage
         {
             let local_id = self.get_next_local_id();
-            if vm_state != VirtualMachineSymbolState::NotYetPushed {
+            if vm_state != VmSymbolState::NotYetPushed {
                 code_builder.load_symbol(symbol, vm_state, local_id);
                 code_builder.set_local(local_id);
             }

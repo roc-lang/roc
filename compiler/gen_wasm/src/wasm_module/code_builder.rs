@@ -73,7 +73,7 @@ impl From<u32> for Align {
 }
 
 #[derive(Debug, Clone, PartialEq, Copy)]
-pub enum VirtualMachineSymbolState {
+pub enum VmSymbolState {
     /// Value doesn't exist yet
     NotYetPushed,
 
@@ -169,7 +169,7 @@ impl<'a> CodeBuilder<'a> {
 
     /// Set the Symbol that is at the top of the VM stack right now
     /// We will use this later when we need to load the Symbol
-    pub fn set_top_symbol(&mut self, sym: Symbol) -> VirtualMachineSymbolState {
+    pub fn set_top_symbol(&mut self, sym: Symbol) -> VmSymbolState {
         let len = self.vm_stack.len();
         let pushed_at = self.code.len();
 
@@ -182,7 +182,7 @@ impl<'a> CodeBuilder<'a> {
 
         self.vm_stack[len - 1] = sym;
 
-        VirtualMachineSymbolState::Pushed { pushed_at }
+        VmSymbolState::Pushed { pushed_at }
     }
 
     /// Verify if a sequence of symbols is at the top of the stack
@@ -227,10 +227,10 @@ impl<'a> CodeBuilder<'a> {
     pub fn load_symbol(
         &mut self,
         symbol: Symbol,
-        vm_state: VirtualMachineSymbolState,
+        vm_state: VmSymbolState,
         next_local_id: LocalId,
-    ) -> Option<VirtualMachineSymbolState> {
-        use VirtualMachineSymbolState::*;
+    ) -> Option<VmSymbolState> {
+        use VmSymbolState::*;
 
         match vm_state {
             NotYetPushed => panic!("Symbol {:?} has no value yet. Nothing to load.", symbol),
