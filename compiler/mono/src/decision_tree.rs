@@ -422,7 +422,7 @@ fn gather_edges<'a>(
     // TODO remove clone
     let all_edges = relevant_tests
         .into_iter()
-        .map(|t| edges_for(path, branches.clone(), t))
+        .map(|t| edges_for(path, &branches, t))
         .collect();
 
     let fallbacks = if check {
@@ -583,7 +583,7 @@ fn test_at_path<'a>(
 // understanding: if the test is successful, where could we go?
 fn edges_for<'a>(
     path: &[PathInstruction],
-    branches: Vec<Branch<'a>>,
+    branches: &[Branch<'a>],
     test: GuardedTest<'a>,
 ) -> (GuardedTest<'a>, Vec<Branch<'a>>) {
     let mut new_branches = Vec::new();
