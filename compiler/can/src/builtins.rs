@@ -2144,20 +2144,33 @@ fn list_sublist(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// List.drop : List elem, Nat -> List elem
 fn list_drop(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
-    let index_var = var_store.fresh();
+    let len_var = var_store.fresh();
+
+    let get_list_len = RunLowLevel {
+        op: LowLevel::ListLen,
+        args: vec![(list_var, Var(Symbol::ARG_1))],
+        ret_var: len_var,
+    };
+
+    let get_len = RunLowLevel {
+        op: LowLevel::NumSubWrap,
+        args: vec![(len_var, get_list_len), (len_var, Var(Symbol::ARG_2))],
+        ret_var: len_var,
+    };
 
     let body = RunLowLevel {
-        op: LowLevel::ListDrop,
+        op: LowLevel::ListSublist,
         args: vec![
             (list_var, Var(Symbol::ARG_1)),
-            (index_var, Var(Symbol::ARG_2)),
+            (len_var, Var(Symbol::ARG_2)),
+            (len_var, get_len),
         ],
         ret_var: list_var,
     };
 
     defn(
         symbol,
-        vec![(list_var, Symbol::ARG_1), (index_var, Symbol::ARG_2)],
+        vec![(list_var, Symbol::ARG_1), (len_var, Symbol::ARG_2)],
         var_store,
         body,
         list_var,
