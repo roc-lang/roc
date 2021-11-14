@@ -385,7 +385,7 @@ fn gen_basic_def() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_multiple_defs() {
     assert_evals_to!(
         indoc!(
