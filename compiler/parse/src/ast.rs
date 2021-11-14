@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use crate::header::{AppHeader, ImportsEntry, InterfaceHeader, PlatformHeader, TypedIdent};
 use crate::ident::Ident;
 use bumpalo::collections::{String, Vec};
@@ -489,7 +491,7 @@ impl<'a> Pattern<'a> {
         }
     }
 }
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone)]
 pub struct Collection<'a, T> {
     pub items: &'a [T],
     // Use a pointer to a slice (rather than just a slice), in order to avoid bloating
@@ -594,6 +596,19 @@ impl<'a, T> Collection<'a, T> {
 impl<'a, T: PartialEq> PartialEq for Collection<'a, T> {
     fn eq(&self, other: &Self) -> bool {
         self.items == other.items && self.final_comments() == other.final_comments()
+    }
+}
+
+impl<'a, T: Debug> Debug for Collection<'a, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.final_comments().is_empty() {
+            f.debug_list().entries(self.items.iter()).finish()
+        } else {
+            f.debug_struct("Collection")
+                .field("items", &self.items)
+                .field("final_comments", &self.final_comments())
+                .finish()
+        }
     }
 }
 
