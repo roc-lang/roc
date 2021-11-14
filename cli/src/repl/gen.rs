@@ -218,8 +218,8 @@ pub fn gen_and_eval<'a>(
         // Verify the module
         if let Err(errors) = env.module.verify() {
             panic!(
-                "Errors defining module: {}\n\nUncomment things nearby to see more details.",
-                errors
+                "Errors defining module:\n{}\n\nUncomment things nearby to see more details.",
+                errors.to_string()
             );
         }
 

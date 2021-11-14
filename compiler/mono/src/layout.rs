@@ -863,6 +863,16 @@ impl<'a> Layout<'a> {
         false
     }
 
+    pub fn is_passed_by_reference(&self) -> bool {
+        match self {
+            Layout::Union(UnionLayout::NonRecursive(_)) => true,
+            Layout::LambdaSet(lambda_set) => {
+                lambda_set.runtime_representation().is_passed_by_reference()
+            }
+            _ => false,
+        }
+    }
+
     pub fn stack_size(&self, pointer_size: u32) -> u32 {
         let width = self.stack_size_without_alignment(pointer_size);
         let alignment = self.alignment_bytes(pointer_size);
@@ -941,16 +951,16 @@ impl<'a> Layout<'a> {
                             })
                             .max();
 
+                        let tag_id_builtin = variant.tag_id_builtin();
                         match max_alignment {
-                            Some(align) => {
-                                let tag_id_builtin = variant.tag_id_builtin();
-
-                                round_up_to_alignment(
-                                    align,
-                                    tag_id_builtin.alignment_bytes(pointer_size),
-                                )
+                            Some(align) => round_up_to_alignment(
+                                align.max(tag_id_builtin.alignment_bytes(pointer_size)),
+                                tag_id_builtin.alignment_bytes(pointer_size),
+                            ),
+                            None => {
+                                // none of the tags had any payload, but the tag id still contains information
+                                tag_id_builtin.alignment_bytes(pointer_size)
                             }
-                            None => 0,
                         }
                     }
                     Recursive(_)
@@ -2672,5 +2682,29 @@ impl<'a> std::convert::TryFrom<&Layout<'a>> for ListLayout<'a> {
             Layout::Builtin(Builtin::List(element)) => Ok(ListLayout::List(element)),
             _ => Err(()),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn width_and_alignment_union_empty_struct() {
+        let lambda_set = LambdaSet {
+            set: &[(Symbol::LIST_MAP, &[])],
+            representation: &Layout::Struct(&[]),
+        };
+
+        let a = &[Layout::Struct(&[])] as &[_];
+        let b = &[Layout::LambdaSet(lambda_set)] as &[_];
+        let tt = [a, b];
+
+        let layout = Layout::Union(UnionLayout::NonRecursive(&tt));
+
+        // at the moment, the tag id uses an I64, so
+        let ptr_width = 8;
+        assert_eq!(layout.stack_size(ptr_width), 8);
+        assert_eq!(layout.alignment_bytes(ptr_width), 8);
     }
 }
