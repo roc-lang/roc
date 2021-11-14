@@ -132,7 +132,7 @@ pub fn expr_to_expr2<'a>(
 
         Str(literal) => flatten_str_literal(env, scope, literal),
 
-        List { items, .. } => {
+        List(items) => {
             let mut output = Output::default();
             let output_ref = &mut output;
 
@@ -185,13 +185,12 @@ pub fn expr_to_expr2<'a>(
         RecordUpdate {
             fields,
             update: loc_update,
-            final_comments: _,
         } => {
             let (can_update, update_out) =
                 expr_to_expr2(env, scope, &loc_update.value, loc_update.region);
 
             if let Expr2::Var(symbol) = &can_update {
-                match canonicalize_fields(env, scope, fields) {
+                match canonicalize_fields(env, scope, fields.items) {
                     Ok((can_fields, mut output)) => {
                         output.references.union_mut(update_out.references);
 
@@ -236,14 +235,11 @@ pub fn expr_to_expr2<'a>(
             }
         }
 
-        Record {
-            fields,
-            final_comments: _,
-        } => {
+        Record(fields) => {
             if fields.is_empty() {
                 (Expr2::EmptyRecord, Output::default())
             } else {
-                match canonicalize_fields(env, scope, fields) {
+                match canonicalize_fields(env, scope, fields.items) {
                     Ok((can_fields, output)) => (
                         Expr2::Record {
                             record_var: env.var_store.fresh(),

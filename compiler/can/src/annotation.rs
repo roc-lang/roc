@@ -417,7 +417,7 @@ fn can_annotation_help(
         TagUnion { tags, ext, .. } => {
             let tag_types = can_tags(
                 env,
-                tags,
+                tags.items,
                 region,
                 scope,
                 var_store,
