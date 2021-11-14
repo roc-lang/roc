@@ -6,6 +6,410 @@ use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use std::hash::{Hash, Hasher};
 
+static_assertions::assert_eq_size!([u8; 9 * 8], SolvedType);
+static_assertions::assert_eq_size!([u8; 3 * 8], SolvedTypeTag);
+
+impl SolvedTypeState {
+    fn push_internal<T>(vector: &mut Vec<T>, value: T) -> Index<T> {
+        let index = vector.len();
+
+        vector.push(value);
+
+        Index {
+            _marker: std::marker::PhantomData,
+            index: index as _,
+        }
+    }
+
+    fn push_type_tag(&mut self, tag: SolvedTypeTag) -> TypeIndex {
+        Self::push_internal(&mut self.type_tags, tag)
+    }
+
+    fn push_tag_name(&mut self, tag: TagName) -> Index<TagName> {
+        Self::push_internal(&mut self.tag_names, tag)
+    }
+
+    fn push_lowercase(&mut self, tag: Lowercase) -> Index<Lowercase> {
+        Self::push_internal(&mut self.lowercases, tag)
+    }
+
+    fn push_type_tags(&mut self, tags: impl Iterator<Item = SolvedTypeTag>) -> TypeSlice {
+        let index = self.type_tags.len();
+
+        self.type_tags.extend(tags);
+
+        let length = self.type_tags.len() - index;
+
+        Slice {
+            _marker: std::marker::PhantomData,
+            start: index as _,
+            length: length as _,
+        }
+    }
+
+    fn push_alias(&mut self, data: AliasData) -> Index<AliasData> {
+        Self::push_internal(&mut self.aliases, data)
+    }
+
+    fn push_problem(&mut self, data: Problem) -> Index<Problem> {
+        Self::push_internal(&mut self.problems, data)
+    }
+
+    fn push_record_fields(
+        &mut self,
+        tags: impl Iterator<Item = (Lowercase, RecordField<SolvedTypeTag>)>,
+    ) -> Slice<(Lowercase, RecordField<SolvedTypeTag>)> {
+        let index = self.record_fields.len();
+
+        self.record_fields.extend(tags);
+
+        let length = self.record_fields.len() - index;
+
+        Slice {
+            _marker: std::marker::PhantomData,
+            start: index as _,
+            length: length as _,
+        }
+    }
+
+    fn push_union_tags(
+        &mut self,
+        tags: impl Iterator<Item = (TagName, Vec<SolvedTypeTag>)>,
+    ) -> Slice<(TagName, Slice<SolvedTypeTag>)> {
+        let index = self.tags.len();
+
+        for (tag_name, mut arguments) in tags {
+            let slice = self.push_type_tags(arguments.drain(..));
+            self.tags.push((tag_name, slice));
+        }
+
+        let length = self.tags.len() - index;
+
+        Slice {
+            _marker: std::marker::PhantomData,
+            start: index as _,
+            length: length as _,
+        }
+    }
+}
+
+impl SolvedTypeTag {
+    fn from_flat_type(
+        state: &mut SolvedTypeState,
+        subs: &Subs,
+        recursion_vars: &mut RecursionVars,
+        flat_type: &FlatType,
+    ) -> Self {
+        use crate::subs::FlatType::*;
+
+        let mut scratchpad = Vec::new();
+
+        match flat_type {
+            Func(arguments, lambda_set, result) => {
+                for var in subs.get_subs_slice(*arguments.as_subs_slice()) {
+                    scratchpad.push(Self::from_var_help(state, subs, recursion_vars, *var));
+                }
+
+                SolvedTypeTag::Func {
+                    arguments: state.push_type_tags(scratchpad.drain(..)),
+                    lambda_set: TypeIndex::from_var_help(state, subs, recursion_vars, *lambda_set),
+                    result: TypeIndex::from_var_help(state, subs, recursion_vars, *result),
+                }
+            }
+            Apply(symbol, arguments) => {
+                for var in subs.get_subs_slice(*arguments.as_subs_slice()) {
+                    scratchpad.push(Self::from_var_help(state, subs, recursion_vars, *var));
+                }
+
+                SolvedTypeTag::Apply {
+                    symbol: *symbol,
+                    arguments: state.push_type_tags(scratchpad.drain(..)),
+                }
+            }
+            Record(fields, ext) => {
+                let mut solved_fields = Vec::with_capacity(fields.len());
+
+                for (i1, i2, i3) in fields.iter_all() {
+                    let field_name: Lowercase = subs[i1].clone();
+                    let variable: Variable = subs[i2];
+                    let field: RecordField<()> = subs[i3];
+
+                    let solved_type =
+                        field.map(|var| Self::from_var_help(state, subs, recursion_vars, variable));
+
+                    solved_fields.push((field_name, solved_type));
+                }
+
+                SolvedTypeTag::Record {
+                    fields: state.push_record_fields(solved_fields.drain(..)),
+                    ext: TypeIndex::from_var_help(state, subs, recursion_vars, *ext),
+                }
+            }
+            TagUnion(tags, ext_var) => {
+                let mut new_tags = Vec::with_capacity(tags.len());
+
+                for (name_index, slice_index) in tags.iter_all() {
+                    let slice = subs[slice_index];
+
+                    let mut new_args = Vec::with_capacity(slice.len());
+
+                    for var_index in slice {
+                        let var = subs[var_index];
+                        new_args.push(Self::from_var_help(state, subs, recursion_vars, var));
+                    }
+                    let tag_name = subs[name_index].clone();
+                    new_tags.push((tag_name.clone(), new_args));
+                }
+
+                let ext = Self::from_var_help(state, subs, recursion_vars, *ext_var);
+
+                Self::TagUnion {
+                    tags: state.push_union_tags(new_tags.drain(..)),
+                    ext: state.push_type_tag(ext),
+                }
+            }
+            FunctionOrTagUnion(tag_name, symbol, ext_var) => {
+                let ext = TypeIndex::from_var_help(state, subs, recursion_vars, *ext_var);
+                let tag_name = subs[*tag_name].clone();
+
+                Self::FunctionOrTagUnion(state.push_tag_name(tag_name), *symbol, ext)
+            }
+            RecursiveTagUnion(rec_var, tags, ext_var) => {
+                recursion_vars.insert(subs, *rec_var);
+
+                let mut new_tags = Vec::with_capacity(tags.len());
+
+                for (name_index, slice_index) in tags.iter_all() {
+                    let slice = subs[slice_index];
+
+                    let mut new_args = Vec::with_capacity(slice.len());
+
+                    for var_index in slice {
+                        let var = subs[var_index];
+                        new_args.push(Self::from_var_help(state, subs, recursion_vars, var));
+                    }
+                    let tag_name = subs[name_index].clone();
+                    new_tags.push((tag_name.clone(), new_args));
+                }
+
+                let ext = Self::from_var_help(state, subs, recursion_vars, *ext_var);
+
+                Self::RecursiveTagUnion {
+                    rec_var: VarId::from_var(*rec_var, subs),
+                    tags: state.push_union_tags(new_tags.drain(..)),
+                    ext: state.push_type_tag(ext),
+                }
+            }
+            Erroneous(problem) => Self::Erroneous(state.push_problem(*(*problem).clone())),
+            EmptyRecord => Self::EmptyRecord,
+            EmptyTagUnion => Self::EmptyTagUnion,
+        }
+    }
+
+    pub fn from_var(state: &mut SolvedTypeState, subs: &Subs, var: Variable) -> Self {
+        let mut seen = RecursionVars::default();
+        Self::from_var_help(state, subs, &mut seen, var)
+    }
+
+    fn from_var_help(
+        state: &mut SolvedTypeState,
+        subs: &Subs,
+        recursion_vars: &mut RecursionVars,
+        var: Variable,
+    ) -> Self {
+        use crate::subs::Content::*;
+
+        // if this is a recursion var we've seen before, just generate a Flex
+        // (not doing so would have this function loop forever)
+        if recursion_vars.contains(subs, var) {
+            return SolvedTypeTag::Flex(VarId::from_var(var, subs));
+        }
+
+        match subs.get_content_without_compacting(var) {
+            FlexVar(_) => Self::Flex(VarId::from_var(var, subs)),
+            RecursionVar { structure, .. } => {
+                // TODO should there be a SolvedType RecursionVar variant?
+                Self::from_var_help(state, subs, recursion_vars, *structure)
+            }
+            RigidVar(name) => Self::Rigid(state.push_lowercase(name.clone())),
+            Structure(flat_type) => Self::from_flat_type(state, subs, recursion_vars, flat_type),
+            Alias(symbol, args, actual_var) => {
+                let mut new_args = Vec::with_capacity(args.len());
+
+                for (name_index, var_index) in args.named_type_arguments() {
+                    let arg_var = subs[var_index];
+
+                    new_args.push((
+                        subs[name_index].clone(),
+                        Self::from_var_help(state, subs, recursion_vars, arg_var),
+                    ));
+                }
+
+                let mut solved_lambda_sets = Vec::with_capacity(0);
+                for var_index in args.unnamed_type_arguments() {
+                    let var = subs[var_index];
+
+                    solved_lambda_sets.push(Self::from_var_help(state, subs, recursion_vars, var));
+                }
+
+                let aliased_to = TypeIndex::from_var_help(state, subs, recursion_vars, *actual_var);
+
+                let alias_data = AliasData {
+                    name: *symbol,
+                    lambda_set_variables: solved_lambda_sets,
+                    actual: aliased_to,
+                    arguments: new_args,
+                };
+
+                // Self::Alias(*symbol, new_args, solved_lambda_sets, Box::new(aliased_to))
+                Self::Alias(state.push_alias(alias_data))
+            }
+            Error => Self::Error,
+        }
+    }
+}
+
+impl Index<SolvedTypeTag> {
+    fn from_flat_type(
+        state: &mut SolvedTypeState,
+        subs: &Subs,
+        recursion_vars: &mut RecursionVars,
+        flat_type: &FlatType,
+    ) -> Self {
+        let solved_tag = SolvedTypeTag::from_flat_type(state, subs, recursion_vars, flat_type);
+        state.push_type_tag(solved_tag)
+    }
+
+    fn from_var_help(
+        state: &mut SolvedTypeState,
+        subs: &Subs,
+        recursion_vars: &mut RecursionVars,
+        var: Variable,
+    ) -> Self {
+        let solved_tag = SolvedTypeTag::from_var_help(state, subs, recursion_vars, var);
+        state.push_type_tag(solved_tag)
+    }
+}
+
+#[derive(Default)]
+pub struct SolvedTypeState {
+    pub type_tags: Vec<SolvedTypeTag>,
+    pub lowercases: Vec<Lowercase>,
+    pub record_fields: Vec<(Lowercase, RecordField<SolvedTypeTag>)>,
+    pub tags: Vec<(TagName, Slice<SolvedTypeTag>)>,
+    pub tag_names: Vec<TagName>,
+    pub aliases: Vec<AliasData>,
+    pub problems: Vec<Problem>,
+}
+
+impl<'a> std::ops::Index<TypeSlice> for SolvedTypeState {
+    type Output = [SolvedTypeTag];
+
+    fn index(&self, index: TypeSlice) -> &Self::Output {
+        &self.type_tags[index.start as usize..][..index.length as usize]
+    }
+}
+
+impl<'a> std::ops::Index<TypeIndex> for SolvedTypeState {
+    type Output = SolvedTypeTag;
+
+    fn index(&self, index: TypeIndex) -> &Self::Output {
+        &self.type_tags[index.index as usize]
+    }
+}
+
+type TypeIndex = Index<SolvedTypeTag>;
+
+pub struct Index<T> {
+    _marker: std::marker::PhantomData<T>,
+    index: u32,
+}
+
+impl<T> Clone for Index<T> {
+    fn clone(&self) -> Self {
+        Self {
+            _marker: self._marker.clone(),
+            index: self.index.clone(),
+        }
+    }
+}
+
+impl<T> Copy for Index<T> {}
+
+type TypeSlice = Slice<SolvedTypeTag>;
+
+pub struct Slice<T> {
+    _marker: std::marker::PhantomData<T>,
+    start: u32,
+    length: u16,
+}
+
+impl<T> Slice<T> {
+    pub fn len(self) -> usize {
+        self.length as usize
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.length == 0
+    }
+}
+
+impl<T> Clone for Slice<T> {
+    fn clone(&self) -> Self {
+        Self {
+            _marker: self._marker.clone(),
+            start: self.start.clone(),
+            length: self.length.clone(),
+        }
+    }
+}
+
+impl<T> Copy for Slice<T> {}
+
+#[derive(Clone, Copy)]
+pub enum SolvedTypeTag {
+    Func {
+        lambda_set: Index<SolvedTypeTag>,
+        result: Index<SolvedTypeTag>,
+        arguments: Slice<SolvedTypeTag>,
+    },
+    Apply {
+        symbol: Symbol,
+        arguments: Slice<SolvedTypeTag>,
+    },
+    Rigid(Index<Lowercase>),
+    Flex(VarId),
+    Wildcard,
+    Record {
+        ext: Index<SolvedTypeTag>,
+        fields: Slice<(Lowercase, RecordField<SolvedTypeTag>)>,
+    },
+    EmptyRecord,
+    TagUnion {
+        ext: Index<SolvedTypeTag>,
+        tags: Slice<(TagName, Slice<SolvedTypeTag>)>,
+    },
+    FunctionOrTagUnion(Index<TagName>, Symbol, Index<SolvedTypeTag>),
+    RecursiveTagUnion {
+        ext: Index<SolvedTypeTag>,
+        rec_var: VarId,
+        tags: Slice<(TagName, Slice<SolvedTypeTag>)>,
+    },
+    EmptyTagUnion,
+    Alias(Index<AliasData>),
+    HostExposedAlias(VarId, Index<AliasData>),
+
+    Erroneous(Index<Problem>),
+    Error,
+}
+
+pub struct AliasData {
+    name: Symbol,
+    lambda_set_variables: Vec<SolvedTypeTag>,
+    actual: TypeIndex,
+    arguments: Vec<(Lowercase, SolvedTypeTag)>,
+}
+
 /// A marker that a given Subs has been solved.
 /// The only way to obtain a Solved<Subs> is by running the solver on it.
 #[derive(Clone, Debug)]

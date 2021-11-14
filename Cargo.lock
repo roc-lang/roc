@@ -3552,6 +3552,7 @@ version = "0.1.0"
 name = "roc_types"
 version = "0.1.0"
 dependencies = [
+ "arrayvec 0.7.2",
  "roc_collections",
  "roc_module",
  "roc_region",

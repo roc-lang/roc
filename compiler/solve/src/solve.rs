@@ -4,7 +4,7 @@ use roc_collections::all::MutMap;
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
-use roc_types::solved_types::Solved;
+use roc_types::solved_types::{FreeVars, Solved, SolvedTypeState, SolvedTypeTag};
 use roc_types::subs::{
     AliasVariables, Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields, Subs,
     SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
@@ -633,6 +633,69 @@ pub fn insert_type_into_subs(subs: &mut Subs, typ: &Type) -> Variable {
     let mut cached = MutMap::default();
 
     type_to_variable(subs, rank, &mut pools, &mut cached, typ)
+}
+
+fn type_tag_to_variable(
+    subs: &mut Subs,
+    state: &SolvedTypeState,
+    free_vars: &mut FreeVars,
+    pools: &mut Pools,
+    rank: Rank,
+    type_tag: SolvedTypeTag,
+) -> Variable {
+    match type_tag {
+        SolvedTypeTag::Func {
+            lambda_set,
+            result,
+            arguments,
+        } => {
+            let mut new_arg_vars = Vec::with_capacity(arguments.len());
+
+            for arg in state[arguments].iter() {
+                let var = type_tag_to_variable(subs, state, free_vars, pools, rank, *arg);
+                new_arg_vars.push(var);
+            }
+
+            let arg_vars = VariableSubsSlice::insert_into_subs(subs, new_arg_vars);
+
+            let ret_var = type_tag_to_variable(subs, state, free_vars, pools, rank, state[result]);
+            let closure_var =
+                type_tag_to_variable(subs, state, free_vars, pools, rank, state[lambda_set]);
+            let content = Content::Structure(FlatType::Func(arg_vars, closure_var, ret_var));
+
+            register(subs, rank, pools, content)
+        }
+        SolvedTypeTag::Apply { symbol, arguments } => {
+            let mut new_arg_vars = Vec::with_capacity(arguments.len());
+
+            for arg in state[arguments].iter() {
+                let var = type_tag_to_variable(subs, state, free_vars, pools, rank, *arg);
+                new_arg_vars.push(var);
+            }
+
+            let arg_vars = VariableSubsSlice::insert_into_subs(subs, new_arg_vars);
+            let flat_type = FlatType::Apply(symbol, arg_vars);
+            let content = Content::Structure(flat_type);
+
+            register(subs, rank, pools, content)
+        }
+        SolvedTypeTag::Rigid(_) => todo!(),
+
+        SolvedTypeTag::Flex(var_id) => {
+            Type::Variable(var_id_to_flex_var(*var_id, free_vars, var_store))
+        }
+        SolvedTypeTag::Wildcard => todo!(),
+        SolvedTypeTag::Record { ext, fields } => todo!(),
+        SolvedTypeTag::EmptyRecord => Variable::EMPTY_RECORD,
+        SolvedTypeTag::TagUnion { ext, tags } => todo!(),
+        SolvedTypeTag::FunctionOrTagUnion(_, _, _) => todo!(),
+        SolvedTypeTag::RecursiveTagUnion { ext, rec_var, tags } => todo!(),
+        SolvedTypeTag::EmptyTagUnion => Variable::EMPTY_TAG_UNION,
+        SolvedTypeTag::Alias(_) => todo!(),
+        SolvedTypeTag::HostExposedAlias(_, _) => todo!(),
+        SolvedTypeTag::Erroneous(_) => todo!(),
+        SolvedTypeTag::Error => todo!(),
+    }
 }
 
 fn type_to_variable(
