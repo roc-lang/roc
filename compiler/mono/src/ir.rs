@@ -206,7 +206,7 @@ impl<'a> Default for CapturedSymbols<'a> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct PendingSpecialization<'a> {
     solved_type: SolvedType,
     host_exposed_aliases: BumpMap<Symbol, SolvedType>,
@@ -1819,27 +1819,11 @@ fn specialize_externals_others_need<'a>(
     layout_cache: &mut LayoutCache<'a>,
 ) {
     for (symbol, solved_types) in externals_others_need.specs.iter() {
-        // de-duplicate by the Hash instance (set only deduplicates by Eq instance)
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let mut seen_hashes = Vec::with_capacity_in(solved_types.len(), env.arena);
-
-        let hash_the_thing = |x: &SolvedType| {
-            let mut hasher = DefaultHasher::new();
-            x.hash(&mut hasher);
-            hasher.finish()
-        };
-
         for solved_type in solved_types {
-            let hash = hash_the_thing(solved_type);
-
-            if seen_hashes.iter().any(|h| *h == hash) {
-                // we've seen this one already
-                continue;
-            }
-
-            seen_hashes.push(hash);
+            // historical note: we used to deduplicate with a hash here,
+            // but the cost of that hash is very high. So for now we make
+            // duplicate specializations, and the insertion into a hash map
+            // below will deduplicate them.
 
             let name = *symbol;
 
