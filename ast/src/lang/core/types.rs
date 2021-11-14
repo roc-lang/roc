@@ -428,7 +428,7 @@ pub fn to_type2<'a>(
             Type2::Record(field_types, ext_type)
         }
         TagUnion { tags, ext, .. } => {
-            let tag_types_vec = can_tags(env, scope, references, tags, region);
+            let tag_types_vec = can_tags(env, scope, references, tags.items, region);
 
             let tag_types = PoolVec::with_capacity(tag_types_vec.len() as u32, env.pool);
 

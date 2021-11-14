@@ -144,77 +144,46 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
 
             arena.alloc(Located { region, value })
         }
-        List {
-            items,
-            final_comments,
-        } => {
+        List(items) => {
             let mut new_items = Vec::with_capacity_in(items.len(), arena);
 
             for item in items.iter() {
                 new_items.push(desugar_expr(arena, item));
             }
             let new_items = new_items.into_bump_slice();
-            let value: Expr<'a> = List {
-                items: new_items,
-                final_comments,
-            };
+            let value: Expr<'a> = List(items.replace_items(new_items));
 
             arena.alloc(Located {
                 region: loc_expr.region,
                 value,
             })
         }
-        Record {
-            fields,
-            final_comments,
-        } => {
-            let mut new_fields = Vec::with_capacity_in(fields.len(), arena);
-
-            for field in fields.iter() {
+        Record(fields) => arena.alloc(Located {
+            region: loc_expr.region,
+            value: Record(fields.map_items(arena, |field| {
                 let value = desugar_field(arena, &field.value);
-
-                new_fields.push(Located {
+                Located {
                     value,
                     region: field.region,
-                });
-            }
+                }
+            })),
+        }),
 
-            let new_fields = new_fields.into_bump_slice();
-
-            arena.alloc(Located {
-                region: loc_expr.region,
-                value: Record {
-                    fields: new_fields,
-                    final_comments,
-                },
-            })
-        }
-
-        RecordUpdate {
-            fields,
-            update,
-            final_comments,
-        } => {
+        RecordUpdate { fields, update } => {
             // NOTE the `update` field is always a `Var { .. }` and does not need to be desugared
-            let mut new_fields = Vec::with_capacity_in(fields.len(), arena);
-
-            for field in fields.iter() {
+            let new_fields = fields.map_items(arena, |field| {
                 let value = desugar_field(arena, &field.value);
-
-                new_fields.push(Located {
+                Located {
                     value,
                     region: field.region,
-                });
-            }
-
-            let new_fields = new_fields.into_bump_slice();
+                }
+            });
 
             arena.alloc(Located {
                 region: loc_expr.region,
                 value: RecordUpdate {
                     update: *update,
                     fields: new_fields,
-                    final_comments,
                 },
             })
         }

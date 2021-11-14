@@ -1,4 +1,4 @@
-use crate::ast::{AssignedField, Collection, Tag, TypeAnnotation};
+use crate::ast::{AssignedField, Tag, TypeAnnotation};
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::keyword;
 use crate::parser::{
@@ -40,11 +40,7 @@ fn tag_union_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, ET
         )))
         .parse(arena, state)?;
 
-        let result = TypeAnnotation::TagUnion {
-            tags: tags.items,
-            ext,
-            final_comments: tags.final_comments,
-        };
+        let result = TypeAnnotation::TagUnion { tags, ext };
 
         Ok((MadeProgress, result, state))
     }
@@ -295,13 +291,7 @@ fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, EType
         let field_term = specialize_ref(ETypeRecord::Type, term(min_indent));
         let (_, ext, state) = optional(allocated(field_term)).parse(arena, state)?;
 
-        let result = Record {
-            fields: Collection {
-                items: fields.items,
-                final_comments: fields.final_comments,
-            },
-            ext,
-        };
+        let result = Record { fields, ext };
 
         Ok((MadeProgress, result, state))
     }
