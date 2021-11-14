@@ -17,7 +17,7 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_region::all::{Located, Region};
 use roc_std::RocDec;
-use roc_types::solved_types::{SolvedType, SolvedTypeState, SolvedTypeTag};
+use roc_types::solved_types::{SolvedTypeState, SolvedTypeTag};
 use roc_types::subs::{Content, FlatType, Subs, Variable, VariableSubsSlice};
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
@@ -219,29 +219,29 @@ impl<'a> Default for CapturedSymbols<'a> {
 #[derive(Clone, Debug)]
 pub struct SolvedTypeWrapper {
     state: SolvedTypeState,
-    tag_type: SolvedTypeTag,
+    type_tag: SolvedTypeTag,
 }
 
 impl SolvedTypeWrapper {
     pub fn from_var(subs: &Subs, var: Variable) -> Self {
         let mut state = SolvedTypeState::default();
 
-        let tag_type = SolvedTypeTag::from_var(&mut state, subs, var);
+        let type_tag = SolvedTypeTag::from_var(&mut state, subs, var);
 
-        Self { state, tag_type }
+        Self { state, type_tag }
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct PendingSpecialization<'a> {
-    solved_type: SolvedType,
-    host_exposed_aliases: BumpMap<Symbol, SolvedType>,
+    solved_type: SolvedTypeWrapper,
+    host_exposed_aliases: BumpMap<Symbol, SolvedTypeWrapper>,
     _lifetime: std::marker::PhantomData<&'a u8>,
 }
 
 impl<'a> PendingSpecialization<'a> {
     pub fn from_var(arena: &'a Bump, subs: &Subs, var: Variable) -> Self {
-        let solved_type = SolvedType::from_var(subs, var);
+        let solved_type = SolvedTypeWrapper::from_var(subs, var);
         PendingSpecialization {
             solved_type,
             host_exposed_aliases: BumpMap::new_in(arena),
@@ -255,14 +255,14 @@ impl<'a> PendingSpecialization<'a> {
         var: Variable,
         exposed: &MutMap<Symbol, Variable>,
     ) -> Self {
-        let solved_type = SolvedType::from_var(subs, var);
+        let solved_type = SolvedTypeWrapper::from_var(subs, var);
 
         let mut host_exposed_aliases = BumpMap::with_capacity_in(exposed.len(), arena);
 
         host_exposed_aliases.extend(
             exposed
                 .iter()
-                .map(|(symbol, variable)| (*symbol, SolvedType::from_var(subs, *variable))),
+                .map(|(symbol, variable)| (*symbol, SolvedTypeWrapper::from_var(subs, *variable))),
         );
 
         PendingSpecialization {
@@ -427,7 +427,7 @@ impl<'a> Proc<'a> {
 #[derive(Clone, Debug)]
 pub struct ExternalSpecializations<'a> {
     /// Not a bumpalo vec because bumpalo is not thread safe
-    pub specs: BumpMap<Symbol, std::vec::Vec<SolvedType>>,
+    pub specs: BumpMap<Symbol, std::vec::Vec<SolvedTypeWrapper>>,
     _lifetime: std::marker::PhantomData<&'a u8>,
 }
 
@@ -439,7 +439,7 @@ impl<'a> ExternalSpecializations<'a> {
         }
     }
 
-    pub fn insert(&mut self, symbol: Symbol, typ: SolvedType) {
+    pub fn insert(&mut self, symbol: Symbol, typ: SolvedTypeWrapper) {
         use hashbrown::hash_map::Entry::{Occupied, Vacant};
 
         let existing = match self.specs.entry(symbol) {
@@ -1850,23 +1850,26 @@ fn specialize_externals_others_need<'a>(
     for (symbol, solved_types) in externals_others_need.specs.iter() {
         // de-duplicate by the Hash instance (set only deduplicates by Eq instance)
         use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+        use std::hash::Hasher;
 
         let mut seen_hashes = Vec::with_capacity_in(solved_types.len(), env.arena);
 
-        let hash_the_thing = |x: &SolvedType| {
+        let hash_the_thing = |x: &SolvedTypeWrapper| {
             let mut hasher = DefaultHasher::new();
-            x.hash(&mut hasher);
+            let mut flex_vars = std::vec::Vec::new();
+            x.type_tag.hash_help(&x.state, &mut flex_vars, &mut hasher);
             hasher.finish()
         };
 
         for solved_type in solved_types {
             let hash = hash_the_thing(solved_type);
 
+            /*
             if seen_hashes.iter().any(|h| *h == hash) {
                 // we've seen this one already
                 continue;
             }
+            */
 
             seen_hashes.push(hash);
 
@@ -2505,23 +2508,11 @@ fn specialize<'a, 'b>(
     )
 }
 
-fn introduce_solved_type_to_subs<'a>(env: &mut Env<'a, '_>, solved_type: &SolvedType) -> Variable {
-    use roc_solve::solve::insert_type_into_subs;
-    use roc_types::solved_types::{to_type, FreeVars};
-    use roc_types::subs::VarStore;
-    let mut free_vars = FreeVars::default();
-    let mut var_store = VarStore::new_from_subs(env.subs);
-
-    let before = var_store.peek();
-
-    let normal_type = to_type(solved_type, &mut free_vars, &mut var_store);
-
-    let after = var_store.peek();
-    let variables_introduced = after - before;
-
-    env.subs.extend_by(variables_introduced as usize);
-
-    insert_type_into_subs(env.subs, &normal_type)
+fn introduce_solved_type_to_subs<'a>(
+    env: &mut Env<'a, '_>,
+    solved_type: &SolvedTypeWrapper,
+) -> Variable {
+    roc_solve::solve::type_tag_to_var(&mut env.subs, &solved_type.state, solved_type.type_tag)
 }
 
 fn specialize_solved_type<'a>(
@@ -2529,8 +2520,8 @@ fn specialize_solved_type<'a>(
     procs: &mut Procs<'a>,
     proc_name: Symbol,
     layout_cache: &mut LayoutCache<'a>,
-    solved_type: &SolvedType,
-    host_exposed_aliases: BumpMap<Symbol, SolvedType>,
+    solved_type: &SolvedTypeWrapper,
+    host_exposed_aliases: BumpMap<Symbol, SolvedTypeWrapper>,
     partial_proc_id: PartialProcId,
 ) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
     specialize_variable_help(
@@ -2550,7 +2541,7 @@ fn specialize_variable<'a>(
     proc_name: Symbol,
     layout_cache: &mut LayoutCache<'a>,
     fn_var: Variable,
-    host_exposed_aliases: BumpMap<Symbol, SolvedType>,
+    host_exposed_aliases: BumpMap<Symbol, SolvedTypeWrapper>,
     partial_proc_id: PartialProcId,
 ) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
     specialize_variable_help(
@@ -2570,7 +2561,7 @@ fn specialize_variable_help<'a, F>(
     proc_name: Symbol,
     layout_cache: &mut LayoutCache<'a>,
     fn_var_thunk: F,
-    host_exposed_aliases: BumpMap<Symbol, SolvedType>,
+    host_exposed_aliases: BumpMap<Symbol, SolvedTypeWrapper>,
     partial_proc_id: PartialProcId,
 ) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>>
 where
@@ -6371,7 +6362,7 @@ fn add_needed_external<'a>(
         Occupied(entry) => entry.into_mut(),
     };
 
-    let solved_type = SolvedType::from_var(env.subs, fn_var);
+    let solved_type = SolvedTypeWrapper::from_var(env.subs, fn_var);
     existing.insert(name, solved_type);
 }
 
@@ -7445,7 +7436,7 @@ fn from_can_pattern_help<'a>(
                             debug_assert_eq!(&w_tag_name, tag_name);
 
                             ctors.push(Ctor {
-                                tag_id: TagId(0 as TagIdIntType),
+                                tag_id: TagId(0),
                                 name: tag_name.clone(),
                                 arity: fields.len(),
                             });

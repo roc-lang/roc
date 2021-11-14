@@ -69,6 +69,7 @@ impl<T> RecordField<T> {
         }
     }
 
+    #[inline(always)]
     pub fn map<F, U>(&self, mut f: F) -> RecordField<U>
     where
         F: FnMut(&T) -> U,

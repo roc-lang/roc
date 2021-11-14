@@ -1,6 +1,6 @@
 use crate::subs::{FlatType, GetSubsSlice, Subs, VarId, VarStore, Variable};
 use crate::types::{Problem, RecordField, Type};
-use roc_collections::all::{MutMap, MutSet, SendMap};
+use roc_collections::all::{MutMap, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
@@ -74,13 +74,19 @@ impl SolvedTypeState {
 
     fn push_union_tags(
         &mut self,
-        tags: impl Iterator<Item = (TagName, Vec<SolvedTypeTag>)>,
+        tag_names: Vec<TagName>,
+        lengths: &[u16],
+        type_tags: &[SolvedTypeTag],
     ) -> Slice<(TagName, Slice<SolvedTypeTag>)> {
         let index = self.tags.len();
 
-        for (tag_name, mut arguments) in tags {
-            let slice = self.push_type_tags(arguments.drain(..));
+        let mut start = 0;
+        for (tag_name, length) in tag_names.into_iter().zip(lengths) {
+            let slice = &type_tags[start..][..*length as usize];
+            let slice = self.push_type_tags(slice.iter().copied());
             self.tags.push((tag_name, slice));
+
+            start += *length as usize;
         }
 
         let length = self.tags.len() - index;
@@ -146,25 +152,29 @@ impl SolvedTypeTag {
                 }
             }
             TagUnion(tags, ext_var) => {
-                let mut new_tags = Vec::with_capacity(tags.len());
+                let mut tag_names = Vec::with_capacity(tags.len());
+                let mut lengths = Vec::with_capacity(tags.len());
+                let mut arguments = Vec::with_capacity(2 * tags.len()); // guess: average of 2 arguments per tag
 
                 for (name_index, slice_index) in tags.iter_all() {
                     let slice = subs[slice_index];
 
-                    let mut new_args = Vec::with_capacity(slice.len());
-
                     for var_index in slice {
                         let var = subs[var_index];
-                        new_args.push(Self::from_var_help(state, subs, recursion_vars, var));
+                        arguments.push(Self::from_var_help(state, subs, recursion_vars, var));
                     }
+
+                    // TODO copy over whole slice?
                     let tag_name = subs[name_index].clone();
-                    new_tags.push((tag_name.clone(), new_args));
+                    tag_names.push(tag_name);
+
+                    lengths.push(slice.len() as u16);
                 }
 
                 let ext = Self::from_var_help(state, subs, recursion_vars, *ext_var);
 
                 Self::TagUnion {
-                    tags: state.push_union_tags(new_tags.drain(..)),
+                    tags: state.push_union_tags(tag_names, &lengths, &arguments),
                     ext: state.push_type_tag(ext),
                 }
             }
@@ -177,26 +187,30 @@ impl SolvedTypeTag {
             RecursiveTagUnion(rec_var, tags, ext_var) => {
                 recursion_vars.insert(subs, *rec_var);
 
-                let mut new_tags = Vec::with_capacity(tags.len());
+                let mut tag_names = Vec::with_capacity(tags.len());
+                let mut lengths = Vec::with_capacity(tags.len());
+                let mut arguments = Vec::with_capacity(2 * tags.len()); // guess: average of 2 arguments per tag
 
                 for (name_index, slice_index) in tags.iter_all() {
                     let slice = subs[slice_index];
 
-                    let mut new_args = Vec::with_capacity(slice.len());
-
                     for var_index in slice {
                         let var = subs[var_index];
-                        new_args.push(Self::from_var_help(state, subs, recursion_vars, var));
+                        arguments.push(Self::from_var_help(state, subs, recursion_vars, var));
                     }
+
+                    // TODO copy over whole slice?
                     let tag_name = subs[name_index].clone();
-                    new_tags.push((tag_name.clone(), new_args));
+                    tag_names.push(tag_name);
+
+                    lengths.push(slice.len() as u16);
                 }
 
                 let ext = Self::from_var_help(state, subs, recursion_vars, *ext_var);
 
                 Self::RecursiveTagUnion {
                     rec_var: VarId::from_var(*rec_var, subs),
-                    tags: state.push_union_tags(new_tags.drain(..)),
+                    tags: state.push_union_tags(tag_names, &lengths, &arguments),
                     ext: state.push_type_tag(ext),
                 }
             }
@@ -267,19 +281,139 @@ impl SolvedTypeTag {
             Error => Self::Error,
         }
     }
+
+    pub fn hash_help<H: Hasher>(
+        &self,
+        state: &SolvedTypeState,
+        flex_vars: &mut Vec<VarId>,
+        hasher: &mut H,
+    ) {
+        use SolvedTypeTag::*;
+
+        let mut stack = Vec::with_capacity(63);
+
+        stack.push(*self);
+
+        while let Some(solved_type) = stack.pop() {
+            match solved_type {
+                Flex(var_id) => {
+                    var_id_hash_help(var_id, flex_vars, hasher);
+                }
+                Wildcard => "wildcard".hash(hasher),
+                EmptyRecord => "empty_record".hash(hasher),
+                EmptyTagUnion => "empty_tag_union".hash(hasher),
+                Error => "error".hash(hasher),
+                Func {
+                    lambda_set,
+                    result,
+                    arguments,
+                } => {
+                    stack.extend(state[arguments].iter().copied());
+                    stack.push(state[result]);
+                    stack.push(state[lambda_set]);
+                }
+                Apply { symbol, arguments } => {
+                    symbol.hash(hasher);
+                    stack.extend(state[arguments].iter().copied());
+                }
+                Rigid(_) => todo!(),
+                Record { ext, fields } => {
+                    let fields = &state.record_fields[fields.start as usize..][..fields.len()];
+
+                    stack.extend(
+                        fields
+                            .iter()
+                            .map(|(name, field)| {
+                                name.hash(hasher);
+
+                                field.as_inner()
+                            })
+                            .copied(),
+                    );
+                    stack.push(state[ext]);
+                }
+                TagUnion { ext, tags } => {
+                    let tags = &state.tags[tags.start as usize..][..tags.len()];
+
+                    stack.extend(
+                        tags.iter()
+                            .map(|(name, arguments)| {
+                                name.hash(hasher);
+
+                                state[*arguments].iter()
+                            })
+                            .flatten()
+                            .copied(),
+                    );
+
+                    stack.push(state[ext]);
+                }
+                RecursiveTagUnion { ext, rec_var, tags } => {
+                    var_id_hash_help(rec_var, flex_vars, hasher);
+
+                    let tags = &state.tags[tags.start as usize..][..tags.len()];
+
+                    stack.extend(
+                        tags.iter()
+                            .map(|(name, arguments)| {
+                                name.hash(hasher);
+
+                                state[*arguments].iter()
+                            })
+                            .flatten()
+                            .copied(),
+                    );
+
+                    stack.push(state[ext]);
+                }
+                FunctionOrTagUnion(tag_name, symbol, type_tag) => {
+                    let tag_name = &state.tag_names[tag_name.index as usize];
+                    tag_name.hash(hasher);
+
+                    symbol.hash(hasher);
+
+                    stack.push(state[type_tag]);
+                }
+                Alias(alias_data) => {
+                    let alias_data = &state.aliases[alias_data.index as usize];
+
+                    alias_data.name.hash(hasher);
+                    stack.extend(alias_data.lambda_set_variables.iter().copied());
+                    stack.push(state[alias_data.actual]);
+
+                    stack.extend(alias_data.arguments.iter().map(|(name, field)| {
+                        name.hash(hasher);
+
+                        *field
+                    }));
+                }
+
+                HostExposedAlias(var_id, alias_data) => {
+                    var_id_hash_help(var_id, flex_vars, hasher);
+
+                    let alias_data = &state.aliases[alias_data.index as usize];
+
+                    alias_data.name.hash(hasher);
+                    stack.extend(alias_data.lambda_set_variables.iter().copied());
+                    stack.push(state[alias_data.actual]);
+
+                    stack.extend(alias_data.arguments.iter().map(|(name, field)| {
+                        name.hash(hasher);
+
+                        *field
+                    }));
+                }
+
+                Erroneous(problem) => {
+                    let problem = &state.problems[problem.index as usize];
+                    problem.hash(hasher);
+                }
+            }
+        }
+    }
 }
 
 impl Index<SolvedTypeTag> {
-    fn from_flat_type(
-        state: &mut SolvedTypeState,
-        subs: &Subs,
-        recursion_vars: &mut RecursionVars,
-        flat_type: &FlatType,
-    ) -> Self {
-        let solved_tag = SolvedTypeTag::from_flat_type(state, subs, recursion_vars, flat_type);
-        state.push_type_tag(solved_tag)
-    }
-
     fn from_var_help(
         state: &mut SolvedTypeState,
         subs: &Subs,
@@ -367,9 +501,9 @@ impl<T> Slice<T> {
 impl<T> Clone for Slice<T> {
     fn clone(&self) -> Self {
         Self {
-            _marker: self._marker.clone(),
-            start: self.start.clone(),
-            length: self.length.clone(),
+            _marker: self._marker,
+            start: self.start,
+            length: self.length,
         }
     }
 }
@@ -954,19 +1088,20 @@ pub struct BuiltinAlias {
 }
 
 #[derive(Default)]
-struct RecursionVars(MutSet<Variable>);
+struct RecursionVars(Vec<Variable>);
 
 impl RecursionVars {
     fn contains(&self, subs: &Subs, var: Variable) -> bool {
         let var = subs.get_root_key_without_compacting(var);
 
-        self.0.contains(&var)
+        self.0.iter().any(|v| *v == var)
     }
 
     fn insert(&mut self, subs: &Subs, var: Variable) {
         let var = subs.get_root_key_without_compacting(var);
+        debug_assert!(!self.contains(subs, var));
 
-        self.0.insert(var);
+        self.0.push(var);
     }
 }
 

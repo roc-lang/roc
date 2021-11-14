@@ -637,6 +637,18 @@ pub fn insert_type_into_subs(subs: &mut Subs, typ: &Type) -> Variable {
     type_to_variable(subs, rank, &mut pools, &mut cached, typ)
 }
 
+pub fn type_tag_to_var(
+    subs: &mut Subs,
+    state: &SolvedTypeState,
+    type_tag: SolvedTypeTag,
+) -> Variable {
+    let rank = Rank::NONE;
+    let mut pools = Pools::default();
+    let mut free_vars = FreeVars::default();
+
+    type_tag_to_variable(subs, state, &mut free_vars, &mut pools, rank, type_tag)
+}
+
 fn type_tag_to_variable(
     subs: &mut Subs,
     state: &SolvedTypeState,
@@ -827,6 +839,34 @@ fn alias_helper(
     alias_data_index: roc_types::solved_types::Index<roc_types::solved_types::AliasData>,
 ) -> Variable {
     let alias_data = &state.aliases[alias_data_index.index as usize];
+
+    // the rank of these variables is NONE (encoded as 0 in practice)
+    // using them for other ranks causes issues
+    if rank.is_none() {
+        // TODO replace by arithmetic?
+        match alias_data.name {
+            Symbol::NUM_I128 => return Variable::I128,
+            Symbol::NUM_I64 => return Variable::I64,
+            Symbol::NUM_I32 => return Variable::I32,
+            Symbol::NUM_I16 => return Variable::I16,
+            Symbol::NUM_I8 => return Variable::I8,
+
+            Symbol::NUM_U128 => return Variable::U128,
+            Symbol::NUM_U64 => return Variable::U64,
+            Symbol::NUM_U32 => return Variable::U32,
+            Symbol::NUM_U16 => return Variable::U16,
+            Symbol::NUM_U8 => return Variable::U8,
+
+            Symbol::NUM_NAT => return Variable::NAT,
+
+            Symbol::NUM_F32 => return Variable::F32,
+            Symbol::NUM_F64 => return Variable::F64,
+
+            Symbol::NUM_DEC => return Variable::DEC,
+
+            _ => {}
+        }
+    }
 
     let mut arg_vars = Vec::with_capacity(alias_data.arguments.len());
     for (arg, arg_type) in alias_data.arguments.iter() {
