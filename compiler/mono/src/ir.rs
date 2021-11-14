@@ -7429,7 +7429,7 @@ fn from_can_pattern_help<'a>(
                             debug_assert_eq!(&w_tag_name, tag_name);
 
                             ctors.push(Ctor {
-                                tag_id: TagId(0 as TagIdIntType),
+                                tag_id: TagId(0),
                                 name: tag_name.clone(),
                                 arity: fields.len(),
                             });
