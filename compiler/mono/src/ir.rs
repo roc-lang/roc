@@ -17,7 +17,7 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_region::all::{Located, Region};
 use roc_std::RocDec;
-use roc_types::solved_types::SolvedType;
+use roc_types::solved_types::{SolvedType, SolvedTypeState, SolvedTypeTag};
 use roc_types::subs::{Content, FlatType, Subs, Variable, VariableSubsSlice};
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
@@ -216,7 +216,23 @@ impl<'a> Default for CapturedSymbols<'a> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
+pub struct SolvedTypeWrapper {
+    state: SolvedTypeState,
+    tag_type: SolvedTypeTag,
+}
+
+impl SolvedTypeWrapper {
+    pub fn from_var(subs: &Subs, var: Variable) -> Self {
+        let mut state = SolvedTypeState::default();
+
+        let tag_type = SolvedTypeTag::from_var(&mut state, subs, var);
+
+        Self { state, tag_type }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct PendingSpecialization<'a> {
     solved_type: SolvedType,
     host_exposed_aliases: BumpMap<Symbol, SolvedType>,

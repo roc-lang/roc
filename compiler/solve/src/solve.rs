@@ -744,7 +744,6 @@ fn type_tag_to_variable(
             register(subs, rank, pools, content)
         }
         SolvedTypeTag::FunctionOrTagUnion(tag_name_index, symbol, ext) => {
-            // FunctionOrTagUnion(Index<TagName>, Symbol, Index<SolvedTypeTag>),
             let temp_ext_var =
                 type_tag_to_variable(subs, state, free_vars, pools, rank, state[ext]);
             let mut ext_tag_vec = Vec::new();

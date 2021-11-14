@@ -135,7 +135,7 @@ impl SolvedTypeTag {
                     let field: RecordField<()> = subs[i3];
 
                     let solved_type =
-                        field.map(|var| Self::from_var_help(state, subs, recursion_vars, variable));
+                        field.map(|()| Self::from_var_help(state, subs, recursion_vars, variable));
 
                     solved_fields.push((field_name, solved_type));
                 }
@@ -291,7 +291,7 @@ impl Index<SolvedTypeTag> {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub struct SolvedTypeState {
     pub type_tags: Vec<SolvedTypeTag>,
     pub lowercases: Vec<Lowercase>,
@@ -328,6 +328,7 @@ impl std::ops::Index<Index<Lowercase>> for SolvedTypeState {
 
 type TypeIndex = Index<SolvedTypeTag>;
 
+#[derive(Debug)]
 pub struct Index<T> {
     _marker: std::marker::PhantomData<T>,
     pub index: u32,
@@ -346,6 +347,7 @@ impl<T> Copy for Index<T> {}
 
 type TypeSlice = Slice<SolvedTypeTag>;
 
+#[derive(Debug)]
 pub struct Slice<T> {
     _marker: std::marker::PhantomData<T>,
     pub start: u32,
@@ -374,7 +376,7 @@ impl<T> Clone for Slice<T> {
 
 impl<T> Copy for Slice<T> {}
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum SolvedTypeTag {
     Func {
         lambda_set: Index<SolvedTypeTag>,
@@ -411,6 +413,7 @@ pub enum SolvedTypeTag {
     Error,
 }
 
+#[derive(Clone, Debug)]
 pub struct AliasData {
     pub name: Symbol,
     pub lambda_set_variables: Vec<SolvedTypeTag>,
