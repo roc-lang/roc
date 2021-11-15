@@ -15,21 +15,12 @@ extern crate roc_parse;
 mod test_parse {
     use bumpalo::collections::vec::Vec;
     use bumpalo::{self, Bump};
-    use roc_module::operator::BinOp::{self, *};
-    use roc_module::operator::{CalledVia, UnaryOp};
-    use roc_parse::ast::AssignedField::*;
-    use roc_parse::ast::CommentOrNewline::*;
     use roc_parse::ast::Expr::{self, *};
     use roc_parse::ast::Pattern::{self, *};
     use roc_parse::ast::StrLiteral::{self, *};
     use roc_parse::ast::StrSegment::*;
     use roc_parse::ast::{
-        self, Collection, Def, EscapedChar, Spaceable, TypeAnnotation, WhenBranch,
-    };
-    use roc_parse::header::{
-        AppHeader, Effects, ExposesEntry, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
-        PackageName, PackageOrPath, PlatformHeader, PlatformRequires, PlatformRigid, To,
-        TypedIdent,
+        self, EscapedChar
     };
     use roc_parse::module::module_defs;
     use roc_parse::parser::{Parser, State, SyntaxError};
@@ -264,31 +255,11 @@ mod test_parse {
         if std::env::var("ROC_PARSER_SNAPSHOT_TEST_OVERWRITE").is_ok() {
             std::fs::write(&result_path, actual_result).unwrap();
         } else {
+            // TODO: do a diff over the "real" content of these strings, rather than
+            // the debug-formatted content. As is, we get an ugly single-line diff
+            // from pretty_assertions
             assert_eq!(expected_result, actual_result);
         }
-    }
-
-    fn save_snapshot(name: &str, ty: &str, input: &str, result: &str) {
-        let mut parent = std::path::PathBuf::from("tests");
-        parent.push("snapshots");
-        parent.push("pass");
-        let input_path = parent.join(&format!("{}.{}.roc", name, ty));
-        let result_path = parent.join(&format!("{}.{}.result-ast", name, ty));
-        std::fs::create_dir_all(parent).unwrap();
-        std::fs::write(input_path, input).unwrap();
-        std::fs::write(result_path, result).unwrap();
-    }
-
-    fn test_name() -> String {
-        std::thread::current().name().unwrap().strip_prefix("test_parse::").unwrap().to_string()
-    }
-
-    fn save_parse_expr_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Expr<'a>, SyntaxError<'a>> {
-        let actual = parse_expr_with(&arena, input.trim());
-        let result = format!("{:#?}\n", actual.as_ref().unwrap());
-
-        save_snapshot(&test_name(), "expr", input, &result);
-        actual
     }
 
     fn assert_parses_to<'a>(input: &'a str, expected_expr: Expr<'a>) {
