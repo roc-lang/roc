@@ -241,8 +241,7 @@ impl<'a> Serialize for ImportSection<'a> {
 
 #[derive(Debug)]
 pub struct FunctionSection<'a> {
-    /// Private. See WasmModule::add_function_signature
-    signature_indices: Vec<'a, u32>,
+    pub signature_indices: Vec<'a, u32>,
 }
 
 impl<'a> FunctionSection<'a> {
