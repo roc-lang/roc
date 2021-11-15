@@ -779,14 +779,15 @@ impl<'a> WasmBackend<'a> {
                 };
                 self.module.import.entries.push(import);
 
-                let sym_idx = self.linker_symbols.len() as u32;
+                let sym_idx = self.linker_symbols.len();
                 let sym_info = SymInfo::Function(WasmObjectSymbol::Imported {
                     flags: WASM_SYM_UNDEFINED,
                     index: import_index,
                 });
                 self.linker_symbols.push(sym_info);
+                self.builtin_sym_index_map.insert(name, sym_idx);
 
-                (import_index, sym_idx)
+                (import_index, sym_idx as u32)
             }
         };
         self.code_builder.call(
