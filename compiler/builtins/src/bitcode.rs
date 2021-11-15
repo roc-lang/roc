@@ -185,7 +185,6 @@ pub const LIST_REPEAT: &str = "roc_builtins.list.repeat";
 pub const LIST_APPEND: &str = "roc_builtins.list.append";
 pub const LIST_PREPEND: &str = "roc_builtins.list.prepend";
 pub const LIST_SUBLIST: &str = "roc_builtins.list.sublist";
-pub const LIST_DROP: &str = "roc_builtins.list.drop";
 pub const LIST_DROP_AT: &str = "roc_builtins.list.drop_at";
 pub const LIST_SWAP: &str = "roc_builtins.list.swap";
 pub const LIST_SINGLE: &str = "roc_builtins.list.single";
