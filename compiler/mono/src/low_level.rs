@@ -101,7 +101,6 @@ enum FirstOrder {
     ListGetUnsafe,
     ListSet,
     ListSublist,
-    ListDrop,
     ListDropAt,
     ListSingle,
     ListRepeat,
