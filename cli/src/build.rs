@@ -282,6 +282,7 @@ pub fn build_file<'a>(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_rebuild_thread(
     opt_level: OptLevel,
     surgically_link: bool,
