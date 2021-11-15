@@ -229,13 +229,13 @@ where
                     } => {
                         // If this function is just a lowlevel wrapper, then inline it
                         if let Some(lowlevel) = LowLevel::from_wrapper_symbol(*func_sym) {
-                            return self.build_run_low_level(
+                            self.build_run_low_level(
                                 sym,
                                 &lowlevel,
                                 arguments,
                                 arg_layouts,
                                 ret_layout,
-                            );
+                            )
                         } else if func_sym
                             .module_string(&self.env().interns)
                             .starts_with(ModuleName::APP)
@@ -247,7 +247,10 @@ where
                             self.load_literal_symbols(arguments)?;
                             self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
                         } else {
-                            Err(format!("the function, {:?}, is not yet implemented", func_sym))
+                            Err(format!(
+                                "the function, {:?}, is not yet implemented",
+                                func_sym
+                            ))
                         }
                     }
 

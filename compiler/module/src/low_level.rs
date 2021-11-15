@@ -143,10 +143,7 @@ impl LowLevel {
     pub fn is_higher_order(&self) -> bool {
         use LowLevel::*;
 
-        match self {
-            higher_order!() => true,
-            _ => false,
-        }
+        matches!(self, higher_order!())
     }
 
     pub fn function_argument_position(&self) -> usize {
