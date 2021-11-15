@@ -1,6 +1,8 @@
 Interface {
     header: InterfaceHeader {
-        name: |L 0-0, C 10-13| ModuleName("Foo"),
+        name: |L 0-0, C 10-13| ModuleName(
+            "Foo",
+        ),
         exposes: [],
         imports: [],
         before_header: [],

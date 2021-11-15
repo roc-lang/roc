@@ -1,10 +1,14 @@
 App {
     header: AppHeader {
-        name: |L 0-0, C 4-14| PlainLine("test-app"),
+        name: |L 0-0, C 4-14| PlainLine(
+            "test-app",
+        ),
         packages: [],
         imports: [],
         provides: [],
-        to: |L 0-0, C 53-57| ExistingPackage("blah"),
+        to: |L 0-0, C 53-57| ExistingPackage(
+            "blah",
+        ),
         before_header: [],
         after_app_keyword: [],
         before_packages: [],

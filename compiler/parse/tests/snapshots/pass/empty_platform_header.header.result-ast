@@ -1,9 +1,19 @@
 Platform {
     header: PlatformHeader {
-        name: |L 0-0, C 9-23| PackageName { account: "rtfeldman", pkg: "blah" },
+        name: |L 0-0, C 9-23| PackageName {
+            account: "rtfeldman",
+            pkg: "blah",
+        },
         requires: PlatformRequires {
             rigids: [],
-            signature: |L 0-0, C 38-47| Entry { ident: |L 0-0, C 38-42| "main", spaces_before_colon: [], ann: |L 0-0, C 45-47| Record { fields: [], ext: None } },
+            signature: |L 0-0, C 38-47| Entry {
+                ident: |L 0-0, C 38-42| "main",
+                spaces_before_colon: [],
+                ann: |L 0-0, C 45-47| Record {
+                    fields: [],
+                    ext: None,
+                },
+            },
         },
         exposes: [],
         packages: [],

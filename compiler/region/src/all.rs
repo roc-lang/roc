@@ -230,7 +230,11 @@ where
             // because it makes failed assertions much harder to read.
             self.value.fmt(f)
         } else {
-            write!(f, "{:?} {:?}", region, self.value)
+            if f.alternate() {
+                write!(f, "{:?} {:#?}", region, self.value)
+            } else {
+                write!(f, "{:?} {:?}", region, self.value)
+            }
         }
     }
 }
