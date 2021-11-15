@@ -12,7 +12,7 @@ use crate::helpers::wasm::assert_evals_to;
 
 #[allow(unused_imports)]
 use indoc::indoc;
-// use roc_std::RocStr;
+use roc_std::RocStr;
 
 // #[test]
 // fn str_split_bigger_delimiter_small_str() {
@@ -287,15 +287,14 @@ fn small_str_zeroed_literal() {
     );
 }
 
-// TODO: fix linking errors for undefined symbols roc_alloc, roc_dealloc
-// #[test]
-// fn long_str_literal() {
-//     assert_evals_to!(
-//         "\"0123456789 123456789 123456789\"",
-//         RocStr::from_slice(b"0123456789 123456789 123456789"),
-//         RocStr
-//     );
-// }
+#[test]
+fn long_str_literal() {
+    assert_evals_to!(
+        "\"0123456789 123456789 123456789\"",
+        RocStr::from_slice(b"0123456789 123456789 123456789"),
+        RocStr
+    );
+}
 
 // #[test]
 // fn small_str_concat_empty_first_arg() {
