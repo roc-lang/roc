@@ -439,15 +439,69 @@ impl<'a> ExternalSpecializations<'a> {
 }
 
 #[derive(Clone, Debug)]
+pub struct Suspended<'a> {
+    pub store: Subs,
+    pub symbols: Vec<'a, Symbol>,
+    pub layouts: Vec<'a, ProcLayout<'a>>,
+    pub variables: Vec<'a, Variable>,
+}
+
+impl<'a> Suspended<'a> {
+    fn specialization(
+        &mut self,
+        subs: &mut Subs,
+        symbol: Symbol,
+        proc_layout: ProcLayout<'a>,
+        variable: Variable,
+    ) {
+        // de-duplicate
+        for (i, s) in self.symbols.iter().enumerate() {
+            if *s == symbol {
+                let existing = &self.layouts[i];
+                if &proc_layout == existing {
+                    // symbol + layout combo exists
+                    return;
+                }
+            }
+        }
+
+        self.symbols.push(symbol);
+        self.layouts.push(proc_layout);
+
+        let variable = roc_solve::solve::deep_copy_var_to(subs, &mut self.store, variable);
+        self.variables.push(variable);
+    }
+}
+
+#[derive(Clone, Debug)]
+enum PendingSpecializations<'a> {
+    /// We are finding specializations we need. This is a separate step so
+    /// that we can give specializations we need to modules higher up in the dependency chain, so
+    /// that they can start making specializations too
+    Finding(BumpMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>),
+    /// We are making specializations. If any new one comes up, we can just make it immediately
+    Making,
+}
+
+impl<'a> PendingSpecializations<'a> {
+    fn into_option(
+        self,
+    ) -> Option<BumpMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>> {
+        match self {
+            PendingSpecializations::Finding(x) => Some(x),
+            PendingSpecializations::Making => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Procs<'a> {
     pub partial_procs: PartialProcs<'a>,
     pub imported_module_thunks: &'a [Symbol],
     pub module_thunks: &'a [Symbol],
-    pub pending_specializations:
-        Option<BumpMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>>,
+    pending_specializations: PendingSpecializations<'a>,
     pub specialized: BumpMap<(Symbol, ProcLayout<'a>), InProgressProc<'a>>,
     pub runtime_errors: BumpMap<Symbol, &'a str>,
-    pub call_by_pointer_wrappers: BumpMap<Symbol, Symbol>,
     pub externals_we_need: BumpMap<ModuleId, ExternalSpecializations<'a>>,
 }
 
@@ -457,10 +511,9 @@ impl<'a> Procs<'a> {
             partial_procs: PartialProcs::new_in(arena),
             imported_module_thunks: &[],
             module_thunks: &[],
-            pending_specializations: Some(BumpMap::new_in(arena)),
+            pending_specializations: PendingSpecializations::Finding(BumpMap::new_in(arena)),
             specialized: BumpMap::new_in(arena),
             runtime_errors: BumpMap::new_in(arena),
-            call_by_pointer_wrappers: BumpMap::new_in(arena),
             externals_we_need: BumpMap::new_in(arena),
         }
     }
@@ -557,7 +610,7 @@ impl<'a> Procs<'a> {
                     }
 
                     match &mut self.pending_specializations {
-                        Some(pending_specializations) => {
+                        PendingSpecializations::Finding(pending_specializations) => {
                             // register the pending specialization, so this gets code genned later
                             add_pending(pending_specializations, symbol, layout, pending);
 
@@ -590,7 +643,7 @@ impl<'a> Procs<'a> {
                                 }
                             }
                         }
-                        None => {
+                        PendingSpecializations::Making => {
                             // Mark this proc as in-progress, so if we're dealing with
                             // mutually recursive functions, we don't loop forever.
                             // (We had a bug around this before this system existed!)
@@ -690,12 +743,12 @@ impl<'a> Procs<'a> {
         // This should only be called when pending_specializations is Some.
         // Otherwise, it's being called in the wrong pass!
         match &mut self.pending_specializations {
-            Some(pending_specializations) => {
+            PendingSpecializations::Finding(pending_specializations) => {
                 let pending = PendingSpecialization::from_var(env.arena, env.subs, fn_var);
 
                 add_pending(pending_specializations, name, layout, pending)
             }
-            None => {
+            PendingSpecializations::Making => {
                 let symbol = name;
 
                 let partial_proc_id = match self.partial_procs.symbol_to_id(symbol) {
@@ -1743,7 +1796,11 @@ pub fn specialize_all<'a>(
 
     // When calling from_can, pending_specializations should be unavailable.
     // This must be a single pass, and we must not add any more entries to it!
-    let opt_pending_specializations = std::mem::replace(&mut procs.pending_specializations, None);
+    let opt_pending_specializations = std::mem::replace(
+        &mut procs.pending_specializations,
+        PendingSpecializations::Making,
+    )
+    .into_option();
 
     let it = specializations_for_host
         .into_iter()
@@ -6651,7 +6708,7 @@ fn call_by_name_help<'a>(
         }
 
         match &mut procs.pending_specializations {
-            Some(pending_specializations) => {
+            PendingSpecializations::Finding(pending_specializations) => {
                 debug_assert!(!env.is_imported_symbol(proc_name));
 
                 // register the pending specialization, so this gets code genned later
@@ -6686,7 +6743,7 @@ fn call_by_name_help<'a>(
                 let iter = loc_args.into_iter().rev().zip(field_symbols.iter().rev());
                 assign_to_symbols(env, procs, layout_cache, iter, result)
             }
-            None => {
+            PendingSpecializations::Making => {
                 let opt_partial_proc = procs.partial_procs.symbol_to_id(proc_name);
 
                 /*
@@ -6808,7 +6865,7 @@ fn call_by_name_module_thunk<'a>(
         }
 
         match &mut procs.pending_specializations {
-            Some(pending_specializations) => {
+            PendingSpecializations::Finding(pending_specializations) => {
                 debug_assert!(!env.is_imported_symbol(proc_name));
 
                 // register the pending specialization, so this gets code genned later
@@ -6821,7 +6878,7 @@ fn call_by_name_module_thunk<'a>(
 
                 force_thunk(env, proc_name, inner_layout, assigned, hole)
             }
-            None => {
+            PendingSpecializations::Making => {
                 let opt_partial_proc = procs.partial_procs.symbol_to_id(proc_name);
 
                 match opt_partial_proc {

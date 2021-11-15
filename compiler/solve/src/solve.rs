@@ -1381,8 +1381,19 @@ fn instantiate_rigids_help(
     var
 }
 
+pub fn deep_copy_var_to(
+    source: &mut Subs, // mut to set the copy
+    target: &mut Subs,
+    var: Variable,
+) -> Variable {
+    let mut pools = Pools::default();
+    let rank = Rank::toplevel();
+
+    deep_copy_var_to_help(source, target, rank, &mut pools, var)
+}
+
 fn deep_copy_var_to_help(
-    source: &Subs,
+    source: &mut Subs, // mut to set the copy
     target: &mut Subs,
     max_rank: Rank,
     pools: &mut Pools,
