@@ -146,7 +146,13 @@ pub fn build_and_preprocess_host(
 ) -> io::Result<()> {
     let dummy_lib = host_input_path.with_file_name("libapp.so");
     generate_dynamic_lib(target, exposed_to_host, &dummy_lib)?;
-    rebuild_host(opt_level, target, host_input_path, Some(&dummy_lib), target_valgrind);
+    rebuild_host(
+        opt_level,
+        target,
+        host_input_path,
+        Some(&dummy_lib),
+        target_valgrind,
+    );
     let dynhost = host_input_path.with_file_name("dynhost");
     let metadata = host_input_path.with_file_name("metadata");
     let prehost = host_input_path.with_file_name("preprocessedhost");

@@ -117,7 +117,7 @@ pub fn build_file<'a>(
             .keys()
             .map(|x| x.as_str(&loaded.interns).to_string())
             .collect(),
-        target_valgrind
+        target_valgrind,
     );
 
     // TODO try to move as much of this linking as possible to the precompiled
@@ -290,7 +290,7 @@ fn spawn_rebuild_thread(
     binary_path: PathBuf,
     target: &Triple,
     exported_symbols: Vec<String>,
-    target_valgrind: bool
+    target_valgrind: bool,
 ) -> std::thread::JoinHandle<u128> {
     let thread_local_target = target.clone();
     std::thread::spawn(move || {
@@ -311,7 +311,7 @@ fn spawn_rebuild_thread(
                     &thread_local_target,
                     host_input_path.as_path(),
                     None,
-                    target_valgrind
+                    target_valgrind,
                 );
             }
         }

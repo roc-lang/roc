@@ -53,7 +53,6 @@ mod cli_run {
         expected_ending: &str,
         use_valgrind: bool,
     ) {
-
         let mut all_flags = vec![];
         all_flags.extend_from_slice(flags);
 

@@ -307,7 +307,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
         link_type,
         surgically_link,
         precompiled,
-        target_valgrind
+        target_valgrind,
     );
 
     match res_binary_path {
