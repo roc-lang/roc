@@ -27,16 +27,31 @@ pub fn decode_low_level<'a>(
     let panic_ret_type = || panic!("Invalid return layout for {:?}: {:?}", lowlevel, ret_layout);
 
     match lowlevel {
-        StrConcat | StrJoinWith | StrIsEmpty | StrStartsWith | StrStartsWithCodePt
-        | StrEndsWith | StrSplit | StrCountGraphemes | StrFromInt | StrFromUtf8 | StrTrimLeft
-        | StrTrimRight | StrFromUtf8Range | StrToUtf8 | StrRepeat | StrFromFloat | StrTrim
-        | ListLen | ListGetUnsafe | ListSet | ListSingle | ListRepeat | ListReverse
-        | ListConcat | ListContains | ListAppend | ListPrepend | ListJoin | ListRange | ListMap
-        | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk
-        | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith
-        | ListSublist | ListDrop | ListDropAt | ListSwap | ListAny | ListFindUnsafe | DictSize
-        | DictEmpty | DictInsert | DictRemove | DictContains | DictGetUnsafe | DictKeys
-        | DictValues | DictUnion | DictIntersection | DictDifference | DictWalk | SetFromList => {
+        StrConcat => return BuiltinCall(bitcode::STR_CONCAT),
+        StrJoinWith => return BuiltinCall(bitcode::STR_JOIN_WITH),
+        StrIsEmpty => return NotImplemented,
+        StrStartsWith => return BuiltinCall(bitcode::STR_STARTS_WITH),
+        StrStartsWithCodePt => return BuiltinCall(bitcode::STR_STARTS_WITH_CODE_PT),
+        StrEndsWith => return BuiltinCall(bitcode::STR_ENDS_WITH),
+        StrSplit => return NotImplemented,
+        StrCountGraphemes => return NotImplemented,
+        StrFromInt => return NotImplemented,
+        StrFromUtf8 => return BuiltinCall(bitcode::STR_FROM_UTF8),
+        StrTrimLeft => return BuiltinCall(bitcode::STR_TRIM_LEFT),
+        StrTrimRight => return BuiltinCall(bitcode::STR_TRIM_RIGHT),
+        StrFromUtf8Range => return BuiltinCall(bitcode::STR_FROM_UTF8_RANGE),
+        StrToUtf8 => return BuiltinCall(bitcode::STR_TO_UTF8),
+        StrRepeat => return BuiltinCall(bitcode::STR_REPEAT),
+        StrFromFloat => return BuiltinCall(bitcode::STR_FROM_FLOAT),
+        StrTrim => return BuiltinCall(bitcode::STR_TRIM),
+
+        ListLen | ListGetUnsafe | ListSet | ListSingle | ListRepeat | ListReverse | ListConcat
+        | ListContains | ListAppend | ListPrepend | ListJoin | ListRange | ListMap | ListMap2
+        | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk | ListWalkUntil
+        | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith | ListSublist
+        | ListDrop | ListDropAt | ListSwap | ListAny | ListFindUnsafe | DictSize | DictEmpty
+        | DictInsert | DictRemove | DictContains | DictGetUnsafe | DictKeys | DictValues
+        | DictUnion | DictIntersection | DictDifference | DictWalk | SetFromList => {
             return NotImplemented;
         }
 
