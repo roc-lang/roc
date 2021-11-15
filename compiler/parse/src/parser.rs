@@ -214,6 +214,7 @@ pub enum EHeader<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EProvides<'a> {
     Provides(Row, Col),
+    Open(Row, Col),
     To(Row, Col),
     IndentProvides(Row, Col),
     IndentTo(Row, Col),
@@ -230,6 +231,7 @@ pub enum EProvides<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EExposes {
     Exposes(Row, Col),
+    Open(Row, Col),
     IndentExposes(Row, Col),
     IndentListStart(Row, Col),
     IndentListEnd(Row, Col),
@@ -242,6 +244,7 @@ pub enum EExposes {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ERequires<'a> {
     Requires(Row, Col),
+    Open(Row, Col),
     IndentRequires(Row, Col),
     IndentListStart(Row, Col),
     IndentListEnd(Row, Col),
@@ -302,6 +305,7 @@ pub enum EPackageEntry<'a> {
 pub enum EEffects<'a> {
     Space(BadInputError, Row, Col),
     Effects(Row, Col),
+    Open(Row, Col),
     IndentEffects(Row, Col),
     ListStart(Row, Col),
     ListEnd(Row, Col),
@@ -315,6 +319,7 @@ pub enum EEffects<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EImports {
+    Open(Row, Col),
     Imports(Row, Col),
     IndentImports(Row, Col),
     IndentListStart(Row, Col),
@@ -1175,83 +1180,6 @@ macro_rules! collection {
                     $crate::parser::sep_by0(
                         $delimiter,
                         $crate::blankspace::space0_around($elem, $min_indent)
-                    ),
-                    $closing_brace
-                )
-            )
-        )
-    };
-}
-
-#[macro_export]
-macro_rules! collection_e {
-    ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $min_indent:expr, $space_problem:expr, $indent_problem:expr) => {
-        skip_first!(
-            $opening_brace,
-            skip_first!(
-                // We specifically allow space characters inside here, so that
-                // `[  ]` can be successfully parsed as an empty list, and then
-                // changed by the formatter back into `[]`.
-                //
-                // We don't allow newlines or comments in the middle of empty
-                // roc_collections because those are normally stored in an Expr,
-                // and there's no Expr in which to store them in an empty collection!
-                //
-                // We could change the AST to add extra storage specifically to
-                // support empty literals containing newlines or comments, but this
-                // does not seem worth even the tiniest regression in compiler performance.
-                zero_or_more!($crate::parser::word1(b' ', |row, col| $space_problem(
-                    crate::parser::BadInputError::LineTooLong,
-                    row,
-                    col
-                ))),
-                skip_second!(
-                    $crate::parser::sep_by0(
-                        $delimiter,
-                        $crate::blankspace::space0_around_ee(
-                            $elem,
-                            $min_indent,
-                            $space_problem,
-                            $indent_problem,
-                            $indent_problem
-                        )
-                    ),
-                    $closing_brace
-                )
-            )
-        )
-    };
-}
-
-/// Parse zero or more elements between two braces (e.g. square braces).
-/// Elements can be optionally surrounded by spaces, and are separated by a
-/// delimiter (e.g comma-separated) with optionally a trailing delimiter.
-/// Braces and delimiters get discarded.
-#[macro_export]
-macro_rules! collection_trailing_sep {
-    ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $min_indent:expr) => {
-        skip_first!(
-            $opening_brace,
-            skip_first!(
-                // We specifically allow space characters inside here, so that
-                // `[  ]` can be successfully parsed as an empty list, and then
-                // changed by the formatter back into `[]`.
-                //
-                // We don't allow newlines or comments in the middle of empty
-                // roc_collections because those are normally stored in an Expr,
-                // and there's no Expr in which to store them in an empty collection!
-                //
-                // We could change the AST to add extra storage specifically to
-                // support empty literals containing newlines or comments, but this
-                // does not seem worth even the tiniest regression in compiler performance.
-                zero_or_more!($crate::parser::ascii_char(b' ')),
-                skip_second!(
-                    and!(
-                        $crate::parser::trailing_sep_by0(
-                            $delimiter,
-                            $crate::blankspace::space0_around($elem, $min_indent)
-                        ),
-                        $crate::blankspace::space0($min_indent)
                     ),
                     $closing_brace
                 )
