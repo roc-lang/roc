@@ -229,12 +229,10 @@ where
             // Also in tests, we don't want to bother printing the locations
             // because it makes failed assertions much harder to read.
             self.value.fmt(f)
+        } else if f.alternate() {
+            write!(f, "{:?} {:#?}", region, self.value)
         } else {
-            if f.alternate() {
-                write!(f, "{:?} {:#?}", region, self.value)
-            } else {
-                write!(f, "{:?} {:?}", region, self.value)
-            }
+            write!(f, "{:?} {:?}", region, self.value)
         }
     }
 }

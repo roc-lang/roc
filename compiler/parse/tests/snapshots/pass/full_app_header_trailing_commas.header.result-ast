@@ -30,9 +30,9 @@ App {
                                 Newline,
                             ],
                         ),
-                        |L 4-4, C 8-17| SpaceBefore(
+                        |L 4-4, C 8-16| SpaceBefore(
                             Exposed(
-                                "FourtyTwo",
+                                "FortyTwo",
                             ),
                             [
                                 Newline,

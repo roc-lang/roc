@@ -16,12 +16,9 @@ mod test_parse {
     use bumpalo::collections::vec::Vec;
     use bumpalo::{self, Bump};
     use roc_parse::ast::Expr::{self, *};
-    use roc_parse::ast::Pattern::{self, *};
-    use roc_parse::ast::StrLiteral::{self, *};
+    use roc_parse::ast::StrLiteral::*;
     use roc_parse::ast::StrSegment::*;
-    use roc_parse::ast::{
-        self, EscapedChar
-    };
+    use roc_parse::ast::{self, EscapedChar};
     use roc_parse::module::module_defs;
     use roc_parse::parser::{Parser, State, SyntaxError};
     use roc_parse::test_helpers::parse_expr_with;
@@ -60,7 +57,7 @@ mod test_parse {
                     } else {
                         panic!("unexpected test file found: {}", file);
                     }
-                }                
+                }
             }
 
             $(
