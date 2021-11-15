@@ -8,7 +8,7 @@ use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
 use crate::layout::WasmLayout;
-use crate::low_level::{decode_low_level, symbol_to_lowlevel, LowlevelBuildResult};
+use crate::low_level::{decode_low_level, LowlevelBuildResult};
 use crate::storage::{Storage, StoredValue, StoredValueKind};
 use crate::wasm_module::linking::{
     DataSymbol, LinkingSection, RelocationSection, WasmObjectSymbol, WASM_SYM_BINDING_WEAK,
@@ -471,7 +471,7 @@ impl<'a> WasmBackend<'a> {
             }) => match call_type {
                 CallType::ByName { name: func_sym, .. } => {
                     // If this function is just a lowlevel wrapper, then inline it
-                    if let Some(lowlevel) = symbol_to_lowlevel(*func_sym) {
+                    if let Some(lowlevel) = LowLevel::from_wrapper_symbol(*func_sym) {
                         return self.build_low_level(lowlevel, arguments, wasm_layout);
                     }
 

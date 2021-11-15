@@ -227,97 +227,27 @@ where
                         ret_layout,
                         ..
                     } => {
-                        // For most builtins instead of calling a function, we can just inline the low level.
-                        match *func_sym {
-                            Symbol::NUM_ABS => self.build_run_low_level(
+                        // If this function is just a lowlevel wrapper, then inline it
+                        if let Some(lowlevel) = LowLevel::from_wrapper_symbol(*func_sym) {
+                            return self.build_run_low_level(
                                 sym,
-                                &LowLevel::NumAbs,
+                                &lowlevel,
                                 arguments,
                                 arg_layouts,
                                 ret_layout,
-                            ),
-                            Symbol::NUM_ADD => self.build_run_low_level(
-                                sym,
-                                &LowLevel::NumAdd,
-                                arguments,
-                                arg_layouts,
-                                ret_layout,
-                            ),
-                            Symbol::NUM_ACOS => self.build_run_low_level(
-                                sym,
-                                &LowLevel::NumAcos,
-                                arguments,
-                                arg_layouts,
-                                ret_layout,
-                            ),
-                            Symbol::NUM_ASIN => self.build_run_low_level(
-                                sym,
-                                &LowLevel::NumAsin,
-                                arguments,
-                                arg_layouts,
-                                ret_layout,
-                            ),
-                            Symbol::NUM_ATAN => self.build_run_low_level(
-                                sym,
-                                &LowLevel::NumAtan,
-                                arguments,
-                                arg_layouts,
-                                ret_layout,
-                            ),
-                            Symbol::NUM_MUL => self.build_run_low_level(
-                                sym,
-                                &LowLevel::NumMul,
-                                arguments,
-                                arg_layouts,
-                                ret_layout,
-                            ),
-                            Symbol::NUM_POW_INT => self.build_run_low_level(
-                                sym,
-                                &LowLevel::NumPowInt,
-                                arguments,
-                                arg_layouts,
-                                ret_layout,
-                            ),
-                            Symbol::NUM_SUB => self.build_run_low_level(
-                                sym,
-                                &LowLevel::NumSub,
-                                arguments,
-                                arg_layouts,
-                                ret_layout,
-                            ),
-                            Symbol::NUM_ROUND => self.build_run_low_level(
-                                sym,
-                                &LowLevel::NumRound,
-                                arguments,
-                                arg_layouts,
-                                ret_layout,
-                            ),
-                            Symbol::BOOL_EQ => self.build_run_low_level(
-                                sym,
-                                &LowLevel::Eq,
-                                arguments,
-                                arg_layouts,
-                                ret_layout,
-                            ),
-                            Symbol::STR_CONCAT => self.build_run_low_level(
-                                sym,
-                                &LowLevel::StrConcat,
-                                arguments,
-                                arg_layouts,
-                                ret_layout,
-                            ),
-                            x if x
-                                .module_string(&self.env().interns)
-                                .starts_with(ModuleName::APP) =>
-                            {
-                                let fn_name = LayoutIds::default()
-                                    .get(*func_sym, layout)
-                                    .to_symbol_string(*func_sym, &self.env().interns);
-                                // Now that the arguments are needed, load them if they are literals.
-                                self.load_literal_symbols(arguments)?;
-                                self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
-                            }
-                            x => Err(format!("the function, {:?}, is not yet implemented", x)),
+                            );
+                        } else if func_sym
+                            .module_string(&self.env().interns)
+                            .starts_with(ModuleName::APP)
+                        {
+                            let fn_name = LayoutIds::default()
+                                .get(*func_sym, layout)
+                                .to_symbol_string(*func_sym, &self.env().interns);
+                            // Now that the arguments are needed, load them if they are literals.
+                            self.load_literal_symbols(arguments)?;
+                            self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
+                        } else {
+                            Err(format!("the function, {:?}, is not yet implemented", func_sym))
                         }
                     }
 
