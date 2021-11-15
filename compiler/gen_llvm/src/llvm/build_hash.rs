@@ -2,9 +2,9 @@ use crate::debug_info_init;
 use crate::llvm::bitcode::call_bitcode_fn;
 use crate::llvm::build::tag_pointer_clear_tag_id;
 use crate::llvm::build::Env;
-use crate::llvm::build::{cast_block_of_memory_to_tag, get_tag_id, FAST_CALL_CONV, TAG_DATA_INDEX};
+use crate::llvm::build::{get_tag_id, FAST_CALL_CONV, TAG_DATA_INDEX};
 use crate::llvm::build_str;
-use crate::llvm::convert::basic_type_from_layout;
+use crate::llvm::convert::{basic_type_from_layout, basic_type_from_layout_1};
 use bumpalo::collections::Vec;
 use inkwell::values::{
     BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue,
@@ -339,7 +339,8 @@ fn build_hash_tag<'a, 'ctx, 'env>(
         None => {
             let seed_type = env.context.i64_type();
 
-            let arg_type = basic_type_from_layout(env, layout);
+            let arg_type = basic_type_from_layout_1(env, layout);
+            dbg!(layout, arg_type);
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
@@ -423,14 +424,6 @@ fn hash_tag<'a, 'ctx, 'env>(
                 let block = env.context.append_basic_block(parent, "tag_id_modify");
                 env.builder.position_at_end(block);
 
-                let struct_layout = Layout::Struct(field_layouts);
-
-                let wrapper_type = basic_type_from_layout(env, &struct_layout);
-                debug_assert!(wrapper_type.is_struct_type());
-
-                let as_struct =
-                    cast_block_of_memory_to_tag(env.builder, tag.into_struct_value(), wrapper_type);
-
                 // hash the tag id
                 let hash_bytes = store_and_use_as_u8_ptr(
                     env,
@@ -440,7 +433,6 @@ fn hash_tag<'a, 'ctx, 'env>(
                         .into(),
                     &tag_id_layout,
                 );
-
                 let seed = hash_bitcode_fn(
                     env,
                     seed,
@@ -449,14 +441,9 @@ fn hash_tag<'a, 'ctx, 'env>(
                 );
 
                 // hash the tag data
-                let answer = build_hash_struct(
-                    env,
-                    layout_ids,
-                    field_layouts,
-                    WhenRecursive::Unreachable,
-                    seed,
-                    as_struct,
-                );
+                let tag = tag.into_pointer_value();
+                let answer =
+                    hash_ptr_to_struct(env, layout_ids, union_layout, field_layouts, seed, tag);
 
                 merge_phi.add_incoming(&[(&answer, block)]);
                 env.builder.build_unconditional_branch(merge_block);
@@ -793,7 +780,15 @@ fn hash_list<'a, 'ctx, 'env>(
         env.builder.build_store(result, answer);
     };
 
-    incrementing_elem_loop(env, parent, ptr, length, "current_index", loop_fn);
+    incrementing_elem_loop(
+        env,
+        parent,
+        *element_layout,
+        ptr,
+        length,
+        "current_index",
+        loop_fn,
+    );
 
     env.builder.build_unconditional_branch(done_block);
 
@@ -822,12 +817,12 @@ fn hash_ptr_to_struct<'a, 'ctx, 'env>(
 ) -> IntValue<'ctx> {
     use inkwell::types::BasicType;
 
-    let wrapper_type = basic_type_from_layout(env, &Layout::Union(*union_layout));
+    let wrapper_type = basic_type_from_layout_1(env, &Layout::Union(*union_layout));
 
     // cast the opaque pointer to a pointer of the correct shape
     let wrapper_ptr = env
         .builder
-        .build_bitcast(tag, wrapper_type, "opaque_to_correct")
+        .build_bitcast(tag, wrapper_type, "hash_ptr_to_struct_opaque_to_correct")
         .into_pointer_value();
 
     let struct_ptr = env

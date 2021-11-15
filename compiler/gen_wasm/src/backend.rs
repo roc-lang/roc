@@ -22,8 +22,8 @@ use crate::wasm_module::{
     LocalId, Signature, SymInfo, ValueType,
 };
 use crate::{
-    copy_memory, CopyMemoryConfig, Env, BUILTINS_IMPORT_MODULE_NAME, MEMORY_NAME, PTR_TYPE,
-    STACK_POINTER_GLOBAL_ID, STACK_POINTER_NAME,
+    copy_memory, CopyMemoryConfig, Env, BUILTINS_IMPORT_MODULE_NAME, MEMORY_NAME, PTR_SIZE,
+    PTR_TYPE, STACK_POINTER_GLOBAL_ID, STACK_POINTER_NAME,
 };
 
 /// The memory address where the constants data will be loaded during module instantiation.
@@ -539,6 +539,29 @@ impl<'a> WasmBackend<'a> {
             },
 
             Expr::Struct(fields) => self.create_struct(sym, layout, fields),
+
+            Expr::StructAtIndex {
+                index,
+                field_layouts,
+                structure,
+            } => {
+                if let StoredValue::StackMemory { location, .. } = self.storage.get(structure) {
+                    let (local_id, mut offset) =
+                        location.local_and_offset(self.storage.stack_frame_pointer);
+                    for field in field_layouts.iter().take(*index as usize) {
+                        offset += field.stack_size(PTR_SIZE);
+                    }
+                    self.storage.copy_value_from_memory(
+                        &mut self.code_builder,
+                        *sym,
+                        local_id,
+                        offset,
+                    );
+                } else {
+                    unreachable!("Unexpected storage for {:?}", structure)
+                }
+                Ok(())
+            }
 
             x => Err(format!("Expression is not yet implemented {:?}", x)),
         }

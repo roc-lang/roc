@@ -5,7 +5,9 @@ use crate::spaces::{add_spaces, fmt_comments_only, fmt_spaces, newline, NewlineA
 use bumpalo::collections::String;
 use roc_module::operator::{self, BinOp};
 use roc_parse::ast::StrSegment;
-use roc_parse::ast::{AssignedField, Base, CommentOrNewline, Expr, Pattern, WhenBranch};
+use roc_parse::ast::{
+    AssignedField, Base, Collection, CommentOrNewline, Expr, Pattern, WhenBranch,
+};
 use roc_region::all::Located;
 
 impl<'a> Formattable<'a> for Expr<'a> {
@@ -39,7 +41,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
             // These expressions always have newlines
             Defs(_, _) | When(_, _) => true,
 
-            List { items, .. } => items.iter().any(|loc_expr| loc_expr.is_multiline()),
+            List(items) => items.iter().any(|loc_expr| loc_expr.is_multiline()),
 
             Str(literal) => {
                 use roc_parse::ast::StrLiteral::*;
@@ -98,7 +100,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
                         .any(|loc_pattern| loc_pattern.is_multiline())
             }
 
-            Record { fields, .. } => fields.iter().any(|loc_field| loc_field.is_multiline()),
+            Record(fields) => fields.iter().any(|loc_field| loc_field.is_multiline()),
             RecordUpdate { fields, .. } => fields.iter().any(|loc_field| loc_field.is_multiline()),
         }
     }
@@ -250,18 +252,11 @@ impl<'a> Formattable<'a> for Expr<'a> {
 
                 buf.push_str(string);
             }
-            Record {
-                fields,
-                final_comments,
-            } => {
-                fmt_record(buf, None, fields, final_comments, indent);
+            Record(fields) => {
+                fmt_record(buf, None, *fields, indent);
             }
-            RecordUpdate {
-                fields,
-                update,
-                final_comments,
-            } => {
-                fmt_record(buf, Some(*update), fields, final_comments, indent);
+            RecordUpdate { update, fields } => {
+                fmt_record(buf, Some(*update), *fields, indent);
             }
             Closure(loc_patterns, loc_ret) => {
                 fmt_closure(buf, loc_patterns, loc_ret, indent);
@@ -295,11 +290,8 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 fmt_if(buf, branches, final_else, self.is_multiline(), indent);
             }
             When(loc_condition, branches) => fmt_when(buf, loc_condition, branches, indent),
-            List {
-                items,
-                final_comments,
-            } => {
-                fmt_list(buf, items, final_comments, indent);
+            List(items) => {
+                fmt_list(buf, *items, indent);
             }
             BinOps(lefts, right) => fmt_bin_ops(buf, lefts, right, false, parens, indent),
             UnaryOp(sub_expr, unary_op) => {
@@ -416,12 +408,9 @@ fn fmt_bin_ops<'a>(
     loc_right_side.format_with_options(buf, apply_needs_parens, Newlines::Yes, indent);
 }
 
-fn fmt_list<'a>(
-    buf: &mut String<'a>,
-    loc_items: &[&Located<Expr<'a>>],
-    final_comments: &'a [CommentOrNewline<'a>],
-    indent: u16,
-) {
+fn fmt_list<'a>(buf: &mut String<'a>, items: Collection<'a, &'a Located<Expr<'a>>>, indent: u16) {
+    let loc_items = items.items;
+    let final_comments = items.final_comments();
     if loc_items.is_empty() && final_comments.iter().all(|c| c.is_newline()) {
         buf.push_str("[]");
     } else {
@@ -917,10 +906,11 @@ fn fmt_backpassing<'a>(
 fn fmt_record<'a>(
     buf: &mut String<'a>,
     update: Option<&'a Located<Expr<'a>>>,
-    loc_fields: &[Located<AssignedField<'a, Expr<'a>>>],
-    final_comments: &'a [CommentOrNewline<'a>],
+    fields: Collection<'a, Located<AssignedField<'a, Expr<'a>>>>,
     indent: u16,
 ) {
+    let loc_fields = fields.items;
+    let final_comments = fields.final_comments();
     if loc_fields.is_empty() && final_comments.iter().all(|c| c.is_newline()) {
         buf.push_str("{}");
     } else {

@@ -1,31 +1,11 @@
+use std::fmt::Debug;
+
 use crate::header::{AppHeader, ImportsEntry, InterfaceHeader, PlatformHeader, TypedIdent};
 use crate::ident::Ident;
-use bumpalo::collections::String;
+use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
 use roc_module::operator::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub struct Collection<'a, T> {
-    pub items: &'a [T],
-    pub final_comments: &'a [CommentOrNewline<'a>],
-}
-
-impl<'a, T> Collection<'a, T> {
-    pub fn empty() -> Collection<'a, T> {
-        Collection {
-            items: &[],
-            final_comments: &[],
-        }
-    }
-
-    pub fn with_items(items: &'a [T]) -> Collection<'a, T> {
-        Collection {
-            items,
-            final_comments: &[],
-        }
-    }
-}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Module<'a> {
@@ -115,21 +95,14 @@ pub enum Expr<'a> {
     AccessorFunction(&'a str),
 
     // Collection Literals
-    List {
-        items: &'a [&'a Loc<Expr<'a>>],
-        final_comments: &'a [CommentOrNewline<'a>],
-    },
+    List(Collection<'a, &'a Loc<Expr<'a>>>),
 
     RecordUpdate {
         update: &'a Loc<Expr<'a>>,
-        fields: &'a [Loc<AssignedField<'a, Expr<'a>>>],
-        final_comments: &'a &'a [CommentOrNewline<'a>],
+        fields: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
     },
 
-    Record {
-        fields: &'a [Loc<AssignedField<'a, Expr<'a>>>],
-        final_comments: &'a [CommentOrNewline<'a>],
-    },
+    Record(Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>),
 
     // Lookups
     Var {
@@ -257,16 +230,14 @@ pub enum TypeAnnotation<'a> {
         /// The row type variable in an open record, e.g. the `r` in `{ name: Str }r`.
         /// This is None if it's a closed record annotation like `{ name: Str }`.
         ext: Option<&'a Loc<TypeAnnotation<'a>>>,
-        // final_comments: &'a [CommentOrNewline<'a>],
     },
 
     /// A tag union, e.g. `[
     TagUnion {
-        tags: &'a [Loc<Tag<'a>>],
         /// The row type variable in an open tag union, e.g. the `a` in `[ Foo, Bar ]a`.
         /// This is None if it's a closed tag union like `[ Foo, Bar]`.
         ext: Option<&'a Loc<TypeAnnotation<'a>>>,
-        final_comments: &'a [CommentOrNewline<'a>],
+        tags: Collection<'a, Loc<Tag<'a>>>,
     },
 
     /// The `*` type variable, e.g. in (List *)
@@ -357,10 +328,11 @@ pub enum Pattern<'a> {
     GlobalTag(&'a str),
     PrivateTag(&'a str),
     Apply(&'a Loc<Pattern<'a>>, &'a [Loc<Pattern<'a>>]),
+
     /// This is Loc<Pattern> rather than Loc<str> so we can record comments
     /// around the destructured names, e.g. { x ### x does stuff ###, y }
     /// In practice, these patterns will always be Identifier
-    RecordDestructure(&'a [Loc<Pattern<'a>>]),
+    RecordDestructure(Collection<'a, Loc<Pattern<'a>>>),
 
     /// A required field pattern, e.g. { x: Just 0 } -> ...
     /// Can only occur inside of a RecordDestructure
@@ -516,6 +488,126 @@ impl<'a> Pattern<'a> {
 
             // Different constructors
             _ => false,
+        }
+    }
+}
+#[derive(Copy, Clone)]
+pub struct Collection<'a, T> {
+    pub items: &'a [T],
+    // Use a pointer to a slice (rather than just a slice), in order to avoid bloating
+    // Ast variants. The final_comments field is rarely accessed in the hot path, so
+    // this shouldn't matter much for perf.
+    // Use an Option, so it's possible to initialize without allocating.
+    final_comments: Option<&'a &'a [CommentOrNewline<'a>]>,
+}
+
+impl<'a, T> Collection<'a, T> {
+    pub fn empty() -> Collection<'a, T> {
+        Collection {
+            items: &[],
+            final_comments: None,
+        }
+    }
+
+    pub fn with_items(items: &'a [T]) -> Collection<'a, T> {
+        Collection {
+            items,
+            final_comments: None,
+        }
+    }
+
+    pub fn with_items_and_comments(
+        arena: &'a Bump,
+        items: &'a [T],
+        comments: &'a [CommentOrNewline<'a>],
+    ) -> Collection<'a, T> {
+        Collection {
+            items,
+            final_comments: if comments.is_empty() {
+                None
+            } else {
+                Some(arena.alloc(comments))
+            },
+        }
+    }
+
+    pub fn replace_items<V>(&self, new_items: &'a [V]) -> Collection<'a, V> {
+        Collection {
+            items: new_items,
+            final_comments: self.final_comments,
+        }
+    }
+
+    pub fn ptrify_items(&self, arena: &'a Bump) -> Collection<'a, &'a T> {
+        let mut allocated = Vec::with_capacity_in(self.len(), arena);
+
+        for parsed_elem in self.items {
+            allocated.push(parsed_elem);
+        }
+
+        self.replace_items(allocated.into_bump_slice())
+    }
+
+    pub fn map_items<V: 'a>(&self, arena: &'a Bump, f: impl Fn(&'a T) -> V) -> Collection<'a, V> {
+        let mut allocated = Vec::with_capacity_in(self.len(), arena);
+
+        for parsed_elem in self.items {
+            allocated.push(f(parsed_elem));
+        }
+
+        self.replace_items(allocated.into_bump_slice())
+    }
+
+    pub fn map_items_result<V: 'a, E>(
+        &self,
+        arena: &'a Bump,
+        f: impl Fn(&T) -> Result<V, E>,
+    ) -> Result<Collection<'a, V>, E> {
+        let mut allocated = Vec::with_capacity_in(self.len(), arena);
+
+        for parsed_elem in self.items {
+            allocated.push(f(parsed_elem)?);
+        }
+
+        Ok(self.replace_items(allocated.into_bump_slice()))
+    }
+
+    pub fn final_comments(&self) -> &'a [CommentOrNewline<'a>] {
+        if let Some(final_comments) = self.final_comments {
+            *final_comments
+        } else {
+            &[]
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &'a T> {
+        self.items.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+}
+
+impl<'a, T: PartialEq> PartialEq for Collection<'a, T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.items == other.items && self.final_comments() == other.final_comments()
+    }
+}
+
+impl<'a, T: Debug> Debug for Collection<'a, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.final_comments().is_empty() {
+            f.debug_list().entries(self.items.iter()).finish()
+        } else {
+            f.debug_struct("Collection")
+                .field("items", &self.items)
+                .field("final_comments", &self.final_comments())
+                .finish()
         }
     }
 }

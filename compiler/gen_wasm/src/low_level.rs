@@ -29,14 +29,14 @@ pub fn build_call_low_level<'a>(
     match lowlevel {
         StrConcat | StrJoinWith | StrIsEmpty | StrStartsWith | StrStartsWithCodePt
         | StrEndsWith | StrSplit | StrCountGraphemes | StrFromInt | StrFromUtf8 | StrTrimLeft
-        | StrFromUtf8Range | StrToUtf8 | StrRepeat | StrFromFloat | StrTrim | ListLen
-        | ListGetUnsafe | ListSet | ListSingle | ListRepeat | ListReverse | ListConcat
-        | ListContains | ListAppend | ListPrepend | ListJoin | ListRange | ListMap | ListMap2
-        | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk | ListWalkUntil
-        | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith | ListSublist
-        | ListDropAt | ListSwap | ListAny | ListFindUnsafe | DictSize | DictEmpty | DictInsert
-        | DictRemove | DictContains | DictGetUnsafe | DictKeys | DictValues | DictUnion
-        | DictIntersection | DictDifference | DictWalk | SetFromList => {
+        | StrTrimRight | StrFromUtf8Range | StrToUtf8 | StrRepeat | StrFromFloat | StrTrim
+        | ListLen | ListGetUnsafe | ListSet | ListSingle | ListRepeat | ListReverse
+        | ListConcat | ListContains | ListAppend | ListPrepend | ListJoin | ListRange | ListMap
+        | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk
+        | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith
+        | ListSublist | ListDropAt | ListSwap | ListAny | ListFindUnsafe | DictSize | DictEmpty
+        | DictInsert | DictRemove | DictContains | DictGetUnsafe | DictKeys | DictValues
+        | DictUnion | DictIntersection | DictDifference | DictWalk | SetFromList => {
             return NotImplemented;
         }
 

@@ -17,6 +17,8 @@ use morphic_lib::UpdateMode;
 use roc_builtins::bitcode;
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
+use super::build::{load_roc_value, store_roc_value};
+
 pub fn pass_update_mode<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     update_mode: UpdateMode,
@@ -53,9 +55,13 @@ pub fn call_bitcode_fn_returns_list<'a, 'ctx, 'env>(
 fn pass_element_as_opaque<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     element: BasicValueEnum<'ctx>,
+    layout: Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let element_ptr = env.builder.build_alloca(element.get_type(), "element");
-    env.builder.build_store(element_ptr, element);
+    let element_type = basic_type_from_layout(env, &layout);
+    let element_ptr = env
+        .builder
+        .build_alloca(element_type, "element_to_pass_as_opaque");
+    store_roc_value(env, layout, element_ptr, element);
 
     env.builder.build_bitcast(
         element_ptr,
@@ -106,7 +112,7 @@ pub fn list_single<'a, 'ctx, 'env>(
         env,
         &[
             env.alignment_intvalue(element_layout),
-            pass_element_as_opaque(env, element),
+            pass_element_as_opaque(env, element, *element_layout),
             layout_width(env, element_layout),
         ],
         bitcode::LIST_SINGLE,
@@ -128,7 +134,7 @@ pub fn list_repeat<'a, 'ctx, 'env>(
         &[
             list_len.into(),
             env.alignment_intvalue(element_layout),
-            pass_element_as_opaque(env, element),
+            pass_element_as_opaque(env, element, *element_layout),
             layout_width(env, element_layout),
             inc_element_fn.as_global_value().as_pointer_value().into(),
         ],
@@ -216,10 +222,11 @@ pub fn list_get_unsafe<'a, 'ctx, 'env>(
 
             // Assume the bounds have already been checked earlier
             // (e.g. by List.get or List.first, which wrap List.#getUnsafe)
-            let elem_ptr =
-                unsafe { builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "elem") };
+            let elem_ptr = unsafe {
+                builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "list_get_element")
+            };
 
-            let result = builder.build_load(elem_ptr, "List.get");
+            let result = load_roc_value(env, **elem_layout, elem_ptr, "list_get_load_element");
 
             increment_refcount_layout(env, parent, layout_ids, 1, result, elem_layout);
 
@@ -247,7 +254,7 @@ pub fn list_append<'a, 'ctx, 'env>(
         &[
             pass_list_cc(env, original_wrapper.into()),
             env.alignment_intvalue(element_layout),
-            pass_element_as_opaque(env, element),
+            pass_element_as_opaque(env, element, *element_layout),
             layout_width(env, element_layout),
             pass_update_mode(env, update_mode),
         ],
@@ -267,7 +274,7 @@ pub fn list_prepend<'a, 'ctx, 'env>(
         &[
             pass_list_cc(env, original_wrapper.into()),
             env.alignment_intvalue(element_layout),
-            pass_element_as_opaque(env, element),
+            pass_element_as_opaque(env, element, *element_layout),
             layout_width(env, element_layout),
         ],
         bitcode::LIST_PREPEND,
@@ -367,7 +374,7 @@ pub fn list_set<'a, 'ctx, 'env>(
             &[
                 bytes.into(),
                 index.into(),
-                pass_element_as_opaque(env, element),
+                pass_element_as_opaque(env, element, *element_layout),
                 layout_width(env, element_layout),
                 dec_element_fn.as_global_value().as_pointer_value().into(),
             ],
@@ -380,7 +387,7 @@ pub fn list_set<'a, 'ctx, 'env>(
                 length.into(),
                 env.alignment_intvalue(element_layout),
                 index.into(),
-                pass_element_as_opaque(env, element),
+                pass_element_as_opaque(env, element, *element_layout),
                 layout_width(env, element_layout),
                 dec_element_fn.as_global_value().as_pointer_value().into(),
             ],
@@ -556,7 +563,7 @@ pub fn list_contains<'a, 'ctx, 'env>(
         env,
         &[
             pass_list_cc(env, list),
-            pass_element_as_opaque(env, element),
+            pass_element_as_opaque(env, element, *element_layout),
             layout_width(env, element_layout),
             eq_fn,
         ],
@@ -1115,6 +1122,7 @@ where
 pub fn incrementing_elem_loop<'a, 'ctx, 'env, LoopFn>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
+    element_layout: Layout<'a>,
     ptr: PointerValue<'ctx>,
     len: IntValue<'ctx>,
     index_name: &str,
@@ -1127,9 +1135,14 @@ where
 
     incrementing_index_loop(env, parent, len, index_name, |index| {
         // The pointer to the element in the list
-        let elem_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index], "load_index") };
+        let element_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index], "load_index") };
 
-        let elem = builder.build_load(elem_ptr, "get_elem");
+        let elem = load_roc_value(
+            env,
+            element_layout,
+            element_ptr,
+            "incrementing_element_loop_load",
+        );
 
         loop_fn(index, elem);
     })
