@@ -1,9 +1,9 @@
 use crate::def::Def;
 use crate::expr::{ClosureData, Expr::*};
-use crate::expr::{Expr, Recursive, WhenBranch};
+use crate::expr::{Expr, Field, Recursive, WhenBranch};
 use crate::pattern::Pattern;
 use roc_collections::all::SendMap;
-use roc_module::ident::TagName;
+use roc_module::ident::{Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
@@ -96,6 +96,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_TAKE_FIRST => list_take_first,
         LIST_TAKE_LAST => list_take_last,
         LIST_SUBLIST => list_sublist,
+        LIST_SPLIT => list_split,
         LIST_DROP => list_drop,
         LIST_DROP_AT => list_drop_at,
         LIST_DROP_FIRST => list_drop_first,
@@ -2144,6 +2145,74 @@ fn list_sublist(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         list_var,
+    )
+}
+
+/// List.split : List elem, Nat -> { before: List elem, others: List elem }
+fn list_split(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
+    let index_var = var_store.fresh();
+
+    let sym_list = Symbol::ARG_1;
+    let sym_index = Symbol::ARG_2;
+
+    let ret_var = var_store.fresh();
+    let zero = int(index_var, Variable::NATURAL, 0);
+
+    let get_before = RunLowLevel {
+        op: LowLevel::ListSublist,
+        args: vec![
+            (list_var, Var(sym_list)),
+            (index_var, zero),
+            (index_var, Var(sym_index)),
+        ],
+        ret_var: list_var,
+    };
+
+    let get_list_len = RunLowLevel {
+        op: LowLevel::ListLen,
+        args: vec![(list_var, Var(sym_list))],
+        ret_var: index_var,
+    };
+
+    let get_others_len = RunLowLevel {
+        op: LowLevel::NumSubWrap,
+        args: vec![(index_var, get_list_len), (index_var, Var(sym_index))],
+        ret_var: index_var,
+    };
+
+    let get_others = RunLowLevel {
+        op: LowLevel::ListSublist,
+        args: vec![
+            (list_var, Var(sym_list)),
+            (index_var, Var(sym_index)),
+            (index_var, get_others_len),
+        ],
+        ret_var: list_var,
+    };
+
+    let before = Field {
+        var: list_var,
+        region: Region::zero(),
+        loc_expr: Box::new(no_region(get_before)),
+    };
+    let others = Field {
+        var: list_var,
+        region: Region::zero(),
+        loc_expr: Box::new(no_region(get_others)),
+    };
+
+    let body = record(
+        vec![("before".into(), before), ("others".into(), others)],
+        var_store,
+    );
+
+    defn(
+        symbol,
+        vec![(list_var, sym_list), (index_var, sym_index)],
+        var_store,
+        body,
+        ret_var,
     )
 }
 
@@ -4296,17 +4365,17 @@ fn tag(name: &'static str, args: Vec<Expr>, var_store: &mut VarStore) -> Expr {
     }
 }
 
-// #[inline(always)]
-// fn record(fields: Vec<(Lowercase, Field)>, var_store: &mut VarStore) -> Expr {
-// let mut send_map = SendMap::default();
-// for (k, v) in fields {
-// send_map.insert(k, v);
-// }
-// Expr::Record {
-// record_var: var_store.fresh(),
-// fields: send_map,
-// }
-// }
+#[inline(always)]
+fn record(fields: Vec<(Lowercase, Field)>, var_store: &mut VarStore) -> Expr {
+    let mut send_map = SendMap::default();
+    for (k, v) in fields {
+        send_map.insert(k, v);
+    }
+    Expr::Record {
+        record_var: var_store.fresh(),
+        fields: send_map,
+    }
+}
 
 #[inline(always)]
 fn defn(
