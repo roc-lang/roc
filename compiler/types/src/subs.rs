@@ -9,10 +9,12 @@ use ven_ena::unify::{InPlace, Snapshot, UnificationTable, UnifyKey};
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
-static_assertions::assert_eq_size!([u8; 48], Descriptor);
-static_assertions::assert_eq_size!([u8; 32], Content);
-static_assertions::assert_eq_size!([u8; 24], FlatType);
-static_assertions::assert_eq_size!([u8; 48], Problem);
+static_assertions::assert_eq_size!([u8; 6 * 8], Descriptor);
+static_assertions::assert_eq_size!([u8; 4 * 8], Content);
+static_assertions::assert_eq_size!([u8; 3 * 8], FlatType);
+static_assertions::assert_eq_size!([u8; 6 * 8], Problem);
+static_assertions::assert_eq_size!([u8; 12], UnionTags);
+static_assertions::assert_eq_size!([u8; 2 * 8], RecordFields);
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Mark(i32);
@@ -1326,6 +1328,12 @@ impl From<Content> for Descriptor {
     }
 }
 
+static_assertions::assert_eq_size!([u8; 4 * 8], Content);
+static_assertions::assert_eq_size!([u8; 4 * 8], (Variable, Option<Lowercase>));
+static_assertions::assert_eq_size!([u8; 3 * 8], (Symbol, AliasVariables, Variable));
+static_assertions::assert_eq_size!([u8; 12], AliasVariables);
+static_assertions::assert_eq_size!([u8; 3 * 8], FlatType);
+
 #[derive(Clone, Debug)]
 pub enum Content {
     /// A type variable which the user did not name in an annotation,
@@ -1465,6 +1473,8 @@ impl Content {
         self
     }
 }
+
+static_assertions::assert_eq_size!([u8; 3 * 8], FlatType);
 
 #[derive(Clone, Debug)]
 pub enum FlatType {
