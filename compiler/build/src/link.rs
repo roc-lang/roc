@@ -351,7 +351,6 @@ pub fn rebuild_host(
     shared_lib_path: Option<&Path>,
     target_valgrind: bool,
 ) {
-    dbg!("rebuilding host");
     let c_host_src = host_input_path.with_file_name("host.c");
     let c_host_dest = host_input_path.with_file_name("c_host.o");
     let zig_host_src = host_input_path.with_file_name("host.zig");
