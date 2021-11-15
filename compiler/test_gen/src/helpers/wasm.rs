@@ -9,7 +9,7 @@ use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
 use roc_gen_wasm::MEMORY_NAME;
 
-use tempfile::tempdir;
+use tempfile::{TempDir, tempdir};
 
 const TEST_WRAPPER_NAME: &str = "test_wrapper";
 
@@ -118,39 +118,34 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     let mut module_bytes = std::vec::Vec::with_capacity(4096);
     wasm_module.serialize_mut(&mut module_bytes);
 
-    // for debugging (e.g. with wasm2wat or wasm-objdump)
-    if false {
-        use std::io::Write;
-
-        let mut hash_state = DefaultHasher::new();
-        src.hash(&mut hash_state);
-        let src_hash = hash_state.finish();
-
-        // Filename contains a hash of the Roc test source code. Helpful when comparing across commits.
-        let dir = "/tmp/roc/gen_wasm";
-        std::fs::create_dir_all(dir).unwrap();
-        let path = format!("{}/test-{:016x}.wasm", dir, src_hash);
-
-        // Print out filename (appears just after test name)
-        println!("dumping file {:?}", path);
-
-        match std::fs::File::create(path) {
-            Err(e) => eprintln!("Problem creating wasm debug file: {:?}", e),
-            Ok(mut file) => {
-                file.write_all(&module_bytes).unwrap();
-            }
-        }
-    }
-
     // now, do wasmer stuff
 
     use wasmer::{Instance, Module, Store};
 
     let store = Store::default();
 
+    // Keep the final .wasm file for debugging with wasm-objdump or wasm2wat
+    const DEBUG_WASM_FILE: bool = true;
+
     let wasmer_module = {
-        let dir = tempdir().unwrap();
-        let dirpath = dir.path();
+        let tmp_dir: TempDir; // directory for normal test runs, deleted when dropped
+        let debug_dir: String; // persistent directory for debugging
+
+        let dirpath: &Path = 
+            if DEBUG_WASM_FILE {
+                // Directory name based on a hash of the Roc source
+                let mut hash_state = DefaultHasher::new();
+                src.hash(&mut hash_state);
+                let src_hash = hash_state.finish();
+                debug_dir = format!("/tmp/roc/gen_wasm/{:016x}", src_hash);
+                std::fs::create_dir_all(&debug_dir).unwrap();
+                println!("Debug command:\n\twasm-objdump -sdx {}/final.wasm", &debug_dir);
+                Path::new(&debug_dir)
+            } else {
+                tmp_dir = tempdir().unwrap();
+                tmp_dir.path()
+            };
+
         let final_wasm_file = dirpath.join("final.wasm");
         let app_o_file = dirpath.join("app.o");
 

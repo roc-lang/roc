@@ -7,6 +7,7 @@ pub mod wasm_module;
 use bumpalo::{self, collections::Vec, Bump};
 
 use roc_collections::all::{MutMap, MutSet};
+use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::LayoutIds;
@@ -47,34 +48,50 @@ pub fn build_module_help<'a>(
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Result<WasmModule<'a>, String> {
     let mut layout_ids = LayoutIds::default();
-    let mut proc_symbols = Vec::with_capacity_in(procedures.len(), env.arena);
+    let mut generated_procs = Vec::with_capacity_in(procedures.len(), env.arena);
+    let mut generated_symbols = Vec::with_capacity_in(procedures.len(), env.arena);
     let mut linker_symbols = Vec::with_capacity_in(procedures.len() * 2, env.arena);
-    let mut exports = Vec::with_capacity_in(procedures.len(), env.arena);
+    let mut exports = Vec::with_capacity_in(4, env.arena);
 
-    // Collect the symbols & names for the procedures
-    for (i, (sym, layout)) in procedures.keys().enumerate() {
-        proc_symbols.push(*sym);
+    // Collect the symbols & names for the procedures,
+    // and filter out procs we're going to inline
+    let mut fn_index = 0;
+    for ((sym, layout), proc) in procedures.into_iter() {
+        if LowLevel::from_inlined_wrapper(sym).is_some() {
+            continue;
+        }
+        generated_procs.push(proc);
+        generated_symbols.push(sym);
 
         let fn_name = layout_ids
-            .get_toplevel(*sym, layout)
-            .to_symbol_string(*sym, &env.interns);
+            .get_toplevel(sym, &layout)
+            .to_symbol_string(sym, &env.interns);
 
-        if env.exposed_to_host.contains(sym) {
+        if env.exposed_to_host.contains(&sym) {
             exports.push(Export {
                 name: fn_name.clone(),
                 ty: ExportType::Func,
-                index: i as u32,
+                index: fn_index as u32,
             });
         }
 
-        let linker_sym = SymInfo::for_function(i as u32, fn_name);
+        let linker_sym = SymInfo::for_function(fn_index as u32, fn_name);
         linker_symbols.push(linker_sym);
+
+        fn_index += 1;
     }
 
-    // Main loop: Build the Wasm module
+    // Build the Wasm module
     let (mut module, linker_symbols) = {
-        let mut backend = WasmBackend::new(env, layout_ids, proc_symbols, linker_symbols, exports);
-        for ((sym, _), proc) in procedures.into_iter() {
+        let mut backend = WasmBackend::new(
+            env,
+            layout_ids,
+            generated_symbols.clone(),
+            linker_symbols,
+            exports,
+        );
+
+        for (proc, sym) in generated_procs.into_iter().zip(generated_symbols) {
             backend.build_proc(proc, sym)?;
         }
         (backend.module, backend.linker_symbols)

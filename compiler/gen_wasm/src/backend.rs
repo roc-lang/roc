@@ -444,6 +444,13 @@ impl<'a> WasmBackend<'a> {
 
                 Ok(())
             }
+
+            Stmt::Refcounting(_modify, following) => {
+                // TODO: actually deal with refcounting. For hello world, we just skipped it.
+                self.build_stmt(following, ret_layout)?;
+                Ok(())
+            }
+
             x => Err(format!("statement not yet implemented: {:?}", x)),
         }
     }
@@ -558,7 +565,8 @@ impl<'a> WasmBackend<'a> {
         arguments: &'a [Symbol],
         return_layout: WasmLayout,
     ) -> Result<(), String> {
-        self.storage.load_symbols(&mut self.code_builder, arguments);
+        self.storage
+            .load_symbols_fastcc(&mut self.code_builder, arguments, &return_layout);
 
         let build_result = decode_low_level(
             &mut self.code_builder,
@@ -764,11 +772,27 @@ impl<'a> WasmBackend<'a> {
             },
 
             None => {
-                let mut param_types = Vec::with_capacity_in(arguments.len(), self.env.arena);
-                param_types.extend(arguments.iter().map(|a| self.storage.get(a).value_type()));
+                let mut param_types = Vec::with_capacity_in(1 + arguments.len(), self.env.arena);
+
+                let ret_type = if ret_layout.is_stack_memory() {
+                    param_types.push(ValueType::I32);
+                    None
+                } else {
+                    Some(ret_layout.value_type())
+                };
+
+                for arg in arguments {
+                    param_types.push(match self.storage.get(arg) {
+                        StoredValue::StackMemory { size, .. } if *size > 4 && *size <= 8 => {
+                            ValueType::I64
+                        }
+                        _ => ValueType::I32,
+                    });
+                }
+
                 let signature_index = self.module.types.insert(Signature {
                     param_types,
-                    ret_type: Some(ret_layout.value_type()), // TODO: handle builtins with no return value
+                    ret_type,
                 });
 
                 let import_index = self.module.import.entries.len() as u32;
