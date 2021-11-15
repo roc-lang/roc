@@ -242,8 +242,8 @@ impl LowLevel {
         use LowLevel::*;
 
         match self {
-            first_order!() => false,
             higher_order!() => true,
+            _ => false,
         }
     }
 
@@ -251,7 +251,6 @@ impl LowLevel {
         use LowLevel::*;
 
         match self {
-            first_order!() => unreachable!(),
             ListMap => 1,
             ListMap2 => 2,
             ListMap3 => 3,
@@ -267,6 +266,7 @@ impl LowLevel {
             ListAny => 1,
             ListFindUnsafe => 1,
             DictWalk => 2,
+            _ => unreachable!(),
         }
     }
 }
