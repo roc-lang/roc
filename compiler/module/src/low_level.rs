@@ -217,7 +217,6 @@ impl LowLevel {
             Symbol::LIST_KEEP_ERRS => Some(ListKeepErrs),
             Symbol::LIST_SORT_WITH => Some(ListSortWith),
             Symbol::LIST_SUBLIST => Some(ListSublist),
-            Symbol::LIST_DROP => Some(ListDrop),
             Symbol::LIST_DROP_AT => Some(ListDropAt),
             Symbol::LIST_SWAP => Some(ListSwap),
             Symbol::LIST_ANY => Some(ListAny),
