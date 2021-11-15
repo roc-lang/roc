@@ -245,13 +245,14 @@ mod test_parse {
         let result_path = parent.join(&format!("{}.{}.result-ast", name, ty));
 
         let input = std::fs::read_to_string(&input_path).unwrap();
-        let expected_result = std::fs::read_to_string(&result_path).unwrap();
 
         let actual_result = func(&input);
 
         if std::env::var("ROC_PARSER_SNAPSHOT_TEST_OVERWRITE").is_ok() {
             std::fs::write(&result_path, actual_result).unwrap();
         } else {
+            let expected_result = std::fs::read_to_string(&result_path).unwrap();
+
             // TODO: do a diff over the "real" content of these strings, rather than
             // the debug-formatted content. As is, we get an ugly single-line diff
             // from pretty_assertions
