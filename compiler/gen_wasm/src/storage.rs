@@ -319,6 +319,67 @@ impl<'a> Storage<'a> {
         }
     }
 
+    /// Generate code to copy a StoredValue from an arbitrary memory location
+    /// (defined by a pointer and offset).
+    pub fn copy_value_from_memory(
+        &mut self,
+        code_builder: &mut CodeBuilder,
+        to_symbol: Symbol,
+        from_ptr: LocalId,
+        from_offset: u32,
+    ) -> u32 {
+        let to_storage = self.get(&to_symbol).to_owned();
+        match to_storage {
+            StoredValue::StackMemory {
+                location,
+                size,
+                alignment_bytes,
+            } => {
+                let (to_ptr, to_offset) = location.local_and_offset(self.stack_frame_pointer);
+                copy_memory(
+                    code_builder,
+                    CopyMemoryConfig {
+                        from_ptr,
+                        from_offset,
+                        to_ptr,
+                        to_offset,
+                        size,
+                        alignment_bytes,
+                    },
+                );
+                size
+            }
+
+            StoredValue::VirtualMachineStack {
+                value_type, size, ..
+            }
+            | StoredValue::Local {
+                value_type, size, ..
+            } => {
+                use crate::wasm_module::Align::*;
+
+                code_builder.get_local(from_ptr);
+                match (value_type, size) {
+                    (ValueType::I64, 8) => code_builder.i64_load(Bytes8, from_offset),
+                    (ValueType::I32, 4) => code_builder.i32_load(Bytes4, from_offset),
+                    (ValueType::I32, 2) => code_builder.i32_load16_s(Bytes2, from_offset),
+                    (ValueType::I32, 1) => code_builder.i32_load8_s(Bytes1, from_offset),
+                    (ValueType::F32, 4) => code_builder.f32_load(Bytes4, from_offset),
+                    (ValueType::F64, 8) => code_builder.f64_load(Bytes8, from_offset),
+                    _ => {
+                        panic!("Cannot store {:?} with alignment of {:?}", value_type, size);
+                    }
+                };
+
+                if let StoredValue::Local { local_id, .. } = to_storage {
+                    code_builder.set_local(local_id);
+                }
+
+                size
+            }
+        }
+    }
+
     /// Generate code to copy from one StoredValue to another
     /// Copies the _entire_ value. For struct fields etc., see `copy_value_to_memory`
     pub fn clone_value(

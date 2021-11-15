@@ -2,12 +2,13 @@ use bumpalo::{self, collections::Vec};
 
 use code_builder::Align;
 use roc_collections::all::MutMap;
+use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
 use crate::layout::WasmLayout;
-use crate::low_level::{build_call_low_level, LowlevelBuildResult};
+use crate::low_level::{decode_low_level, LowlevelBuildResult};
 use crate::storage::{Storage, StoredValue, StoredValueKind};
 use crate::wasm_module::linking::{
     DataSymbol, LinkingSection, RelocationSection, WasmObjectSymbol, WASM_SYM_BINDING_WEAK,
@@ -22,8 +23,8 @@ use crate::wasm_module::{
     LocalId, Signature, SymInfo, ValueType,
 };
 use crate::{
-    copy_memory, CopyMemoryConfig, Env, BUILTINS_IMPORT_MODULE_NAME, MEMORY_NAME, PTR_TYPE,
-    STACK_POINTER_GLOBAL_ID, STACK_POINTER_NAME,
+    copy_memory, CopyMemoryConfig, Env, BUILTINS_IMPORT_MODULE_NAME, MEMORY_NAME, PTR_SIZE,
+    PTR_TYPE, STACK_POINTER_GLOBAL_ID, STACK_POINTER_NAME,
 };
 
 /// The memory address where the constants data will be loaded during module instantiation.
@@ -469,6 +470,11 @@ impl<'a> WasmBackend<'a> {
                 arguments,
             }) => match call_type {
                 CallType::ByName { name: func_sym, .. } => {
+                    // If this function is just a lowlevel wrapper, then inline it
+                    if let Some(lowlevel) = LowLevel::from_inlined_wrapper(*func_sym) {
+                        return self.build_low_level(lowlevel, arguments, wasm_layout);
+                    }
+
                     let mut wasm_args_tmp: Vec<Symbol>;
                     let (wasm_args, has_return_val) = match wasm_layout {
                         WasmLayout::StackMemory { .. } => {
@@ -511,36 +517,68 @@ impl<'a> WasmBackend<'a> {
                 }
 
                 CallType::LowLevel { op: lowlevel, .. } => {
-                    let return_layout = WasmLayout::new(layout);
-                    self.storage.load_symbols(&mut self.code_builder, arguments);
-
-                    let build_result = build_call_low_level(
-                        &mut self.code_builder,
-                        &mut self.storage,
-                        lowlevel,
-                        arguments,
-                        &return_layout,
-                    );
-                    use LowlevelBuildResult::*;
-
-                    match build_result {
-                        Done => Ok(()),
-                        BuiltinCall(name) => {
-                            self.call_imported_builtin(name, arguments, &return_layout);
-                            Ok(())
-                        }
-                        NotImplemented => Err(format!(
-                            "Low level operation {:?} is not yet implemented",
-                            lowlevel
-                        )),
-                    }
+                    self.build_low_level(*lowlevel, arguments, wasm_layout)
                 }
+
                 x => Err(format!("the call type, {:?}, is not yet implemented", x)),
             },
 
             Expr::Struct(fields) => self.create_struct(sym, layout, fields),
 
+            Expr::StructAtIndex {
+                index,
+                field_layouts,
+                structure,
+            } => {
+                if let StoredValue::StackMemory { location, .. } = self.storage.get(structure) {
+                    let (local_id, mut offset) =
+                        location.local_and_offset(self.storage.stack_frame_pointer);
+                    for field in field_layouts.iter().take(*index as usize) {
+                        offset += field.stack_size(PTR_SIZE);
+                    }
+                    self.storage.copy_value_from_memory(
+                        &mut self.code_builder,
+                        *sym,
+                        local_id,
+                        offset,
+                    );
+                } else {
+                    unreachable!("Unexpected storage for {:?}", structure)
+                }
+                Ok(())
+            }
+
             x => Err(format!("Expression is not yet implemented {:?}", x)),
+        }
+    }
+
+    fn build_low_level(
+        &mut self,
+        lowlevel: LowLevel,
+        arguments: &'a [Symbol],
+        return_layout: WasmLayout,
+    ) -> Result<(), String> {
+        self.storage.load_symbols(&mut self.code_builder, arguments);
+
+        let build_result = decode_low_level(
+            &mut self.code_builder,
+            &mut self.storage,
+            lowlevel,
+            arguments,
+            &return_layout,
+        );
+        use LowlevelBuildResult::*;
+
+        match build_result {
+            Done => Ok(()),
+            BuiltinCall(name) => {
+                self.call_imported_builtin(name, arguments, &return_layout);
+                Ok(())
+            }
+            NotImplemented => Err(format!(
+                "Low level operation {:?} is not yet implemented",
+                lowlevel
+            )),
         }
     }
 
@@ -741,14 +779,15 @@ impl<'a> WasmBackend<'a> {
                 };
                 self.module.import.entries.push(import);
 
-                let sym_idx = self.linker_symbols.len() as u32;
+                let sym_idx = self.linker_symbols.len();
                 let sym_info = SymInfo::Function(WasmObjectSymbol::Imported {
                     flags: WASM_SYM_UNDEFINED,
                     index: import_index,
                 });
                 self.linker_symbols.push(sym_info);
+                self.builtin_sym_index_map.insert(name, sym_idx);
 
-                (import_index, sym_idx)
+                (import_index, sym_idx as u32)
             }
         };
         self.code_builder.call(

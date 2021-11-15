@@ -3077,8 +3077,8 @@ mod test_parse {
     fn empty_app_header() {
         let arena = Bump::new();
         let packages = Collection::empty();
-        let imports = Vec::new_in(&arena);
-        let provides = Vec::new_in(&arena);
+        let imports = Collection::empty();
+        let provides = Collection::empty();
         let module_name = StrLiteral::PlainLine("test-app");
         let header = AppHeader {
             name: Located::new(0, 0, 4, 14, module_name),
@@ -3117,8 +3117,8 @@ mod test_parse {
 
         let arena = Bump::new();
         let packages = Collection::empty();
-        let imports = Vec::new_in(&arena);
-        let provides = Vec::new_in(&arena);
+        let imports = Collection::empty();
+        let provides = Collection::empty();
         let module_name = StrLiteral::PlainLine("test-app");
         let header = AppHeader {
             before_header: &[],
@@ -3166,11 +3166,11 @@ mod test_parse {
         let loc_pkg_entry = Located::new(1, 1, 15, 33, pkg_entry);
         let arena = Bump::new();
         let packages = Collection::with_items(arena.alloc([loc_pkg_entry]));
-        let import = ImportsEntry::Package("foo", ModuleName::new("Bar.Baz"), Vec::new_in(&arena));
+        let import = ImportsEntry::Package("foo", ModuleName::new("Bar.Baz"), Collection::empty());
         let loc_import = Located::new(2, 2, 14, 25, import);
-        let imports = bumpalo::vec![in &arena; loc_import];
+        let imports = Collection::with_items(arena.alloc([loc_import]));
         let provide_entry = Located::new(3, 3, 15, 24, Exposed("quicksort"));
-        let provides = bumpalo::vec![in &arena; provide_entry];
+        let provides = Collection::with_items(arena.alloc([provide_entry]));
         let module_name = StrLiteral::PlainLine("quicksort");
 
         let header = AppHeader {
@@ -3222,11 +3222,40 @@ mod test_parse {
         let loc_pkg_entry = Located::new(1, 1, 15, 33, pkg_entry);
         let arena = Bump::new();
         let packages = Collection::with_items(arena.alloc([loc_pkg_entry]));
-        let import = ImportsEntry::Package("foo", ModuleName::new("Bar.Baz"), Vec::new_in(&arena));
-        let loc_import = Located::new(2, 2, 14, 25, import);
-        let imports = bumpalo::vec![in &arena; loc_import];
-        let provide_entry = Located::new(3, 3, 15, 24, Exposed("quicksort"));
-        let provides = bumpalo::vec![in &arena; provide_entry];
+        let import = ImportsEntry::Package(
+            "foo",
+            ModuleName::new("Bar"),
+            Collection::with_items_and_comments(
+                &arena,
+                arena.alloc([
+                    Located::new(
+                        3,
+                        3,
+                        8,
+                        11,
+                        ExposesEntry::SpaceBefore(
+                            arena.alloc(ExposesEntry::Exposed("Baz")),
+                            arena.alloc([Newline]),
+                        ),
+                    ),
+                    Located::new(
+                        4,
+                        4,
+                        8,
+                        17,
+                        ExposesEntry::SpaceBefore(
+                            arena.alloc(ExposesEntry::Exposed("FourtyTwo")),
+                            arena.alloc([Newline]),
+                        ),
+                    ),
+                ]),
+                arena.alloc([Newline, LineComment(" I'm a happy comment")]),
+            ),
+        );
+        let loc_import = Located::new(2, 6, 14, 5, import);
+        let imports = Collection::with_items(arena.alloc([loc_import]));
+        let provide_entry = Located::new(7, 7, 15, 24, Exposed("quicksort"));
+        let provides = Collection::with_items(arena.alloc([provide_entry]));
         let module_name = StrLiteral::PlainLine("quicksort");
 
         let header = AppHeader {
@@ -3235,7 +3264,7 @@ mod test_parse {
             packages,
             imports,
             provides,
-            to: Located::new(3, 3, 30, 34, To::ExistingPackage("base")),
+            to: Located::new(7, 7, 31, 35, To::ExistingPackage("base")),
             after_app_keyword: &[],
             before_packages: newlines,
             after_packages: &[],
@@ -3253,8 +3282,12 @@ mod test_parse {
             r#"
                 app "quicksort"
                     packages { base: "./platform", }
-                    imports [ foo.Bar.Baz ]
-                    provides [ quicksort ] to base
+                    imports [ foo.Bar.{
+                        Baz,
+                        FourtyTwo,
+                        # I'm a happy comment
+                    } ]
+                    provides [ quicksort, ] to base
             "#
         );
 
@@ -3285,7 +3318,7 @@ mod test_parse {
             let region2 = Region::new(0, 0, 45, 47);
 
             PlatformRequires {
-                rigids: Vec::new_in(&arena),
+                rigids: Collection::empty(),
                 signature: Located::at(
                     region1,
                     TypedIdent::Entry {
@@ -3307,10 +3340,10 @@ mod test_parse {
             before_header: &[],
             name: Located::new(0, 0, 9, 23, pkg_name),
             requires,
-            exposes: Vec::new_in(&arena),
+            exposes: Collection::empty(),
             packages: Collection::empty(),
-            imports: Vec::new_in(&arena),
-            provides: Vec::new_in(&arena),
+            imports: Collection::empty(),
+            provides: Collection::empty(),
             effects,
             after_platform_keyword: &[],
             before_requires: &[],
@@ -3352,9 +3385,9 @@ mod test_parse {
         let loc_pkg_entry = Located::new(3, 3, 15, 27, pkg_entry);
         let arena = Bump::new();
         let packages = Collection::with_items(arena.alloc([loc_pkg_entry]));
-        let imports = Vec::new_in(&arena);
+        let imports = Collection::empty();
         let provide_entry = Located::new(5, 5, 15, 26, Exposed("mainForHost"));
-        let provides = bumpalo::vec![in &arena; provide_entry];
+        let provides = Collection::with_items(arena.alloc([provide_entry]));
         let effects = Effects {
             effect_type_name: "Effect",
             effect_shortname: "fx",
@@ -3370,7 +3403,13 @@ mod test_parse {
             let region3 = Region::new(1, 1, 14, 26);
 
             PlatformRequires {
-                rigids: bumpalo::vec![ in &arena; Located::at(region3, PlatformRigid::Entry { alias: "Model", rigid: "model" }) ],
+                rigids: Collection::with_items(arena.alloc([Located::at(
+                    region3,
+                    PlatformRigid::Entry {
+                        alias: "Model",
+                        rigid: "model",
+                    },
+                )])),
                 signature: Located::at(
                     region1,
                     TypedIdent::Entry {
@@ -3392,7 +3431,7 @@ mod test_parse {
             before_header: &[],
             name: Located::new(0, 0, 9, 19, pkg_name),
             requires,
-            exposes: Vec::new_in(&arena),
+            exposes: Collection::empty(),
             packages,
             imports,
             provides,
@@ -3432,8 +3471,8 @@ mod test_parse {
     #[test]
     fn empty_interface_header() {
         let arena = Bump::new();
-        let exposes = Vec::new_in(&arena);
-        let imports = Vec::new_in(&arena);
+        let exposes = Collection::empty();
+        let imports = Collection::empty();
         let module_name = ModuleName::new("Foo");
         let header = InterfaceHeader {
             before_header: &[],
@@ -3464,8 +3503,8 @@ mod test_parse {
     #[test]
     fn nested_module() {
         let arena = Bump::new();
-        let exposes = Vec::new_in(&arena);
-        let imports = Vec::new_in(&arena);
+        let exposes = Collection::empty();
+        let imports = Collection::empty();
         let module_name = ModuleName::new("Foo.Bar.Baz");
         let header = InterfaceHeader {
             before_header: &[],
