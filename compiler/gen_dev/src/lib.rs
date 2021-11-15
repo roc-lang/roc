@@ -228,7 +228,7 @@ where
                         ..
                     } => {
                         // If this function is just a lowlevel wrapper, then inline it
-                        if let Some(lowlevel) = LowLevel::from_wrapper_symbol(*func_sym) {
+                        if let Some(lowlevel) = LowLevel::from_inlined_wrapper(*func_sym) {
                             self.build_run_low_level(
                                 sym,
                                 &lowlevel,
