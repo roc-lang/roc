@@ -15,10 +15,10 @@ pub enum LowlevelBuildResult {
     NotImplemented,
 }
 
-pub fn build_call_low_level<'a>(
+pub fn decode_low_level<'a>(
     code_builder: &mut CodeBuilder<'a>,
     storage: &mut Storage<'a>,
-    lowlevel: &LowLevel,
+    lowlevel: LowLevel,
     args: &'a [Symbol],
     ret_layout: &WasmLayout,
 ) -> LowlevelBuildResult {
@@ -129,6 +129,9 @@ pub fn build_call_low_level<'a>(
         NumIsMultipleOf => return NotImplemented,
         NumAbs => match ret_layout.value_type() {
             I32 => {
+                let arg_storage = storage.get(&args[0]).to_owned();
+                storage.ensure_value_has_local(code_builder, args[0], arg_storage);
+                storage.load_symbols(code_builder, args);
                 code_builder.i32_const(0);
                 storage.load_symbols(code_builder, args);
                 code_builder.i32_sub();
@@ -138,6 +141,9 @@ pub fn build_call_low_level<'a>(
                 code_builder.select();
             }
             I64 => {
+                let arg_storage = storage.get(&args[0]).to_owned();
+                storage.ensure_value_has_local(code_builder, args[0], arg_storage);
+                storage.load_symbols(code_builder, args);
                 code_builder.i64_const(0);
                 storage.load_symbols(code_builder, args);
                 code_builder.i64_sub();
