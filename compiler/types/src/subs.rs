@@ -81,8 +81,8 @@ impl Default for Subs {
 /// The starting position is a u32 which should be plenty
 /// We limit slices to u16::MAX = 65535 elements
 pub struct SubsSlice<T> {
-    start: u32,
-    length: u16,
+    pub start: u32,
+    pub length: u16,
     _marker: std::marker::PhantomData<T>,
 }
 
@@ -681,7 +681,7 @@ impl Variable {
     ///
     /// This should only ever be called from tests!
     pub unsafe fn unsafe_test_debug_variable(v: u32) -> Self {
-        debug_assert!(v <= Self::NUM_RESERVED_VARS as u32);
+        debug_assert!(v >= Self::NUM_RESERVED_VARS as u32);
         Variable(v)
     }
 
@@ -1355,10 +1355,10 @@ pub enum Content {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AliasVariables {
-    lowercases_start: u32,
-    variables_start: u32,
-    lowercases_len: u16,
-    variables_len: u16,
+    pub lowercases_start: u32,
+    pub variables_start: u32,
+    pub lowercases_len: u16,
+    pub variables_len: u16,
 }
 
 impl AliasVariables {
@@ -2716,7 +2716,11 @@ fn restore_content(subs: &mut Subs, content: &Content) {
     use FlatType::*;
 
     match content {
-        FlexVar(_) | RigidVar(_) | RecursionVar { .. } | Error => (),
+        FlexVar(_) | RigidVar(_) | Error => (),
+
+        RecursionVar { structure, .. } => {
+            subs.restore(*structure);
+        }
 
         Structure(flat_type) => match flat_type {
             Apply(_, args) => {
