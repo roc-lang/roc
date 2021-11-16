@@ -419,10 +419,9 @@ fn gather_edges<'a>(
 
     let check = guarded_tests_are_complete(&relevant_tests);
 
-    // TODO remove clone
     let all_edges = relevant_tests
         .into_iter()
-        .map(|t| edges_for(path, branches.clone(), t))
+        .map(|t| edges_for(path, &branches, t))
         .collect();
 
     let fallbacks = if check {
@@ -583,7 +582,7 @@ fn test_at_path<'a>(
 // understanding: if the test is successful, where could we go?
 fn edges_for<'a>(
     path: &[PathInstruction],
-    branches: Vec<Branch<'a>>,
+    branches: &[Branch<'a>],
     test: GuardedTest<'a>,
 ) -> (GuardedTest<'a>, Vec<Branch<'a>>) {
     let mut new_branches = Vec::new();
@@ -1055,9 +1054,19 @@ fn small_defaults(branches: &[Branch], path: &[PathInstruction]) -> usize {
 }
 
 fn small_branching_factor(branches: &[Branch], path: &[PathInstruction]) -> usize {
-    let (edges, fallback) = gather_edges(branches.to_vec(), path);
+    // a specialized version of gather_edges that just counts the number of options
 
-    edges.len() + (if fallback.is_empty() { 0 } else { 1 })
+    let relevant_tests = tests_at_path(path, branches);
+
+    let check = guarded_tests_are_complete(&relevant_tests);
+
+    let fallbacks = if check {
+        false
+    } else {
+        branches.iter().any(|b| is_irrelevant_to(path, b))
+    };
+
+    relevant_tests.len() + (if !fallbacks { 0 } else { 1 })
 }
 
 #[derive(Clone, Debug, PartialEq)]
