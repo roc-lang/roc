@@ -50,6 +50,7 @@ pub enum LowLevel {
     ListDropAt,
     ListSwap,
     ListAny,
+    ListAll,
     ListFindUnsafe,
     DictSize,
     DictEmpty,
@@ -131,6 +132,7 @@ macro_rules! higher_order {
             | ListKeepErrs
             | ListSortWith
             | ListAny
+            | ListAll
             | ListFindUnsafe
             | DictWalk
     };
@@ -162,6 +164,7 @@ impl LowLevel {
             ListKeepErrs => 1,
             ListSortWith => 1,
             ListAny => 1,
+            ListAll => 1,
             ListFindUnsafe => 1,
             DictWalk => 2,
             _ => unreachable!(),
@@ -220,6 +223,7 @@ impl LowLevel {
             Symbol::LIST_DROP_AT => Some(ListDropAt),
             Symbol::LIST_SWAP => Some(ListSwap),
             Symbol::LIST_ANY => Some(ListAny),
+            Symbol::LIST_ALL => Some(ListAll),
             Symbol::LIST_FIND => None,
             Symbol::DICT_LEN => Some(DictSize),
             Symbol::DICT_EMPTY => Some(DictEmpty),

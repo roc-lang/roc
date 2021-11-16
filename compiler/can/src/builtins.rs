@@ -111,6 +111,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_WALK_UNTIL => list_walk_until,
         LIST_SORT_WITH => list_sort_with,
         LIST_ANY => list_any,
+        LIST_ALL => list_all,
         LIST_FIND => list_find,
         DICT_LEN => dict_len,
         DICT_EMPTY => dict_empty,
@@ -2853,6 +2854,11 @@ fn list_sort_with(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// List.any: List elem, (elem -> Bool) -> Bool
 fn list_any(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::ListAny, var_store)
+}
+
+/// List.all: List elem, (elem -> Bool) -> Bool
+fn list_all(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::ListAll, var_store)
 }
 
 /// List.find : List elem, (elem -> Bool) -> Result elem [ NotFound ]*
