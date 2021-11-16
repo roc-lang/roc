@@ -206,7 +206,7 @@ impl<'a> Default for CapturedSymbols<'a> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct PendingSpecialization<'a> {
     solved_type: SolvedType,
     host_exposed_aliases: BumpMap<Symbol, SolvedType>,
@@ -550,8 +550,6 @@ impl<'a> Procs<'a> {
 
                 // if we've already specialized this one, no further work is needed.
                 if !already_specialized {
-                    let pending = PendingSpecialization::from_var(env.arena, env.subs, annotation);
-
                     if self.is_module_thunk(symbol) {
                         debug_assert!(layout.arguments.is_empty());
                     }
@@ -559,6 +557,8 @@ impl<'a> Procs<'a> {
                     match &mut self.pending_specializations {
                         Some(pending_specializations) => {
                             // register the pending specialization, so this gets code genned later
+                            let pending =
+                                PendingSpecialization::from_var(env.arena, env.subs, annotation);
                             add_pending(pending_specializations, symbol, layout, pending);
 
                             match self.partial_procs.symbol_to_id(symbol) {
@@ -626,12 +626,13 @@ impl<'a> Procs<'a> {
                                 self.partial_procs.insert(symbol, partial_proc)
                             };
 
-                            match specialize(
+                            match specialize_variable(
                                 env,
                                 self,
                                 symbol,
                                 layout_cache,
-                                pending,
+                                annotation,
+                                BumpMap::new_in(env.arena),
                                 partial_proc_id,
                             ) {
                                 Ok((proc, layout)) => {
@@ -1819,27 +1820,11 @@ fn specialize_externals_others_need<'a>(
     layout_cache: &mut LayoutCache<'a>,
 ) {
     for (symbol, solved_types) in externals_others_need.specs.iter() {
-        // de-duplicate by the Hash instance (set only deduplicates by Eq instance)
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let mut seen_hashes = Vec::with_capacity_in(solved_types.len(), env.arena);
-
-        let hash_the_thing = |x: &SolvedType| {
-            let mut hasher = DefaultHasher::new();
-            x.hash(&mut hasher);
-            hasher.finish()
-        };
-
         for solved_type in solved_types {
-            let hash = hash_the_thing(solved_type);
-
-            if seen_hashes.iter().any(|h| *h == hash) {
-                // we've seen this one already
-                continue;
-            }
-
-            seen_hashes.push(hash);
+            // historical note: we used to deduplicate with a hash here,
+            // but the cost of that hash is very high. So for now we make
+            // duplicate specializations, and the insertion into a hash map
+            // below will deduplicate them.
 
             let name = *symbol;
 
@@ -6633,8 +6618,6 @@ fn call_by_name_help<'a>(
             assign_to_symbols(env, procs, layout_cache, iter, result)
         }
     } else {
-        let pending = PendingSpecialization::from_var(env.arena, env.subs, fn_var);
-
         // When requested (that is, when procs.pending_specializations is `Some`),
         // store a pending specialization rather than specializing immediately.
         //
@@ -6655,6 +6638,7 @@ fn call_by_name_help<'a>(
                 debug_assert!(!env.is_imported_symbol(proc_name));
 
                 // register the pending specialization, so this gets code genned later
+                let pending = PendingSpecialization::from_var(env.arena, env.subs, fn_var);
                 add_pending(
                     pending_specializations,
                     proc_name,
@@ -6689,17 +6673,6 @@ fn call_by_name_help<'a>(
             None => {
                 let opt_partial_proc = procs.partial_procs.symbol_to_id(proc_name);
 
-                /*
-                debug_assert_eq!(
-                    argument_layouts.len(),
-                    field_symbols.len(),
-                    "Function {:?} is called with {} arguments, but the layout expects {}",
-                    proc_name,
-                    field_symbols.len(),
-                    argument_layouts.len(),
-                );
-                */
-
                 let field_symbols = field_symbols.into_bump_slice();
 
                 match opt_partial_proc {
@@ -6711,8 +6684,15 @@ fn call_by_name_help<'a>(
                             .specialized
                             .insert((proc_name, top_level_layout), InProgress);
 
-                        match specialize(env, procs, proc_name, layout_cache, pending, partial_proc)
-                        {
+                        match specialize_variable(
+                            env,
+                            procs,
+                            proc_name,
+                            layout_cache,
+                            fn_var,
+                            BumpMap::new_in(env.arena),
+                            partial_proc,
+                        ) {
                             Ok((proc, layout)) => {
                                 // now we just call our freshly-specialized function
                                 call_specialized_proc(
@@ -6790,8 +6770,6 @@ fn call_by_name_module_thunk<'a>(
     if already_specialized {
         force_thunk(env, proc_name, inner_layout, assigned, hole)
     } else {
-        let pending = PendingSpecialization::from_var(env.arena, env.subs, fn_var);
-
         // When requested (that is, when procs.pending_specializations is `Some`),
         // store a pending specialization rather than specializing immediately.
         //
@@ -6812,6 +6790,7 @@ fn call_by_name_module_thunk<'a>(
                 debug_assert!(!env.is_imported_symbol(proc_name));
 
                 // register the pending specialization, so this gets code genned later
+                let pending = PendingSpecialization::from_var(env.arena, env.subs, fn_var);
                 add_pending(
                     pending_specializations,
                     proc_name,
@@ -6833,8 +6812,15 @@ fn call_by_name_module_thunk<'a>(
                             .specialized
                             .insert((proc_name, top_level_layout), InProgress);
 
-                        match specialize(env, procs, proc_name, layout_cache, pending, partial_proc)
-                        {
+                        match specialize_variable(
+                            env,
+                            procs,
+                            proc_name,
+                            layout_cache,
+                            fn_var,
+                            BumpMap::new_in(env.arena),
+                            partial_proc,
+                        ) {
                             Ok((proc, raw_layout)) => {
                                 debug_assert!(
                                     raw_layout.is_zero_argument_thunk(),
