@@ -444,7 +444,7 @@ mod test_parse {
     #[quickcheck]
     fn all_f64_values_parse(num: f64) {
         let string = num.to_string();
-        if string.contains(".") {
+        if string.contains('.') {
             assert_parses_to(&string, Float(&string));
         } else if num.is_nan() {
             assert_parses_to(&string, Expr::GlobalTag(&string));

@@ -3467,6 +3467,7 @@ dependencies = [
  "roc_std",
  "roc_types",
  "roc_unify",
+ "static_assertions",
  "ven_graph",
  "ven_pretty",
 ]
