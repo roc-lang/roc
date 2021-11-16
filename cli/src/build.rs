@@ -249,7 +249,7 @@ pub fn build_file<'a>(
             link(
                 target,
                 binary_path.clone(),
-            &inputs,
+                &inputs,
                 link_type
             )
             .map_err(|_| {

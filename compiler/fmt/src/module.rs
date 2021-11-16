@@ -1,6 +1,6 @@
 use crate::spaces::{fmt_spaces, INDENT};
-use bumpalo::collections::{String, Vec};
-use roc_parse::ast::Module;
+use bumpalo::collections::String;
+use roc_parse::ast::{Collection, Module};
 use roc_parse::header::{AppHeader, ExposesEntry, ImportsEntry, InterfaceHeader, PlatformHeader};
 use roc_region::all::Located;
 
@@ -64,7 +64,7 @@ pub fn fmt_interface_header<'a>(buf: &mut String<'a>, header: &'a InterfaceHeade
         fmt_spaces(buf, header.after_imports.iter(), indent);
     }
 
-    fmt_imports(buf, &header.imports, indent);
+    fmt_imports(buf, header.imports, indent);
 }
 
 pub fn fmt_app_header<'a>(buf: &mut String<'a>, header: &'a AppHeader<'a>) {
@@ -76,7 +76,7 @@ pub fn fmt_app_header<'a>(buf: &mut String<'a>, header: &'a AppHeader<'a>) {
     buf.push_str("imports");
 
     fmt_spaces(buf, header.before_imports.iter(), indent);
-    fmt_imports(buf, &header.imports, indent);
+    fmt_imports(buf, header.imports, indent);
     fmt_spaces(buf, header.after_imports.iter(), indent);
 }
 
@@ -86,7 +86,7 @@ pub fn fmt_platform_header<'a>(_buf: &mut String<'a>, _header: &'a PlatformHeade
 
 fn fmt_imports<'a>(
     buf: &mut String<'a>,
-    loc_entries: &'a Vec<'a, Located<ImportsEntry<'a>>>,
+    loc_entries: Collection<'a, Located<ImportsEntry<'a>>>,
     indent: u16,
 ) {
     buf.push('[');
@@ -112,7 +112,7 @@ fn fmt_imports<'a>(
 
 fn fmt_exposes<'a>(
     buf: &mut String<'a>,
-    loc_entries: &'a Vec<'a, Located<ExposesEntry<'a, &'a str>>>,
+    loc_entries: &'a Collection<'a, Located<ExposesEntry<'a, &'a str>>>,
     indent: u16,
 ) {
     buf.push('[');

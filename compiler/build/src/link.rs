@@ -877,6 +877,7 @@ fn get_macos_version() -> String {
         .expect("Failed to convert output of command 'sw_vers -productVersion' into a utf8 string");
 
     full_version_string
+        .trim_end()
         .split('.')
         .take(2)
         .collect::<Vec<&str>>()

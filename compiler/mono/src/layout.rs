@@ -12,7 +12,16 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use ven_pretty::{DocAllocator, DocBuilder};
 
-pub const MAX_ENUM_SIZE: usize = (std::mem::size_of::<u8>() * 8) as usize;
+// if your changes cause this number to go down, great!
+// please change it to the lower number.
+// if it went up, maybe check that the change is really required
+static_assertions::assert_eq_size!([u8; 3 * 8], Builtin);
+static_assertions::assert_eq_size!([u8; 4 * 8], Layout);
+static_assertions::assert_eq_size!([u8; 3 * 8], UnionLayout);
+static_assertions::assert_eq_size!([u8; 3 * 8], LambdaSet);
+
+pub type TagIdIntType = u16;
+pub const MAX_ENUM_SIZE: usize = (std::mem::size_of::<TagIdIntType>() * 8) as usize;
 const GENERATE_NULLABLE: bool = true;
 
 /// If a (Num *) gets translated to a Layout, this is the numeric type it defaults to.
@@ -209,7 +218,7 @@ pub enum UnionLayout<'a> {
     /// e.g. `FingerTree a : [ Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a) ]`
     /// see also: https://youtu.be/ip92VMpf_-A?t=164
     NullableWrapped {
-        nullable_id: i64,
+        nullable_id: u16,
         other_tags: &'a [&'a [Layout<'a>]],
     },
     /// A recursive tag union where the non-nullable variant does NOT store the tag id
@@ -247,7 +256,7 @@ impl<'a> UnionLayout<'a> {
         }
     }
 
-    pub fn layout_at(self, tag_id: u8, index: usize) -> Layout<'a> {
+    pub fn layout_at(self, tag_id: TagIdIntType, index: usize) -> Layout<'a> {
         let result = match self {
             UnionLayout::NonRecursive(tag_layouts) => {
                 let field_layouts = tag_layouts[tag_id as usize];
@@ -265,9 +274,9 @@ impl<'a> UnionLayout<'a> {
                 nullable_id,
                 other_tags,
             } => {
-                debug_assert_ne!(nullable_id, tag_id as i64);
+                debug_assert_ne!(nullable_id, tag_id);
 
-                let tag_index = if (tag_id as i64) < nullable_id {
+                let tag_index = if tag_id < nullable_id {
                     tag_id
                 } else {
                     tag_id - 1
@@ -370,12 +379,12 @@ impl<'a> UnionLayout<'a> {
         }
     }
 
-    pub fn tag_is_null(&self, tag_id: u8) -> bool {
+    pub fn tag_is_null(&self, tag_id: TagIdIntType) -> bool {
         match self {
             UnionLayout::NonRecursive(_)
             | UnionLayout::NonNullableUnwrapped(_)
             | UnionLayout::Recursive(_) => false,
-            UnionLayout::NullableWrapped { nullable_id, .. } => *nullable_id == tag_id as i64,
+            UnionLayout::NullableWrapped { nullable_id, .. } => *nullable_id == tag_id,
             UnionLayout::NullableUnwrapped { nullable_id, .. } => *nullable_id == (tag_id != 0),
         }
     }
@@ -431,7 +440,7 @@ pub enum ClosureRepresentation<'a> {
     Union {
         alphabetic_order_fields: &'a [Layout<'a>],
         tag_name: TagName,
-        tag_id: u8,
+        tag_id: TagIdIntType,
         union_layout: UnionLayout<'a>,
     },
     /// The closure is represented as a struct. The layouts are sorted
@@ -489,7 +498,7 @@ impl<'a> LambdaSet<'a> {
                             .unwrap();
 
                         ClosureRepresentation::Union {
-                            tag_id: index as u8,
+                            tag_id: index as TagIdIntType,
                             alphabetic_order_fields: fields,
                             tag_name: TagName::Closure(function_symbol),
                             union_layout: *union,
@@ -863,6 +872,16 @@ impl<'a> Layout<'a> {
         false
     }
 
+    pub fn is_passed_by_reference(&self) -> bool {
+        match self {
+            Layout::Union(UnionLayout::NonRecursive(_)) => true,
+            Layout::LambdaSet(lambda_set) => {
+                lambda_set.runtime_representation().is_passed_by_reference()
+            }
+            _ => false,
+        }
+    }
+
     pub fn stack_size(&self, pointer_size: u32) -> u32 {
         let width = self.stack_size_without_alignment(pointer_size);
         let alignment = self.alignment_bytes(pointer_size);
@@ -941,16 +960,16 @@ impl<'a> Layout<'a> {
                             })
                             .max();
 
+                        let tag_id_builtin = variant.tag_id_builtin();
                         match max_alignment {
-                            Some(align) => {
-                                let tag_id_builtin = variant.tag_id_builtin();
-
-                                round_up_to_alignment(
-                                    align,
-                                    tag_id_builtin.alignment_bytes(pointer_size),
-                                )
+                            Some(align) => round_up_to_alignment(
+                                align.max(tag_id_builtin.alignment_bytes(pointer_size)),
+                                tag_id_builtin.alignment_bytes(pointer_size),
+                            ),
+                            None => {
+                                // none of the tags had any payload, but the tag id still contains information
+                                tag_id_builtin.alignment_bytes(pointer_size)
                             }
-                            None => 0,
                         }
                     }
                     Recursive(_)
@@ -1475,7 +1494,7 @@ fn layout_from_flat_type<'a>(
             if GENERATE_NULLABLE {
                 for (index, (_name, variables)) in tags_vec.iter().enumerate() {
                     if variables.is_empty() {
-                        nullable = Some(index as i64);
+                        nullable = Some(index as TagIdIntType);
                         break;
                     }
                 }
@@ -1483,7 +1502,7 @@ fn layout_from_flat_type<'a>(
 
             env.insert_seen(rec_var);
             for (index, (_name, variables)) in tags_vec.into_iter().enumerate() {
-                if matches!(nullable, Some(i) if i == index as i64) {
+                if matches!(nullable, Some(i) if i == index as TagIdIntType) {
                     // don't add the nullable case
                     continue;
                 }
@@ -1633,7 +1652,7 @@ pub enum WrappedVariant<'a> {
         sorted_tag_layouts: Vec<'a, (TagName, &'a [Layout<'a>])>,
     },
     NullableWrapped {
-        nullable_id: i64,
+        nullable_id: TagIdIntType,
         nullable_name: TagName,
         sorted_tag_layouts: Vec<'a, (TagName, &'a [Layout<'a>])>,
     },
@@ -1650,7 +1669,7 @@ pub enum WrappedVariant<'a> {
 }
 
 impl<'a> WrappedVariant<'a> {
-    pub fn tag_name_to_id(&self, tag_name: &TagName) -> (u8, &'a [Layout<'a>]) {
+    pub fn tag_name_to_id(&self, tag_name: &TagName) -> (TagIdIntType, &'a [Layout<'a>]) {
         use WrappedVariant::*;
 
         match self {
@@ -1662,7 +1681,7 @@ impl<'a> WrappedVariant<'a> {
                     .expect("tag name is not in its own type");
 
                 debug_assert!(tag_id < 256);
-                (tag_id as u8, *argument_layouts)
+                (tag_id as TagIdIntType, *argument_layouts)
             }
             NullableWrapped {
                 nullable_id,
@@ -1672,7 +1691,7 @@ impl<'a> WrappedVariant<'a> {
                 // assumption: the nullable_name is not included in sorted_tag_layouts
 
                 if tag_name == nullable_name {
-                    (*nullable_id as u8, &[] as &[_])
+                    (*nullable_id as TagIdIntType, &[] as &[_])
                 } else {
                     let (mut tag_id, (_, argument_layouts)) = sorted_tag_layouts
                         .iter()
@@ -1685,7 +1704,7 @@ impl<'a> WrappedVariant<'a> {
                     }
 
                     debug_assert!(tag_id < 256);
-                    (tag_id as u8, *argument_layouts)
+                    (tag_id as TagIdIntType, *argument_layouts)
                 }
             }
             NullableUnwrapped {
@@ -1695,11 +1714,11 @@ impl<'a> WrappedVariant<'a> {
                 other_fields,
             } => {
                 if tag_name == nullable_name {
-                    (*nullable_id as u8, &[] as &[_])
+                    (*nullable_id as TagIdIntType, &[] as &[_])
                 } else {
                     debug_assert_eq!(other_name, tag_name);
 
-                    (!*nullable_id as u8, *other_fields)
+                    (!*nullable_id as TagIdIntType, *other_fields)
                 }
             }
             NonNullableUnwrapped { fields, .. } => (0, fields),
@@ -1855,14 +1874,14 @@ fn union_sorted_tags_help_new<'a>(
             let mut answer = Vec::with_capacity_in(tags_vec.len(), arena);
             let mut has_any_arguments = false;
 
-            let mut nullable: Option<(i64, TagName)> = None;
+            let mut nullable: Option<(TagIdIntType, TagName)> = None;
 
             // only recursive tag unions can be nullable
             let is_recursive = opt_rec_var.is_some();
             if is_recursive && GENERATE_NULLABLE {
                 for (index, (name, variables)) in tags_vec.iter().enumerate() {
                     if variables.is_empty() {
-                        nullable = Some((index as i64, (*name).clone()));
+                        nullable = Some((index as TagIdIntType, (*name).clone()));
                         break;
                     }
                 }
@@ -2073,7 +2092,7 @@ pub fn union_sorted_tags_help<'a>(
             if is_recursive && GENERATE_NULLABLE {
                 for (index, (name, variables)) in tags_vec.iter().enumerate() {
                     if variables.is_empty() {
-                        nullable = Some((index as i64, name.clone()));
+                        nullable = Some((index as TagIdIntType, name.clone()));
                         break;
                     }
                 }
@@ -2672,5 +2691,29 @@ impl<'a> std::convert::TryFrom<&Layout<'a>> for ListLayout<'a> {
             Layout::Builtin(Builtin::List(element)) => Ok(ListLayout::List(element)),
             _ => Err(()),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn width_and_alignment_union_empty_struct() {
+        let lambda_set = LambdaSet {
+            set: &[(Symbol::LIST_MAP, &[])],
+            representation: &Layout::Struct(&[]),
+        };
+
+        let a = &[Layout::Struct(&[])] as &[_];
+        let b = &[Layout::LambdaSet(lambda_set)] as &[_];
+        let tt = [a, b];
+
+        let layout = Layout::Union(UnionLayout::NonRecursive(&tt));
+
+        // at the moment, the tag id uses an I64, so
+        let ptr_width = 8;
+        assert_eq!(layout.stack_size(ptr_width), 8);
+        assert_eq!(layout.alignment_bytes(ptr_width), 8);
     }
 }

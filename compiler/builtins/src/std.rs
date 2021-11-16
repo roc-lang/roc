@@ -639,6 +639,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(str_type())
     );
 
+    // trimRight : Str -> Str
+    add_top_level_function_type!(
+        Symbol::STR_TRIM_RIGHT,
+        vec![str_type()],
+        Box::new(str_type())
+    );
+
     // trim : Str -> Str
     add_top_level_function_type!(Symbol::STR_TRIM, vec![str_type()], Box::new(str_type()));
 
@@ -1372,6 +1379,20 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Symbol::RESULT_WITH_DEFAULT,
         vec![result_type(flex(TVAR1), flex(TVAR3)), flex(TVAR1)],
         Box::new(flex(TVAR1)),
+    );
+
+    // isOk : Result * * -> bool
+    add_top_level_function_type!(
+        Symbol::RESULT_IS_OK,
+        vec![result_type(flex(TVAR1), flex(TVAR3))],
+        Box::new(bool_type()),
+    );
+
+    // isErr : Result * * -> bool
+    add_top_level_function_type!(
+        Symbol::RESULT_IS_ERR,
+        vec![result_type(flex(TVAR1), flex(TVAR3))],
+        Box::new(bool_type()),
     );
 
     types

@@ -2608,8 +2608,8 @@ fn parse_header<'a>(
                 opt_shorthand,
                 header_src,
                 packages: &[],
-                exposes: header.exposes.into_bump_slice(),
-                imports: header.imports.into_bump_slice(),
+                exposes: header.exposes.items,
+                imports: header.imports.items,
                 to_platform: None,
             };
 
@@ -2642,8 +2642,8 @@ fn parse_header<'a>(
                 opt_shorthand,
                 header_src,
                 packages,
-                exposes: header.provides.into_bump_slice(),
-                imports: header.imports.into_bump_slice(),
+                exposes: header.provides.items,
+                imports: header.imports.items,
                 to_platform: Some(header.to.value.clone()),
             };
 
@@ -3236,7 +3236,7 @@ fn send_header_two<'a>(
 
     let extra = HeaderFor::PkgConfig {
         config_shorthand: shorthand,
-        platform_main_type: requires[0].value.clone(),
+        platform_main_type: requires[0].value,
         main_for_host,
     };
 
@@ -3409,8 +3409,7 @@ fn fabricate_pkg_config_module<'a>(
     header_src: &'a str,
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
-    let provides: &'a [Located<ExposesEntry<'a, &'a str>>] =
-        header.provides.clone().into_bump_slice();
+    let provides: &'a [Located<ExposesEntry<'a, &'a str>>] = header.provides.items;
 
     let info = PlatformHeaderInfo {
         filename,
@@ -3420,8 +3419,8 @@ fn fabricate_pkg_config_module<'a>(
         app_module_id,
         packages: &[],
         provides,
-        requires: arena.alloc([header.requires.signature.clone()]),
-        imports: header.imports.clone().into_bump_slice(),
+        requires: arena.alloc([header.requires.signature]),
+        imports: header.imports.items,
     };
 
     send_header_two(
@@ -3467,7 +3466,7 @@ fn fabricate_effects_module<'a>(
     {
         let mut module_ids = (*module_ids).lock();
 
-        for exposed in header.exposes {
+        for exposed in header.exposes.iter() {
             if let ExposesEntry::Exposed(module_name) = exposed.value {
                 module_ids.get_or_insert(&PQModuleName::Qualified(
                     shorthand,
@@ -3886,7 +3885,7 @@ fn exposed_from_import<'a>(entry: &ImportsEntry<'a>) -> (QualifiedModuleName<'a>
         Module(module_name, exposes) => {
             let mut exposed = Vec::with_capacity(exposes.len());
 
-            for loc_entry in exposes {
+            for loc_entry in exposes.iter() {
                 exposed.push(ident_from_exposed(&loc_entry.value));
             }
 
@@ -3901,7 +3900,7 @@ fn exposed_from_import<'a>(entry: &ImportsEntry<'a>) -> (QualifiedModuleName<'a>
         Package(package_name, module_name, exposes) => {
             let mut exposed = Vec::with_capacity(exposes.len());
 
-            for loc_entry in exposes {
+            for loc_entry in exposes.iter() {
                 exposed.push(ident_from_exposed(&loc_entry.value));
             }
 

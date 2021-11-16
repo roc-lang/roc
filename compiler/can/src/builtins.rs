@@ -69,6 +69,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_REPEAT => str_repeat,
         STR_TRIM => str_trim,
         STR_TRIM_LEFT => str_trim_left,
+        STR_TRIM_RIGHT => str_trim_right,
         LIST_LEN => list_len,
         LIST_GET => list_get,
         LIST_SET => list_set,
@@ -192,6 +193,8 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         RESULT_MAP_ERR => result_map_err,
         RESULT_AFTER => result_after,
         RESULT_WITH_DEFAULT => result_with_default,
+        RESULT_IS_OK => result_is_ok,
+        RESULT_IS_ERR => result_is_err,
     }
 }
 
@@ -1293,6 +1296,11 @@ fn str_trim_left(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::StrTrimLeft, var_store)
 }
 
+/// Str.trimRight : Str -> Str
+fn str_trim_right(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::StrTrimRight, var_store)
+}
+
 /// Str.repeat : Str, Nat -> Str
 fn str_repeat(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let str_var = var_store.fresh();
@@ -2019,11 +2027,13 @@ fn list_swap(symbol: Symbol, var_store: &mut VarStore) -> Def {
 fn list_take_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let len_var = var_store.fresh();
+    let zero = int(len_var, Variable::NATURAL, 0);
 
     let body = RunLowLevel {
-        op: LowLevel::ListTakeFirst,
+        op: LowLevel::ListSublist,
         args: vec![
             (list_var, Var(Symbol::ARG_1)),
+            (len_var, zero),
             (len_var, Var(Symbol::ARG_2)),
         ],
         ret_var: list_var,
@@ -2043,10 +2053,40 @@ fn list_take_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let len_var = var_store.fresh();
 
+    let zero = int(len_var, Variable::NATURAL, 0);
+    let bool_var = var_store.fresh();
+
+    let get_list_len = RunLowLevel {
+        op: LowLevel::ListLen,
+        args: vec![(list_var, Var(Symbol::ARG_1))],
+        ret_var: len_var,
+    };
+
+    let get_sub = RunLowLevel {
+        op: LowLevel::NumSubWrap,
+        args: vec![(len_var, get_list_len), (len_var, Var(Symbol::ARG_2))],
+        ret_var: len_var,
+    };
+
+    let get_start = If {
+        cond_var: bool_var,
+        branch_var: len_var,
+        branches: vec![(
+            no_region(RunLowLevel {
+                op: LowLevel::NumGt,
+                args: vec![(len_var, get_sub.clone()), (len_var, zero.clone())],
+                ret_var: bool_var,
+            }),
+            no_region(get_sub),
+        )],
+        final_else: Box::new(no_region(zero)),
+    };
+
     let body = RunLowLevel {
-        op: LowLevel::ListTakeLast,
+        op: LowLevel::ListSublist,
         args: vec![
             (list_var, Var(Symbol::ARG_1)),
+            (len_var, get_start),
             (len_var, Var(Symbol::ARG_2)),
         ],
         ret_var: list_var,
@@ -2088,15 +2128,13 @@ fn list_sublist(symbol: Symbol, var_store: &mut VarStore) -> Def {
         field: "len".into(),
     };
 
-    let body_drop = RunLowLevel {
-        op: LowLevel::ListDrop,
-        args: vec![(list_var, Var(sym_list)), (start_var, get_start)],
-        ret_var: list_var,
-    };
-
-    let body_take = RunLowLevel {
-        op: LowLevel::ListTakeFirst,
-        args: vec![(list_var, body_drop), (len_var, get_len)],
+    let body = RunLowLevel {
+        op: LowLevel::ListSublist,
+        args: vec![
+            (list_var, Var(sym_list)),
+            (start_var, get_start),
+            (len_var, get_len),
+        ],
         ret_var: list_var,
     };
 
@@ -2104,7 +2142,7 @@ fn list_sublist(symbol: Symbol, var_store: &mut VarStore) -> Def {
         symbol,
         vec![(list_var, sym_list), (rec_var, sym_rec)],
         var_store,
-        body_take,
+        body,
         list_var,
     )
 }
@@ -2112,20 +2150,33 @@ fn list_sublist(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// List.drop : List elem, Nat -> List elem
 fn list_drop(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
-    let index_var = var_store.fresh();
+    let len_var = var_store.fresh();
+
+    let get_list_len = RunLowLevel {
+        op: LowLevel::ListLen,
+        args: vec![(list_var, Var(Symbol::ARG_1))],
+        ret_var: len_var,
+    };
+
+    let get_len = RunLowLevel {
+        op: LowLevel::NumSubWrap,
+        args: vec![(len_var, get_list_len), (len_var, Var(Symbol::ARG_2))],
+        ret_var: len_var,
+    };
 
     let body = RunLowLevel {
-        op: LowLevel::ListDrop,
+        op: LowLevel::ListSublist,
         args: vec![
             (list_var, Var(Symbol::ARG_1)),
-            (index_var, Var(Symbol::ARG_2)),
+            (len_var, Var(Symbol::ARG_2)),
+            (len_var, get_len),
         ],
         ret_var: list_var,
     };
 
     defn(
         symbol,
-        vec![(list_var, Symbol::ARG_1), (index_var, Symbol::ARG_2)],
+        vec![(list_var, Symbol::ARG_1), (len_var, Symbol::ARG_2)],
         var_store,
         body,
         list_var,
@@ -3985,6 +4036,160 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
     defn(
         symbol,
         vec![(result_var, Symbol::ARG_1), (ret_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
+fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let ret_var = var_store.fresh();
+    let result_var = var_store.fresh();
+
+    let mut branches = vec![];
+
+    {
+        // ok branch
+        let tag_name = TagName::Global("Ok".into());
+
+        let pattern = Pattern::AppliedTag {
+            whole_var: result_var,
+            ext_var: var_store.fresh(),
+            tag_name,
+            arguments: vec![(var_store.fresh(), no_region(Pattern::Underscore))],
+        };
+
+        let false_expr = Tag {
+            variant_var: var_store.fresh(),
+            ext_var: var_store.fresh(),
+            name: TagName::Global("False".into()),
+            arguments: vec![],
+        };
+
+        let branch = WhenBranch {
+            patterns: vec![no_region(pattern)],
+            value: no_region(false_expr),
+            guard: None,
+        };
+
+        branches.push(branch);
+    }
+
+    {
+        // err branch
+        let tag_name = TagName::Global("Err".into());
+
+        let pattern = Pattern::AppliedTag {
+            whole_var: result_var,
+            ext_var: var_store.fresh(),
+            tag_name,
+            arguments: vec![(var_store.fresh(), no_region(Pattern::Underscore))],
+        };
+
+        let true_expr = Tag {
+            variant_var: var_store.fresh(),
+            ext_var: var_store.fresh(),
+            name: TagName::Global("True".into()),
+            arguments: vec![],
+        };
+
+        let branch = WhenBranch {
+            patterns: vec![no_region(pattern)],
+            value: no_region(true_expr),
+            guard: None,
+        };
+
+        branches.push(branch);
+    }
+
+    let body = When {
+        cond_var: result_var,
+        expr_var: ret_var,
+        region: Region::zero(),
+        loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
+        branches,
+    };
+
+    defn(
+        symbol,
+        vec![(result_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
+fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let ret_var = var_store.fresh();
+    let result_var = var_store.fresh();
+
+    let mut branches = vec![];
+
+    {
+        // ok branch
+        let tag_name = TagName::Global("Ok".into());
+
+        let pattern = Pattern::AppliedTag {
+            whole_var: result_var,
+            ext_var: var_store.fresh(),
+            tag_name,
+            arguments: vec![(var_store.fresh(), no_region(Pattern::Underscore))],
+        };
+
+        let true_expr = Tag {
+            variant_var: var_store.fresh(),
+            ext_var: var_store.fresh(),
+            name: TagName::Global("True".into()),
+            arguments: vec![],
+        };
+
+        let branch = WhenBranch {
+            patterns: vec![no_region(pattern)],
+            value: no_region(true_expr),
+            guard: None,
+        };
+
+        branches.push(branch);
+    }
+
+    {
+        // err branch
+        let tag_name = TagName::Global("Err".into());
+
+        let pattern = Pattern::AppliedTag {
+            whole_var: result_var,
+            ext_var: var_store.fresh(),
+            tag_name,
+            arguments: vec![(var_store.fresh(), no_region(Pattern::Underscore))],
+        };
+
+        let false_expr = Tag {
+            variant_var: var_store.fresh(),
+            ext_var: var_store.fresh(),
+            name: TagName::Global("False".into()),
+            arguments: vec![],
+        };
+
+        let branch = WhenBranch {
+            patterns: vec![no_region(pattern)],
+            value: no_region(false_expr),
+            guard: None,
+        };
+
+        branches.push(branch);
+    }
+
+    let body = When {
+        cond_var: result_var,
+        expr_var: ret_var,
+        region: Region::zero(),
+        loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
+        branches,
+    };
+
+    defn(
+        symbol,
+        vec![(result_var, Symbol::ARG_1)],
         var_store,
         body,
         ret_var,

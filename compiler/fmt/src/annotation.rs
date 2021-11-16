@@ -1,6 +1,6 @@
 use crate::spaces::{fmt_comments_only, fmt_spaces, newline, NewlineAt, INDENT};
 use bumpalo::collections::String;
-use roc_parse::ast::{AssignedField, Collection, Expr, Tag, TypeAnnotation};
+use roc_parse::ast::{AssignedField, Expr, Tag, TypeAnnotation};
 use roc_region::all::Located;
 
 /// Does an AST node need parens around it?
@@ -81,9 +81,9 @@ where
 }
 
 macro_rules! format_sequence {
-    ($buf: expr, $indent:expr, $start:expr, $end:expr, $items:expr, $final_comments:expr, $newline:expr, $t:ident) => {
-        let is_multiline =
-            $items.iter().any(|item| item.value.is_multiline()) || !$final_comments.is_empty();
+    ($buf: expr, $indent:expr, $start:expr, $end:expr, $items:expr, $newline:expr, $t:ident) => {
+        let is_multiline = $items.iter().any(|item| item.value.is_multiline())
+            || !$items.final_comments().is_empty();
 
         if is_multiline {
             let braces_indent = $indent + INDENT;
@@ -138,7 +138,12 @@ macro_rules! format_sequence {
                     }
                 }
             }
-            fmt_comments_only($buf, $final_comments.iter(), NewlineAt::Top, item_indent);
+            fmt_comments_only(
+                $buf,
+                $items.final_comments().iter(),
+                NewlineAt::Top,
+                item_indent,
+            );
             newline($buf, braces_indent);
             $buf.push($end);
         } else {
@@ -192,11 +197,7 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
                 fields.items.iter().any(|field| field.value.is_multiline())
             }
 
-            TagUnion {
-                tags,
-                ext,
-                final_comments: _,
-            } => {
+            TagUnion { tags, ext } => {
                 match ext {
                     Some(ann) if ann.value.is_multiline() => return true,
                     _ => {}
@@ -279,36 +280,16 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
             BoundVariable(v) => buf.push_str(v),
             Wildcard => buf.push('*'),
 
-            TagUnion {
-                tags,
-                ext,
-                final_comments,
-            } => {
-                format_sequence!(buf, indent, '[', ']', tags, final_comments, newlines, Tag);
+            TagUnion { tags, ext } => {
+                format_sequence!(buf, indent, '[', ']', tags, newlines, Tag);
 
                 if let Some(loc_ext_ann) = *ext {
                     loc_ext_ann.value.format(buf, indent);
                 }
             }
 
-            Record {
-                fields:
-                    Collection {
-                        items,
-                        final_comments,
-                    },
-                ext,
-            } => {
-                format_sequence!(
-                    buf,
-                    indent,
-                    '{',
-                    '}',
-                    items,
-                    final_comments,
-                    newlines,
-                    AssignedField
-                );
+            Record { fields, ext } => {
+                format_sequence!(buf, indent, '{', '}', fields, newlines, AssignedField);
 
                 if let Some(loc_ext_ann) = *ext {
                     loc_ext_ann.value.format(buf, indent);
