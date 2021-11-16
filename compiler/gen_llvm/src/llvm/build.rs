@@ -9,15 +9,16 @@ use crate::llvm::build_dict::{
 use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
     self, allocate_list, empty_list, empty_polymorphic_list, list_any, list_append, list_concat,
-    list_contains, list_drop, list_drop_at, list_find_trivial_not_found, list_find_unsafe,
-    list_get_unsafe, list_join, list_keep_errs, list_keep_if, list_keep_oks, list_len, list_map,
-    list_map2, list_map3, list_map4, list_map_with_index, list_prepend, list_range, list_repeat,
-    list_reverse, list_set, list_single, list_sort_with, list_sublist, list_swap,
+    list_contains, list_drop_at, list_find_trivial_not_found, list_find_unsafe, list_get_unsafe,
+    list_join, list_keep_errs, list_keep_if, list_keep_oks, list_len, list_map, list_map2,
+    list_map3, list_map4, list_map_with_index, list_prepend, list_range, list_repeat, list_reverse,
+    list_set, list_single, list_sort_with, list_sublist, list_swap,
 };
 use crate::llvm::build_str::{
     empty_str, str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int,
     str_from_utf8, str_from_utf8_range, str_join_with, str_number_of_bytes, str_repeat, str_split,
     str_starts_with, str_starts_with_code_point, str_to_utf8, str_trim, str_trim_left,
+    str_trim_right,
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
@@ -55,10 +56,10 @@ use roc_collections::all::{ImMap, MutMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{
-    BranchInfo, CallType, EntryPoint, JoinPointId, ListLiteralElement, ModifyRc, OptLevel,
-    ProcLayout,
+    BranchInfo, CallType, EntryPoint, HigherOrderLowLevel, JoinPointId, ListLiteralElement,
+    ModifyRc, OptLevel, ProcLayout,
 };
-use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, UnionLayout};
+use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, TagIdIntType, UnionLayout};
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
@@ -672,7 +673,7 @@ fn promote_to_main_function<'a, 'ctx, 'env>(
     top_level: ProcLayout<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
     let it = top_level.arguments.iter().copied();
-    let bytes = roc_mono::alias_analysis::func_name_bytes_help(symbol, it, top_level.result);
+    let bytes = roc_mono::alias_analysis::func_name_bytes_help(symbol, it, &top_level.result);
     let func_name = FuncName(&bytes);
     let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
 
@@ -936,33 +937,12 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
             )
         }
 
-        CallType::HigherOrderLowLevel {
-            op,
-            function_owns_closure_data,
-            specialization_id,
-            function_name,
-            function_env,
-            arg_layouts,
-            ret_layout,
-            ..
-        } => {
-            let bytes = specialization_id.to_bytes();
+        CallType::HigherOrder(higher_order) => {
+            let bytes = higher_order.specialization_id.to_bytes();
             let callee_var = CalleeSpecVar(&bytes);
             let func_spec = func_spec_solutions.callee_spec(callee_var).unwrap();
 
-            run_higher_order_low_level(
-                env,
-                layout_ids,
-                scope,
-                layout,
-                *op,
-                func_spec,
-                arg_layouts,
-                ret_layout,
-                *function_owns_closure_data,
-                *function_name,
-                function_env,
-            )
+            run_higher_order_low_level(env, layout_ids, scope, layout, func_spec, higher_order)
         }
 
         CallType::Foreign {
@@ -1302,9 +1282,9 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     other_tags,
                 } => {
                     debug_assert!(argument.is_pointer_value());
-                    debug_assert_ne!(*tag_id as i64, *nullable_id);
+                    debug_assert_ne!(*tag_id, *nullable_id);
 
-                    let tag_index = if (*tag_id as i64) < *nullable_id {
+                    let tag_index = if *tag_id < *nullable_id {
                         *tag_id
                     } else {
                         tag_id - 1
@@ -1482,7 +1462,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
     union_layout: &UnionLayout<'a>,
-    tag_id: u8,
+    tag_id: TagIdIntType,
     arguments: &[Symbol],
     reuse_allocation: Option<PointerValue<'ctx>>,
     parent: FunctionValue<'ctx>,
@@ -1584,7 +1564,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
                 env,
                 scope,
                 union_layout,
-                tag_id,
+                tag_id as _,
                 arguments,
                 tag_field_layouts,
                 tags,
@@ -1598,7 +1578,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
         } => {
             let tag_field_layouts = {
                 use std::cmp::Ordering::*;
-                match tag_id.cmp(&(*nullable_id as u8)) {
+                match tag_id.cmp(&(*nullable_id as _)) {
                     Equal => {
                         let layout = Layout::Union(*union_layout);
 
@@ -1616,7 +1596,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
                 env,
                 scope,
                 union_layout,
-                tag_id,
+                tag_id as _,
                 arguments,
                 tag_field_layouts,
                 tags,
@@ -1683,7 +1663,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
             let tag_struct_type =
                 block_of_memory_slices(env.context, &[other_fields], env.ptr_bytes);
 
-            if tag_id == *nullable_id as u8 {
+            if tag_id == *nullable_id as _ {
                 let output_type = tag_struct_type.ptr_type(AddressSpace::Generic);
 
                 return output_type.const_null().into();
@@ -4386,7 +4366,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
                         let bytes = roc_mono::alias_analysis::func_name_bytes_help(
                             symbol,
                             it,
-                            top_level.result,
+                            &top_level.result,
                         );
                         let func_name = FuncName(&bytes);
                         let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
@@ -4693,15 +4673,23 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
     return_layout: &Layout<'a>,
-    op: roc_mono::low_level::HigherOrder,
     func_spec: FuncSpec,
-    argument_layouts: &[Layout<'a>],
-    result_layout: &Layout<'a>,
-    function_owns_closure_data: bool,
-    function_name: Symbol,
-    function_env: &Symbol,
+    higher_order: &HigherOrderLowLevel<'a>,
 ) -> BasicValueEnum<'ctx> {
     use roc_mono::low_level::HigherOrder::*;
+
+    let HigherOrderLowLevel {
+        op,
+        arg_layouts: argument_layouts,
+        ret_layout: result_layout,
+        function_owns_closure_data,
+        function_name,
+        function_env,
+        ..
+    } = higher_order;
+
+    let function_owns_closure_data = *function_owns_closure_data;
+    let function_name = *function_name;
 
     // macros because functions cause lifetime issues related to the `env` or `layout_ids`
     macro_rules! function_details {
@@ -4762,7 +4750,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
     match op {
         ListMap { xs } => {
             // List.map : List before, (before -> after) -> List after
-            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
+            let (list, list_layout) = load_symbol_and_layout(scope, xs);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -4791,8 +4779,8 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             }
         }
         ListMap2 { xs, ys } => {
-            let (list1, list1_layout) = load_symbol_and_layout(scope, &xs);
-            let (list2, list2_layout) = load_symbol_and_layout(scope, &ys);
+            let (list1, list1_layout) = load_symbol_and_layout(scope, xs);
+            let (list2, list2_layout) = load_symbol_and_layout(scope, ys);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -4832,9 +4820,9 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             }
         }
         ListMap3 { xs, ys, zs } => {
-            let (list1, list1_layout) = load_symbol_and_layout(scope, &xs);
-            let (list2, list2_layout) = load_symbol_and_layout(scope, &ys);
-            let (list3, list3_layout) = load_symbol_and_layout(scope, &zs);
+            let (list1, list1_layout) = load_symbol_and_layout(scope, xs);
+            let (list2, list2_layout) = load_symbol_and_layout(scope, ys);
+            let (list3, list3_layout) = load_symbol_and_layout(scope, zs);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -4879,10 +4867,10 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             }
         }
         ListMap4 { xs, ys, zs, ws } => {
-            let (list1, list1_layout) = load_symbol_and_layout(scope, &xs);
-            let (list2, list2_layout) = load_symbol_and_layout(scope, &ys);
-            let (list3, list3_layout) = load_symbol_and_layout(scope, &zs);
-            let (list4, list4_layout) = load_symbol_and_layout(scope, &ws);
+            let (list1, list1_layout) = load_symbol_and_layout(scope, xs);
+            let (list2, list2_layout) = load_symbol_and_layout(scope, ys);
+            let (list3, list3_layout) = load_symbol_and_layout(scope, zs);
+            let (list4, list4_layout) = load_symbol_and_layout(scope, ws);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -4942,7 +4930,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
         }
         ListMapWithIndex { xs } => {
             // List.mapWithIndex : List before, (Nat, before -> after) -> List after
-            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
+            let (list, list_layout) = load_symbol_and_layout(scope, xs);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -4972,7 +4960,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
         }
         ListKeepIf { xs } => {
             // List.keepIf : List elem, (elem -> Bool) -> List elem
-            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
+            let (list, list_layout) = load_symbol_and_layout(scope, xs);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -4999,7 +4987,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
         }
         ListKeepOks { xs } => {
             // List.keepOks : List before, (before -> Result after *) -> List after
-            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
+            let (list, list_layout) = load_symbol_and_layout(scope, xs);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -5040,7 +5028,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
         }
         ListKeepErrs { xs } => {
             // List.keepErrs : List before, (before -> Result * after) -> List after
-            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
+            let (list, list_layout) = load_symbol_and_layout(scope, xs);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -5090,7 +5078,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
         }
         ListSortWith { xs } => {
             // List.sortWith : List a, (a, a -> Ordering) -> List a
-            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
+            let (list, list_layout) = load_symbol_and_layout(scope, xs);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -5129,7 +5117,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             }
         }
         ListAny { xs } => {
-            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
+            let (list, list_layout) = load_symbol_and_layout(scope, xs);
             let (function, closure, closure_layout) = function_details!();
 
             match list_layout {
@@ -5154,7 +5142,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             }
         }
         ListFindUnsafe { xs } => {
-            let (list, list_layout) = load_symbol_and_layout(scope, &xs);
+            let (list, list_layout) = load_symbol_and_layout(scope, xs);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -5186,8 +5174,8 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             }
         }
         DictWalk { xs, state } => {
-            let (dict, dict_layout) = load_symbol_and_layout(scope, &xs);
-            let (default, default_layout) = load_symbol_and_layout(scope, &state);
+            let (dict, dict_layout) = load_symbol_and_layout(scope, xs);
+            let (default, default_layout) = load_symbol_and_layout(scope, state);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -5359,6 +5347,12 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             str_trim_left(env, scope, args[0])
         }
+        StrTrimRight => {
+            // Str.trim : Str -> Str
+            debug_assert_eq!(args.len(), 1);
+
+            str_trim_right(env, scope, args[0])
+        }
         ListLen => {
             // List.len : List * -> Int
             debug_assert_eq!(args.len(), 1);
@@ -5481,27 +5475,6 @@ fn run_low_level<'a, 'ctx, 'env>(
                     element_layout,
                 ),
                 _ => unreachable!("Invalid layout {:?} in List.sublist", list_layout),
-            }
-        }
-        ListDrop => {
-            // List.drop : List elem, Nat -> List elem
-            debug_assert_eq!(args.len(), 2);
-
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-            let original_wrapper = list.into_struct_value();
-
-            let count = load_symbol(scope, &args[1]);
-
-            match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-                Layout::Builtin(Builtin::List(element_layout)) => list_drop(
-                    env,
-                    layout_ids,
-                    original_wrapper,
-                    count.into_int_value(),
-                    element_layout,
-                ),
-                _ => unreachable!("Invalid layout {:?} in List.drop", list_layout),
             }
         }
         ListDropAt => {

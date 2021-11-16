@@ -46,7 +46,6 @@ comptime {
     exportListFn(list.listSortWith, "sort_with");
     exportListFn(list.listConcat, "concat");
     exportListFn(list.listSublist, "sublist");
-    exportListFn(list.listDrop, "drop");
     exportListFn(list.listDropAt, "drop_at");
     exportListFn(list.listSet, "set");
     exportListFn(list.listSetInPlace, "set_in_place");
@@ -127,6 +126,7 @@ comptime {
     exportStrFn(str.repeat, "repeat");
     exportStrFn(str.strTrim, "trim");
     exportStrFn(str.strTrimLeft, "trim_left");
+    exportStrFn(str.strTrimRight, "trim_right");
 
     inline for (INTEGERS) |T| {
         str.exportFromInt(T, ROC_BUILTINS ++ "." ++ STR ++ ".from_int.");

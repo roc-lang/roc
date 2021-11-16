@@ -3093,6 +3093,7 @@ fn to_provides_report<'a>(
     use roc_parse::parser::EProvides;
 
     match *parse_problem {
+        EProvides::ListEnd(row, col) | // TODO: give this its own error message
         EProvides::Identifier(row, col) => {
             let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
             let region = Region::from_row_col(row, col);
@@ -3158,6 +3159,7 @@ fn to_exposes_report<'a>(
     use roc_parse::parser::EExposes;
 
     match *parse_problem {
+        EExposes::ListEnd(row, col) | // TODO: give this its own error message
         EExposes::Identifier(row, col) => {
             let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
             let region = Region::from_row_col(row, col);

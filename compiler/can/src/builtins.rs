@@ -69,6 +69,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_REPEAT => str_repeat,
         STR_TRIM => str_trim,
         STR_TRIM_LEFT => str_trim_left,
+        STR_TRIM_RIGHT => str_trim_right,
         LIST_LEN => list_len,
         LIST_GET => list_get,
         LIST_SET => list_set,
@@ -1295,6 +1296,11 @@ fn str_trim_left(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::StrTrimLeft, var_store)
 }
 
+/// Str.trimRight : Str -> Str
+fn str_trim_right(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::StrTrimRight, var_store)
+}
+
 /// Str.repeat : Str, Nat -> Str
 fn str_repeat(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let str_var = var_store.fresh();
@@ -2144,20 +2150,33 @@ fn list_sublist(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// List.drop : List elem, Nat -> List elem
 fn list_drop(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
-    let index_var = var_store.fresh();
+    let len_var = var_store.fresh();
+
+    let get_list_len = RunLowLevel {
+        op: LowLevel::ListLen,
+        args: vec![(list_var, Var(Symbol::ARG_1))],
+        ret_var: len_var,
+    };
+
+    let get_len = RunLowLevel {
+        op: LowLevel::NumSubWrap,
+        args: vec![(len_var, get_list_len), (len_var, Var(Symbol::ARG_2))],
+        ret_var: len_var,
+    };
 
     let body = RunLowLevel {
-        op: LowLevel::ListDrop,
+        op: LowLevel::ListSublist,
         args: vec![
             (list_var, Var(Symbol::ARG_1)),
-            (index_var, Var(Symbol::ARG_2)),
+            (len_var, Var(Symbol::ARG_2)),
+            (len_var, get_len),
         ],
         ret_var: list_var,
     };
 
     defn(
         symbol,
-        vec![(list_var, Symbol::ARG_1), (index_var, Symbol::ARG_2)],
+        vec![(list_var, Symbol::ARG_1), (len_var, Symbol::ARG_2)],
         var_store,
         body,
         list_var,
