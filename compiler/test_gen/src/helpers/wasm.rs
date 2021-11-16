@@ -122,7 +122,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     );
 
     // We can either generate the test platform or write an external source file, whatever works
-    generate_test_platform(&mut wasm_module, arena);
+    // generate_test_platform(&mut wasm_module, arena);
 
     let mut module_bytes = std::vec::Vec::with_capacity(4096);
     wasm_module.serialize_mut(&mut module_bytes);
