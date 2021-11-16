@@ -1073,6 +1073,7 @@ define_builtins! {
         48 LIST_FIND_RESULT: "#find_result" // symbol used in the definition of List.find
         49 LIST_SUBLIST: "sublist"
         50 LIST_SPLIT: "split"
+        51 LIST_SPLIT_TEMP: "#splitTemp"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

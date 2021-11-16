@@ -2155,14 +2155,23 @@ fn list_split(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     let sym_list = Symbol::ARG_1;
     let sym_index = Symbol::ARG_2;
+    let sym_temp = Symbol::LIST_SPLIT_TEMP;
 
     let ret_var = var_store.fresh();
     let zero = int(index_var, Variable::NATURAL, 0);
 
+    let def_temp = Def {
+        annotation: None,
+        expr_var: list_var,
+        loc_expr: no_region(Var(sym_list)),
+        loc_pattern: no_region(Pattern::Identifier(sym_temp)),
+        pattern_vars: Default::default(),
+    };
+
     let get_before = RunLowLevel {
         op: LowLevel::ListSublist,
         args: vec![
-            (list_var, Var(sym_list)),
+            (list_var, Var(sym_temp)),
             (index_var, zero),
             (index_var, Var(sym_index)),
         ],
@@ -2202,10 +2211,12 @@ fn list_split(symbol: Symbol, var_store: &mut VarStore) -> Def {
         loc_expr: Box::new(no_region(get_others)),
     };
 
-    let body = record(
+    let get_rec = record(
         vec![("before".into(), before), ("others".into(), others)],
         var_store,
     );
+
+    let body = LetNonRec(Box::new(def_temp), Box::new(no_region(get_rec)), ret_var);
 
     defn(
         symbol,
