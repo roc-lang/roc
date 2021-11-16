@@ -828,7 +828,7 @@ pub fn constrain_expr<'a>(
         Expr2::LetFunction {
             def_id,
             body_id,
-            body_var,
+            body_var: _,
         } => {
             let body = env.pool.get(*body_id);
             let body_con = constrain_expr(arena, env, body, expected.shallow_clone(), region);
@@ -843,7 +843,7 @@ pub fn constrain_expr<'a>(
                     name,
                     arguments,
                     body_id: expr_id,
-                    return_var,
+                    return_var: _,
                 } => {
                     // A function definition is equivalent to a named value definition, where the
                     // value is a closure. So, we create a closure definition in correspondence
@@ -852,8 +852,6 @@ pub fn constrain_expr<'a>(
                     let fn_var = env.var_store.fresh();
                     let fn_ty = Type2::Variable(fn_var);
 
-                    let clos_var = env.var_store.fresh();
-                    let clos_ty = Type2::Variable(clos_var);
                     let extra = ClosureExtra {
                         return_type: env.var_store.fresh(),
                         captured_symbols: PoolVec::empty(env.pool),
@@ -864,7 +862,7 @@ pub fn constrain_expr<'a>(
                         args: arguments.shallow_clone(),
                         uniq_symbol: *name,
                         body_id: *expr_id,
-                        function_type: clos_var,
+                        function_type: env.var_store.fresh(),
                         extra: env.pool.add(extra),
                         recursive: roc_can::expr::Recursive::Recursive,
                     };
