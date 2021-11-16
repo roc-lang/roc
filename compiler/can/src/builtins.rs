@@ -2153,74 +2153,105 @@ fn list_split(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let index_var = var_store.fresh();
 
-    let sym_list = Symbol::ARG_1;
-    let sym_index = Symbol::ARG_2;
-    let sym_temp = Symbol::LIST_SPLIT_TEMP;
+    let list_sym = Symbol::ARG_1;
+    let index_sym = Symbol::ARG_2;
+
+    let clos_sym = Symbol::LIST_SPLIT_CLOS;
+    let clos_start_sym = Symbol::ARG_3;
+    let clos_len_sym = Symbol::ARG_4;
+
+    let clos_fun_var = var_store.fresh();
+    let clos_start_var = var_store.fresh();
+    let clos_len_var = var_store.fresh();
+    let clos_ret_var = var_store.fresh();
 
     let ret_var = var_store.fresh();
     let zero = int(index_var, Variable::NATURAL, 0);
 
-    let def_temp = Def {
-        annotation: None,
-        expr_var: list_var,
-        loc_expr: no_region(Var(sym_list)),
-        loc_pattern: no_region(Pattern::Identifier(sym_temp)),
-        pattern_vars: Default::default(),
-    };
-
-    let get_before = RunLowLevel {
-        op: LowLevel::ListSublist,
-        args: vec![
-            (list_var, Var(sym_temp)),
-            (index_var, zero),
-            (index_var, Var(sym_index)),
+    let clos = Closure(ClosureData {
+        function_type: clos_fun_var,
+        closure_type: var_store.fresh(),
+        closure_ext_var: var_store.fresh(),
+        return_type: clos_ret_var,
+        name: clos_sym,
+        recursive: Recursive::NotRecursive,
+        captured_symbols: vec![(list_sym, clos_ret_var)],
+        arguments: vec![
+            (
+                clos_start_var,
+                no_region(Pattern::Identifier(clos_start_sym)),
+            ),
+            (clos_len_var, no_region(Pattern::Identifier(clos_len_sym))),
         ],
-        ret_var: list_var,
-    };
+        loc_body: {
+            Box::new(no_region(RunLowLevel {
+                op: LowLevel::ListSublist,
+                args: vec![
+                    (clos_ret_var, Var(list_sym)),
+                    (clos_start_var, Var(clos_start_sym)),
+                    (clos_len_var, Var(clos_len_sym)),
+                ],
+                ret_var: clos_ret_var,
+            }))
+        },
+    });
+
+    let fun = Box::new((
+        clos_fun_var,
+        no_region(clos),
+        var_store.fresh(),
+        clos_ret_var,
+    ));
+
+    let get_before = Call(
+        fun.clone(),
+        vec![
+            (index_var, no_region(zero)),
+            (index_var, no_region(Var(index_sym))),
+        ],
+        CalledVia::Space,
+    );
 
     let get_list_len = RunLowLevel {
         op: LowLevel::ListLen,
-        args: vec![(list_var, Var(sym_list))],
+        args: vec![(list_var, Var(list_sym))],
         ret_var: index_var,
     };
 
     let get_others_len = RunLowLevel {
         op: LowLevel::NumSubWrap,
-        args: vec![(index_var, get_list_len), (index_var, Var(sym_index))],
+        args: vec![(index_var, get_list_len), (index_var, Var(index_sym))],
         ret_var: index_var,
     };
 
-    let get_others = RunLowLevel {
-        op: LowLevel::ListSublist,
-        args: vec![
-            (list_var, Var(sym_list)),
-            (index_var, Var(sym_index)),
-            (index_var, get_others_len),
+    let get_others = Call(
+        fun,
+        vec![
+            (index_var, no_region(Var(index_sym))),
+            (index_var, no_region(get_others_len)),
         ],
-        ret_var: list_var,
-    };
+        CalledVia::Space,
+    );
 
     let before = Field {
-        var: list_var,
+        var: clos_ret_var,
         region: Region::zero(),
         loc_expr: Box::new(no_region(get_before)),
     };
     let others = Field {
-        var: list_var,
+        var: clos_ret_var,
         region: Region::zero(),
         loc_expr: Box::new(no_region(get_others)),
     };
 
-    let get_rec = record(
+    let body = record(
         vec![("before".into(), before), ("others".into(), others)],
         var_store,
     );
 
-    let body = LetNonRec(Box::new(def_temp), Box::new(no_region(get_rec)), ret_var);
-
     defn(
         symbol,
-        vec![(list_var, sym_list), (index_var, sym_index)],
+        vec![(list_var, list_sym), (index_var, index_sym)],
         var_store,
         body,
         ret_var,
