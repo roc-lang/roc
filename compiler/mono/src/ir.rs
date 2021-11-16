@@ -4,7 +4,7 @@ use self::InProgressProc::*;
 use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
 use crate::layout::{
     Builtin, ClosureRepresentation, LambdaSet, Layout, LayoutCache, LayoutProblem,
-    RawFunctionLayout, UnionLayout, WrappedVariant,
+    RawFunctionLayout, TagIdIntType, UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -23,6 +23,16 @@ use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
 pub const PRETTY_PRINT_IR_SYMBOLS: bool = false;
+
+// if your changes cause this number to go down, great!
+// please change it to the lower number.
+// if it went up, maybe check that the change is really required
+static_assertions::assert_eq_size!([u8; 3 * 8], Literal);
+static_assertions::assert_eq_size!([u8; 10 * 8], Expr);
+static_assertions::assert_eq_size!([u8; 19 * 8], Stmt);
+static_assertions::assert_eq_size!([u8; 6 * 8], ProcLayout);
+static_assertions::assert_eq_size!([u8; 8 * 8], Call);
+static_assertions::assert_eq_size!([u8; 6 * 8], CallType);
 
 macro_rules! return_on_layout_error {
     ($env:expr, $layout_result:expr) => {
@@ -923,7 +933,7 @@ pub enum BranchInfo<'a> {
     Constructor {
         scrutinee: Symbol,
         layout: Layout<'a>,
-        tag_id: u8,
+        tag_id: TagIdIntType,
     },
 }
 
@@ -1073,11 +1083,11 @@ impl<'a> Call<'a> {
                     .text(format!("lowlevel {:?} ", lowlevel))
                     .append(alloc.intersperse(it, " "))
             }
-            HigherOrderLowLevel { op: lowlevel, .. } => {
+            HigherOrder(higher_order) => {
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
 
                 alloc
-                    .text(format!("lowlevel {:?} ", lowlevel))
+                    .text(format!("lowlevel {:?} ", higher_order.op))
                     .append(alloc.intersperse(it, " "))
             }
             Foreign {
@@ -1119,43 +1129,46 @@ impl UpdateModeId {
 pub enum CallType<'a> {
     ByName {
         name: Symbol,
-        ret_layout: Layout<'a>,
+        ret_layout: &'a Layout<'a>,
         arg_layouts: &'a [Layout<'a>],
         specialization_id: CallSpecId,
     },
     Foreign {
         foreign_symbol: ForeignSymbol,
-        ret_layout: Layout<'a>,
+        ret_layout: &'a Layout<'a>,
     },
     LowLevel {
         op: LowLevel,
         update_mode: UpdateModeId,
     },
-    HigherOrderLowLevel {
-        op: crate::low_level::HigherOrder,
-        /// the layout of the closure argument, if any
-        closure_env_layout: Option<Layout<'a>>,
+    HigherOrder(&'a HigherOrderLowLevel<'a>),
+}
 
-        /// name of the top-level function that is passed as an argument
-        /// e.g. in `List.map xs Num.abs` this would be `Num.abs`
-        function_name: Symbol,
+#[derive(Clone, Debug, PartialEq)]
+pub struct HigherOrderLowLevel<'a> {
+    pub op: crate::low_level::HigherOrder,
+    /// the layout of the closure argument, if any
+    pub closure_env_layout: Option<Layout<'a>>,
 
-        /// Symbol of the environment captured by the function argument
-        function_env: Symbol,
+    /// name of the top-level function that is passed as an argument
+    /// e.g. in `List.map xs Num.abs` this would be `Num.abs`
+    pub function_name: Symbol,
 
-        /// does the function argument need to own the closure data
-        function_owns_closure_data: bool,
+    /// Symbol of the environment captured by the function argument
+    pub function_env: Symbol,
 
-        /// specialization id of the function argument, used for name generation
-        specialization_id: CallSpecId,
+    /// does the function argument need to own the closure data
+    pub function_owns_closure_data: bool,
 
-        /// update mode of the higher order lowlevel itself
-        update_mode: UpdateModeId,
+    /// specialization id of the function argument, used for name generation
+    pub specialization_id: CallSpecId,
 
-        /// function layout, used for name generation
-        arg_layouts: &'a [Layout<'a>],
-        ret_layout: Layout<'a>,
-    },
+    /// update mode of the higher order lowlevel itself
+    pub update_mode: UpdateModeId,
+
+    /// function layout, used for name generation
+    pub arg_layouts: &'a [Layout<'a>],
+    pub ret_layout: Layout<'a>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1168,7 +1181,7 @@ pub enum Expr<'a> {
     Tag {
         tag_layout: UnionLayout<'a>,
         tag_name: TagName,
-        tag_id: u8,
+        tag_id: TagIdIntType,
         arguments: &'a [Symbol],
     },
     Struct(&'a [Symbol]),
@@ -1186,7 +1199,7 @@ pub enum Expr<'a> {
 
     UnionAtIndex {
         structure: Symbol,
-        tag_id: u8,
+        tag_id: TagIdIntType,
         union_layout: UnionLayout<'a>,
         index: u64,
     },
@@ -1203,7 +1216,7 @@ pub enum Expr<'a> {
         // normal Tag fields
         tag_layout: UnionLayout<'a>,
         tag_name: TagName,
-        tag_id: u8,
+        tag_id: TagIdIntType,
         arguments: &'a [Symbol],
     },
     Reset(Symbol),
@@ -1999,7 +2012,7 @@ fn specialize_external<'a>(
                         Symbol::ARG_CLOSURE,
                         argument_symbols.into_bump_slice(),
                         argument_layouts,
-                        *return_layout,
+                        return_layout,
                         assigned,
                         hole,
                     );
@@ -3843,7 +3856,7 @@ pub fn with_hole<'a>(
                                     closure_data_symbol,
                                     arg_symbols,
                                     arg_layouts,
-                                    *ret_layout,
+                                    ret_layout,
                                     assigned,
                                     hole,
                                 );
@@ -3870,7 +3883,7 @@ pub fn with_hole<'a>(
                                         closure_data_symbol,
                                         arg_symbols,
                                         arg_layouts,
-                                        *ret_layout,
+                                        ret_layout,
                                         assigned,
                                         hole,
                                     );
@@ -3919,7 +3932,7 @@ pub fn with_hole<'a>(
             let call = self::Call {
                 call_type: CallType::Foreign {
                     foreign_symbol,
-                    ret_layout: layout,
+                    ret_layout: env.arena.alloc(layout),
                 },
                 arguments: arg_symbols,
             };
@@ -3971,8 +3984,8 @@ pub fn with_hole<'a>(
                                 lambda_set,
                                 op,
                                 closure_data_symbol,
-                                |(top_level_function, closure_data, closure_env_layout,  specialization_id, update_mode)| self::Call {
-                                    call_type: CallType::HigherOrderLowLevel {
+                                |(top_level_function, closure_data, closure_env_layout,  specialization_id, update_mode)| {
+                                    let higher_order = HigherOrderLowLevel {
                                         op: crate::low_level::HigherOrder::$ho { $($x,)* },
                                         closure_env_layout,
                                         specialization_id,
@@ -3982,8 +3995,12 @@ pub fn with_hole<'a>(
                                         function_name: top_level_function,
                                         arg_layouts,
                                         ret_layout,
-                                    },
-                                    arguments: arena.alloc([$($x,)* top_level_function, closure_data]),
+                                    };
+
+                                    self::Call {
+                                        call_type: CallType::HigherOrder(arena.alloc(higher_order)),
+                                        arguments: arena.alloc([$($x,)* top_level_function, closure_data]),
+                                    }
                                 },
                                 layout,
                                 assigned,
@@ -4374,7 +4391,7 @@ fn convert_tag_union<'a>(
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
                         tag_name,
-                        tag_id: tag_id as u8,
+                        tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
 
@@ -4397,7 +4414,7 @@ fn convert_tag_union<'a>(
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
                         tag_name,
-                        tag_id: tag_id as u8,
+                        tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
 
@@ -4422,7 +4439,7 @@ fn convert_tag_union<'a>(
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
                         tag_name,
-                        tag_id: tag_id as u8,
+                        tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
 
@@ -4449,7 +4466,7 @@ fn convert_tag_union<'a>(
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
                         tag_name,
-                        tag_id: tag_id as u8,
+                        tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
 
@@ -4467,7 +4484,7 @@ fn convert_tag_union<'a>(
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
                         tag_name,
-                        tag_id: tag_id as u8,
+                        tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
 
@@ -5460,7 +5477,7 @@ fn substitute_in_call<'a>(
         }),
         CallType::Foreign { .. } => None,
         CallType::LowLevel { .. } => None,
-        CallType::HigherOrderLowLevel { .. } => None,
+        CallType::HigherOrder { .. } => None,
     };
 
     let mut did_change = false;
@@ -5779,7 +5796,7 @@ fn store_tag_pattern<'a>(
     structure: Symbol,
     union_layout: UnionLayout<'a>,
     arguments: &[(Pattern<'a>, Layout<'a>)],
-    tag_id: u8,
+    tag_id: TagIdIntType,
     mut stmt: Stmt<'a>,
 ) -> StorePattern<'a> {
     use Pattern::*;
@@ -6075,7 +6092,7 @@ fn force_thunk<'a>(
     let call = self::Call {
         call_type: CallType::ByName {
             name: thunk_name,
-            ret_layout: layout,
+            ret_layout: env.arena.alloc(layout),
             arg_layouts: &[],
             specialization_id: env.next_call_specialization_id(),
         },
@@ -6440,7 +6457,7 @@ fn call_by_name<'a>(
                         closure_data_symbol,
                         arg_symbols,
                         arg_layouts,
-                        *ret_layout,
+                        ret_layout,
                         assigned,
                         hole,
                     );
@@ -6564,7 +6581,7 @@ fn call_by_name_help<'a>(
         let call = self::Call {
             call_type: CallType::ByName {
                 name: proc_name,
-                ret_layout: *ret_layout,
+                ret_layout,
                 arg_layouts: argument_layouts,
                 specialization_id: env.next_call_specialization_id(),
             },
@@ -6605,7 +6622,7 @@ fn call_by_name_help<'a>(
             let call = self::Call {
                 call_type: CallType::ByName {
                     name: proc_name,
-                    ret_layout: *ret_layout,
+                    ret_layout,
                     arg_layouts: argument_layouts,
                     specialization_id: env.next_call_specialization_id(),
                 },
@@ -6658,7 +6675,7 @@ fn call_by_name_help<'a>(
                 let call = self::Call {
                     call_type: CallType::ByName {
                         name: proc_name,
-                        ret_layout: *ret_layout,
+                        ret_layout,
                         arg_layouts: argument_layouts,
                         specialization_id: env.next_call_specialization_id(),
                     },
@@ -6908,7 +6925,7 @@ fn call_specialized_proc<'a>(
                 let call = self::Call {
                     call_type: CallType::ByName {
                         name: proc_name,
-                        ret_layout: function_layout.result,
+                        ret_layout: env.arena.alloc(function_layout.result),
                         arg_layouts: function_layout.arguments,
                         specialization_id: env.next_call_specialization_id(),
                     },
@@ -6951,7 +6968,7 @@ fn call_specialized_proc<'a>(
                     closure_data_symbol,
                     field_symbols,
                     argument_layouts.into_bump_slice(),
-                    function_layout.result,
+                    env.arena.alloc(function_layout.result),
                     assigned,
                     hole,
                 );
@@ -6981,7 +6998,7 @@ fn call_specialized_proc<'a>(
                 let call = self::Call {
                     call_type: CallType::ByName {
                         name: proc_name,
-                        ret_layout: function_layout.result,
+                        ret_layout: env.arena.alloc(function_layout.result),
                         arg_layouts: function_layout.arguments,
                         specialization_id: env.next_call_specialization_id(),
                     },
@@ -7024,7 +7041,7 @@ pub enum Pattern<'a> {
     },
     AppliedTag {
         tag_name: TagName,
-        tag_id: u8,
+        tag_id: TagIdIntType,
         arguments: Vec<'a, (Pattern<'a>, Layout<'a>)>,
         layout: UnionLayout<'a>,
         union: crate::exhaustive::Union,
@@ -7211,7 +7228,7 @@ fn from_can_pattern_help<'a>(
                     let mut ctors = std::vec::Vec::with_capacity(tag_names.len());
                     for (i, tag_name) in tag_names.into_iter().enumerate() {
                         ctors.push(Ctor {
-                            tag_id: TagId(i as u8),
+                            tag_id: TagId(i as _),
                             name: tag_name,
                             arity: 0,
                         })
@@ -7302,7 +7319,7 @@ fn from_can_pattern_help<'a>(
 
                             for (i, (tag_name, args)) in tags.iter().enumerate() {
                                 ctors.push(Ctor {
-                                    tag_id: TagId(i as u8),
+                                    tag_id: TagId(i as _),
                                     name: tag_name.clone(),
                                     arity: args.len(),
                                 })
@@ -7339,7 +7356,7 @@ fn from_can_pattern_help<'a>(
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
-                                tag_id: tag_id as u8,
+                                tag_id: tag_id as _,
                                 arguments: mono_args,
                                 union,
                                 layout,
@@ -7353,7 +7370,7 @@ fn from_can_pattern_help<'a>(
 
                             for (i, (tag_name, args)) in tags.iter().enumerate() {
                                 ctors.push(Ctor {
-                                    tag_id: TagId(i as u8),
+                                    tag_id: TagId(i as _),
                                     name: tag_name.clone(),
                                     // don't include tag discriminant in arity
                                     arity: args.len() - 1,
@@ -7384,7 +7401,7 @@ fn from_can_pattern_help<'a>(
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
-                                tag_id: tag_id as u8,
+                                tag_id: tag_id as _,
                                 arguments: mono_args,
                                 union,
                                 layout,
@@ -7398,7 +7415,7 @@ fn from_can_pattern_help<'a>(
                             debug_assert_eq!(&w_tag_name, tag_name);
 
                             ctors.push(Ctor {
-                                tag_id: TagId(0_u8),
+                                tag_id: TagId(0),
                                 name: tag_name.clone(),
                                 arity: fields.len(),
                             });
@@ -7427,7 +7444,7 @@ fn from_can_pattern_help<'a>(
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
-                                tag_id: tag_id as u8,
+                                tag_id: tag_id as _,
                                 arguments: mono_args,
                                 union,
                                 layout,
@@ -7445,7 +7462,7 @@ fn from_can_pattern_help<'a>(
                             for (tag_name, args) in tags.iter() {
                                 if i == nullable_id as usize {
                                     ctors.push(Ctor {
-                                        tag_id: TagId(i as u8),
+                                        tag_id: TagId(i as _),
                                         name: nullable_name.clone(),
                                         // don't include tag discriminant in arity
                                         arity: 0,
@@ -7455,7 +7472,7 @@ fn from_can_pattern_help<'a>(
                                 }
 
                                 ctors.push(Ctor {
-                                    tag_id: TagId(i as u8),
+                                    tag_id: TagId(i as _),
                                     name: tag_name.clone(),
                                     // don't include tag discriminant in arity
                                     arity: args.len() - 1,
@@ -7466,7 +7483,7 @@ fn from_can_pattern_help<'a>(
 
                             if i == nullable_id as usize {
                                 ctors.push(Ctor {
-                                    tag_id: TagId(i as u8),
+                                    tag_id: TagId(i as _),
                                     name: nullable_name.clone(),
                                     // don't include tag discriminant in arity
                                     arity: 0,
@@ -7500,7 +7517,7 @@ fn from_can_pattern_help<'a>(
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
-                                tag_id: tag_id as u8,
+                                tag_id: tag_id as _,
                                 arguments: mono_args,
                                 union,
                                 layout,
@@ -7516,13 +7533,13 @@ fn from_can_pattern_help<'a>(
                             debug_assert!(!other_fields.is_empty());
 
                             ctors.push(Ctor {
-                                tag_id: TagId(nullable_id as u8),
+                                tag_id: TagId(nullable_id as _),
                                 name: nullable_name.clone(),
                                 arity: 0,
                             });
 
                             ctors.push(Ctor {
-                                tag_id: TagId(!nullable_id as u8),
+                                tag_id: TagId(!nullable_id as _),
                                 name: nullable_name.clone(),
                                 // FIXME drop tag
                                 arity: other_fields.len() - 1,
@@ -7556,7 +7573,7 @@ fn from_can_pattern_help<'a>(
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
-                                tag_id: tag_id as u8,
+                                tag_id: tag_id as _,
                                 arguments: mono_args,
                                 union,
                                 layout,
@@ -8065,7 +8082,7 @@ fn match_on_lambda_set<'a>(
     closure_data_symbol: Symbol,
     argument_symbols: &'a [Symbol],
     argument_layouts: &'a [Layout<'a>],
-    return_layout: Layout<'a>,
+    return_layout: &'a Layout<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
@@ -8162,7 +8179,7 @@ fn union_lambda_set_to_switch<'a>(
     closure_data_symbol: Symbol,
     argument_symbols: &'a [Symbol],
     argument_layouts: &'a [Layout<'a>],
-    return_layout: Layout<'a>,
+    return_layout: &'a Layout<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
@@ -8206,12 +8223,12 @@ fn union_lambda_set_to_switch<'a>(
         cond_layout: closure_tag_id_layout,
         branches: branches.into_bump_slice(),
         default_branch,
-        ret_layout: return_layout,
+        ret_layout: *return_layout,
     };
 
     let param = Param {
         symbol: assigned,
-        layout: return_layout,
+        layout: *return_layout,
         borrow: false,
     };
 
@@ -8233,7 +8250,7 @@ fn union_lambda_set_branch<'a>(
     closure_data_layout: Layout<'a>,
     argument_symbols_slice: &'a [Symbol],
     argument_layouts_slice: &'a [Layout<'a>],
-    return_layout: Layout<'a>,
+    return_layout: &'a Layout<'a>,
 ) -> Stmt<'a> {
     let result_symbol = env.unique_symbol();
 
@@ -8262,7 +8279,7 @@ fn union_lambda_set_branch_help<'a>(
     closure_data_layout: Layout<'a>,
     argument_symbols_slice: &'a [Symbol],
     argument_layouts_slice: &'a [Layout<'a>],
-    return_layout: Layout<'a>,
+    return_layout: &'a Layout<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
@@ -8308,7 +8325,7 @@ fn union_lambda_set_branch_help<'a>(
         arguments: argument_symbols,
     };
 
-    build_call(env, call, assigned, return_layout, hole)
+    build_call(env, call, assigned, *return_layout, hole)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -8320,7 +8337,7 @@ fn enum_lambda_set_to_switch<'a>(
     closure_data_symbol: Symbol,
     argument_symbols: &'a [Symbol],
     argument_layouts: &'a [Layout<'a>],
-    return_layout: Layout<'a>,
+    return_layout: &'a Layout<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
@@ -8357,12 +8374,12 @@ fn enum_lambda_set_to_switch<'a>(
         cond_layout: closure_tag_id_layout,
         branches: branches.into_bump_slice(),
         default_branch,
-        ret_layout: return_layout,
+        ret_layout: *return_layout,
     };
 
     let param = Param {
         symbol: assigned,
-        layout: return_layout,
+        layout: *return_layout,
         borrow: false,
     };
 
@@ -8383,7 +8400,7 @@ fn enum_lambda_set_branch<'a>(
     closure_data_layout: Layout<'a>,
     argument_symbols_slice: &'a [Symbol],
     argument_layouts_slice: &'a [Layout<'a>],
-    return_layout: Layout<'a>,
+    return_layout: &'a Layout<'a>,
 ) -> Stmt<'a> {
     let result_symbol = env.unique_symbol();
 
@@ -8424,7 +8441,7 @@ fn enum_lambda_set_branch<'a>(
         },
         arguments: argument_symbols,
     };
-    build_call(env, call, assigned, return_layout, env.arena.alloc(hole))
+    build_call(env, call, assigned, *return_layout, env.arena.alloc(hole))
 }
 
 #[allow(clippy::too_many_arguments)]
