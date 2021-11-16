@@ -1765,7 +1765,7 @@ pub mod test_constrain {
     use roc_parse::parser::SyntaxError;
     use roc_region::all::Region;
     use roc_types::{
-        pretty_print::content_to_string,
+        pretty_print::{content_to_string, name_all_type_vars},
         solved_types::Solved,
         subs::{Subs, VarStore, Variable},
     };
@@ -1875,6 +1875,9 @@ pub mod test_constrain {
                 );
 
                 let subs = solved.inner_mut();
+
+                // name type vars
+                name_all_type_vars(var, subs);
 
                 let content = subs.get_content_without_compacting(var);
 
@@ -2130,6 +2133,102 @@ pub mod test_constrain {
             ),
             "List Str",
         )
+    }
+
+    #[test]
+    fn dual_arity_lambda() {
+        infer_eq(
+            indoc!(
+                r#"
+                    \a, b -> Pair a b
+                "#
+            ),
+            "a, b -> [ Pair a b ]*",
+        );
+    }
+
+    #[test]
+    fn anonymous_identity() {
+        infer_eq(
+            indoc!(
+                r#"
+                    (\a -> a) 3.14
+                "#
+            ),
+            "Float *",
+        );
+    }
+
+    #[test]
+    fn identity_of_identity() {
+        infer_eq(
+            indoc!(
+                r#"
+                    (\val -> val) (\val -> val)
+                "#
+            ),
+            "a -> a",
+        );
+    }
+
+    #[test]
+    fn identity_function() {
+        infer_eq(
+            indoc!(
+                r#"
+                    \val -> val
+                "#
+            ),
+            "a -> a",
+        );
+    }
+
+    #[test]
+    fn apply_function() {
+        infer_eq(
+            indoc!(
+                r#"
+                    \f, x -> f x
+                "#
+            ),
+            "(a -> b), a -> b",
+        );
+    }
+
+    #[test]
+    fn flip_function() {
+        infer_eq(
+            indoc!(
+                r#"
+                    \f -> (\a, b -> f b a)
+                "#
+            ),
+            "(a, b -> c) -> (b, a -> c)",
+        );
+    }
+
+    #[test]
+    fn always_function() {
+        infer_eq(
+            indoc!(
+                r#"
+                    \val -> \_ -> val
+                "#
+            ),
+            "a -> (* -> a)",
+        );
+    }
+
+    #[test]
+    fn pass_a_function() {
+        infer_eq(
+            indoc!(
+                r#"
+                    \f -> f {}
+                "#
+            ),
+            "({} -> a) -> a",
+        );
     }
 
     #[test]
