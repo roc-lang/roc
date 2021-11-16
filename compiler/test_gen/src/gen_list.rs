@@ -2358,7 +2358,7 @@ fn list_all() {
     assert_evals_to!("List.all [] (\\e -> e > 3)", false, bool);
     assert_evals_to!("List.all [ 1, 2, 3 ] (\\e -> e > 3)", false, bool);
     assert_evals_to!("List.all [ 1, 2, 4 ] (\\e -> e > 3)", false, bool);
-    assert_evals_to!("List.all [ 1, 2, 3 ] (\\e -> e >= 1", true, bool);
+    assert_evals_to!("List.all [ 1, 2, 3 ] (\\e -> e >= 1)", true, bool);
 }
 
 #[test]
