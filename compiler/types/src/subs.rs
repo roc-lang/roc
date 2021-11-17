@@ -63,16 +63,7 @@ pub struct Subs {
 
 impl Default for Subs {
     fn default() -> Self {
-        Subs {
-            utable: Default::default(),
-            variables: Default::default(),
-            tag_names: Default::default(),
-            field_names: Default::default(),
-            record_fields: Default::default(),
-            // store an empty slice at the first position
-            // used for "TagOrFunction"
-            variable_slices: vec![VariableSubsSlice::default()],
-        }
+        Subs::new()
     }
 }
 
@@ -987,21 +978,31 @@ fn define_integer_types(subs: &mut Subs) {
 }
 
 impl Subs {
-    pub fn new(var_store: VarStore) -> Self {
-        let entries = var_store.next;
+    pub fn new() -> Self {
+        Self::with_capacity(0)
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        let capacity = capacity.max(Variable::NUM_RESERVED_VARS);
 
         let mut subs = Subs {
             utable: UnificationTable::default(),
-            ..Default::default()
+            variables: Default::default(),
+            tag_names: Default::default(),
+            field_names: Default::default(),
+            record_fields: Default::default(),
+            // store an empty slice at the first position
+            // used for "TagOrFunction"
+            variable_slices: vec![VariableSubsSlice::default()],
         };
 
         // NOTE the utable does not (currently) have a with_capacity; using this as the next-best thing
-        subs.utable.reserve(entries as usize);
+        subs.utable.reserve(capacity);
 
         // TODO There are at least these opportunities for performance optimization here:
         // * Making the default flex_var_descriptor be all 0s, so no init step is needed.
 
-        for _ in 0..entries {
+        for _ in 0..capacity {
             subs.utable.new_key(flex_var_descriptor());
         }
 
@@ -1040,6 +1041,12 @@ impl Subs {
         });
 
         subs
+    }
+
+    pub fn new_from_varstore(var_store: VarStore) -> Self {
+        let entries = var_store.next;
+
+        Self::with_capacity(entries as usize)
     }
 
     pub fn extend_by(&mut self, entries: usize) {

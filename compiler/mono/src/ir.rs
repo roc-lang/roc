@@ -481,7 +481,7 @@ pub struct Suspended<'a> {
 impl<'a> Suspended<'a> {
     fn new_in(arena: &'a Bump) -> Self {
         Self {
-            store: Subs::new(Default::default()),
+            store: Subs::new_from_varstore(Default::default()),
             symbols: Vec::new_in(arena),
             layouts: Vec::new_in(arena),
             variables: Vec::new_in(arena),
