@@ -320,7 +320,7 @@ fn from_pending_alias<'a>(
             }
 
             for loc_lowercase in vars {
-                if !named_rigids.contains_key(loc_lowercase.value.as_str()) {
+                if !named_rigids.contains_key(&loc_lowercase.value) {
                     env.problem(Problem::PhantomTypeArgument {
                         alias: symbol,
                         variable_region: loc_lowercase.region,

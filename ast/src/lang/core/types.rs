@@ -3,7 +3,7 @@
 #![allow(unused_imports)]
 // use roc_can::expr::Output;
 use roc_collections::all::{MutMap, MutSet};
-use roc_module::ident::{Ident, TagName};
+use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::types::{Problem, RecordField};
@@ -176,9 +176,9 @@ pub enum Signature {
     },
 }
 
-pub enum Annotation2<'a> {
+pub enum Annotation2 {
     Annotation {
-        named_rigids: MutMap<&'a str, Variable>,
+        named_rigids: MutMap<Lowercase, Variable>,
         unnamed_rigids: MutSet<Variable>,
         symbols: MutSet<Symbol>,
         signature: Signature,
@@ -191,7 +191,7 @@ pub fn to_annotation2<'a>(
     scope: &mut Scope,
     annotation: &'a roc_parse::ast::TypeAnnotation<'a>,
     region: Region,
-) -> Annotation2<'a> {
+) -> Annotation2 {
     let mut references = References::default();
 
     let annotation = to_type2(env, scope, &mut references, annotation, region);
@@ -245,11 +245,7 @@ pub fn to_annotation2<'a>(
     }
 }
 
-fn shallow_dealias<'a>(
-    env: &mut Env,
-    references: References<'a>,
-    annotation: Type2,
-) -> Annotation2<'a> {
+fn shallow_dealias<'a>(env: &mut Env, references: References, annotation: Type2) -> Annotation2 {
     let References {
         named,
         unnamed,
@@ -293,8 +289,8 @@ fn shallow_dealias<'a>(
 }
 
 #[derive(Default)]
-pub struct References<'a> {
-    named: MutMap<&'a str, Variable>,
+pub struct References {
+    named: MutMap<Lowercase, Variable>,
     unnamed: MutSet<Variable>,
     hidden: MutSet<Variable>,
     symbols: MutSet<Symbol>,
@@ -303,7 +299,7 @@ pub struct References<'a> {
 pub fn to_type_id<'a>(
     env: &mut Env,
     scope: &mut Scope,
-    rigids: &mut References<'a>,
+    rigids: &mut References,
     annotation: &roc_parse::ast::TypeAnnotation<'a>,
     region: Region,
 ) -> TypeId {
@@ -315,7 +311,7 @@ pub fn to_type_id<'a>(
 pub fn as_type_id<'a>(
     env: &mut Env,
     scope: &mut Scope,
-    rigids: &mut References<'a>,
+    rigids: &mut References,
     type_id: TypeId,
     annotation: &roc_parse::ast::TypeAnnotation<'a>,
     region: Region,
@@ -329,7 +325,7 @@ pub fn as_type_id<'a>(
 pub fn to_type2<'a>(
     env: &mut Env,
     scope: &mut Scope,
-    references: &mut References<'a>,
+    references: &mut References,
     annotation: &roc_parse::ast::TypeAnnotation<'a>,
     region: Region,
 ) -> Type2 {
@@ -380,8 +376,9 @@ pub fn to_type2<'a>(
             Type2::Function(arguments, closure_type_id, return_type_id)
         }
         BoundVariable(v) => {
-            // a rigid type variable
-            match references.named.get(v) {
+            // A rigid type variable. The parser should have already ensured that the name is indeed a lowercase.
+            let v = Lowercase::from(*v);
+            match references.named.get(&v) {
                 Some(var) => Type2::Variable(*var),
                 None => {
                     let var = env.var_store.fresh();
@@ -406,7 +403,7 @@ pub fn to_type2<'a>(
             let field_types = PoolVec::with_capacity(field_types_map.len() as u32, env.pool);
 
             for (node_id, (label, field)) in field_types.iter_node_ids().zip(field_types_map) {
-                let poolstr = PoolStr::new(label, env.pool);
+                let poolstr = PoolStr::new(label.as_str(), env.pool);
 
                 let rec_field = match field {
                     RecordField::Optional(_) => {
@@ -485,10 +482,10 @@ pub fn to_type2<'a>(
                     {
                         match loc_var.value {
                             BoundVariable(ident) => {
-                                let var_name = ident;
+                                let var_name = Lowercase::from(ident);
 
                                 if let Some(var) = references.named.get(&var_name) {
-                                    let poolstr = PoolStr::new(var_name, env.pool);
+                                    let poolstr = PoolStr::new(var_name.as_str(), env.pool);
 
                                     let type_id = env.pool.add(Type2::Variable(*var));
                                     env.pool[var_id] = (poolstr.shallow_clone(), type_id);
@@ -499,7 +496,7 @@ pub fn to_type2<'a>(
                                     let var = env.var_store.fresh();
 
                                     references.named.insert(var_name.clone(), var);
-                                    let poolstr = PoolStr::new(var_name, env.pool);
+                                    let poolstr = PoolStr::new(var_name.as_str(), env.pool);
 
                                     let type_id = env.pool.add(Type2::Variable(var));
                                     env.pool[var_id] = (poolstr.shallow_clone(), type_id);
@@ -581,10 +578,10 @@ pub fn to_type2<'a>(
 fn can_assigned_fields<'a>(
     env: &mut Env,
     scope: &mut Scope,
-    rigids: &mut References<'a>,
+    rigids: &mut References,
     fields: &&[Located<roc_parse::ast::AssignedField<'a, roc_parse::ast::TypeAnnotation<'a>>>],
     region: Region,
-) -> MutMap<&'a str, RecordField<Type2>> {
+) -> MutMap<Lowercase, RecordField<Type2>> {
     use roc_parse::ast::AssignedField::*;
     use roc_types::types::RecordField::*;
 
@@ -607,8 +604,8 @@ fn can_assigned_fields<'a>(
                     let field_type =
                         to_type2(env, scope, rigids, &annotation.value, annotation.region);
 
-                    let label = field_name.value;
-                    field_types.insert(label, Required(field_type));
+                    let label = Lowercase::from(field_name.value);
+                    field_types.insert(label.clone(), Required(field_type));
 
                     break 'inner label;
                 }
@@ -616,20 +613,20 @@ fn can_assigned_fields<'a>(
                     let field_type =
                         to_type2(env, scope, rigids, &annotation.value, annotation.region);
 
-                    let label = field_name.value;
+                    let label = Lowercase::from(field_name.value);
                     field_types.insert(label.clone(), Optional(field_type));
 
                     break 'inner label;
                 }
                 LabelOnly(loc_field_name) => {
                     // Interpret { a, b } as { a : a, b : b }
-                    let field_name = loc_field_name.value;
+                    let field_name = Lowercase::from(loc_field_name.value);
                     let field_type = {
                         if let Some(var) = rigids.named.get(&field_name) {
                             Type2::Variable(*var)
                         } else {
                             let field_var = env.var_store.fresh();
-                            rigids.named.insert(field_name, field_var);
+                            rigids.named.insert(field_name.clone(), field_var);
                             Type2::Variable(field_var)
                         }
                     };
@@ -669,7 +666,7 @@ fn can_assigned_fields<'a>(
 fn can_tags<'a>(
     env: &mut Env,
     scope: &mut Scope,
-    rigids: &mut References<'a>,
+    rigids: &mut References,
     tags: &'a [Located<roc_parse::ast::Tag<'a>>],
     region: Region,
 ) -> Vec<(TagName, PoolVec<Type2>)> {
@@ -753,7 +750,7 @@ enum TypeApply {
 fn to_type_apply<'a>(
     env: &mut Env,
     scope: &mut Scope,
-    rigids: &mut References<'a>,
+    rigids: &mut References,
     module_name: &str,
     ident: &str,
     type_arguments: &[Located<roc_parse::ast::TypeAnnotation<'a>>],
