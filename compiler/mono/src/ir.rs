@@ -419,8 +419,9 @@ pub struct ExternalSpecializations<'a> {
     /// Not a bumpalo vec because bumpalo is not thread safe
     /// Separate array so we can search for membership quickly
     symbols: std::vec::Vec<Symbol>,
-    /// For each symbol, what types to specialize it for
-    types_to_specialize: std::vec::Vec<std::vec::Vec<(Subs, Variable)>>,
+    storage_subs: Subs,
+    /// For each symbol, what types to specialize it for, points into the storage_subs
+    types_to_specialize: std::vec::Vec<std::vec::Vec<Variable>>,
     _lifetime: std::marker::PhantomData<&'a u8>,
 }
 
@@ -428,43 +429,40 @@ impl<'a> ExternalSpecializations<'a> {
     pub fn new_in(_arena: &'a Bump) -> Self {
         Self {
             symbols: std::vec::Vec::new(),
+            storage_subs: Subs::default(),
             types_to_specialize: std::vec::Vec::new(),
             _lifetime: std::marker::PhantomData,
         }
     }
 
-    fn insert_external(&mut self, symbol: Symbol, store: Subs, variable: Variable) {
+    fn insert_external(&mut self, symbol: Symbol, env_subs: &mut Subs, variable: Variable) {
+        let variable =
+            roc_solve::solve::deep_copy_var_to(env_subs, &mut self.storage_subs, variable);
+
         match self.symbols.iter().position(|s| *s == symbol) {
             None => {
                 self.symbols.push(symbol);
-                self.types_to_specialize.push(vec![(store, variable)]);
+                self.types_to_specialize.push(vec![variable]);
             }
             Some(index) => {
                 let types_to_specialize = &mut self.types_to_specialize[index];
-                types_to_specialize.push((store, variable));
+                types_to_specialize.push(variable);
             }
         }
     }
 
-    pub fn extend(&mut self, other: Self) {
-        for (symbol, tts) in other.into_iter() {
-            match self.symbols.iter().position(|s| *s == symbol) {
-                None => {
-                    self.symbols.push(symbol);
-                    self.types_to_specialize.push(tts);
-                }
-                Some(index) => {
-                    let types_to_specialize = &mut self.types_to_specialize[index];
-                    types_to_specialize.extend(tts);
-                }
-            }
-        }
-    }
-
-    fn into_iter(self) -> impl Iterator<Item = (Symbol, std::vec::Vec<(Subs, Variable)>)> {
-        self.symbols
-            .into_iter()
-            .zip(self.types_to_specialize.into_iter())
+    fn decompose(
+        self,
+    ) -> (
+        Subs,
+        impl Iterator<Item = (Symbol, std::vec::Vec<Variable>)>,
+    ) {
+        (
+            self.storage_subs,
+            self.symbols
+                .into_iter()
+                .zip(self.types_to_specialize.into_iter()),
+        )
     }
 }
 
@@ -1897,7 +1895,7 @@ fn pattern_to_when<'a>(
 pub fn specialize_all<'a>(
     env: &mut Env<'a, '_>,
     mut procs: Procs<'a>,
-    externals_others_need: ExternalSpecializations<'a>,
+    externals_others_need: std::vec::Vec<ExternalSpecializations<'a>>,
     specializations_for_host: BumpMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>,
     layout_cache: &mut LayoutCache<'a>,
 ) -> Procs<'a> {
@@ -2051,55 +2049,59 @@ pub fn specialize_all<'a>(
 fn specialize_externals_others_need<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
-    externals_others_need: ExternalSpecializations<'a>,
+    all_externals_others_need: std::vec::Vec<ExternalSpecializations<'a>>,
     layout_cache: &mut LayoutCache<'a>,
 ) {
-    for (symbol, solved_types) in externals_others_need.into_iter() {
-        for (mut store, store_variable) in solved_types {
-            // historical note: we used to deduplicate with a hash here,
-            // but the cost of that hash is very high. So for now we make
-            // duplicate specializations, and the insertion into a hash map
-            // below will deduplicate them.
+    for externals_others_need in all_externals_others_need {
+        let (mut store, it) = externals_others_need.decompose();
+        for (symbol, solved_types) in it {
+            for store_variable in solved_types {
+                // historical note: we used to deduplicate with a hash here,
+                // but the cost of that hash is very high. So for now we make
+                // duplicate specializations, and the insertion into a hash map
+                // below will deduplicate them.
 
-            let name = symbol;
+                let name = symbol;
 
-            let partial_proc_id = match procs.partial_procs.symbol_to_id(name) {
-                Some(v) => v,
-                None => {
-                    panic!("Cannot find a partial proc for {:?}", name);
-                }
-            };
-
-            let variable = roc_solve::solve::deep_copy_var_to(&mut store, env.subs, store_variable);
-
-            // TODO I believe this is also duplicated
-            match specialize_variable(
-                env,
-                procs,
-                name,
-                layout_cache,
-                variable,
-                BumpMap::new_in(env.arena),
-                partial_proc_id,
-            ) {
-                Ok((proc, layout)) => {
-                    let top_level = ProcLayout::from_raw(env.arena, layout);
-
-                    if procs.is_module_thunk(name) {
-                        debug_assert!(top_level.arguments.is_empty());
+                let partial_proc_id = match procs.partial_procs.symbol_to_id(name) {
+                    Some(v) => v,
+                    None => {
+                        panic!("Cannot find a partial proc for {:?}", name);
                     }
+                };
 
-                    procs.specialized.insert_specialized(name, top_level, proc);
-                }
-                Err(SpecializeFailure {
-                    problem: _,
-                    attempted_layout,
-                }) => {
-                    let proc = generate_runtime_error_function(env, name, attempted_layout);
+                let variable =
+                    roc_solve::solve::deep_copy_var_to(&mut store, env.subs, store_variable);
 
-                    let top_level = ProcLayout::from_raw(env.arena, attempted_layout);
+                // TODO I believe this is also duplicated
+                match specialize_variable(
+                    env,
+                    procs,
+                    name,
+                    layout_cache,
+                    variable,
+                    BumpMap::new_in(env.arena),
+                    partial_proc_id,
+                ) {
+                    Ok((proc, layout)) => {
+                        let top_level = ProcLayout::from_raw(env.arena, layout);
 
-                    procs.specialized.insert_specialized(name, top_level, proc);
+                        if procs.is_module_thunk(name) {
+                            debug_assert!(top_level.arguments.is_empty());
+                        }
+
+                        procs.specialized.insert_specialized(name, top_level, proc);
+                    }
+                    Err(SpecializeFailure {
+                        problem: _,
+                        attempted_layout,
+                    }) => {
+                        let proc = generate_runtime_error_function(env, name, attempted_layout);
+
+                        let top_level = ProcLayout::from_raw(env.arena, attempted_layout);
+
+                        procs.specialized.insert_specialized(name, top_level, proc);
+                    }
                 }
             }
         }
@@ -6562,10 +6564,7 @@ fn add_needed_external<'a>(
         Occupied(entry) => entry.into_mut(),
     };
 
-    let mut store = Subs::default();
-    let variable = roc_solve::solve::deep_copy_var_to(env.subs, &mut store, fn_var);
-
-    existing.insert_external(name, store, variable);
+    existing.insert_external(name, env.subs, fn_var);
 }
 
 fn build_call<'a>(
