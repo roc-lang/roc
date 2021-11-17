@@ -1415,6 +1415,7 @@ fn deep_copy_var_to_help(
     let desc = source.get_without_compacting(var);
 
     if let Some(copy) = desc.copy.into_variable() {
+        debug_assert!(target.contains(copy));
         return copy;
     } else if desc.rank != Rank::NONE {
         // DO NOTHING
@@ -1478,6 +1479,7 @@ fn deep_copy_var_to_help(
                 Func(arg_vars, closure_var, ret_var) => {
                     let new_ret_var =
                         deep_copy_var_to_help(source, target, max_rank, pools, mapping, ret_var);
+
                     let new_closure_var = deep_copy_var_to_help(
                         source,
                         target,
