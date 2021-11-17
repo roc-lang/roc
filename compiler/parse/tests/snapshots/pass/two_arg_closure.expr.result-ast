@@ -1,0 +1,13 @@
+Closure(
+    [
+        |L 0-0, C 1-2| Identifier(
+            "a",
+        ),
+        |L 0-0, C 4-5| Identifier(
+            "b",
+        ),
+    ],
+    |L 0-0, C 9-11| Num(
+        "42",
+    ),
+)

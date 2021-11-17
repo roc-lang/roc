@@ -1,0 +1,12 @@
+Apply(
+    |L 0-0, C 0-4| Var {
+        module_name: "",
+        ident: "whee",
+    },
+    [
+        |L 0-0, C 5-6| Num(
+            "1",
+        ),
+    ],
+    Space,
+)

@@ -870,6 +870,9 @@ pub fn listSublist(
     len: usize,
     dec: Dec,
 ) callconv(.C) RocList {
+    if (len == 0) {
+        return RocList.empty();
+    }
     if (list.bytes) |source_ptr| {
         const size = list.len();
 
