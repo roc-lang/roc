@@ -296,31 +296,14 @@ fn long_str_literal() {
     );
 }
 
-// #[test]
-// fn small_str_concat_empty_first_arg() {
-//     assert_llvm_evals_to!(
-//         r#"Str.concat "" "JJJJJJJJJJJJJJJ""#,
-//         [
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0b1000_1111
-//         ],
-//         [u8; 16]
-//     );
-// }
+#[test]
+fn small_str_concat_empty_first_arg() {
+    assert_evals_to!(
+        r#"Str.concat "" "JJJJJJJ""#,
+        [0x4a, 0x4a, 0x4a, 0x4a, 0x4a, 0x4a, 0x4a, 0b1000_0111],
+        [u8; 8]
+    );
+}
 
 // #[test]
 // fn small_str_concat_empty_second_arg() {
