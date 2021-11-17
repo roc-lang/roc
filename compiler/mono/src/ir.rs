@@ -27,9 +27,17 @@ pub const PRETTY_PRINT_IR_SYMBOLS: bool = false;
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
+
+// i128 alignment is different on arm
+#[cfg(target_arch = "aarch64")]
+static_assertions::assert_eq_size!([u8; 4 * 8], Literal);
+#[cfg(not(target_arch = "aarch64"))]
 static_assertions::assert_eq_size!([u8; 3 * 8], Literal);
 static_assertions::assert_eq_size!([u8; 10 * 8], Expr);
+#[cfg(not(target_arch = "aarch64"))]
 static_assertions::assert_eq_size!([u8; 19 * 8], Stmt);
+#[cfg(target_arch = "aarch64")]
+static_assertions::assert_eq_size!([u8; 20 * 8], Stmt);
 static_assertions::assert_eq_size!([u8; 6 * 8], ProcLayout);
 static_assertions::assert_eq_size!([u8; 8 * 8], Call);
 static_assertions::assert_eq_size!([u8; 6 * 8], CallType);
