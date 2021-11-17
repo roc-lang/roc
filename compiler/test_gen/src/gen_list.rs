@@ -250,6 +250,47 @@ fn list_sublist() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn list_split() {
+    assert_evals_to!(
+        r#"
+               list = List.split [1, 2, 3] 0
+               list.before
+            "#,
+        RocList::from_slice(&[]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        r#"
+               list = List.split [1, 2, 3] 0
+               list.others
+            "#,
+        RocList::from_slice(&[1, 2, 3]),
+        RocList<i64>
+    );
+
+    assert_evals_to!(
+        "List.split [1, 2, 3] 1",
+        (RocList::from_slice(&[1]), RocList::from_slice(&[2, 3]),),
+        (RocList<i64>, RocList<i64>,)
+    );
+    assert_evals_to!(
+        "List.split [1, 2, 3] 3",
+        (RocList::from_slice(&[1, 2, 3]), RocList::from_slice(&[]),),
+        (RocList<i64>, RocList<i64>,)
+    );
+    assert_evals_to!(
+        "List.split [1, 2, 3] 4",
+        (RocList::from_slice(&[1, 2, 3]), RocList::from_slice(&[]),),
+        (RocList<i64>, RocList<i64>,)
+    );
+    assert_evals_to!(
+        "List.split [] 1",
+        (RocList::from_slice(&[]), RocList::from_slice(&[]),),
+        (RocList<i64>, RocList<i64>,)
+    );
+}
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn list_drop() {
     assert_evals_to!(
         "List.drop [1,2,3] 2",
