@@ -37,7 +37,11 @@ use crate::{
         rigids::Rigids,
         scope::Scope,
     },
-    mem_pool::{pool::Pool, pool_vec::PoolVec, shallow_clone::ShallowClone},
+    mem_pool::{
+        pool::{NodeId, Pool},
+        pool_vec::PoolVec,
+        shallow_clone::ShallowClone,
+    },
 };
 
 #[derive(Debug)]
@@ -521,7 +525,7 @@ fn canonicalize_pending_def<'a>(
                             // parent commit for the bug this fixed!
                             let refs = References::new();
 
-                            let arguments: PoolVec<(PatternId, Type2)> =
+                            let arguments: PoolVec<(NodeId<Type2>, PatternId)> =
                                 PoolVec::with_capacity(closure_args.len() as u32, env.pool);
 
                             let return_type: TypeId;
@@ -558,7 +562,8 @@ fn canonicalize_pending_def<'a>(
                                     for (node_id, ((_, pattern_id), typ)) in
                                         arguments.iter_node_ids().zip(it.into_iter())
                                     {
-                                        env.pool[node_id] = (pattern_id, typ);
+                                        let typ = env.pool.add(typ);
+                                        env.pool[node_id] = (typ, pattern_id);
                                     }
 
                                     return_type = return_type_id;
