@@ -1140,6 +1140,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     }
 
+    // intersperse : List elem, elem -> List elem
+    add_top_level_function_type!(
+        Symbol::LIST_INTERSPERSE,
+        vec![list_type(flex(TVAR1)), flex(TVAR1)],
+        Box::new(list_type(flex(TVAR1))),
+    );
+
     // Dict module
 
     // len : Dict * * -> Nat

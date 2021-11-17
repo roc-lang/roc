@@ -3806,6 +3806,17 @@ mod solve_expr {
     }
 
     #[test]
+    fn list_intersperse() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                List.intersperse
+                "#
+            ),
+            "List a, a -> List a",
+        );
+    }
+    #[test]
     fn function_that_captures_nothing_is_not_captured() {
         // we should make sure that a function that doesn't capture anything it not itself captured
         // such functions will be lifted to the top-level, and are thus globally available!
