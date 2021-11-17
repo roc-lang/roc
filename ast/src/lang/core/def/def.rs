@@ -458,6 +458,10 @@ fn canonicalize_pending_def<'a>(
                         output.references.referenced_aliases.insert(symbol);
                     }
 
+                    // Ensure rigid type vars and their names are known in the output.
+                    for (name, &var) in named_rigids.iter() {
+                        output.introduced_variables.insert_named(name.clone(), var);
+                    }
                     let rigids = Rigids::new(named_rigids, unnamed_rigids, env.pool);
 
                     // bookkeeping for tail-call detection. If we're assigning to an
