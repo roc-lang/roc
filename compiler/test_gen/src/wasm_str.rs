@@ -1,6 +1,6 @@
 // Wasm pointers are only 32bit. This effects RocStr.
 // These are versions of the str tests assuming 32bit pointers.
-#![cfg(not(feature = "gen-dev"))]
+#![cfg(feature = "gen-wasm")]
 
 // TODO: We need to make these tests work with the llvm wasm backend.
 
