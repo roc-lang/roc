@@ -1926,7 +1926,7 @@ pub mod test_constrain {
         let expr2_result = str_to_expr2(&code_arena, actual, &mut env, &mut scope, region);
 
         match expr2_result {
-            Ok((expr, _)) => {
+            Ok((expr, output)) => {
                 let constraint = constrain_expr(
                     &code_arena,
                     &mut env,
@@ -1946,11 +1946,13 @@ pub mod test_constrain {
                 let mut var_store = VarStore::default();
                 std::mem::swap(ref_var_store, &mut var_store);
 
+                let rigids = output.introduced_variables.name_by_var;
+
                 let (mut solved, _, _) = run_solve(
                     &code_arena,
                     pool,
                     Default::default(),
-                    Default::default(),
+                    rigids,
                     constraint,
                     var_store,
                 );
