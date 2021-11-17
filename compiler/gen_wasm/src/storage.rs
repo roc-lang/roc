@@ -194,7 +194,8 @@ impl<'a> Storage<'a> {
         })
     }
 
-    /// Load a symbol using the C Calling Convention
+    /// Load a single symbol using the C Calling Convention
+    /// *Private* because external code should always load symbols in bulk (see load_symbols)
     fn load_symbol_ccc(&mut self, code_builder: &mut CodeBuilder, sym: Symbol) {
         let storage = self.get(&sym).to_owned();
         match storage {
@@ -274,13 +275,16 @@ impl<'a> Storage<'a> {
     /// It squashes small structs into primitive values where possible, avoiding stack memory
     /// in favour of CPU registers (or VM stack values, which eventually become CPU registers).
     /// We need to convert some of our structs from our internal C-like representation to work with Zig.
-    /// Why not just always use the fastcc representation? Because of non-Zig platforms.
+    /// We are sticking to C ABI for better compatibility on the platform side.
     pub fn load_symbols_fastcc(
         &mut self,
         code_builder: &mut CodeBuilder,
         symbols: &[Symbol],
         return_layout: &WasmLayout,
     ) {
+        // Note: we are not doing verify_stack_match in this case so we may generate more code.
+        // We would need more bookkeeping in CodeBuilder to track which representation is on the stack!
+
         if return_layout.is_stack_memory() {
             // Load the address where the return value should be written
             self.load_symbol_ccc(code_builder, symbols[0]);

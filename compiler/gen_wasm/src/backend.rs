@@ -565,6 +565,9 @@ impl<'a> WasmBackend<'a> {
         arguments: &'a [Symbol],
         return_layout: WasmLayout,
     ) -> Result<(), String> {
+        // Load symbols using the "fast calling convention" that Zig uses instead of the C ABI we normally use.
+        // It's only different from the C ABI for small structs, and we are using Zig for all of those cases.
+        // This is a workaround for a bug in Zig. If later versions fix it, we can change to the C ABI.
         self.storage
             .load_symbols_fastcc(&mut self.code_builder, arguments, &return_layout);
 
@@ -580,7 +583,7 @@ impl<'a> WasmBackend<'a> {
         match build_result {
             Done => Ok(()),
             BuiltinCall(name) => {
-                self.call_imported_builtin(name, arguments, &return_layout);
+                self.call_zig_builtin(name, arguments, &return_layout);
                 Ok(())
             }
             NotImplemented => Err(format!(
@@ -757,12 +760,10 @@ impl<'a> WasmBackend<'a> {
         Ok(())
     }
 
-    fn call_imported_builtin(
-        &mut self,
-        name: &'a str,
-        arguments: &[Symbol],
-        ret_layout: &WasmLayout,
-    ) {
+    /// Generate a call instruction to a Zig builtin function.
+    /// And if we haven't seen it before, add an Import and linker data for it.
+    /// Zig calls use LLVM's "fast" calling convention rather than our usual C ABI.
+    fn call_zig_builtin(&mut self, name: &'a str, arguments: &[Symbol], ret_layout: &WasmLayout) {
         let (fn_index, linker_symbol_index) = match self.builtin_sym_index_map.get(name) {
             Some(sym_idx) => match &self.linker_symbols[*sym_idx] {
                 SymInfo::Function(WasmObjectSymbol::Imported { index, .. }) => {
@@ -781,6 +782,8 @@ impl<'a> WasmBackend<'a> {
                     Some(ret_layout.value_type())
                 };
 
+                // Zig's "fast calling convention" packs structs into CPU registers (stack machine slots) if possible.
+                // If they're small enough they can go into an I32 or I64. If they're big, they're pointers (I32).
                 for arg in arguments {
                     param_types.push(match self.storage.get(arg) {
                         StoredValue::StackMemory { size, .. } if *size > 4 && *size <= 8 => {
