@@ -98,11 +98,6 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     // }
 
     debug_assert_eq!(exposed_to_host.len(), 1);
-    let main_fn_symbol = loaded.entry_point.symbol;
-    let main_fn_index = procedures
-        .keys()
-        .position(|(s, _)| *s == main_fn_symbol)
-        .unwrap();
 
     let exposed_to_host = exposed_to_host.keys().copied().collect::<MutSet<_>>();
 
@@ -112,14 +107,10 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
         exposed_to_host,
     };
 
-    let mut wasm_module = roc_gen_wasm::build_module_help(&env, procedures).unwrap();
+    let (mut wasm_module, main_fn_index) =
+        roc_gen_wasm::build_module_help(&env, procedures).unwrap();
 
-    T::insert_test_wrapper(
-        arena,
-        &mut wasm_module,
-        TEST_WRAPPER_NAME,
-        main_fn_index as u32,
-    );
+    T::insert_test_wrapper(arena, &mut wasm_module, TEST_WRAPPER_NAME, main_fn_index);
 
     // We can either generate the test platform or write an external source file, whatever works
     generate_test_platform(&mut wasm_module, arena);
@@ -164,7 +155,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
         // write the module to a file so the linker can access it
         std::fs::write(&app_o_file, &module_bytes).unwrap();
 
-        std::process::Command::new("zig")
+        let _linker_output = std::process::Command::new("zig")
             .args(&[
                 "wasm-ld",
                 // input files
@@ -189,6 +180,8 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
             ])
             .output()
             .unwrap();
+
+        // dbg!(_linker_output);
 
         Module::from_file(&store, &final_wasm_file).unwrap()
     };

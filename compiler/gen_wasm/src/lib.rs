@@ -37,7 +37,7 @@ pub fn build_module<'a>(
     env: &'a Env,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Result<std::vec::Vec<u8>, String> {
-    let mut wasm_module = build_module_help(env, procedures)?;
+    let (mut wasm_module, _) = build_module_help(env, procedures)?;
     let mut buffer = std::vec::Vec::with_capacity(4096);
     wasm_module.serialize_mut(&mut buffer);
     Ok(buffer)
@@ -46,16 +46,17 @@ pub fn build_module<'a>(
 pub fn build_module_help<'a>(
     env: &'a Env,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-) -> Result<WasmModule<'a>, String> {
+) -> Result<(WasmModule<'a>, u32), String> {
     let mut layout_ids = LayoutIds::default();
     let mut generated_procs = Vec::with_capacity_in(procedures.len(), env.arena);
     let mut generated_symbols = Vec::with_capacity_in(procedures.len(), env.arena);
     let mut linker_symbols = Vec::with_capacity_in(procedures.len() * 2, env.arena);
     let mut exports = Vec::with_capacity_in(4, env.arena);
+    let mut main_fn_index = None;
 
     // Collect the symbols & names for the procedures,
     // and filter out procs we're going to inline
-    let mut fn_index = 0;
+    let mut fn_index: u32 = 0;
     for ((sym, layout), proc) in procedures.into_iter() {
         if LowLevel::from_inlined_wrapper(sym).is_some() {
             continue;
@@ -68,14 +69,15 @@ pub fn build_module_help<'a>(
             .to_symbol_string(sym, &env.interns);
 
         if env.exposed_to_host.contains(&sym) {
+            main_fn_index = Some(fn_index);
             exports.push(Export {
                 name: fn_name.clone(),
                 ty: ExportType::Func,
-                index: fn_index as u32,
+                index: fn_index,
             });
         }
 
-        let linker_sym = SymInfo::for_function(fn_index as u32, fn_name);
+        let linker_sym = SymInfo::for_function(fn_index, fn_name);
         linker_symbols.push(linker_sym);
 
         fn_index += 1;
@@ -100,7 +102,7 @@ pub fn build_module_help<'a>(
     let symbol_table = LinkingSubSection::SymbolTable(linker_symbols);
     module.linking.subsections.push(symbol_table);
 
-    Ok(module)
+    Ok((module, main_fn_index.unwrap()))
 }
 
 pub struct CopyMemoryConfig {
