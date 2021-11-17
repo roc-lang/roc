@@ -626,8 +626,8 @@ impl<'a> WasmBackend<'a> {
                             self.lookup_string_constant(string, sym, layout);
 
                         self.code_builder.get_local(local_id);
-                        self.code_builder.insert_memory_relocation(linker_sym_index);
-                        self.code_builder.i32_const(elements_addr as i32);
+                        self.code_builder
+                            .i32_const_mem_addr(elements_addr, linker_sym_index);
                         self.code_builder.i32_store(Align::Bytes4, offset);
 
                         self.code_builder.get_local(local_id);
