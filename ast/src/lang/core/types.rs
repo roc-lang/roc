@@ -20,29 +20,34 @@ pub type TypeId = NodeId<Type2>;
 
 #[derive(Debug)]
 pub enum Type2 {
-    Variable(Variable),
+    Variable(Variable), // 4B
 
-    Alias(Symbol, PoolVec<(PoolStr, TypeId)>, TypeId), // 24B = 8B + 12B + 4B
-    AsAlias(Symbol, PoolVec<(PoolStr, TypeId)>, TypeId), // 24B = 8B + 12B + 4B
+    Alias(Symbol, PoolVec<(PoolStr, TypeId)>, TypeId), // 24B = 8B + 8B + 4B + pad
+    AsAlias(Symbol, PoolVec<(PoolStr, TypeId)>, TypeId), // 24B = 8B + 8B + 4B + pad
 
-    // 32B
+    // 24B
     HostExposedAlias {
         name: Symbol,                          // 8B
-        arguments: PoolVec<(PoolStr, TypeId)>, // 12B
+        arguments: PoolVec<(PoolStr, TypeId)>, // 8B
         actual_var: Variable,                  // 4B
         actual: TypeId,                        // 4B
     },
     EmptyTagUnion,
-    TagUnion(PoolVec<(TagName, PoolVec<Type2>)>, TypeId), // 16B = 12B + 4B
-    RecursiveTagUnion(Variable, PoolVec<(TagName, PoolVec<Type2>)>, TypeId), // 20B = 4B + 12B + 4B
+    TagUnion(PoolVec<(TagName, PoolVec<Type2>)>, TypeId), // 12B = 8B + 4B
+    RecursiveTagUnion(Variable, PoolVec<(TagName, PoolVec<Type2>)>, TypeId), // 16B = 4B + 8B + 4B
 
     EmptyRec,
-    Record(PoolVec<(PoolStr, RecordField<TypeId>)>, TypeId), // 16B = 12B + 4B
+    Record(PoolVec<(PoolStr, RecordField<TypeId>)>, TypeId), // 12B = 8B + 4B
 
-    Function(PoolVec<Type2>, TypeId, TypeId), // 20B = 12B + 4B + 4B
-    Apply(Symbol, PoolVec<Type2>),            // 20B = 8B + 12B
+    Function(PoolVec<Type2>, TypeId, TypeId), // 16B = 8B + 4B + 4B
+    Apply(Symbol, PoolVec<Type2>),            // 16B = 8B + 8B
 
-    Erroneous(Problem2),
+    Erroneous(Problem2), // 24B
+}
+
+#[test]
+fn type2_size() {
+    assert_eq!(std::mem::size_of::<Type2>(), 32); // 24B + pad
 }
 
 #[derive(Debug)]
