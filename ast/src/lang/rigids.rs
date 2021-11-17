@@ -7,6 +7,7 @@ use crate::mem_pool::{
     pool::Pool, pool_str::PoolStr, pool_vec::PoolVec, shallow_clone::ShallowClone,
 };
 use roc_collections::all::WyHash;
+use roc_module::ident::Lowercase;
 use roc_types::subs::Variable;
 
 #[derive(Debug)]
@@ -18,7 +19,7 @@ pub struct Rigids {
 #[allow(clippy::needless_collect)]
 impl Rigids {
     pub fn new(
-        named: HashMap<&str, Variable, BuildHasherDefault<WyHash>>,
+        named: HashMap<Lowercase, Variable, BuildHasherDefault<WyHash>>,
         unnamed: HashSet<Variable, BuildHasherDefault<WyHash>>,
         pool: &mut Pool,
     ) -> Self {
@@ -26,7 +27,7 @@ impl Rigids {
 
         let mut temp_names = Vec::new();
 
-        temp_names.extend(named.iter().map(|(name, var)| (Some(*name), *var)));
+        temp_names.extend(named.iter().map(|(name, var)| (Some(name.as_str()), *var)));
 
         temp_names.extend(unnamed.iter().map(|var| (None, *var)));
 
