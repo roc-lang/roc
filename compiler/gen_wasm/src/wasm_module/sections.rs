@@ -29,6 +29,8 @@ pub enum SectionId {
     Element = 9,
     Code = 10,
     Data = 11,
+    /// DataCount section is unused. Only needed for single-pass validation of
+    /// memory.init and data.drop, which we don't use
     DataCount = 12,
 }
 
@@ -527,42 +529,6 @@ impl Serialize for DataSection<'_> {
 
 /*******************************************************************
  *
- * Data Count section
- *
- * Pre-declares the number of segments in the Data section.
- * This helps the runtime to validate the module in a single pass.
- * The order of sections is DataCount -> Code -> Data
- *
- *******************************************************************/
-
-#[derive(Debug)]
-struct DataCountSection {
-    count: u32,
-}
-
-impl DataCountSection {
-    fn new(data_section: &DataSection<'_>) -> Self {
-        let count = data_section
-            .segments
-            .iter()
-            .filter(|seg| !seg.init.is_empty())
-            .count() as u32;
-        DataCountSection { count }
-    }
-}
-
-impl Serialize for DataCountSection {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        if self.count > 0 {
-            let header_indices = write_section_header(buffer, SectionId::DataCount);
-            buffer.encode_u32(self.count);
-            update_section_size(buffer, header_indices);
-        }
-    }
-}
-
-/*******************************************************************
- *
  * Module
  *
  * https://webassembly.github.io/spec/core/binary/modules.html
@@ -657,11 +623,6 @@ impl<'a> WasmModule<'a> {
         counter.serialize_and_count(buffer, &self.export);
         counter.serialize_and_count(buffer, &self.start);
         counter.serialize_and_count(buffer, &self.element);
-
-        // Data Count section forward-declares the size of the Data section
-        // so that Code section can be validated in one pass
-        let data_count_section = DataCountSection::new(&self.data);
-        counter.serialize_and_count(buffer, &data_count_section);
 
         // Code section is the only one with relocations so we can stop counting
         let code_section_index = counter.section_index;

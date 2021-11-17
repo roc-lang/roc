@@ -53,7 +53,14 @@ mod cli_run {
         expected_ending: &str,
         use_valgrind: bool,
     ) {
-        let compile_out = run_roc(&[&["build", file.to_str().unwrap()], flags].concat());
+        let mut all_flags = vec![];
+        all_flags.extend_from_slice(flags);
+
+        if use_valgrind {
+            all_flags.extend_from_slice(&["--valgrind"]);
+        }
+
+        let compile_out = run_roc(&[&["build", file.to_str().unwrap()], &all_flags[..]].concat());
         if !compile_out.stderr.is_empty() {
             panic!("{}", compile_out.stderr);
         }
