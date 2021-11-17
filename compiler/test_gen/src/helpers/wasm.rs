@@ -122,7 +122,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     );
 
     // We can either generate the test platform or write an external source file, whatever works
-    // generate_test_platform(&mut wasm_module, arena);
+    generate_test_platform(&mut wasm_module, arena);
 
     let mut module_bytes = std::vec::Vec::with_capacity(4096);
     wasm_module.serialize_mut(&mut module_bytes);
@@ -140,7 +140,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
         let tmp_dir: TempDir; // directory for normal test runs, deleted when dropped
         let debug_dir: String; // persistent directory for debugging
 
-        let dirpath: &Path = if DEBUG_WASM_FILE {
+        let wasm_build_dir: &Path = if DEBUG_WASM_FILE {
             // Directory name based on a hash of the Roc source
             let mut hash_state = DefaultHasher::new();
             src.hash(&mut hash_state);
@@ -157,8 +157,9 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
             tmp_dir.path()
         };
 
-        let final_wasm_file = dirpath.join("final.wasm");
-        let app_o_file = dirpath.join("app.o");
+        let final_wasm_file = wasm_build_dir.join("final.wasm");
+        let app_o_file = wasm_build_dir.join("app.o");
+        let libc_a_file = "../gen_wasm/lib/libc.a";
 
         // write the module to a file so the linker can access it
         std::fs::write(&app_o_file, &module_bytes).unwrap();
@@ -169,6 +170,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
                 // input files
                 app_o_file.to_str().unwrap(),
                 bitcode::BUILTINS_WASM32_OBJ_PATH,
+                libc_a_file,
                 // output
                 "-o",
                 final_wasm_file.to_str().unwrap(),
