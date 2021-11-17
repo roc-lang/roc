@@ -2462,4 +2462,34 @@ pub mod test_constrain {
             "tyb -> tyb",
         );
     }
+
+    #[ignore = "Implement annotation-only decls"]
+    #[test]
+    fn type_signature_without_body() {
+        infer_eq(
+            indoc!(
+                r#"
+                    foo: Str -> {}
+
+                    foo "hi"
+                "#
+            ),
+            "{}",
+        );
+    }
+
+    #[ignore = "Implement annotation-only decls"]
+    #[test]
+    fn type_signature_without_body_rigid() {
+        infer_eq(
+            indoc!(
+                r#"
+                    foo : Num * -> custom
+
+                    foo 2
+                "#
+            ),
+            "custom",
+        );
+    }
 }
