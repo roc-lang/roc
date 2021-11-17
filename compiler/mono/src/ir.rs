@@ -419,40 +419,54 @@ impl<'a> Proc<'a> {
 #[derive(Clone, Debug)]
 pub struct ExternalSpecializations<'a> {
     /// Not a bumpalo vec because bumpalo is not thread safe
-    pub specs: BumpMap<Symbol, std::vec::Vec<SolvedType>>,
+    /// Separate array so we can search for membership quickly
+    symbols: std::vec::Vec<Symbol>,
+    /// For each symbol, what types to specialize it for
+    types_to_specialize: std::vec::Vec<std::vec::Vec<SolvedType>>,
     _lifetime: std::marker::PhantomData<&'a u8>,
 }
 
 impl<'a> ExternalSpecializations<'a> {
-    pub fn new_in(arena: &'a Bump) -> Self {
+    pub fn new_in(_arena: &'a Bump) -> Self {
         Self {
-            specs: BumpMap::new_in(arena),
+            symbols: std::vec::Vec::new(),
+            types_to_specialize: std::vec::Vec::new(),
             _lifetime: std::marker::PhantomData,
         }
     }
 
     pub fn insert(&mut self, symbol: Symbol, typ: SolvedType) {
-        use hashbrown::hash_map::Entry::{Occupied, Vacant};
-
-        let existing = match self.specs.entry(symbol) {
-            Vacant(entry) => entry.insert(std::vec::Vec::new()),
-            Occupied(entry) => entry.into_mut(),
-        };
-
-        existing.push(typ);
+        match self.symbols.iter().position(|s| *s == symbol) {
+            None => {
+                self.symbols.push(symbol);
+                self.types_to_specialize.push(vec![typ]);
+            }
+            Some(index) => {
+                let types_to_specialize = &mut self.types_to_specialize[index];
+                types_to_specialize.push(typ);
+            }
+        }
     }
 
     pub fn extend(&mut self, other: Self) {
-        use hashbrown::hash_map::Entry::{Occupied, Vacant};
-
-        for (symbol, solved_types) in other.specs {
-            let existing = match self.specs.entry(symbol) {
-                Vacant(entry) => entry.insert(std::vec::Vec::new()),
-                Occupied(entry) => entry.into_mut(),
-            };
-
-            existing.extend(solved_types);
+        for (symbol, tts) in other.into_iter() {
+            match self.symbols.iter().position(|s| *s == symbol) {
+                None => {
+                    self.symbols.push(symbol);
+                    self.types_to_specialize.push(tts);
+                }
+                Some(index) => {
+                    let types_to_specialize = &mut self.types_to_specialize[index];
+                    types_to_specialize.extend(tts);
+                }
+            }
         }
+    }
+
+    pub fn into_iter(self) -> impl Iterator<Item = (Symbol, std::vec::Vec<SolvedType>)> {
+        self.symbols
+            .into_iter()
+            .zip(self.types_to_specialize.into_iter())
     }
 }
 
@@ -1970,14 +1984,14 @@ fn specialize_externals_others_need<'a>(
     externals_others_need: ExternalSpecializations<'a>,
     layout_cache: &mut LayoutCache<'a>,
 ) {
-    for (symbol, solved_types) in externals_others_need.specs.iter() {
+    for (symbol, solved_types) in externals_others_need.into_iter() {
         for solved_type in solved_types {
             // historical note: we used to deduplicate with a hash here,
             // but the cost of that hash is very high. So for now we make
             // duplicate specializations, and the insertion into a hash map
             // below will deduplicate them.
 
-            let name = *symbol;
+            let name = symbol;
 
             let partial_proc_id = match procs.partial_procs.symbol_to_id(name) {
                 Some(v) => v,
@@ -1992,7 +2006,7 @@ fn specialize_externals_others_need<'a>(
                 procs,
                 name,
                 layout_cache,
-                solved_type,
+                &solved_type,
                 BumpMap::new_in(env.arena),
                 partial_proc_id,
             ) {
