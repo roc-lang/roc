@@ -23,7 +23,7 @@ roc_constrain = { path = "../constrain" }
 roc_unify = { path = "../unify" }
 roc_solve = { path = "../solve" }
 roc_mono = { path = "../mono" }
-roc_reporting = { path = "../reporting" }
+roc_reporting = { path = "../../reporting" }
 roc_load = { path = "../load" }
 roc_can = { path = "../can" }
 roc_parse = { path = "../parse" }
