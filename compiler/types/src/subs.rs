@@ -317,7 +317,8 @@ fn subs_fmt_desc(this: &Descriptor, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
     subs_fmt_content(&this.content, subs, f)?;
 
     write!(f, " r: {:?}", &this.rank)?;
-    write!(f, " m: {:?}", &this.mark)
+    write!(f, " m: {:?}", &this.mark)?;
+    write!(f, " c: {:?}", &this.copy)
 }
 
 pub struct SubsFmtContent<'a>(pub &'a Content, pub &'a Subs);
@@ -1089,6 +1090,10 @@ impl Subs {
         &self.utable.probe_value_ref(key).value
     }
 
+    pub fn get_ref_mut(&mut self, key: Variable) -> &mut Descriptor {
+        &mut self.utable.probe_value_ref_mut(key).value
+    }
+
     pub fn get_rank(&self, key: Variable) -> Rank {
         self.utable.probe_value_ref(key).value.rank
     }
@@ -1201,22 +1206,7 @@ impl Subs {
     }
 
     pub fn restore(&mut self, var: Variable) {
-        let desc = self.get(var);
-
-        if desc.copy.is_some() {
-            let content = desc.content;
-
-            let desc = Descriptor {
-                content: content.clone(),
-                rank: Rank::NONE,
-                mark: Mark::NONE,
-                copy: OptVariable::NONE,
-            };
-
-            self.set(var, desc);
-
-            restore_content(self, &content);
-        }
+        restore_help(self, var)
     }
 
     pub fn len(&self) -> usize {
@@ -1225,6 +1215,10 @@ impl Subs {
 
     pub fn is_empty(&self) -> bool {
         self.utable.is_empty()
+    }
+
+    pub fn contains(&self, var: Variable) -> bool {
+        (var.index() as usize) < self.len()
     }
 
     pub fn snapshot(&mut self) -> Snapshot<InPlace<Variable>> {
@@ -1828,6 +1822,12 @@ impl RecordFields {
             variables_start: 0,
             field_types_start: 0,
         }
+    }
+
+    fn variables(&self) -> VariableSubsSlice {
+        let slice = SubsSlice::new(self.variables_start, self.length);
+
+        VariableSubsSlice { slice }
     }
 
     pub fn iter_variables(&self) -> impl Iterator<Item = SubsIndex<Variable>> {
@@ -2718,83 +2718,85 @@ fn get_fresh_var_name(state: &mut ErrorTypeState) -> Lowercase {
     name
 }
 
-fn restore_content(subs: &mut Subs, content: &Content) {
-    use Content::*;
-    use FlatType::*;
+fn restore_help(subs: &mut Subs, initial: Variable) {
+    let mut stack = vec![initial];
 
-    match content {
-        FlexVar(_) | RigidVar(_) | Error => (),
+    let variable_slices = &subs.variable_slices;
 
-        RecursionVar { structure, .. } => {
-            subs.restore(*structure);
-        }
+    let variables = &subs.variables;
+    let var_slice = |variable_subs_slice: VariableSubsSlice| {
+        &variables[variable_subs_slice.slice.start as usize..]
+            [..variable_subs_slice.slice.length as usize]
+    };
 
-        Structure(flat_type) => match flat_type {
-            Apply(_, args) => {
-                for index in args.into_iter() {
-                    let var = subs[index];
-                    subs.restore(var);
-                }
-            }
+    while let Some(var) = stack.pop() {
+        let desc = &mut subs.utable.probe_value_ref_mut(var).value;
 
-            Func(arg_vars, closure_var, ret_var) => {
-                for index in arg_vars.into_iter() {
-                    let var = subs[index];
-                    subs.restore(var);
-                }
+        if desc.copy.is_some() {
+            desc.rank = Rank::NONE;
+            desc.mark = Mark::NONE;
+            desc.copy = OptVariable::NONE;
 
-                subs.restore(*ret_var);
-                subs.restore(*closure_var);
-            }
+            use Content::*;
+            use FlatType::*;
 
-            EmptyRecord => (),
-            EmptyTagUnion => (),
+            match &desc.content {
+                FlexVar(_) | RigidVar(_) | Error => (),
 
-            Record(fields, ext_var) => {
-                for index in fields.iter_variables() {
-                    let var = subs[index];
-                    subs.restore(var);
+                RecursionVar { structure, .. } => {
+                    stack.push(*structure);
                 }
 
-                subs.restore(*ext_var);
-            }
-            TagUnion(tags, ext_var) => {
-                for slice_index in tags.variables() {
-                    let slice = subs[slice_index];
-                    for var_index in slice {
-                        let var = subs[var_index];
-                        subs.restore(var);
+                Structure(flat_type) => match flat_type {
+                    Apply(_, args) => {
+                        stack.extend(var_slice(*args));
                     }
-                }
 
-                subs.restore(*ext_var);
-            }
-            FunctionOrTagUnion(_, _, ext_var) => {
-                subs.restore(*ext_var);
-            }
+                    Func(arg_vars, closure_var, ret_var) => {
+                        stack.extend(var_slice(*arg_vars));
 
-            RecursiveTagUnion(rec_var, tags, ext_var) => {
-                for slice_index in tags.variables() {
-                    let slice = subs[slice_index];
-                    for var_index in slice {
-                        let var = subs[var_index];
-                        subs.restore(var);
+                        stack.push(*ret_var);
+                        stack.push(*closure_var);
                     }
+
+                    EmptyRecord => (),
+                    EmptyTagUnion => (),
+
+                    Record(fields, ext_var) => {
+                        stack.extend(var_slice(fields.variables()));
+
+                        stack.push(*ext_var);
+                    }
+                    TagUnion(tags, ext_var) => {
+                        for slice_index in tags.variables() {
+                            let slice = variable_slices[slice_index.start as usize];
+                            stack.extend(var_slice(slice));
+                        }
+
+                        stack.push(*ext_var);
+                    }
+                    FunctionOrTagUnion(_, _, ext_var) => {
+                        stack.push(*ext_var);
+                    }
+
+                    RecursiveTagUnion(rec_var, tags, ext_var) => {
+                        for slice_index in tags.variables() {
+                            let slice = variable_slices[slice_index.start as usize];
+                            stack.extend(var_slice(slice));
+                        }
+
+                        stack.push(*ext_var);
+                        stack.push(*rec_var);
+                    }
+
+                    Erroneous(_) => (),
+                },
+                Alias(_, args, var) => {
+                    stack.extend(var_slice(args.variables()));
+
+                    stack.push(*var);
                 }
-
-                subs.restore(*ext_var);
-                subs.restore(*rec_var);
             }
-
-            Erroneous(_) => (),
-        },
-        Alias(_, args, var) => {
-            for var_index in args.variables().into_iter() {
-                let var = subs[var_index];
-                subs.restore(var);
-            }
-
-            subs.restore(*var);
         }
     }
 }
