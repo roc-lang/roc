@@ -837,22 +837,6 @@ impl<'a> Procs<'a> {
     }
 }
 
-fn add_pending<'a>(
-    pending_specializations: &mut BumpMap<
-        Symbol,
-        MutMap<ProcLayout<'a>, PendingSpecialization<'a>>,
-    >,
-    symbol: Symbol,
-    layout: ProcLayout<'a>,
-    pending: PendingSpecialization<'a>,
-) {
-    let all_pending = pending_specializations
-        .entry(symbol)
-        .or_insert_with(|| HashMap::with_capacity_and_hasher(1, default_hasher()));
-
-    all_pending.insert(layout, pending);
-}
-
 #[derive(Default)]
 pub struct Specializations<'a> {
     by_symbol: MutMap<Symbol, MutMap<Layout<'a>, Proc<'a>>>,
