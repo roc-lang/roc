@@ -479,7 +479,7 @@ impl<'a> WasmBackend<'a> {
                 CallType::ByName { name: func_sym, .. } => {
                     // If this function is just a lowlevel wrapper, then inline it
                     if let Some(lowlevel) = LowLevel::from_inlined_wrapper(*func_sym) {
-                        return self.build_low_level(lowlevel, arguments, wasm_layout);
+                        return self.build_low_level(lowlevel, arguments, *sym, wasm_layout);
                     }
 
                     let mut wasm_args_tmp: Vec<Symbol>;
@@ -524,7 +524,7 @@ impl<'a> WasmBackend<'a> {
                 }
 
                 CallType::LowLevel { op: lowlevel, .. } => {
-                    self.build_low_level(*lowlevel, arguments, wasm_layout)
+                    self.build_low_level(*lowlevel, arguments, *sym, wasm_layout)
                 }
 
                 x => Err(format!("the call type, {:?}, is not yet implemented", x)),
@@ -563,13 +563,18 @@ impl<'a> WasmBackend<'a> {
         &mut self,
         lowlevel: LowLevel,
         arguments: &'a [Symbol],
+        return_sym: Symbol,
         return_layout: WasmLayout,
     ) -> Result<(), String> {
         // Load symbols using the "fast calling convention" that Zig uses instead of the C ABI we normally use.
         // It's only different from the C ABI for small structs, and we are using Zig for all of those cases.
         // This is a workaround for a bug in Zig. If later versions fix it, we can change to the C ABI.
-        self.storage
-            .load_symbols_fastcc(&mut self.code_builder, arguments, &return_layout);
+        self.storage.load_symbols_fastcc(
+            &mut self.code_builder,
+            arguments,
+            return_sym,
+            &return_layout,
+        );
 
         let build_result = decode_low_level(
             &mut self.code_builder,

@@ -233,20 +233,15 @@ impl<'a> Storage<'a> {
                     }
                 }
             }
-            StoredValue::Local { local_id, .. }
-            | StoredValue::StackMemory {
-                location: StackMemoryLocation::PointerArg(local_id),
-                ..
-            } => {
+
+            StoredValue::Local { local_id, .. } => {
                 code_builder.get_local(local_id);
                 code_builder.set_top_symbol(sym);
             }
 
-            StoredValue::StackMemory {
-                location: StackMemoryLocation::FrameOffset(offset),
-                ..
-            } => {
-                code_builder.get_local(self.stack_frame_pointer.unwrap());
+            StoredValue::StackMemory { location, .. } => {
+                let (local_id, offset) = location.local_and_offset(self.stack_frame_pointer);
+                code_builder.get_local(local_id);
                 if offset != 0 {
                     code_builder.i32_const(offset as i32);
                     code_builder.i32_add();
@@ -280,6 +275,7 @@ impl<'a> Storage<'a> {
         &mut self,
         code_builder: &mut CodeBuilder,
         symbols: &[Symbol],
+        return_symbol: Symbol,
         return_layout: &WasmLayout,
     ) {
         // Note: we are not doing verify_stack_match in this case so we may generate more code.
@@ -287,7 +283,8 @@ impl<'a> Storage<'a> {
 
         if return_layout.is_stack_memory() {
             // Load the address where the return value should be written
-            self.load_symbol_ccc(code_builder, symbols[0]);
+            // Apparently for return values we still use a pointer to stack memory
+            self.load_symbol_ccc(code_builder, return_symbol);
         };
 
         for sym in symbols {
