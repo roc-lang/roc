@@ -284,6 +284,12 @@ impl<S: UnificationStore> UnificationTable<S> {
         &self.values[key.index() as usize]
     }
 
+    /// Obtains the current value for a particular key.
+    /// Not for end-users; they can use `probe_value`.
+    pub fn value_mut(&mut self, key: S::Key) -> &mut VarValue<S::Key> {
+        &mut self.values[key.index() as usize]
+    }
+
     /// Find the root node for `vid`. This uses the standard
     /// union-find algorithm with path compression:
     /// <http://en.wikipedia.org/wiki/Disjoint-set_data_structure>.
@@ -449,6 +455,17 @@ where
         let id = id.into();
         let id = self.get_root_key_without_compacting(id);
         self.value(id)
+    }
+
+    /// Returns the current value for the given key. If the key has
+    /// been union'd, this will give the value from the current root.
+    pub fn probe_value_ref_mut<K1>(&mut self, id: K1) -> &mut VarValue<K>
+    where
+        K1: Into<K>,
+    {
+        let id = id.into();
+        let id = self.get_root_key_without_compacting(id);
+        self.value_mut(id)
     }
 
     /// This is for a debug_assert! in solve() only. Do not use it elsewhere!
