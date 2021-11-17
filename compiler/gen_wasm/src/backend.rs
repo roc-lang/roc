@@ -794,7 +794,7 @@ impl<'a> WasmBackend<'a> {
                         StoredValue::StackMemory { size, .. } if *size > 4 && *size <= 8 => {
                             ValueType::I64
                         }
-                        _ => ValueType::I32,
+                        stored => stored.value_type(),
                     });
                 }
 
