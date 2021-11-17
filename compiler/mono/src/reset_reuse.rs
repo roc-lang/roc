@@ -1,6 +1,6 @@
 use crate::inc_dec::{collect_stmt, occurring_variables_expr, JPLiveVarMap, LiveVarSet};
 use crate::ir::{BranchInfo, Call, Expr, ListLiteralElement, Proc, Stmt};
-use crate::layout::{Layout, UnionLayout};
+use crate::layout::{Layout, TagIdIntType, UnionLayout};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::MutSet;
@@ -27,17 +27,17 @@ pub fn insert_reset_reuse<'a, 'i>(
 
 #[derive(Debug)]
 struct CtorInfo<'a> {
-    id: u8,
+    id: TagIdIntType,
     layout: UnionLayout<'a>,
 }
 
-fn may_reuse(tag_layout: UnionLayout, tag_id: u8, other: &CtorInfo) -> bool {
+fn may_reuse(tag_layout: UnionLayout, tag_id: TagIdIntType, other: &CtorInfo) -> bool {
     if tag_layout != other.layout {
         return false;
     }
 
     // we should not get here if the tag we matched on is represented as NULL
-    debug_assert!(!tag_layout.tag_is_null(other.id));
+    debug_assert!(!tag_layout.tag_is_null(other.id as _));
 
     // furthermore, we can only use the memory if the tag we're creating is non-NULL
     !tag_layout.tag_is_null(tag_id)

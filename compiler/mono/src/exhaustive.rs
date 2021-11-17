@@ -1,4 +1,4 @@
-use crate::ir::DestructType;
+use crate::{ir::DestructType, layout::TagIdIntType};
 use roc_collections::all::{Index, MutMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_region::all::{Located, Region};
@@ -35,7 +35,7 @@ pub enum RenderAs {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Copy)]
-pub struct TagId(pub u8);
+pub struct TagId(pub TagIdIntType);
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Ctor {
@@ -71,8 +71,12 @@ fn simplify(pattern: &crate::ir::Pattern) -> Pattern {
         StrLiteral(v) => Literal(Literal::Str(v.clone())),
 
         // To make sure these are exhaustive, we have to "fake" a union here
-        BitLiteral { value, union, .. } => Ctor(union.clone(), TagId(*value as u8), vec![]),
-        EnumLiteral { tag_id, union, .. } => Ctor(union.clone(), TagId(*tag_id), vec![]),
+        BitLiteral { value, union, .. } => {
+            Ctor(union.clone(), TagId(*value as TagIdIntType), vec![])
+        }
+        EnumLiteral { tag_id, union, .. } => {
+            Ctor(union.clone(), TagId(*tag_id as TagIdIntType), vec![])
+        }
 
         Underscore => Anything,
         Identifier(_) => Anything,

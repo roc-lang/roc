@@ -36,9 +36,9 @@ pub fn decode_low_level<'a>(
         | ListContains | ListAppend | ListPrepend | ListJoin | ListRange | ListMap | ListMap2
         | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk | ListWalkUntil
         | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith | ListSublist
-        | ListDrop | ListDropAt | ListSwap | ListAny | ListFindUnsafe | DictSize | DictEmpty
-        | DictInsert | DictRemove | DictContains | DictGetUnsafe | DictKeys | DictValues
-        | DictUnion | DictIntersection | DictDifference | DictWalk | SetFromList => {
+        | ListDropAt | ListSwap | ListAny | ListFindUnsafe | DictSize | DictEmpty | DictInsert
+        | DictRemove | DictContains | DictGetUnsafe | DictKeys | DictValues | DictUnion
+        | DictIntersection | DictDifference | DictWalk | SetFromList => {
             return NotImplemented;
         }
 

@@ -53,7 +53,14 @@ mod cli_run {
         expected_ending: &str,
         use_valgrind: bool,
     ) {
-        let compile_out = run_roc(&[&["build", file.to_str().unwrap()], flags].concat());
+        let mut all_flags = vec![];
+        all_flags.extend_from_slice(flags);
+
+        if use_valgrind {
+            all_flags.extend_from_slice(&["--valgrind"]);
+        }
+
+        let compile_out = run_roc(&[&["build", file.to_str().unwrap()], &all_flags[..]].concat());
         if !compile_out.stderr.is_empty() {
             panic!("{}", compile_out.stderr);
         }
@@ -111,20 +118,18 @@ mod cli_run {
             }
 
             valgrind_out
+        } else if let Some(input_file) = input_file {
+            run_cmd(
+                file.with_file_name(executable_filename).to_str().unwrap(),
+                stdin,
+                &[input_file.to_str().unwrap()],
+            )
         } else {
-            if let Some(input_file) = input_file {
-                run_cmd(
-                    file.with_file_name(executable_filename).to_str().unwrap(),
-                    stdin,
-                    &[input_file.to_str().unwrap()],
-                )
-            } else {
-                run_cmd(
-                    file.with_file_name(executable_filename).to_str().unwrap(),
-                    stdin,
-                    &[],
-                )
-            }
+            run_cmd(
+                file.with_file_name(executable_filename).to_str().unwrap(),
+                stdin,
+                &[],
+            )
         };
         if !&out.stdout.ends_with(expected_ending) {
             panic!(
@@ -796,7 +801,7 @@ fn read_wasi_stdout(wasi_env: wasmer_wasi::WasiEnv) -> String {
             let mut buf = String::new();
             stdout.read_to_string(&mut buf).unwrap();
 
-            return buf;
+            buf
         }
         _ => todo!(),
     }
