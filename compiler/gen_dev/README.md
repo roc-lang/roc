@@ -70,7 +70,7 @@ This is the general procedure I follow with some helpful links:
    A good place to look for missing features is in the test files for generation in [test_gen](https://github.com/rtfeldman/roc/tree/trunk/compiler/test_gen). Any test that is not enabled for the `gen-dev` feature still needs to be added to the dev backend. Eventually all features should be enabled for the dev backend.
 1. Pick/write the simplest test case you can find for the new feature.
    Just add `feature = "gen-dev"` to the `cfg` line for the test case.
-1. Uncomment the code to print out procedures [from here](https://github.com/rtfeldman/roc/blob/trunk/compiler/gen_dev/tests/helpers/eval.rs) and run the test.
+1. Uncomment the code to print out procedures [from here](https://github.com/rtfeldman/roc/blob/b03ed18553569314a420d5bf1fb0ead4b6b5ecda/compiler/test_gen/src/helpers/dev.rs#L76) and run the test.
    It should fail and print out the mono ir for this test case.
    Seeing the actual mono ir tends to be very helpful for complex additions.
 1. Generally it will fail in one of the match statements in the [Backend](https://github.com/rtfeldman/roc/blob/trunk/compiler/gen_dev/src/lib.rs) trait.
