@@ -1,0 +1,45 @@
+Defs(
+    [
+        |L 0-0, C 0-33| Annotation(
+            |L 0-0, C 0-3| Identifier(
+                "foo",
+            ),
+            |L 0-0, C 6-33| As(
+                |L 0-0, C 6-21| Apply(
+                    "Foo.Bar",
+                    "Baz",
+                    [
+                        |L 0-0, C 18-19| BoundVariable(
+                            "x",
+                        ),
+                        |L 0-0, C 20-21| BoundVariable(
+                            "y",
+                        ),
+                    ],
+                ),
+                [],
+                |L 0-0, C 25-33| Apply(
+                    "",
+                    "Blah",
+                    [
+                        |L 0-0, C 30-31| BoundVariable(
+                            "a",
+                        ),
+                        |L 0-0, C 32-33| BoundVariable(
+                            "b",
+                        ),
+                    ],
+                ),
+            ),
+        ),
+    ],
+    |L 2-2, C 0-2| SpaceBefore(
+        Num(
+            "42",
+        ),
+        [
+            Newline,
+            Newline,
+        ],
+    ),
+)

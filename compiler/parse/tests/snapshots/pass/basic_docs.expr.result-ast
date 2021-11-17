@@ -1,0 +1,43 @@
+SpaceBefore(
+    Defs(
+        [
+            |L 6-6, C 0-5| Body(
+                |L 6-6, C 0-1| Identifier(
+                    "x",
+                ),
+                |L 6-6, C 4-5| Num(
+                    "5",
+                ),
+            ),
+        ],
+        |L 8-8, C 0-2| SpaceBefore(
+            Num(
+                "42",
+            ),
+            [
+                Newline,
+                Newline,
+            ],
+        ),
+    ),
+    [
+        DocComment(
+            "first line of docs",
+        ),
+        DocComment(
+            "    second line",
+        ),
+        DocComment(
+            " third line",
+        ),
+        DocComment(
+            "fourth line",
+        ),
+        DocComment(
+            "",
+        ),
+        DocComment(
+            "sixth line after doc new line",
+        ),
+    ],
+)

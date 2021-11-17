@@ -1,0 +1,80 @@
+When(
+    |L 0-0, C 5-22| Apply(
+        |L 0-0, C 5-11| GlobalTag(
+            "Delmin",
+        ),
+        [
+            |L 0-0, C 13-19| ParensAround(
+                Apply(
+                    |L 0-0, C 13-16| GlobalTag(
+                        "Del",
+                    ),
+                    [
+                        |L 0-0, C 17-19| Var {
+                            module_name: "",
+                            ident: "rx",
+                        },
+                    ],
+                    Space,
+                ),
+            ),
+            |L 0-0, C 21-22| Num(
+                "0",
+            ),
+        ],
+        Space,
+    ),
+    [
+        WhenBranch {
+            patterns: [
+                |L 1-1, C 4-22| SpaceBefore(
+                    Apply(
+                        |L 1-1, C 4-10| GlobalTag(
+                            "Delmin",
+                        ),
+                        [
+                            |L 1-1, C 12-18| Apply(
+                                |L 1-1, C 12-15| GlobalTag(
+                                    "Del",
+                                ),
+                                [
+                                    |L 1-1, C 16-18| Identifier(
+                                        "ry",
+                                    ),
+                                ],
+                            ),
+                            |L 1-1, C 21-22| Underscore(
+                                "",
+                            ),
+                        ],
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ],
+            value: |L 1-1, C 26-47| Apply(
+                |L 1-1, C 26-30| GlobalTag(
+                    "Node",
+                ),
+                [
+                    |L 1-1, C 31-36| GlobalTag(
+                        "Black",
+                    ),
+                    |L 1-1, C 37-38| Num(
+                        "0",
+                    ),
+                    |L 1-1, C 39-44| GlobalTag(
+                        "False",
+                    ),
+                    |L 1-1, C 45-47| Var {
+                        module_name: "",
+                        ident: "ry",
+                    },
+                ],
+                Space,
+            ),
+            guard: None,
+        },
+    ],
+)

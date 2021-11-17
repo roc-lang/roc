@@ -1,0 +1,21 @@
+Apply(
+    |L 0-0, C 0-1| Var {
+        module_name: "",
+        ident: "a",
+    },
+    [
+        |L 0-0, C 2-3| Var {
+            module_name: "",
+            ident: "b",
+        },
+        |L 0-0, C 4-5| Var {
+            module_name: "",
+            ident: "c",
+        },
+        |L 0-0, C 6-7| Var {
+            module_name: "",
+            ident: "d",
+        },
+    ],
+    Space,
+)

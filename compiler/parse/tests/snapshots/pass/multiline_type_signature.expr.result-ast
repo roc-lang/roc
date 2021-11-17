@@ -1,0 +1,27 @@
+Defs(
+    [
+        |L 0-1, C 0-6| Annotation(
+            |L 0-0, C 0-1| Identifier(
+                "f",
+            ),
+            |L 1-1, C 4-6| SpaceBefore(
+                Record {
+                    fields: [],
+                    ext: None,
+                },
+                [
+                    Newline,
+                ],
+            ),
+        ),
+    ],
+    |L 3-3, C 0-2| SpaceBefore(
+        Num(
+            "42",
+        ),
+        [
+            Newline,
+            Newline,
+        ],
+    ),
+)
