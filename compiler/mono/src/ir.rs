@@ -422,7 +422,7 @@ pub struct ExternalSpecializations<'a> {
     /// Separate array so we can search for membership quickly
     symbols: std::vec::Vec<Symbol>,
     /// For each symbol, what types to specialize it for
-    types_to_specialize: std::vec::Vec<std::vec::Vec<SolvedType>>,
+    types_to_specialize: std::vec::Vec<std::vec::Vec<(Subs, Variable)>>,
     _lifetime: std::marker::PhantomData<&'a u8>,
 }
 
@@ -435,15 +435,15 @@ impl<'a> ExternalSpecializations<'a> {
         }
     }
 
-    pub fn insert(&mut self, symbol: Symbol, typ: SolvedType) {
+    fn insert_external(&mut self, symbol: Symbol, store: Subs, variable: Variable) {
         match self.symbols.iter().position(|s| *s == symbol) {
             None => {
                 self.symbols.push(symbol);
-                self.types_to_specialize.push(vec![typ]);
+                self.types_to_specialize.push(vec![(store, variable)]);
             }
             Some(index) => {
                 let types_to_specialize = &mut self.types_to_specialize[index];
-                types_to_specialize.push(typ);
+                types_to_specialize.push((store, variable));
             }
         }
     }
@@ -463,7 +463,7 @@ impl<'a> ExternalSpecializations<'a> {
         }
     }
 
-    pub fn into_iter(self) -> impl Iterator<Item = (Symbol, std::vec::Vec<SolvedType>)> {
+    fn into_iter(self) -> impl Iterator<Item = (Symbol, std::vec::Vec<(Subs, Variable)>)> {
         self.symbols
             .into_iter()
             .zip(self.types_to_specialize.into_iter())
@@ -1969,7 +1969,7 @@ fn specialize_externals_others_need<'a>(
     layout_cache: &mut LayoutCache<'a>,
 ) {
     for (symbol, solved_types) in externals_others_need.into_iter() {
-        for solved_type in solved_types {
+        for (mut store, store_variable) in solved_types {
             // historical note: we used to deduplicate with a hash here,
             // but the cost of that hash is very high. So for now we make
             // duplicate specializations, and the insertion into a hash map
@@ -1984,13 +1984,15 @@ fn specialize_externals_others_need<'a>(
                 }
             };
 
+            let variable = roc_solve::solve::deep_copy_var_to(&mut store, env.subs, store_variable);
+
             // TODO I believe this is also duplicated
-            match specialize_solved_type(
+            match specialize_variable(
                 env,
                 procs,
                 name,
                 layout_cache,
-                &solved_type,
+                variable,
                 BumpMap::new_in(env.arena),
                 partial_proc_id,
             ) {
@@ -6476,8 +6478,10 @@ fn add_needed_external<'a>(
         Occupied(entry) => entry.into_mut(),
     };
 
-    let solved_type = SolvedType::from_var(env.subs, fn_var);
-    existing.insert(name, solved_type);
+    let mut store = Subs::default();
+    let variable = roc_solve::solve::deep_copy_var_to(env.subs, &mut store, fn_var);
+
+    existing.insert_external(name, store, variable);
 }
 
 fn build_call<'a>(
