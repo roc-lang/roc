@@ -41,7 +41,7 @@ use winit::{
     platform::run_return::EventLoopExtRunReturn,
 };
 
-// Inspired by:
+// Inspired by: test
 // https://github.com/sotrh/learn-wgpu by Benjamin Hansen, which is licensed under the MIT license
 // https://github.com/cloudhead/rgx by Alexis Sellier, which is licensed under the MIT license
 //
