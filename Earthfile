@@ -33,6 +33,8 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN rustup component add clippy
     # rustfmt
     RUN rustup component add rustfmt
+    # macOS target for checking Mac-specific compilations
+    RUN rustup target add x86_64-apple-darwin
     # criterion
     RUN cargo install cargo-criterion
     # editor
@@ -53,6 +55,10 @@ test-zig:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
     COPY --dir compiler/builtins/bitcode ./
     RUN cd bitcode && ./run-tests.sh
+
+check-macos:
+    FROM +copy-dirs
+    RUN cargo check --target x86_64-apple-darwin
 
 check-clippy:
     FROM +copy-dirs
@@ -104,6 +110,7 @@ verify-no-git-changes:
 
 test-all:
     BUILD +test-zig
+    BUILD +check-macos
     BUILD +check-rustfmt
     BUILD +check-clippy
     BUILD +test-rust
