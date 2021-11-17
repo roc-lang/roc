@@ -22,7 +22,7 @@ pub enum FunctionDef {
     },
     NoAnnotation {
         name: Symbol,                              // 8B
-        arguments: PoolVec<(PatternId, Variable)>, // 8B
+        arguments: PoolVec<(Variable, PatternId)>, // 8B
         return_var: Variable,                      // 4B
         body_id: ExprId,                           // 4B
     },

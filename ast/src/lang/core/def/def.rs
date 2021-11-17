@@ -689,14 +689,14 @@ fn canonicalize_pending_def<'a>(
                     // parent commit for the bug this fixed!
                     let refs = References::new();
 
-                    let arguments: PoolVec<(PatternId, Variable)> =
+                    let arguments: PoolVec<(Variable, PatternId)> =
                         PoolVec::with_capacity(closure_args.len() as u32, env.pool);
 
                     let it: Vec<_> = closure_args.iter(env.pool).map(|(x, y)| (*x, *y)).collect();
 
                     for (node_id, (_, pattern_id)) in arguments.iter_node_ids().zip(it.into_iter())
                     {
-                        env.pool[node_id] = (pattern_id, env.var_store.fresh());
+                        env.pool[node_id] = (env.var_store.fresh(), pattern_id);
                     }
 
                     let function_def = FunctionDef::NoAnnotation {
