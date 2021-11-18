@@ -12,6 +12,15 @@ pub enum CalledVia {
 
     /// Calling with a unary operator, e.g. (!foo bar baz) or (-foo bar baz)
     UnaryOp(UnaryOp),
+
+    /// This call is the result of some desugaring, e.g. "\(first) \(last)" is
+    /// transformed into first ++ last.
+    Sugar(Sugar),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sugar {
+    StringInterpolation,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -5,6 +5,7 @@ use crate::subs::{
 use roc_collections::all::{ImMap, ImSet, Index, MutSet, SendMap};
 use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
+use roc_module::operator::CalledVia;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_region::all::{Located, Region};
 use std::fmt;
@@ -1134,7 +1135,7 @@ pub enum Reason {
 #[derive(PartialEq, Debug, Clone)]
 pub enum Category {
     Lookup(Symbol),
-    CallResult(Option<Symbol>),
+    CallResult(Option<Symbol>, CalledVia),
     LowLevelOpResult(LowLevel),
     ForeignCall,
     TagApply {
