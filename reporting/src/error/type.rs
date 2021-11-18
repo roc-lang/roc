@@ -1045,7 +1045,7 @@ fn add_category<'b>(
             alloc.text(" is a:"),
         ]),
         CallResult(
-            Some(symbol),
+            Some(_),
             CalledVia::BinOp(
                 BinOp::Equals
                 | BinOp::NotEquals
@@ -1055,7 +1055,7 @@ fn add_category<'b>(
                 | BinOp::GreaterThanOrEq,
             ),
         ) => alloc.concat(vec![alloc.text("This comparison produces:")]),
-        CallResult(Some(symbol), CalledVia::Sugar(Sugar::StringInterpolation)) => {
+        CallResult(Some(_), CalledVia::Sugar(Sugar::StringInterpolation)) => {
             alloc.concat(vec![alloc.text("This string interpolation produces:")])
         }
         CallResult(Some(symbol), _) => alloc.concat(vec![
