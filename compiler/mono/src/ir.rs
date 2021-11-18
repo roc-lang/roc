@@ -544,8 +544,7 @@ impl<'a> Specialized<'a> {
             .zip(self.proc_layouts.into_iter())
             .zip(self.procedures.into_iter())
             .filter_map(|((s, l), in_progress)| {
-                // we use UNDERSCORE for removed symbols
-                if let Symbol::UNDERSCORE = s {
+                if let Symbol::REMOVED_SPECIALIZATION = s {
                     None
                 } else {
                     match in_progress {
@@ -596,8 +595,7 @@ impl<'a> Specialized<'a> {
         }
 
         if let Some(index) = index {
-            // we use UNDERSCORE for removed symbols
-            self.symbols[index] = Symbol::UNDERSCORE;
+            self.symbols[index] = Symbol::REMOVED_SPECIALIZATION;
 
             true
         } else {
