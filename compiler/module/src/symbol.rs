@@ -989,12 +989,14 @@ define_builtins! {
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
-        1 BOOL_AND: "and"
-        2 BOOL_OR: "or"
-        3 BOOL_NOT: "not"
-        4 BOOL_XOR: "xor"
-        5 BOOL_EQ: "isEq"
-        6 BOOL_NEQ: "isNotEq"
+        1 BOOL_FALSE: "False" imported // Bool.Bool = [ False, True ]
+        2 BOOL_TRUE: "True" imported // Bool.Bool = [ False, True ]
+        3 BOOL_AND: "and"
+        4 BOOL_OR: "or"
+        5 BOOL_NOT: "not"
+        6 BOOL_XOR: "xor"
+        7 BOOL_EQ: "isEq"
+        8 BOOL_NEQ: "isNotEq"
     }
     3 STR: "Str" => {
         0 STR_STR: "Str" imported // the Str.Str type alias
@@ -1077,12 +1079,14 @@ define_builtins! {
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias
-        1 RESULT_MAP: "map"
-        2 RESULT_MAP_ERR: "mapErr"
-        3 RESULT_WITH_DEFAULT: "withDefault"
-        4 RESULT_AFTER: "after"
-        5 RESULT_IS_OK: "isOk"
-        6 RESULT_IS_ERR: "isErr"
+        1 RESULT_OK: "Ok" imported // Result.Result = [ Ok a, Err e ]
+        2 RESULT_ERR: "Err" imported // Result.Result = [ Ok a, Err e ]
+        3 RESULT_MAP: "map"
+        4 RESULT_MAP_ERR: "mapErr"
+        5 RESULT_WITH_DEFAULT: "withDefault"
+        6 RESULT_AFTER: "after"
+        7 RESULT_IS_OK: "isOk"
+        8 RESULT_IS_ERR: "isErr"
     }
     6 DICT: "Dict" => {
         0 DICT_DICT: "Dict" imported // the Dict.Dict type alias

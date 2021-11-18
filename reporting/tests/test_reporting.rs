@@ -547,7 +547,35 @@ mod test_reporting {
                     baz
                     Nat
                     Str
-                    U8
+                    Err
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn lowercase_primitive_tag_bool() {
+        report_problem_as(
+            indoc!(
+                r#"
+                if true then 1 else 2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
+                
+                I cannot find a `true` value
+                
+                1│  if true then 1 else 2
+                       ^^^^
+                
+                Did you mean one of these?
+                
+                    True
+                    Str
+                    Num
+                    Err
                 "#
             ),
         )
@@ -1950,10 +1978,10 @@ mod test_reporting {
 
                 Did you mean one of these?
 
+                    Ok
                     U8
                     f
                     I8
-                    F64
                "#
             ),
         )
@@ -5802,8 +5830,8 @@ mod test_reporting {
 
                     Nat
                     Str
+                    Err
                     U8
-                    F64
                 "#
             ),
         )
