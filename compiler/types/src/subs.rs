@@ -677,7 +677,7 @@ impl Variable {
         Variable(v)
     }
 
-    pub fn index(&self) -> u32 {
+    pub const fn index(&self) -> u32 {
         self.0
     }
 }
@@ -2798,5 +2798,182 @@ fn restore_help(subs: &mut Subs, initial: Variable) {
                 }
             }
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct StorageSubs {
+    subs: Subs,
+}
+
+struct StorageSubsOffsets {
+    utable: u32,
+    variables: u32,
+    tag_names: u32,
+    field_names: u32,
+    record_fields: u32,
+    variable_slices: u32,
+}
+
+impl StorageSubs {
+    pub fn merge_into(self, target: &mut Subs) {
+        let offsets = StorageSubsOffsets {
+            utable: target.utable.len() as u32,
+            variables: target.variables.len() as u32,
+            tag_names: target.tag_names.len() as u32,
+            field_names: target.field_names.len() as u32,
+            record_fields: target.record_fields.len() as u32,
+            variable_slices: target.variable_slices.len() as u32,
+        };
+
+        let range = Variable::NUM_RESERVED_VARS..self.subs.utable.len();
+
+        target.utable.reserve(range.len());
+
+        for i in range {
+            let descriptor = self.subs.get_ref(Variable(i as u32));
+            debug_assert!(descriptor.copy.is_none());
+
+            let new_content = Self::offset_content(&offsets, &descriptor.content);
+
+            let new_variable = Variable(i as u32 + offsets.utable);
+
+            let new_descriptor = Descriptor {
+                rank: descriptor.rank,
+                mark: descriptor.mark,
+                copy: OptVariable::NONE,
+                content: new_content,
+            };
+
+            target.set(new_variable, new_descriptor);
+        }
+
+        target.variables.extend(
+            self.subs
+                .variables
+                .into_iter()
+                .map(|v| Self::offset_variable(&offsets, v)),
+        );
+
+        target.variable_slices.extend(
+            self.subs
+                .variable_slices
+                .into_iter()
+                .map(|v| Self::offset_variable_slice(&offsets, v)),
+        );
+
+        target.tag_names.extend(self.subs.tag_names);
+        target.field_names.extend(self.subs.field_names);
+        target.record_fields.extend(self.subs.record_fields);
+    }
+    fn offset_flat_type(offsets: &StorageSubsOffsets, flat_type: &FlatType) -> FlatType {
+        match flat_type {
+            FlatType::Apply(symbol, arguments) => {
+                FlatType::Apply(*symbol, Self::offset_variable_slice(offsets, *arguments))
+            }
+            FlatType::Func(arguments, lambda_set, result) => FlatType::Func(
+                Self::offset_variable_slice(offsets, *arguments),
+                Self::offset_variable(offsets, *lambda_set),
+                Self::offset_variable(offsets, *result),
+            ),
+            FlatType::Record(record_fields, ext) => FlatType::Record(
+                Self::offset_record_fields(offsets, *record_fields),
+                Self::offset_variable(offsets, *ext),
+            ),
+            FlatType::TagUnion(union_tags, ext) => FlatType::TagUnion(
+                Self::offset_union_tags(offsets, *union_tags),
+                Self::offset_variable(offsets, *ext),
+            ),
+            FlatType::FunctionOrTagUnion(tag_name, symbol, ext) => FlatType::FunctionOrTagUnion(
+                Self::offset_tag_name_index(offsets, *tag_name),
+                *symbol,
+                Self::offset_variable(offsets, *ext),
+            ),
+            FlatType::RecursiveTagUnion(rec, union_tags, ext) => FlatType::RecursiveTagUnion(
+                Self::offset_variable(offsets, *rec),
+                Self::offset_union_tags(offsets, *union_tags),
+                Self::offset_variable(offsets, *ext),
+            ),
+            FlatType::Erroneous(problem) => FlatType::Erroneous(problem.clone()),
+            FlatType::EmptyRecord => FlatType::EmptyRecord,
+            FlatType::EmptyTagUnion => FlatType::EmptyTagUnion,
+        }
+    }
+
+    fn offset_content(offsets: &StorageSubsOffsets, content: &Content) -> Content {
+        use Content::*;
+
+        match content {
+            FlexVar(opt_name) => FlexVar(opt_name.clone()),
+            RigidVar(name) => RigidVar(name.clone()),
+            RecursionVar {
+                structure,
+                opt_name,
+            } => RecursionVar {
+                structure: Self::offset_variable(offsets, *structure),
+                opt_name: opt_name.clone(),
+            },
+            Structure(flat_type) => Structure(Self::offset_flat_type(offsets, flat_type)),
+            Alias(symbol, alias_variables, actual) => Alias(
+                *symbol,
+                Self::offset_alias_variables(offsets, *alias_variables),
+                Self::offset_variable(offsets, *actual),
+            ),
+            Error => Content::Error,
+        }
+    }
+
+    fn offset_alias_variables(
+        offsets: &StorageSubsOffsets,
+        mut alias_variables: AliasVariables,
+    ) -> AliasVariables {
+        alias_variables.lowercases_start += offsets.field_names;
+        alias_variables.variables_start += offsets.variables;
+
+        alias_variables
+    }
+
+    fn offset_union_tags(offsets: &StorageSubsOffsets, mut union_tags: UnionTags) -> UnionTags {
+        union_tags.tag_names_start += offsets.tag_names;
+        union_tags.variables_start += offsets.variables;
+
+        union_tags
+    }
+
+    fn offset_record_fields(
+        offsets: &StorageSubsOffsets,
+        mut record_fields: RecordFields,
+    ) -> RecordFields {
+        record_fields.field_names_start += offsets.field_names;
+        record_fields.variables_start += offsets.variables;
+        record_fields.field_types_start += offsets.record_fields;
+
+        record_fields
+    }
+
+    fn offset_tag_name_index(
+        offsets: &StorageSubsOffsets,
+        mut tag_name: SubsIndex<TagName>,
+    ) -> SubsIndex<TagName> {
+        tag_name.start += offsets.tag_names;
+
+        tag_name
+    }
+
+    fn offset_variable(offsets: &StorageSubsOffsets, variable: Variable) -> Variable {
+        if variable.index() < Variable::FIRST_USER_SPACE_VAR.index() {
+            variable
+        } else {
+            Variable(variable.0 + offsets.variables)
+        }
+    }
+
+    fn offset_variable_slice(
+        offsets: &StorageSubsOffsets,
+        mut slice: VariableSubsSlice,
+    ) -> VariableSubsSlice {
+        slice.slice.start += offsets.variable_slices;
+
+        slice
     }
 }
