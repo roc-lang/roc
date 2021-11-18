@@ -879,7 +879,7 @@ define_builtins! {
         24 WASM_TMP: "#wasm_tmp"
 
         // the _ used in mono when a specialized symbol is deleted
-        25 DELETED_SPECIALIZATION: "#deleted_specialization"
+        25 REMOVED_SPECIALIZATION: "#removed_specialization"
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
