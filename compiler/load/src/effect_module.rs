@@ -6,7 +6,7 @@ use roc_can::pattern::Pattern;
 use roc_can::scope::Scope;
 use roc_collections::all::{MutSet, SendMap};
 use roc_module::ident::TagName;
-use roc_module::operator::CalledVia;
+use roc_module::called_via::CalledVia;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};

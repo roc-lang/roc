@@ -3,7 +3,7 @@ use crate::def::fmt_def;
 use crate::pattern::fmt_pattern;
 use crate::spaces::{add_spaces, fmt_comments_only, fmt_spaces, newline, NewlineAt, INDENT};
 use bumpalo::collections::String;
-use roc_module::operator::{self, BinOp};
+use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::StrSegment;
 use roc_parse::ast::{
     AssignedField, Base, Collection, CommentOrNewline, Expr, Pattern, WhenBranch,

@@ -1,7 +1,7 @@
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{Index, MutSet, SendMap};
 use roc_module::ident::{Ident, IdentStr, Lowercase, TagName};
-use roc_module::operator::{BinOp, CalledVia, Sugar};
+use roc_module::called_via::{BinOp, CalledVia, Sugar};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_solve::solve;

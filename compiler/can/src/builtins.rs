@@ -5,7 +5,7 @@ use crate::pattern::Pattern;
 use roc_collections::all::SendMap;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::low_level::LowLevel;
-use roc_module::operator::CalledVia;
+use roc_module::called_via::CalledVia;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};

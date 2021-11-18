@@ -12,7 +12,7 @@ use crate::scope::Scope;
 use roc_collections::all::{ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
-use roc_module::operator::{CalledVia, Sugar};
+use roc_module::called_via::{CalledVia, Sugar};
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{self, EscapedChar, StrLiteral};
 use roc_parse::pattern::PatternType::*;
