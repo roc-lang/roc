@@ -1,0 +1,76 @@
+App {
+    header: AppHeader {
+        name: |L 0-0, C 4-15| PlainLine(
+            "quicksort",
+        ),
+        packages: [
+            |L 1-1, C 15-33| Entry {
+                shorthand: "base",
+                spaces_after_shorthand: [],
+                package_or_path: |L 1-1, C 21-33| Path(
+                    PlainLine(
+                        "./platform",
+                    ),
+                ),
+            },
+        ],
+        imports: [
+            |L 2-6, C 14-5| Package(
+                "foo",
+                ModuleName(
+                    "Bar",
+                ),
+                Collection {
+                    items: [
+                        |L 3-3, C 8-11| SpaceBefore(
+                            Exposed(
+                                "Baz",
+                            ),
+                            [
+                                Newline,
+                            ],
+                        ),
+                        |L 4-4, C 8-16| SpaceBefore(
+                            Exposed(
+                                "FortyTwo",
+                            ),
+                            [
+                                Newline,
+                            ],
+                        ),
+                    ],
+                    final_comments: [
+                        Newline,
+                        LineComment(
+                            " I'm a happy comment",
+                        ),
+                    ],
+                },
+            ),
+        ],
+        provides: [
+            |L 7-7, C 15-24| Exposed(
+                "quicksort",
+            ),
+        ],
+        to: |L 7-7, C 31-35| ExistingPackage(
+            "base",
+        ),
+        before_header: [],
+        after_app_keyword: [],
+        before_packages: [
+            Newline,
+        ],
+        after_packages: [],
+        before_imports: [
+            Newline,
+        ],
+        after_imports: [],
+        before_provides: [
+            Newline,
+        ],
+        after_provides: [],
+        before_to: [],
+        after_to: [],
+    },
+}

@@ -1,0 +1,24 @@
+Expect(
+    |L 0-0, C 7-13| BinOps(
+        [
+            (
+                |L 0-0, C 7-8| Num(
+                    "1",
+                ),
+                |L 0-0, C 9-11| Equals,
+            ),
+        ],
+        |L 0-0, C 12-13| Num(
+            "1",
+        ),
+    ),
+    |L 2-2, C 0-1| SpaceBefore(
+        Num(
+            "4",
+        ),
+        [
+            Newline,
+            Newline,
+        ],
+    ),
+)

@@ -55,6 +55,7 @@ fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, ETy
         and!(
             one_of!(
                 loc_wildcard(),
+                loc_inferred(),
                 specialize(EType::TInParens, loc_type_in_parens(min_indent)),
                 loc!(specialize(EType::TRecord, record_type(min_indent))),
                 loc!(specialize(EType::TTagUnion, tag_union_type(min_indent))),
@@ -111,6 +112,15 @@ fn loc_wildcard<'a>() -> impl Parser<'a, Located<TypeAnnotation<'a>>, EType<'a>>
     })
 }
 
+/// The `_` indicating an inferred type, e.g. in (List _)
+fn loc_inferred<'a>() -> impl Parser<'a, Located<TypeAnnotation<'a>>, EType<'a>> {
+    map!(loc!(word1(b'_', EType::TInferred)), |loc_val: Located<
+        (),
+    >| {
+        loc_val.map(|_| TypeAnnotation::Inferred)
+    })
+}
+
 fn loc_applied_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, EType<'a>> {
     use crate::ast::Spaceable;
 
@@ -119,6 +129,7 @@ fn loc_applied_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotatio
             backtrackable(space0_e(min_indent, EType::TSpace, EType::TIndentStart)),
             one_of!(
                 loc_wildcard(),
+                loc_inferred(),
                 specialize(EType::TInParens, loc_type_in_parens(min_indent)),
                 loc!(specialize(EType::TRecord, record_type(min_indent))),
                 loc!(specialize(EType::TTagUnion, tag_union_type(min_indent))),

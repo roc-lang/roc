@@ -1,6 +1,6 @@
 // Wasm pointers are only 32bit. This effects RocStr.
 // These are versions of the str tests assuming 32bit pointers.
-#![cfg(not(feature = "gen-dev"))]
+#![cfg(feature = "gen-wasm")]
 
 // TODO: We need to make these tests work with the llvm wasm backend.
 
@@ -12,7 +12,7 @@ use crate::helpers::wasm::assert_evals_to;
 
 #[allow(unused_imports)]
 use indoc::indoc;
-// use roc_std::RocStr;
+use roc_std::RocStr;
 
 // #[test]
 // fn str_split_bigger_delimiter_small_str() {
@@ -287,41 +287,23 @@ fn small_str_zeroed_literal() {
     );
 }
 
-// TODO: fix linking errors for undefined symbols roc_alloc, roc_dealloc
-// #[test]
-// fn long_str_literal() {
-//     assert_evals_to!(
-//         "\"0123456789 123456789 123456789\"",
-//         RocStr::from_slice(b"0123456789 123456789 123456789"),
-//         RocStr
-//     );
-// }
+#[test]
+fn long_str_literal() {
+    assert_evals_to!(
+        "\"0123456789 123456789 123456789\"",
+        RocStr::from_slice(b"0123456789 123456789 123456789"),
+        RocStr
+    );
+}
 
-// #[test]
-// fn small_str_concat_empty_first_arg() {
-//     assert_llvm_evals_to!(
-//         r#"Str.concat "" "JJJJJJJJJJJJJJJ""#,
-//         [
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0b1000_1111
-//         ],
-//         [u8; 16]
-//     );
-// }
+#[test]
+fn small_str_concat_empty_first_arg() {
+    assert_evals_to!(
+        r#"Str.concat "" "JJJJJJJ""#,
+        [0x4a, 0x4a, 0x4a, 0x4a, 0x4a, 0x4a, 0x4a, 0b1000_0111],
+        [u8; 8]
+    );
+}
 
 // #[test]
 // fn small_str_concat_empty_second_arg() {

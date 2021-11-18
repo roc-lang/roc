@@ -1,0 +1,9 @@
+Access(
+    ParensAround(
+        Var {
+            module_name: "One.Two",
+            ident: "rec",
+        },
+    ),
+    "field",
+)

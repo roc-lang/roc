@@ -1,0 +1,21 @@
+Defs(
+    [
+        |L 0-0, C 0-6| Body(
+            |L 0-0, C 0-4| Identifier(
+                "iffy",
+            ),
+            |L 0-0, C 5-6| Num(
+                "5",
+            ),
+        ),
+    ],
+    |L 2-2, C 0-2| SpaceBefore(
+        Num(
+            "42",
+        ),
+        [
+            Newline,
+            Newline,
+        ],
+    ),
+)

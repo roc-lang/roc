@@ -55,6 +55,7 @@ pub fn build_file<'a>(
     link_type: LinkType,
     surgically_link: bool,
     precompiled: bool,
+    target_valgrind: bool,
 ) -> Result<BuiltFile, LoadingProblem<'a>> {
     let compilation_start = SystemTime::now();
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
@@ -116,6 +117,7 @@ pub fn build_file<'a>(
             .keys()
             .map(|x| x.as_str(&loaded.interns).to_string())
             .collect(),
+        target_valgrind,
     );
 
     // TODO try to move as much of this linking as possible to the precompiled
@@ -280,6 +282,7 @@ pub fn build_file<'a>(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_rebuild_thread(
     opt_level: OptLevel,
     surgically_link: bool,
@@ -288,6 +291,7 @@ fn spawn_rebuild_thread(
     binary_path: PathBuf,
     target: &Triple,
     exported_symbols: Vec<String>,
+    target_valgrind: bool,
 ) -> std::thread::JoinHandle<u128> {
     let thread_local_target = target.clone();
     std::thread::spawn(move || {
@@ -299,6 +303,7 @@ fn spawn_rebuild_thread(
                     &thread_local_target,
                     host_input_path.as_path(),
                     exported_symbols,
+                    target_valgrind,
                 )
                 .unwrap();
             } else {
@@ -307,6 +312,7 @@ fn spawn_rebuild_thread(
                     &thread_local_target,
                     host_input_path.as_path(),
                     None,
+                    target_valgrind,
                 );
             }
         }

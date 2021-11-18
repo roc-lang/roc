@@ -1,9 +1,9 @@
 use crate::def::Def;
 use crate::expr::{ClosureData, Expr::*};
-use crate::expr::{Expr, Recursive, WhenBranch};
+use crate::expr::{Expr, Field, Recursive, WhenBranch};
 use crate::pattern::Pattern;
 use roc_collections::all::SendMap;
-use roc_module::ident::TagName;
+use roc_module::ident::{Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
@@ -96,6 +96,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_TAKE_FIRST => list_take_first,
         LIST_TAKE_LAST => list_take_last,
         LIST_SUBLIST => list_sublist,
+        LIST_SPLIT => list_split,
         LIST_DROP => list_drop,
         LIST_DROP_AT => list_drop_at,
         LIST_DROP_FIRST => list_drop_first,
@@ -2145,6 +2146,116 @@ fn list_sublist(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         list_var,
+    )
+}
+
+/// List.split : List elem, Nat -> { before: List elem, others: List elem }
+fn list_split(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
+    let index_var = var_store.fresh();
+
+    let list_sym = Symbol::ARG_1;
+    let index_sym = Symbol::ARG_2;
+
+    let clos_sym = Symbol::LIST_SPLIT_CLOS;
+    let clos_start_sym = Symbol::ARG_3;
+    let clos_len_sym = Symbol::ARG_4;
+
+    let clos_fun_var = var_store.fresh();
+    let clos_start_var = var_store.fresh();
+    let clos_len_var = var_store.fresh();
+    let clos_ret_var = var_store.fresh();
+
+    let ret_var = var_store.fresh();
+    let zero = int(index_var, Variable::NATURAL, 0);
+
+    let clos = Closure(ClosureData {
+        function_type: clos_fun_var,
+        closure_type: var_store.fresh(),
+        closure_ext_var: var_store.fresh(),
+        return_type: clos_ret_var,
+        name: clos_sym,
+        recursive: Recursive::NotRecursive,
+        captured_symbols: vec![(list_sym, clos_ret_var)],
+        arguments: vec![
+            (
+                clos_start_var,
+                no_region(Pattern::Identifier(clos_start_sym)),
+            ),
+            (clos_len_var, no_region(Pattern::Identifier(clos_len_sym))),
+        ],
+        loc_body: {
+            Box::new(no_region(RunLowLevel {
+                op: LowLevel::ListSublist,
+                args: vec![
+                    (clos_ret_var, Var(list_sym)),
+                    (clos_start_var, Var(clos_start_sym)),
+                    (clos_len_var, Var(clos_len_sym)),
+                ],
+                ret_var: clos_ret_var,
+            }))
+        },
+    });
+
+    let fun = Box::new((
+        clos_fun_var,
+        no_region(clos),
+        var_store.fresh(),
+        clos_ret_var,
+    ));
+
+    let get_before = Call(
+        fun.clone(),
+        vec![
+            (index_var, no_region(zero)),
+            (index_var, no_region(Var(index_sym))),
+        ],
+        CalledVia::Space,
+    );
+
+    let get_list_len = RunLowLevel {
+        op: LowLevel::ListLen,
+        args: vec![(list_var, Var(list_sym))],
+        ret_var: index_var,
+    };
+
+    let get_others_len = RunLowLevel {
+        op: LowLevel::NumSubWrap,
+        args: vec![(index_var, get_list_len), (index_var, Var(index_sym))],
+        ret_var: index_var,
+    };
+
+    let get_others = Call(
+        fun,
+        vec![
+            (index_var, no_region(Var(index_sym))),
+            (index_var, no_region(get_others_len)),
+        ],
+        CalledVia::Space,
+    );
+
+    let before = Field {
+        var: clos_ret_var,
+        region: Region::zero(),
+        loc_expr: Box::new(no_region(get_before)),
+    };
+    let others = Field {
+        var: clos_ret_var,
+        region: Region::zero(),
+        loc_expr: Box::new(no_region(get_others)),
+    };
+
+    let body = record(
+        vec![("before".into(), before), ("others".into(), others)],
+        var_store,
+    );
+
+    defn(
+        symbol,
+        vec![(list_var, list_sym), (index_var, index_sym)],
+        var_store,
+        body,
+        ret_var,
     )
 }
 
@@ -4315,17 +4426,17 @@ fn tag(name: &'static str, args: Vec<Expr>, var_store: &mut VarStore) -> Expr {
     }
 }
 
-// #[inline(always)]
-// fn record(fields: Vec<(Lowercase, Field)>, var_store: &mut VarStore) -> Expr {
-// let mut send_map = SendMap::default();
-// for (k, v) in fields {
-// send_map.insert(k, v);
-// }
-// Expr::Record {
-// record_var: var_store.fresh(),
-// fields: send_map,
-// }
-// }
+#[inline(always)]
+fn record(fields: Vec<(Lowercase, Field)>, var_store: &mut VarStore) -> Expr {
+    let mut send_map = SendMap::default();
+    for (k, v) in fields {
+        send_map.insert(k, v);
+    }
+    Expr::Record {
+        record_var: var_store.fresh(),
+        fields: send_map,
+    }
+}
 
 #[inline(always)]
 fn defn(

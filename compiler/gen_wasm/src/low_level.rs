@@ -27,16 +27,18 @@ pub fn decode_low_level<'a>(
     let panic_ret_type = || panic!("Invalid return layout for {:?}: {:?}", lowlevel, ret_layout);
 
     match lowlevel {
-        StrConcat | StrJoinWith | StrIsEmpty | StrStartsWith | StrStartsWithCodePt
-        | StrEndsWith | StrSplit | StrCountGraphemes | StrFromInt | StrFromUtf8 | StrTrimLeft
-        | StrTrimRight | StrFromUtf8Range | StrToUtf8 | StrRepeat | StrFromFloat | StrTrim
-        | ListLen | ListGetUnsafe | ListSet | ListSingle | ListRepeat | ListReverse
-        | ListConcat | ListContains | ListAppend | ListPrepend | ListJoin | ListRange | ListMap
-        | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk
-        | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith
-        | ListSublist | ListDropAt | ListSwap | ListAny | ListAll | ListFindUnsafe | DictSize
-        | DictEmpty | DictInsert | DictRemove | DictContains | DictGetUnsafe | DictKeys
-        | DictValues | DictUnion | DictIntersection | DictDifference | DictWalk | SetFromList => {
+        StrConcat => return BuiltinCall(bitcode::STR_CONCAT),
+
+        StrJoinWith | StrIsEmpty | StrStartsWith | StrStartsWithCodePt | StrEndsWith | StrSplit
+        | StrCountGraphemes | StrFromInt | StrFromUtf8 | StrTrimLeft | StrTrimRight
+        | StrFromUtf8Range | StrToUtf8 | StrRepeat | StrFromFloat | StrTrim | ListLen
+        | ListGetUnsafe | ListSet | ListSingle | ListRepeat | ListReverse | ListConcat
+        | ListContains | ListAppend | ListPrepend | ListJoin | ListRange | ListMap | ListMap2
+        | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk | ListWalkUntil
+        | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith | ListSublist
+        | ListDropAt | ListSwap | ListAny | ListAll | ListFindUnsafe | DictSize | DictEmpty | DictInsert
+        | DictRemove | DictContains | DictGetUnsafe | DictKeys | DictValues | DictUnion
+        | DictIntersection | DictDifference | DictWalk | SetFromList => {
             return NotImplemented;
         }
 

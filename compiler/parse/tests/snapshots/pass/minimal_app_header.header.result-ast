@@ -1,0 +1,27 @@
+App {
+    header: AppHeader {
+        name: |L 0-0, C 4-14| PlainLine(
+            "test-app",
+        ),
+        packages: [],
+        imports: [],
+        provides: [],
+        to: |L 0-0, C 30-38| NewPackage(
+            Path(
+                PlainLine(
+                    "./blah",
+                ),
+            ),
+        ),
+        before_header: [],
+        after_app_keyword: [],
+        before_packages: [],
+        after_packages: [],
+        before_imports: [],
+        after_imports: [],
+        before_provides: [],
+        after_provides: [],
+        before_to: [],
+        after_to: [],
+    },
+}

@@ -1,0 +1,43 @@
+Platform {
+    header: PlatformHeader {
+        name: |L 0-0, C 9-23| PackageName {
+            account: "rtfeldman",
+            pkg: "blah",
+        },
+        requires: PlatformRequires {
+            rigids: [],
+            signature: |L 0-0, C 38-47| Entry {
+                ident: |L 0-0, C 38-42| "main",
+                spaces_before_colon: [],
+                ann: |L 0-0, C 45-47| Record {
+                    fields: [],
+                    ext: None,
+                },
+            },
+        },
+        exposes: [],
+        packages: [],
+        imports: [],
+        provides: [],
+        effects: Effects {
+            spaces_before_effects_keyword: [],
+            spaces_after_effects_keyword: [],
+            spaces_after_type_name: [],
+            effect_shortname: "fx",
+            effect_type_name: "Blah",
+            entries: [],
+        },
+        before_header: [],
+        after_platform_keyword: [],
+        before_requires: [],
+        after_requires: [],
+        before_exposes: [],
+        after_exposes: [],
+        before_packages: [],
+        after_packages: [],
+        before_imports: [],
+        after_imports: [],
+        before_provides: [],
+        after_provides: [],
+    },
+}

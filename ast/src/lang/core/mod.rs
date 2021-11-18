@@ -2,7 +2,7 @@ pub mod ast;
 mod declaration;
 pub mod def;
 pub mod expr;
-mod fun_def;
+pub mod fun_def;
 pub mod header;
 pub mod pattern;
 pub mod str;
