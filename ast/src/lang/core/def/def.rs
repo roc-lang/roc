@@ -37,7 +37,11 @@ use crate::{
         rigids::Rigids,
         scope::Scope,
     },
-    mem_pool::{pool::Pool, pool_vec::PoolVec, shallow_clone::ShallowClone},
+    mem_pool::{
+        pool::{NodeId, Pool},
+        pool_vec::PoolVec,
+        shallow_clone::ShallowClone,
+    },
 };
 
 #[derive(Debug)]
@@ -316,7 +320,7 @@ fn from_pending_alias<'a>(
             }
 
             for loc_lowercase in vars {
-                if !named_rigids.contains_key(loc_lowercase.value.as_str()) {
+                if !named_rigids.contains_key(&loc_lowercase.value) {
                     env.problem(Problem::PhantomTypeArgument {
                         alias: symbol,
                         variable_region: loc_lowercase.region,
@@ -454,6 +458,10 @@ fn canonicalize_pending_def<'a>(
                         output.references.referenced_aliases.insert(symbol);
                     }
 
+                    // Ensure rigid type vars and their names are known in the output.
+                    for (name, &var) in named_rigids.iter() {
+                        output.introduced_variables.insert_named(name.clone(), var);
+                    }
                     let rigids = Rigids::new(named_rigids, unnamed_rigids, env.pool);
 
                     // bookkeeping for tail-call detection. If we're assigning to an
@@ -521,7 +529,7 @@ fn canonicalize_pending_def<'a>(
                             // parent commit for the bug this fixed!
                             let refs = References::new();
 
-                            let arguments: PoolVec<(PatternId, Type2)> =
+                            let arguments: PoolVec<(NodeId<Type2>, PatternId)> =
                                 PoolVec::with_capacity(closure_args.len() as u32, env.pool);
 
                             let return_type: TypeId;
@@ -558,7 +566,8 @@ fn canonicalize_pending_def<'a>(
                                     for (node_id, ((_, pattern_id), typ)) in
                                         arguments.iter_node_ids().zip(it.into_iter())
                                     {
-                                        env.pool[node_id] = (pattern_id, typ);
+                                        let typ = env.pool.add(typ);
+                                        env.pool[node_id] = (typ, pattern_id);
                                     }
 
                                     return_type = return_type_id;

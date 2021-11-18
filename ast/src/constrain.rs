@@ -835,70 +835,109 @@ pub fn constrain_expr<'a>(
 
             let function_def = env.pool.get(*def_id);
 
-            match function_def {
-                FunctionDef::WithAnnotation { .. } => {
-                    todo!("implement constraint generation for {:?}", function_def)
+            let (name, arguments, body_id, rigid_vars, args_constrs) = match function_def {
+                FunctionDef::WithAnnotation {
+                    name,
+                    arguments,
+                    body_id,
+                    rigids,
+                    return_type: _,
+                } => {
+                    // The annotation gives us arguments with proper Type2s, but the constraints we
+                    // generate below args bound to type variables. Create fresh ones and bind them
+                    // to the types we already know.
+                    let mut args_constrs = BumpVec::with_capacity_in(arguments.len(), arena);
+                    let args_vars = PoolVec::with_capacity(arguments.len() as u32, env.pool);
+                    for (arg_ty_node_id, arg_var_node_id) in
+                        arguments.iter_node_ids().zip(args_vars.iter_node_ids())
+                    {
+                        let (ty, pattern) = env.pool.get(arg_ty_node_id);
+                        let arg_var = env.var_store.fresh();
+                        let ty = env.pool.get(*ty);
+                        args_constrs.push(Eq(
+                            Type2::Variable(arg_var),
+                            Expected::NoExpectation(ty.shallow_clone()),
+                            Category::Storage(std::file!(), std::line!()),
+                            // TODO: should be the actual region of the argument
+                            region,
+                        ));
+                        env.pool[arg_var_node_id] = (arg_var, *pattern);
+                    }
+
+                    let rigids = env.pool.get(*rigids);
+                    let rigid_vars: BumpVec<Variable> =
+                        BumpVec::from_iter_in(rigids.names.iter(env.pool).map(|&(_, v)| v), arena);
+
+                    (name, args_vars, body_id, rigid_vars, args_constrs)
                 }
                 FunctionDef::NoAnnotation {
                     name,
                     arguments,
-                    body_id: expr_id,
+                    body_id,
                     return_var: _,
                 } => {
-                    // A function definition is equivalent to a named value definition, where the
-                    // value is a closure. So, we create a closure definition in correspondence
-                    // with the function definition, generate type constraints for it, and demand
-                    // that type of the function is just the type of the resolved closure.
-                    let fn_var = env.var_store.fresh();
-                    let fn_ty = Type2::Variable(fn_var);
-
-                    let extra = ClosureExtra {
-                        return_type: env.var_store.fresh(),
-                        captured_symbols: PoolVec::empty(env.pool),
-                        closure_type: env.var_store.fresh(),
-                        closure_ext_var: env.var_store.fresh(),
-                    };
-                    let clos = Expr2::Closure {
-                        args: arguments.shallow_clone(),
-                        uniq_symbol: *name,
-                        body_id: *expr_id,
-                        function_type: env.var_store.fresh(),
-                        extra: env.pool.add(extra),
-                        recursive: roc_can::expr::Recursive::Recursive,
-                    };
-                    let clos_con = constrain_expr(
-                        arena,
-                        env,
-                        &clos,
-                        Expected::NoExpectation(fn_ty.shallow_clone()),
-                        region,
-                    );
-
-                    // This is the `foo` part in `foo = \...`. We want to bind the name of the
-                    // function with its type, whose constraints we generated above.
-                    let mut def_pattern_state = PatternState2 {
-                        headers: BumpMap::new_in(arena),
-                        vars: BumpVec::new_in(arena),
-                        constraints: BumpVec::new_in(arena),
-                    };
-                    def_pattern_state.headers.insert(*name, fn_ty);
-                    def_pattern_state.vars.push(fn_var);
-
-                    Let(arena.alloc(LetConstraint {
-                        rigid_vars: BumpVec::new_in(arena), // The function def is unannotated, so there are no rigid type vars
-                        flex_vars: def_pattern_state.vars,
-                        def_types: def_pattern_state.headers, // Binding function name -> its type
-                        defs_constraint: Let(arena.alloc(LetConstraint {
-                            rigid_vars: BumpVec::new_in(arena), // always empty
-                            flex_vars: BumpVec::new_in(arena), // empty, because our functions have no arguments
-                            def_types: BumpMap::new_in(arena), // empty, because our functions have no arguments
-                            defs_constraint: And(def_pattern_state.constraints),
-                            ret_constraint: clos_con,
-                        })),
-                        ret_constraint: body_con,
-                    }))
+                    (
+                        name,
+                        arguments.shallow_clone(),
+                        body_id,
+                        BumpVec::new_in(arena), // The function is unannotated, so there are no rigid type vars
+                        BumpVec::new_in(arena), // No extra constraints to generate for arguments
+                    )
                 }
-            }
+            };
+
+            // A function definition is equivalent to a named value definition, where the
+            // value is a closure. So, we create a closure definition in correspondence
+            // with the function definition, generate type constraints for it, and demand
+            // that type of the function is just the type of the resolved closure.
+            let fn_var = env.var_store.fresh();
+            let fn_ty = Type2::Variable(fn_var);
+
+            let extra = ClosureExtra {
+                return_type: env.var_store.fresh(),
+                captured_symbols: PoolVec::empty(env.pool),
+                closure_type: env.var_store.fresh(),
+                closure_ext_var: env.var_store.fresh(),
+            };
+            let clos = Expr2::Closure {
+                args: arguments.shallow_clone(),
+                uniq_symbol: *name,
+                body_id: *body_id,
+                function_type: env.var_store.fresh(),
+                extra: env.pool.add(extra),
+                recursive: roc_can::expr::Recursive::Recursive,
+            };
+            let clos_con = constrain_expr(
+                arena,
+                env,
+                &clos,
+                Expected::NoExpectation(fn_ty.shallow_clone()),
+                region,
+            );
+
+            // This is the `foo` part in `foo = \...`. We want to bind the name of the
+            // function with its type, whose constraints we generated above.
+            let mut def_pattern_state = PatternState2 {
+                headers: BumpMap::new_in(arena),
+                vars: BumpVec::new_in(arena),
+                constraints: args_constrs,
+            };
+            def_pattern_state.headers.insert(*name, fn_ty);
+            def_pattern_state.vars.push(fn_var);
+
+            Let(arena.alloc(LetConstraint {
+                rigid_vars,
+                flex_vars: def_pattern_state.vars,
+                def_types: def_pattern_state.headers, // Binding function name -> its type
+                defs_constraint: Let(arena.alloc(LetConstraint {
+                    rigid_vars: BumpVec::new_in(arena), // always empty
+                    flex_vars: BumpVec::new_in(arena), // empty, because our functions have no arguments
+                    def_types: BumpMap::new_in(arena), // empty, because our functions have no arguments
+                    defs_constraint: And(def_pattern_state.constraints),
+                    ret_constraint: clos_con,
+                })),
+                ret_constraint: body_con,
+            }))
         }
         Expr2::Update {
             symbol,
@@ -1926,7 +1965,7 @@ pub mod test_constrain {
         let expr2_result = str_to_expr2(&code_arena, actual, &mut env, &mut scope, region);
 
         match expr2_result {
-            Ok((expr, _)) => {
+            Ok((expr, output)) => {
                 let constraint = constrain_expr(
                     &code_arena,
                     &mut env,
@@ -1946,11 +1985,13 @@ pub mod test_constrain {
                 let mut var_store = VarStore::default();
                 std::mem::swap(ref_var_store, &mut var_store);
 
+                let rigids = output.introduced_variables.name_by_var;
+
                 let (mut solved, _, _) = run_solve(
                     &code_arena,
                     pool,
                     Default::default(),
-                    Default::default(),
+                    rigids,
                     constraint,
                     var_store,
                 );
@@ -2385,6 +2426,70 @@ pub mod test_constrain {
                 "#
             ),
             "{ x : a }b -> { x : a }b",
+        );
+    }
+
+    #[test]
+    fn using_type_signature() {
+        infer_eq(
+            indoc!(
+                r#"
+                    bar : custom -> custom
+                    bar = \x -> x
+
+                    bar
+                "#
+            ),
+            "custom -> custom",
+        );
+    }
+
+    #[ignore = "Currently panics at 'Invalid Cycle', ast/src/lang/core/def/def.rs:1212:21"]
+    #[test]
+    fn using_type_signature2() {
+        infer_eq(
+            indoc!(
+                r#"
+                    id1 : tya -> tya
+                    id1 = \x -> x
+
+                    id2 : tyb -> tyb
+                    id2 = id1
+
+                    id2
+                "#
+            ),
+            "tyb -> tyb",
+        );
+    }
+
+    #[ignore = "Implement annotation-only decls"]
+    #[test]
+    fn type_signature_without_body() {
+        infer_eq(
+            indoc!(
+                r#"
+                    foo: Str -> {}
+
+                    foo "hi"
+                "#
+            ),
+            "{}",
+        );
+    }
+
+    #[ignore = "Implement annotation-only decls"]
+    #[test]
+    fn type_signature_without_body_rigid() {
+        infer_eq(
+            indoc!(
+                r#"
+                    foo : Num * -> custom
+
+                    foo 2
+                "#
+            ),
+            "custom",
         );
     }
 }

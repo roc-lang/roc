@@ -240,6 +240,9 @@ pub enum TypeAnnotation<'a> {
         tags: Collection<'a, Loc<Tag<'a>>>,
     },
 
+    /// '_', indicating the compiler should infer the type
+    Inferred,
+
     /// The `*` type variable, e.g. in (List *)
     Wildcard,
 

@@ -14,11 +14,11 @@ use super::{
 #[derive(Debug)]
 pub enum FunctionDef {
     WithAnnotation {
-        name: Symbol,                           // 8B
-        arguments: PoolVec<(PatternId, Type2)>, // 8B
-        rigids: NodeId<Rigids>,                 // 4B
-        return_type: TypeId,                    // 4B
-        body_id: ExprId,                        // 4B
+        name: Symbol,                                   // 8B
+        arguments: PoolVec<(NodeId<Type2>, PatternId)>, // 8B
+        rigids: NodeId<Rigids>,                         // 4B
+        return_type: TypeId,                            // 4B
+        body_id: ExprId,                                // 4B
     },
     NoAnnotation {
         name: Symbol,                              // 8B

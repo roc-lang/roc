@@ -368,6 +368,18 @@ where
                 );
                 self.build_num_mul(sym, &args[0], &args[1], ret_layout)
             }
+            LowLevel::NumNeg => {
+                debug_assert_eq!(
+                    1,
+                    args.len(),
+                    "NumNeg: expected to have exactly one argument"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], *ret_layout,
+                    "NumNeg: expected to have the same argument and return layout"
+                );
+                self.build_num_neg(sym, &args[0], ret_layout)
+            }
             LowLevel::NumPowInt => self.build_fn_call(
                 sym,
                 bitcode::NUM_POW_INT[IntWidth::I64].to_string(),
@@ -456,6 +468,14 @@ where
         dst: &Symbol,
         src1: &Symbol,
         src2: &Symbol,
+        layout: &Layout<'a>,
+    ) -> Result<(), String>;
+
+    /// build_num_neg stores the negated value of src into dst.
+    fn build_num_neg(
+        &mut self,
+        dst: &Symbol,
+        src: &Symbol,
         layout: &Layout<'a>,
     ) -> Result<(), String>;
 

@@ -446,6 +446,10 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
             unimplemented!("stack offsets over 32k are not yet implement for AArch64");
         }
     }
+    #[inline(always)]
+    fn neg_reg64_reg64(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg, _src: AArch64GeneralReg) {
+        unimplemented!("neg is not yet implement for AArch64");
+    }
 
     #[inline(always)]
     fn sub_reg64_reg64_imm32(
