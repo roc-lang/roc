@@ -320,6 +320,29 @@ fn list_drop_at() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn list_intersperse() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    List.intersperse [0, 0, 0] 1
+                "#
+        ),
+        RocList::from_slice(&[0, 1, 0, 1, 0]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    List.intersperse [] 1
+                "#
+        ),
+        RocList::from_slice(&[]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn list_drop_at_shared() {
     assert_evals_to!(
         indoc!(
