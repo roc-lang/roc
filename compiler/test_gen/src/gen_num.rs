@@ -1216,9 +1216,9 @@ fn tail_call_elimination() {
 #[test]
 #[cfg(any(feature = "gen-dev"))]
 fn int_negate_dev() {
-    // Dev backend yet to have `Num.maxInt` or `Num.minInt`.
-    // TODO Remove this test and add "gen-dev" feature the below
-    // after implementing the both.
+    // TODO
+    // dev backend yet to have `Num.maxInt` or `Num.minInt`.
+    // add the "gen-dev" feature to the test below after implementing them both.
     assert_evals_to!("Num.neg 123", -123, i64);
     assert_evals_to!("Num.neg -123", 123, i64);
     assert_evals_to!("Num.neg 0", 0, i64);
