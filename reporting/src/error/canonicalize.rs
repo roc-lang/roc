@@ -1244,8 +1244,6 @@ fn module_not_found<'b>(
     name: &ModuleName,
     options: MutSet<Box<str>>,
 ) -> RocDocBuilder<'b> {
-    use crate::error::r#type::suggest;
-
     let mut suggestions =
         suggest::sort(name.as_str(), options.iter().map(|v| v.as_ref()).collect());
     suggestions.truncate(4);
