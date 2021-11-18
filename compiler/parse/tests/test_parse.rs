@@ -196,6 +196,7 @@ mod test_parse {
             two_backpassing,
             two_branch_when,
             two_spaced_def,
+            type_decl_with_underscore,
             unary_negation,
             unary_negation_access, // Regression test for https://github.com/rtfeldman/roc/issues/509
             unary_negation_arg,
