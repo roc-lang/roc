@@ -356,7 +356,7 @@ struct ModuleCache<'a> {
     constrained: MutMap<ModuleId, ConstrainedModule>,
     typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
-    external_specializations_requested: MutMap<ModuleId, ExternalSpecializations<'a>>,
+    external_specializations_requested: MutMap<ModuleId, Vec<ExternalSpecializations<'a>>>,
 
     /// Various information
     imports: MutMap<ModuleId, MutSet<ModuleId>>,
@@ -587,7 +587,7 @@ fn start_phase<'a>(
                     .module_cache
                     .external_specializations_requested
                     .remove(&module_id)
-                    .unwrap_or_else(|| ExternalSpecializations::new_in(arena));
+                    .unwrap_or_default();
 
                 let FoundSpecializationsModule {
                     module_id,
@@ -1054,7 +1054,7 @@ enum BuildTask<'a> {
         subs: Subs,
         procs_base: ProcsBase<'a>,
         layout_cache: LayoutCache<'a>,
-        specializations_we_must_make: ExternalSpecializations<'a>,
+        specializations_we_must_make: Vec<ExternalSpecializations<'a>>,
         module_timing: ModuleTiming,
     },
 }
@@ -2171,11 +2171,11 @@ fn update<'a>(
                         .external_specializations_requested
                         .entry(module_id)
                     {
-                        Vacant(entry) => entry.insert(ExternalSpecializations::new_in(arena)),
+                        Vacant(entry) => entry.insert(vec![]),
                         Occupied(entry) => entry.into_mut(),
                     };
 
-                    existing.extend(requested);
+                    existing.push(requested);
                 }
 
                 msg_tx
@@ -2198,11 +2198,11 @@ fn update<'a>(
                         .external_specializations_requested
                         .entry(module_id)
                     {
-                        Vacant(entry) => entry.insert(ExternalSpecializations::new_in(arena)),
+                        Vacant(entry) => entry.insert(vec![]),
                         Occupied(entry) => entry.into_mut(),
                     };
 
-                    existing.extend(requested);
+                    existing.push(requested);
                 }
 
                 start_tasks(arena, &mut state, work, injector, worker_listeners)?;
@@ -3936,7 +3936,7 @@ fn make_specializations<'a>(
     mut subs: Subs,
     procs_base: ProcsBase<'a>,
     mut layout_cache: LayoutCache<'a>,
-    specializations_we_must_make: ExternalSpecializations<'a>,
+    specializations_we_must_make: Vec<ExternalSpecializations<'a>>,
     mut module_timing: ModuleTiming,
     ptr_bytes: u32,
 ) -> Msg<'a> {

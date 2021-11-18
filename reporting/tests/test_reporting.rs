@@ -66,7 +66,7 @@ mod test_reporting {
             problems: can_problems,
             ..
         } = can_expr(arena, expr_src)?;
-        let mut subs = Subs::new(var_store);
+        let mut subs = Subs::new_from_varstore(var_store);
 
         for (var, name) in output.introduced_variables.name_by_var {
             subs.rigid_var(var, name);

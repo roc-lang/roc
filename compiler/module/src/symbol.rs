@@ -877,6 +877,9 @@ define_builtins! {
 
         // used in wasm dev backend to mark temporary values in the VM stack
         24 WASM_TMP: "#wasm_tmp"
+
+        // the _ used in mono when a specialized symbol is deleted
+        25 REMOVED_SPECIALIZATION: "#removed_specialization"
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
