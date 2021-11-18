@@ -2,9 +2,9 @@
 
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_module::ident::ModuleName;
 use roc_module::called_via::BinOp::Pizza;
 use roc_module::called_via::{BinOp, CalledVia};
+use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
 use roc_parse::ast::{AssignedField, Def, WhenBranch};
 use roc_region::all::{Located, Region};

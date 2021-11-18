@@ -3,9 +3,9 @@ use crate::subs::{
     GetSubsSlice, RecordFields, Subs, UnionTags, VarStore, Variable, VariableSubsSlice,
 };
 use roc_collections::all::{ImMap, ImSet, Index, MutSet, SendMap};
+use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
-use roc_module::called_via::CalledVia;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_region::all::{Located, Region};
 use std::fmt;
