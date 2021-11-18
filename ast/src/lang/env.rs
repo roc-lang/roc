@@ -1,7 +1,7 @@
 use crate::mem_pool::pool::{NodeId, Pool};
 use bumpalo::{collections::Vec as BumpVec, Bump};
 use roc_collections::all::{MutMap, MutSet};
-use roc_module::ident::{Ident, ModuleName};
+use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Located, Region};
@@ -134,23 +134,42 @@ impl<'a> Env<'a> {
                         )),
                     }
                 } else {
-                    match self
-                        .dep_idents
-                        .get(&module_id)
-                        .and_then(|exposed_ids| exposed_ids.get_id(&ident))
-                    {
-                        Some(ident_id) => {
-                            let symbol = Symbol::new(module_id, *ident_id);
+                    match self.dep_idents.get(&module_id) {
+                        Some(exposed_ids) => match exposed_ids.get_id(&ident) {
+                            Some(ident_id) => {
+                                let symbol = Symbol::new(module_id, *ident_id);
 
-                            self.qualified_lookups.insert(symbol);
+                                self.qualified_lookups.insert(symbol);
 
-                            Ok(symbol)
+                                Ok(symbol)
+                            }
+                            None => {
+                                let exposed_values = exposed_ids
+                                    .idents()
+                                    .filter(|(_, ident)| {
+                                        ident
+                                            .as_ref()
+                                            .chars()
+                                            .next()
+                                            .filter(|c| c.is_lowercase())
+                                            .is_some()
+                                    })
+                                    .map(|(_, ident)| Lowercase::from(ident.as_ref()))
+                                    .collect();
+                                Err(RuntimeError::ValueNotExposed {
+                                    module_name,
+                                    ident,
+                                    region,
+                                    exposed_values,
+                                })
+                            }
+                        },
+                        None => {
+                            panic!(
+                                "Module {} exists, but is not recorded in dep_idents",
+                                module_name
+                            )
                         }
-                        None => Err(RuntimeError::ValueNotExposed {
-                            module_name,
-                            ident,
-                            region,
-                        }),
                     }
                 }
             }
