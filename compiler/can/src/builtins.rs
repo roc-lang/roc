@@ -2166,7 +2166,7 @@ fn list_intersperse(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let int_var = var_store.fresh();
     let zero = int(int_var, Variable::NATURAL, 0);
 
-    // \elem -> [sep, elem]
+    // \acc, elem -> acc |> List.append sep |> List.append elem
     let clos = Closure(ClosureData {
         function_type: clos_var,
         closure_type: var_store.fresh(),
@@ -2180,19 +2180,21 @@ fn list_intersperse(symbol: Symbol, var_store: &mut VarStore) -> Def {
             (sep_var, no_region(Pattern::Identifier(clos_elem_sym))),
         ],
         loc_body: {
-            let pair = List {
-                elem_var: sep_var,
-                loc_elems: vec![no_region(Var(sep_sym)), no_region(Var(clos_elem_sym))],
+            let append_sep = RunLowLevel {
+                op: LowLevel::ListAppend,
+                args: vec![(clos_acc_var, Var(clos_acc_sym)), (sep_var, Var(sep_sym))],
+                ret_var: clos_acc_var,
             };
+
             Box::new(no_region(RunLowLevel {
-                op: LowLevel::ListConcat,
-                args: vec![(clos_acc_var, Var(clos_acc_sym)), (clos_acc_var, pair)],
+                op: LowLevel::ListAppend,
+                args: vec![(clos_acc_var, append_sep), (sep_var, Var(clos_elem_sym))],
                 ret_var: clos_acc_var,
             }))
         },
     });
 
-    // List.walk [] l (\acc, elem -> List.concat acc [sep, elem])
+    // List.walk [] l (\acc, elem -> acc |> List.append sep |> List.append elem)
     let acc = RunLowLevel {
         op: LowLevel::ListWalk,
         args: vec![
