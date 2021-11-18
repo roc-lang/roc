@@ -882,7 +882,7 @@ fn pretty_runtime_error<'b>(
 
             let did_you_mean = if suggestions.is_empty() {
                 alloc.concat(vec![
-                    alloc.reflow("In fact, it look like "),
+                    alloc.reflow("In fact, it looks like "),
                     alloc.module_name(module_name.clone()),
                     alloc.reflow(" doesn't expose any values!"),
                 ])
