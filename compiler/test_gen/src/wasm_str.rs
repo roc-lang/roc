@@ -305,80 +305,46 @@ fn small_str_concat_empty_first_arg() {
     );
 }
 
-// #[test]
-// fn small_str_concat_empty_second_arg() {
-//     assert_llvm_evals_to!(
-//         r#"Str.concat "JJJJJJJJJJJJJJJ" """#,
-//         [
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0b1000_1111
-//         ],
-//         [u8; 16]
-//     );
-// }
+#[test]
+fn small_str_concat_empty_second_arg() {
+    assert_evals_to!(
+        r#"Str.concat "JJJJJJJ" """#,
+        [0x4a, 0x4a, 0x4a, 0x4a, 0x4a, 0x4a, 0x4a, 0b1000_0111],
+        [u8; 8]
+    );
+}
 
-// #[test]
-// fn small_str_concat_small_to_big() {
-//     assert_evals_to!(
-//         r#"Str.concat "abc" " this is longer than 15 chars""#,
-//         RocStr::from_slice(b"abc this is longer than 15 chars"),
-//         RocStr
-//     );
-// }
+#[test]
+fn small_str_concat_small_to_big() {
+    assert_evals_to!(
+        r#"Str.concat "abc" " this is longer than 7 chars""#,
+        RocStr::from_slice(b"abc this is longer than 7 chars"),
+        RocStr
+    );
+}
 
-// #[test]
-// fn small_str_concat_small_to_small_staying_small() {
-//     assert_llvm_evals_to!(
-//         r#"Str.concat "J" "JJJJJJJJJJJJJJ""#,
-//         [
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0x4a,
-//             0b1000_1111
-//         ],
-//         [u8; 16]
-//     );
-// }
+#[test]
+fn small_str_concat_small_to_small_staying_small() {
+    assert_evals_to!(
+        r#"Str.concat "J" "JJJJJJ""#,
+        [0x4a, 0x4a, 0x4a, 0x4a, 0x4a, 0x4a, 0x4a, 0b1000_0111],
+        [u8; 8]
+    );
+}
 
-// #[test]
-// fn small_str_concat_small_to_small_overflow_to_big() {
-//     assert_evals_to!(
-//         r#"Str.concat "abcdefghijklm" "nopqrstuvwxyz""#,
-//         RocStr::from_slice(b"abcdefghijklmnopqrstuvwxyz"),
-//         RocStr
-//     );
-// }
+#[test]
+fn small_str_concat_small_to_small_overflow_to_big() {
+    assert_evals_to!(
+        r#"Str.concat "abcdefg" "hijklmn""#,
+        RocStr::from_slice(b"abcdefghijklmn"),
+        RocStr
+    );
+}
 
-// #[test]
-// fn str_concat_empty() {
-//     assert_evals_to!(r#"Str.concat "" """#, RocStr::default(), RocStr);
-// }
+#[test]
+fn str_concat_empty() {
+    assert_evals_to!(r#"Str.concat "" """#, RocStr::default(), RocStr);
+}
 
 // #[test]
 // fn small_str_is_empty() {
