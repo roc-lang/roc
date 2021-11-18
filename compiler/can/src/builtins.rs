@@ -2227,7 +2227,6 @@ fn list_intersperse(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-
 /// List.split : List elem, Nat -> { before: List elem, others: List elem }
 fn list_split(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
