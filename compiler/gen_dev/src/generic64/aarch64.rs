@@ -1,6 +1,7 @@
 use crate::generic64::{Assembler, CallConv, RegTrait, SymbolStorage};
 use crate::Relocation;
 use bumpalo::collections::Vec;
+use packed_struct::prelude::*;
 use roc_collections::all::MutMap;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::Layout;
@@ -42,7 +43,20 @@ pub enum AArch64GeneralReg {
     /// This can mean Zero or Stack Pointer depending on the context.
     ZRSP = 31,
 }
+
 impl RegTrait for AArch64GeneralReg {}
+
+impl AArch64GeneralReg {
+    fn id(&self) -> u8 {
+        *self as u8
+    }
+
+    fn size(&self) -> usize {
+        match *self as u8 {
+            0..=31 => 64,
+        }
+    }
+}
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 #[allow(dead_code)]
@@ -498,19 +512,104 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
 impl AArch64Assembler {}
 
+// Instructions
+
+#[derive(PackedStruct, Debug)]
+struct MoveWideImmediate {
+    reg_d: Integer<u8, packed_bits::Bits<5>>, // AArch64GeneralReg
+    #[packed_field(endian = "msb")]
+    imm16: u16,
+    hw: Integer<u8, packed_bits::Bits<2>>,
+    fixed: Integer<u8, packed_bits::Bits<6>>, // = 0b100101,
+    opc: Integer<u8, packed_bits::Bits<2>>,
+    sf: bool,
+}
+
+impl MoveWideImmediate {
+    fn new(opc: u8, rd: AArch64GeneralReg, imm16: u16, hw: u8, sf: bool) -> Self {
+        match rd.size() {
+            64 => {
+                // assert!(shift % 16 == 0 && shift <= 48);
+
+                Self {
+                    // we want this to truncate, not sure if this does that
+                    reg_d: rd.id().into(),
+                    imm16,
+                    hw: hw.into(),
+                    opc: opc.into(),
+                    sf,
+                    fixed: 0b100101.into(),
+                }
+            }
+        }
+    }
+}
+
+#[derive(PackedStruct, Debug)]
+struct AddSubtractImmediate {
+    reg_d: Integer<u8, packed_bits::Bits<5>>,
+    reg_n: Integer<u8, packed_bits::Bits<5>>,
+    #[packed_field(endian = "msb")]
+    imm12: Integer<u16, packed_bits::Bits<12>>,
+    sh: bool,                                 // shift
+    fixed: Integer<u8, packed_bits::Bits<6>>, // = 0b100010,
+    s: bool,                                  // subtract
+    op: bool,                                 // set_flags??
+    sf: bool,
+}
+
+impl AddSubtractImmediate {
+    fn new(
+        op: bool,
+        s: bool,
+        rd: AArch64GeneralReg,
+        rn: AArch64GeneralReg,
+        imm12: u16,
+        shift: bool,
+    ) -> Self {
+        Self {
+            reg_d: rd.id().into(),
+            reg_n: rn.id().into(),
+            imm12: imm12.into(),
+            sh: shift,
+            s,
+            op,
+            sf: match rd.size() {
+                64 => true,
+            },
+            fixed: 0b100010.into(),
+        }
+    }
+}
+
+#[derive(PackedStruct, Debug)]
+struct LoadStoreRegister {
+    rt: Integer<u8, packed_bits::Bits<5>>,
+    rn: Integer<u8, packed_bits::Bits<5>>,
+    #[packed_field(endian = "msb")]
+    offset: Integer<u16, packed_bits::Bits<12>>,
+    opc: Integer<u8, packed_bits::Bits<2>>,
+    op1: Integer<u8, packed_bits::Bits<2>>,
+    v: bool,
+    fixed: Integer<u8, packed_bits::Bits<3>>, // = 0b111,
+    size: Integer<u8, packed_bits::Bits<2>>,
+}
+
 /// AArch64Instruction, maps all instructions to an enum.
 /// Decoding the function should be cheap because we will always inline.
 /// All of the operations should resolved by constants, leave just some bit manipulation.
 /// Enums may not be complete since we will only add what we need.
 #[derive(Debug)]
 enum AArch64Instruction {
-    _Reserved,
-    _SVE,
-    DPImm(DPImmGroup),
-    Branch(BranchGroup),
-    LdStr(LdStrGroup),
-    DPReg(DPRegGroup),
-    _DPFloat,
+    // _Reserved,
+    // _SVE,
+    // Branch(BranchGroup),
+    // LdStr(LdStrGroup),
+    // DPReg(DPRegGroup),
+    // _DPFloat,
+    MoveWideImmediate(MoveWideImmediate),
+    AddSubtractImmediate(AddSubtractImmediate),
+    LoadStoreRegister(LoadStoreRegister),
 }
 
 #[derive(Debug)]
@@ -543,26 +642,6 @@ enum DPRegGroup {
         reg_m: AArch64GeneralReg,
         imm6: u8,
         reg_n: AArch64GeneralReg,
-        reg_d: AArch64GeneralReg,
-    },
-}
-
-#[derive(Debug)]
-enum DPImmGroup {
-    AddSubImm {
-        sf: bool,
-        subtract: bool,
-        set_flags: bool,
-        shift: bool,
-        imm12: u16,
-        reg_n: AArch64GeneralReg,
-        reg_d: AArch64GeneralReg,
-    },
-    MoveWide {
-        sf: bool,
-        opc: u8,
-        hw: u8,
-        imm16: u16,
         reg_d: AArch64GeneralReg,
     },
 }
@@ -835,32 +914,22 @@ fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64Ge
 #[inline(always)]
 fn movk_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm16: u16, hw: u8) {
     debug_assert!(hw <= 0b11);
+
+    let inst = MoveWideImmediate::new(0b11, dst, imm16, hw, true);
+
     // MOV is equvalent to `ORR Xd, XZR, XM` in AARCH64.
-    buf.extend(&build_instruction(AArch64Instruction::DPImm(
-        DPImmGroup::MoveWide {
-            sf: true,
-            opc: 0b11,
-            hw,
-            imm16,
-            reg_d: dst,
-        },
-    )));
+    buf.extend(inst.pack().unwrap());
 }
 
 /// `MOVZ Xd, imm16` -> Zeros Xd and moves an optionally shifted imm16 to Xd.
 #[inline(always)]
 fn movz_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm16: u16, hw: u8) {
     debug_assert!(hw <= 0b11);
+
+    let inst = MoveWideImmediate::new(0b10, dst, imm16, hw, true);
+
     // MOV is equvalent to `ORR Xd, XZR, XM` in AARCH64.
-    buf.extend(&build_instruction(AArch64Instruction::DPImm(
-        DPImmGroup::MoveWide {
-            sf: true,
-            opc: 0b10,
-            hw,
-            imm16,
-            reg_d: dst,
-        },
-    )));
+    buf.extend(inst.pack().unwrap());
 }
 
 /// `STR Xt, [Xn, #offset]` -> Store Xt to Xn + Offset. ZRSP is SP.
