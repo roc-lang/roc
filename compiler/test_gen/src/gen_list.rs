@@ -2355,7 +2355,7 @@ fn list_any_empty_with_unknown_element_type() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn list_all() {
-    assert_evals_to!("List.all [] (\\e -> e > 3)", false, bool);
+    assert_evals_to!("List.all [] (\\e -> e > 3)", true, bool);
     assert_evals_to!("List.all [ 1, 2, 3 ] (\\e -> e > 3)", false, bool);
     assert_evals_to!("List.all [ 1, 2, 4 ] (\\e -> e > 3)", false, bool);
     assert_evals_to!("List.all [ 1, 2, 3 ] (\\e -> e >= 1)", true, bool);
