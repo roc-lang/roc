@@ -298,17 +298,24 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                List.foobar 1 2
+                List.isempty 1 2
             "#
             ),
             indoc!(
                 r#"
                 ── NOT EXPOSED ─────────────────────────────────────────────────────────────────
 
-                The List module does not expose a foobar value:
+                The List module does not expose `isempty`:
 
-                1│  List.foobar 1 2
-                    ^^^^^^^^^^^
+                1│  List.isempty 1 2
+                    ^^^^^^^^^^^^
+
+                Did you mean one of these?
+
+                    List.isEmpty
+                    List.set
+                    List.get
+                    List.keepIf
                 "#
             ),
         )
@@ -5624,10 +5631,17 @@ mod test_reporting {
                 r#"
                 ── NOT EXPOSED ─────────────────────────────────────────────────────────────────
 
-                The Num module does not expose a if value:
+                The Num module does not expose `if`:
 
                 1│  Num.if
                     ^^^^^^
+
+                Did you mean one of these?
+
+                    Num.sin
+                    Num.div
+                    Num.abs
+                    Num.neg
             "#
             ),
         )

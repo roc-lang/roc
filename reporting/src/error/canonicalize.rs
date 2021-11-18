@@ -6,6 +6,7 @@ use roc_problem::can::{BadPattern, FloatErrorKind, IntErrorKind, Problem, Runtim
 use roc_region::all::{Located, Region};
 use std::path::PathBuf;
 
+use crate::error::r#type::suggest;
 use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder, Severity};
 use ven_pretty::DocAllocator;
 
@@ -874,16 +875,36 @@ fn pretty_runtime_error<'b>(
             module_name,
             ident,
             region,
+            exposed_values,
         } => {
+            let mut suggestions = suggest::sort(ident.as_ref(), exposed_values);
+            suggestions.truncate(4);
+
+            let did_you_mean = if suggestions.is_empty() {
+                alloc.concat(vec![
+                    alloc.reflow("In fact, it look like "),
+                    alloc.module_name(module_name.clone()),
+                    alloc.reflow(" doesn't expose any values!"),
+                ])
+            } else {
+                let qualified_suggestions = suggestions
+                    .into_iter()
+                    .map(|v| alloc.string(module_name.to_string() + "." + v.as_str()));
+                alloc.stack(vec![
+                    alloc.reflow("Did you mean one of these?"),
+                    alloc.vcat(qualified_suggestions).indent(4),
+                ])
+            };
             doc = alloc.stack(vec![
                 alloc.concat(vec![
                     alloc.reflow("The "),
                     alloc.module_name(module_name),
-                    alloc.reflow(" module does not expose a "),
+                    alloc.reflow(" module does not expose `"),
                     alloc.string(ident.to_string()),
-                    alloc.reflow(" value:"),
+                    alloc.reflow("`:"),
                 ]),
                 alloc.region(region),
+                did_you_mean,
             ]);
 
             title = VALUE_NOT_EXPOSED;
@@ -1176,8 +1197,6 @@ fn not_found<'b>(
     thing: &'b str,
     options: MutSet<Box<str>>,
 ) -> RocDocBuilder<'b> {
-    use crate::error::r#type::suggest;
-
     let mut suggestions = suggest::sort(
         name.as_inline_str().as_str(),
         options.iter().map(|v| v.as_ref()).collect(),
