@@ -626,6 +626,7 @@ pub enum EType<'a> {
     TApply(ETypeApply, Row, Col),
     TBadTypeVariable(Row, Col),
     TWildcard(Row, Col),
+    TInferred(Row, Col),
     ///
     TStart(Row, Col),
     TEnd(Row, Col),

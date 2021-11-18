@@ -180,7 +180,7 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
                 true
             }
 
-            Wildcard | BoundVariable(_) | Malformed(_) => false,
+            Wildcard | Inferred | BoundVariable(_) | Malformed(_) => false,
             Function(args, result) => {
                 (&result.value).is_multiline()
                     || args.iter().any(|loc_arg| (&loc_arg.value).is_multiline())
@@ -279,6 +279,7 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
             }
             BoundVariable(v) => buf.push_str(v),
             Wildcard => buf.push('*'),
+            Inferred => buf.push('_'),
 
             TagUnion { tags, ext } => {
                 format_sequence!(buf, indent, '[', ']', tags, newlines, Tag);

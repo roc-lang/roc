@@ -459,6 +459,9 @@ fn can_annotation_help(
 
             Type::Variable(var)
         }
+        Inferred => {
+            unimplemented!();
+        }
         Malformed(string) => {
             malformed(env, region, string);
 

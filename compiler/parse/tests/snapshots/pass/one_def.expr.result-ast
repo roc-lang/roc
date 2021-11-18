@@ -1,0 +1,28 @@
+SpaceBefore(
+    Defs(
+        [
+            |L 1-1, C 0-3| Body(
+                |L 1-1, C 0-1| Identifier(
+                    "x",
+                ),
+                |L 1-1, C 2-3| Num(
+                    "5",
+                ),
+            ),
+        ],
+        |L 3-3, C 0-2| SpaceBefore(
+            Num(
+                "42",
+            ),
+            [
+                Newline,
+                Newline,
+            ],
+        ),
+    ),
+    [
+        LineComment(
+            " leading comment",
+        ),
+    ],
+)

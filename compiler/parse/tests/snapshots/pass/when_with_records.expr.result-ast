@@ -1,0 +1,51 @@
+When(
+    |L 0-0, C 5-6| Var {
+        module_name: "",
+        ident: "x",
+    },
+    [
+        WhenBranch {
+            patterns: [
+                |L 1-1, C 1-6| SpaceBefore(
+                    RecordDestructure(
+                        [
+                            |L 1-1, C 3-4| Identifier(
+                                "y",
+                            ),
+                        ],
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ],
+            value: |L 1-1, C 10-11| Num(
+                "2",
+            ),
+            guard: None,
+        },
+        WhenBranch {
+            patterns: [
+                |L 2-2, C 1-9| SpaceBefore(
+                    RecordDestructure(
+                        [
+                            |L 2-2, C 3-4| Identifier(
+                                "z",
+                            ),
+                            |L 2-2, C 6-7| Identifier(
+                                "w",
+                            ),
+                        ],
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ],
+            value: |L 2-2, C 13-14| Num(
+                "4",
+            ),
+            guard: None,
+        },
+    ],
+)

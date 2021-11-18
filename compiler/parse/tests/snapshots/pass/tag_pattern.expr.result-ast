@@ -1,0 +1,10 @@
+Closure(
+    [
+        |L 0-0, C 1-6| GlobalTag(
+            "Thing",
+        ),
+    ],
+    |L 0-0, C 10-12| Num(
+        "42",
+    ),
+)

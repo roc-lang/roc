@@ -1,0 +1,19 @@
+Apply(
+    |L 0-0, C 0-4| Var {
+        module_name: "",
+        ident: "whee",
+    },
+    [
+        |L 0-0, C 6-8| Num(
+            "12",
+        ),
+        |L 0-0, C 9-13| UnaryOp(
+            |L 0-0, C 10-13| Var {
+                module_name: "",
+                ident: "foo",
+            },
+            |L 0-0, C 9-10| Negate,
+        ),
+    ],
+    Space,
+)

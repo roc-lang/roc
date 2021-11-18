@@ -1074,6 +1074,8 @@ define_builtins! {
         49 LIST_SUBLIST: "sublist"
         50 LIST_INTERSPERSE: "intersperse"
         51 LIST_INTERSPERSE_CLOS: "#intersperseClos"
+        52 LIST_SPLIT: "split"
+        53 LIST_SPLIT_CLOS: "#splitClos"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

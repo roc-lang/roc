@@ -1,0 +1,7 @@
+UnaryOp(
+    |L 0-0, C 1-5| Var {
+        module_name: "",
+        ident: "blah",
+    },
+    |L 0-0, C 0-1| Not,
+)

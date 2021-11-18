@@ -1015,6 +1015,25 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(list_type(flex(TVAR1))),
     );
 
+    // split : List elem, Nat -> { before: List elem, others: List elem }
+    add_top_level_function_type!(
+        Symbol::LIST_SPLIT,
+        vec![list_type(flex(TVAR1)), nat_type(),],
+        Box::new(SolvedType::Record {
+            fields: vec![
+                (
+                    "before".into(),
+                    RecordField::Required(list_type(flex(TVAR1)))
+                ),
+                (
+                    "others".into(),
+                    RecordField::Required(list_type(flex(TVAR1)))
+                ),
+            ],
+            ext: Box::new(SolvedType::EmptyRecord),
+        },),
+    );
+
     // drop : List elem, Nat -> List elem
     add_top_level_function_type!(
         Symbol::LIST_DROP,

@@ -444,6 +444,13 @@ impl<'a> WasmBackend<'a> {
 
                 Ok(())
             }
+
+            Stmt::Refcounting(_modify, following) => {
+                // TODO: actually deal with refcounting. For hello world, we just skipped it.
+                self.build_stmt(following, ret_layout)?;
+                Ok(())
+            }
+
             x => Err(format!("statement not yet implemented: {:?}", x)),
         }
     }
@@ -472,7 +479,7 @@ impl<'a> WasmBackend<'a> {
                 CallType::ByName { name: func_sym, .. } => {
                     // If this function is just a lowlevel wrapper, then inline it
                     if let Some(lowlevel) = LowLevel::from_inlined_wrapper(*func_sym) {
-                        return self.build_low_level(lowlevel, arguments, wasm_layout);
+                        return self.build_low_level(lowlevel, arguments, *sym, wasm_layout);
                     }
 
                     let mut wasm_args_tmp: Vec<Symbol>;
@@ -517,7 +524,7 @@ impl<'a> WasmBackend<'a> {
                 }
 
                 CallType::LowLevel { op: lowlevel, .. } => {
-                    self.build_low_level(*lowlevel, arguments, wasm_layout)
+                    self.build_low_level(*lowlevel, arguments, *sym, wasm_layout)
                 }
 
                 x => Err(format!("the call type, {:?}, is not yet implemented", x)),
@@ -556,9 +563,18 @@ impl<'a> WasmBackend<'a> {
         &mut self,
         lowlevel: LowLevel,
         arguments: &'a [Symbol],
+        return_sym: Symbol,
         return_layout: WasmLayout,
     ) -> Result<(), String> {
-        self.storage.load_symbols(&mut self.code_builder, arguments);
+        // Load symbols using the "fast calling convention" that Zig uses instead of the C ABI we normally use.
+        // It's only different from the C ABI for small structs, and we are using Zig for all of those cases.
+        // This is a workaround for a bug in Zig. If later versions fix it, we can change to the C ABI.
+        self.storage.load_symbols_fastcc(
+            &mut self.code_builder,
+            arguments,
+            return_sym,
+            &return_layout,
+        );
 
         let build_result = decode_low_level(
             &mut self.code_builder,
@@ -572,7 +588,7 @@ impl<'a> WasmBackend<'a> {
         match build_result {
             Done => Ok(()),
             BuiltinCall(name) => {
-                self.call_imported_builtin(name, arguments, &return_layout);
+                self.call_zig_builtin(name, arguments, &return_layout);
                 Ok(())
             }
             NotImplemented => Err(format!(
@@ -626,8 +642,8 @@ impl<'a> WasmBackend<'a> {
                             self.lookup_string_constant(string, sym, layout);
 
                         self.code_builder.get_local(local_id);
-                        self.code_builder.insert_memory_relocation(linker_sym_index);
-                        self.code_builder.i32_const(elements_addr as i32);
+                        self.code_builder
+                            .i32_const_mem_addr(elements_addr, linker_sym_index);
                         self.code_builder.i32_store(Align::Bytes4, offset);
 
                         self.code_builder.get_local(local_id);
@@ -749,12 +765,10 @@ impl<'a> WasmBackend<'a> {
         Ok(())
     }
 
-    fn call_imported_builtin(
-        &mut self,
-        name: &'a str,
-        arguments: &[Symbol],
-        ret_layout: &WasmLayout,
-    ) {
+    /// Generate a call instruction to a Zig builtin function.
+    /// And if we haven't seen it before, add an Import and linker data for it.
+    /// Zig calls use LLVM's "fast" calling convention rather than our usual C ABI.
+    fn call_zig_builtin(&mut self, name: &'a str, arguments: &[Symbol], ret_layout: &WasmLayout) {
         let (fn_index, linker_symbol_index) = match self.builtin_sym_index_map.get(name) {
             Some(sym_idx) => match &self.linker_symbols[*sym_idx] {
                 SymInfo::Function(WasmObjectSymbol::Imported { index, .. }) => {
@@ -764,11 +778,29 @@ impl<'a> WasmBackend<'a> {
             },
 
             None => {
-                let mut param_types = Vec::with_capacity_in(arguments.len(), self.env.arena);
-                param_types.extend(arguments.iter().map(|a| self.storage.get(a).value_type()));
+                let mut param_types = Vec::with_capacity_in(1 + arguments.len(), self.env.arena);
+
+                let ret_type = if ret_layout.is_stack_memory() {
+                    param_types.push(ValueType::I32);
+                    None
+                } else {
+                    Some(ret_layout.value_type())
+                };
+
+                // Zig's "fast calling convention" packs structs into CPU registers (stack machine slots) if possible.
+                // If they're small enough they can go into an I32 or I64. If they're big, they're pointers (I32).
+                for arg in arguments {
+                    param_types.push(match self.storage.get(arg) {
+                        StoredValue::StackMemory { size, .. } if *size > 4 && *size <= 8 => {
+                            ValueType::I64
+                        }
+                        stored => stored.value_type(),
+                    });
+                }
+
                 let signature_index = self.module.types.insert(Signature {
                     param_types,
-                    ret_type: Some(ret_layout.value_type()), // TODO: handle builtins with no return value
+                    ret_type,
                 });
 
                 let import_index = self.module.import.entries.len() as u32;

@@ -149,6 +149,7 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait> {
     fn mov_stack32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: FloatReg);
     fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg);
 
+    fn neg_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg);
     fn imul_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
@@ -783,6 +784,23 @@ impl<
                 Ok(())
             }
             x => Err(format!("NumMul: layout, {:?}, not implemented yet", x)),
+        }
+    }
+
+    fn build_num_neg(
+        &mut self,
+        dst: &Symbol,
+        src: &Symbol,
+        layout: &Layout<'a>,
+    ) -> Result<(), String> {
+        match layout {
+            Layout::Builtin(Builtin::Int64) => {
+                let dst_reg = self.claim_general_reg(dst)?;
+                let src_reg = self.load_to_general_reg(src)?;
+                ASM::neg_reg64_reg64(&mut self.buf, dst_reg, src_reg);
+                Ok(())
+            }
+            x => Err(format!("NumNeg: layout, {:?}, not implemented yet", x)),
         }
     }
 

@@ -9,7 +9,7 @@ use super::opcodes::{OpCode, OpCode::*};
 use super::serialize::{SerialBuffer, Serialize};
 use crate::{round_up_to_alignment, FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID};
 
-const ENABLE_DEBUG_LOG: bool = true;
+const ENABLE_DEBUG_LOG: bool = false;
 macro_rules! log_instruction {
     ($($x: expr),+) => {
         if ENABLE_DEBUG_LOG { println!($($x,)*); }
@@ -572,11 +572,14 @@ impl<'a> CodeBuilder<'a> {
         );
     }
 
-    /// Insert a linker relocation for a memory address
-    pub fn insert_memory_relocation(&mut self, symbol_index: u32) {
+    /// Insert a const reference to a memory address
+    pub fn i32_const_mem_addr(&mut self, addr: u32, symbol_index: u32) {
+        self.inst_base(I32CONST, 0, true);
+        let offset = self.code.len() as u32;
+        self.code.encode_padded_u32(addr);
         self.relocations.push(RelocationEntry::Offset {
             type_id: OffsetRelocType::MemoryAddrLeb,
-            offset: self.code.len() as u32,
+            offset,
             symbol_index,
             addend: 0,
         });

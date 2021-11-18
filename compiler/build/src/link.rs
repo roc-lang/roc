@@ -145,6 +145,8 @@ pub fn build_zig_host_native(
     _target: &str,
     opt_level: OptLevel,
     shared_lib_path: Option<&Path>,
+    // For compatibility with the non-macOS def above. Keep these in sync.
+    _target_valgrind: bool,
 ) -> Output {
     use serde_json::Value;
 
