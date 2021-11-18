@@ -1,6 +1,5 @@
 #![allow(clippy::manual_map)]
 
-use self::InProgressProc::*;
 use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
 use crate::layout::{
     Builtin, ClosureRepresentation, LambdaSet, Layout, LayoutCache, LayoutProblem,
@@ -8,7 +7,6 @@ use crate::layout::{
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use hashbrown::hash_map::Entry;
 use roc_can::expr::ClosureData;
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
@@ -419,40 +417,215 @@ impl<'a> Proc<'a> {
 #[derive(Clone, Debug)]
 pub struct ExternalSpecializations<'a> {
     /// Not a bumpalo vec because bumpalo is not thread safe
-    pub specs: BumpMap<Symbol, std::vec::Vec<SolvedType>>,
+    /// Separate array so we can search for membership quickly
+    symbols: std::vec::Vec<Symbol>,
+    storage_subs: Subs,
+    /// For each symbol, what types to specialize it for, points into the storage_subs
+    types_to_specialize: std::vec::Vec<std::vec::Vec<Variable>>,
     _lifetime: std::marker::PhantomData<&'a u8>,
 }
 
 impl<'a> ExternalSpecializations<'a> {
-    pub fn new_in(arena: &'a Bump) -> Self {
+    pub fn new_in(_arena: &'a Bump) -> Self {
         Self {
-            specs: BumpMap::new_in(arena),
+            symbols: std::vec::Vec::new(),
+            storage_subs: Subs::default(),
+            types_to_specialize: std::vec::Vec::new(),
             _lifetime: std::marker::PhantomData,
         }
     }
 
-    pub fn insert(&mut self, symbol: Symbol, typ: SolvedType) {
-        use hashbrown::hash_map::Entry::{Occupied, Vacant};
+    fn insert_external(&mut self, symbol: Symbol, env_subs: &mut Subs, variable: Variable) {
+        let variable =
+            roc_solve::solve::deep_copy_var_to(env_subs, &mut self.storage_subs, variable);
 
-        let existing = match self.specs.entry(symbol) {
-            Vacant(entry) => entry.insert(std::vec::Vec::new()),
-            Occupied(entry) => entry.into_mut(),
-        };
-
-        existing.push(typ);
+        match self.symbols.iter().position(|s| *s == symbol) {
+            None => {
+                self.symbols.push(symbol);
+                self.types_to_specialize.push(vec![variable]);
+            }
+            Some(index) => {
+                let types_to_specialize = &mut self.types_to_specialize[index];
+                types_to_specialize.push(variable);
+            }
+        }
     }
 
-    pub fn extend(&mut self, other: Self) {
-        use hashbrown::hash_map::Entry::{Occupied, Vacant};
+    fn decompose(
+        self,
+    ) -> (
+        Subs,
+        impl Iterator<Item = (Symbol, std::vec::Vec<Variable>)>,
+    ) {
+        (
+            self.storage_subs,
+            self.symbols
+                .into_iter()
+                .zip(self.types_to_specialize.into_iter()),
+        )
+    }
+}
 
-        for (symbol, solved_types) in other.specs {
-            let existing = match self.specs.entry(symbol) {
-                Vacant(entry) => entry.insert(std::vec::Vec::new()),
-                Occupied(entry) => entry.into_mut(),
-            };
+#[derive(Clone, Debug)]
+pub struct Suspended<'a> {
+    pub store: Subs,
+    pub symbols: Vec<'a, Symbol>,
+    pub layouts: Vec<'a, ProcLayout<'a>>,
+    pub variables: Vec<'a, Variable>,
+}
 
-            existing.extend(solved_types);
+impl<'a> Suspended<'a> {
+    fn new_in(arena: &'a Bump) -> Self {
+        Self {
+            store: Subs::new_from_varstore(Default::default()),
+            symbols: Vec::new_in(arena),
+            layouts: Vec::new_in(arena),
+            variables: Vec::new_in(arena),
         }
+    }
+
+    fn specialization(
+        &mut self,
+        subs: &mut Subs,
+        symbol: Symbol,
+        proc_layout: ProcLayout<'a>,
+        variable: Variable,
+    ) {
+        // de-duplicate
+        for (i, s) in self.symbols.iter().enumerate() {
+            if *s == symbol {
+                let existing = &self.layouts[i];
+                if &proc_layout == existing {
+                    // symbol + layout combo exists
+                    return;
+                }
+            }
+        }
+
+        self.symbols.push(symbol);
+        self.layouts.push(proc_layout);
+
+        let variable = roc_solve::solve::deep_copy_var_to(subs, &mut self.store, variable);
+
+        self.variables.push(variable);
+    }
+}
+
+#[derive(Clone, Debug)]
+enum PendingSpecializations<'a> {
+    /// We are finding specializations we need. This is a separate step so
+    /// that we can give specializations we need to modules higher up in the dependency chain, so
+    /// that they can start making specializations too
+    Finding(Suspended<'a>),
+    /// We are making specializations. If any new one comes up, we can just make it immediately
+    Making,
+}
+
+#[derive(Clone, Debug, Default)]
+struct Specialized<'a> {
+    symbols: std::vec::Vec<Symbol>,
+    proc_layouts: std::vec::Vec<ProcLayout<'a>>,
+    procedures: std::vec::Vec<InProgressProc<'a>>,
+}
+
+impl<'a> Specialized<'a> {
+    fn len(&self) -> usize {
+        self.symbols.len()
+    }
+
+    #[allow(dead_code)]
+    fn is_empty(&self) -> bool {
+        self.symbols.is_empty()
+    }
+
+    fn into_iter_assert_done(self) -> impl Iterator<Item = (Symbol, ProcLayout<'a>, Proc<'a>)> {
+        self.symbols
+            .into_iter()
+            .zip(self.proc_layouts.into_iter())
+            .zip(self.procedures.into_iter())
+            .filter_map(|((s, l), in_progress)| {
+                if let Symbol::REMOVED_SPECIALIZATION = s {
+                    None
+                } else {
+                    match in_progress {
+                        InProgressProc::InProgress => panic!("Function is not done specializing"),
+                        InProgressProc::Done(proc) => Some((s, l, proc)),
+                    }
+                }
+            })
+    }
+
+    fn is_specialized(&mut self, symbol: Symbol, layout: &ProcLayout<'a>) -> bool {
+        for (i, s) in self.symbols.iter().enumerate() {
+            if *s == symbol && &self.proc_layouts[i] == layout {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn mark_in_progress(&mut self, symbol: Symbol, layout: ProcLayout<'a>) {
+        for (i, s) in self.symbols.iter().enumerate() {
+            if *s == symbol && self.proc_layouts[i] == layout {
+                match &self.procedures[i] {
+                    InProgressProc::InProgress => {
+                        return;
+                    }
+                    InProgressProc::Done(_) => {
+                        panic!("marking in progress, but this proc is already done!")
+                    }
+                }
+            }
+        }
+
+        // the key/layout combo was not found; insert it
+        self.symbols.push(symbol);
+        self.proc_layouts.push(layout);
+        self.procedures.push(InProgressProc::InProgress);
+    }
+
+    fn remove_specialized(&mut self, symbol: Symbol, layout: &ProcLayout<'a>) -> bool {
+        let mut index = None;
+
+        for (i, s) in self.symbols.iter().enumerate() {
+            if *s == symbol && &self.proc_layouts[i] == layout {
+                index = Some(i);
+            }
+        }
+
+        if let Some(index) = index {
+            self.symbols[index] = Symbol::REMOVED_SPECIALIZATION;
+
+            true
+        } else {
+            false
+        }
+    }
+
+    fn insert_specialized(&mut self, symbol: Symbol, layout: ProcLayout<'a>, proc: Proc<'a>) {
+        for (i, s) in self.symbols.iter().enumerate() {
+            if *s == symbol && self.proc_layouts[i] == layout {
+                match &self.procedures[i] {
+                    InProgressProc::InProgress => {
+                        self.procedures[i] = InProgressProc::Done(proc);
+                        return;
+                    }
+                    InProgressProc::Done(_) => {
+                        // overwrite existing! this is important in practice
+                        // TODO investigate why we generate the wrong proc in some cases and then
+                        // correct later
+                        self.procedures[i] = InProgressProc::Done(proc);
+                        return;
+                    }
+                }
+            }
+        }
+
+        // the key/layout combo was not found; insert it
+        self.symbols.push(symbol);
+        self.proc_layouts.push(layout);
+        self.procedures.push(InProgressProc::Done(proc));
     }
 }
 
@@ -461,11 +634,9 @@ pub struct Procs<'a> {
     pub partial_procs: PartialProcs<'a>,
     pub imported_module_thunks: &'a [Symbol],
     pub module_thunks: &'a [Symbol],
-    pub pending_specializations:
-        Option<BumpMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>>,
-    pub specialized: BumpMap<(Symbol, ProcLayout<'a>), InProgressProc<'a>>,
+    pending_specializations: PendingSpecializations<'a>,
+    specialized: Specialized<'a>,
     pub runtime_errors: BumpMap<Symbol, &'a str>,
-    pub call_by_pointer_wrappers: BumpMap<Symbol, Symbol>,
     pub externals_we_need: BumpMap<ModuleId, ExternalSpecializations<'a>>,
 }
 
@@ -475,10 +646,9 @@ impl<'a> Procs<'a> {
             partial_procs: PartialProcs::new_in(arena),
             imported_module_thunks: &[],
             module_thunks: &[],
-            pending_specializations: Some(BumpMap::new_in(arena)),
-            specialized: BumpMap::new_in(arena),
+            pending_specializations: PendingSpecializations::Finding(Suspended::new_in(arena)),
+            specialized: Specialized::default(),
             runtime_errors: BumpMap::new_in(arena),
-            call_by_pointer_wrappers: BumpMap::new_in(arena),
             externals_we_need: BumpMap::new_in(arena),
         }
     }
@@ -509,23 +679,11 @@ impl<'a> Procs<'a> {
     ) -> MutMap<(Symbol, ProcLayout<'a>), Proc<'a>> {
         let mut result = MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
 
-        for (key, in_prog_proc) in self.specialized.into_iter() {
-            match in_prog_proc {
-                InProgress => {
-                    let (symbol, layout) = key;
-                    eprintln!(
-                        "The procedure {:?} should have be done by now:\n\n    {:?}",
-                        symbol, layout
-                    );
+        for (symbol, layout, mut proc) in self.specialized.into_iter_assert_done() {
+            proc.make_tail_recursive(env);
 
-                    panic!();
-                }
-                Done(mut proc) => {
-                    proc.make_tail_recursive(env);
-
-                    result.insert(key, proc);
-                }
-            }
+            let key = (symbol, layout);
+            result.insert(key, proc);
         }
 
         result
@@ -559,10 +717,7 @@ impl<'a> Procs<'a> {
                 // by the surrounding context, so we can add pending specializations
                 // for them immediately.
 
-                let already_specialized = self
-                    .specialized
-                    .keys()
-                    .any(|(s, t)| *s == symbol && *t == top_level);
+                let already_specialized = self.specialized.is_specialized(symbol, &top_level);
 
                 let layout = top_level;
 
@@ -573,11 +728,9 @@ impl<'a> Procs<'a> {
                     }
 
                     match &mut self.pending_specializations {
-                        Some(pending_specializations) => {
+                        PendingSpecializations::Finding(suspended) => {
                             // register the pending specialization, so this gets code genned later
-                            let pending =
-                                PendingSpecialization::from_var(env.arena, env.subs, annotation);
-                            add_pending(pending_specializations, symbol, layout, pending);
+                            suspended.specialization(env.subs, symbol, layout, annotation);
 
                             match self.partial_procs.symbol_to_id(symbol) {
                                 Some(occupied) => {
@@ -608,11 +761,11 @@ impl<'a> Procs<'a> {
                                 }
                             }
                         }
-                        None => {
+                        PendingSpecializations::Making => {
                             // Mark this proc as in-progress, so if we're dealing with
                             // mutually recursive functions, we don't loop forever.
                             // (We had a bug around this before this system existed!)
-                            self.specialized.insert((symbol, layout), InProgress);
+                            self.specialized.mark_in_progress(symbol, layout);
 
                             let outside_layout = layout;
 
@@ -666,7 +819,7 @@ impl<'a> Procs<'a> {
                                         debug_assert!(top_level.arguments.is_empty());
                                     }
 
-                                    self.specialized.insert((symbol, top_level), Done(proc));
+                                    self.specialized.insert_specialized(symbol, top_level, proc);
                                 }
                                 Err(error) => {
                                     panic!("TODO generate a RuntimeError message for {:?}", error);
@@ -691,7 +844,7 @@ impl<'a> Procs<'a> {
         layout_cache: &mut LayoutCache<'a>,
     ) {
         // If we've already specialized this one, no further work is needed.
-        if self.specialized.contains_key(&(name, layout)) {
+        if self.specialized.is_specialized(name, &layout) {
             return;
         }
 
@@ -709,12 +862,10 @@ impl<'a> Procs<'a> {
         // This should only be called when pending_specializations is Some.
         // Otherwise, it's being called in the wrong pass!
         match &mut self.pending_specializations {
-            Some(pending_specializations) => {
-                let pending = PendingSpecialization::from_var(env.arena, env.subs, fn_var);
-
-                add_pending(pending_specializations, name, layout, pending)
+            PendingSpecializations::Finding(suspended) => {
+                suspended.specialization(env.subs, name, layout, fn_var);
             }
-            None => {
+            PendingSpecializations::Making => {
                 let symbol = name;
 
                 let partial_proc_id = match self.partial_procs.symbol_to_id(symbol) {
@@ -725,7 +876,7 @@ impl<'a> Procs<'a> {
                 // Mark this proc as in-progress, so if we're dealing with
                 // mutually recursive functions, we don't loop forever.
                 // (We had a bug around this before this system existed!)
-                self.specialized.insert((symbol, layout), InProgress);
+                self.specialized.mark_in_progress(symbol, layout);
 
                 // See https://github.com/rtfeldman/roc/issues/1600
                 //
@@ -763,8 +914,9 @@ impl<'a> Procs<'a> {
                         // NOTE: some function are specialized to have a closure, but don't actually
                         // need any closure argument. Here is where we correct this sort of thing,
                         // by trusting the layout of the Proc, not of what we specialize for
-                        self.specialized.remove(&(symbol, layout));
-                        self.specialized.insert((symbol, proper_layout), Done(proc));
+                        self.specialized.remove_specialized(symbol, &layout);
+                        self.specialized
+                            .insert_specialized(symbol, proper_layout, proc);
                     }
                     Err(error) => {
                         panic!("TODO generate a RuntimeError message for {:?}", error);
@@ -773,22 +925,6 @@ impl<'a> Procs<'a> {
             }
         }
     }
-}
-
-fn add_pending<'a>(
-    pending_specializations: &mut BumpMap<
-        Symbol,
-        MutMap<ProcLayout<'a>, PendingSpecialization<'a>>,
-    >,
-    symbol: Symbol,
-    layout: ProcLayout<'a>,
-    pending: PendingSpecialization<'a>,
-) {
-    let all_pending = pending_specializations
-        .entry(symbol)
-        .or_insert_with(|| HashMap::with_capacity_and_hasher(1, default_hasher()));
-
-    all_pending.insert(layout, pending);
 }
 
 #[derive(Default)]
@@ -1757,7 +1893,7 @@ fn pattern_to_when<'a>(
 pub fn specialize_all<'a>(
     env: &mut Env<'a, '_>,
     mut procs: Procs<'a>,
-    externals_others_need: ExternalSpecializations<'a>,
+    externals_others_need: std::vec::Vec<ExternalSpecializations<'a>>,
     specializations_for_host: BumpMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>,
     layout_cache: &mut LayoutCache<'a>,
 ) -> Procs<'a> {
@@ -1765,30 +1901,38 @@ pub fn specialize_all<'a>(
 
     // When calling from_can, pending_specializations should be unavailable.
     // This must be a single pass, and we must not add any more entries to it!
-    let opt_pending_specializations = std::mem::replace(&mut procs.pending_specializations, None);
+    let pending_specializations = std::mem::replace(
+        &mut procs.pending_specializations,
+        PendingSpecializations::Making,
+    );
 
-    let it = specializations_for_host
-        .into_iter()
-        .chain(opt_pending_specializations.into_iter().flatten());
+    match pending_specializations {
+        PendingSpecializations::Making => {}
+        PendingSpecializations::Finding(mut suspended) => {
+            // TODO can we copy everything over in one pass (bumping variables by however many
+            // variables are in the env's subs?
+            for var in suspended.variables.iter_mut() {
+                debug_assert!((var.index() as usize) < suspended.store.len());
 
-    for (name, by_layout) in it {
-        for (outside_layout, pending) in by_layout.into_iter() {
-            // If we've already seen this (Symbol, Layout) combination before,
-            // don't try to specialize it again. If we do, we'll loop forever!
-            let key = (name, outside_layout);
+                *var = roc_solve::solve::deep_copy_var_to(&mut suspended.store, env.subs, *var);
+            }
 
-            let partial_proc = match procs.specialized.entry(key) {
-                Entry::Occupied(_) => {
+            for (i, symbol) in suspended.symbols.iter().enumerate() {
+                let name = *symbol;
+                let var = suspended.variables[i];
+                let outside_layout = suspended.layouts[i];
+
+                // TODO define our own Entry for Specialized?
+                let partial_proc = if procs.specialized.is_specialized(name, &outside_layout) {
                     // already specialized, just continue
                     continue;
-                }
-                Entry::Vacant(vacant) => {
+                } else {
                     match procs.partial_procs.symbol_to_id(name) {
                         Some(v) => {
                             // Mark this proc as in-progress, so if we're dealing with
                             // mutually recursive functions, we don't loop forever.
                             // (We had a bug around this before this system existed!)
-                            vacant.insert(InProgress);
+                            procs.specialized.mark_in_progress(name, outside_layout);
 
                             v
                         }
@@ -1797,6 +1941,72 @@ pub fn specialize_all<'a>(
                             // make sure this does not become a problem down the road!
                             continue;
                         }
+                    }
+                };
+
+                match specialize_variable(
+                    env,
+                    &mut procs,
+                    name,
+                    layout_cache,
+                    var,
+                    BumpMap::new_in(env.arena),
+                    partial_proc,
+                ) {
+                    Ok((proc, layout)) => {
+                        // TODO thiscode is duplicated elsewhere
+                        let top_level = ProcLayout::from_raw(env.arena, layout);
+
+                        if procs.is_module_thunk(proc.name) {
+                            debug_assert!(
+                                top_level.arguments.is_empty(),
+                                "{:?} from {:?}",
+                                name,
+                                layout
+                            );
+                        }
+
+                        debug_assert_eq!(outside_layout, top_level, " in {:?}", name);
+                        procs.specialized.insert_specialized(name, top_level, proc);
+                    }
+                    Err(SpecializeFailure {
+                        attempted_layout, ..
+                    }) => {
+                        let proc = generate_runtime_error_function(env, name, attempted_layout);
+
+                        let top_level = ProcLayout::from_raw(env.arena, attempted_layout);
+
+                        procs.specialized.insert_specialized(name, top_level, proc);
+                    }
+                }
+            }
+        }
+    }
+
+    let it = specializations_for_host.into_iter();
+
+    for (name, by_layout) in it {
+        for (outside_layout, pending) in by_layout.into_iter() {
+            // If we've already seen this (Symbol, Layout) combination before,
+            // don't try to specialize it again. If we do, we'll loop forever!
+
+            let partial_proc = if procs.specialized.is_specialized(name, &outside_layout) {
+                // already specialized, just continue
+                continue;
+            } else {
+                match procs.partial_procs.symbol_to_id(name) {
+                    Some(v) => {
+                        // Mark this proc as in-progress, so if we're dealing with
+                        // mutually recursive functions, we don't loop forever.
+                        // (We had a bug around this before this system existed!)
+                        procs.specialized.mark_in_progress(name, outside_layout);
+
+                        v
+                    }
+                    None => {
+                        // TODO this assumes the specialization is done by another module
+                        // make sure this does not become a problem down the road!
+                        continue;
                     }
                 }
             };
@@ -1816,7 +2026,7 @@ pub fn specialize_all<'a>(
                     }
 
                     debug_assert_eq!(outside_layout, top_level, " in {:?}", name);
-                    procs.specialized.insert((name, top_level), Done(proc));
+                    procs.specialized.insert_specialized(name, top_level, proc);
                 }
                 Err(SpecializeFailure {
                     attempted_layout, ..
@@ -1825,7 +2035,7 @@ pub fn specialize_all<'a>(
 
                     let top_level = ProcLayout::from_raw(env.arena, attempted_layout);
 
-                    procs.specialized.insert((name, top_level), Done(proc));
+                    procs.specialized.insert_specialized(name, top_level, proc);
                 }
             }
         }
@@ -1837,53 +2047,59 @@ pub fn specialize_all<'a>(
 fn specialize_externals_others_need<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
-    externals_others_need: ExternalSpecializations<'a>,
+    all_externals_others_need: std::vec::Vec<ExternalSpecializations<'a>>,
     layout_cache: &mut LayoutCache<'a>,
 ) {
-    for (symbol, solved_types) in externals_others_need.specs.iter() {
-        for solved_type in solved_types {
-            // historical note: we used to deduplicate with a hash here,
-            // but the cost of that hash is very high. So for now we make
-            // duplicate specializations, and the insertion into a hash map
-            // below will deduplicate them.
+    for externals_others_need in all_externals_others_need {
+        let (mut store, it) = externals_others_need.decompose();
+        for (symbol, solved_types) in it {
+            for store_variable in solved_types {
+                // historical note: we used to deduplicate with a hash here,
+                // but the cost of that hash is very high. So for now we make
+                // duplicate specializations, and the insertion into a hash map
+                // below will deduplicate them.
 
-            let name = *symbol;
+                let name = symbol;
 
-            let partial_proc_id = match procs.partial_procs.symbol_to_id(name) {
-                Some(v) => v,
-                None => {
-                    panic!("Cannot find a partial proc for {:?}", name);
-                }
-            };
-
-            // TODO I believe this is also duplicated
-            match specialize_solved_type(
-                env,
-                procs,
-                name,
-                layout_cache,
-                solved_type,
-                BumpMap::new_in(env.arena),
-                partial_proc_id,
-            ) {
-                Ok((proc, layout)) => {
-                    let top_level = ProcLayout::from_raw(env.arena, layout);
-
-                    if procs.is_module_thunk(name) {
-                        debug_assert!(top_level.arguments.is_empty());
+                let partial_proc_id = match procs.partial_procs.symbol_to_id(name) {
+                    Some(v) => v,
+                    None => {
+                        panic!("Cannot find a partial proc for {:?}", name);
                     }
+                };
 
-                    procs.specialized.insert((name, top_level), Done(proc));
-                }
-                Err(SpecializeFailure {
-                    problem: _,
-                    attempted_layout,
-                }) => {
-                    let proc = generate_runtime_error_function(env, name, attempted_layout);
+                let variable =
+                    roc_solve::solve::deep_copy_var_to(&mut store, env.subs, store_variable);
 
-                    let top_level = ProcLayout::from_raw(env.arena, attempted_layout);
+                // TODO I believe this is also duplicated
+                match specialize_variable(
+                    env,
+                    procs,
+                    name,
+                    layout_cache,
+                    variable,
+                    BumpMap::new_in(env.arena),
+                    partial_proc_id,
+                ) {
+                    Ok((proc, layout)) => {
+                        let top_level = ProcLayout::from_raw(env.arena, layout);
 
-                    procs.specialized.insert((name, top_level), Done(proc));
+                        if procs.is_module_thunk(name) {
+                            debug_assert!(top_level.arguments.is_empty());
+                        }
+
+                        procs.specialized.insert_specialized(name, top_level, proc);
+                    }
+                    Err(SpecializeFailure {
+                        problem: _,
+                        attempted_layout,
+                    }) => {
+                        let proc = generate_runtime_error_function(env, name, attempted_layout);
+
+                        let top_level = ProcLayout::from_raw(env.arena, attempted_layout);
+
+                        procs.specialized.insert_specialized(name, top_level, proc);
+                    }
                 }
             }
         }
@@ -2042,9 +2258,7 @@ fn specialize_external<'a>(
                         *return_layout,
                     );
 
-                    procs
-                        .specialized
-                        .insert((name, top_level), InProgressProc::Done(proc));
+                    procs.specialized.insert_specialized(name, top_level, proc);
 
                     aliases.insert(*symbol, (name, top_level, layout));
                 }
@@ -6354,8 +6568,7 @@ fn add_needed_external<'a>(
         Occupied(entry) => entry.into_mut(),
     };
 
-    let solved_type = SolvedType::from_var(env.subs, fn_var);
-    existing.insert(name, solved_type);
+    existing.insert_external(name, env.subs, fn_var);
 }
 
 fn build_call<'a>(
@@ -6580,8 +6793,7 @@ fn call_by_name_help<'a>(
     // If we've already specialized this one, no further work is needed.
     if procs
         .specialized
-        .keys()
-        .any(|x| x == &(proc_name, top_level_layout))
+        .is_specialized(proc_name, &top_level_layout)
     {
         debug_assert_eq!(
             argument_layouts.len(),
@@ -6665,17 +6877,11 @@ fn call_by_name_help<'a>(
         }
 
         match &mut procs.pending_specializations {
-            Some(pending_specializations) => {
+            PendingSpecializations::Finding(suspended) => {
                 debug_assert!(!env.is_imported_symbol(proc_name));
 
                 // register the pending specialization, so this gets code genned later
-                let pending = PendingSpecialization::from_var(env.arena, env.subs, fn_var);
-                add_pending(
-                    pending_specializations,
-                    proc_name,
-                    top_level_layout,
-                    pending,
-                );
+                suspended.specialization(env.subs, proc_name, top_level_layout, fn_var);
 
                 debug_assert_eq!(
                     argument_layouts.len(),
@@ -6701,7 +6907,7 @@ fn call_by_name_help<'a>(
                 let iter = loc_args.into_iter().rev().zip(field_symbols.iter().rev());
                 assign_to_symbols(env, procs, layout_cache, iter, result)
             }
-            None => {
+            PendingSpecializations::Making => {
                 let opt_partial_proc = procs.partial_procs.symbol_to_id(proc_name);
 
                 let field_symbols = field_symbols.into_bump_slice();
@@ -6713,7 +6919,7 @@ fn call_by_name_help<'a>(
                         // (We had a bug around this before this system existed!)
                         procs
                             .specialized
-                            .insert((proc_name, top_level_layout), InProgress);
+                            .mark_in_progress(proc_name, top_level_layout);
 
                         match specialize_variable(
                             env,
@@ -6796,7 +7002,7 @@ fn call_by_name_module_thunk<'a>(
     // If we've already specialized this one, no further work is needed.
     let already_specialized = procs
         .specialized
-        .contains_key(&(proc_name, top_level_layout));
+        .is_specialized(proc_name, &top_level_layout);
 
     if already_specialized {
         force_thunk(env, proc_name, inner_layout, assigned, hole)
@@ -6817,21 +7023,15 @@ fn call_by_name_module_thunk<'a>(
         }
 
         match &mut procs.pending_specializations {
-            Some(pending_specializations) => {
+            PendingSpecializations::Finding(suspended) => {
                 debug_assert!(!env.is_imported_symbol(proc_name));
 
                 // register the pending specialization, so this gets code genned later
-                let pending = PendingSpecialization::from_var(env.arena, env.subs, fn_var);
-                add_pending(
-                    pending_specializations,
-                    proc_name,
-                    top_level_layout,
-                    pending,
-                );
+                suspended.specialization(env.subs, proc_name, top_level_layout, fn_var);
 
                 force_thunk(env, proc_name, inner_layout, assigned, hole)
             }
-            None => {
+            PendingSpecializations::Making => {
                 let opt_partial_proc = procs.partial_procs.symbol_to_id(proc_name);
 
                 match opt_partial_proc {
@@ -6841,7 +7041,7 @@ fn call_by_name_module_thunk<'a>(
                         // (We had a bug around this before this system existed!)
                         procs
                             .specialized
-                            .insert((proc_name, top_level_layout), InProgress);
+                            .mark_in_progress(proc_name, top_level_layout);
 
                         match specialize_variable(
                             env,
@@ -6859,13 +7059,16 @@ fn call_by_name_module_thunk<'a>(
                                     raw_layout
                                 );
 
-                                let was_present =
-                                    procs.specialized.remove(&(proc_name, top_level_layout));
-                                debug_assert!(was_present.is_some());
-
-                                procs
+                                let was_present = procs
                                     .specialized
-                                    .insert((proc_name, top_level_layout), Done(proc));
+                                    .remove_specialized(proc_name, &top_level_layout);
+                                debug_assert!(was_present);
+
+                                procs.specialized.insert_specialized(
+                                    proc_name,
+                                    top_level_layout,
+                                    proc,
+                                );
 
                                 force_thunk(env, proc_name, inner_layout, assigned, hole)
                             }
@@ -6879,13 +7082,16 @@ fn call_by_name_module_thunk<'a>(
                                     attempted_layout,
                                 );
 
-                                let was_present =
-                                    procs.specialized.remove(&(proc_name, top_level_layout));
-                                debug_assert!(was_present.is_some());
-
-                                procs
+                                let was_present = procs
                                     .specialized
-                                    .insert((proc_name, top_level_layout), Done(proc));
+                                    .remove_specialized(proc_name, &top_level_layout);
+                                debug_assert!(was_present);
+
+                                procs.specialized.insert_specialized(
+                                    proc_name,
+                                    top_level_layout,
+                                    proc,
+                                );
 
                                 force_thunk(env, proc_name, inner_layout, assigned, hole)
                             }
@@ -6917,11 +7123,9 @@ fn call_specialized_proc<'a>(
 ) -> Stmt<'a> {
     let function_layout = ProcLayout::from_raw(env.arena, layout);
 
-    procs.specialized.remove(&(proc_name, function_layout));
-
     procs
         .specialized
-        .insert((proc_name, function_layout), Done(proc));
+        .insert_specialized(proc_name, function_layout, proc);
 
     if field_symbols.is_empty() {
         debug_assert!(loc_args.is_empty());

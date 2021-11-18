@@ -27,7 +27,7 @@ pub fn run_solve(
         aliases,
     };
 
-    let mut subs = Subs::new(var_store);
+    let mut subs = Subs::new_from_varstore(var_store);
 
     for (var, name) in rigid_variables {
         subs.rigid_var(var, name);

@@ -501,7 +501,7 @@ impl<'a> EdModel<'a> {
         };
         let arena = Bump::new();
 
-        let mut subs = Subs::new(var_store);
+        let mut subs = Subs::new_from_varstore(var_store);
 
         for (var, name) in rigid_variables {
             subs.rigid_var(var, name);

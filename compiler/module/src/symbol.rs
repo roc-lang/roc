@@ -877,6 +877,9 @@ define_builtins! {
 
         // used in wasm dev backend to mark temporary values in the VM stack
         24 WASM_TMP: "#wasm_tmp"
+
+        // the _ used in mono when a specialized symbol is deleted
+        25 REMOVED_SPECIALIZATION: "#removed_specialization"
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
@@ -1072,9 +1075,11 @@ define_builtins! {
         47 LIST_FIND: "find"
         48 LIST_FIND_RESULT: "#find_result" // symbol used in the definition of List.find
         49 LIST_SUBLIST: "sublist"
-        50 LIST_SPLIT: "split"
-        51 LIST_SPLIT_CLOS: "#splitClos"
-        52 LIST_ALL: "all"
+        50 LIST_INTERSPERSE: "intersperse"
+        51 LIST_INTERSPERSE_CLOS: "#intersperseClos"
+        52 LIST_SPLIT: "split"
+        53 LIST_SPLIT_CLOS: "#splitClos"
+        54 LIST_ALL: "all"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

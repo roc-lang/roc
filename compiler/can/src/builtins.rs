@@ -97,6 +97,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_TAKE_LAST => list_take_last,
         LIST_SUBLIST => list_sublist,
         LIST_SPLIT => list_split,
+        LIST_INTERSPERSE => list_intersperse,
         LIST_DROP => list_drop,
         LIST_DROP_AT => list_drop_at,
         LIST_DROP_FIRST => list_drop_first,
@@ -2146,6 +2147,84 @@ fn list_sublist(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         list_var,
+    )
+}
+
+/// List.intersperse : List elem, elem -> List elem
+fn list_intersperse(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
+    let sep_var = var_store.fresh();
+
+    let list_sym = Symbol::ARG_1;
+    let sep_sym = Symbol::ARG_2;
+
+    let clos_var = var_store.fresh();
+    let clos_acc_var = var_store.fresh();
+
+    let clos_sym = Symbol::LIST_INTERSPERSE_CLOS;
+    let clos_acc_sym = Symbol::ARG_3;
+    let clos_elem_sym = Symbol::ARG_4;
+
+    let int_var = var_store.fresh();
+    let zero = int(int_var, Variable::NATURAL, 0);
+
+    // \acc, elem -> acc |> List.append sep |> List.append elem
+    let clos = Closure(ClosureData {
+        function_type: clos_var,
+        closure_type: var_store.fresh(),
+        closure_ext_var: var_store.fresh(),
+        return_type: clos_acc_var,
+        name: clos_sym,
+        recursive: Recursive::NotRecursive,
+        captured_symbols: vec![(sep_sym, sep_var)],
+        arguments: vec![
+            (clos_acc_var, no_region(Pattern::Identifier(clos_acc_sym))),
+            (sep_var, no_region(Pattern::Identifier(clos_elem_sym))),
+        ],
+        loc_body: {
+            let append_sep = RunLowLevel {
+                op: LowLevel::ListAppend,
+                args: vec![(clos_acc_var, Var(clos_acc_sym)), (sep_var, Var(sep_sym))],
+                ret_var: clos_acc_var,
+            };
+
+            Box::new(no_region(RunLowLevel {
+                op: LowLevel::ListAppend,
+                args: vec![(clos_acc_var, append_sep), (sep_var, Var(clos_elem_sym))],
+                ret_var: clos_acc_var,
+            }))
+        },
+    });
+
+    // List.walk [] l (\acc, elem -> acc |> List.append sep |> List.append elem)
+    let acc = RunLowLevel {
+        op: LowLevel::ListWalk,
+        args: vec![
+            (list_var, Var(list_sym)),
+            (
+                clos_acc_var,
+                List {
+                    elem_var: sep_var,
+                    loc_elems: vec![],
+                },
+            ),
+            (clos_var, clos),
+        ],
+        ret_var: clos_acc_var,
+    };
+
+    let body = RunLowLevel {
+        op: LowLevel::ListDropAt,
+        args: vec![(clos_acc_var, acc), (int_var, zero)],
+        ret_var: clos_acc_var,
+    };
+
+    defn(
+        symbol,
+        vec![(list_var, list_sym), (sep_var, sep_sym)],
+        var_store,
+        body,
+        clos_acc_var,
     )
 }
 
