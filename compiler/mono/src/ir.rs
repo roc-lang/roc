@@ -419,7 +419,7 @@ pub struct ExternalSpecializations<'a> {
     /// Not a bumpalo vec because bumpalo is not thread safe
     /// Separate array so we can search for membership quickly
     symbols: std::vec::Vec<Symbol>,
-    storage_subs: Subs,
+    storage_subs: StorageSubs,
     /// For each symbol, what types to specialize it for, points into the storage_subs
     types_to_specialize: std::vec::Vec<std::vec::Vec<Variable>>,
     _lifetime: std::marker::PhantomData<&'a u8>,
@@ -429,15 +429,14 @@ impl<'a> ExternalSpecializations<'a> {
     pub fn new_in(_arena: &'a Bump) -> Self {
         Self {
             symbols: std::vec::Vec::new(),
-            storage_subs: Subs::default(),
+            storage_subs: StorageSubs::new(Subs::default()),
             types_to_specialize: std::vec::Vec::new(),
             _lifetime: std::marker::PhantomData,
         }
     }
 
     fn insert_external(&mut self, symbol: Symbol, env_subs: &mut Subs, variable: Variable) {
-        let variable =
-            roc_types::subs::deep_copy_var_to(env_subs, &mut self.storage_subs, variable);
+        let variable = self.storage_subs.extend_with_variable(env_subs, variable);
 
         match self.symbols.iter().position(|s| *s == symbol) {
             None => {
@@ -454,7 +453,7 @@ impl<'a> ExternalSpecializations<'a> {
     fn decompose(
         self,
     ) -> (
-        Subs,
+        StorageSubs,
         impl Iterator<Item = (Symbol, std::vec::Vec<Variable>)>,
     ) {
         (
@@ -2051,9 +2050,13 @@ fn specialize_externals_others_need<'a>(
     layout_cache: &mut LayoutCache<'a>,
 ) {
     for externals_others_need in all_externals_others_need {
-        let (mut store, it) = externals_others_need.decompose();
+        let (store, it) = externals_others_need.decompose();
+
+        let offset_variable = StorageSubs::merge_into(store, env.subs);
+
         for (symbol, solved_types) in it {
             for store_variable in solved_types {
+                let variable = offset_variable(store_variable);
                 // historical note: we used to deduplicate with a hash here,
                 // but the cost of that hash is very high. So for now we make
                 // duplicate specializations, and the insertion into a hash map
@@ -2067,9 +2070,6 @@ fn specialize_externals_others_need<'a>(
                         panic!("Cannot find a partial proc for {:?}", name);
                     }
                 };
-
-                let variable =
-                    roc_types::subs::deep_copy_var_to(&mut store, env.subs, store_variable);
 
                 // TODO I believe this is also duplicated
                 match specialize_variable(
