@@ -1097,6 +1097,17 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
+    fn neq_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+    ) {
+        cmp_reg64_reg64(buf, src1, src2);
+        setne_reg64(buf, dst);
+    }
+
+    #[inline(always)]
     fn ret(buf: &mut Vec<'_, u8>) {
         ret(buf);
     }
@@ -1472,6 +1483,26 @@ fn sete_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
 
     // We and reg with 1 because the SETE instruction only applies
     // to the lower bits of the register
+    and_reg64_imm8(buf, reg, 1);
+}
+
+/// `SETNE r/m64` -> Set byte if not equal (ZF=0).
+#[inline(always)]
+fn setne_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
+    // Follow `sete_reg64` implementation.
+    // Change 94 => 95
+    buf.reserve(7);
+
+    let reg_mod = reg as u8 % 8;
+    use X86_64GeneralReg::*;
+    match reg {
+        RAX | RCX | RDX | RBX => buf.extend(&[0x0F, 0x95, 0xC0 + reg_mod]),
+        RSP | RBP | RSI | RDI => buf.extend(&[REX, 0x0F, 0x95, 0xC0 + reg_mod]),
+        R8 | R9 | R10 | R11 | R12 | R13 | R14 | R15 => {
+            buf.extend(&[REX + 1, 0x0F, 0x95, 0xC0 + reg_mod])
+        }
+    }
+
     and_reg64_imm8(buf, reg, 1);
 }
 
@@ -2070,6 +2101,46 @@ mod tests {
         ] {
             buf.clear();
             sete_reg64(&mut buf, *reg);
+            assert_eq!(expected, &buf[..]);
+        }
+    }
+
+    #[test]
+    // follow test_sete_reg64
+    // refer it
+    fn test_setne_reg64() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+
+        let (reg, expected) = (
+            X86_64GeneralReg::RAX,
+            [
+                0x0F, 0x95, 0xC0, // SETNE al ;
+                0x48, 0x83, 0xE0, 0x01,
+            ],
+        );
+        buf.clear();
+        setne_reg64(&mut buf, reg);
+        assert_eq!(expected, &buf[..]);
+
+        for (reg, expected) in &[
+            (
+                X86_64GeneralReg::RSP,
+                [
+                    // SETNE spl;
+                    0x40, 0x0F, 0x95, 0xC4, 0x48, 0x83, 0xE4, 0x01,
+                ],
+            ),
+            (
+                X86_64GeneralReg::R15,
+                [
+                    // SETNE r15b;
+                    0x41, 0x0F, 0x95, 0xC7, 0x49, 0x83, 0xE7, 0x01,
+                ],
+            ),
+        ] {
+            buf.clear();
+            setne_reg64(&mut buf, *reg);
             assert_eq!(expected, &buf[..]);
         }
     }

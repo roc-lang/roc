@@ -713,7 +713,7 @@ fn gen_int_eq() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_int_neq() {
     assert_evals_to!(
         indoc!(
