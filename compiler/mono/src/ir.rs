@@ -2016,7 +2016,15 @@ fn specialize_suspended<'a>(
             }
         };
 
-        match specialize_variable(env, procs, name, layout_cache, var, &[], partial_proc) {
+        match specialize_variable(
+            env,
+            procs,
+            name,
+            layout_cache,
+            var,
+            BumpMap::new_in(env.arena),
+            partial_proc,
+        ) {
             Ok((proc, layout)) => {
                 // TODO thiscode is duplicated elsewhere
                 let top_level = ProcLayout::from_raw(env.arena, layout);
