@@ -619,10 +619,13 @@ fn type_to_var(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
-    cached: &mut MutMap<Symbol, Variable>,
+    _: &mut MutMap<Symbol, Variable>,
     typ: &Type,
 ) -> Variable {
-    type_to_variable(subs, rank, pools, cached, typ)
+    // capacity based on the false hello world program
+    let arena = bumpalo::Bump::with_capacity(4 * 1024);
+
+    type_to_variable(subs, rank, pools, &arena, typ)
 }
 
 /// Abusing existing functions for our purposes
@@ -630,25 +633,29 @@ fn type_to_var(
 pub fn insert_type_into_subs(subs: &mut Subs, typ: &Type) -> Variable {
     let rank = Rank::NONE;
     let mut pools = Pools::default();
-    let mut cached = MutMap::default();
 
-    type_to_variable(subs, rank, &mut pools, &mut cached, typ)
+    // capacity based on the false hello world program
+    let arena = bumpalo::Bump::with_capacity(4 * 1024);
+
+    type_to_variable(subs, rank, &mut pools, &arena, typ)
 }
 
-fn type_to_variable(
+fn type_to_variable<'a>(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
-    cached: &mut MutMap<Symbol, Variable>,
+    arena: &'a bumpalo::Bump,
     typ: &Type,
 ) -> Variable {
+    use bumpalo::collections::Vec;
+
     match typ {
         Variable(var) => *var,
         Apply(symbol, args) => {
-            let mut new_arg_vars = Vec::with_capacity(args.len());
+            let mut new_arg_vars = Vec::with_capacity_in(args.len(), arena);
 
             for arg in args {
-                let var = type_to_variable(subs, rank, pools, cached, arg);
+                let var = type_to_variable(subs, rank, pools, arena, arg);
                 new_arg_vars.push(var);
             }
 
@@ -663,32 +670,32 @@ fn type_to_variable(
 
         // This case is important for the rank of boolean variables
         Function(arg_vars, closure_type, ret_type) => {
-            let mut new_arg_vars = Vec::with_capacity(arg_vars.len());
+            let mut new_arg_vars = Vec::with_capacity_in(arg_vars.len(), arena);
 
             for arg in arg_vars {
-                let var = type_to_variable(subs, rank, pools, cached, arg);
+                let var = type_to_variable(subs, rank, pools, arena, arg);
                 new_arg_vars.push(var);
             }
 
             let arg_vars = VariableSubsSlice::insert_into_subs(subs, new_arg_vars);
 
-            let ret_var = type_to_variable(subs, rank, pools, cached, ret_type);
-            let closure_var = type_to_variable(subs, rank, pools, cached, closure_type);
+            let ret_var = type_to_variable(subs, rank, pools, arena, ret_type);
+            let closure_var = type_to_variable(subs, rank, pools, arena, closure_type);
             let content = Content::Structure(FlatType::Func(arg_vars, closure_var, ret_var));
 
             register(subs, rank, pools, content)
         }
         Record(fields, ext) => {
-            let mut field_vars = Vec::with_capacity(fields.len());
+            let mut field_vars = Vec::with_capacity_in(fields.len(), arena);
 
             for (field, field_type) in fields {
                 let field_var =
-                    field_type.map(|typ| type_to_variable(subs, rank, pools, cached, typ));
+                    field_type.map(|typ| type_to_variable(subs, rank, pools, arena, typ));
 
                 field_vars.push((field.clone(), field_var));
             }
 
-            let temp_ext_var = type_to_variable(subs, rank, pools, cached, ext);
+            let temp_ext_var = type_to_variable(subs, rank, pools, arena, ext);
 
             let (it, new_ext_var) =
                 gather_fields_unsorted_iter(subs, RecordFields::empty(), temp_ext_var);
@@ -707,14 +714,14 @@ fn type_to_variable(
             register(subs, rank, pools, content)
         }
         TagUnion(tags, ext) => {
-            let (union_tags, ext) = type_to_union_tags(subs, rank, pools, cached, tags, ext);
+            let (union_tags, ext) = type_to_union_tags(subs, rank, pools, arena, tags, ext);
             let content = Content::Structure(FlatType::TagUnion(union_tags, ext));
 
             register(subs, rank, pools, content)
         }
         FunctionOrTagUnion(tag_name, symbol, ext) => {
-            let temp_ext_var = type_to_variable(subs, rank, pools, cached, ext);
-            let mut ext_tag_vec = Vec::new();
+            let temp_ext_var = type_to_variable(subs, rank, pools, arena, ext);
+            let mut ext_tag_vec = std::vec::Vec::new();
             let new_ext_var = match roc_types::pretty_print::chase_ext_tag_union(
                 subs,
                 temp_ext_var,
@@ -735,7 +742,7 @@ fn type_to_variable(
             register(subs, rank, pools, content)
         }
         RecursiveTagUnion(rec_var, tags, ext) => {
-            let (union_tags, ext) = type_to_union_tags(subs, rank, pools, cached, tags, ext);
+            let (union_tags, ext) = type_to_union_tags(subs, rank, pools, arena, tags, ext);
             let content =
                 Content::Structure(FlatType::RecursiveTagUnion(*rec_var, union_tags, ext));
 
@@ -780,22 +787,22 @@ fn type_to_variable(
                 }
             }
 
-            let mut arg_vars = Vec::with_capacity(args.len());
+            let mut arg_vars = Vec::with_capacity_in(args.len(), arena);
 
             for (arg, arg_type) in args {
-                let arg_var = type_to_variable(subs, rank, pools, cached, arg_type);
+                let arg_var = type_to_variable(subs, rank, pools, arena, arg_type);
 
                 arg_vars.push((arg.clone(), arg_var));
             }
 
-            let lambda_set_variables: Vec<_> = lambda_set_variables
+            let lambda_set_variables_it = lambda_set_variables
                 .iter()
-                .map(|ls| type_to_variable(subs, rank, pools, cached, &ls.0))
-                .collect();
+                .map(|ls| type_to_variable(subs, rank, pools, arena, &ls.0));
+            let lambda_set_variables = Vec::from_iter_in(lambda_set_variables_it, arena);
 
             let arg_vars = AliasVariables::insert_into_subs(subs, arg_vars, lambda_set_variables);
 
-            let alias_var = type_to_variable(subs, rank, pools, cached, alias_type);
+            let alias_var = type_to_variable(subs, rank, pools, arena, alias_type);
             let content = Content::Alias(*symbol, arg_vars, alias_var);
 
             register(subs, rank, pools, content)
@@ -808,22 +815,22 @@ fn type_to_variable(
             lambda_set_variables,
             ..
         } => {
-            let mut arg_vars = Vec::with_capacity(args.len());
+            let mut arg_vars = Vec::with_capacity_in(args.len(), arena);
 
             for (arg, arg_type) in args {
-                let arg_var = type_to_variable(subs, rank, pools, cached, arg_type);
+                let arg_var = type_to_variable(subs, rank, pools, arena, arg_type);
 
                 arg_vars.push((arg.clone(), arg_var));
             }
 
-            let lambda_set_variables: Vec<_> = lambda_set_variables
+            let lambda_set_variables_it = lambda_set_variables
                 .iter()
-                .map(|ls| type_to_variable(subs, rank, pools, cached, &ls.0))
-                .collect();
+                .map(|ls| type_to_variable(subs, rank, pools, arena, &ls.0));
+            let lambda_set_variables = Vec::from_iter_in(lambda_set_variables_it, arena);
 
             let arg_vars = AliasVariables::insert_into_subs(subs, arg_vars, lambda_set_variables);
 
-            let alias_var = type_to_variable(subs, rank, pools, cached, alias_type);
+            let alias_var = type_to_variable(subs, rank, pools, arena, alias_type);
 
             // unify the actual_var with the result var
             // this can be used to access the type of the actual_var
@@ -853,20 +860,22 @@ fn type_to_variable(
     }
 }
 
-fn type_to_union_tags(
+fn type_to_union_tags<'a>(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
-    cached: &mut MutMap<Symbol, Variable>,
+    arena: &'a bumpalo::Bump,
     tags: &[(TagName, Vec<Type>)],
     ext: &Type,
 ) -> (UnionTags, Variable) {
-    let mut tag_vars = Vec::with_capacity(tags.len());
+    use bumpalo::collections::Vec;
 
-    let mut tag_argument_vars = Vec::new();
+    let mut tag_vars = Vec::with_capacity_in(tags.len(), arena);
+
+    let mut tag_argument_vars = Vec::with_capacity_in(tags.len(), arena);
     for (tag, tag_argument_types) in tags {
         for arg_type in tag_argument_types {
-            let new_var = type_to_variable(subs, rank, pools, cached, arg_type);
+            let new_var = type_to_variable(subs, rank, pools, arena, arg_type);
             tag_argument_vars.push(new_var);
         }
 
@@ -875,7 +884,7 @@ fn type_to_union_tags(
         tag_vars.push((tag.clone(), new_slice));
     }
 
-    let temp_ext_var = type_to_variable(subs, rank, pools, cached, ext);
+    let temp_ext_var = type_to_variable(subs, rank, pools, arena, ext);
 
     let ext = {
         let (it, ext) =
@@ -1031,8 +1040,7 @@ fn pool_to_rank_table(
 
     // Sort the variables into buckets by rank.
     for &var in young_vars.iter() {
-        let rank = subs.get_rank(var);
-        subs.set_mark(var, young_mark);
+        let rank = subs.get_rank_set_mark(var, young_mark);
 
         debug_assert!(rank.into_usize() < young_rank.into_usize() + 1);
         pools.get_mut(rank).push(var);

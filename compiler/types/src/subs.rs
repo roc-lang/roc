@@ -1175,6 +1175,19 @@ impl Subs {
         });
     }
 
+    pub fn get_rank_set_mark(&mut self, key: Variable, mark: Mark) -> Rank {
+        let l_key = self.utable.get_root_key(key);
+
+        let mut rank = Rank::NONE;
+
+        self.utable.update_value(l_key, |node| {
+            node.value.mark = mark;
+            rank = node.value.rank;
+        });
+
+        rank
+    }
+
     pub fn equivalent(&mut self, left: Variable, right: Variable) -> bool {
         self.utable.unioned(left, right)
     }
