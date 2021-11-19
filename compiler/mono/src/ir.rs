@@ -225,7 +225,7 @@ impl<'a> Default for CapturedSymbols<'a> {
 #[derive(Clone, Debug)]
 pub struct PendingSpecialization<'a> {
     solved_type: SolvedType,
-    host_exposed_aliases: BumpMap<Symbol, SolvedType>,
+    host_exposed_aliases: MutMap<Symbol, SolvedType>,
     _lifetime: std::marker::PhantomData<&'a u8>,
 }
 
@@ -234,7 +234,8 @@ impl<'a> PendingSpecialization<'a> {
         let solved_type = SolvedType::from_var(subs, var);
         PendingSpecialization {
             solved_type,
-            host_exposed_aliases: BumpMap::new_in(arena),
+            host_exposed_aliases: MutMap::default(),
+
             _lifetime: std::marker::PhantomData,
         }
     }
@@ -247,7 +248,7 @@ impl<'a> PendingSpecialization<'a> {
     ) -> Self {
         let solved_type = SolvedType::from_var(subs, var);
 
-        let mut host_exposed_aliases = BumpMap::with_capacity_in(exposed.len(), arena);
+        let mut host_exposed_aliases = MutMap::default();
 
         host_exposed_aliases.extend(
             exposed
@@ -886,7 +887,7 @@ impl<'a> Procs<'a> {
                                 symbol,
                                 layout_cache,
                                 annotation,
-                                BumpMap::new_in(env.arena),
+                                MutMap::default(),
                                 partial_proc_id,
                             ) {
                                 Ok((proc, layout)) => {
@@ -2020,7 +2021,7 @@ fn specialize_suspended<'a>(
             name,
             layout_cache,
             var,
-            BumpMap::new_in(env.arena),
+            MutMap::default(),
             partial_proc,
         ) {
             Ok((proc, layout)) => {
@@ -2136,6 +2137,70 @@ pub fn specialize_all<'a>(
     procs
 }
 
+fn specialize_host_specializations<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    host_specializations: HostSpecializations,
+) {
+    let (store, it) = host_specializations.decompose();
+
+    let offset_variable = StorageSubs::merge_into(store, env.subs);
+
+    for (symbol, solved_types, host_exposed_aliases) in it {
+        let it = solved_types
+            .into_iter()
+            .zip(host_exposed_aliases.into_iter());
+        for (store_variable, host_exposed_aliases) in it {
+            let variable = offset_variable(store_variable);
+            // historical note: we used to deduplicate with a hash here,
+            // but the cost of that hash is very high. So for now we make
+            // duplicate specializations, and the insertion into a hash map
+            // below will deduplicate them.
+
+            let name = symbol;
+
+            let partial_proc_id = match procs.partial_procs.symbol_to_id(name) {
+                Some(v) => v,
+                None => {
+                    panic!("Cannot find a partial proc for {:?}", name);
+                }
+            };
+
+            // TODO I believe this is also duplicated
+            match specialize_variable(
+                env,
+                procs,
+                name,
+                layout_cache,
+                variable,
+                host_exposed_aliases,
+                partial_proc_id,
+            ) {
+                Ok((proc, layout)) => {
+                    let top_level = ProcLayout::from_raw(env.arena, layout);
+
+                    if procs.is_module_thunk(name) {
+                        debug_assert!(top_level.arguments.is_empty());
+                    }
+
+                    procs.specialized.insert_specialized(name, top_level, proc);
+                }
+                Err(SpecializeFailure {
+                    problem: _,
+                    attempted_layout,
+                }) => {
+                    let proc = generate_runtime_error_function(env, name, attempted_layout);
+
+                    let top_level = ProcLayout::from_raw(env.arena, attempted_layout);
+
+                    procs.specialized.insert_specialized(name, top_level, proc);
+                }
+            }
+        }
+    }
+}
+
 fn specialize_externals_others_need<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
@@ -2171,7 +2236,7 @@ fn specialize_externals_others_need<'a>(
                     name,
                     layout_cache,
                     variable,
-                    BumpMap::new_in(env.arena),
+                    MutMap::default(),
                     partial_proc_id,
                 ) {
                     Ok((proc, layout)) => {
@@ -2814,7 +2879,7 @@ fn specialize_solved_type<'a>(
     proc_name: Symbol,
     layout_cache: &mut LayoutCache<'a>,
     solved_type: &SolvedType,
-    host_exposed_aliases: BumpMap<Symbol, SolvedType>,
+    host_exposed_aliases: MutMap<Symbol, SolvedType>,
     partial_proc_id: PartialProcId,
 ) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
     specialize_variable_help(
@@ -2834,7 +2899,7 @@ fn specialize_variable<'a>(
     proc_name: Symbol,
     layout_cache: &mut LayoutCache<'a>,
     fn_var: Variable,
-    host_exposed_aliases: BumpMap<Symbol, SolvedType>,
+    host_exposed_aliases: MutMap<Symbol, SolvedType>,
     partial_proc_id: PartialProcId,
 ) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
     specialize_variable_help(
@@ -2854,7 +2919,7 @@ fn specialize_variable_help<'a, F>(
     proc_name: Symbol,
     layout_cache: &mut LayoutCache<'a>,
     fn_var_thunk: F,
-    host_exposed_aliases: BumpMap<Symbol, SolvedType>,
+    host_exposed_aliases: MutMap<Symbol, SolvedType>,
     partial_proc_id: PartialProcId,
 ) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>>
 where
@@ -7014,7 +7079,7 @@ fn call_by_name_help<'a>(
                             proc_name,
                             layout_cache,
                             fn_var,
-                            BumpMap::new_in(env.arena),
+                            MutMap::default(),
                             partial_proc,
                         ) {
                             Ok((proc, layout)) => {
@@ -7136,7 +7201,7 @@ fn call_by_name_module_thunk<'a>(
                             proc_name,
                             layout_cache,
                             fn_var,
-                            BumpMap::new_in(env.arena),
+                            MutMap::default(),
                             partial_proc,
                         ) {
                             Ok((proc, raw_layout)) => {
