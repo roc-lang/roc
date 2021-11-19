@@ -6,8 +6,6 @@ use core::{fmt, mem, ptr, slice};
 
 // A list of C functions that are being imported
 extern "C" {
-    pub fn printf(format: *const u8, ...) -> i32;
-
     pub fn roc_alloc(size: usize, alignment: u32) -> *mut c_void;
     pub fn roc_realloc(
         ptr: *mut c_void,
