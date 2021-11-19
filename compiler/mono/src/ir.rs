@@ -2006,7 +2006,9 @@ pub fn specialize_all<'a>(
     specializations_for_host: HostSpecializations,
     layout_cache: &mut LayoutCache<'a>,
 ) -> Procs<'a> {
-    specialize_externals_others_need(env, &mut procs, externals_others_need, layout_cache);
+    for externals in externals_others_need {
+        specialize_external_specializations(env, &mut procs, layout_cache, externals);
+    }
 
     // When calling from_can, pending_specializations should be unavailable.
     // This must be a single pass, and we must not add any more entries to it!
@@ -2042,114 +2044,91 @@ fn specialize_host_specializations<'a>(
             .into_iter()
             .zip(host_exposed_aliases.into_iter());
         for (store_variable, host_exposed_aliases) in it {
-            let variable = offset_variable(store_variable);
+            barfoo(
+                env,
+                procs,
+                layout_cache,
+                symbol,
+                offset_variable(store_variable),
+                host_exposed_aliases,
+            )
+        }
+    }
+}
+
+fn specialize_external_specializations<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    externals_others_need: ExternalSpecializations<'a>,
+) {
+    let (store, it) = externals_others_need.decompose();
+
+    let offset_variable = StorageSubs::merge_into(store, env.subs);
+
+    for (symbol, solved_types) in it {
+        for store_variable in solved_types {
             // historical note: we used to deduplicate with a hash here,
             // but the cost of that hash is very high. So for now we make
             // duplicate specializations, and the insertion into a hash map
             // below will deduplicate them.
 
-            let name = symbol;
-
-            let partial_proc_id = match procs.partial_procs.symbol_to_id(name) {
-                Some(v) => v,
-                None => {
-                    panic!("Cannot find a partial proc for {:?}", name);
-                }
-            };
-
-            // TODO I believe this is also duplicated
-            match specialize_variable(
+            barfoo(
                 env,
                 procs,
-                name,
                 layout_cache,
-                variable,
-                host_exposed_aliases,
-                partial_proc_id,
-            ) {
-                Ok((proc, layout)) => {
-                    let top_level = ProcLayout::from_raw(env.arena, layout);
-
-                    if procs.is_module_thunk(name) {
-                        debug_assert!(top_level.arguments.is_empty());
-                    }
-
-                    procs.specialized.insert_specialized(name, top_level, proc);
-                }
-                Err(SpecializeFailure {
-                    problem: _,
-                    attempted_layout,
-                }) => {
-                    let proc = generate_runtime_error_function(env, name, attempted_layout);
-
-                    let top_level = ProcLayout::from_raw(env.arena, attempted_layout);
-
-                    procs.specialized.insert_specialized(name, top_level, proc);
-                }
-            }
+                symbol,
+                offset_variable(store_variable),
+                MutMap::default(),
+            )
         }
     }
 }
 
-fn specialize_externals_others_need<'a>(
+fn barfoo<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
-    all_externals_others_need: std::vec::Vec<ExternalSpecializations<'a>>,
     layout_cache: &mut LayoutCache<'a>,
+    name: Symbol,
+    variable: Variable,
+    host_exposed_aliases: MutMap<Symbol, SolvedType>,
 ) {
-    for externals_others_need in all_externals_others_need {
-        let (store, it) = externals_others_need.decompose();
+    let partial_proc_id = match procs.partial_procs.symbol_to_id(name) {
+        Some(v) => v,
+        None => {
+            panic!("Cannot find a partial proc for {:?}", name);
+        }
+    };
 
-        let offset_variable = StorageSubs::merge_into(store, env.subs);
+    let specialization_result = specialize_variable(
+        env,
+        procs,
+        name,
+        layout_cache,
+        variable,
+        host_exposed_aliases,
+        partial_proc_id,
+    );
 
-        for (symbol, solved_types) in it {
-            for store_variable in solved_types {
-                let variable = offset_variable(store_variable);
-                // historical note: we used to deduplicate with a hash here,
-                // but the cost of that hash is very high. So for now we make
-                // duplicate specializations, and the insertion into a hash map
-                // below will deduplicate them.
+    match specialization_result {
+        Ok((proc, layout)) => {
+            let top_level = ProcLayout::from_raw(env.arena, layout);
 
-                let name = symbol;
-
-                let partial_proc_id = match procs.partial_procs.symbol_to_id(name) {
-                    Some(v) => v,
-                    None => {
-                        panic!("Cannot find a partial proc for {:?}", name);
-                    }
-                };
-
-                // TODO I believe this is also duplicated
-                match specialize_variable(
-                    env,
-                    procs,
-                    name,
-                    layout_cache,
-                    variable,
-                    MutMap::default(),
-                    partial_proc_id,
-                ) {
-                    Ok((proc, layout)) => {
-                        let top_level = ProcLayout::from_raw(env.arena, layout);
-
-                        if procs.is_module_thunk(name) {
-                            debug_assert!(top_level.arguments.is_empty());
-                        }
-
-                        procs.specialized.insert_specialized(name, top_level, proc);
-                    }
-                    Err(SpecializeFailure {
-                        problem: _,
-                        attempted_layout,
-                    }) => {
-                        let proc = generate_runtime_error_function(env, name, attempted_layout);
-
-                        let top_level = ProcLayout::from_raw(env.arena, attempted_layout);
-
-                        procs.specialized.insert_specialized(name, top_level, proc);
-                    }
-                }
+            if procs.is_module_thunk(name) {
+                debug_assert!(top_level.arguments.is_empty());
             }
+
+            procs.specialized.insert_specialized(name, top_level, proc);
+        }
+        Err(SpecializeFailure {
+            problem: _,
+            attempted_layout,
+        }) => {
+            let proc = generate_runtime_error_function(env, name, attempted_layout);
+
+            let top_level = ProcLayout::from_raw(env.arena, attempted_layout);
+
+            procs.specialized.insert_specialized(name, top_level, proc);
         }
     }
 }
