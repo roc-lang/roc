@@ -1245,39 +1245,21 @@ fn introduce(subs: &mut Subs, rank: Rank, pools: &mut Pools, vars: &[Variable]) 
 /// this is used during the monomorphization process
 pub fn instantiate_rigids(subs: &mut Subs, var: Variable) {
     let rank = Rank::NONE;
-    let mut pools = Pools::default();
 
-    instantiate_rigids_help(subs, rank, &mut pools, var);
+    instantiate_rigids_help(subs, rank, var);
 
     subs.restore(var);
 }
 
-fn instantiate_rigids_help(
-    subs: &mut Subs,
-    max_rank: Rank,
-    pools: &mut Pools,
-    var: Variable,
-) -> Variable {
+fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, var: Variable) {
     use roc_types::subs::Content::*;
     use roc_types::subs::FlatType::*;
 
     let desc = subs.get_without_compacting(var);
 
-    if let Some(copy) = desc.copy.into_variable() {
-        return copy;
+    if desc.copy.is_some() {
+        return;
     }
-
-    let make_descriptor = |content| Descriptor {
-        content,
-        rank: max_rank,
-        mark: Mark::NONE,
-        copy: OptVariable::NONE,
-    };
-
-    let content = desc.content;
-    let copy = var;
-
-    pools.get_mut(max_rank).push(copy);
 
     // Link the original variable to the new variable. This lets us
     // avoid making multiple copies of the variable we are instantiating.
@@ -1286,33 +1268,33 @@ fn instantiate_rigids_help(
     subs.set(
         var,
         Descriptor {
-            content: content.clone(),
+            content: desc.content.clone(),
             rank: desc.rank,
             mark: Mark::NONE,
-            copy: copy.into(),
+            copy: var.into(),
         },
     );
 
     // Now we recursively copy the content of the variable.
     // We have already marked the variable as copied, so we
     // will not repeat this work or crawl this variable again.
-    match content {
+    match desc.content {
         Structure(flat_type) => {
             match flat_type {
                 Apply(_, args) => {
                     for var_index in args.into_iter() {
                         let var = subs[var_index];
-                        instantiate_rigids_help(subs, max_rank, pools, var);
+                        instantiate_rigids_help(subs, max_rank, var);
                     }
                 }
 
                 Func(arg_vars, closure_var, ret_var) => {
-                    instantiate_rigids_help(subs, max_rank, pools, ret_var);
-                    instantiate_rigids_help(subs, max_rank, pools, closure_var);
+                    instantiate_rigids_help(subs, max_rank, ret_var);
+                    instantiate_rigids_help(subs, max_rank, closure_var);
 
                     for index in arg_vars.into_iter() {
                         let var = subs[index];
-                        instantiate_rigids_help(subs, max_rank, pools, var);
+                        instantiate_rigids_help(subs, max_rank, var);
                     }
                 }
 
@@ -1321,10 +1303,10 @@ fn instantiate_rigids_help(
                 Record(fields, ext_var) => {
                     for index in fields.iter_variables() {
                         let var = subs[index];
-                        instantiate_rigids_help(subs, max_rank, pools, var);
+                        instantiate_rigids_help(subs, max_rank, var);
                     }
 
-                    instantiate_rigids_help(subs, max_rank, pools, ext_var);
+                    instantiate_rigids_help(subs, max_rank, ext_var);
                 }
 
                 TagUnion(tags, ext_var) => {
@@ -1332,29 +1314,29 @@ fn instantiate_rigids_help(
                         let slice = subs[index];
                         for var_index in slice {
                             let var = subs[var_index];
-                            instantiate_rigids_help(subs, max_rank, pools, var);
+                            instantiate_rigids_help(subs, max_rank, var);
                         }
                     }
 
-                    instantiate_rigids_help(subs, max_rank, pools, ext_var);
+                    instantiate_rigids_help(subs, max_rank, ext_var);
                 }
 
                 FunctionOrTagUnion(_tag_name, _symbol, ext_var) => {
-                    instantiate_rigids_help(subs, max_rank, pools, ext_var);
+                    instantiate_rigids_help(subs, max_rank, ext_var);
                 }
 
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
-                    instantiate_rigids_help(subs, max_rank, pools, rec_var);
+                    instantiate_rigids_help(subs, max_rank, rec_var);
 
                     for (_, index) in tags.iter_all() {
                         let slice = subs[index];
                         for var_index in slice {
                             let var = subs[var_index];
-                            instantiate_rigids_help(subs, max_rank, pools, var);
+                            instantiate_rigids_help(subs, max_rank, var);
                         }
                     }
 
-                    instantiate_rigids_help(subs, max_rank, pools, ext_var);
+                    instantiate_rigids_help(subs, max_rank, ext_var);
                 }
             };
         }
@@ -1362,25 +1344,31 @@ fn instantiate_rigids_help(
         FlexVar(_) | Error => {}
 
         RecursionVar { structure, .. } => {
-            instantiate_rigids_help(subs, max_rank, pools, structure);
+            instantiate_rigids_help(subs, max_rank, structure);
         }
 
         RigidVar(name) => {
             // what it's all about: convert the rigid var into a flex var
-            subs.set(copy, make_descriptor(FlexVar(Some(name))));
+            subs.set(
+                var,
+                Descriptor {
+                    content: FlexVar(Some(name)),
+                    rank: max_rank,
+                    mark: Mark::NONE,
+                    copy: OptVariable::NONE,
+                },
+            );
         }
 
         Alias(_symbol, args, real_type_var) => {
             for var_index in args.variables().into_iter() {
                 let var = subs[var_index];
-                instantiate_rigids_help(subs, max_rank, pools, var);
+                instantiate_rigids_help(subs, max_rank, var);
             }
 
-            instantiate_rigids_help(subs, max_rank, pools, real_type_var);
+            instantiate_rigids_help(subs, max_rank, real_type_var);
         }
     }
-
-    var
 }
 
 fn deep_copy_var(subs: &mut Subs, rank: Rank, pools: &mut Pools, var: Variable) -> Variable {
