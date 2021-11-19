@@ -968,3 +968,24 @@ fn update_the_only_field() {
         i64
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+// https://github.com/rtfeldman/roc/issues/1513
+fn both_have_unique_fields() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            a = { x: 42, y: 43 }
+            b = { x: 42, z: 44 }
+
+            f : { x : I64 }a, { x : I64 }b -> I64
+            f = \{ x: x1}, { x: x2 } -> x1 + x2 
+
+            f a b
+            "#
+        ),
+        84,
+        i64
+    );
+}

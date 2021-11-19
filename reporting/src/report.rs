@@ -353,7 +353,7 @@ impl<'a> RocDocAllocator<'a> {
 
     pub fn binop(
         &'a self,
-        content: roc_module::operator::BinOp,
+        content: roc_module::called_via::BinOp,
     ) -> DocBuilder<'a, Self, Annotation> {
         self.text(content.to_string()).annotate(Annotation::BinOp)
     }
