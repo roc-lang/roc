@@ -415,6 +415,92 @@ impl<'a> Proc<'a> {
 }
 
 #[derive(Clone, Debug)]
+pub struct HostSpecializations {
+    /// Not a bumpalo vec because bumpalo is not thread safe
+    /// Separate array so we can search for membership quickly
+    symbols: std::vec::Vec<Symbol>,
+    storage_subs: StorageSubs,
+    /// For each symbol, what types to specialize it for, points into the storage_subs
+    types_to_specialize: std::vec::Vec<std::vec::Vec<Variable>>,
+    /// Variables for an exposed alias
+    exposed_aliases: std::vec::Vec<std::vec::Vec<std::vec::Vec<(Symbol, Variable)>>>,
+}
+
+impl HostSpecializations {
+    pub fn new() -> Self {
+        Self {
+            symbols: std::vec::Vec::new(),
+            storage_subs: StorageSubs::new(Subs::default()),
+            types_to_specialize: std::vec::Vec::new(),
+            exposed_aliases: std::vec::Vec::new(),
+        }
+    }
+
+    pub fn insert_host_exposed(
+        &mut self,
+        env_subs: &mut Subs,
+        symbol: Symbol,
+        opt_annotation: Option<roc_can::def::Annotation>,
+        variable: Variable,
+    ) {
+        let variable = self.storage_subs.extend_with_variable(env_subs, variable);
+
+        dbg!(symbol, &opt_annotation);
+
+        let mut host_exposed_aliases = std::vec::Vec::new();
+
+        if let Some(annotation) = opt_annotation {
+            for (symbol, variable) in annotation.introduced_variables.host_exposed_aliases {
+                let variable = self.storage_subs.extend_with_variable(env_subs, variable);
+                host_exposed_aliases.push((symbol, variable));
+            }
+        }
+
+        match self.symbols.iter().position(|s| *s == symbol) {
+            None => {
+                self.symbols.push(symbol);
+                self.types_to_specialize.push(vec![variable]);
+                self.exposed_aliases.push(vec![host_exposed_aliases]);
+            }
+            Some(index) => {
+                let types_to_specialize = &mut self.types_to_specialize[index];
+                let exposed_aliases = &mut self.exposed_aliases[index];
+
+                debug_assert_eq!(types_to_specialize.len(), exposed_aliases.len());
+
+                types_to_specialize.push(variable);
+                exposed_aliases.push(host_exposed_aliases);
+            }
+        }
+
+        debug_assert_eq!(self.types_to_specialize.len(), self.exposed_aliases.len());
+    }
+
+    fn decompose(
+        self,
+    ) -> (
+        StorageSubs,
+        impl Iterator<
+            Item = (
+                Symbol,
+                std::vec::Vec<Variable>,
+                std::vec::Vec<std::vec::Vec<(Symbol, Variable)>>,
+            ),
+        >,
+    ) {
+        let it1 = self.symbols.into_iter();
+
+        let it2 = self.types_to_specialize.into_iter();
+        let it3 = self.exposed_aliases.into_iter();
+
+        (
+            self.storage_subs,
+            it1.zip(it2).zip(it3).map(|((a, b), c)| (a, b, c)),
+        )
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct ExternalSpecializations<'a> {
     /// Not a bumpalo vec because bumpalo is not thread safe
     /// Separate array so we can search for membership quickly
