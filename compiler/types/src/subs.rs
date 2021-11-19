@@ -79,7 +79,7 @@ pub struct SubsSlice<T> {
 
 /// An index into the Vec<T> of subs
 pub struct SubsIndex<T> {
-    start: u32,
+    pub start: u32,
     _marker: std::marker::PhantomData<T>,
 }
 
@@ -1525,7 +1525,7 @@ pub enum Builtin {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct VariableSubsSlice {
-    slice: SubsSlice<Variable>,
+    pub slice: SubsSlice<Variable>,
 }
 
 impl VariableSubsSlice {
@@ -1849,7 +1849,7 @@ impl RecordFields {
         }
     }
 
-    fn variables(&self) -> VariableSubsSlice {
+    pub const fn variables(&self) -> VariableSubsSlice {
         let slice = SubsSlice::new(self.variables_start, self.length);
 
         VariableSubsSlice { slice }
