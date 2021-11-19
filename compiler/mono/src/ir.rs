@@ -222,66 +222,6 @@ impl<'a> Default for CapturedSymbols<'a> {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct PendingSpecialization<'a> {
-    solved_type: SolvedType,
-    host_exposed_aliases: MutMap<Symbol, SolvedType>,
-    _lifetime: std::marker::PhantomData<&'a u8>,
-}
-
-impl<'a> PendingSpecialization<'a> {
-    pub fn from_var(arena: &'a Bump, subs: &Subs, var: Variable) -> Self {
-        let solved_type = SolvedType::from_var(subs, var);
-        PendingSpecialization {
-            solved_type,
-            host_exposed_aliases: MutMap::default(),
-
-            _lifetime: std::marker::PhantomData,
-        }
-    }
-
-    pub fn from_var_host_exposed(
-        arena: &'a Bump,
-        subs: &Subs,
-        var: Variable,
-        exposed: &MutMap<Symbol, Variable>,
-    ) -> Self {
-        let solved_type = SolvedType::from_var(subs, var);
-
-        let mut host_exposed_aliases = MutMap::default();
-
-        host_exposed_aliases.extend(
-            exposed
-                .iter()
-                .map(|(symbol, variable)| (*symbol, SolvedType::from_var(subs, *variable))),
-        );
-
-        PendingSpecialization {
-            solved_type,
-            host_exposed_aliases,
-            _lifetime: std::marker::PhantomData,
-        }
-    }
-
-    /// Add a named function that will be publicly exposed to the host
-    pub fn from_exposed_function(
-        arena: &'a Bump,
-        subs: &Subs,
-        opt_annotation: Option<roc_can::def::Annotation>,
-        fn_var: Variable,
-    ) -> Self {
-        match opt_annotation {
-            None => PendingSpecialization::from_var(arena, subs, fn_var),
-            Some(annotation) => PendingSpecialization::from_var_host_exposed(
-                arena,
-                subs,
-                fn_var,
-                &annotation.introduced_variables.host_exposed_aliases,
-            ),
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct Proc<'a> {
     pub name: Symbol,
@@ -425,6 +365,12 @@ pub struct HostSpecializations {
     types_to_specialize: std::vec::Vec<std::vec::Vec<Variable>>,
     /// Variables for an exposed alias
     exposed_aliases: std::vec::Vec<std::vec::Vec<MutMap<Symbol, SolvedType>>>,
+}
+
+impl Default for HostSpecializations {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HostSpecializations {
@@ -2773,31 +2719,6 @@ struct SpecializeFailure<'a> {
 
 type SpecializeSuccess<'a> = (Proc<'a>, RawFunctionLayout<'a>);
 
-fn specialize<'a, 'b>(
-    env: &mut Env<'a, '_>,
-    procs: &'b mut Procs<'a>,
-    proc_name: Symbol,
-    layout_cache: &mut LayoutCache<'a>,
-    pending: PendingSpecialization,
-    partial_proc_id: PartialProcId,
-) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
-    let PendingSpecialization {
-        solved_type,
-        host_exposed_aliases,
-        ..
-    } = pending;
-
-    specialize_solved_type(
-        env,
-        procs,
-        proc_name,
-        layout_cache,
-        &solved_type,
-        host_exposed_aliases,
-        partial_proc_id,
-    )
-}
-
 fn introduce_solved_type_to_subs<'a>(env: &mut Env<'a, '_>, solved_type: &SolvedType) -> Variable {
     use roc_solve::solve::insert_type_into_subs;
     use roc_types::solved_types::{to_type, FreeVars};
@@ -2815,26 +2736,6 @@ fn introduce_solved_type_to_subs<'a>(env: &mut Env<'a, '_>, solved_type: &Solved
     env.subs.extend_by(variables_introduced as usize);
 
     insert_type_into_subs(env.subs, &normal_type)
-}
-
-fn specialize_solved_type<'a>(
-    env: &mut Env<'a, '_>,
-    procs: &mut Procs<'a>,
-    proc_name: Symbol,
-    layout_cache: &mut LayoutCache<'a>,
-    solved_type: &SolvedType,
-    host_exposed_aliases: MutMap<Symbol, SolvedType>,
-    partial_proc_id: PartialProcId,
-) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
-    specialize_variable_help(
-        env,
-        procs,
-        proc_name,
-        layout_cache,
-        |env| introduce_solved_type_to_subs(env, solved_type),
-        host_exposed_aliases,
-        partial_proc_id,
-    )
 }
 
 fn specialize_variable<'a>(

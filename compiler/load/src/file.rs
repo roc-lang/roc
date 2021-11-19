@@ -21,7 +21,7 @@ use roc_module::symbol::{
 use roc_mono::ir::{
     CapturedSymbols, EntryPoint, ExternalSpecializations, PartialProc, Proc, ProcLayout, Procs,
 };
-use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
+use roc_mono::layout::{Layout, LayoutCache};
 use roc_parse::ast::{self, StrLiteral, TypeAnnotation};
 use roc_parse::header::{
     ExposesEntry, ImportsEntry, PackageEntry, PackageOrPath, PlatformHeader, To, TypedIdent,
