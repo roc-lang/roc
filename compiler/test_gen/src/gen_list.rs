@@ -2418,6 +2418,28 @@ fn list_any_empty_with_unknown_element_type() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn list_all() {
+    assert_evals_to!("List.all [] (\\e -> e > 3)", true, bool);
+    assert_evals_to!("List.all [ 1, 2, 3 ] (\\e -> e > 3)", false, bool);
+    assert_evals_to!("List.all [ 1, 2, 4 ] (\\e -> e > 3)", false, bool);
+    assert_evals_to!("List.all [ 1, 2, 3 ] (\\e -> e >= 1)", true, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+#[should_panic(expected = r#"Roc failed with message: "UnresolvedTypeVar"#)]
+fn list_all_empty_with_unknown_element_type() {
+    // Segfaults with invalid memory reference. Running this as a stand-alone
+    // Roc program, generates the following error message:
+    //
+    //     Application crashed with message
+    //     UnresolvedTypeVar compiler/mono/src/ir.rs line 3775
+    //     Shutting down
+    assert_evals_to!("List.all [] (\\_ -> True)", false, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 #[should_panic(expected = r#"Roc failed with message: "invalid ret_layout""#)]
 fn lists_with_incompatible_type_param_in_if() {
     assert_evals_to!(

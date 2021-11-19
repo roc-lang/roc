@@ -926,6 +926,27 @@ pub fn list_any<'a, 'ctx, 'env>(
     )
 }
 
+/// List.all : List elem, \(elem -> Bool) -> Bool
+pub fn list_all<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    roc_function_call: RocFunctionCall<'ctx>,
+    list: BasicValueEnum<'ctx>,
+    element_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    call_bitcode_fn(
+        env,
+        &[
+            pass_list_cc(env, list),
+            roc_function_call.caller.into(),
+            pass_as_opaque(env, roc_function_call.data),
+            roc_function_call.inc_n_data.into(),
+            roc_function_call.data_is_owned.into(),
+            layout_width(env, element_layout),
+        ],
+        bitcode::LIST_ALL,
+    )
+}
+
 /// List.findUnsafe : List elem, (elem -> Bool) -> { value: elem, found: bool }
 pub fn list_find_unsafe<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
