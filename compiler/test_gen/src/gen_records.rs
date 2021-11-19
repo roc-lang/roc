@@ -970,7 +970,7 @@ fn update_the_only_field() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 // https://github.com/rtfeldman/roc/issues/1513
 fn both_have_unique_fields() {
     assert_evals_to!(
