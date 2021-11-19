@@ -1164,6 +1164,17 @@ impl Subs {
         });
     }
 
+    pub fn modify<F>(&mut self, key: Variable, mapper: F)
+    where
+        F: Fn(&mut Descriptor),
+    {
+        let l_key = self.utable.get_root_key(key);
+
+        self.utable.update_value(l_key, |node| {
+            mapper(&mut node.value);
+        });
+    }
+
     pub fn equivalent(&mut self, left: Variable, right: Variable) -> bool {
         self.utable.unioned(left, right)
     }
@@ -3058,31 +3069,21 @@ fn deep_copy_var_to_help(
         copy: OptVariable::NONE,
     };
 
-    let content = desc.content;
-    // let copy = target.fresh(make_descriptor(content.clone()));
     let copy = target.fresh_unnamed_flex_var();
-
-    // pools.get_mut(max_rank).push(copy);
 
     // Link the original variable to the new variable. This lets us
     // avoid making multiple copies of the variable we are instantiating.
     //
     // Need to do this before recursively copying to avoid looping.
-
-    source.set(
-        var,
-        Descriptor {
-            content: content.clone(),
-            rank: desc.rank,
-            mark: Mark::NONE,
-            copy: copy.into(),
-        },
-    );
+    source.modify(var, |descriptor| {
+        descriptor.mark = Mark::NONE;
+        descriptor.copy = copy.into();
+    });
 
     // Now we recursively copy the content of the variable.
     // We have already marked the variable as copied, so we
     // will not repeat this work or crawl this variable again.
-    match content {
+    match desc.content {
         Structure(flat_type) => {
             let new_flat_type = match flat_type {
                 Apply(symbol, args) => {
