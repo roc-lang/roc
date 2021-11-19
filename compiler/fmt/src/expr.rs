@@ -3,7 +3,7 @@ use crate::def::fmt_def;
 use crate::pattern::fmt_pattern;
 use crate::spaces::{add_spaces, fmt_comments_only, fmt_spaces, newline, NewlineAt, INDENT};
 use bumpalo::collections::String;
-use roc_module::operator::{self, BinOp};
+use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::StrSegment;
 use roc_parse::ast::{
     AssignedField, Base, Collection, CommentOrNewline, Expr, Pattern, WhenBranch,
@@ -296,10 +296,10 @@ impl<'a> Formattable<'a> for Expr<'a> {
             BinOps(lefts, right) => fmt_bin_ops(buf, lefts, right, false, parens, indent),
             UnaryOp(sub_expr, unary_op) => {
                 match &unary_op.value {
-                    operator::UnaryOp::Negate => {
+                    called_via::UnaryOp::Negate => {
                         buf.push('-');
                     }
-                    operator::UnaryOp::Not => {
+                    called_via::UnaryOp::Not => {
                         buf.push('!');
                     }
                 }
@@ -354,26 +354,26 @@ fn format_str_segment<'a>(seg: &StrSegment<'a>, buf: &mut String<'a>, indent: u1
 
 fn push_op(buf: &mut String, op: BinOp) {
     match op {
-        operator::BinOp::Caret => buf.push('^'),
-        operator::BinOp::Star => buf.push('*'),
-        operator::BinOp::Slash => buf.push('/'),
-        operator::BinOp::DoubleSlash => buf.push_str("//"),
-        operator::BinOp::Percent => buf.push('%'),
-        operator::BinOp::DoublePercent => buf.push_str("%%"),
-        operator::BinOp::Plus => buf.push('+'),
-        operator::BinOp::Minus => buf.push('-'),
-        operator::BinOp::Equals => buf.push_str("=="),
-        operator::BinOp::NotEquals => buf.push_str("!="),
-        operator::BinOp::LessThan => buf.push('<'),
-        operator::BinOp::GreaterThan => buf.push('>'),
-        operator::BinOp::LessThanOrEq => buf.push_str("<="),
-        operator::BinOp::GreaterThanOrEq => buf.push_str(">="),
-        operator::BinOp::And => buf.push_str("&&"),
-        operator::BinOp::Or => buf.push_str("||"),
-        operator::BinOp::Pizza => buf.push_str("|>"),
-        operator::BinOp::Assignment => unreachable!(),
-        operator::BinOp::HasType => unreachable!(),
-        operator::BinOp::Backpassing => unreachable!(),
+        called_via::BinOp::Caret => buf.push('^'),
+        called_via::BinOp::Star => buf.push('*'),
+        called_via::BinOp::Slash => buf.push('/'),
+        called_via::BinOp::DoubleSlash => buf.push_str("//"),
+        called_via::BinOp::Percent => buf.push('%'),
+        called_via::BinOp::DoublePercent => buf.push_str("%%"),
+        called_via::BinOp::Plus => buf.push('+'),
+        called_via::BinOp::Minus => buf.push('-'),
+        called_via::BinOp::Equals => buf.push_str("=="),
+        called_via::BinOp::NotEquals => buf.push_str("!="),
+        called_via::BinOp::LessThan => buf.push('<'),
+        called_via::BinOp::GreaterThan => buf.push('>'),
+        called_via::BinOp::LessThanOrEq => buf.push_str("<="),
+        called_via::BinOp::GreaterThanOrEq => buf.push_str(">="),
+        called_via::BinOp::And => buf.push_str("&&"),
+        called_via::BinOp::Or => buf.push_str("||"),
+        called_via::BinOp::Pizza => buf.push_str("|>"),
+        called_via::BinOp::Assignment => unreachable!(),
+        called_via::BinOp::HasType => unreachable!(),
+        called_via::BinOp::Backpassing => unreachable!(),
     }
 }
 

@@ -5587,6 +5587,82 @@ mod test_reporting {
     }
 
     #[test]
+    // https://github.com/rtfeldman/roc/issues/1714
+    fn interpolate_concat_is_transparent_1714() {
+        report_problem_as(
+            indoc!(
+                r#"
+                greeting = "Privet"
+
+                if True then 1 else "\(greeting), World!"
+                "#,
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                This `if` has an `else` branch with a different type from its `then` branch:
+
+                3│  if True then 1 else "\(greeting), World!"
+                                        ^^^^^^^^^^^^^^^^^^^^^
+
+                The `else` branch is a string of type:
+
+                    Str
+
+                but the `then` branch has the type:
+
+                    Num a
+
+                I need all branches in an `if` to have the same type!
+                "#
+            ),
+        )
+    }
+
+    macro_rules! comparison_binop_transparency_tests {
+        ($($op:expr, $name:ident),* $(,)?) => {
+            $(
+            #[test]
+            fn $name() {
+                report_problem_as(
+                    &format!(r#"if True then "abc" else 1 {} 2"#, $op),
+                    &format!(
+r#"── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+This `if` has an `else` branch with a different type from its `then` branch:
+
+1│  if True then "abc" else 1 {} 2
+                            ^^{}^^
+
+This comparison produces:
+
+    Bool
+
+but the `then` branch has the type:
+
+    Str
+
+I need all branches in an `if` to have the same type!
+"#,
+                        $op, "^".repeat($op.len())
+                    ),
+                )
+            }
+            )*
+        }
+    }
+
+    comparison_binop_transparency_tests! {
+        "<", lt_binop_is_transparent,
+        ">", gt_binop_is_transparent,
+        "==", eq_binop_is_transparent,
+        "!=", neq_binop_is_transparent,
+        "<=", leq_binop_is_transparent,
+        ">=", geq_binop_is_transparent,
+    }
+
+    #[test]
     fn keyword_record_field_access() {
         report_problem_as(
             indoc!(

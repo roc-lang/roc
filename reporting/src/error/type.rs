@@ -1,5 +1,6 @@
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{Index, MutSet, SendMap};
+use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::{Ident, IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
@@ -1043,13 +1044,26 @@ fn add_category<'b>(
             alloc.record_field(field.to_owned()),
             alloc.text(" is a:"),
         ]),
-
-        CallResult(Some(symbol)) => alloc.concat(vec![
+        CallResult(
+            Some(_),
+            CalledVia::BinOp(
+                BinOp::Equals
+                | BinOp::NotEquals
+                | BinOp::LessThan
+                | BinOp::GreaterThan
+                | BinOp::LessThanOrEq
+                | BinOp::GreaterThanOrEq,
+            ),
+        ) => alloc.concat(vec![alloc.text("This comparison produces:")]),
+        CallResult(Some(_), CalledVia::StringInterpolation) => {
+            alloc.concat(vec![this_is, alloc.text(" a string of type:")])
+        }
+        CallResult(Some(symbol), _) => alloc.concat(vec![
             alloc.text("This "),
             alloc.symbol_foreign_qualified(*symbol),
             alloc.text(" call produces:"),
         ]),
-        CallResult(None) => alloc.concat(vec![this_is, alloc.text(":")]),
+        CallResult(None, _) => alloc.concat(vec![this_is, alloc.text(":")]),
         LowLevelOpResult(op) => {
             panic!(
                 "Compiler bug: invalid return type from low-level op {:?}",
