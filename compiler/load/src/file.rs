@@ -21,7 +21,7 @@ use roc_module::symbol::{
 use roc_mono::ir::{
     CapturedSymbols, EntryPoint, ExternalSpecializations, PartialProc, Proc, ProcLayout, Procs,
 };
-use roc_mono::layout::{Layout, LayoutCache};
+use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
 use roc_parse::ast::{self, StrLiteral, TypeAnnotation};
 use roc_parse::header::{
     ExposesEntry, ImportsEntry, PackageEntry, PackageOrPath, PlatformHeader, To, TypedIdent,
@@ -4121,6 +4121,30 @@ fn add_def_to_module<'a>(
                     // never gets called by Roc code, it will never
                     // get specialized!
                     if is_exposed {
+                        let layout_result =
+                            layout_cache.raw_from_var(mono_env.arena, annotation, mono_env.subs);
+
+                        // cannot specialize when e.g. main's type contains type variables
+                        if let Err(e) = layout_result {
+                            match e {
+                                LayoutProblem::Erroneous => {
+                                    let message = "top level function has erroneous type";
+                                    procs.runtime_errors.insert(symbol, message);
+                                    return;
+                                }
+                                LayoutProblem::UnresolvedTypeVar(v) => {
+                                    let message = format!(
+                                        "top level function has unresolved type variable {:?}",
+                                        v
+                                    );
+                                    procs
+                                        .runtime_errors
+                                        .insert(symbol, mono_env.arena.alloc(message));
+                                    return;
+                                }
+                            }
+                        }
+
                         procs.host_specializations.insert_host_exposed(
                             mono_env.subs,
                             symbol,
@@ -4153,6 +4177,30 @@ fn add_def_to_module<'a>(
                     // never gets called by Roc code, it will never
                     // get specialized!
                     if is_exposed {
+                        let layout_result =
+                            layout_cache.raw_from_var(mono_env.arena, annotation, mono_env.subs);
+
+                        // cannot specialize when e.g. main's type contains type variables
+                        if let Err(e) = layout_result {
+                            match e {
+                                LayoutProblem::Erroneous => {
+                                    let message = "top level function has erroneous type";
+                                    procs.runtime_errors.insert(symbol, message);
+                                    return;
+                                }
+                                LayoutProblem::UnresolvedTypeVar(v) => {
+                                    let message = format!(
+                                        "top level function has unresolved type variable {:?}",
+                                        v
+                                    );
+                                    procs
+                                        .runtime_errors
+                                        .insert(symbol, mono_env.arena.alloc(message));
+                                    return;
+                                }
+                            }
+                        }
+
                         procs.host_specializations.insert_host_exposed(
                             mono_env.subs,
                             symbol,
