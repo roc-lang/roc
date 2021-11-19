@@ -139,6 +139,7 @@ pub enum RuntimeError {
         module_name: ModuleName,
         ident: Ident,
         region: Region,
+        exposed_values: Vec<Lowercase>,
     },
     ModuleNotImported {
         module_name: ModuleName,

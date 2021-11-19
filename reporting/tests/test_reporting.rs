@@ -298,17 +298,24 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                List.foobar 1 2
+                List.isempty 1 2
             "#
             ),
             indoc!(
                 r#"
                 ── NOT EXPOSED ─────────────────────────────────────────────────────────────────
 
-                The List module does not expose a foobar value:
+                The List module does not expose `isempty`:
 
-                1│  List.foobar 1 2
-                    ^^^^^^^^^^^
+                1│  List.isempty 1 2
+                    ^^^^^^^^^^^^
+
+                Did you mean one of these?
+
+                    List.isEmpty
+                    List.set
+                    List.get
+                    List.keepIf
                 "#
             ),
         )
@@ -547,7 +554,35 @@ mod test_reporting {
                     baz
                     Nat
                     Str
-                    U8
+                    Err
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn lowercase_primitive_tag_bool() {
+        report_problem_as(
+            indoc!(
+                r#"
+                if true then 1 else 2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
+                
+                I cannot find a `true` value
+                
+                1│  if true then 1 else 2
+                       ^^^^
+                
+                Did you mean one of these?
+                
+                    True
+                    Str
+                    Num
+                    Err
                 "#
             ),
         )
@@ -1950,10 +1985,10 @@ mod test_reporting {
 
                 Did you mean one of these?
 
+                    Ok
                     U8
                     f
                     I8
-                    F64
                "#
             ),
         )
@@ -5596,10 +5631,17 @@ mod test_reporting {
                 r#"
                 ── NOT EXPOSED ─────────────────────────────────────────────────────────────────
 
-                The Num module does not expose a if value:
+                The Num module does not expose `if`:
 
                 1│  Num.if
                     ^^^^^^
+
+                Did you mean one of these?
+
+                    Num.sin
+                    Num.div
+                    Num.abs
+                    Num.neg
             "#
             ),
         )
@@ -5802,8 +5844,8 @@ mod test_reporting {
 
                     Nat
                     Str
+                    Err
                     U8
-                    F64
                 "#
             ),
         )
