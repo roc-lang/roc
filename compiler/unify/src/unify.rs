@@ -133,12 +133,14 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
         //        println!("\n --- \n");
         //        dbg!(ctx.second, type2);
         //        println!("\n --------------- \n");
+        let content_1 = subs.get(ctx.first).content;
+        let content_2 = subs.get(ctx.second).content;
         println!(
             "{:?} {:?} ~ {:?} {:?}",
             ctx.first,
-            subs.get(ctx.first).content,
+            roc_types::subs::SubsFmtContent(&content_1, subs),
             ctx.second,
-            subs.get(ctx.second).content
+            roc_types::subs::SubsFmtContent(&content_2, subs),
         );
     }
     match &ctx.first_desc.content {
