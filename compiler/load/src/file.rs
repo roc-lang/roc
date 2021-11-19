@@ -355,7 +355,7 @@ struct ModuleCache<'a> {
     constrained: MutMap<ModuleId, ConstrainedModule>,
     typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
-    external_specializations_requested: MutMap<ModuleId, Vec<ExternalSpecializations<'a>>>,
+    external_specializations_requested: MutMap<ModuleId, Vec<ExternalSpecializations>>,
 
     /// Various information
     imports: MutMap<ModuleId, MutSet<ModuleId>>,
@@ -830,7 +830,7 @@ enum Msg<'a> {
         module_id: ModuleId,
         ident_ids: IdentIds,
         layout_cache: LayoutCache<'a>,
-        external_specializations_requested: BumpMap<ModuleId, ExternalSpecializations<'a>>,
+        external_specializations_requested: BumpMap<ModuleId, ExternalSpecializations>,
         procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
         problems: Vec<roc_mono::ir::MonoProblem>,
         module_timing: ModuleTiming,
@@ -1050,7 +1050,7 @@ enum BuildTask<'a> {
         subs: Subs,
         procs_base: ProcsBase<'a>,
         layout_cache: LayoutCache<'a>,
-        specializations_we_must_make: Vec<ExternalSpecializations<'a>>,
+        specializations_we_must_make: Vec<ExternalSpecializations>,
         module_timing: ModuleTiming,
     },
 }
@@ -3920,7 +3920,7 @@ fn make_specializations<'a>(
     mut subs: Subs,
     procs_base: ProcsBase<'a>,
     mut layout_cache: LayoutCache<'a>,
-    specializations_we_must_make: Vec<ExternalSpecializations<'a>>,
+    specializations_we_must_make: Vec<ExternalSpecializations>,
     mut module_timing: ModuleTiming,
     ptr_bytes: u32,
 ) -> Msg<'a> {

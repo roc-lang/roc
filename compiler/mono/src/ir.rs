@@ -435,23 +435,27 @@ impl HostSpecializations {
 
 /// Specializations of this module's symbols that other modules need
 #[derive(Clone, Debug)]
-pub struct ExternalSpecializations<'a> {
+pub struct ExternalSpecializations {
     /// Not a bumpalo vec because bumpalo is not thread safe
     /// Separate array so we can search for membership quickly
     symbols: std::vec::Vec<Symbol>,
     storage_subs: StorageSubs,
     /// For each symbol, what types to specialize it for, points into the storage_subs
     types_to_specialize: std::vec::Vec<std::vec::Vec<Variable>>,
-    _lifetime: std::marker::PhantomData<&'a u8>,
 }
 
-impl<'a> ExternalSpecializations<'a> {
-    pub fn new_in(_arena: &'a Bump) -> Self {
+impl Default for ExternalSpecializations {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ExternalSpecializations {
+    pub fn new() -> Self {
         Self {
             symbols: std::vec::Vec::new(),
             storage_subs: StorageSubs::new(Subs::default()),
             types_to_specialize: std::vec::Vec::new(),
-            _lifetime: std::marker::PhantomData,
         }
     }
 
@@ -656,7 +660,7 @@ pub struct Procs<'a> {
     pending_specializations: PendingSpecializations<'a>,
     specialized: Specialized<'a>,
     pub runtime_errors: BumpMap<Symbol, &'a str>,
-    pub externals_we_need: BumpMap<ModuleId, ExternalSpecializations<'a>>,
+    pub externals_we_need: BumpMap<ModuleId, ExternalSpecializations>,
 }
 
 impl<'a> Procs<'a> {
@@ -1983,7 +1987,7 @@ fn specialize_suspended<'a>(
 pub fn specialize_all<'a>(
     env: &mut Env<'a, '_>,
     mut procs: Procs<'a>,
-    externals_others_need: std::vec::Vec<ExternalSpecializations<'a>>,
+    externals_others_need: std::vec::Vec<ExternalSpecializations>,
     specializations_for_host: HostSpecializations,
     layout_cache: &mut LayoutCache<'a>,
 ) -> Procs<'a> {
@@ -2021,7 +2025,7 @@ fn specialize_host_specializations<'a>(
     let offset_variable = StorageSubs::merge_into(store, env.subs);
 
     for (symbol, variable, host_exposed_aliases) in it {
-        barfoo(
+        specialize_external_help(
             env,
             procs,
             layout_cache,
@@ -2036,7 +2040,7 @@ fn specialize_external_specializations<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
-    externals_others_need: ExternalSpecializations<'a>,
+    externals_others_need: ExternalSpecializations,
 ) {
     let (store, it) = externals_others_need.decompose();
 
@@ -2049,7 +2053,7 @@ fn specialize_external_specializations<'a>(
             // duplicate specializations, and the insertion into a hash map
             // below will deduplicate them.
 
-            barfoo(
+            specialize_external_help(
                 env,
                 procs,
                 layout_cache,
@@ -2061,7 +2065,7 @@ fn specialize_external_specializations<'a>(
     }
 }
 
-fn barfoo<'a>(
+fn specialize_external_help<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
@@ -6489,7 +6493,7 @@ fn add_needed_external<'a>(
     use hashbrown::hash_map::Entry::{Occupied, Vacant};
 
     let existing = match procs.externals_we_need.entry(name.module_id()) {
-        Vacant(entry) => entry.insert(ExternalSpecializations::new_in(env.arena)),
+        Vacant(entry) => entry.insert(ExternalSpecializations::new()),
         Occupied(entry) => entry.into_mut(),
     };
 
