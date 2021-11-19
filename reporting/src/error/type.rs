@@ -1056,7 +1056,7 @@ fn add_category<'b>(
             ),
         ) => alloc.concat(vec![alloc.text("This comparison produces:")]),
         CallResult(Some(_), CalledVia::StringInterpolation) => {
-            alloc.concat(vec![alloc.text("This string interpolation produces:")])
+            alloc.concat(vec![this_is, alloc.text(" a string of type:")])
         }
         CallResult(Some(symbol), _) => alloc.concat(vec![
             alloc.text("This "),

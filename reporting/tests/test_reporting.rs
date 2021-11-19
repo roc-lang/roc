@@ -5571,7 +5571,7 @@ mod test_reporting {
                 3│  if True then 1 else "\(greeting), World!"
                                         ^^^^^^^^^^^^^^^^^^^^^
 
-                This string interpolation produces:
+                The `else` branch is a string of type:
 
                     Str
 
