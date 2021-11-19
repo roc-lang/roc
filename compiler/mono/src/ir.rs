@@ -2057,7 +2057,7 @@ pub fn specialize_all<'a>(
     env: &mut Env<'a, '_>,
     mut procs: Procs<'a>,
     externals_others_need: std::vec::Vec<ExternalSpecializations<'a>>,
-    specializations_for_host: BumpMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>,
+    specializations_for_host: HostSpecializations,
     layout_cache: &mut LayoutCache<'a>,
 ) -> Procs<'a> {
     specialize_externals_others_need(env, &mut procs, externals_others_need, layout_cache);
@@ -2076,63 +2076,7 @@ pub fn specialize_all<'a>(
         }
     }
 
-    let it = specializations_for_host.into_iter();
-
-    for (name, by_layout) in it {
-        for (outside_layout, pending) in by_layout.into_iter() {
-            // If we've already seen this (Symbol, Layout) combination before,
-            // don't try to specialize it again. If we do, we'll loop forever!
-
-            let partial_proc = if procs.specialized.is_specialized(name, &outside_layout) {
-                // already specialized, just continue
-                continue;
-            } else {
-                match procs.partial_procs.symbol_to_id(name) {
-                    Some(v) => {
-                        // Mark this proc as in-progress, so if we're dealing with
-                        // mutually recursive functions, we don't loop forever.
-                        // (We had a bug around this before this system existed!)
-                        procs.specialized.mark_in_progress(name, outside_layout);
-
-                        v
-                    }
-                    None => {
-                        // TODO this assumes the specialization is done by another module
-                        // make sure this does not become a problem down the road!
-                        continue;
-                    }
-                }
-            };
-
-            match specialize(env, &mut procs, name, layout_cache, pending, partial_proc) {
-                Ok((proc, layout)) => {
-                    // TODO thiscode is duplicated elsewhere
-                    let top_level = ProcLayout::from_raw(env.arena, layout);
-
-                    if procs.is_module_thunk(proc.name) {
-                        debug_assert!(
-                            top_level.arguments.is_empty(),
-                            "{:?} from {:?}",
-                            name,
-                            layout
-                        );
-                    }
-
-                    debug_assert_eq!(outside_layout, top_level, " in {:?}", name);
-                    procs.specialized.insert_specialized(name, top_level, proc);
-                }
-                Err(SpecializeFailure {
-                    attempted_layout, ..
-                }) => {
-                    let proc = generate_runtime_error_function(env, name, attempted_layout);
-
-                    let top_level = ProcLayout::from_raw(env.arena, attempted_layout);
-
-                    procs.specialized.insert_specialized(name, top_level, proc);
-                }
-            }
-        }
-    }
+    specialize_host_specializations(env, &mut procs, layout_cache, specializations_for_host);
 
     procs
 }

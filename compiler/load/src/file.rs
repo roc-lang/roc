@@ -19,8 +19,7 @@ use roc_module::symbol::{
     Symbol,
 };
 use roc_mono::ir::{
-    CapturedSymbols, EntryPoint, ExternalSpecializations, PartialProc, PendingSpecialization, Proc,
-    ProcLayout, Procs,
+    CapturedSymbols, EntryPoint, ExternalSpecializations, PartialProc, Proc, ProcLayout, Procs,
 };
 use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
 use roc_parse::ast::{self, StrLiteral, TypeAnnotation};
@@ -3957,7 +3956,7 @@ fn make_specializations<'a>(
         &mut mono_env,
         procs,
         specializations_we_must_make,
-        procs_base.specializations_for_host,
+        procs_base.host_specializations,
         &mut layout_cache,
     );
 
@@ -3989,25 +3988,9 @@ struct ProcsBase<'a> {
     partial_procs: BumpMap<Symbol, PartialProc<'a>>,
     module_thunks: &'a [Symbol],
     /// A host-exposed function must be specialized; it's a seed for subsequent specializations
-    specializations_for_host: BumpMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>,
+    host_specializations: roc_mono::ir::HostSpecializations,
     runtime_errors: BumpMap<Symbol, &'a str>,
     imported_module_thunks: &'a [Symbol],
-}
-
-impl<'a> ProcsBase<'a> {
-    fn add_specialization_for_host(
-        &mut self,
-        symbol: Symbol,
-        layout: ProcLayout<'a>,
-        pending: PendingSpecialization<'a>,
-    ) {
-        let all_pending = self
-            .specializations_for_host
-            .entry(symbol)
-            .or_insert_with(|| HashMap::with_capacity_and_hasher(1, default_hasher()));
-
-        all_pending.insert(layout, pending);
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4031,7 +4014,7 @@ fn build_pending_specializations<'a>(
     let mut procs_base = ProcsBase {
         partial_procs: BumpMap::default(),
         module_thunks: &[],
-        specializations_for_host: BumpMap::default(),
+        host_specializations: roc_mono::ir::HostSpecializations::new(),
         runtime_errors: BumpMap::default(),
         imported_module_thunks,
     };
@@ -4138,40 +4121,11 @@ fn add_def_to_module<'a>(
                     // never gets called by Roc code, it will never
                     // get specialized!
                     if is_exposed {
-                        let layout = match layout_cache.raw_from_var(
-                            mono_env.arena,
-                            annotation,
+                        procs.host_specializations.insert_host_exposed(
                             mono_env.subs,
-                        ) {
-                            Ok(l) => l,
-                            Err(LayoutProblem::Erroneous) => {
-                                let message = "top level function has erroneous type";
-                                procs.runtime_errors.insert(symbol, message);
-                                return;
-                            }
-                            Err(LayoutProblem::UnresolvedTypeVar(v)) => {
-                                let message = format!(
-                                    "top level function has unresolved type variable {:?}",
-                                    v
-                                );
-                                procs
-                                    .runtime_errors
-                                    .insert(symbol, mono_env.arena.alloc(message));
-                                return;
-                            }
-                        };
-
-                        let pending = PendingSpecialization::from_exposed_function(
-                            mono_env.arena,
-                            mono_env.subs,
+                            symbol,
                             def.annotation,
                             annotation,
-                        );
-
-                        procs.add_specialization_for_host(
-                            symbol,
-                            ProcLayout::from_raw(mono_env.arena, layout),
-                            pending,
                         );
                     }
 
@@ -4192,51 +4146,23 @@ fn add_def_to_module<'a>(
                     // mark this symbols as a top-level thunk before any other work on the procs
                     module_thunks.push(symbol);
 
+                    let annotation = def.expr_var;
+
                     // If this is an exposed symbol, we need to
                     // register it as such. Otherwise, since it
                     // never gets called by Roc code, it will never
                     // get specialized!
                     if is_exposed {
-                        let annotation = def.expr_var;
-
-                        let top_level = match layout_cache.from_var(
-                            mono_env.arena,
-                            annotation,
+                        procs.host_specializations.insert_host_exposed(
                             mono_env.subs,
-                        ) {
-                            Ok(l) => {
-                                // remember, this is a 0-argument thunk
-                                ProcLayout::new(mono_env.arena, &[], l)
-                            }
-                            Err(LayoutProblem::Erroneous) => {
-                                let message = "top level function has erroneous type";
-                                procs.runtime_errors.insert(symbol, message);
-                                return;
-                            }
-                            Err(LayoutProblem::UnresolvedTypeVar(v)) => {
-                                let message = format!(
-                                    "top level function has unresolved type variable {:?}",
-                                    v
-                                );
-                                procs
-                                    .runtime_errors
-                                    .insert(symbol, mono_env.arena.alloc(message));
-                                return;
-                            }
-                        };
-
-                        let pending = PendingSpecialization::from_exposed_function(
-                            mono_env.arena,
-                            mono_env.subs,
+                            symbol,
                             def.annotation,
                             annotation,
                         );
-
-                        procs.add_specialization_for_host(symbol, top_level, pending);
                     }
 
                     let proc = PartialProc {
-                        annotation: def.expr_var,
+                        annotation,
                         // This is a 0-arity thunk, so it has no arguments.
                         pattern_symbols: &[],
                         // This is a top-level definition, so it cannot capture anything
