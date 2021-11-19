@@ -354,8 +354,7 @@ impl<'a> Proc<'a> {
     }
 }
 
-type ExposedAliases = std::vec::Vec<(Symbol, Variable)>;
-
+/// A host-exposed function must be specialized; it's a seed for subsequent specializations
 #[derive(Clone, Debug)]
 pub struct HostSpecializations {
     /// Not a bumpalo vec because bumpalo is not thread safe
@@ -363,9 +362,9 @@ pub struct HostSpecializations {
     symbols: std::vec::Vec<Symbol>,
     storage_subs: StorageSubs,
     /// For each symbol, what types to specialize it for, points into the storage_subs
-    types_to_specialize: std::vec::Vec<std::vec::Vec<Variable>>,
+    types_to_specialize: std::vec::Vec<Variable>,
     /// Variables for an exposed alias
-    exposed_aliases: std::vec::Vec<std::vec::Vec<std::vec::Vec<(Symbol, Variable)>>>,
+    exposed_aliases: std::vec::Vec<std::vec::Vec<(Symbol, Variable)>>,
 }
 
 impl Default for HostSpecializations {
@@ -402,17 +401,14 @@ impl HostSpecializations {
         match self.symbols.iter().position(|s| *s == symbol) {
             None => {
                 self.symbols.push(symbol);
-                self.types_to_specialize.push(vec![variable]);
-                self.exposed_aliases.push(vec![host_exposed_aliases]);
+                self.types_to_specialize.push(variable);
+                self.exposed_aliases.push(host_exposed_aliases);
             }
-            Some(index) => {
-                let types_to_specialize = &mut self.types_to_specialize[index];
-                let exposed_aliases = &mut self.exposed_aliases[index];
-
-                debug_assert_eq!(types_to_specialize.len(), exposed_aliases.len());
-
-                types_to_specialize.push(variable);
-                exposed_aliases.push(host_exposed_aliases);
+            Some(_) => {
+                // we assume that only one specialization of a function is directly exposed to the
+                // host. Other host-exposed symbols may (transitively) specialize this symbol,
+                // but then the existing specialization mechanism will find those specializations
+                panic!("A host-exposed symbol can only be exposed once");
             }
         }
 
@@ -423,13 +419,7 @@ impl HostSpecializations {
         self,
     ) -> (
         StorageSubs,
-        impl Iterator<
-            Item = (
-                Symbol,
-                std::vec::Vec<Variable>,
-                std::vec::Vec<ExposedAliases>,
-            ),
-        >,
+        impl Iterator<Item = (Symbol, Variable, std::vec::Vec<(Symbol, Variable)>)>,
     ) {
         let it1 = self.symbols.into_iter();
 
@@ -443,6 +433,7 @@ impl HostSpecializations {
     }
 }
 
+/// Specializations of this module's symbols that other modules need
 #[derive(Clone, Debug)]
 pub struct ExternalSpecializations<'a> {
     /// Not a bumpalo vec because bumpalo is not thread safe
@@ -2029,20 +2020,15 @@ fn specialize_host_specializations<'a>(
 
     let offset_variable = StorageSubs::merge_into(store, env.subs);
 
-    for (symbol, solved_types, host_exposed_aliases) in it {
-        let it = solved_types
-            .into_iter()
-            .zip(host_exposed_aliases.into_iter());
-        for (store_variable, host_exposed_aliases) in it {
-            barfoo(
-                env,
-                procs,
-                layout_cache,
-                symbol,
-                offset_variable(store_variable),
-                &host_exposed_aliases,
-            )
-        }
+    for (symbol, variable, host_exposed_aliases) in it {
+        barfoo(
+            env,
+            procs,
+            layout_cache,
+            symbol,
+            offset_variable(variable),
+            &host_exposed_aliases,
+        )
     }
 }
 
