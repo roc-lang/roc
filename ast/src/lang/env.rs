@@ -147,12 +147,7 @@ impl<'a> Env<'a> {
                                 let exposed_values = exposed_ids
                                     .idents()
                                     .filter(|(_, ident)| {
-                                        ident
-                                            .as_ref()
-                                            .chars()
-                                            .next()
-                                            .filter(|c| c.is_lowercase())
-                                            .is_some()
+                                        ident.as_ref().starts_with(|c: char| c.is_lowercase())
                                     })
                                     .map(|(_, ident)| Lowercase::from(ident.as_ref()))
                                     .collect();

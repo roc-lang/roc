@@ -990,7 +990,9 @@ define_builtins! {
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
         1 BOOL_FALSE: "False" imported // Bool.Bool = [ False, True ]
+                                       // NB: not strictly needed; used for finding global tag names in error suggestions
         2 BOOL_TRUE: "True" imported // Bool.Bool = [ False, True ]
+                                     // NB: not strictly needed; used for finding global tag names in error suggestions
         3 BOOL_AND: "and"
         4 BOOL_OR: "or"
         5 BOOL_NOT: "not"
@@ -1079,8 +1081,10 @@ define_builtins! {
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias
-        1 RESULT_OK: "Ok" imported // Result.Result = [ Ok a, Err e ]
-        2 RESULT_ERR: "Err" imported // Result.Result = [ Ok a, Err e ]
+        1 RESULT_OK: "Ok" imported // Result.Result a e = [ Ok a, Err e ]
+                                   // NB: not strictly needed; used for finding global tag names in error suggestions
+        2 RESULT_ERR: "Err" imported // Result.Result a e = [ Ok a, Err e ]
+                                     // NB: not strictly needed; used for finding global tag names in error suggestions
         3 RESULT_MAP: "map"
         4 RESULT_MAP_ERR: "mapErr"
         5 RESULT_WITH_DEFAULT: "withDefault"
