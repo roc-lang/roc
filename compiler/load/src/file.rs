@@ -911,9 +911,6 @@ struct State<'a> {
     /// pending specializations in the same thread.
     pub needs_specialization: MutSet<ModuleId>,
 
-    pub all_pending_specializations:
-        MutMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>,
-
     pub specializations_in_flight: u32,
 
     pub timings: MutMap<ModuleId, ModuleTiming>,
@@ -1538,7 +1535,6 @@ where
                 unsolved_modules: MutMap::default(),
                 timings: MutMap::default(),
                 needs_specialization: MutSet::default(),
-                all_pending_specializations: MutMap::default(),
                 specializations_in_flight: 0,
                 layout_caches: std::vec::Vec::with_capacity(num_cpus::get()),
                 procs: Procs::new_in(arena),
@@ -2066,17 +2062,6 @@ fn update<'a>(
         } => {
             log!("found specializations for {:?}", module_id);
             let subs = solved_subs.into_inner();
-
-            for (symbol, specs) in &procs_base.specializations_for_host {
-                let existing = match state.all_pending_specializations.entry(*symbol) {
-                    Vacant(entry) => entry.insert(MutMap::default()),
-                    Occupied(entry) => entry.into_mut(),
-                };
-
-                for (layout, pend) in specs {
-                    existing.insert(*layout, pend.clone());
-                }
-            }
 
             state
                 .module_cache
