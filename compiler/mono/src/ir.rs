@@ -16,7 +16,7 @@ use roc_problem::can::RuntimeError;
 use roc_region::all::{Located, Region};
 use roc_std::RocDec;
 use roc_types::solved_types::SolvedType;
-use roc_types::subs::{Content, FlatType, Subs, Variable, VariableSubsSlice};
+use roc_types::subs::{Content, FlatType, StorageSubs, Subs, Variable, VariableSubsSlice};
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
@@ -437,7 +437,7 @@ impl<'a> ExternalSpecializations<'a> {
 
     fn insert_external(&mut self, symbol: Symbol, env_subs: &mut Subs, variable: Variable) {
         let variable =
-            roc_solve::solve::deep_copy_var_to(env_subs, &mut self.storage_subs, variable);
+            roc_types::subs::deep_copy_var_to(env_subs, &mut self.storage_subs, variable);
 
         match self.symbols.iter().position(|s| *s == symbol) {
             None => {
@@ -468,7 +468,7 @@ impl<'a> ExternalSpecializations<'a> {
 
 #[derive(Clone, Debug)]
 pub struct Suspended<'a> {
-    pub store: Subs,
+    pub store: StorageSubs,
     pub symbols: Vec<'a, Symbol>,
     pub layouts: Vec<'a, ProcLayout<'a>>,
     pub variables: Vec<'a, Variable>,
@@ -477,7 +477,7 @@ pub struct Suspended<'a> {
 impl<'a> Suspended<'a> {
     fn new_in(arena: &'a Bump) -> Self {
         Self {
-            store: Subs::new_from_varstore(Default::default()),
+            store: StorageSubs::new(Subs::new_from_varstore(Default::default())),
             symbols: Vec::new_in(arena),
             layouts: Vec::new_in(arena),
             variables: Vec::new_in(arena),
@@ -505,7 +505,7 @@ impl<'a> Suspended<'a> {
         self.symbols.push(symbol);
         self.layouts.push(proc_layout);
 
-        let variable = roc_solve::solve::deep_copy_var_to(subs, &mut self.store, variable);
+        let variable = self.store.extend_with_variable(subs, variable);
 
         self.variables.push(variable);
     }
@@ -1908,19 +1908,19 @@ pub fn specialize_all<'a>(
 
     match pending_specializations {
         PendingSpecializations::Making => {}
-        PendingSpecializations::Finding(mut suspended) => {
-            // TODO can we copy everything over in one pass (bumping variables by however many
-            // variables are in the env's subs?
-            for var in suspended.variables.iter_mut() {
-                debug_assert!((var.index() as usize) < suspended.store.len());
+        PendingSpecializations::Finding(suspended) => {
+            let offset_variable = StorageSubs::merge_into(suspended.store, env.subs);
 
-                *var = roc_solve::solve::deep_copy_var_to(&mut suspended.store, env.subs, *var);
-            }
-
-            for (i, symbol) in suspended.symbols.iter().enumerate() {
+            for (i, (symbol, var)) in suspended
+                .symbols
+                .iter()
+                .zip(suspended.variables.iter())
+                .enumerate()
+            {
                 let name = *symbol;
-                let var = suspended.variables[i];
                 let outside_layout = suspended.layouts[i];
+
+                let var = offset_variable(*var);
 
                 // TODO define our own Entry for Specialized?
                 let partial_proc = if procs.specialized.is_specialized(name, &outside_layout) {
@@ -2069,7 +2069,7 @@ fn specialize_externals_others_need<'a>(
                 };
 
                 let variable =
-                    roc_solve::solve::deep_copy_var_to(&mut store, env.subs, store_variable);
+                    roc_types::subs::deep_copy_var_to(&mut store, env.subs, store_variable);
 
                 // TODO I believe this is also duplicated
                 match specialize_variable(
