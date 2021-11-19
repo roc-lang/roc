@@ -4102,7 +4102,7 @@ fn add_def_to_module<'a>(
 
     match def.loc_pattern.value {
         Identifier(symbol) => {
-            let is_exposed = exposed_to_host.contains_key(&symbol);
+            let is_host_exposed = exposed_to_host.contains_key(&symbol);
 
             match def.loc_expr.value {
                 Closure(ClosureData {
@@ -4120,7 +4120,7 @@ fn add_def_to_module<'a>(
                     // register it as such. Otherwise, since it
                     // never gets called by Roc code, it will never
                     // get specialized!
-                    if is_exposed {
+                    if is_host_exposed {
                         let layout_result =
                             layout_cache.raw_from_var(mono_env.arena, annotation, mono_env.subs);
 
@@ -4176,7 +4176,7 @@ fn add_def_to_module<'a>(
                     // register it as such. Otherwise, since it
                     // never gets called by Roc code, it will never
                     // get specialized!
-                    if is_exposed {
+                    if is_host_exposed {
                         let layout_result =
                             layout_cache.raw_from_var(mono_env.arena, annotation, mono_env.subs);
 
