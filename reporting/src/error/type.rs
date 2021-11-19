@@ -1,6 +1,6 @@
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{Index, MutSet, SendMap};
-use roc_module::called_via::{BinOp, CalledVia, Sugar};
+use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::{Ident, IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
@@ -1055,7 +1055,7 @@ fn add_category<'b>(
                 | BinOp::GreaterThanOrEq,
             ),
         ) => alloc.concat(vec![alloc.text("This comparison produces:")]),
-        CallResult(Some(_), CalledVia::Sugar(Sugar::StringInterpolation)) => {
+        CallResult(Some(_), CalledVia::StringInterpolation) => {
             alloc.concat(vec![alloc.text("This string interpolation produces:")])
         }
         CallResult(Some(symbol), _) => alloc.concat(vec![
