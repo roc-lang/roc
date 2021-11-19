@@ -48,7 +48,7 @@ use winit::{
 // See this link to learn wgpu: https://sotrh.github.io/learn-wgpu/
 
 /// The editor is actually launched from the CLI if you pass it zero arguments,
-/// or if you provide it 1 or more files or directories to open on launch.
+/// or if you provide it 1 or more files or directories to open on launch. This is a test.
 pub fn launch(project_dir_path_opt: Option<&Path>) -> io::Result<()> {
     run_event_loop(project_dir_path_opt).expect("Error running event loop");
 
