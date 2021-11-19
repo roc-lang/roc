@@ -15,7 +15,6 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_region::all::{Located, Region};
 use roc_std::RocDec;
-use roc_types::solved_types::SolvedType;
 use roc_types::subs::{Content, FlatType, StorageSubs, Subs, Variable, VariableSubsSlice};
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
@@ -355,6 +354,8 @@ impl<'a> Proc<'a> {
     }
 }
 
+type ExposedAliases = std::vec::Vec<(Symbol, Variable)>;
+
 #[derive(Clone, Debug)]
 pub struct HostSpecializations {
     /// Not a bumpalo vec because bumpalo is not thread safe
@@ -364,7 +365,7 @@ pub struct HostSpecializations {
     /// For each symbol, what types to specialize it for, points into the storage_subs
     types_to_specialize: std::vec::Vec<std::vec::Vec<Variable>>,
     /// Variables for an exposed alias
-    exposed_aliases: std::vec::Vec<std::vec::Vec<MutMap<Symbol, SolvedType>>>,
+    exposed_aliases: std::vec::Vec<std::vec::Vec<std::vec::Vec<(Symbol, Variable)>>>,
 }
 
 impl Default for HostSpecializations {
@@ -392,13 +393,10 @@ impl HostSpecializations {
     ) {
         let variable = self.storage_subs.extend_with_variable(env_subs, variable);
 
-        // let mut host_exposed_aliases = std::vec::Vec::new();
-        let mut host_exposed_aliases = MutMap::default();
+        let mut host_exposed_aliases = std::vec::Vec::new();
 
         if let Some(annotation) = opt_annotation {
-            for (symbol, variable) in annotation.introduced_variables.host_exposed_aliases {
-                host_exposed_aliases.insert(symbol, SolvedType::from_var(env_subs, variable));
-            }
+            host_exposed_aliases.extend(annotation.introduced_variables.host_exposed_aliases);
         }
 
         match self.symbols.iter().position(|s| *s == symbol) {
@@ -429,7 +427,7 @@ impl HostSpecializations {
             Item = (
                 Symbol,
                 std::vec::Vec<Variable>,
-                std::vec::Vec<MutMap<Symbol, SolvedType>>,
+                std::vec::Vec<ExposedAliases>,
             ),
         >,
     ) {
@@ -833,7 +831,7 @@ impl<'a> Procs<'a> {
                                 symbol,
                                 layout_cache,
                                 annotation,
-                                MutMap::default(),
+                                &[],
                                 partial_proc_id,
                             ) {
                                 Ok((proc, layout)) => {
@@ -1961,15 +1959,7 @@ fn specialize_suspended<'a>(
             }
         };
 
-        match specialize_variable(
-            env,
-            procs,
-            name,
-            layout_cache,
-            var,
-            MutMap::default(),
-            partial_proc,
-        ) {
+        match specialize_variable(env, procs, name, layout_cache, var, &[], partial_proc) {
             Ok((proc, layout)) => {
                 // TODO thiscode is duplicated elsewhere
                 let top_level = ProcLayout::from_raw(env.arena, layout);
@@ -2050,7 +2040,7 @@ fn specialize_host_specializations<'a>(
                 layout_cache,
                 symbol,
                 offset_variable(store_variable),
-                host_exposed_aliases,
+                &host_exposed_aliases,
             )
         }
     }
@@ -2079,7 +2069,7 @@ fn specialize_external_specializations<'a>(
                 layout_cache,
                 symbol,
                 offset_variable(store_variable),
-                MutMap::default(),
+                &[],
             )
         }
     }
@@ -2091,7 +2081,7 @@ fn barfoo<'a>(
     layout_cache: &mut LayoutCache<'a>,
     name: Symbol,
     variable: Variable,
-    host_exposed_aliases: MutMap<Symbol, SolvedType>,
+    host_exposed_aliases: &[(Symbol, Variable)],
 ) {
     let partial_proc_id = match procs.partial_procs.symbol_to_id(name) {
         Some(v) => v,
@@ -2698,32 +2688,13 @@ struct SpecializeFailure<'a> {
 
 type SpecializeSuccess<'a> = (Proc<'a>, RawFunctionLayout<'a>);
 
-fn introduce_solved_type_to_subs<'a>(env: &mut Env<'a, '_>, solved_type: &SolvedType) -> Variable {
-    use roc_solve::solve::insert_type_into_subs;
-    use roc_types::solved_types::{to_type, FreeVars};
-    use roc_types::subs::VarStore;
-    let mut free_vars = FreeVars::default();
-    let mut var_store = VarStore::new_from_subs(env.subs);
-
-    let before = var_store.peek();
-
-    let normal_type = to_type(solved_type, &mut free_vars, &mut var_store);
-
-    let after = var_store.peek();
-    let variables_introduced = after - before;
-
-    env.subs.extend_by(variables_introduced as usize);
-
-    insert_type_into_subs(env.subs, &normal_type)
-}
-
 fn specialize_variable<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
     proc_name: Symbol,
     layout_cache: &mut LayoutCache<'a>,
     fn_var: Variable,
-    host_exposed_aliases: MutMap<Symbol, SolvedType>,
+    host_exposed_aliases: &[(Symbol, Variable)],
     partial_proc_id: PartialProcId,
 ) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
     specialize_variable_help(
@@ -2743,7 +2714,7 @@ fn specialize_variable_help<'a, F>(
     proc_name: Symbol,
     layout_cache: &mut LayoutCache<'a>,
     fn_var_thunk: F,
-    host_exposed_aliases: MutMap<Symbol, SolvedType>,
+    host_exposed_variables: &[(Symbol, Variable)],
     partial_proc_id: PartialProcId,
 ) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>>
 where
@@ -2778,21 +2749,13 @@ where
     let annotation_var = procs.partial_procs.get_id(partial_proc_id).annotation;
     instantiate_rigids(env.subs, annotation_var);
 
-    let mut host_exposed_variables = Vec::with_capacity_in(host_exposed_aliases.len(), env.arena);
-
-    for (symbol, solved_type) in host_exposed_aliases {
-        let alias_var = introduce_solved_type_to_subs(env, &solved_type);
-
-        host_exposed_variables.push((symbol, alias_var));
-    }
-
     let specialized = specialize_external(
         env,
         procs,
         proc_name,
         layout_cache,
         fn_var,
-        &host_exposed_variables,
+        host_exposed_variables,
         partial_proc_id,
     );
 
@@ -6903,7 +6866,7 @@ fn call_by_name_help<'a>(
                             proc_name,
                             layout_cache,
                             fn_var,
-                            MutMap::default(),
+                            &[],
                             partial_proc,
                         ) {
                             Ok((proc, layout)) => {
@@ -7025,7 +6988,7 @@ fn call_by_name_module_thunk<'a>(
                             proc_name,
                             layout_cache,
                             fn_var,
-                            MutMap::default(),
+                            &[],
                             partial_proc,
                         ) {
                             Ok((proc, raw_layout)) => {
