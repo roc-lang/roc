@@ -1975,6 +1975,77 @@ fn pattern_to_when<'a>(
     }
 }
 
+fn specialize_suspended<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    suspended: Suspended<'a>,
+) {
+    let offset_variable = StorageSubs::merge_into(suspended.store, env.subs);
+
+    for (i, (symbol, var)) in suspended
+        .symbols
+        .iter()
+        .zip(suspended.variables.iter())
+        .enumerate()
+    {
+        let name = *symbol;
+        let outside_layout = suspended.layouts[i];
+
+        let var = offset_variable(*var);
+
+        // TODO define our own Entry for Specialized?
+        let partial_proc = if procs.specialized.is_specialized(name, &outside_layout) {
+            // already specialized, just continue
+            continue;
+        } else {
+            match procs.partial_procs.symbol_to_id(name) {
+                Some(v) => {
+                    // Mark this proc as in-progress, so if we're dealing with
+                    // mutually recursive functions, we don't loop forever.
+                    // (We had a bug around this before this system existed!)
+                    procs.specialized.mark_in_progress(name, outside_layout);
+
+                    v
+                }
+                None => {
+                    // TODO this assumes the specialization is done by another module
+                    // make sure this does not become a problem down the road!
+                    continue;
+                }
+            }
+        };
+
+        match specialize_variable(env, procs, name, layout_cache, var, &[], partial_proc) {
+            Ok((proc, layout)) => {
+                // TODO thiscode is duplicated elsewhere
+                let top_level = ProcLayout::from_raw(env.arena, layout);
+
+                if procs.is_module_thunk(proc.name) {
+                    debug_assert!(
+                        top_level.arguments.is_empty(),
+                        "{:?} from {:?}",
+                        name,
+                        layout
+                    );
+                }
+
+                debug_assert_eq!(outside_layout, top_level, " in {:?}", name);
+                procs.specialized.insert_specialized(name, top_level, proc);
+            }
+            Err(SpecializeFailure {
+                attempted_layout, ..
+            }) => {
+                let proc = generate_runtime_error_function(env, name, attempted_layout);
+
+                let top_level = ProcLayout::from_raw(env.arena, attempted_layout);
+
+                procs.specialized.insert_specialized(name, top_level, proc);
+            }
+        }
+    }
+}
+
 pub fn specialize_all<'a>(
     env: &mut Env<'a, '_>,
     mut procs: Procs<'a>,
