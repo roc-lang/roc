@@ -1464,9 +1464,9 @@ fn neg_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     buf.extend(&[rex, 0xF7, 0xD8 + reg_mod]);
 }
 
-/// `SETE r/m64` -> Set Byte on Condition - zero/equal (ZF=1)
+// helper function for `set*` instructions
 #[inline(always)]
-fn sete_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
+fn set_reg64_help(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg, value: u8) {
     // XOR needs 3 bytes, actual SETE instruction need 3 or 4 bytes
     buf.reserve(7);
 
@@ -1474,10 +1474,10 @@ fn sete_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     let reg_mod = reg as u8 % 8;
     use X86_64GeneralReg::*;
     match reg {
-        RAX | RCX | RDX | RBX => buf.extend(&[0x0F, 0x94, 0xC0 + reg_mod]),
-        RSP | RBP | RSI | RDI => buf.extend(&[REX, 0x0F, 0x94, 0xC0 + reg_mod]),
+        RAX | RCX | RDX | RBX => buf.extend(&[0x0F, value, 0xC0 + reg_mod]),
+        RSP | RBP | RSI | RDI => buf.extend(&[REX, 0x0F, value, 0xC0 + reg_mod]),
         R8 | R9 | R10 | R11 | R12 | R13 | R14 | R15 => {
-            buf.extend(&[REX + 1, 0x0F, 0x94, 0xC0 + reg_mod])
+            buf.extend(&[REX + 1, 0x0F, value, 0xC0 + reg_mod])
         }
     }
 
@@ -1486,24 +1486,16 @@ fn sete_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     and_reg64_imm8(buf, reg, 1);
 }
 
+/// `SETE r/m64` -> Set Byte on Condition - zero/equal (ZF=1)
+#[inline(always)]
+fn sete_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
+    set_reg64_help(buf, reg, 0x94);
+}
+
 /// `SETNE r/m64` -> Set byte if not equal (ZF=0).
 #[inline(always)]
 fn setne_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
-    // Follow `sete_reg64` implementation.
-    // Change 94 => 95
-    buf.reserve(7);
-
-    let reg_mod = reg as u8 % 8;
-    use X86_64GeneralReg::*;
-    match reg {
-        RAX | RCX | RDX | RBX => buf.extend(&[0x0F, 0x95, 0xC0 + reg_mod]),
-        RSP | RBP | RSI | RDI => buf.extend(&[REX, 0x0F, 0x95, 0xC0 + reg_mod]),
-        R8 | R9 | R10 | R11 | R12 | R13 | R14 | R15 => {
-            buf.extend(&[REX + 1, 0x0F, 0x95, 0xC0 + reg_mod])
-        }
-    }
-
-    and_reg64_imm8(buf, reg, 1);
+    set_reg64_help(buf, reg, 0x95);
 }
 
 /// `RET` -> Near return to calling procedure.
