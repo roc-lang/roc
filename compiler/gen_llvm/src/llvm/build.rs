@@ -4136,7 +4136,7 @@ fn build_proc_header<'a, 'ctx, 'env>(
         env.module,
         fn_name.as_str(),
         fn_type,
-        Linkage::Private,
+        Linkage::Internal,
         FAST_CALL_CONV,
     );
 
@@ -6240,7 +6240,7 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                 env.module,
                 &fastcc_function_name,
                 fastcc_type,
-                Linkage::Private,
+                Linkage::Internal,
                 FAST_CALL_CONV,
             );
 
