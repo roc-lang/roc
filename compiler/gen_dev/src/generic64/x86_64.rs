@@ -1582,6 +1582,34 @@ mod tests {
     }
 
     #[test]
+    fn test_sub_reg64_reg64() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        for ((dst, src), expected) in &[
+            (
+                (X86_64GeneralReg::RAX, X86_64GeneralReg::RAX),
+                [0x48, 0x29, 0xC0],
+            ),
+            (
+                (X86_64GeneralReg::RAX, X86_64GeneralReg::R15),
+                [0x4C, 0x29, 0xF8],
+            ),
+            (
+                (X86_64GeneralReg::R15, X86_64GeneralReg::RAX),
+                [0x49, 0x29, 0xC7],
+            ),
+            (
+                (X86_64GeneralReg::R15, X86_64GeneralReg::R15),
+                [0x4D, 0x29, 0xFF],
+            ),
+        ] {
+            buf.clear();
+            sub_reg64_reg64(&mut buf, *dst, *src);
+            assert_eq!(expected, &buf[..]);
+        }
+    }
+
+    #[test]
     fn test_addsd_freg64_freg64() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
