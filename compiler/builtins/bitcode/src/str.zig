@@ -1698,13 +1698,6 @@ pub fn strTrimRight(string: RocStr) callconv(.C) RocStr {
 
         // nonempty, large, and unique:
 
-        var i: usize = 0;
-        while (i < new_len) : (i += 1) {
-            const dest = bytes_ptr + i;
-            const source = dest;
-            @memcpy(dest, source, 1);
-        }
-
         var new_string = string;
         new_string.str_len = new_len;
 
