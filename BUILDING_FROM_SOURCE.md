@@ -94,7 +94,7 @@ Install nix:
 
 `curl -L https://nixos.org/nix/install | sh`
 
-You will need to use a new terminal to use nix.
+You will need to start a fresh terminal session to use nix.
 
 ### Usage
 
