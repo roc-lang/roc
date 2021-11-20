@@ -1213,16 +1213,8 @@ impl<'a> Layout<'a> {
 }
 
 impl<'a> Builtin<'a> {
-    const I128_SIZE: u32 = std::mem::size_of::<i128>() as u32;
-    const I64_SIZE: u32 = std::mem::size_of::<i64>() as u32;
-    const I32_SIZE: u32 = std::mem::size_of::<i32>() as u32;
-    const I16_SIZE: u32 = std::mem::size_of::<i16>() as u32;
-    const I8_SIZE: u32 = std::mem::size_of::<i8>() as u32;
     const I1_SIZE: u32 = std::mem::size_of::<bool>() as u32;
     const DECIMAL_SIZE: u32 = std::mem::size_of::<i128>() as u32;
-    const F128_SIZE: u32 = 16;
-    const F64_SIZE: u32 = std::mem::size_of::<f64>() as u32;
-    const F32_SIZE: u32 = std::mem::size_of::<f32>() as u32;
 
     /// Number of machine words in an empty one of these
     pub const STR_WORDS: u32 = 2;
