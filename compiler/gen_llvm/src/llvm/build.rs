@@ -22,7 +22,7 @@ use crate::llvm::build_str::{
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
-    basic_type_from_builtin, basic_type_from_layout, basic_type_from_layout_1,
+    self, basic_type_from_builtin, basic_type_from_layout, basic_type_from_layout_1,
     block_of_memory_slices, ptr_int,
 };
 use crate::llvm::refcounting::{
@@ -703,32 +703,31 @@ fn promote_to_main_function<'a, 'ctx, 'env>(
     (main_fn_name, main_fn)
 }
 
-pub fn int_with_precision<'a, 'ctx, 'env>(
+fn int_with_precision<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     value: i128,
-    precision: &Builtin,
+    int_width: IntWidth,
 ) -> IntValue<'ctx> {
-    match precision {
-        Builtin::Usize => ptr_int(env.context, env.ptr_bytes).const_int(value as u64, false),
-        Builtin::Int128 => const_i128(env, value),
-        Builtin::Int64 => env.context.i64_type().const_int(value as u64, false),
-        Builtin::Int32 => env.context.i32_type().const_int(value as u64, false),
-        Builtin::Int16 => env.context.i16_type().const_int(value as u64, false),
-        Builtin::Int8 => env.context.i8_type().const_int(value as u64, false),
-        Builtin::Bool => env.context.bool_type().const_int(value as u64, false),
-        _ => panic!("Invalid layout for int literal = {:?}", precision),
+    use IntWidth::*;
+
+    match int_width {
+        U128 | I128 => const_i128(env, value),
+        U64 | I64 => env.context.i64_type().const_int(value as u64, false),
+        U32 | I32 => env.context.i32_type().const_int(value as u64, false),
+        U16 | I16 => env.context.i16_type().const_int(value as u64, false),
+        U8 | I8 => env.context.i8_type().const_int(value as u64, false),
     }
 }
 
-pub fn float_with_precision<'a, 'ctx, 'env>(
+fn float_with_precision<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     value: f64,
-    precision: &Builtin,
+    float_width: FloatWidth,
 ) -> BasicValueEnum<'ctx> {
-    match precision {
-        Builtin::Float64 => env.context.f64_type().const_float(value).into(),
-        Builtin::Float32 => env.context.f32_type().const_float(value).into(),
-        _ => panic!("Invalid layout for float literal = {:?}", precision),
+    match float_width {
+        FloatWidth::F64 => env.context.f64_type().const_float(value).into(),
+        FloatWidth::F32 => env.context.f32_type().const_float(value).into(),
+        FloatWidth::F128 => todo!("F128 is not implemented"),
     }
 }
 
@@ -741,12 +740,22 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
 
     match literal {
         Int(int) => match layout {
-            Layout::Builtin(builtin) => int_with_precision(env, *int as i128, builtin).into(),
+            Layout::Builtin(Builtin::Bool) => {
+                env.context.bool_type().const_int(*int as u64, false).into()
+            }
+            Layout::Builtin(Builtin::Usize) => ptr_int(env.context, env.ptr_bytes)
+                .const_int(*int as u64, false)
+                .into(),
+            Layout::Builtin(Builtin::Int(int_width)) => {
+                int_with_precision(env, *int as i128, *int_width).into()
+            }
             _ => panic!("Invalid layout for int literal = {:?}", layout),
         },
 
         Float(float) => match layout {
-            Layout::Builtin(builtin) => float_with_precision(env, *float, builtin),
+            Layout::Builtin(Builtin::Float(float_width)) => {
+                float_with_precision(env, *float, *float_width)
+            }
             _ => panic!("Invalid layout for float literal = {:?}", layout),
         },
 
@@ -3044,20 +3053,18 @@ fn build_switch_ir<'a, 'ctx, 'env>(
 
     // Build the condition
     let cond = match cond_layout {
-        Layout::Builtin(Builtin::Float64) => {
+        Layout::Builtin(Builtin::Float(float_width)) => {
             // float matches are done on the bit pattern
-            cond_layout = Layout::Builtin(Builtin::Int64);
+            cond_layout = Layout::float_width(float_width);
+
+            let int_type = match float_width {
+                FloatWidth::F32 => env.context.i32_type(),
+                FloatWidth::F64 => env.context.i64_type(),
+                FloatWidth::F128 => env.context.i128_type(),
+            };
 
             builder
-                .build_bitcast(cond_value, env.context.i64_type(), "")
-                .into_int_value()
-        }
-        Layout::Builtin(Builtin::Float32) => {
-            // float matches are done on the bit pattern
-            cond_layout = Layout::Builtin(Builtin::Int32);
-
-            builder
-                .build_bitcast(cond_value, env.context.i32_type(), "")
+                .build_bitcast(cond_value, int_type, "")
                 .into_int_value()
         }
         Layout::Union(variant) => {
@@ -3433,7 +3440,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
         call_roc_function(
             env,
             roc_wrapper_function,
-            &Layout::Struct(&[Layout::Builtin(Builtin::Int64), return_layout]),
+            &Layout::Struct(&[Layout::u64(), return_layout]),
             arguments_for_call,
         )
     };
@@ -3811,11 +3818,7 @@ fn make_exception_catcher<'a, 'ctx, 'env>(
 }
 
 fn roc_result_layout<'a>(arena: &'a Bump, return_layout: Layout<'a>) -> Layout<'a> {
-    let elements = [
-        Layout::Builtin(Builtin::Int64),
-        Layout::Builtin(Builtin::Usize),
-        return_layout,
-    ];
+    let elements = [Layout::u64(), Layout::usize(), return_layout];
 
     Layout::Struct(arena.alloc(elements))
 }
@@ -5553,17 +5556,13 @@ fn run_low_level<'a, 'ctx, 'env>(
                     use roc_mono::layout::Builtin::*;
 
                     match arg_builtin {
-                        Usize | Int128 | Int64 | Int32 | Int16 | Int8 => {
-                            build_int_unary_op(env, arg.into_int_value(), arg_builtin, op)
+                        Usize | Int(_) => {
+                            let int_width = intwidth_from_builtin(*arg_builtin, env.ptr_bytes);
+                            let int_type = convert::int_type_from_int_width(env, int_width);
+                            build_int_unary_op(env, arg.into_int_value(), int_type, op)
                         }
-                        Float32 => {
-                            build_float_unary_op(env, arg.into_float_value(), op, FloatWidth::F32)
-                        }
-                        Float64 => {
-                            build_float_unary_op(env, arg.into_float_value(), op, FloatWidth::F64)
-                        }
-                        Float128 => {
-                            build_float_unary_op(env, arg.into_float_value(), op, FloatWidth::F128)
+                        Float(float_width) => {
+                            build_float_unary_op(env, arg.into_float_value(), op, *float_width)
                         }
                         _ => {
                             unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, arg_layout);
@@ -5633,15 +5632,22 @@ fn run_low_level<'a, 'ctx, 'env>(
                     let tag_lt = env.context.i8_type().const_int(2_u64, false);
 
                     match lhs_builtin {
-                        Usize | Int128 | Int64 | Int32 | Int16 | Int8 => {
+                        Int(int_width) => {
                             let are_equal = env.builder.build_int_compare(
                                 IntPredicate::EQ,
                                 lhs_arg.into_int_value(),
                                 rhs_arg.into_int_value(),
                                 "int_eq",
                             );
+
+                            let predicate = if int_width.is_signed() {
+                                IntPredicate::SLT
+                            } else {
+                                IntPredicate::ULT
+                            };
+
                             let is_less_than = env.builder.build_int_compare(
-                                IntPredicate::SLT,
+                                predicate,
                                 lhs_arg.into_int_value(),
                                 rhs_arg.into_int_value(),
                                 "int_compare",
@@ -5658,7 +5664,32 @@ fn run_low_level<'a, 'ctx, 'env>(
                                 "lt_or_gt",
                             )
                         }
-                        Float128 | Float64 | Float32 => {
+                        Usize => {
+                            let are_equal = env.builder.build_int_compare(
+                                IntPredicate::EQ,
+                                lhs_arg.into_int_value(),
+                                rhs_arg.into_int_value(),
+                                "int_eq",
+                            );
+                            let is_less_than = env.builder.build_int_compare(
+                                IntPredicate::ULT,
+                                lhs_arg.into_int_value(),
+                                rhs_arg.into_int_value(),
+                                "int_compare",
+                            );
+
+                            let step1 =
+                                env.builder
+                                    .build_select(is_less_than, tag_lt, tag_gt, "lt_or_gt");
+
+                            env.builder.build_select(
+                                are_equal,
+                                tag_eq,
+                                step1.into_int_value(),
+                                "lt_or_gt",
+                            )
+                        }
+                        Float(_) => {
                             let are_equal = env.builder.build_float_compare(
                                 FloatPredicate::OEQ,
                                 lhs_arg.into_float_value(),
@@ -5711,13 +5742,15 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (lhs_arg, lhs_layout) = load_symbol_and_layout(scope, &args[0]);
             let (rhs_arg, rhs_layout) = load_symbol_and_layout(scope, &args[1]);
 
+            debug_assert_eq!(lhs_layout, rhs_layout);
+            let int_width = intwidth_from_layout(*lhs_layout, env.ptr_bytes);
+
             build_int_binop(
                 env,
                 parent,
+                int_width,
                 lhs_arg.into_int_value(),
-                lhs_layout,
                 rhs_arg.into_int_value(),
-                rhs_layout,
                 op,
             )
         }
@@ -5727,13 +5760,15 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (lhs_arg, lhs_layout) = load_symbol_and_layout(scope, &args[0]);
             let (rhs_arg, rhs_layout) = load_symbol_and_layout(scope, &args[1]);
 
+            debug_assert_eq!(lhs_layout, rhs_layout);
+            let int_width = intwidth_from_layout(*lhs_layout, env.ptr_bytes);
+
             build_int_binop(
                 env,
                 parent,
+                int_width,
                 lhs_arg.into_int_value(),
-                lhs_layout,
                 rhs_arg.into_int_value(),
-                rhs_layout,
                 op,
             )
         }
@@ -6096,17 +6131,9 @@ fn to_cc_type_builtin<'a, 'ctx, 'env>(
     builtin: &Builtin<'a>,
 ) -> BasicTypeEnum<'ctx> {
     match builtin {
-        Builtin::Int128
-        | Builtin::Int64
-        | Builtin::Int32
-        | Builtin::Int16
-        | Builtin::Int8
-        | Builtin::Bool
-        | Builtin::Usize
-        | Builtin::Decimal
-        | Builtin::Float128
-        | Builtin::Float64
-        | Builtin::Float32 => basic_type_from_builtin(env, builtin),
+        Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Usize | Builtin::Decimal => {
+            basic_type_from_builtin(env, builtin)
+        }
         Builtin::Str | Builtin::EmptyStr | Builtin::List(_) | Builtin::EmptyList => {
             env.str_list_c_abi().into()
         }
@@ -6329,11 +6356,7 @@ pub fn intwidth_from_builtin(builtin: Builtin<'_>, ptr_bytes: u32) -> IntWidth {
     use IntWidth::*;
 
     match builtin {
-        Builtin::Int128 => I128,
-        Builtin::Int64 => I64,
-        Builtin::Int32 => I32,
-        Builtin::Int16 => I16,
-        Builtin::Int8 => I8,
+        Builtin::Int(int_width) => int_width,
         Builtin::Usize => match ptr_bytes {
             4 => I32,
             8 => I64,
@@ -6353,18 +6376,15 @@ fn intwidth_from_layout(layout: Layout<'_>, ptr_bytes: u32) -> IntWidth {
 fn build_int_binop<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
+    int_width: IntWidth,
     lhs: IntValue<'ctx>,
-    lhs_layout: &Layout<'a>,
     rhs: IntValue<'ctx>,
-    _rhs_layout: &Layout<'a>,
     op: LowLevel,
 ) -> BasicValueEnum<'ctx> {
     use inkwell::IntPredicate::*;
     use roc_module::low_level::LowLevel::*;
 
     let bd = env.builder;
-
-    let int_width = intwidth_from_layout(*lhs_layout, env.ptr_bytes);
 
     match op {
         NumAdd => {
@@ -6541,27 +6561,35 @@ pub fn build_num_binop<'a, 'ctx, 'env>(
                 build_float_binop(
                     env,
                     parent,
+                    float_width,
                     lhs_arg.into_float_value(),
                     rhs_arg.into_float_value(),
-                    float_width,
                     op,
                 )
             };
 
             match lhs_builtin {
-                Usize | Int128 | Int64 | Int32 | Int16 | Int8 => build_int_binop(
+                Usize => {
+                    let int_width = intwidth_from_builtin(*lhs_builtin, env.ptr_bytes);
+                    build_int_binop(
+                        env,
+                        parent,
+                        int_width,
+                        lhs_arg.into_int_value(),
+                        rhs_arg.into_int_value(),
+                        op,
+                    )
+                }
+                Int(int_width) => build_int_binop(
                     env,
                     parent,
+                    *int_width,
                     lhs_arg.into_int_value(),
-                    lhs_layout,
                     rhs_arg.into_int_value(),
-                    rhs_layout,
                     op,
                 ),
 
-                Float32 => float_binop(FloatWidth::F32),
-                Float64 => float_binop(FloatWidth::F64),
-                Float128 => float_binop(FloatWidth::F128),
+                Float(float_width) => float_binop(*float_width),
 
                 Decimal => {
                     build_dec_binop(env, parent, lhs_arg, lhs_layout, rhs_arg, rhs_layout, op)
@@ -6580,9 +6608,9 @@ pub fn build_num_binop<'a, 'ctx, 'env>(
 fn build_float_binop<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
+    float_width: FloatWidth,
     lhs: FloatValue<'ctx>,
     rhs: FloatValue<'ctx>,
-    float_width: FloatWidth,
     op: LowLevel,
 ) -> BasicValueEnum<'ctx> {
     use inkwell::FloatPredicate::*;
@@ -6843,20 +6871,10 @@ fn int_type_signed_min(int_type: IntType) -> IntValue {
     }
 }
 
-fn builtin_to_int_type<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    builtin: &Builtin<'a>,
-) -> IntType<'ctx> {
-    let result = basic_type_from_builtin(env, builtin);
-    debug_assert!(result.is_int_type());
-
-    result.into_int_type()
-}
-
 fn build_int_unary_op<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     arg: IntValue<'ctx>,
-    arg_layout: &Builtin<'a>,
+    int_type: IntType<'ctx>,
     op: LowLevel,
 ) -> BasicValueEnum<'ctx> {
     use roc_module::low_level::LowLevel::*;
@@ -6866,11 +6884,11 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
     match op {
         NumNeg => {
             // integer abs overflows when applied to the minimum value of a signed type
-            int_neg_raise_on_overflow(env, arg, arg_layout)
+            int_neg_raise_on_overflow(env, arg, int_type)
         }
         NumAbs => {
             // integer abs overflows when applied to the minimum value of a signed type
-            int_abs_raise_on_overflow(env, arg, arg_layout)
+            int_abs_raise_on_overflow(env, arg, int_type)
         }
         NumToFloat => {
             // TODO: Handle different sized numbers
@@ -6891,11 +6909,11 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
 fn int_neg_raise_on_overflow<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     arg: IntValue<'ctx>,
-    builtin: &Builtin<'a>,
+    int_type: IntType<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let min_val = int_type_signed_min(builtin_to_int_type(env, builtin));
+    let min_val = int_type_signed_min(int_type);
     let condition = builder.build_int_compare(IntPredicate::EQ, arg, min_val, "is_min_val");
 
     let block = env.builder.get_insert_block().expect("to be in a function");
@@ -6921,11 +6939,11 @@ fn int_neg_raise_on_overflow<'a, 'ctx, 'env>(
 fn int_abs_raise_on_overflow<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     arg: IntValue<'ctx>,
-    builtin: &Builtin<'a>,
+    int_type: IntType<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let min_val = int_type_signed_min(builtin_to_int_type(env, builtin));
+    let min_val = int_type_signed_min(int_type);
     let condition = builder.build_int_compare(IntPredicate::EQ, arg, min_val, "is_min_val");
 
     let block = env.builder.get_insert_block().expect("to be in a function");
@@ -6945,13 +6963,13 @@ fn int_abs_raise_on_overflow<'a, 'ctx, 'env>(
 
     builder.position_at_end(else_block);
 
-    int_abs_with_overflow(env, arg, builtin)
+    int_abs_with_overflow(env, arg, int_type)
 }
 
 fn int_abs_with_overflow<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     arg: IntValue<'ctx>,
-    arg_layout: &Builtin<'a>,
+    int_type: IntType<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     // This is how libc's abs() is implemented - it uses no branching!
     //
@@ -6964,10 +6982,10 @@ fn int_abs_with_overflow<'a, 'ctx, 'env>(
     let ctx = env.context;
     let shifted_name = "abs_shift_right";
     let shifted_alloca = {
-        let bits_to_shift = ((arg_layout.stack_size(env.ptr_bytes) as u64) * 8) - 1;
+        let bits_to_shift = int_type.get_bit_width() as u64 - 1;
         let shift_val = ctx.i64_type().const_int(bits_to_shift, false);
         let shifted = bd.build_right_shift(arg, shift_val, true, shifted_name);
-        let alloca = bd.build_alloca(basic_type_from_builtin(env, arg_layout), "#int_abs_help");
+        let alloca = bd.build_alloca(int_type, "#int_abs_help");
 
         // shifted = arg >>> 63
         bd.build_store(alloca, shifted);

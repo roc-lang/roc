@@ -78,19 +78,24 @@ impl FloatWidth {
 #[repr(u8)]
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub enum IntWidth {
-    U8,
-    U16,
-    U32,
-    U64,
-    U128,
-    I8,
-    I16,
-    I32,
-    I64,
-    I128,
+    U8 = 0,
+    U16 = 1,
+    U32 = 2,
+    U64 = 3,
+    U128 = 4,
+    I8 = 5,
+    I16 = 6,
+    I32 = 7,
+    I64 = 8,
+    I128 = 9,
 }
 
 impl IntWidth {
+    pub const fn is_signed(&self) -> bool {
+        use IntWidth::*;
+
+        matches!(self, I8 | I16 | I32 | I64 | I128)
+    }
     pub const fn stack_size(&self) -> u32 {
         use IntWidth::*;
 

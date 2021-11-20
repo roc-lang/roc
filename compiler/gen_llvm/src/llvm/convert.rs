@@ -1,7 +1,8 @@
 use bumpalo::collections::Vec;
 use inkwell::context::Context;
-use inkwell::types::{BasicType, BasicTypeEnum, IntType, StructType};
+use inkwell::types::{BasicType, BasicTypeEnum, FloatType, IntType, StructType};
 use inkwell::AddressSpace;
+use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
 
 fn basic_type_from_record<'a, 'ctx, 'env>(
@@ -146,21 +147,43 @@ pub fn basic_type_from_builtin<'a, 'ctx, 'env>(
     let ptr_bytes = env.ptr_bytes;
 
     match builtin {
-        Int128 => context.i128_type().as_basic_type_enum(),
-        Int64 => context.i64_type().as_basic_type_enum(),
-        Int32 => context.i32_type().as_basic_type_enum(),
-        Int16 => context.i16_type().as_basic_type_enum(),
-        Int8 => context.i8_type().as_basic_type_enum(),
+        Int(int_width) => int_type_from_int_width(env, *int_width).as_basic_type_enum(),
+        Float(float_width) => float_type_from_float_width(env, *float_width).as_basic_type_enum(),
         Bool => context.bool_type().as_basic_type_enum(),
         Usize => ptr_int(context, ptr_bytes).as_basic_type_enum(),
         Decimal => context.i128_type().as_basic_type_enum(),
-        Float128 => context.f128_type().as_basic_type_enum(),
-        Float64 => context.f64_type().as_basic_type_enum(),
-        Float32 => context.f32_type().as_basic_type_enum(),
         Dict(_, _) | EmptyDict => zig_dict_type(env).into(),
         Set(_) | EmptySet => zig_dict_type(env).into(),
         List(_) | EmptyList => zig_list_type(env).into(),
         Str | EmptyStr => zig_str_type(env).into(),
+    }
+}
+
+pub fn int_type_from_int_width<'a, 'ctx, 'env>(
+    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
+    int_width: IntWidth,
+) -> IntType<'ctx> {
+    use IntWidth::*;
+
+    match int_width {
+        U128 | I128 => env.context.i128_type(),
+        U64 | I64 => env.context.i64_type(),
+        U32 | I32 => env.context.i32_type(),
+        U16 | I16 => env.context.i16_type(),
+        U8 | I8 => env.context.i8_type(),
+    }
+}
+
+pub fn float_type_from_float_width<'a, 'ctx, 'env>(
+    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
+    float_width: FloatWidth,
+) -> FloatType<'ctx> {
+    use FloatWidth::*;
+
+    match float_width {
+        F128 => todo!("F128 is not implemented"),
+        F64 => env.context.f64_type(),
+        F32 => env.context.f32_type(),
     }
 }
 

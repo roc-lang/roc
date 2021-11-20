@@ -183,7 +183,7 @@ pub fn list_reverse<'a, 'ctx, 'env>(
     let element_layout = match *list_layout {
         Layout::Builtin(Builtin::EmptyList) => {
             // this pointer will never actually be dereferenced
-            Layout::Builtin(Builtin::Int64)
+            Layout::i64()
         }
 
         Layout::Builtin(Builtin::List(elem_layout)) => *elem_layout,

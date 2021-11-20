@@ -13,7 +13,7 @@ use roc_mono::layout::{Builtin, Layout};
 
 use super::build::{intwidth_from_builtin, load_symbol, load_symbol_and_layout};
 
-pub static CHAR_LAYOUT: Layout = Layout::Builtin(Builtin::Int8);
+pub static CHAR_LAYOUT: Layout = Layout::u8();
 
 /// Str.repeat : Str, Nat -> Str
 pub fn str_repeat<'a, 'ctx, 'env>(
@@ -289,15 +289,11 @@ pub fn str_from_int<'a, 'ctx, 'env>(
 
     match int_layout {
         Layout::Builtin(builtin) => match builtin {
-            Builtin::Usize
-            | Builtin::Int128
-            | Builtin::Int64
-            | Builtin::Int32
-            | Builtin::Int16
-            | Builtin::Int8 => {
+            Builtin::Usize | Builtin::Int(_) => {
                 let intwidth = intwidth_from_builtin(*builtin, env.ptr_bytes);
                 call_bitcode_fn(env, &[int], &bitcode::STR_FROM_INT[intwidth])
             }
+
             _ => {
                 unreachable!(
                     "Compiler bug: tried to convert numeric on invalid builtin layout: ({:?})",

@@ -1167,7 +1167,7 @@ impl<'a> Layout<'a> {
         Layout::Builtin(Builtin::Bool)
     }
 
-    pub fn u8() -> Layout<'a> {
+    pub const fn u8() -> Layout<'a> {
         Layout::Builtin(Builtin::Int(IntWidth::U8))
     }
 
