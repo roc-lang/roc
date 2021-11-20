@@ -128,7 +128,7 @@ fn hash_builtin<'a, 'ctx, 'env>(
         | Builtin::Int32
         | Builtin::Int16
         | Builtin::Int8
-        | Builtin::Int1
+        | Builtin::Bool
         | Builtin::Float64
         | Builtin::Float32
         | Builtin::Float128

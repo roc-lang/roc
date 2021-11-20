@@ -328,7 +328,7 @@ impl<'a> WasmBackend<'a> {
                     self.start_block(BlockType::NoResult)
                 }
 
-                let is_bool = matches!(cond_layout, Layout::Builtin(Builtin::Int1));
+                let is_bool = matches!(cond_layout, Layout::Builtin(Builtin::Bool));
                 let cond_type = WasmLayout::new(cond_layout).value_type();
 
                 // then, we jump whenever the value under scrutiny is equal to the value of a branch

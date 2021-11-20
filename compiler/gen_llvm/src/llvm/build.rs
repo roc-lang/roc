@@ -715,7 +715,7 @@ pub fn int_with_precision<'a, 'ctx, 'env>(
         Builtin::Int32 => env.context.i32_type().const_int(value as u64, false),
         Builtin::Int16 => env.context.i16_type().const_int(value as u64, false),
         Builtin::Int8 => env.context.i8_type().const_int(value as u64, false),
-        Builtin::Int1 => env.context.bool_type().const_int(value as u64, false),
+        Builtin::Bool => env.context.bool_type().const_int(value as u64, false),
         _ => panic!("Invalid layout for int literal = {:?}", precision),
     }
 }
@@ -3072,7 +3072,7 @@ fn build_switch_ir<'a, 'ctx, 'env>(
     // Build the cases
     let mut incoming = Vec::with_capacity_in(branches.len(), arena);
 
-    if let Layout::Builtin(Builtin::Int1) = cond_layout {
+    if let Layout::Builtin(Builtin::Bool) = cond_layout {
         match (branches, default_branch) {
             ([(0, _, false_branch)], true_branch) | ([(1, _, true_branch)], false_branch) => {
                 let then_block = context.append_basic_block(parent, "then_block");
@@ -5133,7 +5133,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
-                        Layout::Builtin(Builtin::Int1),
+                        Layout::Builtin(Builtin::Bool),
                     );
 
                     list_any(env, roc_function_call, list, element_layout)
@@ -5160,7 +5160,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
-                        Layout::Builtin(Builtin::Int1),
+                        Layout::Builtin(Builtin::Bool),
                     );
 
                     list_all(env, roc_function_call, list, element_layout)
@@ -5193,7 +5193,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
-                        Layout::Builtin(Builtin::Int1),
+                        Layout::Builtin(Builtin::Bool),
                     );
                     list_find_unsafe(env, layout_ids, roc_function_call, list, element_layout)
                 }
@@ -6101,7 +6101,7 @@ fn to_cc_type_builtin<'a, 'ctx, 'env>(
         | Builtin::Int32
         | Builtin::Int16
         | Builtin::Int8
-        | Builtin::Int1
+        | Builtin::Bool
         | Builtin::Usize
         | Builtin::Decimal
         | Builtin::Float128

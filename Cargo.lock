@@ -3458,6 +3458,7 @@ dependencies = [
  "bumpalo",
  "hashbrown 0.11.2",
  "morphic_lib",
+ "roc_builtins",
  "roc_can",
  "roc_collections",
  "roc_module",

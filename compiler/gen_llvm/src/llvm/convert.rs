@@ -151,7 +151,7 @@ pub fn basic_type_from_builtin<'a, 'ctx, 'env>(
         Int32 => context.i32_type().as_basic_type_enum(),
         Int16 => context.i16_type().as_basic_type_enum(),
         Int8 => context.i8_type().as_basic_type_enum(),
-        Int1 => context.bool_type().as_basic_type_enum(),
+        Bool => context.bool_type().as_basic_type_enum(),
         Usize => ptr_int(context, ptr_bytes).as_basic_type_enum(),
         Decimal => context.i128_type().as_basic_type_enum(),
         Float128 => context.f128_type().as_basic_type_enum(),

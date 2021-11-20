@@ -71,7 +71,7 @@ fn jit_to_ast_help<'a>(
     content: &Content,
 ) -> Result<Expr<'a>, ToAstProblem> {
     match layout {
-        Layout::Builtin(Builtin::Int1) => Ok(run_jit_function!(lib, main_fn_name, bool, |num| {
+        Layout::Builtin(Builtin::Bool) => Ok(run_jit_function!(lib, main_fn_name, bool, |num| {
             bool_to_ast(env, num, content)
         })),
         Layout::Builtin(Builtin::Int8) => {
@@ -248,7 +248,7 @@ fn jit_to_ast_help<'a>(
                                                 .unwrap_or(0);
 
                                             let tag_id = match union_layout.tag_id_builtin() {
-                                                Builtin::Int1 => {
+                                                Builtin::Bool => {
                                                     *(ptr.add(offset as usize) as *const i8) as i64
                                                 }
                                                 Builtin::Int8 => {
@@ -406,7 +406,7 @@ fn ptr_to_ast<'a>(
 
             num_to_ast(env, number_literal_to_ast(env.arena, num), content)
         }
-        Layout::Builtin(Builtin::Int1) => {
+        Layout::Builtin(Builtin::Bool) => {
             // TODO: bits are not as expected here.
             // num is always false at the moment.
             let num = unsafe { *(ptr as *const bool) };

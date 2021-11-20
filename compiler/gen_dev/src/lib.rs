@@ -410,7 +410,7 @@ where
                     "Eq: expected all arguments of to have the same layout"
                 );
                 debug_assert_eq!(
-                    Layout::Builtin(Builtin::Int1),
+                    Layout::Builtin(Builtin::Bool),
                     *ret_layout,
                     "Eq: expected to have return layout of type I1"
                 );
@@ -427,7 +427,7 @@ where
                     "NotEq: expected all arguments of to have the same layout"
                 );
                 debug_assert_eq!(
-                    Layout::Builtin(Builtin::Int1),
+                    Layout::Builtin(Builtin::Bool),
                     *ret_layout,
                     "NotEq: expected to have return layout of type I1"
                 );

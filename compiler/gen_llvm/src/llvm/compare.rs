@@ -93,7 +93,7 @@ fn build_eq_builtin<'a, 'ctx, 'env>(
         Builtin::Int32 => int_cmp(IntPredicate::EQ, "eq_i32"),
         Builtin::Int16 => int_cmp(IntPredicate::EQ, "eq_i16"),
         Builtin::Int8 => int_cmp(IntPredicate::EQ, "eq_i8"),
-        Builtin::Int1 => int_cmp(IntPredicate::EQ, "eq_i1"),
+        Builtin::Bool => int_cmp(IntPredicate::EQ, "eq_i1"),
 
         Builtin::Usize => int_cmp(IntPredicate::EQ, "eq_usize"),
 
@@ -236,7 +236,7 @@ fn build_neq_builtin<'a, 'ctx, 'env>(
         Builtin::Int32 => int_cmp(IntPredicate::NE, "neq_i32"),
         Builtin::Int16 => int_cmp(IntPredicate::NE, "neq_i16"),
         Builtin::Int8 => int_cmp(IntPredicate::NE, "neq_i8"),
-        Builtin::Int1 => int_cmp(IntPredicate::NE, "neq_i1"),
+        Builtin::Bool => int_cmp(IntPredicate::NE, "neq_i1"),
 
         Builtin::Usize => int_cmp(IntPredicate::NE, "neq_usize"),
 

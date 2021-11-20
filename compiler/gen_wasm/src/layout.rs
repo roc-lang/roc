@@ -26,7 +26,7 @@ impl WasmLayout {
         let alignment_bytes = layout.alignment_bytes(PTR_SIZE);
 
         match layout {
-            Layout::Builtin(Int32 | Int16 | Int8 | Int1 | Usize) => Self::Primitive(I32, size),
+            Layout::Builtin(Int32 | Int16 | Int8 | Bool | Usize) => Self::Primitive(I32, size),
 
             Layout::Builtin(Int64) => Self::Primitive(I64, size),
 
