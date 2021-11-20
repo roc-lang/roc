@@ -1,6 +1,7 @@
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use libloading::Library;
+use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
 use roc_module::called_via::CalledVia;
 use roc_module::ident::TagName;
@@ -74,57 +75,55 @@ fn jit_to_ast_help<'a>(
         Layout::Builtin(Builtin::Bool) => Ok(run_jit_function!(lib, main_fn_name, bool, |num| {
             bool_to_ast(env, num, content)
         })),
-        Layout::Builtin(Builtin::Int8) => {
-            Ok(
-                // NOTE: this is does not handle 8-bit numbers yet
-                run_jit_function!(lib, main_fn_name, u8, |num| byte_to_ast(env, num, content)),
-            )
-        }
         Layout::Builtin(Builtin::Usize) => Ok(run_jit_function!(lib, main_fn_name, usize, |num| {
             num_to_ast(env, number_literal_to_ast(env.arena, num), content)
         })),
-        Layout::Builtin(Builtin::Int16) => {
-            Ok(run_jit_function!(lib, main_fn_name, i16, |num| num_to_ast(
-                env,
-                number_literal_to_ast(env.arena, num),
-                content
-            )))
+        Layout::Builtin(Builtin::Int(int_width)) => {
+            use IntWidth::*;
+
+            macro_rules! helper {
+                ($ty:ty) => {
+                    run_jit_function!(lib, main_fn_name, $ty, |num| num_to_ast(
+                        env,
+                        number_literal_to_ast(env.arena, num),
+                        content
+                    ))
+                };
+            }
+
+            let result = match int_width {
+                U8 | I8 => {
+                    // NOTE: this is does not handle 8-bit numbers yet
+                    run_jit_function!(lib, main_fn_name, u8, |num| byte_to_ast(env, num, content))
+                }
+                U16 | I16 => helper!(u16),
+                U32 | I32 => helper!(u32),
+                U64 | I64 => helper!(u64),
+                U128 | I128 => helper!(u128),
+            };
+
+            Ok(result)
         }
-        Layout::Builtin(Builtin::Int32) => {
-            Ok(run_jit_function!(lib, main_fn_name, i32, |num| num_to_ast(
-                env,
-                number_literal_to_ast(env.arena, num),
-                content
-            )))
-        }
-        Layout::Builtin(Builtin::Int64) => {
-            Ok(run_jit_function!(lib, main_fn_name, i64, |num| num_to_ast(
-                env,
-                number_literal_to_ast(env.arena, num),
-                content
-            )))
-        }
-        Layout::Builtin(Builtin::Int128) => {
-            Ok(run_jit_function!(
-                lib,
-                main_fn_name,
-                i128,
-                |num| num_to_ast(env, number_literal_to_ast(env.arena, num), content)
-            ))
-        }
-        Layout::Builtin(Builtin::Float32) => {
-            Ok(run_jit_function!(lib, main_fn_name, f32, |num| num_to_ast(
-                env,
-                number_literal_to_ast(env.arena, num),
-                content
-            )))
-        }
-        Layout::Builtin(Builtin::Float64) => {
-            Ok(run_jit_function!(lib, main_fn_name, f64, |num| num_to_ast(
-                env,
-                number_literal_to_ast(env.arena, num),
-                content
-            )))
+        Layout::Builtin(Builtin::Float(float_width)) => {
+            use FloatWidth::*;
+
+            macro_rules! helper {
+                ($ty:ty) => {
+                    run_jit_function!(lib, main_fn_name, $ty, |num| num_to_ast(
+                        env,
+                        number_literal_to_ast(env.arena, num),
+                        content
+                    ))
+                };
+            }
+
+            let result = match float_width {
+                F32 => helper!(f32),
+                F64 => helper!(f64),
+                F128 => todo!("F128 not implemented"),
+            };
+
+            Ok(result)
         }
         Layout::Builtin(Builtin::Str) | Layout::Builtin(Builtin::EmptyStr) => Ok(
             run_jit_function!(lib, main_fn_name, &'static str, |string: &'static str| {
@@ -192,7 +191,7 @@ fn jit_to_ast_help<'a>(
                 }
             };
 
-            let fields = [Layout::Builtin(Builtin::Int64), *layout];
+            let fields = [Layout::u64(), *layout];
             let layout = Layout::Struct(&fields);
 
             let result_stack_size = layout.stack_size(env.ptr_bytes);
@@ -251,13 +250,13 @@ fn jit_to_ast_help<'a>(
                                                 Builtin::Bool => {
                                                     *(ptr.add(offset as usize) as *const i8) as i64
                                                 }
-                                                Builtin::Int8 => {
+                                                Builtin::Int(IntWidth::U8) => {
                                                     *(ptr.add(offset as usize) as *const i8) as i64
                                                 }
-                                                Builtin::Int16 => {
+                                                Builtin::Int(IntWidth::U16) => {
                                                     *(ptr.add(offset as usize) as *const i16) as i64
                                                 }
-                                                Builtin::Int64 => {
+                                                Builtin::Int(IntWidth::U64) => {
                                                     // used by non-recursive unions at the
                                                     // moment, remove if that is no longer the case
                                                     *(ptr.add(offset as usize) as *const i64) as i64
@@ -380,32 +379,15 @@ fn ptr_to_ast<'a>(
     layout: &Layout<'a>,
     content: &Content,
 ) -> Expr<'a> {
+    macro_rules! helper {
+        ($ty:ty) => {{
+            let num = unsafe { *(ptr as *const $ty) };
+
+            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
+        }};
+    }
+
     match layout {
-        Layout::Builtin(Builtin::Int128) => {
-            let num = unsafe { *(ptr as *const i128) };
-
-            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
-        }
-        Layout::Builtin(Builtin::Int64) => {
-            let num = unsafe { *(ptr as *const i64) };
-
-            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
-        }
-        Layout::Builtin(Builtin::Int32) => {
-            let num = unsafe { *(ptr as *const i32) };
-
-            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
-        }
-        Layout::Builtin(Builtin::Int16) => {
-            let num = unsafe { *(ptr as *const i16) };
-
-            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
-        }
-        Layout::Builtin(Builtin::Int8) => {
-            let num = unsafe { *(ptr as *const i8) };
-
-            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
-        }
         Layout::Builtin(Builtin::Bool) => {
             // TODO: bits are not as expected here.
             // num is always false at the moment.
@@ -413,20 +395,31 @@ fn ptr_to_ast<'a>(
 
             bool_to_ast(env, num, content)
         }
-        Layout::Builtin(Builtin::Usize) => {
-            let num = unsafe { *(ptr as *const usize) };
+        Layout::Builtin(Builtin::Int(int_width)) => {
+            use IntWidth::*;
 
-            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
+            match int_width {
+                U8 => helper!(u8),
+                U16 => helper!(u16),
+                U32 => helper!(u32),
+                U64 => helper!(u64),
+                U128 => helper!(u128),
+                I8 => helper!(i8),
+                I16 => helper!(i16),
+                I32 => helper!(i32),
+                I64 => helper!(i64),
+                I128 => helper!(i128),
+            }
         }
-        Layout::Builtin(Builtin::Float64) => {
-            let num = unsafe { *(ptr as *const f64) };
+        Layout::Builtin(Builtin::Usize) => helper!(usize),
+        Layout::Builtin(Builtin::Float(float_width)) => {
+            use FloatWidth::*;
 
-            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
-        }
-        Layout::Builtin(Builtin::Float32) => {
-            let num = unsafe { *(ptr as *const f32) };
-
-            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
+            match float_width {
+                F32 => helper!(f32),
+                F64 => helper!(f64),
+                F128 => todo!("F128 not implemented"),
+            }
         }
         Layout::Builtin(Builtin::EmptyList) => Expr::List(Collection::empty()),
         Layout::Builtin(Builtin::List(elem_layout)) => {
