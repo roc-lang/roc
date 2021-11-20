@@ -3042,15 +3042,28 @@ pub fn deep_copy_var_to(
     // capacity based on the false hello world program
     let arena = bumpalo::Bump::with_capacity(4 * 1024);
 
-    let copy = deep_copy_var_to_help(&arena, source, target, rank, var);
+    let mut visited = bumpalo::collections::Vec::with_capacity_in(256, &arena);
 
-    source.restore(var);
+    let copy = deep_copy_var_to_help(&arena, &mut visited, source, target, rank, var);
+
+    // we have tracked all visited variables, and can now traverse them
+    // in one go (without looking at the UnificationTable) and clear the copy field
+    for var in visited {
+        let descriptor = source.get_ref_mut(var);
+
+        if descriptor.copy.is_some() {
+            descriptor.rank = Rank::NONE;
+            descriptor.mark = Mark::NONE;
+            descriptor.copy = OptVariable::NONE;
+        }
+    }
 
     copy
 }
 
 fn deep_copy_var_to_help<'a>(
     arena: &'a bumpalo::Bump,
+    visited: &mut bumpalo::collections::Vec<'a, Variable>,
     source: &mut Subs,
     target: &mut Subs,
     max_rank: Rank,
@@ -3066,7 +3079,7 @@ fn deep_copy_var_to_help<'a>(
         debug_assert!(target.contains(copy));
         return copy;
     } else if desc.rank != Rank::NONE {
-        // DO NOTHING
+        // DO NOTHING, Fall through
         //
         // The original deep_copy_var can do
         // return var;
@@ -3074,6 +3087,8 @@ fn deep_copy_var_to_help<'a>(
         // but we cannot, because this `var` is in the source, not the target, and we
         // should only return variables in the target
     }
+
+    visited.push(var);
 
     let make_descriptor = |content| Descriptor {
         content,
@@ -3104,7 +3119,9 @@ fn deep_copy_var_to_help<'a>(
 
                     for index in args.into_iter() {
                         let var = source[index];
-                        new_args.push(deep_copy_var_to_help(arena, source, target, max_rank, var));
+                        new_args.push(deep_copy_var_to_help(
+                            arena, visited, source, target, max_rank, var,
+                        ));
                     }
 
                     let arg_vars = VariableSubsSlice::insert_into_subs(target, new_args);
@@ -3114,16 +3131,23 @@ fn deep_copy_var_to_help<'a>(
 
                 Func(arg_vars, closure_var, ret_var) => {
                     let new_ret_var =
-                        deep_copy_var_to_help(arena, source, target, max_rank, ret_var);
+                        deep_copy_var_to_help(arena, visited, source, target, max_rank, ret_var);
 
-                    let new_closure_var =
-                        deep_copy_var_to_help(arena, source, target, max_rank, closure_var);
+                    let new_closure_var = deep_copy_var_to_help(
+                        arena,
+                        visited,
+                        source,
+                        target,
+                        max_rank,
+                        closure_var,
+                    );
 
                     let mut new_arg_vars = Vec::with_capacity_in(arg_vars.len(), arena);
 
                     for index in arg_vars.into_iter() {
                         let var = source[index];
-                        let copy_var = deep_copy_var_to_help(arena, source, target, max_rank, var);
+                        let copy_var =
+                            deep_copy_var_to_help(arena, visited, source, target, max_rank, var);
                         new_arg_vars.push(copy_var);
                     }
 
@@ -3140,8 +3164,9 @@ fn deep_copy_var_to_help<'a>(
 
                         for index in fields.iter_variables() {
                             let var = source[index];
-                            let copy_var =
-                                deep_copy_var_to_help(arena, source, target, max_rank, var);
+                            let copy_var = deep_copy_var_to_help(
+                                arena, visited, source, target, max_rank, var,
+                            );
 
                             new_vars.push(copy_var);
                         }
@@ -3172,12 +3197,13 @@ fn deep_copy_var_to_help<'a>(
 
                     Record(
                         record_fields,
-                        deep_copy_var_to_help(arena, source, target, max_rank, ext_var),
+                        deep_copy_var_to_help(arena, visited, source, target, max_rank, ext_var),
                     )
                 }
 
                 TagUnion(tags, ext_var) => {
-                    let new_ext = deep_copy_var_to_help(arena, source, target, max_rank, ext_var);
+                    let new_ext =
+                        deep_copy_var_to_help(arena, visited, source, target, max_rank, ext_var);
 
                     let mut new_variable_slices = Vec::with_capacity_in(tags.len(), arena);
 
@@ -3186,8 +3212,9 @@ fn deep_copy_var_to_help<'a>(
                         let slice = source[index];
                         for var_index in slice {
                             let var = source[var_index];
-                            let new_var =
-                                deep_copy_var_to_help(arena, source, target, max_rank, var);
+                            let new_var = deep_copy_var_to_help(
+                                arena, visited, source, target, max_rank, var,
+                            );
                             new_variables.push(new_var);
                         }
 
@@ -3231,7 +3258,7 @@ fn deep_copy_var_to_help<'a>(
                     FunctionOrTagUnion(
                         new_tag_name,
                         symbol,
-                        deep_copy_var_to_help(arena, source, target, max_rank, ext_var),
+                        deep_copy_var_to_help(arena, visited, source, target, max_rank, ext_var),
                     )
                 }
 
@@ -3243,8 +3270,9 @@ fn deep_copy_var_to_help<'a>(
                         let slice = source[index];
                         for var_index in slice {
                             let var = source[var_index];
-                            let new_var =
-                                deep_copy_var_to_help(arena, source, target, max_rank, var);
+                            let new_var = deep_copy_var_to_help(
+                                arena, visited, source, target, max_rank, var,
+                            );
                             new_variables.push(new_var);
                         }
 
@@ -3277,9 +3305,10 @@ fn deep_copy_var_to_help<'a>(
 
                     let union_tags = UnionTags::from_slices(new_tag_names, new_variables);
 
-                    let new_ext = deep_copy_var_to_help(arena, source, target, max_rank, ext_var);
+                    let new_ext =
+                        deep_copy_var_to_help(arena, visited, source, target, max_rank, ext_var);
                     let new_rec_var =
-                        deep_copy_var_to_help(arena, source, target, max_rank, rec_var);
+                        deep_copy_var_to_help(arena, visited, source, target, max_rank, rec_var);
 
                     RecursiveTagUnion(new_rec_var, union_tags, new_ext)
                 }
@@ -3296,7 +3325,8 @@ fn deep_copy_var_to_help<'a>(
             opt_name,
             structure,
         } => {
-            let new_structure = deep_copy_var_to_help(arena, source, target, max_rank, structure);
+            let new_structure =
+                deep_copy_var_to_help(arena, visited, source, target, max_rank, structure);
 
             debug_assert!((new_structure.index() as usize) < target.len());
 
@@ -3322,7 +3352,7 @@ fn deep_copy_var_to_help<'a>(
 
             for var_index in args.variables() {
                 let var = source[var_index];
-                let new_var = deep_copy_var_to_help(arena, source, target, max_rank, var);
+                let new_var = deep_copy_var_to_help(arena, visited, source, target, max_rank, var);
 
                 new_vars.push(new_var);
             }
@@ -3336,7 +3366,7 @@ fn deep_copy_var_to_help<'a>(
             target.field_names.extend(lowercases.iter().cloned());
 
             let new_real_type_var =
-                deep_copy_var_to_help(arena, source, target, max_rank, real_type_var);
+                deep_copy_var_to_help(arena, visited, source, target, max_rank, real_type_var);
             let new_content = Alias(symbol, args, new_real_type_var);
 
             target.set(copy, make_descriptor(new_content));
