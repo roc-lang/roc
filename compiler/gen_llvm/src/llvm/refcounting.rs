@@ -183,7 +183,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
                     env.module,
                     fn_name,
                     fn_type,
-                    Linkage::Private,
+                    Linkage::Internal,
                     FAST_CALL_CONV, // Because it's an internal-only function, it should use the fast calling convention.
                 );
 
