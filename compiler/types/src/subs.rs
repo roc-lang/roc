@@ -1168,11 +1168,7 @@ impl Subs {
     where
         F: Fn(&mut Descriptor),
     {
-        let l_key = self.utable.get_root_key(key);
-
-        self.utable.update_value(l_key, |node| {
-            mapper(&mut node.value);
-        });
+        mapper(self.get_ref_mut(key));
     }
 
     pub fn get_rank_set_mark(&mut self, key: Variable, mark: Mark) -> Rank {
