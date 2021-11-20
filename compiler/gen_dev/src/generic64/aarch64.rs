@@ -50,12 +50,6 @@ impl AArch64GeneralReg {
     fn id(&self) -> u8 {
         *self as u8
     }
-
-    fn size(&self) -> usize {
-        match *self as u8 {
-            0..=31 => 64,
-        }
-    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
@@ -513,6 +507,8 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 impl AArch64Assembler {}
 
 // Instructions
+// ARM manual section C3
+// https://developer.arm.com/documentation/ddi0487/ga
 
 #[derive(PackedStruct, Debug)]
 struct MoveWideImmediate {
@@ -527,57 +523,105 @@ struct MoveWideImmediate {
 
 impl MoveWideImmediate {
     fn new(opc: u8, rd: AArch64GeneralReg, imm16: u16, hw: u8, sf: bool) -> Self {
-        match rd.size() {
-            64 => {
-                // assert!(shift % 16 == 0 && shift <= 48);
+        // TODO: revisit this is we change where we want to check the shift
+        // currently this is done in the assembler above
+        // assert!(shift % 16 == 0 && shift <= 48);
+        debug_assert!(hw <= 0b11);
 
-                Self {
-                    // we want this to truncate, not sure if this does that
-                    reg_d: rd.id().into(),
-                    imm16,
-                    hw: hw.into(),
-                    opc: opc.into(),
-                    sf,
-                    fixed: 0b100101.into(),
-                }
-            }
+        Self {
+            // we want this to truncate, not sure if this does that
+            reg_d: rd.id().into(),
+            imm16,
+            hw: hw.into(),
+            opc: opc.into(),
+            sf,
+            fixed: 0b100101.into(),
         }
     }
 }
 
 #[derive(PackedStruct, Debug)]
-struct AddSubtractImmediate {
+struct ArithmeticImmediate {
     reg_d: Integer<u8, packed_bits::Bits<5>>,
     reg_n: Integer<u8, packed_bits::Bits<5>>,
     #[packed_field(endian = "msb")]
     imm12: Integer<u16, packed_bits::Bits<12>>,
     sh: bool,                                 // shift
     fixed: Integer<u8, packed_bits::Bits<6>>, // = 0b100010,
-    s: bool,                                  // subtract
-    op: bool,                                 // set_flags??
+    s: bool,
+    op: bool, // add or subtract
     sf: bool,
 }
 
-impl AddSubtractImmediate {
+impl ArithmeticImmediate {
     fn new(
         op: bool,
         s: bool,
         rd: AArch64GeneralReg,
         rn: AArch64GeneralReg,
         imm12: u16,
-        shift: bool,
+        sh: bool,
     ) -> Self {
         Self {
             reg_d: rd.id().into(),
             reg_n: rn.id().into(),
             imm12: imm12.into(),
-            sh: shift,
+            sh,
             s,
             op,
-            sf: match rd.size() {
-                64 => true,
-            },
+            // true for 64 bit addition
+            // false for 32 bit addition
+            sf: true,
             fixed: 0b100010.into(),
+        }
+    }
+}
+
+enum ShiftType {
+    Lsl = 0,
+    Lsr = 1,
+    Asr = 2,
+    Ror = 3,
+}
+
+#[derive(PackedStruct)]
+struct ArithmeticShifted {
+    reg_d: Integer<u8, packed_bits::Bits<5>>,
+    reg_n: Integer<u8, packed_bits::Bits<5>>,
+    #[packed_field(endian = "msb")]
+    imm6: Integer<u8, packed_bits::Bits<6>>,
+    reg_m: Integer<u8, packed_bits::Bits<5>>,
+    fixed2: bool,                             // = 0b0,
+    shift: Integer<u8, packed_bits::Bits<2>>, // shift
+    fixed: Integer<u8, packed_bits::Bits<5>>, // = 0b01011,
+    s: bool,
+    op: bool, // add or subtract
+    sf: bool,
+}
+
+impl ArithmeticShifted {
+    fn new(
+        op: bool,
+        s: bool,
+        shift: ShiftType,
+        imm6: u8,
+        rm: AArch64GeneralReg,
+        rn: AArch64GeneralReg,
+        rd: AArch64GeneralReg,
+    ) -> Self {
+        Self {
+            reg_d: rd.into(),
+            reg_n: rn.into(),
+            imm6: imm6.into(),
+            reg_m: rm.into(),
+            fixed2: false,
+            shift: shift.into(),
+            fixed: 0b01011.into(),
+            s,
+            op,
+            // true for 64 bit addition
+            // false for 32 bit addition
+            sf: true,
         }
     }
 }
@@ -608,7 +652,7 @@ enum AArch64Instruction {
     // DPReg(DPRegGroup),
     // _DPFloat,
     MoveWideImmediate(MoveWideImmediate),
-    AddSubtractImmediate(AddSubtractImmediate),
+    ArithmeticImmediate(ArithmeticImmediate),
     LoadStoreRegister(LoadStoreRegister),
 }
 
@@ -836,17 +880,9 @@ fn add_reg64_reg64_imm12(
     src: AArch64GeneralReg,
     imm12: u16,
 ) {
-    buf.extend(&build_instruction(AArch64Instruction::DPImm(
-        DPImmGroup::AddSubImm {
-            sf: true,
-            subtract: false,
-            set_flags: false,
-            shift: false,
-            imm12,
-            reg_n: src,
-            reg_d: dst,
-        },
-    )));
+    let inst = ArithmeticImmediate::new(false, false, dst, src, imm12, false);
+
+    buf.extend(inst.pack().unwrap());
 }
 
 /// `ADD Xd, Xm, Xn` -> Add Xm and Xn and place the result into Xd.
@@ -857,18 +893,9 @@ fn add_reg64_reg64_reg64(
     src1: AArch64GeneralReg,
     src2: AArch64GeneralReg,
 ) {
-    buf.extend(&build_instruction(AArch64Instruction::DPReg(
-        DPRegGroup::AddSubShifted {
-            sf: true,
-            subtract: false,
-            set_flags: false,
-            shift: 0,
-            reg_m: src1,
-            imm6: 0,
-            reg_n: src2,
-            reg_d: dst,
-        },
-    )));
+    let inst = ArithmeticShifted::new(false, false, ShiftType::Lsl, 0, src1, src2, dst);
+
+    buf.extend(inst.pack().unwrap());
 }
 
 /// `LDR Xt, [Xn, #offset]` -> Load Xn + Offset Xt. ZRSP is SP.
@@ -913,8 +940,6 @@ fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64Ge
 /// `MOVK Xd, imm16` -> Keeps Xd and moves an optionally shifted imm16 to Xd.
 #[inline(always)]
 fn movk_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm16: u16, hw: u8) {
-    debug_assert!(hw <= 0b11);
-
     let inst = MoveWideImmediate::new(0b11, dst, imm16, hw, true);
 
     // MOV is equvalent to `ORR Xd, XZR, XM` in AARCH64.
@@ -924,8 +949,6 @@ fn movk_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm16: u16, h
 /// `MOVZ Xd, imm16` -> Zeros Xd and moves an optionally shifted imm16 to Xd.
 #[inline(always)]
 fn movz_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm16: u16, hw: u8) {
-    debug_assert!(hw <= 0b11);
-
     let inst = MoveWideImmediate::new(0b10, dst, imm16, hw, true);
 
     // MOV is equvalent to `ORR Xd, XZR, XM` in AARCH64.
@@ -962,17 +985,9 @@ fn sub_reg64_reg64_imm12(
     src: AArch64GeneralReg,
     imm12: u16,
 ) {
-    buf.extend(&build_instruction(AArch64Instruction::DPImm(
-        DPImmGroup::AddSubImm {
-            sf: true,
-            subtract: true,
-            set_flags: false,
-            shift: false,
-            imm12,
-            reg_n: src,
-            reg_d: dst,
-        },
-    )));
+    let inst = ArithmeticImmediate::new(true, false, dst, src, imm12, false);
+
+    buf.extend(inst.pack().unwrap());
 }
 
 /// `RET Xn` -> Return to the address stored in Xn.
