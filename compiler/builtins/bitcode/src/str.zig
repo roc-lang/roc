@@ -1707,6 +1707,129 @@ pub fn strTrimRight(string: RocStr) callconv(.C) RocStr {
     return RocStr.empty();
 }
 
+// TODO GIESCH
+// dropSuffix : Str, Str -> Result Str {}
+// dropPrefix : Str, Str -> Result Str {}
+//
+// This needs to expose two kinds of fns
+// Str.#prefixMatch and Str.#suffixMatch : Str, Str -> bool
+// Str.#dropLeftNBytesUnsave and Str.#dropRightNBytesUnsafe Str, Nat -> Str
+// then, the can/src/builtins level puts them together to return a result,
+// like list_get does for List.#getUnsafe
+
+fn suffixMatch(string: RocStr, suffix: RocStr) bool {
+    if (suffix.isEmpty()) {
+        return true;
+    }
+
+    if (suffix.len() > string.len()) {
+        return false;
+    }
+
+    var string_bytes = string.asU8ptr()[0..string.len()];
+    var string_iter = ReverseUtf8View.initUnchecked(string_bytes).iterator();
+
+    var suffix_bytes = suffix.asU8ptr()[0..suffix.len()];
+    var suffix_iter = ReverseUtf8View.initUnchecked(suffix_bytes).iterator();
+
+    while (suffix_iter.nextCodepoint()) |suffix_codepoint| {
+        var string_codepoint = string_iter.nextCodepoint();
+        if (suffix_codepoint != string_codepoint) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+fn prefixMatch(string: RocStr, prefix: RocStr) bool {
+    if (prefix.isEmpty()) {
+        return true;
+    }
+
+    if (prefix.len() > string.len()) {
+        return false;
+    }
+
+    var string_bytes = string.asU8ptr()[0..string.len()];
+    var string_iter = unicode.Utf8View.initUnchecked(string_bytes).iterator();
+
+    var prefix_bytes = prefix.asU8ptr()[0..prefix.len()];
+    var prefix_iter = unicode.Utf8View.initUnchecked(prefix_bytes).iterator();
+
+    while (prefix_iter.nextCodepoint()) |prefix_codepoint| {
+        var string_codepoint = string_iter.nextCodepoint();
+        if (prefix_codepoint != string_codepoint) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// NOTE this is unsafe in that it ignores unicode correctness
+// it's the caller's responsibility to ensure that
+// the right n bytes are a group full codepoints
+fn dropRightNBytesUnsafe(string: RocStr, n: usize) RocStr {
+    if (n == 0) {
+        return string;
+    }
+
+    if (string.len() <= n) {
+        string.deinit();
+        return RocStr.empty();
+    }
+
+    const new_len = string.len() - n;
+    const small_or_shared = new_len <= SMALL_STR_MAX_LENGTH or !string.isRefcountOne();
+    if (small_or_shared) {
+        return RocStr.init(string.asU8ptr(), new_len);
+    }
+
+    // nonempty, large, and unique:
+
+    var new_string = string;
+    new_string.str_len = new_len;
+
+    return new_string;
+}
+
+// NOTE this is unsafe in that it ignores unicode correctness
+// it's the caller's responsibility to ensure that
+// the left n bytes are a group full codepoints
+fn dropLeftNBytesUnsafe(string: RocStr, n: usize) RocStr {
+    if (n == 0) {
+        return string;
+    }
+
+    if (string.len() <= n) {
+        string.deinit();
+        return RocStr.empty();
+    }
+
+    const new_len = string.len() - n;
+    const small_or_shared = new_len <= SMALL_STR_MAX_LENGTH or !string.isRefcountOne();
+    if (small_or_shared) {
+        return RocStr.init(string.asU8ptr() + n, new_len);
+    }
+
+    // nonempty, large, and unique:
+
+    const bytes_ptr = string.str_bytes orelse unreachable;
+
+    var i: usize = 0;
+    while (i < new_len) : (i += 1) {
+        const dest = bytes_ptr + i;
+        const source = dest + n;
+        @memcpy(dest, source, 1);
+    }
+
+    var new_string = string;
+    new_string.str_len = new_len;
+
+    return new_string;
+}
+
 fn countLeadingWhitespaceBytes(string: RocStr) usize {
     var byte_count: usize = 0;
 
