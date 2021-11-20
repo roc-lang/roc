@@ -1256,47 +1256,47 @@ pub fn instantiate_rigids(subs: &mut Subs, var: Variable) {
 
     instantiate_rigids_help(subs, rank, var);
 
-    subs.restore(var);
+    // NOTE subs.restore(var) is done at the end of instantiate_rigids_help
 }
 
 fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
+    let mut visited = vec![];
     let mut stack = vec![initial];
 
     macro_rules! var_slice {
         ($variable_subs_slice:expr) => {{
-            &subs.variables[$variable_subs_slice.slice.start as usize..]
-                [..$variable_subs_slice.slice.length as usize]
+            let slice = $variable_subs_slice;
+            &subs.variables[slice.slice.start as usize..][..slice.slice.length as usize]
         }};
     }
 
     while let Some(var) = stack.pop() {
-        if subs.get_ref(var).copy.is_some() {
+        visited.push(var);
+
+        let desc = subs.get_ref_mut(var);
+        if desc.copy.is_some() {
             continue;
         }
 
-        subs.modify(var, |desc| {
-            desc.rank = Rank::NONE;
-            desc.mark = Mark::NONE;
-            desc.copy = OptVariable::from(var);
-        });
+        desc.rank = Rank::NONE;
+        desc.mark = Mark::NONE;
+        desc.copy = OptVariable::from(var);
 
         use Content::*;
         use FlatType::*;
 
-        let desc = subs.get_ref(var);
         match &desc.content {
             RigidVar(name) => {
                 // what it's all about: convert the rigid var into a flex var
                 let name = name.clone();
-                subs.set(
-                    var,
-                    Descriptor {
-                        content: FlexVar(Some(name)),
-                        rank: max_rank,
-                        mark: Mark::NONE,
-                        copy: OptVariable::NONE,
-                    },
-                );
+
+                // NOTE: we must write to the mutually borrowed `desc` value here
+                // using `subs.set` does not work (unclear why, really)
+                // but get_ref_mut approach saves a lookup, so the weirdness is worth it
+                desc.content = FlexVar(Some(name));
+                desc.rank = max_rank;
+                desc.mark = Mark::NONE;
+                desc.copy = OptVariable::NONE;
             }
             FlexVar(_) | Error => (),
 
@@ -1310,49 +1310,77 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
                 }
 
                 Func(arg_vars, closure_var, ret_var) => {
-                    stack.extend(var_slice!(*arg_vars));
+                    let arg_vars = *arg_vars;
+                    let ret_var = *ret_var;
+                    let closure_var = *closure_var;
 
-                    stack.push(*ret_var);
-                    stack.push(*closure_var);
+                    stack.extend(var_slice!(arg_vars));
+
+                    stack.push(ret_var);
+                    stack.push(closure_var);
                 }
 
                 EmptyRecord => (),
                 EmptyTagUnion => (),
 
                 Record(fields, ext_var) => {
+                    let fields = *fields;
+                    let ext_var = *ext_var;
                     stack.extend(var_slice!(fields.variables()));
 
-                    stack.push(*ext_var);
+                    stack.push(ext_var);
                 }
                 TagUnion(tags, ext_var) => {
+                    let tags = *tags;
+                    let ext_var = *ext_var;
+
                     for slice_index in tags.variables() {
                         let slice = subs.variable_slices[slice_index.start as usize];
                         stack.extend(var_slice!(slice));
                     }
 
-                    stack.push(*ext_var);
+                    stack.push(ext_var);
                 }
                 FunctionOrTagUnion(_, _, ext_var) => {
                     stack.push(*ext_var);
                 }
 
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
+                    let tags = *tags;
+                    let ext_var = *ext_var;
+                    let rec_var = *rec_var;
+
                     for slice_index in tags.variables() {
                         let slice = subs.variable_slices[slice_index.start as usize];
                         stack.extend(var_slice!(slice));
                     }
 
-                    stack.push(*ext_var);
-                    stack.push(*rec_var);
+                    stack.push(ext_var);
+                    stack.push(rec_var);
                 }
 
                 Erroneous(_) => (),
             },
             Alias(_, args, var) => {
+                let var = *var;
+                let args = *args;
+
                 stack.extend(var_slice!(args.variables()));
 
-                stack.push(*var);
+                stack.push(var);
             }
+        }
+    }
+
+    // we have tracked all visited variables, and can now traverse them
+    // in one go (without looking at the UnificationTable) and clear copy field
+    for var in visited {
+        let descriptor = subs.get_ref_mut(var);
+
+        if descriptor.copy.is_some() {
+            descriptor.rank = Rank::NONE;
+            descriptor.mark = Mark::NONE;
+            descriptor.copy = OptVariable::NONE;
         }
     }
 }
