@@ -2857,7 +2857,7 @@ impl StorageSubs {
         };
 
         let offsets = StorageSubsOffsets {
-            utable: target.utable.len() as u32,
+            utable: (target.utable.len() - Variable::NUM_RESERVED_VARS) as u32,
             variables: target.variables.len() as u32,
             tag_names: target.tag_names.len() as u32,
             field_names: target.field_names.len() as u32,
@@ -2865,7 +2865,9 @@ impl StorageSubs {
             variable_slices: target.variable_slices.len() as u32,
         };
 
-        let range = 0..self.subs.utable.len();
+        // The first Variable::NUM_RESERVED_VARS are the same in every subs,
+        // so we can skip copying them!
+        let range = Variable::NUM_RESERVED_VARS..self.subs.utable.len();
 
         // fill new slots with empty values
         target.extend_by(range.len());
@@ -2880,8 +2882,6 @@ impl StorageSubs {
             let new_descriptor = Descriptor {
                 rank: descriptor.rank,
                 mark: descriptor.mark,
-                // rank: Rank::NONE,
-                // mark: Mark::NONE,
                 copy: OptVariable::NONE,
                 content: new_content,
             };
@@ -3018,8 +3018,12 @@ impl StorageSubs {
     }
 
     fn offset_variable(offsets: &StorageSubsOffsets, variable: Variable) -> Variable {
-        let new_index = variable.0 + offsets.utable;
-        Variable(new_index)
+        if variable.index() < Variable::FIRST_USER_SPACE_VAR.index() {
+            variable
+        } else {
+            let new_index = variable.0 + offsets.utable;
+            Variable(new_index)
+        }
     }
 
     fn offset_variable_slice(
