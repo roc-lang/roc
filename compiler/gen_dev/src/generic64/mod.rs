@@ -884,7 +884,7 @@ impl<
         arg_layout: &Layout<'a>,
     ) -> Result<(), String> {
         match arg_layout {
-            Layout::Builtin(Builtin::Int64) => {
+            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
                 let dst_reg = self.claim_general_reg(dst)?;
                 let src1_reg = self.load_to_general_reg(src1)?;
                 let src2_reg = self.load_to_general_reg(src2)?;
