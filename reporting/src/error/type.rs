@@ -378,7 +378,7 @@ fn to_expr_report<'b>(
                     match sub_region {
                         None => alloc.region(expr_region),
                         Some(ann_region) => {
-                            // for typed bodies, include the line(s) have the signature
+                            // for typed bodies, include the line(s) with the signature
                             let joined =
                                 roc_region::all::Region::span_across(&ann_region, &expr_region);
                             alloc.region_with_subregion(joined, expr_region)
