@@ -50,6 +50,9 @@ pub enum HigherOrder {
     ListAny {
         xs: Symbol,
     },
+    ListAll {
+        xs: Symbol,
+    },
     ListFindUnsafe {
         xs: Symbol,
     },
@@ -77,6 +80,7 @@ impl HigherOrder {
             HigherOrder::ListFindUnsafe { .. } => 1,
             HigherOrder::DictWalk { .. } => 2,
             HigherOrder::ListAny { .. } => 1,
+            HigherOrder::ListAll { .. } => 1,
         }
     }
 }
@@ -100,9 +104,7 @@ enum FirstOrder {
     ListLen,
     ListGetUnsafe,
     ListSet,
-    ListTakeFirst,
-    ListTakeLast,
-    ListDrop,
+    ListSublist,
     ListDropAt,
     ListSingle,
     ListRepeat,

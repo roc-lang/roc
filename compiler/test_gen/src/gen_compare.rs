@@ -1,19 +1,16 @@
-#![cfg(not(feature = "gen-wasm"))]
-
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
 
 #[cfg(feature = "gen-dev")]
 use crate::helpers::dev::assert_evals_to;
 
-// #[cfg(feature = "gen-wasm")]
-// use crate::helpers::wasm::assert_evals_to;
+#[cfg(feature = "gen-wasm")]
+use crate::helpers::wasm::assert_evals_to;
 
-// use crate::assert_wasm_evals_to as assert_evals_to;
 use indoc::indoc;
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn eq_i64() {
     assert_evals_to!(
         indoc!(
@@ -30,7 +27,7 @@ fn eq_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn neq_i64() {
     assert_evals_to!(
         indoc!(
@@ -47,7 +44,7 @@ fn neq_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn eq_u64() {
     assert_evals_to!(
         indoc!(
@@ -64,7 +61,7 @@ fn eq_u64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn neq_u64() {
     assert_evals_to!(
         indoc!(
@@ -81,7 +78,7 @@ fn neq_u64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn eq_f64() {
     assert_evals_to!(
         indoc!(
@@ -98,7 +95,7 @@ fn eq_f64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn neq_f64() {
     assert_evals_to!(
         indoc!(
@@ -115,7 +112,7 @@ fn neq_f64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn eq_bool_tag() {
     assert_evals_to!(
         indoc!(
@@ -132,7 +129,7 @@ fn eq_bool_tag() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn neq_bool_tag() {
     assert_evals_to!(
         indoc!(
@@ -163,7 +160,7 @@ fn unit() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn newtype() {
     assert_evals_to!("Identity 42 == Identity 42", true, bool);
     assert_evals_to!("Identity 42 != Identity 42", false, bool);

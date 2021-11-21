@@ -639,6 +639,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(str_type())
     );
 
+    // trimRight : Str -> Str
+    add_top_level_function_type!(
+        Symbol::STR_TRIM_RIGHT,
+        vec![str_type()],
+        Box::new(str_type())
+    );
+
     // trim : Str -> Str
     add_top_level_function_type!(Symbol::STR_TRIM, vec![str_type()], Box::new(str_type()));
 
@@ -1008,6 +1015,25 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(list_type(flex(TVAR1))),
     );
 
+    // split : List elem, Nat -> { before: List elem, others: List elem }
+    add_top_level_function_type!(
+        Symbol::LIST_SPLIT,
+        vec![list_type(flex(TVAR1)), nat_type(),],
+        Box::new(SolvedType::Record {
+            fields: vec![
+                (
+                    "before".into(),
+                    RecordField::Required(list_type(flex(TVAR1)))
+                ),
+                (
+                    "others".into(),
+                    RecordField::Required(list_type(flex(TVAR1)))
+                ),
+            ],
+            ext: Box::new(SolvedType::EmptyRecord),
+        },),
+    );
+
     // drop : List elem, Nat -> List elem
     add_top_level_function_type!(
         Symbol::LIST_DROP,
@@ -1102,6 +1128,16 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(bool_type()),
     );
 
+    // all: List elem, (elem -> Bool) -> Bool
+    add_top_level_function_type!(
+        Symbol::LIST_ALL,
+        vec![
+            list_type(flex(TVAR1)),
+            closure(vec![flex(TVAR1)], TVAR2, Box::new(bool_type())),
+        ],
+        Box::new(bool_type()),
+    );
+
     // sortWith : List a, (a, a -> Ordering) -> List a
     add_top_level_function_type!(
         Symbol::LIST_SORT_WITH,
@@ -1132,6 +1168,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
             Box::new(result_type(flex(elem), not_found)),
         )
     }
+
+    // intersperse : List elem, elem -> List elem
+    add_top_level_function_type!(
+        Symbol::LIST_INTERSPERSE,
+        vec![list_type(flex(TVAR1)), flex(TVAR1)],
+        Box::new(list_type(flex(TVAR1))),
+    );
 
     // Dict module
 
@@ -1377,6 +1420,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // isOk : Result * * -> bool
     add_top_level_function_type!(
         Symbol::RESULT_IS_OK,
+        vec![result_type(flex(TVAR1), flex(TVAR3))],
+        Box::new(bool_type()),
+    );
+
+    // isErr : Result * * -> bool
+    add_top_level_function_type!(
+        Symbol::RESULT_IS_ERR,
         vec![result_type(flex(TVAR1), flex(TVAR3))],
         Box::new(bool_type()),
     );

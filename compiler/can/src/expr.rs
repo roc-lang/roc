@@ -10,9 +10,9 @@ use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
 use roc_collections::all::{ImSet, MutMap, MutSet, SendMap};
+use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
-use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{self, EscapedChar, StrLiteral};
 use roc_parse::pattern::PatternType::*;
@@ -228,14 +228,11 @@ pub fn canonicalize_expr<'a>(
 
             (answer, Output::default())
         }
-        ast::Expr::Record {
-            fields,
-            final_comments: _,
-        } => {
+        ast::Expr::Record(fields) => {
             if fields.is_empty() {
                 (EmptyRecord, Output::default())
             } else {
-                match canonicalize_fields(env, var_store, scope, region, fields) {
+                match canonicalize_fields(env, var_store, scope, region, fields.items) {
                     Ok((can_fields, output)) => (
                         Record {
                             record_var: var_store.fresh(),
@@ -261,12 +258,11 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::RecordUpdate {
             fields,
             update: loc_update,
-            final_comments: _,
         } => {
             let (can_update, update_out) =
                 canonicalize_expr(env, var_store, scope, loc_update.region, &loc_update.value);
             if let Var(symbol) = &can_update.value {
-                match canonicalize_fields(env, var_store, scope, region, fields) {
+                match canonicalize_fields(env, var_store, scope, region, fields.items) {
                     Ok((can_fields, mut output)) => {
                         output.references = output.references.union(update_out.references);
 
@@ -307,9 +303,7 @@ pub fn canonicalize_expr<'a>(
             }
         }
         ast::Expr::Str(literal) => flatten_str_literal(env, var_store, scope, literal),
-        ast::Expr::List {
-            items: loc_elems, ..
-        } => {
+        ast::Expr::List(loc_elems) => {
             if loc_elems.is_empty() {
                 (
                     List {
@@ -1717,7 +1711,7 @@ fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> 
                 (var_store.fresh(), loc_new_expr),
                 (var_store.fresh(), loc_expr),
             ],
-            CalledVia::Space,
+            CalledVia::StringInterpolation,
         );
 
         loc_expr = Located::new(0, 0, 0, 0, expr);

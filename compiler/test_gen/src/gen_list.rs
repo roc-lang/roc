@@ -250,6 +250,47 @@ fn list_sublist() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn list_split() {
+    assert_evals_to!(
+        r#"
+               list = List.split [1, 2, 3] 0
+               list.before
+            "#,
+        RocList::from_slice(&[]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        r#"
+               list = List.split [1, 2, 3] 0
+               list.others
+            "#,
+        RocList::from_slice(&[1, 2, 3]),
+        RocList<i64>
+    );
+
+    assert_evals_to!(
+        "List.split [1, 2, 3] 1",
+        (RocList::from_slice(&[1]), RocList::from_slice(&[2, 3]),),
+        (RocList<i64>, RocList<i64>,)
+    );
+    assert_evals_to!(
+        "List.split [1, 2, 3] 3",
+        (RocList::from_slice(&[1, 2, 3]), RocList::from_slice(&[]),),
+        (RocList<i64>, RocList<i64>,)
+    );
+    assert_evals_to!(
+        "List.split [1, 2, 3] 4",
+        (RocList::from_slice(&[1, 2, 3]), RocList::from_slice(&[]),),
+        (RocList<i64>, RocList<i64>,)
+    );
+    assert_evals_to!(
+        "List.split [] 1",
+        (RocList::from_slice(&[]), RocList::from_slice(&[]),),
+        (RocList<i64>, RocList<i64>,)
+    );
+}
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn list_drop() {
     assert_evals_to!(
         "List.drop [1,2,3] 2",
@@ -275,6 +316,29 @@ fn list_drop_at() {
     );
     assert_evals_to!("List.dropAt [] 1", RocList::from_slice(&[]), RocList<i64>);
     assert_evals_to!("List.dropAt [0] 0", RocList::from_slice(&[]), RocList<i64>);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_intersperse() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    List.intersperse [0, 0, 0] 1
+                "#
+        ),
+        RocList::from_slice(&[0, 1, 0, 1, 0]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    List.intersperse [] 1
+                "#
+        ),
+        RocList::from_slice(&[]),
+        RocList<i64>
+    );
 }
 
 #[test]
@@ -2350,6 +2414,28 @@ fn list_any_empty_with_unknown_element_type() {
     //     UnresolvedTypeVar compiler/mono/src/ir.rs line 3775
     //     Shutting down
     assert_evals_to!("List.any [] (\\_ -> True)", false, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_all() {
+    assert_evals_to!("List.all [] (\\e -> e > 3)", true, bool);
+    assert_evals_to!("List.all [ 1, 2, 3 ] (\\e -> e > 3)", false, bool);
+    assert_evals_to!("List.all [ 1, 2, 4 ] (\\e -> e > 3)", false, bool);
+    assert_evals_to!("List.all [ 1, 2, 3 ] (\\e -> e >= 1)", true, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+#[should_panic(expected = r#"Roc failed with message: "UnresolvedTypeVar"#)]
+fn list_all_empty_with_unknown_element_type() {
+    // Segfaults with invalid memory reference. Running this as a stand-alone
+    // Roc program, generates the following error message:
+    //
+    //     Application crashed with message
+    //     UnresolvedTypeVar compiler/mono/src/ir.rs line 3775
+    //     Shutting down
+    assert_evals_to!("List.all [] (\\_ -> True)", false, bool);
 }
 
 #[test]

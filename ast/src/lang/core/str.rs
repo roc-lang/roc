@@ -1,4 +1,4 @@
-use roc_module::{operator::CalledVia, symbol::Symbol};
+use roc_module::{called_via::CalledVia, symbol::Symbol};
 use roc_parse::ast::StrLiteral;
 
 use crate::{

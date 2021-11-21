@@ -5,7 +5,7 @@ use roc_collections::all::MutMap;
 use roc_module::symbol::Symbol;
 
 use crate::layout::WasmLayout;
-use crate::wasm_module::{CodeBuilder, LocalId, ValueType, VirtualMachineSymbolState};
+use crate::wasm_module::{Align, CodeBuilder, LocalId, ValueType, VmSymbolState};
 use crate::{copy_memory, round_up_to_alignment, CopyMemoryConfig, PTR_SIZE, PTR_TYPE};
 
 pub enum StoredValueKind {
@@ -33,7 +33,7 @@ impl StackMemoryLocation {
 pub enum StoredValue {
     /// A value stored implicitly in the VM stack (primitives only)
     VirtualMachineStack {
-        vm_state: VirtualMachineSymbolState,
+        vm_state: VmSymbolState,
         value_type: ValueType,
         size: u32,
     },
@@ -126,7 +126,7 @@ impl<'a> Storage<'a> {
                     }
                 }
                 _ => StoredValue::VirtualMachineStack {
-                    vm_state: VirtualMachineSymbolState::NotYetPushed,
+                    vm_state: VmSymbolState::NotYetPushed,
                     value_type: *value_type,
                     size: *size,
                 },
@@ -194,6 +194,63 @@ impl<'a> Storage<'a> {
         })
     }
 
+    /// Load a single symbol using the C Calling Convention
+    /// *Private* because external code should always load symbols in bulk (see load_symbols)
+    fn load_symbol_ccc(&mut self, code_builder: &mut CodeBuilder, sym: Symbol) {
+        let storage = self.get(&sym).to_owned();
+        match storage {
+            StoredValue::VirtualMachineStack {
+                vm_state,
+                value_type,
+                size,
+            } => {
+                let next_local_id = self.get_next_local_id();
+                let maybe_next_vm_state = code_builder.load_symbol(sym, vm_state, next_local_id);
+                match maybe_next_vm_state {
+                    // The act of loading the value changed the VM state, so update it
+                    Some(next_vm_state) => {
+                        self.symbol_storage_map.insert(
+                            sym,
+                            StoredValue::VirtualMachineStack {
+                                vm_state: next_vm_state,
+                                value_type,
+                                size,
+                            },
+                        );
+                    }
+                    None => {
+                        // Loading the value required creating a new local, because
+                        // it was not in a convenient position in the VM stack.
+                        self.local_types.push(value_type);
+                        self.symbol_storage_map.insert(
+                            sym,
+                            StoredValue::Local {
+                                local_id: next_local_id,
+                                value_type,
+                                size,
+                            },
+                        );
+                    }
+                }
+            }
+
+            StoredValue::Local { local_id, .. } => {
+                code_builder.get_local(local_id);
+                code_builder.set_top_symbol(sym);
+            }
+
+            StoredValue::StackMemory { location, .. } => {
+                let (local_id, offset) = location.local_and_offset(self.stack_frame_pointer);
+                code_builder.get_local(local_id);
+                if offset != 0 {
+                    code_builder.i32_const(offset as i32);
+                    code_builder.i32_add();
+                }
+                code_builder.set_top_symbol(sym);
+            }
+        }
+    }
+
     /// Load symbols to the top of the VM stack
     /// Avoid calling this method in a loop with one symbol at a time! It will work,
     /// but it generates very inefficient Wasm code.
@@ -204,61 +261,60 @@ impl<'a> Storage<'a> {
             return;
         }
         for sym in symbols.iter() {
-            let storage = self.get(sym).to_owned();
-            match storage {
-                StoredValue::VirtualMachineStack {
-                    vm_state,
-                    value_type,
-                    size,
-                } => {
-                    let next_local_id = self.get_next_local_id();
-                    let maybe_next_vm_state =
-                        code_builder.load_symbol(*sym, vm_state, next_local_id);
-                    match maybe_next_vm_state {
-                        // The act of loading the value changed the VM state, so update it
-                        Some(next_vm_state) => {
-                            self.symbol_storage_map.insert(
-                                *sym,
-                                StoredValue::VirtualMachineStack {
-                                    vm_state: next_vm_state,
-                                    value_type,
-                                    size,
-                                },
-                            );
-                        }
-                        None => {
-                            // Loading the value required creating a new local, because
-                            // it was not in a convenient position in the VM stack.
-                            self.local_types.push(value_type);
-                            self.symbol_storage_map.insert(
-                                *sym,
-                                StoredValue::Local {
-                                    local_id: next_local_id,
-                                    value_type,
-                                    size,
-                                },
-                            );
-                        }
-                    }
-                }
-                StoredValue::Local { local_id, .. }
-                | StoredValue::StackMemory {
-                    location: StackMemoryLocation::PointerArg(local_id),
-                    ..
-                } => {
-                    code_builder.get_local(local_id);
-                    code_builder.set_top_symbol(*sym);
+            self.load_symbol_ccc(code_builder, *sym);
+        }
+    }
+
+    /// Load symbols in a way compatible with LLVM's "fast calling convention"
+    /// A bug in Zig means it always uses this for Wasm even when we specify C calling convention.
+    /// It squashes small structs into primitive values where possible, avoiding stack memory
+    /// in favour of CPU registers (or VM stack values, which eventually become CPU registers).
+    /// We need to convert some of our structs from our internal C-like representation to work with Zig.
+    /// We are sticking to C ABI for better compatibility on the platform side.
+    pub fn load_symbols_fastcc(
+        &mut self,
+        code_builder: &mut CodeBuilder,
+        symbols: &[Symbol],
+        return_symbol: Symbol,
+        return_layout: &WasmLayout,
+    ) {
+        // Note: we are not doing verify_stack_match in this case so we may generate more code.
+        // We would need more bookkeeping in CodeBuilder to track which representation is on the stack!
+
+        if return_layout.is_stack_memory() {
+            // Load the address where the return value should be written
+            // Apparently for return values we still use a pointer to stack memory
+            self.load_symbol_ccc(code_builder, return_symbol);
+        };
+
+        for sym in symbols {
+            if let StoredValue::StackMemory {
+                location,
+                size,
+                alignment_bytes,
+            } = self.get(sym)
+            {
+                if *size == 0 {
+                    unimplemented!("Passing zero-sized values is not implemented yet");
+                } else if *size > 8 {
+                    return self.load_symbol_ccc(code_builder, *sym);
                 }
 
-                StoredValue::StackMemory {
-                    location: StackMemoryLocation::FrameOffset(offset),
-                    ..
-                } => {
-                    code_builder.get_local(self.stack_frame_pointer.unwrap());
-                    code_builder.i32_const(offset as i32);
-                    code_builder.i32_add();
-                    code_builder.set_top_symbol(*sym);
+                let (local_id, offset) = location.local_and_offset(self.stack_frame_pointer);
+                code_builder.get_local(local_id);
+                let align = Align::from(*alignment_bytes);
+
+                if *size == 1 {
+                    code_builder.i32_load8_u(align, offset);
+                } else if *size == 2 {
+                    code_builder.i32_load16_u(align, offset);
+                } else if *size <= 4 {
+                    code_builder.i32_load(align, offset);
+                } else {
+                    code_builder.i64_load(align, offset);
                 }
+            } else {
+                self.load_symbol_ccc(code_builder, *sym);
             }
         }
     }
@@ -314,6 +370,67 @@ impl<'a> Storage<'a> {
                         panic!("Cannot store {:?} with alignment of {:?}", value_type, size);
                     }
                 };
+                size
+            }
+        }
+    }
+
+    /// Generate code to copy a StoredValue from an arbitrary memory location
+    /// (defined by a pointer and offset).
+    pub fn copy_value_from_memory(
+        &mut self,
+        code_builder: &mut CodeBuilder,
+        to_symbol: Symbol,
+        from_ptr: LocalId,
+        from_offset: u32,
+    ) -> u32 {
+        let to_storage = self.get(&to_symbol).to_owned();
+        match to_storage {
+            StoredValue::StackMemory {
+                location,
+                size,
+                alignment_bytes,
+            } => {
+                let (to_ptr, to_offset) = location.local_and_offset(self.stack_frame_pointer);
+                copy_memory(
+                    code_builder,
+                    CopyMemoryConfig {
+                        from_ptr,
+                        from_offset,
+                        to_ptr,
+                        to_offset,
+                        size,
+                        alignment_bytes,
+                    },
+                );
+                size
+            }
+
+            StoredValue::VirtualMachineStack {
+                value_type, size, ..
+            }
+            | StoredValue::Local {
+                value_type, size, ..
+            } => {
+                use crate::wasm_module::Align::*;
+
+                code_builder.get_local(from_ptr);
+                match (value_type, size) {
+                    (ValueType::I64, 8) => code_builder.i64_load(Bytes8, from_offset),
+                    (ValueType::I32, 4) => code_builder.i32_load(Bytes4, from_offset),
+                    (ValueType::I32, 2) => code_builder.i32_load16_s(Bytes2, from_offset),
+                    (ValueType::I32, 1) => code_builder.i32_load8_s(Bytes1, from_offset),
+                    (ValueType::F32, 4) => code_builder.f32_load(Bytes4, from_offset),
+                    (ValueType::F64, 8) => code_builder.f64_load(Bytes8, from_offset),
+                    _ => {
+                        panic!("Cannot store {:?} with alignment of {:?}", value_type, size);
+                    }
+                };
+
+                if let StoredValue::Local { local_id, .. } = to_storage {
+                    code_builder.set_local(local_id);
+                }
+
                 size
             }
         }
@@ -422,7 +539,7 @@ impl<'a> Storage<'a> {
         } = storage
         {
             let local_id = self.get_next_local_id();
-            if vm_state != VirtualMachineSymbolState::NotYetPushed {
+            if vm_state != VmSymbolState::NotYetPushed {
                 code_builder.load_symbol(symbol, vm_state, local_id);
                 code_builder.set_local(local_id);
             }

@@ -1,0 +1,21 @@
+UnaryOp(
+    |L 0-0, C 2-14| ParensAround(
+        Apply(
+            |L 0-0, C 2-6| Var {
+                module_name: "",
+                ident: "whee",
+            },
+            [
+                |L 0-0, C 8-10| Num(
+                    "12",
+                ),
+                |L 0-0, C 11-14| Var {
+                    module_name: "",
+                    ident: "foo",
+                },
+            ],
+            Space,
+        ),
+    ),
+    |L 0-0, C 0-1| Negate,
+)

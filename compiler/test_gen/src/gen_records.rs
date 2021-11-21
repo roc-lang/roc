@@ -11,7 +11,7 @@ use crate::helpers::wasm::assert_evals_to;
 use indoc::indoc;
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn basic_record() {
     assert_evals_to!(
         indoc!(
@@ -45,7 +45,7 @@ fn basic_record() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn f64_record() {
     assert_evals_to!(
         indoc!(
@@ -137,7 +137,7 @@ fn fn_record() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn def_record() {
     assert_evals_to!(
         indoc!(
@@ -192,7 +192,7 @@ fn when_on_record() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn when_record_with_guard_pattern() {
     assert_evals_to!(
         indoc!(
@@ -207,7 +207,7 @@ fn when_record_with_guard_pattern() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn let_with_record_pattern() {
     assert_evals_to!(
         indoc!(
@@ -223,7 +223,7 @@ fn let_with_record_pattern() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn record_guard_pattern() {
     assert_evals_to!(
         indoc!(
@@ -239,7 +239,7 @@ fn record_guard_pattern() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn twice_record_access() {
     assert_evals_to!(
         indoc!(
@@ -254,7 +254,7 @@ fn twice_record_access() {
     );
 }
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn empty_record() {
     assert_evals_to!(
         indoc!(
@@ -873,7 +873,7 @@ fn update_single_element_record() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn booleans_in_record() {
     assert_evals_to!(
         indoc!("{ x: 1 == 1, y: 1 == 1 }"),
@@ -908,7 +908,7 @@ fn alignment_in_record() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn blue_and_present() {
     assert_evals_to!(
         indoc!(
@@ -927,7 +927,7 @@ fn blue_and_present() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn blue_and_absent() {
     assert_evals_to!(
         indoc!(
@@ -965,6 +965,27 @@ fn update_the_only_field() {
                 "#
         ),
         4,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+// https://github.com/rtfeldman/roc/issues/1513
+fn both_have_unique_fields() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            a = { x: 42, y: 43 }
+            b = { x: 42, z: 44 }
+
+            f : { x : I64 }a, { x : I64 }b -> I64
+            f = \{ x: x1}, { x: x2 } -> x1 + x2 
+
+            f a b
+            "#
+        ),
+        84,
         i64
     );
 }

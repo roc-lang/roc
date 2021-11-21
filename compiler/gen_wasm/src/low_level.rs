@@ -15,10 +15,10 @@ pub enum LowlevelBuildResult {
     NotImplemented,
 }
 
-pub fn build_call_low_level<'a>(
+pub fn decode_low_level<'a>(
     code_builder: &mut CodeBuilder<'a>,
     storage: &mut Storage<'a>,
-    lowlevel: &LowLevel,
+    lowlevel: LowLevel,
     args: &'a [Symbol],
     ret_layout: &WasmLayout,
 ) -> LowlevelBuildResult {
@@ -27,16 +27,39 @@ pub fn build_call_low_level<'a>(
     let panic_ret_type = || panic!("Invalid return layout for {:?}: {:?}", lowlevel, ret_layout);
 
     match lowlevel {
-        StrConcat | StrJoinWith | StrIsEmpty | StrStartsWith | StrStartsWithCodePt
-        | StrEndsWith | StrSplit | StrCountGraphemes | StrFromInt | StrFromUtf8 | StrTrimLeft
-        | StrFromUtf8Range | StrToUtf8 | StrRepeat | StrFromFloat | StrTrim | ListLen
-        | ListGetUnsafe | ListSet | ListSingle | ListRepeat | ListReverse | ListConcat
+        StrConcat => return BuiltinCall(bitcode::STR_CONCAT),
+        StrJoinWith => return NotImplemented, // needs Array
+        StrIsEmpty => {
+            code_builder.i64_const(i64::MIN);
+            code_builder.i64_eq();
+        }
+        StrStartsWith => return BuiltinCall(bitcode::STR_STARTS_WITH),
+        StrStartsWithCodePt => return BuiltinCall(bitcode::STR_STARTS_WITH_CODE_PT),
+        StrEndsWith => return BuiltinCall(bitcode::STR_ENDS_WITH),
+        StrSplit => return NotImplemented,          // needs Array
+        StrCountGraphemes => return NotImplemented, // test needs Array
+        StrFromInt => return NotImplemented,        // choose builtin based on storage size
+        StrFromUtf8 => return NotImplemented,       // needs Array
+        StrTrimLeft => return BuiltinCall(bitcode::STR_TRIM_LEFT),
+        StrTrimRight => return BuiltinCall(bitcode::STR_TRIM_RIGHT),
+        StrFromUtf8Range => return NotImplemented, // needs Array
+        StrToUtf8 => return NotImplemented,        // needs Array
+        StrRepeat => return BuiltinCall(bitcode::STR_REPEAT),
+        StrFromFloat => {
+            // linker errors for __ashlti3, __fixunsdfti, __multi3, __udivti3, __umodti3
+            // https://gcc.gnu.org/onlinedocs/gccint/Integer-library-routines.html
+            // https://gcc.gnu.org/onlinedocs/gccint/Soft-float-library-routines.html
+            return NotImplemented;
+        }
+        StrTrim => return BuiltinCall(bitcode::STR_TRIM),
+
+        ListLen | ListGetUnsafe | ListSet | ListSingle | ListRepeat | ListReverse | ListConcat
         | ListContains | ListAppend | ListPrepend | ListJoin | ListRange | ListMap | ListMap2
         | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk | ListWalkUntil
-        | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith | ListTakeFirst
-        | ListTakeLast | ListDrop | ListDropAt | ListSwap | ListAny | ListFindUnsafe | DictSize
-        | DictEmpty | DictInsert | DictRemove | DictContains | DictGetUnsafe | DictKeys
-        | DictValues | DictUnion | DictIntersection | DictDifference | DictWalk | SetFromList => {
+        | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith | ListSublist
+        | ListDropAt | ListSwap | ListAny | ListAll | ListFindUnsafe | DictSize | DictEmpty
+        | DictInsert | DictRemove | DictContains | DictGetUnsafe | DictKeys | DictValues
+        | DictUnion | DictIntersection | DictDifference | DictWalk | SetFromList => {
             return NotImplemented;
         }
 
@@ -129,6 +152,9 @@ pub fn build_call_low_level<'a>(
         NumIsMultipleOf => return NotImplemented,
         NumAbs => match ret_layout.value_type() {
             I32 => {
+                let arg_storage = storage.get(&args[0]).to_owned();
+                storage.ensure_value_has_local(code_builder, args[0], arg_storage);
+                storage.load_symbols(code_builder, args);
                 code_builder.i32_const(0);
                 storage.load_symbols(code_builder, args);
                 code_builder.i32_sub();
@@ -138,6 +164,9 @@ pub fn build_call_low_level<'a>(
                 code_builder.select();
             }
             I64 => {
+                let arg_storage = storage.get(&args[0]).to_owned();
+                storage.ensure_value_has_local(code_builder, args[0], arg_storage);
+                storage.load_symbols(code_builder, args);
                 code_builder.i64_const(0);
                 storage.load_symbols(code_builder, args);
                 code_builder.i64_sub();

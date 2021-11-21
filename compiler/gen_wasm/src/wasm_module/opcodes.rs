@@ -1,5 +1,5 @@
 #[repr(u8)]
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpCode {
     UNREACHABLE = 0x00,
     NOP = 0x01,

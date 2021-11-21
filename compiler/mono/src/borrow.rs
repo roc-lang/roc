@@ -1,4 +1,4 @@
-use crate::ir::{Expr, JoinPointId, Param, Proc, ProcLayout, Stmt};
+use crate::ir::{Expr, HigherOrderLowLevel, JoinPointId, Param, Proc, ProcLayout, Stmt};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -560,7 +560,7 @@ impl<'a> BorrowInfState<'a> {
                 arg_layouts,
                 ..
             } => {
-                let top_level = ProcLayout::new(self.arena, arg_layouts, *ret_layout);
+                let top_level = ProcLayout::new(self.arena, arg_layouts, **ret_layout);
 
                 // get the borrow signature of the applied function
                 let ps = param_map
@@ -593,14 +593,14 @@ impl<'a> BorrowInfState<'a> {
                 self.own_args_using_bools(arguments, ps);
             }
 
-            HigherOrderLowLevel {
+            HigherOrder(HigherOrderLowLevel {
                 op,
                 arg_layouts,
                 ret_layout,
                 function_name,
                 function_env,
                 ..
-            } => {
+            }) => {
                 use crate::low_level::HigherOrder::*;
 
                 let closure_layout = ProcLayout {
@@ -619,6 +619,7 @@ impl<'a> BorrowInfState<'a> {
                     | ListKeepOks { xs }
                     | ListKeepErrs { xs }
                     | ListAny { xs }
+                    | ListAll { xs }
                     | ListFindUnsafe { xs } => {
                         // own the list if the function wants to own the element
                         if !function_ps[0].borrow {
@@ -795,7 +796,7 @@ impl<'a> BorrowInfState<'a> {
             Stmt::Ret(z),
         ) = (v, b)
         {
-            let top_level = ProcLayout::new(self.arena, arg_layouts, *ret_layout);
+            let top_level = ProcLayout::new(self.arena, arg_layouts, **ret_layout);
 
             if self.current_proc == *g && x == *z {
                 // anonymous functions (for which the ps may not be known)
@@ -941,6 +942,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         StrConcat => arena.alloc_slice_copy(&[owned, borrowed]),
         StrTrim => arena.alloc_slice_copy(&[owned]),
         StrTrimLeft => arena.alloc_slice_copy(&[owned]),
+        StrTrimRight => arena.alloc_slice_copy(&[owned]),
         StrSplit => arena.alloc_slice_copy(&[borrowed, borrowed]),
         ListSingle => arena.alloc_slice_copy(&[irrelevant]),
         ListRepeat => arena.alloc_slice_copy(&[irrelevant, borrowed]),
@@ -952,7 +954,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         ListMap2 => arena.alloc_slice_copy(&[owned, owned, function, closure_data]),
         ListMap3 => arena.alloc_slice_copy(&[owned, owned, owned, function, closure_data]),
         ListMap4 => arena.alloc_slice_copy(&[owned, owned, owned, owned, function, closure_data]),
-        ListKeepIf | ListKeepOks | ListKeepErrs | ListAny => {
+        ListKeepIf | ListKeepOks | ListKeepErrs | ListAny | ListAll => {
             arena.alloc_slice_copy(&[owned, function, closure_data])
         }
         ListContains => arena.alloc_slice_copy(&[borrowed, irrelevant]),
@@ -966,9 +968,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         // TODO when we have lists with capacity (if ever)
         // List.append should own its first argument
         ListAppend => arena.alloc_slice_copy(&[owned, owned]),
-        ListTakeFirst => arena.alloc_slice_copy(&[owned, irrelevant]),
-        ListTakeLast => arena.alloc_slice_copy(&[owned, irrelevant]),
-        ListDrop => arena.alloc_slice_copy(&[owned, irrelevant]),
+        ListSublist => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
         ListDropAt => arena.alloc_slice_copy(&[owned, irrelevant]),
         ListSwap => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
 
@@ -1046,7 +1046,7 @@ fn call_info_call<'a>(call: &crate::ir::Call<'a>, info: &mut CallInfo<'a>) {
         }
         Foreign { .. } => {}
         LowLevel { .. } => {}
-        HigherOrderLowLevel { .. } => {}
+        HigherOrder(_) => {}
     }
 }
 

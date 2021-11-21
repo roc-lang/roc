@@ -1,7 +1,6 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use core::panic;
-use std::fmt::Debug;
 
 use roc_module::symbol::Symbol;
 
@@ -9,6 +8,13 @@ use super::linking::{IndexRelocType, OffsetRelocType, RelocationEntry};
 use super::opcodes::{OpCode, OpCode::*};
 use super::serialize::{SerialBuffer, Serialize};
 use crate::{round_up_to_alignment, FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID};
+
+const ENABLE_DEBUG_LOG: bool = false;
+macro_rules! log_instruction {
+    ($($x: expr),+) => {
+        if ENABLE_DEBUG_LOG { println!($($x,)*); }
+    };
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LocalId(pub u32);
@@ -29,6 +35,7 @@ impl Serialize for ValueType {
     }
 }
 
+#[derive(PartialEq, Eq, Debug)]
 pub enum BlockType {
     NoResult,
     Value(ValueType),
@@ -40,6 +47,31 @@ impl BlockType {
             Self::NoResult => 0x40,
             Self::Value(t) => *t as u8,
         }
+    }
+}
+
+/// A control block in our model of the VM
+/// Child blocks cannot "see" values from their parent block
+struct VmBlock<'a> {
+    /// opcode indicating what kind of block this is
+    opcode: OpCode,
+    /// the stack of values for this block
+    value_stack: Vec<'a, Symbol>,
+    /// whether this block pushes a result value to its parent
+    has_result: bool,
+}
+
+impl std::fmt::Debug for VmBlock<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!(
+            "{:?} {}",
+            self.opcode,
+            if self.has_result {
+                "Result"
+            } else {
+                "NoResult"
+            }
+        ))
     }
 }
 
@@ -73,7 +105,7 @@ impl From<u32> for Align {
 }
 
 #[derive(Debug, Clone, PartialEq, Copy)]
-pub enum VirtualMachineSymbolState {
+pub enum VmSymbolState {
     /// Value doesn't exist yet
     NotYetPushed,
 
@@ -113,6 +145,8 @@ macro_rules! instruction_memargs {
 
 #[derive(Debug)]
 pub struct CodeBuilder<'a> {
+    arena: &'a Bump,
+
     /// The main container for the instructions
     code: Vec<'a, u8>,
 
@@ -135,8 +169,8 @@ pub struct CodeBuilder<'a> {
     inner_length: Vec<'a, u8>,
 
     /// Our simulation model of the Wasm stack machine
-    /// Keeps track of where Symbol values are in the VM stack
-    vm_stack: Vec<'a, Symbol>,
+    /// Nested blocks of instructions. A child block can't "see" the stack of its parent block
+    vm_block_stack: Vec<'a, VmBlock<'a>>,
 
     /// Linker info to help combine the Roc module with builtin & platform modules,
     /// e.g. to modify call instructions when function indices change
@@ -146,13 +180,22 @@ pub struct CodeBuilder<'a> {
 #[allow(clippy::new_without_default)]
 impl<'a> CodeBuilder<'a> {
     pub fn new(arena: &'a Bump) -> Self {
+        let mut vm_block_stack = Vec::with_capacity_in(8, arena);
+        let function_block = VmBlock {
+            opcode: BLOCK,
+            has_result: true,
+            value_stack: Vec::with_capacity_in(8, arena),
+        };
+        vm_block_stack.push(function_block);
+
         CodeBuilder {
+            arena,
             code: Vec::with_capacity_in(1024, arena),
             insertions: Vec::with_capacity_in(32, arena),
             insert_bytes: Vec::with_capacity_in(64, arena),
             preamble: Vec::with_capacity_in(32, arena),
             inner_length: Vec::with_capacity_in(5, arena),
-            vm_stack: Vec::with_capacity_in(32, arena),
+            vm_block_stack,
             relocations: Vec::with_capacity_in(32, arena),
         }
     }
@@ -167,45 +210,49 @@ impl<'a> CodeBuilder<'a> {
 
     ***********************************************************/
 
+    fn current_stack(&self) -> &Vec<'a, Symbol> {
+        let block = self.vm_block_stack.last().unwrap();
+        &block.value_stack
+    }
+
+    fn current_stack_mut(&mut self) -> &mut Vec<'a, Symbol> {
+        let block = self.vm_block_stack.last_mut().unwrap();
+        &mut block.value_stack
+    }
+
     /// Set the Symbol that is at the top of the VM stack right now
     /// We will use this later when we need to load the Symbol
-    pub fn set_top_symbol(&mut self, sym: Symbol) -> VirtualMachineSymbolState {
-        let len = self.vm_stack.len();
+    pub fn set_top_symbol(&mut self, sym: Symbol) -> VmSymbolState {
+        let current_stack = &mut self.vm_block_stack.last_mut().unwrap().value_stack;
         let pushed_at = self.code.len();
+        let top_symbol: &mut Symbol = current_stack.last_mut().unwrap();
+        *top_symbol = sym;
 
-        if len == 0 {
-            panic!(
-                "trying to set symbol with nothing on stack, code = {:?}",
-                self.code
-            );
-        }
-
-        self.vm_stack[len - 1] = sym;
-
-        VirtualMachineSymbolState::Pushed { pushed_at }
+        VmSymbolState::Pushed { pushed_at }
     }
 
     /// Verify if a sequence of symbols is at the top of the stack
     pub fn verify_stack_match(&self, symbols: &[Symbol]) -> bool {
+        let current_stack = self.current_stack();
         let n_symbols = symbols.len();
-        let stack_depth = self.vm_stack.len();
+        let stack_depth = current_stack.len();
         if n_symbols > stack_depth {
             return false;
         }
         let offset = stack_depth - n_symbols;
 
         for (i, sym) in symbols.iter().enumerate() {
-            if self.vm_stack[offset + i] != *sym {
+            if current_stack[offset + i] != *sym {
                 return false;
             }
         }
         true
     }
 
-    fn add_insertion(&mut self, insert_at: usize, opcode: u8, immediate: u32) {
+    fn add_insertion(&mut self, insert_at: usize, opcode: OpCode, immediate: u32) {
         let start = self.insert_bytes.len();
 
-        self.insert_bytes.push(opcode);
+        self.insert_bytes.push(opcode as u8);
         self.insert_bytes.encode_u32(immediate);
 
         self.insertions.push(Insertion {
@@ -213,6 +260,13 @@ impl<'a> CodeBuilder<'a> {
             start,
             end: self.insert_bytes.len(),
         });
+
+        log_instruction!(
+            "**insert {:?} {} at byte offset {}**",
+            opcode,
+            immediate,
+            insert_at
+        );
     }
 
     /// Load a Symbol that is stored in the VM stack
@@ -225,41 +279,56 @@ impl<'a> CodeBuilder<'a> {
     pub fn load_symbol(
         &mut self,
         symbol: Symbol,
-        vm_state: VirtualMachineSymbolState,
+        vm_state: VmSymbolState,
         next_local_id: LocalId,
-    ) -> Option<VirtualMachineSymbolState> {
-        use VirtualMachineSymbolState::*;
+    ) -> Option<VmSymbolState> {
+        use VmSymbolState::*;
 
         match vm_state {
-            NotYetPushed => panic!("Symbol {:?} has no value yet. Nothing to load.", symbol),
+            NotYetPushed => unreachable!("Symbol {:?} has no value yet. Nothing to load.", symbol),
 
             Pushed { pushed_at } => {
-                let &top = self.vm_stack.last().unwrap();
-                if top == symbol {
-                    // We're lucky, the symbol is already on top of the VM stack
-                    // No code to generate! (This reduces code size by up to 25% in tests.)
-                    // Just let the caller know what happened
-                    Some(Popped { pushed_at })
-                } else {
-                    // Symbol is not on top of the stack. Find it.
-                    if let Some(found_index) = self.vm_stack.iter().rposition(|&s| s == symbol) {
-                        // Insert a local.set where the value was created
-                        self.add_insertion(pushed_at, SETLOCAL as u8, next_local_id.0);
+                match self.current_stack().last() {
+                    Some(top_symbol) if *top_symbol == symbol => {
+                        // We're lucky, the symbol is already on top of the current block's stack.
+                        // No code to generate! (This reduces code size by up to 25% in tests.)
+                        // Just let the caller know what happened
+                        Some(Popped { pushed_at })
+                    }
+                    _ => {
+                        // Symbol is not on top of the stack.
+                        // We should have saved it to a local, so go back and do that now.
 
-                        // Take the value out of the stack where local.set was inserted
-                        self.vm_stack.remove(found_index);
+                        // It should still be on the stack in the block where it was assigned. Remove it.
+                        let mut found = false;
+                        for block in self.vm_block_stack.iter_mut() {
+                            if let Some(found_index) =
+                                block.value_stack.iter().position(|&s| s == symbol)
+                            {
+                                block.value_stack.remove(found_index);
+                                found = true;
+                            }
+                        }
 
-                        // Insert a local.get at the current position
+                        // Go back to the code position where it was pushed, and save it to a local
+                        if found {
+                            self.add_insertion(pushed_at, SETLOCAL, next_local_id.0);
+                        } else {
+                            if ENABLE_DEBUG_LOG {
+                                println!(
+                                    "{:?} has been popped implicitly. Leaving it on the stack.",
+                                    symbol
+                                );
+                            }
+                            self.add_insertion(pushed_at, TEELOCAL, next_local_id.0);
+                        }
+
+                        // Recover the value again at the current position
                         self.get_local(next_local_id);
-                        self.vm_stack.push(symbol);
+                        self.set_top_symbol(symbol);
 
                         // This Symbol is no longer stored in the VM stack, but in a local
                         None
-                    } else {
-                        panic!(
-                            "{:?} has state {:?} but not found in VM stack",
-                            symbol, vm_state
-                        );
                     }
                 }
             }
@@ -267,11 +336,11 @@ impl<'a> CodeBuilder<'a> {
             Popped { pushed_at } => {
                 // This Symbol is being used for a second time
                 // Insert a local.tee where it was pushed, so we don't interfere with the first usage
-                self.add_insertion(pushed_at, TEELOCAL as u8, next_local_id.0);
+                self.add_insertion(pushed_at, TEELOCAL, next_local_id.0);
 
                 // Insert a local.get at the current position
                 self.get_local(next_local_id);
-                self.vm_stack.push(symbol);
+                self.set_top_symbol(symbol);
 
                 // This symbol has been promoted to a Local
                 // Tell the caller it no longer has a VirtualMachineSymbolState
@@ -282,7 +351,7 @@ impl<'a> CodeBuilder<'a> {
 
     /**********************************************************
 
-        FINALIZE AND SERIALIZE
+        FUNCTION HEADER
 
     ***********************************************************/
 
@@ -375,6 +444,12 @@ impl<'a> CodeBuilder<'a> {
         self.insertions.sort_by_key(|ins| ins.at);
     }
 
+    /**********************************************************
+
+        SERIALIZE
+
+    ***********************************************************/
+
     /// Serialize all byte vectors in the right order
     /// Also update relocation offsets relative to the base offset (code section body start)
     pub fn serialize_with_relocs<T: SerialBuffer>(
@@ -433,38 +508,78 @@ impl<'a> CodeBuilder<'a> {
 
     /// Base method for generating instructions
     /// Emits the opcode and simulates VM stack push/pop
-    fn inst(&mut self, opcode: OpCode, pops: usize, push: bool) {
-        let new_len = self.vm_stack.len() - pops as usize;
-        self.vm_stack.truncate(new_len);
+    fn inst_base(&mut self, opcode: OpCode, pops: usize, push: bool) {
+        let current_stack = self.current_stack_mut();
+        let new_len = current_stack.len() - pops as usize;
+        current_stack.truncate(new_len);
         if push {
-            self.vm_stack.push(Symbol::WASM_ANONYMOUS_STACK_VALUE);
+            current_stack.push(Symbol::WASM_TMP);
         }
-
         self.code.push(opcode as u8);
     }
 
-    fn inst_imm8(&mut self, opcode: OpCode, pops: usize, push: bool, immediate: u8) {
-        self.inst(opcode, pops, push);
-        self.code.push(immediate);
+    /// Plain instruction without any immediates
+    fn inst(&mut self, opcode: OpCode, pops: usize, push: bool) {
+        self.inst_base(opcode, pops, push);
+        log_instruction!(
+            "{:10}\t\t{:?}",
+            format!("{:?}", opcode),
+            self.current_stack()
+        );
     }
 
-    // public for use in test code
-    pub fn inst_imm32(&mut self, opcode: OpCode, pops: usize, push: bool, immediate: u32) {
-        self.inst(opcode, pops, push);
+    /// Block instruction
+    fn inst_block(&mut self, opcode: OpCode, pops: usize, block_type: BlockType) {
+        self.inst_base(opcode, pops, false);
+        self.code.push(block_type.as_byte());
+
+        // Start a new block with a fresh value stack
+        self.vm_block_stack.push(VmBlock {
+            opcode,
+            value_stack: Vec::with_capacity_in(8, self.arena),
+            has_result: block_type != BlockType::NoResult,
+        });
+
+        log_instruction!(
+            "{:10} {:?}\t{:?}",
+            format!("{:?}", opcode),
+            block_type,
+            &self.vm_block_stack
+        );
+    }
+
+    fn inst_imm32(&mut self, opcode: OpCode, pops: usize, push: bool, immediate: u32) {
+        self.inst_base(opcode, pops, push);
         self.code.encode_u32(immediate);
+        log_instruction!(
+            "{:10}\t{}\t{:?}",
+            format!("{:?}", opcode),
+            immediate,
+            self.current_stack()
+        );
     }
 
     fn inst_mem(&mut self, opcode: OpCode, pops: usize, push: bool, align: Align, offset: u32) {
-        self.inst(opcode, pops, push);
+        self.inst_base(opcode, pops, push);
         self.code.push(align as u8);
         self.code.encode_u32(offset);
+        log_instruction!(
+            "{:10} {:?} {}\t{:?}",
+            format!("{:?}", opcode),
+            align,
+            offset,
+            self.current_stack()
+        );
     }
 
-    /// Insert a linker relocation for a memory address
-    pub fn insert_memory_relocation(&mut self, symbol_index: u32) {
+    /// Insert a const reference to a memory address
+    pub fn i32_const_mem_addr(&mut self, addr: u32, symbol_index: u32) {
+        self.inst_base(I32CONST, 0, true);
+        let offset = self.code.len() as u32;
+        self.code.encode_padded_u32(addr);
         self.relocations.push(RelocationEntry::Offset {
             type_id: OffsetRelocType::MemoryAddrLeb,
-            offset: self.code.len() as u32,
+            offset,
             symbol_index,
             addend: 0,
         });
@@ -484,22 +599,38 @@ impl<'a> CodeBuilder<'a> {
     instruction_no_args!(nop, NOP, 0, false);
 
     pub fn block(&mut self, ty: BlockType) {
-        self.inst_imm8(BLOCK, 0, false, ty.as_byte());
+        self.inst_block(BLOCK, 0, ty);
     }
     pub fn loop_(&mut self, ty: BlockType) {
-        self.inst_imm8(LOOP, 0, false, ty.as_byte());
+        self.inst_block(LOOP, 0, ty);
     }
     pub fn if_(&mut self, ty: BlockType) {
-        self.inst_imm8(IF, 1, false, ty.as_byte());
+        self.inst_block(IF, 1, ty);
+    }
+    pub fn else_(&mut self) {
+        // Reuse the 'then' block but clear its value stack
+        self.current_stack_mut().clear();
+        self.inst(ELSE, 0, false);
     }
 
-    instruction_no_args!(else_, ELSE, 0, false);
-    instruction_no_args!(end, END, 0, false);
+    pub fn end(&mut self) {
+        self.inst_base(END, 0, false);
 
+        let ended_block = self.vm_block_stack.pop().unwrap();
+        if ended_block.has_result {
+            let result = ended_block.value_stack.last().unwrap();
+            self.current_stack_mut().push(*result)
+        }
+
+        log_instruction!("END       \t\t{:?}", &self.vm_block_stack);
+    }
     pub fn br(&mut self, levels: u32) {
         self.inst_imm32(BR, 0, false, levels);
     }
     pub fn br_if(&mut self, levels: u32) {
+        // In dynamic execution, br_if can pop 2 values if condition is true and the target block has a result.
+        // But our stack model is for *static* analysis and we need it to be correct at the next instruction,
+        // where the branch was not taken. So we only pop 1 value, the condition.
         self.inst_imm32(BRIF, 1, false, levels);
     }
     #[allow(dead_code)]
@@ -516,30 +647,26 @@ impl<'a> CodeBuilder<'a> {
         n_args: usize,
         has_return_val: bool,
     ) {
-        let stack_depth = self.vm_stack.len();
-        if n_args > stack_depth {
-            panic!(
-                "Trying to call to call function {:?} with {:?} values but only {:?} on the VM stack\n{:?}",
-                function_index, n_args, stack_depth, self
-            );
-        }
-        self.vm_stack.truncate(stack_depth - n_args);
-        if has_return_val {
-            self.vm_stack.push(Symbol::WASM_ANONYMOUS_STACK_VALUE);
-        }
-        self.code.push(CALL as u8);
+        self.inst_base(CALL, n_args, has_return_val);
 
-        // Write the index of the function to be called.
-        // Also make a RelocationEntry so the linker can see that this byte offset relates to a function by name.
-        // Here we initialise the offset to an index of self.code. After completing the function, we'll add
-        // other factors to make it relative to the code section. (All insertions will be known then.)
         let offset = self.code.len() as u32;
         self.code.encode_padded_u32(function_index);
+
+        // Make a RelocationEntry so the linker can see that this byte offset relates to a function by name.
+        // Here we initialise the offset to an index of self.code. After completing the function, we'll add
+        // other factors to make it relative to the code section. (All insertions will be known then.)
         self.relocations.push(RelocationEntry::Index {
             type_id: IndexRelocType::FunctionIndexLeb,
             offset,
             symbol_index,
         });
+
+        log_instruction!(
+            "{:10}\t{}\t{:?}",
+            format!("{:?}", CALL),
+            function_index,
+            self.current_stack()
+        );
     }
 
     #[allow(dead_code)]
@@ -591,26 +718,44 @@ impl<'a> CodeBuilder<'a> {
     instruction_memargs!(i64_store32, I64STORE32, 2, false);
 
     pub fn memory_size(&mut self) {
-        self.inst_imm8(CURRENTMEMORY, 0, true, 0);
+        self.inst(CURRENTMEMORY, 0, true);
+        self.code.push(0);
     }
     pub fn memory_grow(&mut self) {
-        self.inst_imm8(GROWMEMORY, 1, true, 0);
+        self.inst(GROWMEMORY, 1, true);
+        self.code.push(0);
+    }
+
+    fn log_const<T>(&self, opcode: OpCode, x: T)
+    where
+        T: std::fmt::Debug + std::fmt::Display,
+    {
+        log_instruction!(
+            "{:10}\t{}\t{:?}",
+            format!("{:?}", opcode),
+            x,
+            self.current_stack()
+        );
     }
     pub fn i32_const(&mut self, x: i32) {
-        self.inst(I32CONST, 0, true);
+        self.inst_base(I32CONST, 0, true);
         self.code.encode_i32(x);
+        self.log_const(I32CONST, x);
     }
     pub fn i64_const(&mut self, x: i64) {
-        self.inst(I64CONST, 0, true);
+        self.inst_base(I64CONST, 0, true);
         self.code.encode_i64(x);
+        self.log_const(I64CONST, x);
     }
     pub fn f32_const(&mut self, x: f32) {
-        self.inst(F32CONST, 0, true);
+        self.inst_base(F32CONST, 0, true);
         self.code.encode_f32(x);
+        self.log_const(F32CONST, x);
     }
     pub fn f64_const(&mut self, x: f64) {
-        self.inst(F64CONST, 0, true);
+        self.inst_base(F64CONST, 0, true);
         self.code.encode_f64(x);
+        self.log_const(F64CONST, x);
     }
 
     // TODO: Consider creating unified methods for numerical ops like 'eq' and 'add',

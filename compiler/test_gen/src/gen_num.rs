@@ -571,7 +571,7 @@ fn abs_min_int_overflow() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn gen_if_fn() {
     assert_evals_to!(
         indoc!(
@@ -713,12 +713,26 @@ fn gen_int_eq() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_int_neq() {
     assert_evals_to!(
         indoc!(
             r#"
                     4 != 5
+                "#
+        ),
+        true,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn gen_int_less_than() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    4 < 5
                 "#
         ),
         true,
@@ -1214,7 +1228,18 @@ fn tail_call_elimination() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-dev"))]
+fn int_negate_dev() {
+    // TODO
+    // dev backend yet to have `Num.maxInt` or `Num.minInt`.
+    // add the "gen-dev" feature to the test below after implementing them both.
+    assert_evals_to!("Num.neg 123", -123, i64);
+    assert_evals_to!("Num.neg -123", 123, i64);
+    assert_evals_to!("Num.neg 0", 0, i64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_negate() {
     assert_evals_to!("Num.neg 123", -123, i64);
     assert_evals_to!("Num.neg Num.maxInt", -i64::MAX, i64);

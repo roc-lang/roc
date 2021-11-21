@@ -819,7 +819,7 @@ Dict.fromList [ KV "Sam" True, KV "Ali" False KV firstName False
 
 This works, but is not nearly as nice to read.
 
-Additionally, map literals can compile directly to efficient initialization code
+Additionally, `Dict` literals can compile directly to efficient initialization code
 without needing to (hopefully be able to) optimize away the intermediate
 `List` involved in  `fromList`.
 

@@ -254,7 +254,7 @@ pub fn constrain_expr(
                 exists(vec![*elem_var], And(constraints))
             }
         }
-        Call(boxed, loc_args, _application_style) => {
+        Call(boxed, loc_args, called_via) => {
             let (fn_var, loc_fn, closure_var, ret_var) = &**boxed;
             // The expression that evaluates to the function being called, e.g. `foo` in
             // (foo) bar baz
@@ -317,7 +317,7 @@ pub fn constrain_expr(
                 region,
             );
 
-            let category = Category::CallResult(opt_symbol);
+            let category = Category::CallResult(opt_symbol, *called_via);
 
             exists(
                 vars,

@@ -47,7 +47,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
 
 copy-dirs:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
-    COPY --dir cli cli_utils compiler docs editor ast code_markup utils roc_std vendor examples linker Cargo.toml Cargo.lock version.txt ./
+    COPY --dir cli cli_utils compiler docs editor ast code_markup utils reporting roc_std vendor examples linker Cargo.toml Cargo.lock version.txt ./
 
 test-zig:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
@@ -79,17 +79,17 @@ test-rust:
     # not pre-compiling the host can cause race conditions
     RUN echo "4" | cargo run --release examples/benchmarks/NQueens.roc
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test --release --features with_sound --workspace && sccache --show-stats
+        cargo test --locked --release --features with_sound --workspace && sccache --show-stats
     # test the dev and wasm backend: they require an explicit feature flag.
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test --release --package test_gen --no-default-features --features gen-dev && sccache --show-stats
+        cargo test --locked --release --package test_gen --no-default-features --features gen-dev && sccache --show-stats
     # gen-wasm has some multithreading problems to do with the wasmer runtime. Run it single-threaded as a separate job
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test --release --package test_gen --no-default-features --features gen-wasm -- --test-threads=1 && sccache --show-stats
+        cargo test --locked --release --package test_gen --no-default-features --features gen-wasm -- --test-threads=1 && sccache --show-stats
     # run i386 (32-bit linux) cli tests
-    RUN echo "4" | cargo run --release --features="target-x86" -- --backend=x86_32 examples/benchmarks/NQueens.roc
+    RUN echo "4" | cargo run --locked --release --features="target-x86" -- --backend=x86_32 examples/benchmarks/NQueens.roc
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test --release --features with_sound --test cli_run i386 --features="i386-cli-run" && sccache --show-stats
+        cargo test --locked --release --features with_sound --test cli_run i386 --features="i386-cli-run" && sccache --show-stats
 
 verify-no-git-changes:
     FROM +test-rust

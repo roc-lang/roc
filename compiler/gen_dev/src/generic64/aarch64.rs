@@ -446,6 +446,10 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
             unimplemented!("stack offsets over 32k are not yet implement for AArch64");
         }
     }
+    #[inline(always)]
+    fn neg_reg64_reg64(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg, _src: AArch64GeneralReg) {
+        unimplemented!("neg is not yet implement for AArch64");
+    }
 
     #[inline(always)]
     fn sub_reg64_reg64_imm32(
@@ -484,6 +488,26 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _src2: AArch64GeneralReg,
     ) {
         unimplemented!("registers equality not implemented yet for AArch64");
+    }
+
+    #[inline(always)]
+    fn neq_reg64_reg64_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) {
+        unimplemented!("registers non-equality not implemented yet for AArch64");
+    }
+
+    #[inline(always)]
+    fn lt_reg64_reg64_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) {
+        unimplemented!("registers less than not implemented yet for AArch64");
     }
 
     #[inline(always)]

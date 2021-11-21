@@ -3794,6 +3794,14 @@ mod solve_expr {
     }
 
     #[test]
+    fn list_split() {
+        infer_eq_without_problem(
+            indoc!("List.split"),
+            "List a, Nat -> { before : List a, others : List a }",
+        );
+    }
+
+    #[test]
     fn list_drop_last() {
         infer_eq_without_problem(
             indoc!(
@@ -3805,6 +3813,17 @@ mod solve_expr {
         );
     }
 
+    #[test]
+    fn list_intersperse() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                List.intersperse
+                "#
+            ),
+            "List a, a -> List a",
+        );
+    }
     #[test]
     fn function_that_captures_nothing_is_not_captured() {
         // we should make sure that a function that doesn't capture anything it not itself captured

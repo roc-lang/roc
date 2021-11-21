@@ -18,7 +18,7 @@ roc_unify = { path = "../unify" }
 roc_parse = { path = "../parse" }
 roc_solve = { path = "../solve" }
 roc_mono = { path = "../mono" }
-roc_reporting = { path = "../reporting" }
+roc_reporting = { path = "../../reporting" }
 morphic_lib = { path = "../../vendor/morphic_lib" }
 ven_pretty = { path = "../../vendor/pretty" }
 bumpalo = { version = "3.8.0", features = ["collections"] }

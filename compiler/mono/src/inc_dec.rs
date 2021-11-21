@@ -1,5 +1,7 @@
 use crate::borrow::{ParamMap, BORROWED, OWNED};
-use crate::ir::{Expr, JoinPointId, ModifyRc, Param, Proc, ProcLayout, Stmt};
+use crate::ir::{
+    CallType, Expr, HigherOrderLowLevel, JoinPointId, ModifyRc, Param, Proc, ProcLayout, Stmt,
+};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -463,7 +465,7 @@ impl<'a> Context<'a> {
                 &*self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
-            HigherOrderLowLevel {
+            HigherOrder(HigherOrderLowLevel {
                 op,
                 closure_env_layout,
                 specialization_id,
@@ -473,7 +475,7 @@ impl<'a> Context<'a> {
                 function_name,
                 function_env,
                 ..
-            } => {
+            }) => {
                 // setup
                 use crate::low_level::HigherOrder::*;
 
@@ -481,7 +483,7 @@ impl<'a> Context<'a> {
                     ($borrows:expr) => {
                         Expr::Call(crate::ir::Call {
                             call_type: if let Some(OWNED) = $borrows.map(|p| p.borrow) {
-                                HigherOrderLowLevel {
+                                let higher_order = HigherOrderLowLevel {
                                     op: *op,
                                     closure_env_layout: *closure_env_layout,
                                     function_owns_closure_data: true,
@@ -491,7 +493,9 @@ impl<'a> Context<'a> {
                                     function_env: *function_env,
                                     arg_layouts,
                                     ret_layout: *ret_layout,
-                                }
+                                };
+
+                                CallType::HigherOrder(self.arena.alloc(higher_order))
                             } else {
                                 call_type
                             },
@@ -532,6 +536,7 @@ impl<'a> Context<'a> {
                     | ListKeepOks { xs }
                     | ListKeepErrs { xs }
                     | ListAny { xs }
+                    | ListAll { xs }
                     | ListFindUnsafe { xs } => {
                         let borrows = [function_ps[0].borrow, FUNCTION, CLOSURE_DATA];
 
@@ -663,7 +668,7 @@ impl<'a> Context<'a> {
                 arg_layouts,
                 ..
             } => {
-                let top_level = ProcLayout::new(self.arena, arg_layouts, *ret_layout);
+                let top_level = ProcLayout::new(self.arena, arg_layouts, **ret_layout);
 
                 // get the borrow signature
                 let ps = self

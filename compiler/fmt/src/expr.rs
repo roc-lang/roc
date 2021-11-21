@@ -3,9 +3,11 @@ use crate::def::fmt_def;
 use crate::pattern::fmt_pattern;
 use crate::spaces::{add_spaces, fmt_comments_only, fmt_spaces, newline, NewlineAt, INDENT};
 use bumpalo::collections::String;
-use roc_module::operator::{self, BinOp};
+use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::StrSegment;
-use roc_parse::ast::{AssignedField, Base, CommentOrNewline, Expr, Pattern, WhenBranch};
+use roc_parse::ast::{
+    AssignedField, Base, Collection, CommentOrNewline, Expr, Pattern, WhenBranch,
+};
 use roc_region::all::Located;
 
 impl<'a> Formattable<'a> for Expr<'a> {
@@ -39,7 +41,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
             // These expressions always have newlines
             Defs(_, _) | When(_, _) => true,
 
-            List { items, .. } => items.iter().any(|loc_expr| loc_expr.is_multiline()),
+            List(items) => items.iter().any(|loc_expr| loc_expr.is_multiline()),
 
             Str(literal) => {
                 use roc_parse::ast::StrLiteral::*;
@@ -98,7 +100,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
                         .any(|loc_pattern| loc_pattern.is_multiline())
             }
 
-            Record { fields, .. } => fields.iter().any(|loc_field| loc_field.is_multiline()),
+            Record(fields) => fields.iter().any(|loc_field| loc_field.is_multiline()),
             RecordUpdate { fields, .. } => fields.iter().any(|loc_field| loc_field.is_multiline()),
         }
     }
@@ -250,18 +252,11 @@ impl<'a> Formattable<'a> for Expr<'a> {
 
                 buf.push_str(string);
             }
-            Record {
-                fields,
-                final_comments,
-            } => {
-                fmt_record(buf, None, fields, final_comments, indent);
+            Record(fields) => {
+                fmt_record(buf, None, *fields, indent);
             }
-            RecordUpdate {
-                fields,
-                update,
-                final_comments,
-            } => {
-                fmt_record(buf, Some(*update), fields, final_comments, indent);
+            RecordUpdate { update, fields } => {
+                fmt_record(buf, Some(*update), *fields, indent);
             }
             Closure(loc_patterns, loc_ret) => {
                 fmt_closure(buf, loc_patterns, loc_ret, indent);
@@ -295,19 +290,16 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 fmt_if(buf, branches, final_else, self.is_multiline(), indent);
             }
             When(loc_condition, branches) => fmt_when(buf, loc_condition, branches, indent),
-            List {
-                items,
-                final_comments,
-            } => {
-                fmt_list(buf, items, final_comments, indent);
+            List(items) => {
+                fmt_list(buf, *items, indent);
             }
             BinOps(lefts, right) => fmt_bin_ops(buf, lefts, right, false, parens, indent),
             UnaryOp(sub_expr, unary_op) => {
                 match &unary_op.value {
-                    operator::UnaryOp::Negate => {
+                    called_via::UnaryOp::Negate => {
                         buf.push('-');
                     }
-                    operator::UnaryOp::Not => {
+                    called_via::UnaryOp::Not => {
                         buf.push('!');
                     }
                 }
@@ -362,26 +354,26 @@ fn format_str_segment<'a>(seg: &StrSegment<'a>, buf: &mut String<'a>, indent: u1
 
 fn push_op(buf: &mut String, op: BinOp) {
     match op {
-        operator::BinOp::Caret => buf.push('^'),
-        operator::BinOp::Star => buf.push('*'),
-        operator::BinOp::Slash => buf.push('/'),
-        operator::BinOp::DoubleSlash => buf.push_str("//"),
-        operator::BinOp::Percent => buf.push('%'),
-        operator::BinOp::DoublePercent => buf.push_str("%%"),
-        operator::BinOp::Plus => buf.push('+'),
-        operator::BinOp::Minus => buf.push('-'),
-        operator::BinOp::Equals => buf.push_str("=="),
-        operator::BinOp::NotEquals => buf.push_str("!="),
-        operator::BinOp::LessThan => buf.push('<'),
-        operator::BinOp::GreaterThan => buf.push('>'),
-        operator::BinOp::LessThanOrEq => buf.push_str("<="),
-        operator::BinOp::GreaterThanOrEq => buf.push_str(">="),
-        operator::BinOp::And => buf.push_str("&&"),
-        operator::BinOp::Or => buf.push_str("||"),
-        operator::BinOp::Pizza => buf.push_str("|>"),
-        operator::BinOp::Assignment => unreachable!(),
-        operator::BinOp::HasType => unreachable!(),
-        operator::BinOp::Backpassing => unreachable!(),
+        called_via::BinOp::Caret => buf.push('^'),
+        called_via::BinOp::Star => buf.push('*'),
+        called_via::BinOp::Slash => buf.push('/'),
+        called_via::BinOp::DoubleSlash => buf.push_str("//"),
+        called_via::BinOp::Percent => buf.push('%'),
+        called_via::BinOp::DoublePercent => buf.push_str("%%"),
+        called_via::BinOp::Plus => buf.push('+'),
+        called_via::BinOp::Minus => buf.push('-'),
+        called_via::BinOp::Equals => buf.push_str("=="),
+        called_via::BinOp::NotEquals => buf.push_str("!="),
+        called_via::BinOp::LessThan => buf.push('<'),
+        called_via::BinOp::GreaterThan => buf.push('>'),
+        called_via::BinOp::LessThanOrEq => buf.push_str("<="),
+        called_via::BinOp::GreaterThanOrEq => buf.push_str(">="),
+        called_via::BinOp::And => buf.push_str("&&"),
+        called_via::BinOp::Or => buf.push_str("||"),
+        called_via::BinOp::Pizza => buf.push_str("|>"),
+        called_via::BinOp::Assignment => unreachable!(),
+        called_via::BinOp::HasType => unreachable!(),
+        called_via::BinOp::Backpassing => unreachable!(),
     }
 }
 
@@ -416,12 +408,9 @@ fn fmt_bin_ops<'a>(
     loc_right_side.format_with_options(buf, apply_needs_parens, Newlines::Yes, indent);
 }
 
-fn fmt_list<'a>(
-    buf: &mut String<'a>,
-    loc_items: &[&Located<Expr<'a>>],
-    final_comments: &'a [CommentOrNewline<'a>],
-    indent: u16,
-) {
+fn fmt_list<'a>(buf: &mut String<'a>, items: Collection<'a, &'a Located<Expr<'a>>>, indent: u16) {
+    let loc_items = items.items;
+    let final_comments = items.final_comments();
     if loc_items.is_empty() && final_comments.iter().all(|c| c.is_newline()) {
         buf.push_str("[]");
     } else {
@@ -917,10 +906,11 @@ fn fmt_backpassing<'a>(
 fn fmt_record<'a>(
     buf: &mut String<'a>,
     update: Option<&'a Located<Expr<'a>>>,
-    loc_fields: &[Located<AssignedField<'a, Expr<'a>>>],
-    final_comments: &'a [CommentOrNewline<'a>],
+    fields: Collection<'a, Located<AssignedField<'a, Expr<'a>>>>,
     indent: u16,
 ) {
+    let loc_fields = fields.items;
+    let final_comments = fields.final_comments();
     if loc_fields.is_empty() && final_comments.iter().all(|c| c.is_newline()) {
         buf.push_str("{}");
     } else {

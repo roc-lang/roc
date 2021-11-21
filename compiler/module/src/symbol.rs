@@ -875,8 +875,11 @@ define_builtins! {
         // used by the dev backend to store the pointer to where to store large return types
         23 RET_POINTER: "#ret_pointer"
 
-        // used in wasm dev backend to mark values in the VM stack that have no other Symbol
-        24 WASM_ANONYMOUS_STACK_VALUE: "#wasm_anonymous_stack_value"
+        // used in wasm dev backend to mark temporary values in the VM stack
+        24 WASM_TMP: "#wasm_tmp"
+
+        // the _ used in mono when a specialized symbol is deleted
+        25 REMOVED_SPECIALIZATION: "#removed_specialization"
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
@@ -989,12 +992,16 @@ define_builtins! {
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
-        1 BOOL_AND: "and"
-        2 BOOL_OR: "or"
-        3 BOOL_NOT: "not"
-        4 BOOL_XOR: "xor"
-        5 BOOL_EQ: "isEq"
-        6 BOOL_NEQ: "isNotEq"
+        1 BOOL_FALSE: "False" imported // Bool.Bool = [ False, True ]
+                                       // NB: not strictly needed; used for finding global tag names in error suggestions
+        2 BOOL_TRUE: "True" imported // Bool.Bool = [ False, True ]
+                                     // NB: not strictly needed; used for finding global tag names in error suggestions
+        3 BOOL_AND: "and"
+        4 BOOL_OR: "or"
+        5 BOOL_NOT: "not"
+        6 BOOL_XOR: "xor"
+        7 BOOL_EQ: "isEq"
+        8 BOOL_NEQ: "isNotEq"
     }
     3 STR: "Str" => {
         0 STR_STR: "Str" imported // the Str.Str type alias
@@ -1019,6 +1026,7 @@ define_builtins! {
         19 STR_REPEAT: "repeat"
         20 STR_TRIM: "trim"
         21 STR_TRIM_LEFT: "trimLeft"
+        22 STR_TRIM_RIGHT: "trimRight"
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
@@ -1071,14 +1079,24 @@ define_builtins! {
         47 LIST_FIND: "find"
         48 LIST_FIND_RESULT: "#find_result" // symbol used in the definition of List.find
         49 LIST_SUBLIST: "sublist"
+        50 LIST_INTERSPERSE: "intersperse"
+        51 LIST_INTERSPERSE_CLOS: "#intersperseClos"
+        52 LIST_SPLIT: "split"
+        53 LIST_SPLIT_CLOS: "#splitClos"
+        54 LIST_ALL: "all"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias
-        1 RESULT_MAP: "map"
-        2 RESULT_MAP_ERR: "mapErr"
-        3 RESULT_WITH_DEFAULT: "withDefault"
-        4 RESULT_AFTER: "after"
-        5 RESULT_IS_OK: "isOk"
+        1 RESULT_OK: "Ok" imported // Result.Result a e = [ Ok a, Err e ]
+                                   // NB: not strictly needed; used for finding global tag names in error suggestions
+        2 RESULT_ERR: "Err" imported // Result.Result a e = [ Ok a, Err e ]
+                                     // NB: not strictly needed; used for finding global tag names in error suggestions
+        3 RESULT_MAP: "map"
+        4 RESULT_MAP_ERR: "mapErr"
+        5 RESULT_WITH_DEFAULT: "withDefault"
+        6 RESULT_AFTER: "after"
+        7 RESULT_IS_OK: "isOk"
+        8 RESULT_IS_ERR: "isErr"
     }
     6 DICT: "Dict" => {
         0 DICT_DICT: "Dict" imported // the Dict.Dict type alias

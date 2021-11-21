@@ -501,7 +501,7 @@ impl<'a> EdModel<'a> {
         };
         let arena = Bump::new();
 
-        let mut subs = Subs::new(var_store);
+        let mut subs = Subs::new_from_varstore(var_store);
 
         for (var, name) in rigid_variables {
             subs.rigid_var(var, name);
@@ -1453,7 +1453,7 @@ pub mod test_ed_update {
 
     // add newlines like the editor's formatting would add them
     fn add_nls(lines: Vec<String>) -> Vec<String> {
-        let mut new_lines = lines.clone();
+        let mut new_lines = lines;
 
         new_lines.append(&mut vec!["".to_owned(), "".to_owned()]);
 

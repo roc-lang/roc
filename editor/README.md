@@ -5,7 +5,7 @@ Unlike most editors, we use projectional or structural editing to edit the [Abst
 
 ## Getting started
 
-- Install the compiler, see [here](../BUILDING_FROM_SOURCE).
+- Install the compiler, see [here](../BUILDING_FROM_SOURCE.md).
 - Run the following from the roc folder:
 
 ```

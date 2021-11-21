@@ -19,8 +19,7 @@ use roc_module::symbol::{
     Symbol,
 };
 use roc_mono::ir::{
-    CapturedSymbols, EntryPoint, ExternalSpecializations, PartialProc, PendingSpecialization, Proc,
-    ProcLayout, Procs,
+    CapturedSymbols, EntryPoint, ExternalSpecializations, PartialProc, Proc, ProcLayout, Procs,
 };
 use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
 use roc_parse::ast::{self, StrLiteral, TypeAnnotation};
@@ -356,7 +355,7 @@ struct ModuleCache<'a> {
     constrained: MutMap<ModuleId, ConstrainedModule>,
     typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
-    external_specializations_requested: MutMap<ModuleId, ExternalSpecializations<'a>>,
+    external_specializations_requested: MutMap<ModuleId, Vec<ExternalSpecializations>>,
 
     /// Various information
     imports: MutMap<ModuleId, MutSet<ModuleId>>,
@@ -587,7 +586,7 @@ fn start_phase<'a>(
                     .module_cache
                     .external_specializations_requested
                     .remove(&module_id)
-                    .unwrap_or_else(|| ExternalSpecializations::new_in(arena));
+                    .unwrap_or_default();
 
                 let FoundSpecializationsModule {
                     module_id,
@@ -831,7 +830,7 @@ enum Msg<'a> {
         module_id: ModuleId,
         ident_ids: IdentIds,
         layout_cache: LayoutCache<'a>,
-        external_specializations_requested: BumpMap<ModuleId, ExternalSpecializations<'a>>,
+        external_specializations_requested: BumpMap<ModuleId, ExternalSpecializations>,
         procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
         problems: Vec<roc_mono::ir::MonoProblem>,
         module_timing: ModuleTiming,
@@ -910,9 +909,6 @@ struct State<'a> {
     /// it gets an entry in here, and then immediately begins working on its
     /// pending specializations in the same thread.
     pub needs_specialization: MutSet<ModuleId>,
-
-    pub all_pending_specializations:
-        MutMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>,
 
     pub specializations_in_flight: u32,
 
@@ -1054,7 +1050,7 @@ enum BuildTask<'a> {
         subs: Subs,
         procs_base: ProcsBase<'a>,
         layout_cache: LayoutCache<'a>,
-        specializations_we_must_make: ExternalSpecializations<'a>,
+        specializations_we_must_make: Vec<ExternalSpecializations>,
         module_timing: ModuleTiming,
     },
 }
@@ -1538,7 +1534,6 @@ where
                 unsolved_modules: MutMap::default(),
                 timings: MutMap::default(),
                 needs_specialization: MutSet::default(),
-                all_pending_specializations: MutMap::default(),
                 specializations_in_flight: 0,
                 layout_caches: std::vec::Vec::with_capacity(num_cpus::get()),
                 procs: Procs::new_in(arena),
@@ -2067,17 +2062,6 @@ fn update<'a>(
             log!("found specializations for {:?}", module_id);
             let subs = solved_subs.into_inner();
 
-            for (symbol, specs) in &procs_base.specializations_for_host {
-                let existing = match state.all_pending_specializations.entry(*symbol) {
-                    Vacant(entry) => entry.insert(MutMap::default()),
-                    Occupied(entry) => entry.into_mut(),
-                };
-
-                for (layout, pend) in specs {
-                    existing.insert(*layout, pend.clone());
-                }
-            }
-
             state
                 .module_cache
                 .top_level_thunks
@@ -2171,11 +2155,11 @@ fn update<'a>(
                         .external_specializations_requested
                         .entry(module_id)
                     {
-                        Vacant(entry) => entry.insert(ExternalSpecializations::new_in(arena)),
+                        Vacant(entry) => entry.insert(vec![]),
                         Occupied(entry) => entry.into_mut(),
                     };
 
-                    existing.extend(requested);
+                    existing.push(requested);
                 }
 
                 msg_tx
@@ -2198,11 +2182,11 @@ fn update<'a>(
                         .external_specializations_requested
                         .entry(module_id)
                     {
-                        Vacant(entry) => entry.insert(ExternalSpecializations::new_in(arena)),
+                        Vacant(entry) => entry.insert(vec![]),
                         Occupied(entry) => entry.into_mut(),
                     };
 
-                    existing.extend(requested);
+                    existing.push(requested);
                 }
 
                 start_tasks(arena, &mut state, work, injector, worker_listeners)?;
@@ -2608,8 +2592,8 @@ fn parse_header<'a>(
                 opt_shorthand,
                 header_src,
                 packages: &[],
-                exposes: header.exposes.into_bump_slice(),
-                imports: header.imports.into_bump_slice(),
+                exposes: header.exposes.items,
+                imports: header.imports.items,
                 to_platform: None,
             };
 
@@ -2642,8 +2626,8 @@ fn parse_header<'a>(
                 opt_shorthand,
                 header_src,
                 packages,
-                exposes: header.provides.into_bump_slice(),
-                imports: header.imports.into_bump_slice(),
+                exposes: header.provides.items,
+                imports: header.imports.items,
                 to_platform: Some(header.to.value.clone()),
             };
 
@@ -3236,7 +3220,7 @@ fn send_header_two<'a>(
 
     let extra = HeaderFor::PkgConfig {
         config_shorthand: shorthand,
-        platform_main_type: requires[0].value.clone(),
+        platform_main_type: requires[0].value,
         main_for_host,
     };
 
@@ -3409,8 +3393,7 @@ fn fabricate_pkg_config_module<'a>(
     header_src: &'a str,
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
-    let provides: &'a [Located<ExposesEntry<'a, &'a str>>] =
-        header.provides.clone().into_bump_slice();
+    let provides: &'a [Located<ExposesEntry<'a, &'a str>>] = header.provides.items;
 
     let info = PlatformHeaderInfo {
         filename,
@@ -3420,8 +3403,8 @@ fn fabricate_pkg_config_module<'a>(
         app_module_id,
         packages: &[],
         provides,
-        requires: arena.alloc([header.requires.signature.clone()]),
-        imports: header.imports.clone().into_bump_slice(),
+        requires: arena.alloc([header.requires.signature]),
+        imports: header.imports.items,
     };
 
     send_header_two(
@@ -3467,7 +3450,7 @@ fn fabricate_effects_module<'a>(
     {
         let mut module_ids = (*module_ids).lock();
 
-        for exposed in header.exposes {
+        for exposed in header.exposes.iter() {
             if let ExposesEntry::Exposed(module_name) = exposed.value {
                 module_ids.get_or_insert(&PQModuleName::Qualified(
                     shorthand,
@@ -3886,7 +3869,7 @@ fn exposed_from_import<'a>(entry: &ImportsEntry<'a>) -> (QualifiedModuleName<'a>
         Module(module_name, exposes) => {
             let mut exposed = Vec::with_capacity(exposes.len());
 
-            for loc_entry in exposes {
+            for loc_entry in exposes.iter() {
                 exposed.push(ident_from_exposed(&loc_entry.value));
             }
 
@@ -3901,7 +3884,7 @@ fn exposed_from_import<'a>(entry: &ImportsEntry<'a>) -> (QualifiedModuleName<'a>
         Package(package_name, module_name, exposes) => {
             let mut exposed = Vec::with_capacity(exposes.len());
 
-            for loc_entry in exposes {
+            for loc_entry in exposes.iter() {
                 exposed.push(ident_from_exposed(&loc_entry.value));
             }
 
@@ -3937,7 +3920,7 @@ fn make_specializations<'a>(
     mut subs: Subs,
     procs_base: ProcsBase<'a>,
     mut layout_cache: LayoutCache<'a>,
-    specializations_we_must_make: ExternalSpecializations<'a>,
+    specializations_we_must_make: Vec<ExternalSpecializations>,
     mut module_timing: ModuleTiming,
     ptr_bytes: u32,
 ) -> Msg<'a> {
@@ -3973,7 +3956,7 @@ fn make_specializations<'a>(
         &mut mono_env,
         procs,
         specializations_we_must_make,
-        procs_base.specializations_for_host,
+        procs_base.host_specializations,
         &mut layout_cache,
     );
 
@@ -4005,25 +3988,9 @@ struct ProcsBase<'a> {
     partial_procs: BumpMap<Symbol, PartialProc<'a>>,
     module_thunks: &'a [Symbol],
     /// A host-exposed function must be specialized; it's a seed for subsequent specializations
-    specializations_for_host: BumpMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>,
+    host_specializations: roc_mono::ir::HostSpecializations,
     runtime_errors: BumpMap<Symbol, &'a str>,
     imported_module_thunks: &'a [Symbol],
-}
-
-impl<'a> ProcsBase<'a> {
-    fn add_specialization_for_host(
-        &mut self,
-        symbol: Symbol,
-        layout: ProcLayout<'a>,
-        pending: PendingSpecialization<'a>,
-    ) {
-        let all_pending = self
-            .specializations_for_host
-            .entry(symbol)
-            .or_insert_with(|| HashMap::with_capacity_and_hasher(1, default_hasher()));
-
-        all_pending.insert(layout, pending);
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4047,7 +4014,7 @@ fn build_pending_specializations<'a>(
     let mut procs_base = ProcsBase {
         partial_procs: BumpMap::default(),
         module_thunks: &[],
-        specializations_for_host: BumpMap::default(),
+        host_specializations: roc_mono::ir::HostSpecializations::new(),
         runtime_errors: BumpMap::default(),
         imported_module_thunks,
     };
@@ -4135,7 +4102,7 @@ fn add_def_to_module<'a>(
 
     match def.loc_pattern.value {
         Identifier(symbol) => {
-            let is_exposed = exposed_to_host.contains_key(&symbol);
+            let is_host_exposed = exposed_to_host.contains_key(&symbol);
 
             match def.loc_expr.value {
                 Closure(ClosureData {
@@ -4153,41 +4120,36 @@ fn add_def_to_module<'a>(
                     // register it as such. Otherwise, since it
                     // never gets called by Roc code, it will never
                     // get specialized!
-                    if is_exposed {
-                        let layout = match layout_cache.raw_from_var(
-                            mono_env.arena,
-                            annotation,
-                            mono_env.subs,
-                        ) {
-                            Ok(l) => l,
-                            Err(LayoutProblem::Erroneous) => {
-                                let message = "top level function has erroneous type";
-                                procs.runtime_errors.insert(symbol, message);
-                                return;
-                            }
-                            Err(LayoutProblem::UnresolvedTypeVar(v)) => {
-                                let message = format!(
-                                    "top level function has unresolved type variable {:?}",
-                                    v
-                                );
-                                procs
-                                    .runtime_errors
-                                    .insert(symbol, mono_env.arena.alloc(message));
-                                return;
-                            }
-                        };
+                    if is_host_exposed {
+                        let layout_result =
+                            layout_cache.raw_from_var(mono_env.arena, annotation, mono_env.subs);
 
-                        let pending = PendingSpecialization::from_exposed_function(
-                            mono_env.arena,
+                        // cannot specialize when e.g. main's type contains type variables
+                        if let Err(e) = layout_result {
+                            match e {
+                                LayoutProblem::Erroneous => {
+                                    let message = "top level function has erroneous type";
+                                    procs.runtime_errors.insert(symbol, message);
+                                    return;
+                                }
+                                LayoutProblem::UnresolvedTypeVar(v) => {
+                                    let message = format!(
+                                        "top level function has unresolved type variable {:?}",
+                                        v
+                                    );
+                                    procs
+                                        .runtime_errors
+                                        .insert(symbol, mono_env.arena.alloc(message));
+                                    return;
+                                }
+                            }
+                        }
+
+                        procs.host_specializations.insert_host_exposed(
                             mono_env.subs,
+                            symbol,
                             def.annotation,
                             annotation,
-                        );
-
-                        procs.add_specialization_for_host(
-                            symbol,
-                            ProcLayout::from_raw(mono_env.arena, layout),
-                            pending,
                         );
                     }
 
@@ -4208,51 +4170,47 @@ fn add_def_to_module<'a>(
                     // mark this symbols as a top-level thunk before any other work on the procs
                     module_thunks.push(symbol);
 
+                    let annotation = def.expr_var;
+
                     // If this is an exposed symbol, we need to
                     // register it as such. Otherwise, since it
                     // never gets called by Roc code, it will never
                     // get specialized!
-                    if is_exposed {
-                        let annotation = def.expr_var;
+                    if is_host_exposed {
+                        let layout_result =
+                            layout_cache.raw_from_var(mono_env.arena, annotation, mono_env.subs);
 
-                        let top_level = match layout_cache.from_var(
-                            mono_env.arena,
-                            annotation,
-                            mono_env.subs,
-                        ) {
-                            Ok(l) => {
-                                // remember, this is a 0-argument thunk
-                                ProcLayout::new(mono_env.arena, &[], l)
+                        // cannot specialize when e.g. main's type contains type variables
+                        if let Err(e) = layout_result {
+                            match e {
+                                LayoutProblem::Erroneous => {
+                                    let message = "top level function has erroneous type";
+                                    procs.runtime_errors.insert(symbol, message);
+                                    return;
+                                }
+                                LayoutProblem::UnresolvedTypeVar(v) => {
+                                    let message = format!(
+                                        "top level function has unresolved type variable {:?}",
+                                        v
+                                    );
+                                    procs
+                                        .runtime_errors
+                                        .insert(symbol, mono_env.arena.alloc(message));
+                                    return;
+                                }
                             }
-                            Err(LayoutProblem::Erroneous) => {
-                                let message = "top level function has erroneous type";
-                                procs.runtime_errors.insert(symbol, message);
-                                return;
-                            }
-                            Err(LayoutProblem::UnresolvedTypeVar(v)) => {
-                                let message = format!(
-                                    "top level function has unresolved type variable {:?}",
-                                    v
-                                );
-                                procs
-                                    .runtime_errors
-                                    .insert(symbol, mono_env.arena.alloc(message));
-                                return;
-                            }
-                        };
+                        }
 
-                        let pending = PendingSpecialization::from_exposed_function(
-                            mono_env.arena,
+                        procs.host_specializations.insert_host_exposed(
                             mono_env.subs,
+                            symbol,
                             def.annotation,
                             annotation,
                         );
-
-                        procs.add_specialization_for_host(symbol, top_level, pending);
                     }
 
                     let proc = PartialProc {
-                        annotation: def.expr_var,
+                        annotation,
                         // This is a 0-arity thunk, so it has no arguments.
                         pattern_symbols: &[],
                         // This is a top-level definition, so it cannot capture anything

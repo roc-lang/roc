@@ -1,0 +1,28 @@
+[package]
+name = "roc_reporting"
+version = "0.1.0"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+edition = "2018"
+
+[dependencies]
+roc_collections = { path = "../compiler/collections" }
+roc_region = { path = "../compiler/region" }
+roc_module = { path = "../compiler/module" }
+roc_parse = { path = "../compiler/parse" }
+roc_problem = { path = "../compiler/problem" }
+roc_types = { path = "../compiler/types" }
+roc_can = { path = "../compiler/can" }
+roc_solve = { path = "../compiler/solve" }
+roc_mono = { path = "../compiler/mono" }
+ven_pretty = { path = "../vendor/pretty" }
+distance = "0.4.0"
+bumpalo = { version = "3.8.0", features = ["collections"] }
+
+[dev-dependencies]
+roc_constrain = { path = "../compiler/constrain" }
+roc_builtins = { path = "../compiler/builtins" }
+roc_problem = { path = "../compiler/problem" }
+roc_parse = { path = "../compiler/parse" }
+pretty_assertions = "1.0.0"
+indoc = "1.0.3"

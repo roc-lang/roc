@@ -10,8 +10,8 @@ use roc_module::symbol::Symbol;
 use std::convert::TryFrom;
 
 use crate::ir::{
-    Call, CallType, Expr, HostExposedLayouts, ListLiteralElement, Literal, ModifyRc, OptLevel,
-    Proc, Stmt,
+    Call, CallType, Expr, HigherOrderLowLevel, HostExposedLayouts, ListLiteralElement, Literal,
+    ModifyRc, OptLevel, Proc, Stmt,
 };
 use crate::layout::{Builtin, Layout, ListLayout, RawFunctionLayout, UnionLayout};
 
@@ -24,7 +24,7 @@ pub const STATIC_LIST_NAME: ConstName = ConstName(b"THIS IS A STATIC LIST");
 const ENTRY_POINT_NAME: &[u8] = b"mainForHost";
 
 pub fn func_name_bytes(proc: &Proc) -> [u8; SIZE] {
-    func_name_bytes_help(proc.name, proc.args.iter().map(|x| x.0), proc.ret_layout)
+    func_name_bytes_help(proc.name, proc.args.iter().map(|x| x.0), &proc.ret_layout)
 }
 
 const DEBUG: bool = false;
@@ -53,7 +53,7 @@ impl TagUnionId {
 pub fn func_name_bytes_help<'a, I>(
     symbol: Symbol,
     argument_layouts: I,
-    return_layout: Layout<'a>,
+    return_layout: &Layout<'a>,
 ) -> [u8; SIZE]
 where
     I: Iterator<Item = Layout<'a>>,
@@ -162,13 +162,13 @@ where
                     match layout {
                         RawFunctionLayout::Function(_, _, _) => {
                             let it = top_level.arguments.iter().copied();
-                            let bytes = func_name_bytes_help(*symbol, it, top_level.result);
+                            let bytes = func_name_bytes_help(*symbol, it, &top_level.result);
 
                             host_exposed_functions.push((bytes, top_level.arguments));
                         }
                         RawFunctionLayout::ZeroArgumentThunk(_) => {
                             let it = std::iter::once(Layout::Struct(&[]));
-                            let bytes = func_name_bytes_help(*symbol, it, top_level.result);
+                            let bytes = func_name_bytes_help(*symbol, it, &top_level.result);
 
                             host_exposed_functions.push((bytes, top_level.arguments));
                         }
@@ -196,7 +196,7 @@ where
         let roc_main_bytes = func_name_bytes_help(
             entry_point.symbol,
             entry_point.layout.arguments.iter().copied(),
-            entry_point.layout.result,
+            &entry_point.layout.result,
         );
         let roc_main = FuncName(&roc_main_bytes);
 
@@ -660,7 +660,7 @@ fn call_spec(
 
             let arg_value_id = build_tuple_value(builder, env, block, call.arguments)?;
             let it = arg_layouts.iter().copied();
-            let bytes = func_name_bytes_help(*symbol, it, *ret_layout);
+            let bytes = func_name_bytes_help(*symbol, it, ret_layout);
             let name = FuncName(&bytes);
             let module = MOD_APP;
             builder.add_call(block, spec_var, module, name, arg_value_id)
@@ -688,7 +688,7 @@ fn call_spec(
             *update_mode,
             call.arguments,
         ),
-        HigherOrderLowLevel {
+        HigherOrder(HigherOrderLowLevel {
             specialization_id,
             closure_env_layout,
             update_mode,
@@ -698,7 +698,7 @@ fn call_spec(
             function_name,
             function_env,
             ..
-        } => {
+        }) => {
             use crate::low_level::HigherOrder::*;
 
             let array = specialization_id.to_bytes();
@@ -708,7 +708,7 @@ fn call_spec(
             let update_mode_var = UpdateModeVar(&mode);
 
             let it = arg_layouts.iter().copied();
-            let bytes = func_name_bytes_help(*function_name, it, *ret_layout);
+            let bytes = func_name_bytes_help(*function_name, it, ret_layout);
             let name = FuncName(&bytes);
             let module = MOD_APP;
 
@@ -1075,6 +1075,25 @@ fn call_spec(
                     add_loop(builder, block, state_type, init_state, loop_body)
                 }
                 ListAny { xs } => {
+                    let list = env.symbols[xs];
+
+                    let loop_body = |builder: &mut FuncDefBuilder, block, _state| {
+                        let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
+                        let element = builder.add_bag_get(block, bag)?;
+
+                        let new_state = call_function!(builder, block, [element]);
+
+                        Ok(new_state)
+                    };
+
+                    let state_layout = Layout::Builtin(Builtin::Int1);
+                    let state_type = layout_spec(builder, &state_layout)?;
+
+                    let init_state = new_num(builder, block)?;
+
+                    add_loop(builder, block, state_type, init_state, loop_body)
+                }
+                ListAll { xs } => {
                     let list = env.symbols[xs];
 
                     let loop_body = |builder: &mut FuncDefBuilder, block, _state| {
@@ -1477,14 +1496,14 @@ fn expr_spec<'a>(
                 }
                 UnionLayout::Recursive(_) => builder.add_make_tuple(block, &[cell_id, data_id])?,
                 UnionLayout::NullableWrapped { nullable_id, .. } => {
-                    if *tag_id == *nullable_id as u8 {
+                    if *tag_id == *nullable_id as _ {
                         data_id
                     } else {
                         builder.add_make_tuple(block, &[cell_id, data_id])?
                     }
                 }
                 UnionLayout::NullableUnwrapped { nullable_id, .. } => {
-                    if *tag_id == *nullable_id as u8 {
+                    if *tag_id == *nullable_id as _ {
                         data_id
                     } else {
                         builder.add_make_tuple(block, &[cell_id, data_id])?

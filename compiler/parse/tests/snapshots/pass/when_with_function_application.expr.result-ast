@@ -1,0 +1,54 @@
+When(
+    |L 0-0, C 5-6| Var {
+        module_name: "",
+        ident: "x",
+    },
+    [
+        WhenBranch {
+            patterns: [
+                |L 1-1, C 4-5| SpaceBefore(
+                    NumLiteral(
+                        "1",
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ],
+            value: |L 1-2, C 9-6| Apply(
+                |L 1-1, C 9-16| Var {
+                    module_name: "Num",
+                    ident: "neg",
+                },
+                [
+                    |L 2-2, C 5-6| SpaceBefore(
+                        Num(
+                            "2",
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                Space,
+            ),
+            guard: None,
+        },
+        WhenBranch {
+            patterns: [
+                |L 3-3, C 4-5| SpaceBefore(
+                    Underscore(
+                        "",
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ],
+            value: |L 3-3, C 9-10| Num(
+                "4",
+            ),
+            guard: None,
+        },
+    ],
+)

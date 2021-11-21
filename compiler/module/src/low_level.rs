@@ -1,3 +1,5 @@
+use crate::symbol::Symbol;
+
 /// Low-level operations that get translated directly into e.g. LLVM instructions.
 /// These are always wrapped when exposed to end users, and can only make it
 /// into an Expr when added directly by can::builtins
@@ -19,6 +21,7 @@ pub enum LowLevel {
     StrFromFloat,
     StrTrim,
     StrTrimLeft,
+    StrTrimRight,
     ListLen,
     ListGetUnsafe,
     ListSet,
@@ -43,12 +46,11 @@ pub enum LowLevel {
     ListKeepOks,
     ListKeepErrs,
     ListSortWith,
-    ListTakeFirst,
-    ListTakeLast,
-    ListDrop,
+    ListSublist,
     ListDropAt,
     ListSwap,
     ListAny,
+    ListAll,
     ListFindUnsafe,
     DictSize,
     DictEmpty,
@@ -115,106 +117,6 @@ pub enum LowLevel {
     ExpectTrue,
 }
 
-macro_rules! first_order {
-    () => {
-        StrConcat
-            | StrJoinWith
-            | StrIsEmpty
-            | StrStartsWith
-            | StrStartsWithCodePt
-            | StrEndsWith
-            | StrSplit
-            | StrCountGraphemes
-            | StrFromInt
-            | StrFromUtf8
-            | StrFromUtf8Range
-            | StrToUtf8
-            | StrRepeat
-            | StrTrim
-            | StrTrimLeft
-            | StrFromFloat
-            | ListLen
-            | ListGetUnsafe
-            | ListSet
-            | ListTakeFirst
-            | ListTakeLast
-            | ListDrop
-            | ListDropAt
-            | ListSingle
-            | ListRepeat
-            | ListReverse
-            | ListConcat
-            | ListContains
-            | ListAppend
-            | ListPrepend
-            | ListJoin
-            | ListRange
-            | ListSwap
-            | DictSize
-            | DictEmpty
-            | DictInsert
-            | DictRemove
-            | DictContains
-            | DictGetUnsafe
-            | DictKeys
-            | DictValues
-            | DictUnion
-            | DictIntersection
-            | DictDifference
-            | SetFromList
-            | NumAdd
-            | NumAddWrap
-            | NumAddChecked
-            | NumSub
-            | NumSubWrap
-            | NumSubChecked
-            | NumMul
-            | NumMulWrap
-            | NumMulChecked
-            | NumGt
-            | NumGte
-            | NumLt
-            | NumLte
-            | NumCompare
-            | NumDivUnchecked
-            | NumDivCeilUnchecked
-            | NumRemUnchecked
-            | NumIsMultipleOf
-            | NumAbs
-            | NumNeg
-            | NumSin
-            | NumCos
-            | NumSqrtUnchecked
-            | NumLogUnchecked
-            | NumRound
-            | NumToFloat
-            | NumPow
-            | NumCeiling
-            | NumPowInt
-            | NumFloor
-            | NumIsFinite
-            | NumAtan
-            | NumAcos
-            | NumAsin
-            | NumBitwiseAnd
-            | NumBitwiseXor
-            | NumBitwiseOr
-            | NumShiftLeftBy
-            | NumShiftRightBy
-            | NumBytesToU16
-            | NumBytesToU32
-            | NumShiftRightZfBy
-            | NumIntCast
-            | Eq
-            | NotEq
-            | And
-            | Or
-            | Not
-            | Hash
-            | ExpectTrue
-    };
-}
-
 macro_rules! higher_order {
     () => {
         ListMap
@@ -230,6 +132,7 @@ macro_rules! higher_order {
             | ListKeepErrs
             | ListSortWith
             | ListAny
+            | ListAll
             | ListFindUnsafe
             | DictWalk
     };
@@ -241,17 +144,13 @@ impl LowLevel {
     pub fn is_higher_order(&self) -> bool {
         use LowLevel::*;
 
-        match self {
-            first_order!() => false,
-            higher_order!() => true,
-        }
+        matches!(self, higher_order!())
     }
 
     pub fn function_argument_position(&self) -> usize {
         use LowLevel::*;
 
         match self {
-            first_order!() => unreachable!(),
             ListMap => 1,
             ListMap2 => 2,
             ListMap3 => 3,
@@ -265,8 +164,131 @@ impl LowLevel {
             ListKeepErrs => 1,
             ListSortWith => 1,
             ListAny => 1,
+            ListAll => 1,
             ListFindUnsafe => 1,
             DictWalk => 2,
+            _ => unreachable!(),
+        }
+    }
+
+    /// Used in dev backends to inline some lowlevel wrapper functions
+    /// For wrappers that contain logic, we return None to prevent inlining
+    /// (Mention each explicitly rather than using `_`, to show they have not been forgotten)
+    pub fn from_inlined_wrapper(symbol: Symbol) -> Option<LowLevel> {
+        use LowLevel::*;
+
+        match symbol {
+            Symbol::STR_CONCAT => Some(StrConcat),
+            Symbol::STR_JOIN_WITH => Some(StrJoinWith),
+            Symbol::STR_IS_EMPTY => Some(StrIsEmpty),
+            Symbol::STR_STARTS_WITH => Some(StrStartsWith),
+            Symbol::STR_STARTS_WITH_CODE_PT => Some(StrStartsWithCodePt),
+            Symbol::STR_ENDS_WITH => Some(StrEndsWith),
+            Symbol::STR_SPLIT => Some(StrSplit),
+            Symbol::STR_COUNT_GRAPHEMES => Some(StrCountGraphemes),
+            Symbol::STR_FROM_INT => Some(StrFromInt),
+            Symbol::STR_FROM_UTF8 => None,
+            Symbol::STR_FROM_UTF8_RANGE => None,
+            Symbol::STR_TO_UTF8 => Some(StrToUtf8),
+            Symbol::STR_REPEAT => Some(StrRepeat),
+            Symbol::STR_FROM_FLOAT => Some(StrFromFloat),
+            Symbol::STR_TRIM => Some(StrTrim),
+            Symbol::STR_TRIM_LEFT => Some(StrTrimLeft),
+            Symbol::STR_TRIM_RIGHT => Some(StrTrimRight),
+            Symbol::LIST_LEN => Some(ListLen),
+            Symbol::LIST_GET => None,
+            Symbol::LIST_SET => None,
+            Symbol::LIST_SINGLE => Some(ListSingle),
+            Symbol::LIST_REPEAT => Some(ListRepeat),
+            Symbol::LIST_REVERSE => Some(ListReverse),
+            Symbol::LIST_CONCAT => Some(ListConcat),
+            Symbol::LIST_CONTAINS => Some(ListContains),
+            Symbol::LIST_APPEND => Some(ListAppend),
+            Symbol::LIST_PREPEND => Some(ListPrepend),
+            Symbol::LIST_JOIN => Some(ListJoin),
+            Symbol::LIST_RANGE => Some(ListRange),
+            Symbol::LIST_MAP => Some(ListMap),
+            Symbol::LIST_MAP2 => Some(ListMap2),
+            Symbol::LIST_MAP3 => Some(ListMap3),
+            Symbol::LIST_MAP4 => Some(ListMap4),
+            Symbol::LIST_MAP_WITH_INDEX => Some(ListMapWithIndex),
+            Symbol::LIST_KEEP_IF => Some(ListKeepIf),
+            Symbol::LIST_WALK => Some(ListWalk),
+            Symbol::LIST_WALK_UNTIL => Some(ListWalkUntil),
+            Symbol::LIST_WALK_BACKWARDS => Some(ListWalkBackwards),
+            Symbol::LIST_KEEP_OKS => Some(ListKeepOks),
+            Symbol::LIST_KEEP_ERRS => Some(ListKeepErrs),
+            Symbol::LIST_SORT_WITH => Some(ListSortWith),
+            Symbol::LIST_SUBLIST => Some(ListSublist),
+            Symbol::LIST_DROP_AT => Some(ListDropAt),
+            Symbol::LIST_SWAP => Some(ListSwap),
+            Symbol::LIST_ANY => Some(ListAny),
+            Symbol::LIST_ALL => Some(ListAll),
+            Symbol::LIST_FIND => None,
+            Symbol::DICT_LEN => Some(DictSize),
+            Symbol::DICT_EMPTY => Some(DictEmpty),
+            Symbol::DICT_INSERT => Some(DictInsert),
+            Symbol::DICT_REMOVE => Some(DictRemove),
+            Symbol::DICT_CONTAINS => Some(DictContains),
+            Symbol::DICT_GET => None,
+            Symbol::DICT_KEYS => Some(DictKeys),
+            Symbol::DICT_VALUES => Some(DictValues),
+            Symbol::DICT_UNION => Some(DictUnion),
+            Symbol::DICT_INTERSECTION => Some(DictIntersection),
+            Symbol::DICT_DIFFERENCE => Some(DictDifference),
+            Symbol::DICT_WALK => Some(DictWalk),
+            Symbol::SET_FROM_LIST => Some(SetFromList),
+            Symbol::NUM_ADD => Some(NumAdd),
+            Symbol::NUM_ADD_WRAP => Some(NumAddWrap),
+            Symbol::NUM_ADD_CHECKED => None,
+            Symbol::NUM_SUB => Some(NumSub),
+            Symbol::NUM_SUB_WRAP => Some(NumSubWrap),
+            Symbol::NUM_SUB_CHECKED => None,
+            Symbol::NUM_MUL => Some(NumMul),
+            Symbol::NUM_MUL_WRAP => Some(NumMulWrap),
+            Symbol::NUM_MUL_CHECKED => None,
+            Symbol::NUM_GT => Some(NumGt),
+            Symbol::NUM_GTE => Some(NumGte),
+            Symbol::NUM_LT => Some(NumLt),
+            Symbol::NUM_LTE => Some(NumLte),
+            Symbol::NUM_COMPARE => Some(NumCompare),
+            Symbol::NUM_DIV_FLOAT => None,
+            Symbol::NUM_DIV_CEIL => None,
+            Symbol::NUM_REM => None,
+            Symbol::NUM_IS_MULTIPLE_OF => Some(NumIsMultipleOf),
+            Symbol::NUM_ABS => Some(NumAbs),
+            Symbol::NUM_NEG => Some(NumNeg),
+            Symbol::NUM_SIN => Some(NumSin),
+            Symbol::NUM_COS => Some(NumCos),
+            Symbol::NUM_SQRT => None,
+            Symbol::NUM_LOG => None,
+            Symbol::NUM_ROUND => Some(NumRound),
+            Symbol::NUM_TO_FLOAT => Some(NumToFloat),
+            Symbol::NUM_POW => Some(NumPow),
+            Symbol::NUM_CEILING => Some(NumCeiling),
+            Symbol::NUM_POW_INT => Some(NumPowInt),
+            Symbol::NUM_FLOOR => Some(NumFloor),
+            // => Some(NumIsFinite),
+            Symbol::NUM_ATAN => Some(NumAtan),
+            Symbol::NUM_ACOS => Some(NumAcos),
+            Symbol::NUM_ASIN => Some(NumAsin),
+            Symbol::NUM_BYTES_TO_U16 => None,
+            Symbol::NUM_BYTES_TO_U32 => None,
+            Symbol::NUM_BITWISE_AND => Some(NumBitwiseAnd),
+            Symbol::NUM_BITWISE_XOR => Some(NumBitwiseXor),
+            Symbol::NUM_BITWISE_OR => Some(NumBitwiseOr),
+            Symbol::NUM_SHIFT_LEFT => Some(NumShiftLeftBy),
+            Symbol::NUM_SHIFT_RIGHT => Some(NumShiftRightBy),
+            Symbol::NUM_SHIFT_RIGHT_ZERO_FILL => Some(NumShiftRightZfBy),
+            Symbol::NUM_INT_CAST => Some(NumIntCast),
+            Symbol::BOOL_EQ => Some(Eq),
+            Symbol::BOOL_NEQ => Some(NotEq),
+            Symbol::BOOL_AND => Some(And),
+            Symbol::BOOL_OR => Some(Or),
+            Symbol::BOOL_NOT => Some(Not),
+            // => Some(Hash),
+            // => Some(ExpectTrue),
+            _ => None,
         }
     }
 }

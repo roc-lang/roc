@@ -76,6 +76,66 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
     }
 }
 
+pub fn basic_type_from_layout_1<'a, 'ctx, 'env>(
+    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
+    layout: &Layout<'_>,
+) -> BasicTypeEnum<'ctx> {
+    use Layout::*;
+
+    match layout {
+        Struct(sorted_fields) => basic_type_from_record(env, sorted_fields),
+        LambdaSet(lambda_set) => {
+            basic_type_from_layout_1(env, &lambda_set.runtime_representation())
+        }
+        Union(union_layout) => {
+            use UnionLayout::*;
+
+            let tag_id_type = basic_type_from_layout(env, &union_layout.tag_id_layout());
+
+            match union_layout {
+                NonRecursive(tags) => {
+                    let data = block_of_memory_slices(env.context, tags, env.ptr_bytes);
+                    let struct_type = env.context.struct_type(&[data, tag_id_type], false);
+
+                    struct_type.ptr_type(AddressSpace::Generic).into()
+                }
+                Recursive(tags)
+                | NullableWrapped {
+                    other_tags: tags, ..
+                } => {
+                    let data = block_of_memory_slices(env.context, tags, env.ptr_bytes);
+
+                    if union_layout.stores_tag_id_as_data(env.ptr_bytes) {
+                        env.context
+                            .struct_type(&[data, tag_id_type], false)
+                            .ptr_type(AddressSpace::Generic)
+                            .into()
+                    } else {
+                        data.ptr_type(AddressSpace::Generic).into()
+                    }
+                }
+                NullableUnwrapped { other_fields, .. } => {
+                    let block = block_of_memory_slices(env.context, &[other_fields], env.ptr_bytes);
+                    block.ptr_type(AddressSpace::Generic).into()
+                }
+                NonNullableUnwrapped(fields) => {
+                    let block = block_of_memory_slices(env.context, &[fields], env.ptr_bytes);
+                    block.ptr_type(AddressSpace::Generic).into()
+                }
+            }
+        }
+        RecursivePointer => {
+            // TODO make this dynamic
+            env.context
+                .i64_type()
+                .ptr_type(AddressSpace::Generic)
+                .as_basic_type_enum()
+        }
+
+        Builtin(builtin) => basic_type_from_builtin(env, builtin),
+    }
+}
+
 pub fn basic_type_from_builtin<'a, 'ctx, 'env>(
     env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
     builtin: &Builtin<'_>,

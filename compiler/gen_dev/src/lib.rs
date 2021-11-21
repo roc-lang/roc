@@ -227,97 +227,30 @@ where
                         ret_layout,
                         ..
                     } => {
-                        // For most builtins instead of calling a function, we can just inline the low level.
-                        match *func_sym {
-                            Symbol::NUM_ABS => self.build_run_low_level(
+                        // If this function is just a lowlevel wrapper, then inline it
+                        if let Some(lowlevel) = LowLevel::from_inlined_wrapper(*func_sym) {
+                            self.build_run_low_level(
                                 sym,
-                                &LowLevel::NumAbs,
+                                &lowlevel,
                                 arguments,
                                 arg_layouts,
                                 ret_layout,
-                            ),
-                            Symbol::NUM_ADD => self.build_run_low_level(
-                                sym,
-                                &LowLevel::NumAdd,
-                                arguments,
-                                arg_layouts,
-                                ret_layout,
-                            ),
-                            Symbol::NUM_ACOS => self.build_run_low_level(
-                                sym,
-                                &LowLevel::NumAcos,
-                                arguments,
-                                arg_layouts,
-                                ret_layout,
-                            ),
-                            Symbol::NUM_ASIN => self.build_run_low_level(
-                                sym,
-                                &LowLevel::NumAsin,
-                                arguments,
-                                arg_layouts,
-                                ret_layout,
-                            ),
-                            Symbol::NUM_ATAN => self.build_run_low_level(
-                                sym,
-                                &LowLevel::NumAtan,
-                                arguments,
-                                arg_layouts,
-                                ret_layout,
-                            ),
-                            Symbol::NUM_MUL => self.build_run_low_level(
-                                sym,
-                                &LowLevel::NumMul,
-                                arguments,
-                                arg_layouts,
-                                ret_layout,
-                            ),
-                            Symbol::NUM_POW_INT => self.build_run_low_level(
-                                sym,
-                                &LowLevel::NumPowInt,
-                                arguments,
-                                arg_layouts,
-                                ret_layout,
-                            ),
-                            Symbol::NUM_SUB => self.build_run_low_level(
-                                sym,
-                                &LowLevel::NumSub,
-                                arguments,
-                                arg_layouts,
-                                ret_layout,
-                            ),
-                            Symbol::NUM_ROUND => self.build_run_low_level(
-                                sym,
-                                &LowLevel::NumRound,
-                                arguments,
-                                arg_layouts,
-                                ret_layout,
-                            ),
-                            Symbol::BOOL_EQ => self.build_run_low_level(
-                                sym,
-                                &LowLevel::Eq,
-                                arguments,
-                                arg_layouts,
-                                ret_layout,
-                            ),
-                            Symbol::STR_CONCAT => self.build_run_low_level(
-                                sym,
-                                &LowLevel::StrConcat,
-                                arguments,
-                                arg_layouts,
-                                ret_layout,
-                            ),
-                            x if x
-                                .module_string(&self.env().interns)
-                                .starts_with(ModuleName::APP) =>
-                            {
-                                let fn_name = LayoutIds::default()
-                                    .get(*func_sym, layout)
-                                    .to_symbol_string(*func_sym, &self.env().interns);
-                                // Now that the arguments are needed, load them if they are literals.
-                                self.load_literal_symbols(arguments)?;
-                                self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
-                            }
-                            x => Err(format!("the function, {:?}, is not yet implemented", x)),
+                            )
+                        } else if func_sym
+                            .module_string(&self.env().interns)
+                            .starts_with(ModuleName::APP)
+                        {
+                            let fn_name = LayoutIds::default()
+                                .get(*func_sym, layout)
+                                .to_symbol_string(*func_sym, &self.env().interns);
+                            // Now that the arguments are needed, load them if they are literals.
+                            self.load_literal_symbols(arguments)?;
+                            self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
+                        } else {
+                            Err(format!(
+                                "the function, {:?}, is not yet implemented",
+                                func_sym
+                            ))
                         }
                     }
 
@@ -435,6 +368,18 @@ where
                 );
                 self.build_num_mul(sym, &args[0], &args[1], ret_layout)
             }
+            LowLevel::NumNeg => {
+                debug_assert_eq!(
+                    1,
+                    args.len(),
+                    "NumNeg: expected to have exactly one argument"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], *ret_layout,
+                    "NumNeg: expected to have the same argument and return layout"
+                );
+                self.build_num_neg(sym, &args[0], ret_layout)
+            }
             LowLevel::NumPowInt => self.build_fn_call(
                 sym,
                 bitcode::NUM_POW_INT[IntWidth::I64].to_string(),
@@ -470,6 +415,40 @@ where
                     "Eq: expected to have return layout of type I1"
                 );
                 self.build_eq(sym, &args[0], &args[1], &arg_layouts[0])
+            }
+            LowLevel::NotEq => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "NotEq: expected to have exactly two argument"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], arg_layouts[1],
+                    "NotEq: expected all arguments of to have the same layout"
+                );
+                debug_assert_eq!(
+                    Layout::Builtin(Builtin::Int1),
+                    *ret_layout,
+                    "NotEq: expected to have return layout of type I1"
+                );
+                self.build_neq(sym, &args[0], &args[1], &arg_layouts[0])
+            }
+            LowLevel::NumLt => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "NumLt: expected to have exactly two argument"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], arg_layouts[1],
+                    "NumLt: expected all arguments of to have the same layout"
+                );
+                debug_assert_eq!(
+                    Layout::Builtin(Builtin::Int1),
+                    *ret_layout,
+                    "NumLt: expected to have return layout of type I1"
+                );
+                self.build_num_lt(sym, &args[0], &args[1], &arg_layouts[0])
             }
             LowLevel::NumRound => self.build_fn_call(
                 sym,
@@ -526,6 +505,14 @@ where
         layout: &Layout<'a>,
     ) -> Result<(), String>;
 
+    /// build_num_neg stores the negated value of src into dst.
+    fn build_num_neg(
+        &mut self,
+        dst: &Symbol,
+        src: &Symbol,
+        layout: &Layout<'a>,
+    ) -> Result<(), String>;
+
     /// build_num_sub stores the `src1 - src2` difference into dst.
     fn build_num_sub(
         &mut self,
@@ -537,6 +524,24 @@ where
 
     /// build_eq stores the result of `src1 == src2` into dst.
     fn build_eq(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        arg_layout: &Layout<'a>,
+    ) -> Result<(), String>;
+
+    /// build_neq stores the result of `src1 != src2` into dst.
+    fn build_neq(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        arg_layout: &Layout<'a>,
+    ) -> Result<(), String>;
+
+    /// build_num_lt stores the result of `src1 < src2` into dst.
+    fn build_num_lt(
         &mut self,
         dst: &Symbol,
         src1: &Symbol,
@@ -785,7 +790,7 @@ where
         match call_type {
             CallType::ByName { .. } => {}
             CallType::LowLevel { .. } => {}
-            CallType::HigherOrderLowLevel { .. } => {}
+            CallType::HigherOrder { .. } => {}
             CallType::Foreign { .. } => {}
         }
     }
