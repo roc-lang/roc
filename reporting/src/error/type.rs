@@ -2539,7 +2539,7 @@ fn type_problem_to_pretty<'b>(
             };
 
             let bad_double_rigid = |a, b| {
-                let line = r#" as separate type variables. Your code seems to be saying they are the same though. Maybe they should be the same your type annotation? Maybe your code uses them in a weird way?"#;
+                let line = r#" as separate type variables. Your code seems to be saying they are the same though. Maybe they should be the same in your type annotation? Maybe your code uses them in a weird way?"#;
 
                 alloc
                     .tip()

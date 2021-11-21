@@ -1877,8 +1877,8 @@ mod test_reporting {
 
                 Tip: Your type annotation uses `b` and `a` as separate type variables.
                 Your code seems to be saying they are the same though. Maybe they
-                should be the same your type annotation? Maybe your code uses them in
-                a weird way?
+                should be the same in your type annotation? Maybe your code uses them
+                in a weird way?
                 "#
             ),
         )
