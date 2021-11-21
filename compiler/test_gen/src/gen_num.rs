@@ -358,7 +358,7 @@ fn u8_hex_int_alias() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn dec_float_alias() {
     assert_evals_to!(
         indoc!(
@@ -719,6 +719,20 @@ fn gen_int_neq() {
         indoc!(
             r#"
                     4 != 5
+                "#
+        ),
+        true,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn gen_int_less_than() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    4 < 5
                 "#
         ),
         true,

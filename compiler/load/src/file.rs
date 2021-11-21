@@ -3627,11 +3627,7 @@ fn fabricate_effects_module<'a>(
         scope,
     };
 
-    let constraint = constrain_module(
-        &module_output.aliases,
-        &module_output.declarations,
-        module_id,
-    );
+    let constraint = constrain_module(&module_output.declarations, module_id);
 
     let module = Module {
         module_id,
@@ -3764,11 +3760,7 @@ where
                 )),
             };
 
-            let constraint = constrain_module(
-                &module_output.aliases,
-                &module_output.declarations,
-                module_id,
-            );
+            let constraint = constrain_module(&module_output.declarations, module_id);
 
             let module = Module {
                 module_id,

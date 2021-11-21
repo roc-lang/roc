@@ -1139,8 +1139,17 @@ impl<'a> BranchInfo<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ModifyRc {
+    /// Increment a reference count
     Inc(Symbol, u64),
+    /// Decrement a reference count
     Dec(Symbol),
+    /// A DecRef is a non-recursive reference count decrement
+    /// e.g. If we Dec a list of lists, then if the reference count of the outer list is one,
+    /// a Dec will recursively decrement all elements, then free the memory of the outer list.
+    /// A DecRef would just free the outer list.
+    /// That is dangerous because you may not free the elements, but in our Zig builtins,
+    /// sometimes we know we already dealt with the elements (e.g. by copying them all over
+    /// to a new list) and so we can just do a DecRef, which is much cheaper in such a case.
     DecRef(Symbol),
 }
 
