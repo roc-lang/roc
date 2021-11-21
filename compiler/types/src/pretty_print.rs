@@ -4,7 +4,7 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 
-static WILDCARD: &str = "*";
+pub static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
 static EMPTY_TAG_UNION: &str = "[]";
 

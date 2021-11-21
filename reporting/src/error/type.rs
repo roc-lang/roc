@@ -5,7 +5,7 @@ use roc_module::ident::{Ident, IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_solve::solve;
-use roc_types::pretty_print::Parens;
+use roc_types::pretty_print::{Parens, WILDCARD};
 use roc_types::types::{Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt};
 use std::path::PathBuf;
 
@@ -355,18 +355,44 @@ fn to_expr_report<'b>(
                 TypedBody { .. } => "The body is".into(),
             };
 
-            let comparison = type_comparison(
-                alloc,
-                found,
-                expected_type,
-                add_category(alloc, alloc.text(it_is), &category),
-                alloc.concat(vec![
-                    alloc.text("But the type annotation"),
-                    on_name_text,
-                    alloc.text(" says it should be:"),
-                ]),
-                None,
-            );
+            let i_am_seeing = add_category(alloc, alloc.text(it_is), &category);
+
+            // TODO: can comparisons between wildcards happen outside the context of an annotation?
+            let comparison = if is_wildcards_comparison(&found, &expected_type) {
+                alloc.stack(vec![
+                    i_am_seeing,
+                    alloc.type_block(to_doc(alloc, Parens::Unnecessary, found)),
+                    alloc.concat(vec![
+                        alloc.reflow("But the type annotation on "),
+                        on_name_text,
+                        alloc.reflow(" says it should be a "),
+                        alloc.type_str(WILDCARD),
+                        alloc.reflow(" too! This tells me that the type is connected in a way that doesn't require a wildcard."),
+                    ]),
+                    alloc.concat(vec![
+                        alloc.reflow("Since the type has to be the same in both places, the type can be more specific than "),
+                        alloc.type_str(WILDCARD),
+                        alloc.reflow(". You can change the "),
+                        alloc.type_str(WILDCARD),
+                        alloc.reflow(" to a named type variable like "),
+                        alloc.type_variable("a".into()),
+                        alloc.reflow(" to reflect the connection.")
+                    ]),
+                ])
+            } else {
+                type_comparison(
+                    alloc,
+                    found,
+                    expected_type,
+                    i_am_seeing,
+                    alloc.concat(vec![
+                        alloc.text("But the type annotation"),
+                        on_name_text,
+                        alloc.text(" says it should be:"),
+                    ]),
+                    None,
+                )
+            };
 
             Report {
                 title: "TYPE MISMATCH".to_string(),
@@ -888,6 +914,14 @@ fn to_expr_report<'b>(
                 unimplemented!("record default field is not implemented yet")
             }
         },
+    }
+}
+
+fn is_wildcards_comparison(type1: &ErrorType, type2: &ErrorType) -> bool {
+    use ErrorType::*;
+    match (type1, type2) {
+        (RigidVar(v1), RigidVar(v2)) if v1.as_str() == WILDCARD && v2.as_str() == WILDCARD => true,
+        _ => false,
     }
 }
 

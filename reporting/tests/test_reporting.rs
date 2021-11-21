@@ -6761,8 +6761,44 @@ I need all branches in an `if` to have the same type!
 
                 Tip: Your type annotation uses `a` and `b` as separate type variables.
                 Your code seems to be saying they are the same though. Maybe they
-                should be the same your type annotation? Maybe your code uses them in
-                a weird way?
+                should be the same in your type annotation? Maybe your code uses them
+                in a weird way?
+                "#
+            ),
+        )
+    }
+
+    fn error_wildcards_are_related() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : * -> *
+                f = \x -> x
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with the body of the `f` definition:
+
+                1│  f : * -> *
+                2│  f = \x -> x
+                              ^
+
+                This `x` value is a:
+
+                    *
+
+                But the type annotation on  on `f` says it should be a * too! This tells
+                me that the type is connected in a way that doesn't require a
+                wildcard.
+
+                Since the type has to be the same in both places, the type can be more
+                specific than *. You can change the * to a named type variable like `a`
+                to reflect the connection.
                 "#
             ),
         )
