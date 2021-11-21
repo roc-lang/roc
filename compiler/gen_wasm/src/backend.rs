@@ -623,6 +623,21 @@ impl<'a> WasmBackend<'a> {
             }
 
             StoredValue::StackMemory { location, .. } => match lit {
+                Literal::Decimal(decimal) => {
+                    let (local_id, offset) =
+                        location.local_and_offset(self.storage.stack_frame_pointer);
+
+                    let lower_bits = decimal.0 as i64;
+                    let upper_bits = (decimal.0 >> 64) as i64;
+
+                    self.code_builder.get_local(local_id);
+                    self.code_builder.i64_const(lower_bits);
+                    self.code_builder.i64_store(Align::Bytes8, offset);
+
+                    self.code_builder.get_local(local_id);
+                    self.code_builder.i64_const(upper_bits);
+                    self.code_builder.i64_store(Align::Bytes8, offset + 8);
+                }
                 Literal::Str(string) => {
                     let (local_id, offset) =
                         location.local_and_offset(self.storage.stack_frame_pointer);
