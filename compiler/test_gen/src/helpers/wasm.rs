@@ -92,7 +92,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
         //     println!("");
         //     for proc in procedures.values() {
         //         println!("{}", proc.to_pretty(200));
-        //     }    
+        //     }
         // } else {
         //     println!("{:?}", procedures.values());
         // }
