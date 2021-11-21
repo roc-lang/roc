@@ -247,25 +247,21 @@ impl<'a> Storage<'a> {
             } => {
                 let (local_id, offset) = location.local_and_offset(self.stack_frame_pointer);
 
-                let get_addr = |cb: &mut CodeBuilder| {
-                    cb.get_local(local_id);
-                    if offset != 0 {
-                        cb.i32_const(offset as i32);
-                        cb.i32_add();
-                    }
-                };
-
                 if format == StackMemoryFormat::Aggregate {
-                    get_addr(code_builder);
+                    code_builder.get_local(local_id);
+                    if offset != 0 {
+                        code_builder.i32_const(offset as i32);
+                        code_builder.i32_add();
+                    }
                     code_builder.set_top_symbol(sym);
                 } else {
                     // It's one of the 128-bit numbers, all of which we load as two i64's
                     // (Mark the same Symbol twice. Shouldn't matter except for debugging.)
-                    get_addr(code_builder);
+                    code_builder.get_local(local_id);
                     code_builder.i64_load(Align::Bytes8, offset);
                     code_builder.set_top_symbol(sym);
 
-                    get_addr(code_builder);
+                    code_builder.get_local(local_id);
                     code_builder.i64_load(Align::Bytes8, offset + 8);
                     code_builder.set_top_symbol(sym);
                 }
