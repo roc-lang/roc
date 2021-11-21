@@ -123,7 +123,7 @@ fn hash_builtin<'a, 'ctx, 'env>(
     let ptr_bytes = env.ptr_bytes;
 
     match builtin {
-        Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal | Builtin::Usize => {
+        Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal => {
             let hash_bytes = store_and_use_as_u8_ptr(env, val, layout);
             hash_bitcode_fn(env, seed, hash_bytes, layout.stack_size(ptr_bytes))
         }

@@ -121,7 +121,6 @@ fn build_eq_builtin<'a, 'ctx, 'env>(
         }
 
         Builtin::Bool => int_cmp(IntPredicate::EQ, "eq_i1"),
-        Builtin::Usize => int_cmp(IntPredicate::EQ, "eq_usize"),
         Builtin::Decimal => call_bitcode_fn(env, &[lhs_val, rhs_val], bitcode::DEC_EQ),
 
         Builtin::Str => str_equal(env, lhs_val, rhs_val),
@@ -285,7 +284,6 @@ fn build_neq_builtin<'a, 'ctx, 'env>(
         }
 
         Builtin::Bool => int_cmp(IntPredicate::NE, "neq_i1"),
-        Builtin::Usize => int_cmp(IntPredicate::NE, "neq_usize"),
         Builtin::Decimal => call_bitcode_fn(env, &[lhs_val, rhs_val], bitcode::DEC_NEQ),
 
         Builtin::Str => {

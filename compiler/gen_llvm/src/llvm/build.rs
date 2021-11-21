@@ -743,9 +743,6 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
             Layout::Builtin(Builtin::Bool) => {
                 env.context.bool_type().const_int(*int as u64, false).into()
             }
-            Layout::Builtin(Builtin::Usize) => ptr_int(env.context, env.ptr_bytes)
-                .const_int(*int as u64, false)
-                .into(),
             Layout::Builtin(Builtin::Int(int_width)) => {
                 int_with_precision(env, *int as i128, *int_width).into()
             }
@@ -3340,7 +3337,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
 
             builder.position_at_end(entry);
 
-            let wrapped_layout = roc_result_layout(env.arena, return_layout);
+            let wrapped_layout = roc_result_layout(env.arena, return_layout, env.ptr_bytes);
             call_roc_function(env, roc_function, &wrapped_layout, arguments_for_call)
         } else {
             call_roc_function(env, roc_function, &return_layout, arguments_for_call)
@@ -3817,8 +3814,8 @@ fn make_exception_catcher<'a, 'ctx, 'env>(
     function_value
 }
 
-fn roc_result_layout<'a>(arena: &'a Bump, return_layout: Layout<'a>) -> Layout<'a> {
-    let elements = [Layout::u64(), Layout::usize(), return_layout];
+fn roc_result_layout<'a>(arena: &'a Bump, return_layout: Layout<'a>, ptr_bytes: u32) -> Layout<'a> {
+    let elements = [Layout::u64(), Layout::usize(ptr_bytes), return_layout];
 
     Layout::Struct(arena.alloc(elements))
 }
@@ -4943,7 +4940,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                     Layout::Builtin(Builtin::List(element_layout)),
                     Layout::Builtin(Builtin::List(result_layout)),
                 ) => {
-                    let argument_layouts = &[Layout::Builtin(Builtin::Usize), **element_layout];
+                    let argument_layouts = &[Layout::usize(env.ptr_bytes), **element_layout];
 
                     let roc_function_call = roc_function_call(
                         env,
@@ -5556,7 +5553,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                     use roc_mono::layout::Builtin::*;
 
                     match arg_builtin {
-                        Usize | Int(_) => {
+                        Int(_) => {
                             let int_width = intwidth_from_builtin(*arg_builtin, env.ptr_bytes);
                             let int_type = convert::int_type_from_int_width(env, int_width);
                             build_int_unary_op(env, arg.into_int_value(), int_type, op)
@@ -5648,31 +5645,6 @@ fn run_low_level<'a, 'ctx, 'env>(
 
                             let is_less_than = env.builder.build_int_compare(
                                 predicate,
-                                lhs_arg.into_int_value(),
-                                rhs_arg.into_int_value(),
-                                "int_compare",
-                            );
-
-                            let step1 =
-                                env.builder
-                                    .build_select(is_less_than, tag_lt, tag_gt, "lt_or_gt");
-
-                            env.builder.build_select(
-                                are_equal,
-                                tag_eq,
-                                step1.into_int_value(),
-                                "lt_or_gt",
-                            )
-                        }
-                        Usize => {
-                            let are_equal = env.builder.build_int_compare(
-                                IntPredicate::EQ,
-                                lhs_arg.into_int_value(),
-                                rhs_arg.into_int_value(),
-                                "int_eq",
-                            );
-                            let is_less_than = env.builder.build_int_compare(
-                                IntPredicate::ULT,
                                 lhs_arg.into_int_value(),
                                 rhs_arg.into_int_value(),
                                 "int_compare",
@@ -6131,7 +6103,7 @@ fn to_cc_type_builtin<'a, 'ctx, 'env>(
     builtin: &Builtin<'a>,
 ) -> BasicTypeEnum<'ctx> {
     match builtin {
-        Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Usize | Builtin::Decimal => {
+        Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal => {
             basic_type_from_builtin(env, builtin)
         }
         Builtin::Str | Builtin::EmptyStr | Builtin::List(_) | Builtin::EmptyList => {

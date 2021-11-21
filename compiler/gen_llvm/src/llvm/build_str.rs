@@ -289,7 +289,7 @@ pub fn str_from_int<'a, 'ctx, 'env>(
 
     match int_layout {
         Layout::Builtin(builtin) => match builtin {
-            Builtin::Usize | Builtin::Int(_) => {
+            Builtin::Int(_) => {
                 let intwidth = intwidth_from_builtin(*builtin, env.ptr_bytes);
                 call_bitcode_fn(env, &[int], &bitcode::STR_FROM_INT[intwidth])
             }
