@@ -1493,7 +1493,7 @@ fn neg_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
 
 // helper function for `set*` instructions
 #[inline(always)]
-fn set_reg64_help(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg, value: u8) {
+fn set_reg64_help(op_code: u8, buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     // XOR needs 3 bytes, actual SETE instruction need 3 or 4 bytes
     buf.reserve(7);
 
@@ -1501,10 +1501,10 @@ fn set_reg64_help(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg, value: u8) {
     let reg_mod = reg as u8 % 8;
     use X86_64GeneralReg::*;
     match reg {
-        RAX | RCX | RDX | RBX => buf.extend(&[0x0F, value, 0xC0 + reg_mod]),
-        RSP | RBP | RSI | RDI => buf.extend(&[REX, 0x0F, value, 0xC0 + reg_mod]),
+        RAX | RCX | RDX | RBX => buf.extend(&[0x0F, op_code, 0xC0 + reg_mod]),
+        RSP | RBP | RSI | RDI => buf.extend(&[REX, 0x0F, op_code, 0xC0 + reg_mod]),
         R8 | R9 | R10 | R11 | R12 | R13 | R14 | R15 => {
-            buf.extend(&[REX + 1, 0x0F, value, 0xC0 + reg_mod])
+            buf.extend(&[REX + 1, 0x0F, op_code, 0xC0 + reg_mod])
         }
     }
 
@@ -1516,19 +1516,19 @@ fn set_reg64_help(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg, value: u8) {
 /// `SETE r/m64` -> Set Byte on Condition - zero/equal (ZF=1)
 #[inline(always)]
 fn sete_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
-    set_reg64_help(buf, reg, 0x94);
+    set_reg64_help(0x94, buf, reg);
 }
 
 /// `SETNE r/m64` -> Set byte if not equal (ZF=0).
 #[inline(always)]
 fn setne_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
-    set_reg64_help(buf, reg, 0x95);
+    set_reg64_help(0x95, buf, reg);
 }
 
 /// `SETL r/m64` -> Set byte if less (SF≠ OF).
 #[inline(always)]
 fn setl_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
-    set_reg64_help(buf, reg, 0x9c);
+    set_reg64_help(0x9c, buf, reg);
 }
 
 /// `RET` -> Near return to calling procedure.
@@ -2100,7 +2100,7 @@ mod tests {
             ],
         );
         buf.clear();
-        set_reg64_help(&mut buf, reg, 0x94); // sete_reg64
+        set_reg64_help(0x94, &mut buf, reg); // sete_reg64
         assert_eq!(expected, &buf[..]);
 
         // tests for 8 bytes in the output buffer
@@ -2125,7 +2125,7 @@ mod tests {
             ),
         ] {
             buf.clear();
-            set_reg64_help(&mut buf, *reg, 0x94); // sete_reg64
+            set_reg64_help(0x94, &mut buf, *reg); // sete_reg64
             assert_eq!(expected, &buf[..]);
         }
     }
