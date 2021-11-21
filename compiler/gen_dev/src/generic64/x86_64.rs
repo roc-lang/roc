@@ -1119,16 +1119,6 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
-    fn num_is_zero_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: X86_64GeneralReg,
-        src: X86_64GeneralReg,
-    ) {
-        test_reg64_reg64(buf, src, src);
-        sete_reg64(buf, dst);
-    }
-
-    #[inline(always)]
     fn ret(buf: &mut Vec<'_, u8>) {
         ret(buf);
     }
@@ -1297,6 +1287,7 @@ fn cmp_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64Gene
 }
 
 /// `TEST r/m64,r64` -> AND r64 with r/m64; set SF, ZF, PF according to result.
+#[allow(dead_code)]
 #[inline(always)]
 fn test_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
     binop_reg64_reg64(0x85, buf, dst, src);

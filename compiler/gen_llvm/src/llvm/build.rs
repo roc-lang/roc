@@ -5678,9 +5678,6 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             build_num_binop(env, parent, lhs_arg, lhs_layout, rhs_arg, rhs_layout, op)
         }
-        NumIsZero => {
-            unreachable!("These low-level operations are gen-dev only");
-        }
         NumBitwiseAnd | NumBitwiseOr | NumBitwiseXor => {
             debug_assert_eq!(args.len(), 2);
 

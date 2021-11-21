@@ -5,7 +5,7 @@
 use bumpalo::{collections::Vec, Bump};
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
-use roc_module::ident::{ModuleName, TagName};
+use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::ir::{
@@ -236,21 +236,13 @@ where
                                 arg_layouts,
                                 ret_layout,
                             )
-                        } else if func_sym
-                            .module_string(&self.env().interns)
-                            .starts_with(ModuleName::APP)
-                        {
+                        } else {
                             let fn_name = LayoutIds::default()
                                 .get(*func_sym, layout)
                                 .to_symbol_string(*func_sym, &self.env().interns);
                             // Now that the arguments are needed, load them if they are literals.
                             self.load_literal_symbols(arguments)?;
                             self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
-                        } else {
-                            Err(format!(
-                                "the function, {:?}, is not yet implemented",
-                                func_sym
-                            ))
                         }
                     }
 
@@ -450,19 +442,6 @@ where
                 );
                 self.build_num_lt(sym, &args[0], &args[1], &arg_layouts[0])
             }
-            LowLevel::NumIsZero => {
-                debug_assert_eq!(
-                    1,
-                    args.len(),
-                    "NumIsZero: expected to have exactly one argument"
-                );
-                debug_assert_eq!(
-                    Layout::Builtin(Builtin::Int1),
-                    *ret_layout,
-                    "NumIsZero: expected to have return layout of type I1"
-                );
-                self.build_num_is_zero(sym, &args[0], ret_layout)
-            }
             LowLevel::NumRound => self.build_fn_call(
                 sym,
                 bitcode::NUM_ROUND[FloatWidth::F64].to_string(),
@@ -559,14 +538,6 @@ where
         dst: &Symbol,
         src1: &Symbol,
         src2: &Symbol,
-        arg_layout: &Layout<'a>,
-    ) -> Result<(), String>;
-
-    /// build_num_is_zero stores the result of `src == 0` into dst.
-    fn build_num_is_zero(
-        &mut self,
-        dst: &Symbol,
-        src: &Symbol,
         arg_layout: &Layout<'a>,
     ) -> Result<(), String>;
 

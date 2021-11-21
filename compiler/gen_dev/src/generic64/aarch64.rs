@@ -511,15 +511,6 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
-    fn num_is_zero_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src: AArch64GeneralReg,
-    ) {
-        unimplemented!("registers is zero not implemented yet for AArch64");
-    }
-
-    #[inline(always)]
     fn ret(buf: &mut Vec<'_, u8>) {
         ret_reg64(buf, AArch64GeneralReg::LR)
     }
