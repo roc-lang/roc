@@ -319,6 +319,7 @@ fn to_expr_report<'b>(
                 TypedIfBranch {
                     index,
                     num_branches,
+                    region: _,
                 } if num_branches == 2 => alloc.concat(vec![
                     alloc.keyword(if index == Index::FIRST {
                         "then"
@@ -335,7 +336,7 @@ fn to_expr_report<'b>(
                     alloc.keyword("if"),
                     alloc.text(" expression:"),
                 ]),
-                TypedWhenBranch { index } => alloc.concat(vec![
+                TypedWhenBranch { index, region: _ } => alloc.concat(vec![
                     alloc.string(index.ordinal()),
                     alloc.reflow(" branch of this "),
                     alloc.keyword("when"),

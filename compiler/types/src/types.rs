@@ -1109,9 +1109,28 @@ pub enum PReason {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnnotationSource {
-    TypedIfBranch { index: Index, num_branches: usize },
-    TypedWhenBranch { index: Index },
-    TypedBody { region: Region },
+    TypedIfBranch {
+        index: Index,
+        num_branches: usize,
+        region: Region,
+    },
+    TypedWhenBranch {
+        index: Index,
+        region: Region,
+    },
+    TypedBody {
+        region: Region,
+    },
+}
+
+impl AnnotationSource {
+    pub fn region(&self) -> Region {
+        match self {
+            &Self::TypedIfBranch { region, .. }
+            | &Self::TypedWhenBranch { region, .. }
+            | &Self::TypedBody { region, .. } => region,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
