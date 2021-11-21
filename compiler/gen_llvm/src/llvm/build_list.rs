@@ -14,7 +14,7 @@ use inkwell::types::{BasicType, BasicTypeEnum, PointerType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
 use morphic_lib::UpdateMode;
-use roc_builtins::bitcode;
+use roc_builtins::bitcode::{self, IntWidth};
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
 use super::build::{load_roc_value, store_roc_value};
@@ -514,7 +514,7 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
 /// List.range : Int a, Int a -> List (Int a)
 pub fn list_range<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    builtin: Builtin<'a>,
+    int_width: IntWidth,
     low: IntValue<'ctx>,
     high: IntValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
@@ -529,10 +529,7 @@ pub fn list_range<'a, 'ctx, 'env>(
     let int_width = env
         .context
         .i8_type()
-        .const_int(
-            crate::llvm::build::intwidth_from_builtin(builtin, env.ptr_bytes) as u64,
-            false,
-        )
+        .const_int(int_width as u64, false)
         .into();
 
     call_bitcode_fn(

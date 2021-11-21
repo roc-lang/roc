@@ -40,7 +40,7 @@ impl WasmLayout {
                 }
             }
 
-            Layout::Builtin(Bool | Usize) => Self::Primitive(I32, size),
+            Layout::Builtin(Bool) => Self::Primitive(I32, size),
 
             Layout::Builtin(Float(float_width)) => {
                 use FloatWidth::*;

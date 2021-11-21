@@ -1122,8 +1122,11 @@ impl<'a> Layout<'a> {
     }
 
     pub fn usize(ptr_bytes: u32) -> Layout<'a> {
-        // Layout::Builtin(Builtin::Usize)
-        todo!()
+        match ptr_bytes {
+            4 => Self::u32(),
+            8 => Self::u32(),
+            _ => panic!("width of usize {} not supported", ptr_bytes),
+        }
     }
 
     pub fn bool() -> Layout<'a> {
@@ -1199,7 +1202,6 @@ impl<'a> Builtin<'a> {
             Int(int) => int.stack_size(),
             Float(float) => float.stack_size(),
             Bool => Builtin::I1_SIZE,
-            Usize => pointer_size,
             Decimal => Builtin::DECIMAL_SIZE,
             Str | EmptyStr => Builtin::STR_WORDS * pointer_size,
             Dict(_, _) | EmptyDict => Builtin::DICT_WORDS * pointer_size,
@@ -1219,7 +1221,6 @@ impl<'a> Builtin<'a> {
             Int(int_width) => int_width.alignment_bytes(),
             Float(float_width) => float_width.alignment_bytes(),
             Bool => align_of::<bool>() as u32,
-            Usize => pointer_size,
             Decimal => align_of::<i128>() as u32,
             Dict(_, _) | EmptyDict => pointer_size,
             Set(_) | EmptySet => pointer_size,

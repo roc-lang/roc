@@ -7977,9 +7977,7 @@ pub fn num_argument_to_int_or_float(
                     num_argument_to_int_or_float(subs, ptr_bytes, var, true)
                 }
 
-                Symbol::NUM_DECIMAL | Symbol::NUM_AT_DECIMAL => {
-                    return IntOrFloat::DecimalFloatType;
-                }
+                Symbol::NUM_DECIMAL | Symbol::NUM_AT_DECIMAL => IntOrFloat::DecimalFloatType,
 
                 Symbol::NUM_NAT | Symbol::NUM_NATURAL | Symbol::NUM_AT_NATURAL => {
                     let int_width = match ptr_bytes {
@@ -7988,7 +7986,7 @@ pub fn num_argument_to_int_or_float(
                         _ => panic!("unsupported word size"),
                     };
 
-                    return IntOrFloat::Int(int_width);
+                    IntOrFloat::Int(int_width)
                 }
 
                 _ => panic!(

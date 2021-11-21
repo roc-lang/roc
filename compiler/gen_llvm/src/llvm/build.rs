@@ -23,7 +23,7 @@ use crate::llvm::build_str::{
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
     self, basic_type_from_builtin, basic_type_from_layout, basic_type_from_layout_1,
-    block_of_memory_slices, ptr_int,
+    block_of_memory_slices,
 };
 use crate::llvm::refcounting::{
     build_reset, decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
@@ -190,7 +190,18 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     /// on 64-bit systems, this is i64
     /// on 32-bit systems, this is i32
     pub fn ptr_int(&self) -> IntType<'ctx> {
-        ptr_int(self.context, self.ptr_bytes)
+        let ctx = self.context;
+
+        match self.ptr_bytes {
+            1 => ctx.i8_type(),
+            2 => ctx.i16_type(),
+            4 => ctx.i32_type(),
+            8 => ctx.i64_type(),
+            _ => panic!(
+                "Invalid target: Roc does't support compiling to {}-bit systems.",
+                self.ptr_bytes * 8
+            ),
+        }
     }
 
     /// The integer type representing a RocList or RocStr when following the C ABI
@@ -2137,7 +2148,6 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
     initial_refcount: IntValue<'ctx>,
 ) -> PointerValue<'ctx> {
     let builder = env.builder;
-    let ctx = env.context;
 
     let len_type = env.ptr_int();
 
@@ -2156,7 +2166,7 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
 
     // We must return a pointer to the first element:
     let data_ptr = {
-        let int_type = ptr_int(ctx, env.ptr_bytes);
+        let int_type = env.ptr_int();
         let as_usize_ptr = builder
             .build_bitcast(
                 ptr,
@@ -5297,7 +5307,15 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.fromInt : Int -> Str
             debug_assert_eq!(args.len(), 1);
 
-            str_from_int(env, scope, args[0])
+            let (int, int_layout) = load_symbol_and_layout(scope, &args[0]);
+            let int = int.into_int_value();
+
+            let int_width = match int_layout {
+                Layout::Builtin(Builtin::Int(int_width)) => *int_width,
+                _ => unreachable!(),
+            };
+
+            str_from_int(env, int, int_width)
         }
         StrFromFloat => {
             // Str.fromFloat : Float * -> Str
@@ -5439,12 +5457,12 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (low, low_layout) = load_symbol_and_layout(scope, &args[0]);
             let high = load_symbol(scope, &args[1]);
 
-            let builtin = match low_layout {
-                Layout::Builtin(builtin) => builtin,
+            let int_width = match low_layout {
+                Layout::Builtin(Builtin::Int(int_width)) => *int_width,
                 _ => unreachable!(),
             };
 
-            list_range(env, *builtin, low.into_int_value(), high.into_int_value())
+            list_range(env, int_width, low.into_int_value(), high.into_int_value())
         }
         ListAppend => {
             // List.append : List elem, elem -> List elem
@@ -5553,9 +5571,8 @@ fn run_low_level<'a, 'ctx, 'env>(
                     use roc_mono::layout::Builtin::*;
 
                     match arg_builtin {
-                        Int(_) => {
-                            let int_width = intwidth_from_builtin(*arg_builtin, env.ptr_bytes);
-                            let int_type = convert::int_type_from_int_width(env, int_width);
+                        Int(int_width) => {
+                            let int_type = convert::int_type_from_int_width(env, *int_width);
                             build_int_unary_op(env, arg.into_int_value(), int_type, op)
                         }
                         Float(float_width) => {
@@ -5715,7 +5732,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (rhs_arg, rhs_layout) = load_symbol_and_layout(scope, &args[1]);
 
             debug_assert_eq!(lhs_layout, rhs_layout);
-            let int_width = intwidth_from_layout(*lhs_layout, env.ptr_bytes);
+            let int_width = intwidth_from_layout(*lhs_layout);
 
             build_int_binop(
                 env,
@@ -5733,7 +5750,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (rhs_arg, rhs_layout) = load_symbol_and_layout(scope, &args[1]);
 
             debug_assert_eq!(lhs_layout, rhs_layout);
-            let int_width = intwidth_from_layout(*lhs_layout, env.ptr_bytes);
+            let int_width = intwidth_from_layout(*lhs_layout);
 
             build_int_binop(
                 env,
@@ -6324,23 +6341,10 @@ fn throw_on_overflow<'a, 'ctx, 'env>(
         .unwrap()
 }
 
-pub fn intwidth_from_builtin(builtin: Builtin<'_>, ptr_bytes: u32) -> IntWidth {
-    use IntWidth::*;
-
-    match builtin {
-        Builtin::Int(int_width) => int_width,
-        Builtin::Usize => match ptr_bytes {
-            4 => I32,
-            8 => I64,
-            _ => unreachable!(),
-        },
-        _ => unreachable!(),
-    }
-}
-
-fn intwidth_from_layout(layout: Layout<'_>, ptr_bytes: u32) -> IntWidth {
+fn intwidth_from_layout(layout: Layout<'_>) -> IntWidth {
     match layout {
-        Layout::Builtin(builtin) => intwidth_from_builtin(builtin, ptr_bytes),
+        Layout::Builtin(Builtin::Int(int_width)) => int_width,
+
         _ => unreachable!(),
     }
 }
@@ -6541,17 +6545,6 @@ pub fn build_num_binop<'a, 'ctx, 'env>(
             };
 
             match lhs_builtin {
-                Usize => {
-                    let int_width = intwidth_from_builtin(*lhs_builtin, env.ptr_bytes);
-                    build_int_binop(
-                        env,
-                        parent,
-                        int_width,
-                        lhs_arg.into_int_value(),
-                        rhs_arg.into_int_value(),
-                        op,
-                    )
-                }
                 Int(int_width) => build_int_binop(
                     env,
                     parent,

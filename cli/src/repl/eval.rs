@@ -75,9 +75,6 @@ fn jit_to_ast_help<'a>(
         Layout::Builtin(Builtin::Bool) => Ok(run_jit_function!(lib, main_fn_name, bool, |num| {
             bool_to_ast(env, num, content)
         })),
-        Layout::Builtin(Builtin::Usize) => Ok(run_jit_function!(lib, main_fn_name, usize, |num| {
-            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
-        })),
         Layout::Builtin(Builtin::Int(int_width)) => {
             use IntWidth::*;
 
@@ -415,7 +412,6 @@ fn ptr_to_ast<'a>(
                 I128 => helper!(i128),
             }
         }
-        Layout::Builtin(Builtin::Usize) => helper!(usize),
         Layout::Builtin(Builtin::Float(float_width)) => {
             use FloatWidth::*;
 

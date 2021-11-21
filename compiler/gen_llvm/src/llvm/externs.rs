@@ -1,6 +1,5 @@
 use crate::llvm::build::Env;
 use crate::llvm::build::{add_func, C_CALL_CONV};
-use crate::llvm::convert::ptr_int;
 use inkwell::module::Linkage;
 use inkwell::values::BasicValue;
 use inkwell::AddressSpace;
@@ -11,9 +10,8 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
     let ctx = env.context;
     let module = env.module;
     let builder = env.builder;
-    let ptr_bytes = env.ptr_bytes;
 
-    let usize_type = ptr_int(ctx, ptr_bytes);
+    let usize_type = env.ptr_int();
     let i8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
 
     // roc_alloc

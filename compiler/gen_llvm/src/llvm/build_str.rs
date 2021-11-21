@@ -7,11 +7,11 @@ use inkwell::builder::Builder;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::AddressSpace;
 use morphic_lib::UpdateMode;
-use roc_builtins::bitcode;
+use roc_builtins::bitcode::{self, IntWidth};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
 
-use super::build::{intwidth_from_builtin, load_symbol, load_symbol_and_layout};
+use super::build::load_symbol;
 
 pub static CHAR_LAYOUT: Layout = Layout::u8();
 
@@ -282,32 +282,10 @@ pub fn str_trim_right<'a, 'ctx, 'env>(
 /// Str.fromInt : Int -> Str
 pub fn str_from_int<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'a, 'ctx>,
-    int_symbol: Symbol,
+    value: IntValue<'ctx>,
+    int_width: IntWidth,
 ) -> BasicValueEnum<'ctx> {
-    let (int, int_layout) = load_symbol_and_layout(scope, &int_symbol);
-
-    match int_layout {
-        Layout::Builtin(builtin) => match builtin {
-            Builtin::Int(_) => {
-                let intwidth = intwidth_from_builtin(*builtin, env.ptr_bytes);
-                call_bitcode_fn(env, &[int], &bitcode::STR_FROM_INT[intwidth])
-            }
-
-            _ => {
-                unreachable!(
-                    "Compiler bug: tried to convert numeric on invalid builtin layout: ({:?})",
-                    int_layout
-                );
-            }
-        },
-        _ => {
-            unreachable!(
-                "Compiler bug: tried to convert numeric on invalid layout: {:?}",
-                int_layout
-            );
-        }
-    }
+    call_bitcode_fn(env, &[value.into()], &bitcode::STR_FROM_INT[int_width])
 }
 
 /// Str.toUtf8 : Str -> List U8

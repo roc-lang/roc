@@ -144,13 +144,11 @@ pub fn basic_type_from_builtin<'a, 'ctx, 'env>(
     use Builtin::*;
 
     let context = env.context;
-    let ptr_bytes = env.ptr_bytes;
 
     match builtin {
         Int(int_width) => int_type_from_int_width(env, *int_width).as_basic_type_enum(),
         Float(float_width) => float_type_from_float_width(env, *float_width).as_basic_type_enum(),
         Bool => context.bool_type().as_basic_type_enum(),
-        Usize => ptr_int(context, ptr_bytes).as_basic_type_enum(),
         Decimal => context.i128_type().as_basic_type_enum(),
         Dict(_, _) | EmptyDict => zig_dict_type(env).into(),
         Set(_) | EmptySet => zig_dict_type(env).into(),
@@ -261,19 +259,6 @@ fn block_of_memory_help(context: &Context, union_size: u32) -> BasicTypeEnum<'_>
         context
             .struct_type(&[i64_array_type, i8_array_type], false)
             .into()
-    }
-}
-
-pub fn ptr_int(ctx: &Context, ptr_bytes: u32) -> IntType<'_> {
-    match ptr_bytes {
-        1 => ctx.i8_type(),
-        2 => ctx.i16_type(),
-        4 => ctx.i32_type(),
-        8 => ctx.i64_type(),
-        _ => panic!(
-            "Invalid target: Roc does't support compiling to {}-bit systems.",
-            ptr_bytes * 8
-        ),
     }
 }
 
