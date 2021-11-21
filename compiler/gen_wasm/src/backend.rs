@@ -805,19 +805,12 @@ impl<'a> WasmBackend<'a> {
                 // Zig's "fast calling convention" packs structs into CPU registers (stack machine slots) if possible.
                 // If they're small enough they can go into an I32 or I64. If they're big, they're pointers (I32).
                 for arg in arguments {
-                    match self.storage.get(arg) {
+                    param_types.push(match self.storage.get(arg) {
                         StoredValue::StackMemory { size, .. } if *size > 4 && *size <= 8 => {
-                            param_types.push(ValueType::I64);
+                            ValueType::I64
                         }
-                        StoredValue::StackMemory { size, .. } if *size == 16 => {
-                            // the exception to the rule: A Decimal is passed as two i64s
-                            param_types.push(ValueType::I64);
-                            param_types.push(ValueType::I64);
-                        }
-                        stored => {
-                            param_types.push(stored.value_type());
-                        }
-                    }
+                        stored => stored.value_type(),
+                    });
                 }
 
                 let signature_index = self.module.types.insert(Signature {

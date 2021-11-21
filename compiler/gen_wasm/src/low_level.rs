@@ -63,16 +63,12 @@ pub fn decode_low_level<'a>(
             return NotImplemented;
         }
 
-        NumAdd => {
-            return BuiltinCall(bitcode::DEC_ADD_WITH_OVERFLOW);
-
-            match ret_layout.value_type() {
-                I32 => code_builder.i32_add(),
-                I64 => code_builder.i64_add(),
-                F32 => code_builder.f32_add(),
-                F64 => code_builder.f64_add(),
-            }
-        }
+        NumAdd => match ret_layout.value_type() {
+            I32 => code_builder.i32_add(),
+            I64 => code_builder.i64_add(),
+            F32 => code_builder.f32_add(),
+            F64 => code_builder.f64_add(),
+        },
         NumAddWrap => match ret_layout.value_type() {
             I32 => {
                 code_builder.i32_add();

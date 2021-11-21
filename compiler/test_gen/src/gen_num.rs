@@ -609,7 +609,7 @@ fn gen_float_eq() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm"))]
 fn gen_add_dec() {
     assert_evals_to!(
         indoc!(
