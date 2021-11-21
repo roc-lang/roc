@@ -2071,7 +2071,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sete_reg64() {
+    fn test_set_reg64_help() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
 
@@ -2084,7 +2084,7 @@ mod tests {
             ],
         );
         buf.clear();
-        sete_reg64(&mut buf, reg);
+        set_reg64_help(&mut buf, reg, 0x94); // sete_reg64
         assert_eq!(expected, &buf[..]);
 
         // tests for 8 bytes in the output buffer
@@ -2109,47 +2109,7 @@ mod tests {
             ),
         ] {
             buf.clear();
-            sete_reg64(&mut buf, *reg);
-            assert_eq!(expected, &buf[..]);
-        }
-    }
-
-    #[test]
-    // follow test_sete_reg64
-    // refer it
-    fn test_setne_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-
-        let (reg, expected) = (
-            X86_64GeneralReg::RAX,
-            [
-                0x0F, 0x95, 0xC0, // SETNE al ;
-                0x48, 0x83, 0xE0, 0x01,
-            ],
-        );
-        buf.clear();
-        setne_reg64(&mut buf, reg);
-        assert_eq!(expected, &buf[..]);
-
-        for (reg, expected) in &[
-            (
-                X86_64GeneralReg::RSP,
-                [
-                    // SETNE spl;
-                    0x40, 0x0F, 0x95, 0xC4, 0x48, 0x83, 0xE4, 0x01,
-                ],
-            ),
-            (
-                X86_64GeneralReg::R15,
-                [
-                    // SETNE r15b;
-                    0x41, 0x0F, 0x95, 0xC7, 0x49, 0x83, 0xE7, 0x01,
-                ],
-            ),
-        ] {
-            buf.clear();
-            setne_reg64(&mut buf, *reg);
+            set_reg64_help(&mut buf, *reg, 0x94); // sete_reg64
             assert_eq!(expected, &buf[..]);
         }
     }
