@@ -684,6 +684,37 @@ impl LogicalShiftedRegister {
     }
 }
 
+#[derive(PackedStruct)]
+struct UnconditionalBranchRegister {
+    fixed5: Integer<u8, packed_bits::Bits<5>>,
+    rn: Integer<u8, packed_bits::Bits<5>>,
+    m: bool,
+    a: bool,
+    fixed4: Integer<u8, packed_bits::Bits<4>>,
+    fixed3: Integer<u8, packed_bits::Bits<5>>,
+    op: Integer<u8, packed_bits::Bits<2>>,
+    fixed2: bool,
+    z: bool,
+    fixed: Integer<u8, packed_bits::Bits<7>>,
+}
+
+impl UnconditionalBranchRegister {
+    fn new(op: u8, rn: AArch64GeneralReg) -> Self {
+        Self {
+            fixed5: 0b00000.into(),
+            rn: rn.into(),
+            m: false,
+            a: false,
+            fixed4: 0b0000.into(),
+            fixed3: 0b11111.into(),
+            op: op.into(),
+            fixed2: false,
+            z: false,
+            fixed: 0b1101011.into(),
+        }
+    }
+}
+
 #[derive(PackedStruct, Debug)]
 struct LoadStoreRegister {
     rt: Integer<u8, packed_bits::Bits<5>>,
@@ -695,17 +726,6 @@ struct LoadStoreRegister {
     v: bool,
     fixed: Integer<u8, packed_bits::Bits<3>>, // = 0b111,
     size: Integer<u8, packed_bits::Bits<2>>,
-}
-
-#[derive(Debug)]
-enum BranchGroup {
-    UnconditionBranchReg {
-        opc: u8,
-        op2: u8,
-        op3: u8,
-        reg_n: AArch64GeneralReg,
-        op4: u8,
-    },
 }
 
 #[derive(Debug)]
@@ -928,6 +948,7 @@ fn ldr_reg64_imm12(
 /// `MOV Xd, Xm` -> Move Xm to Xd.
 #[inline(always)]
 fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64GeneralReg) {
+    // MOV is equvalent to `ORR Xd, XZR, XM` in AARCH64.
     let inst = LogicalShiftedRegister::new(
         LogicalOp::ORR,
         ShiftType::LSL,
@@ -937,7 +958,6 @@ fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64Ge
         dst,
     );
 
-    // MOV is equvalent to `ORR Xd, XZR, XM` in AARCH64.
     buf.extend(inst.pack().unwrap());
 }
 
@@ -997,15 +1017,9 @@ fn sub_reg64_reg64_imm12(
 /// `RET Xn` -> Return to the address stored in Xn.
 #[inline(always)]
 fn ret_reg64(buf: &mut Vec<'_, u8>, xn: AArch64GeneralReg) {
-    buf.extend(&build_instruction(AArch64Instruction::Branch(
-        BranchGroup::UnconditionBranchReg {
-            opc: 0b0010,
-            op2: 0b11111,
-            op3: 0b000000,
-            reg_n: xn,
-            op4: 0b000,
-        },
-    )));
+    let inst = UnconditionalBranchRegister::new(0b10, xn);
+
+    buf.extend(inst.pack().unwrap());
 }
 
 #[cfg(test)]
