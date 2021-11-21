@@ -96,10 +96,14 @@ fn jit_to_ast_help<'a>(
                     // NOTE: this is does not handle 8-bit numbers yet
                     run_jit_function!(lib, main_fn_name, u8, |num| byte_to_ast(env, num, content))
                 }
-                U16 | I16 => helper!(u16),
-                U32 | I32 => helper!(u32),
-                U64 | I64 => helper!(u64),
-                U128 | I128 => helper!(u128),
+                U16 => helper!(u16),
+                U32 => helper!(u32),
+                U64 => helper!(u64),
+                U128 => helper!(u128),
+                I16 => helper!(i16),
+                I32 => helper!(i32),
+                I64 => helper!(i64),
+                I128 => helper!(i128),
             };
 
             Ok(result)
