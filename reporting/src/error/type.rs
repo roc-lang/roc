@@ -6,9 +6,12 @@ use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_solve::solve;
 use roc_types::pretty_print::{Parens, WILDCARD};
-use roc_types::types::{Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt};
+use roc_types::types::{
+    write_error_type, Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt,
+};
 use std::path::PathBuf;
 
+use crate::internal_error;
 use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder, Severity};
 use ven_pretty::DocAllocator;
 
@@ -208,6 +211,7 @@ fn report_mismatch<'b>(
             alloc,
             found,
             expected_type,
+            ExpectationContext::Arbitrary,
             add_category(alloc, this_is, category),
             instead_of,
             further_details,
@@ -286,6 +290,7 @@ fn to_expr_report<'b>(
                 alloc,
                 found,
                 expected_type,
+                ExpectationContext::Arbitrary,
                 add_category(alloc, alloc.text("It is"), &category),
                 alloc.text("But you are trying to use it as:"),
                 None,
@@ -319,7 +324,7 @@ fn to_expr_report<'b>(
                 TypedIfBranch {
                     index,
                     num_branches,
-                    region: _,
+                    ..
                 } if num_branches == 2 => alloc.concat(vec![
                     alloc.keyword(if index == Index::FIRST {
                         "then"
@@ -336,13 +341,13 @@ fn to_expr_report<'b>(
                     alloc.keyword("if"),
                     alloc.text(" expression:"),
                 ]),
-                TypedWhenBranch { index, region: _ } => alloc.concat(vec![
+                TypedWhenBranch { index, .. } => alloc.concat(vec![
                     alloc.string(index.ordinal()),
                     alloc.reflow(" branch of this "),
                     alloc.keyword("when"),
                     alloc.text(" expression:"),
                 ]),
-                TypedBody { region: _ } => alloc.concat(vec![
+                TypedBody { .. } => alloc.concat(vec![
                     alloc.text("body of "),
                     the_name_text,
                     alloc.text(" definition:"),
@@ -357,42 +362,19 @@ fn to_expr_report<'b>(
 
             let i_am_seeing = add_category(alloc, alloc.text(it_is), &category);
 
-            // TODO: can comparisons between wildcards happen outside the context of an annotation?
-            let comparison = if is_wildcards_comparison(&found, &expected_type) {
-                alloc.stack(vec![
-                    i_am_seeing,
-                    alloc.type_block(to_doc(alloc, Parens::Unnecessary, found)),
-                    alloc.concat(vec![
-                        alloc.reflow("But the type annotation on "),
-                        on_name_text,
-                        alloc.reflow(" says it should be a "),
-                        alloc.type_str(WILDCARD),
-                        alloc.reflow(" too! This tells me that the type is connected in a way that doesn't require a wildcard."),
-                    ]),
-                    alloc.concat(vec![
-                        alloc.reflow("Since the type has to be the same in both places, the type can be more specific than "),
-                        alloc.type_str(WILDCARD),
-                        alloc.reflow(". You can change the "),
-                        alloc.type_str(WILDCARD),
-                        alloc.reflow(" to a named type variable like "),
-                        alloc.type_variable("a".into()),
-                        alloc.reflow(" to reflect the connection.")
-                    ]),
-                ])
-            } else {
-                type_comparison(
-                    alloc,
-                    found,
-                    expected_type,
-                    i_am_seeing,
-                    alloc.concat(vec![
-                        alloc.text("But the type annotation"),
-                        on_name_text,
-                        alloc.text(" says it should be:"),
-                    ]),
-                    None,
-                )
-            };
+            let comparison = type_comparison(
+                alloc,
+                found,
+                expected_type,
+                ExpectationContext::Annotation,
+                i_am_seeing,
+                alloc.concat(vec![
+                    alloc.text("But the type annotation"),
+                    on_name_text,
+                    alloc.text(" says it should be:"),
+                ]),
+                None,
+            );
 
             Report {
                 title: "TYPE MISMATCH".to_string(),
@@ -917,14 +899,6 @@ fn to_expr_report<'b>(
     }
 }
 
-fn is_wildcards_comparison(type1: &ErrorType, type2: &ErrorType) -> bool {
-    use ErrorType::*;
-    match (type1, type2) {
-        (RigidVar(v1), RigidVar(v2)) if v1.as_str() == WILDCARD && v2.as_str() == WILDCARD => true,
-        _ => false,
-    }
-}
-
 fn count_arguments(tipe: &ErrorType) -> usize {
     use ErrorType::*;
 
@@ -935,15 +909,26 @@ fn count_arguments(tipe: &ErrorType) -> usize {
     }
 }
 
+/// The context a type expectation is derived from.
+#[derive(Debug, Copy, Clone)]
+enum ExpectationContext {
+    /// An expected type was discovered from a type annotation. Corresponds to
+    /// [`Expected::FromAnnotation`](Expected::FromAnnotation).
+    Annotation,
+    /// When we don't know the context, or it's not relevant.
+    Arbitrary,
+}
+
 fn type_comparison<'b>(
     alloc: &'b RocDocAllocator<'b>,
     actual: ErrorType,
     expected: ErrorType,
+    expectation_context: ExpectationContext,
     i_am_seeing: RocDocBuilder<'b>,
     instead_of: RocDocBuilder<'b>,
     context_hints: Option<RocDocBuilder<'b>>,
 ) -> RocDocBuilder<'b> {
-    let comparison = to_comparison(alloc, actual, expected);
+    let comparison = to_comparison(alloc, actual.clone(), expected.clone());
 
     let mut lines = vec![
         i_am_seeing,
@@ -956,7 +941,11 @@ fn type_comparison<'b>(
         lines.push(alloc.concat(context_hints));
     }
 
-    lines.extend(problems_to_tip(alloc, comparison.problems));
+    lines.extend(problems_to_tip(
+        alloc,
+        comparison.problems,
+        expectation_context,
+    ));
 
     alloc.stack(lines)
 }
@@ -972,7 +961,11 @@ fn lone_type<'b>(
 
     let mut lines = vec![i_am_seeing, comparison.actual, further_details];
 
-    lines.extend(problems_to_tip(alloc, comparison.problems));
+    lines.extend(problems_to_tip(
+        alloc,
+        comparison.problems,
+        ExpectationContext::Arbitrary,
+    ));
 
     alloc.stack(lines)
 }
@@ -1278,7 +1271,11 @@ fn pattern_type_comparison<'b>(
         comparison.expected,
     ];
 
-    lines.extend(problems_to_tip(alloc, comparison.problems));
+    lines.extend(problems_to_tip(
+        alloc,
+        comparison.problems,
+        ExpectationContext::Arbitrary,
+    ));
     lines.extend(reason_hints);
 
     alloc.stack(lines)
@@ -1357,12 +1354,13 @@ pub enum Problem {
 fn problems_to_tip<'b>(
     alloc: &'b RocDocAllocator<'b>,
     mut problems: Vec<Problem>,
+    expectation_context: ExpectationContext,
 ) -> Option<RocDocBuilder<'b>> {
     if problems.is_empty() {
         None
     } else {
         let problem = problems.remove(problems.len() - 1);
-        Some(type_problem_to_pretty(alloc, problem))
+        Some(type_problem_to_pretty(alloc, problem, expectation_context))
     }
 }
 
@@ -1631,7 +1629,10 @@ fn to_diff<'b>(
         (Error, Error) | (Infinite, Infinite) => same(alloc, parens, type1),
 
         (FlexVar(x), FlexVar(y)) if x == y => same(alloc, parens, type1),
-        (RigidVar(x), RigidVar(y)) if x == y => same(alloc, parens, type1),
+        // Wildcards are always different!
+        (RigidVar(x), RigidVar(y)) if x == y && x.as_str() != WILDCARD => {
+            same(alloc, parens, type1)
+        }
 
         (Function(args1, _, ret1), Function(args2, _, ret2)) => {
             if args1.len() == args2.len() {
@@ -2457,11 +2458,12 @@ mod report_text {
 fn type_problem_to_pretty<'b>(
     alloc: &'b RocDocAllocator<'b>,
     problem: crate::error::r#type::Problem,
+    expectation_context: ExpectationContext,
 ) -> RocDocBuilder<'b> {
     use crate::error::r#type::Problem::*;
 
-    match problem {
-        FieldTypo(typo, possibilities) => {
+    match (problem, expectation_context) {
+        (FieldTypo(typo, possibilities), _) => {
             let suggestions = suggest::sort(typo.as_str(), possibilities);
 
             match suggestions.get(0) {
@@ -2487,7 +2489,7 @@ fn type_problem_to_pretty<'b>(
                 }
             }
         }
-        FieldsMissing(missing) => match missing.split_last() {
+        (FieldsMissing(missing), _) => match missing.split_last() {
             None => alloc.nil(),
             Some((f1, [])) => alloc
                 .tip()
@@ -2508,7 +2510,7 @@ fn type_problem_to_pretty<'b>(
                     .append(alloc.reflow(" fields are missing."))
             }
         },
-        TagTypo(typo, possibilities_tn) => {
+        (TagTypo(typo, possibilities_tn), _) => {
             let possibilities: Vec<IdentStr> = possibilities_tn
                 .into_iter()
                 .map(|tag_name| tag_name.as_ident_str(alloc.interns, alloc.home))
@@ -2538,7 +2540,7 @@ fn type_problem_to_pretty<'b>(
                 }
             }
         }
-        ArityMismatch(found, expected) => {
+        (ArityMismatch(found, expected), _) => {
             let line = if found < expected {
                 format!(
                     "It looks like it takes too few arguments. I was expecting {} more.",
@@ -2554,7 +2556,7 @@ fn type_problem_to_pretty<'b>(
             alloc.tip().append(line)
         }
 
-        BadRigidVar(x, tipe) => {
+        (BadRigidVar(x, tipe), ExpectationContext::Annotation) => {
             use ErrorType::*;
 
             let bad_rigid_var = |name: Lowercase, a_thing| {
@@ -2567,7 +2569,33 @@ fn type_problem_to_pretty<'b>(
                     .append(alloc.reflow(" of a single specific type. Maybe change the type annotation to be more specific? Maybe change the code to be more general?"))
             };
 
-            let bad_double_rigid = |a, b| {
+            let bad_double_wildcard = || {
+                alloc
+                    .tip()
+                    .append(alloc.stack(vec![
+                        alloc.concat(vec![
+                            alloc.reflow("When two "),
+                            alloc.type_str(WILDCARD),
+                            alloc.reflow("s are connected, it tells me that they both refer to the same type, in a way that doesn't require a "),
+                            alloc.type_str(WILDCARD),
+                            alloc.reflow("!")
+                        ]),
+                        alloc.concat(vec![
+                            alloc.reflow("Since the type has to be the same in both places, the type can be more specific than "),
+                            alloc.type_str(WILDCARD),
+                            alloc.reflow(". You can change the "),
+                            alloc.type_str(WILDCARD),
+                            alloc.reflow(" to a named type variable like "),
+                            alloc.type_variable("a".into()),
+                            alloc.reflow(" to reflect the connection.")
+                        ]),
+                    ]))
+            };
+
+            let bad_double_rigid = |a: Lowercase, b: Lowercase| {
+                if a.as_str() == WILDCARD && b.as_str() == WILDCARD {
+                    return bad_double_wildcard();
+                }
                 let line = r#" as separate type variables. Your code seems to be saying they are the same though. Maybe they should be the same in your type annotation? Maybe your code uses them in a weird way?"#;
 
                 alloc
@@ -2597,7 +2625,11 @@ fn type_problem_to_pretty<'b>(
                 ),
             }
         }
-        IntFloat => alloc.tip().append(alloc.concat(vec![
+        (BadRigidVar(_, _), expectation_context) => {
+            internal_error!("I thought mismatches between rigid vars could only happen in the context of a type annotation, but here they're happening with a {:?}!", expectation_context)
+        }
+
+        (IntFloat, _) => alloc.tip().append(alloc.concat(vec![
             alloc.reflow("You can convert between "),
             alloc.type_str("Int"),
             alloc.reflow(" and "),
@@ -2609,7 +2641,7 @@ fn type_problem_to_pretty<'b>(
             alloc.reflow("."),
         ])),
 
-        TagsMissing(missing) => match missing.split_last() {
+        (TagsMissing(missing), _) => match missing.split_last() {
             None => alloc.nil(),
             Some((f1, [])) => {
                 let tip1 = alloc
@@ -2650,7 +2682,7 @@ fn type_problem_to_pretty<'b>(
                 alloc.stack(vec![tip1, tip2])
             }
         },
-        OptionalRequiredMismatch(field) => alloc.tip().append(alloc.concat(vec![
+        (OptionalRequiredMismatch(field), _) => alloc.tip().append(alloc.concat(vec![
             alloc.reflow("To extract the "),
             alloc.record_field(field),
             alloc.reflow(

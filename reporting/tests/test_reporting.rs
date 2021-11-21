@@ -6792,9 +6792,52 @@ I need all branches in an `if` to have the same type!
 
                     *
 
-                But the type annotation on  on `f` says it should be a * too! This tells
-                me that the type is connected in a way that doesn't require a
-                wildcard.
+                But the type annotation on `f` says it should be:
+
+                    *
+
+                Tip: When two *s are connected, it tells me that they both refer to
+                the same type, in a way that doesn't require a *!
+
+                Since the type has to be the same in both places, the type can be more
+                specific than *. You can change the * to a named type variable like `a`
+                to reflect the connection.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn error_nested_wildcards_are_related() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : a, * -> {x: a, y: *}
+                f = \x, y -> {x, y}
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with the body of the `f` definition:
+
+                1│  f : a, * -> {x: a, y: *}
+                2│  f = \x, y -> {x, y}
+                                 ^^^^^^
+
+                The body is a record of type:
+
+                    { x : a, y : * }
+
+                But the type annotation on `f` says it should be:
+
+                    { x : a, y : * }
+
+                Tip: When two *s are connected, it tells me that they both refer to
+                the same type, in a way that doesn't require a *!
 
                 Since the type has to be the same in both places, the type can be more
                 specific than *. You can change the * to a named type variable like `a`
