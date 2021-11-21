@@ -5,6 +5,9 @@ use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
 use tempfile::tempdir;
 
+#[allow(unused_imports)]
+use roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS;
+
 #[allow(dead_code)]
 fn promote_expr_to_module(src: &str) -> String {
     let mut buffer = String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
@@ -77,7 +80,14 @@ pub fn helper(
     // while you're working on the dev backend!
     {
         // println!("=========== Procedures ==========");
-        // println!("{:?}", procedures);
+        // if PRETTY_PRINT_IR_SYMBOLS {
+        //     println!("");
+        //     for proc in procedures.values() {
+        //         println!("{}", proc.to_pretty(200));
+        //     }    
+        // } else {
+        //     println!("{:?}", procedures.values());
+        // }
         // println!("=================================\n");
 
         // println!("=========== Interns    ==========");
