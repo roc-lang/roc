@@ -82,6 +82,7 @@ pub enum LowLevel {
     NumDivCeilUnchecked,
     NumRemUnchecked,
     NumIsMultipleOf,
+    NumIsZero, // gen-dev
     NumAbs,
     NumNeg,
     NumSin,
@@ -247,6 +248,7 @@ impl LowLevel {
             Symbol::NUM_GTE => Some(NumGte),
             Symbol::NUM_LT => Some(NumLt),
             Symbol::NUM_LTE => Some(NumLte),
+            Symbol::NUM_IS_ZERO => Some(NumIsZero),
             Symbol::NUM_COMPARE => Some(NumCompare),
             Symbol::NUM_DIV_FLOAT => None,
             Symbol::NUM_DIV_CEIL => None,

@@ -450,6 +450,19 @@ where
                 );
                 self.build_num_lt(sym, &args[0], &args[1], &arg_layouts[0])
             }
+            LowLevel::NumIsZero => {
+                debug_assert_eq!(
+                    1,
+                    args.len(),
+                    "NumIsZero: expected to have exactly one argument"
+                );
+                debug_assert_eq!(
+                    Layout::Builtin(Builtin::Int1),
+                    *ret_layout,
+                    "NumIsZero: expected to have return layout of type I1"
+                );
+                self.build_num_is_zero(sym, &args[0], ret_layout)
+            }
             LowLevel::NumRound => self.build_fn_call(
                 sym,
                 bitcode::NUM_ROUND[FloatWidth::F64].to_string(),
@@ -546,6 +559,14 @@ where
         dst: &Symbol,
         src1: &Symbol,
         src2: &Symbol,
+        arg_layout: &Layout<'a>,
+    ) -> Result<(), String>;
+
+    /// build_num_is_zero stores the result of `src == 0` into dst.
+    fn build_num_is_zero(
+        &mut self,
+        dst: &Symbol,
+        src: &Symbol,
         arg_layout: &Layout<'a>,
     ) -> Result<(), String>;
 

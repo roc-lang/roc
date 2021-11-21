@@ -334,6 +334,8 @@ pub fn decode_low_level<'a>(
         Not => code_builder.i32_eqz(),
         Hash => return NotImplemented,
         ExpectTrue => return NotImplemented,
+        // currently, gen-dev only
+        NumIsZero => return NotImplemented,
     }
     Done
 }

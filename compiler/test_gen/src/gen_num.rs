@@ -964,7 +964,7 @@ fn gen_rem_div_by_zero_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_is_zero_i64() {
     assert_evals_to!("Num.isZero 0", true, bool);
     assert_evals_to!("Num.isZero 1", false, bool);
