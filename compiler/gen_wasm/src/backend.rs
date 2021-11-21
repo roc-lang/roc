@@ -7,7 +7,7 @@ use roc_module::symbol::Symbol;
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
-use crate::layout::WasmLayout;
+use crate::layout::{StackMemoryFormat, WasmLayout};
 use crate::low_level::{decode_low_level, LowlevelBuildResult};
 use crate::storage::{Storage, StoredValue, StoredValueKind};
 use crate::wasm_module::linking::{
@@ -803,15 +803,31 @@ impl<'a> WasmBackend<'a> {
                     Some(ret_layout.value_type())
                 };
 
-                // Zig's "fast calling convention" packs structs into CPU registers (stack machine slots) if possible.
-                // If they're small enough they can go into an I32 or I64. If they're big, they're pointers (I32).
                 for arg in arguments {
-                    param_types.push(match self.storage.get(arg) {
-                        StoredValue::StackMemory { size, .. } if *size > 4 && *size <= 8 => {
-                            ValueType::I64
+                    match self.storage.get(arg) {
+                        stored @ StoredValue::StackMemory { size, format, .. } => {
+                            use StackMemoryFormat::*;
+
+                            match format {
+                                Aggregate => {
+                                    // Zig's "fast calling convention" packs structs into CPU registers
+                                    // (stack machine slots) if possible.  If they're small enough they
+                                    // can go into an I32 or I64. If they're big, they're pointers (I32).
+                                    if *size > 4 && *size <= 8 {
+                                        param_types.push(ValueType::I64)
+                                    } else {
+                                        param_types.push(stored.value_type())
+                                    }
+                                }
+                                Int128 | Float128 | Decimal => {
+                                    // these types are passed as 2 i64s
+                                    param_types.push(ValueType::I64);
+                                    param_types.push(ValueType::I64);
+                                }
+                            }
                         }
-                        stored => stored.value_type(),
-                    });
+                        stored => param_types.push(stored.value_type()),
+                    }
                 }
 
                 let signature_index = self.module.types.insert(Signature {
