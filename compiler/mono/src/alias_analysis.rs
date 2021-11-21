@@ -1718,7 +1718,7 @@ fn builtin_spec(
     use Builtin::*;
 
     match builtin {
-        Int(_) | Usize | Bool => builder.add_tuple_type(&[]),
+        Int(_) | Bool => builder.add_tuple_type(&[]),
         Decimal | Float(_) => builder.add_tuple_type(&[]),
         Str | EmptyStr => str_type(builder),
         Dict(key_layout, value_layout) => {

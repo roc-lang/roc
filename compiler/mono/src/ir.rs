@@ -2954,7 +2954,7 @@ fn try_make_literal<'a>(
     match can_expr {
         Int(_, precision, _, int) => {
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *precision, false) {
-                IntOrFloat::Int(_) | IntOrFloat::Natural => Some(Literal::Int(*int)),
+                IntOrFloat::Int(_) => Some(Literal::Int(*int)),
                 _ => unreachable!("unexpected float precision for integer"),
             }
         }
@@ -2964,9 +2964,12 @@ fn try_make_literal<'a>(
                 IntOrFloat::Float(_) => Some(Literal::Float(*float)),
                 IntOrFloat::DecimalFloatType => {
                     let dec = match RocDec::from_str(float_str) {
-                            Some(d) => d,
-                            None => panic!("Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message", float_str),
-                        };
+                        Some(d) => d,
+                        None => panic!(
+                            r"Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message",
+                            float_str
+                        ),
+                    };
 
                     Some(Literal::Decimal(dec))
                 }
@@ -2979,7 +2982,7 @@ fn try_make_literal<'a>(
         Num(var, num_str, num) => {
             // first figure out what kind of number this is
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, false) {
-                IntOrFloat::Int(_) | IntOrFloat::Natural => Some(Literal::Int((*num).into())),
+                IntOrFloat::Int(_) => Some(Literal::Int((*num).into())),
                 IntOrFloat::Float(_) => Some(Literal::Float(*num as f64)),
                 IntOrFloat::DecimalFloatType => {
                     let dec = match RocDec::from_str(num_str) {
@@ -3018,12 +3021,6 @@ pub fn with_hole<'a>(
                     assigned,
                     Expr::Literal(Literal::Int(int)),
                     Layout::Builtin(Builtin::Int(precision)),
-                    hole,
-                ),
-                IntOrFloat::Natural => Stmt::Let(
-                    assigned,
-                    Expr::Literal(Literal::Int(int)),
-                    Layout::usize(),
                     hole,
                 ),
                 _ => unreachable!("unexpected float precision for integer"),
@@ -3068,12 +3065,6 @@ pub fn with_hole<'a>(
                     assigned,
                     Expr::Literal(Literal::Int(num.into())),
                     Layout::int_width(precision),
-                    hole,
-                ),
-                IntOrFloat::Natural => Stmt::Let(
-                    assigned,
-                    Expr::Literal(Literal::Int(num.into())),
-                    Layout::usize(),
                     hole,
                 ),
                 IntOrFloat::Float(precision) => Stmt::Let(
@@ -7315,7 +7306,6 @@ fn from_can_pattern_help<'a>(
         Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
         IntLiteral(var, _, int) => {
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, false) {
-                IntOrFloat::Natural => todo!(),
                 IntOrFloat::Int(precision) => Ok(Pattern::IntLiteral(*int as i128, precision)),
                 other => {
                     panic!(
@@ -7328,7 +7318,7 @@ fn from_can_pattern_help<'a>(
         FloatLiteral(var, float_str, float) => {
             // TODO: Can I reuse num_argument_to_int_or_float here if I pass in true?
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, true) {
-                IntOrFloat::Int(_) | IntOrFloat::Natural => {
+                IntOrFloat::Int(_) => {
                     panic!("Invalid precision for float pattern {:?}", var)
                 }
                 IntOrFloat::Float(precision) => {
@@ -7360,7 +7350,6 @@ fn from_can_pattern_help<'a>(
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, false) {
                 IntOrFloat::Int(precision) => Ok(Pattern::IntLiteral(*num as i128, precision)),
                 IntOrFloat::Float(precision) => Ok(Pattern::FloatLiteral(*num as u64, precision)),
-                IntOrFloat::Natural => todo!(),
                 IntOrFloat::DecimalFloatType => {
                     let dec = match RocDec::from_str(num_str) {
                             Some(d) => d,
@@ -7947,7 +7936,6 @@ pub enum IntOrFloat {
     Int(IntWidth),
     Float(FloatWidth),
     DecimalFloatType,
-    Natural,
 }
 
 /// Given the `a` in `Num a`, determines whether it's an int or a float
@@ -7994,7 +7982,13 @@ pub fn num_argument_to_int_or_float(
                 }
 
                 Symbol::NUM_NAT | Symbol::NUM_NATURAL | Symbol::NUM_AT_NATURAL => {
-                    return IntOrFloat::Natural;
+                    let int_width = match ptr_bytes {
+                        4 => IntWidth::U32,
+                        8 => IntWidth::U32,
+                        _ => panic!("unsupported word size"),
+                    };
+
+                    return IntOrFloat::Int(int_width);
                 }
 
                 _ => panic!(

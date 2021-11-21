@@ -113,7 +113,7 @@ impl<'a> RawFunctionLayout<'a> {
             // Nat
             Alias(Symbol::NUM_NAT, args, _) => {
                 debug_assert!(args.is_empty());
-                Ok(Self::ZeroArgumentThunk(Layout::usize()))
+                Ok(Self::ZeroArgumentThunk(Layout::usize(env.ptr_bytes)))
             }
 
             Alias(symbol, _, _) if symbol.is_builtin() => Ok(Self::ZeroArgumentThunk(
@@ -683,7 +683,6 @@ pub enum Builtin<'a> {
     Int(IntWidth),
     Float(FloatWidth),
     Bool,
-    Usize,
     Decimal,
     Str,
     Dict(&'a Layout<'a>, &'a Layout<'a>),
@@ -750,67 +749,30 @@ impl<'a> Layout<'a> {
             }
             Structure(flat_type) => layout_from_flat_type(env, flat_type),
 
-            // Ints
-            Alias(Symbol::NUM_I128, args, _) => {
-                debug_assert!(args.is_empty());
-                Ok(Layout::i128())
-            }
-            Alias(Symbol::NUM_I64, args, _) => {
-                debug_assert!(args.is_empty());
-                Ok(Layout::i64())
-            }
-            Alias(Symbol::NUM_I32, args, _) => {
-                debug_assert!(args.is_empty());
-                Ok(Layout::i32())
-            }
-            Alias(Symbol::NUM_I16, args, _) => {
-                debug_assert!(args.is_empty());
-                Ok(Layout::i16())
-            }
-            Alias(Symbol::NUM_I8, args, _) => {
-                debug_assert!(args.is_empty());
-                Ok(Layout::i8())
+            Alias(symbol, args, _) => {
+                if let Some(int_width) = IntWidth::try_from_symbol(symbol) {
+                    debug_assert!(args.is_empty());
+                    return Ok(Layout::Builtin(Builtin::Int(int_width)));
+                }
+
+                if let Some(float_width) = FloatWidth::try_from_symbol(symbol) {
+                    debug_assert!(args.is_empty());
+                    return Ok(Layout::Builtin(Builtin::Float(float_width)));
+                }
+
+                match symbol {
+                    Symbol::NUM_DECIMAL | Symbol::NUM_AT_DECIMAL => {
+                        return Ok(Layout::Builtin(Builtin::Decimal))
+                    }
+
+                    Symbol::NUM_NAT | Symbol::NUM_NATURAL | Symbol::NUM_AT_NATURAL => {
+                        return Ok(Layout::usize(env.ptr_bytes))
+                    }
+
+                    _ => Self::from_var(env, var),
+                }
             }
 
-            // I think unsigned and signed use the same layout
-            Alias(Symbol::NUM_U128, args, _) => {
-                debug_assert!(args.is_empty());
-                Ok(Layout::u128())
-            }
-            Alias(Symbol::NUM_U64, args, _) => {
-                debug_assert!(args.is_empty());
-                Ok(Layout::u64())
-            }
-            Alias(Symbol::NUM_U32, args, _) => {
-                debug_assert!(args.is_empty());
-                Ok(Layout::u32())
-            }
-            Alias(Symbol::NUM_U16, args, _) => {
-                debug_assert!(args.is_empty());
-                Ok(Layout::u16())
-            }
-            Alias(Symbol::NUM_U8, args, _) => {
-                debug_assert!(args.is_empty());
-                Ok(Layout::u8())
-            }
-
-            // Floats
-            Alias(Symbol::NUM_F64, args, _) => {
-                debug_assert!(args.is_empty());
-                Ok(Layout::f64())
-            }
-            Alias(Symbol::NUM_F32, args, _) => {
-                debug_assert!(args.is_empty());
-                Ok(Layout::f32())
-            }
-
-            // Nat
-            Alias(Symbol::NUM_NAT, args, _) => {
-                debug_assert!(args.is_empty());
-                Ok(Layout::usize())
-            }
-
-            Alias(_, _, var) => Self::from_var(env, var),
             Error => Err(LayoutProblem::Erroneous),
         }
     }
@@ -1159,8 +1121,9 @@ impl<'a> Layout<'a> {
         Layout::Builtin(Builtin::Float(FloatWidth::F32))
     }
 
-    pub fn usize() -> Layout<'a> {
-        Layout::Builtin(Builtin::Usize)
+    pub fn usize(ptr_bytes: u32) -> Layout<'a> {
+        // Layout::Builtin(Builtin::Usize)
+        todo!()
     }
 
     pub fn bool() -> Layout<'a> {
@@ -1274,8 +1237,9 @@ impl<'a> Builtin<'a> {
         use Builtin::*;
 
         match self {
-            Int(_) | Usize | Float(_) | Bool | Decimal | EmptyStr | EmptyDict | EmptyList
-            | EmptySet => true,
+            Int(_) | Float(_) | Bool | Decimal | EmptyStr | EmptyDict | EmptyList | EmptySet => {
+                true
+            }
 
             Str | Dict(_, _) | Set(_) | List(_) => false,
         }
@@ -1286,8 +1250,9 @@ impl<'a> Builtin<'a> {
         use Builtin::*;
 
         match self {
-            Int(_) | Usize | Float(_) | Bool | Decimal | EmptyStr | EmptyDict | EmptyList
-            | EmptySet => false,
+            Int(_) | Float(_) | Bool | Decimal | EmptyStr | EmptyDict | EmptyList | EmptySet => {
+                false
+            }
             List(_) => true,
 
             Str | Dict(_, _) | Set(_) => true,
@@ -1331,7 +1296,6 @@ impl<'a> Builtin<'a> {
             }
 
             Bool => alloc.text("Int1"),
-            Usize => alloc.text("Usize"),
             Decimal => alloc.text("Decimal"),
 
             EmptyStr => alloc.text("EmptyStr"),
@@ -1356,11 +1320,9 @@ impl<'a> Builtin<'a> {
 
     pub fn allocation_alignment_bytes(&self, pointer_size: u32) -> u32 {
         let allocation = match self {
-            Builtin::Int(_)
-            | Builtin::Float(_)
-            | Builtin::Bool
-            | Builtin::Usize
-            | Builtin::Decimal => unreachable!("not heap-allocated"),
+            Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal => {
+                unreachable!("not heap-allocated")
+            }
             Builtin::Str => pointer_size,
             Builtin::Dict(k, v) => k
                 .alignment_bytes(pointer_size)
@@ -1395,7 +1357,7 @@ fn layout_from_flat_type<'a>(
                 // Ints
                 Symbol::NUM_NAT => {
                     debug_assert_eq!(args.len(), 0);
-                    Ok(Layout::Builtin(Builtin::Usize))
+                    Ok(Layout::usize(env.ptr_bytes))
                 }
 
                 Symbol::NUM_I128 => {
@@ -1882,7 +1844,7 @@ fn union_sorted_tags_help_new<'a>(
             match tag_name {
                 TagName::Private(Symbol::NUM_AT_NUM) => {
                     let var = subs[arguments.into_iter().next().unwrap()];
-                    layouts.push(unwrap_num_tag(subs, var).expect("invalid num layout"));
+                    layouts.push(unwrap_num_tag(subs, var, ptr_bytes).expect("invalid num layout"));
                 }
                 _ => {
                     for var_index in arguments {
@@ -2085,7 +2047,9 @@ pub fn union_sorted_tags_help<'a>(
             // special-case NUM_AT_NUM: if its argument is a FlexVar, make it Int
             match tag_name {
                 TagName::Private(Symbol::NUM_AT_NUM) => {
-                    layouts.push(unwrap_num_tag(subs, arguments[0]).expect("invalid num layout"));
+                    layouts.push(
+                        unwrap_num_tag(subs, arguments[0], ptr_bytes).expect("invalid num layout"),
+                    );
                 }
                 _ => {
                     for var in arguments {
@@ -2297,7 +2261,7 @@ fn layout_from_newtype<'a>(
     let tag_name = &subs[tag_name_index];
 
     if tag_name == &TagName::Private(Symbol::NUM_AT_NUM) {
-        unwrap_num_tag(subs, var).expect("invalid Num argument")
+        unwrap_num_tag(subs, var, ptr_bytes).expect("invalid Num argument")
     } else {
         let mut env = Env {
             arena,
@@ -2344,7 +2308,7 @@ fn layout_from_tag_union<'a>(
             let var_index = arguments.into_iter().next().unwrap();
             let var = subs[var_index];
 
-            unwrap_num_tag(subs, var).expect("invalid Num argument")
+            unwrap_num_tag(subs, var, ptr_bytes).expect("invalid Num argument")
         }
         _ => {
             let opt_rec_var = None;
@@ -2447,6 +2411,8 @@ fn layout_from_num_content<'a>(content: &Content) -> Result<Layout<'a>, LayoutPr
     use roc_types::subs::Content::*;
     use roc_types::subs::FlatType::*;
 
+    let ptr_bytes = 8;
+
     match content {
         RecursionVar { .. } => panic!("recursion var in num"),
         FlexVar(_) | RigidVar(_) => {
@@ -2458,7 +2424,7 @@ fn layout_from_num_content<'a>(content: &Content) -> Result<Layout<'a>, LayoutPr
         }
         Structure(Apply(symbol, args)) => match *symbol {
             // Ints
-            Symbol::NUM_NAT => Ok(Layout::usize()),
+            Symbol::NUM_NAT => Ok(Layout::usize(ptr_bytes)),
 
             Symbol::NUM_INTEGER => Ok(Layout::i64()),
             Symbol::NUM_I128 => Ok(Layout::i128()),
@@ -2498,7 +2464,11 @@ fn layout_from_num_content<'a>(content: &Content) -> Result<Layout<'a>, LayoutPr
     }
 }
 
-fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutProblem> {
+fn unwrap_num_tag<'a>(
+    subs: &Subs,
+    var: Variable,
+    ptr_bytes: u32,
+) -> Result<Layout<'a>, LayoutProblem> {
     match subs.get_content_without_compacting(var) {
         Content::Alias(Symbol::NUM_INTEGER, args, _) => {
             debug_assert!(args.len() == 1);
@@ -2511,25 +2481,23 @@ fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutPr
                 Content::Alias(symbol, args, _) => {
                     debug_assert!(args.is_empty());
 
-                    let width = match *symbol {
-                        Symbol::NUM_SIGNED128 => IntWidth::I128,
-                        Symbol::NUM_SIGNED64 => IntWidth::I64,
-                        Symbol::NUM_SIGNED32 => IntWidth::I32,
-                        Symbol::NUM_SIGNED16 => IntWidth::I16,
-                        Symbol::NUM_SIGNED8 => IntWidth::I8,
-                        Symbol::NUM_UNSIGNED128 => IntWidth::U128,
-                        Symbol::NUM_UNSIGNED64 => IntWidth::U64,
-                        Symbol::NUM_UNSIGNED32 => IntWidth::U32,
-                        Symbol::NUM_UNSIGNED16 => IntWidth::U16,
-                        Symbol::NUM_UNSIGNED8 => IntWidth::U8,
-                        Symbol::NUM_NATURAL => {
-                            return Ok(Layout::usize());
-                        }
+                    let layout = match *symbol {
+                        Symbol::NUM_SIGNED128 => Layout::i128(),
+                        Symbol::NUM_SIGNED64 => Layout::i64(),
+                        Symbol::NUM_SIGNED32 => Layout::i32(),
+                        Symbol::NUM_SIGNED16 => Layout::i16(),
+                        Symbol::NUM_SIGNED8 => Layout::i8(),
+                        Symbol::NUM_UNSIGNED128 => Layout::u128(),
+                        Symbol::NUM_UNSIGNED64 => Layout::u64(),
+                        Symbol::NUM_UNSIGNED32 => Layout::u32(),
+                        Symbol::NUM_UNSIGNED16 => Layout::u16(),
+                        Symbol::NUM_UNSIGNED8 => Layout::u8(),
+                        Symbol::NUM_NATURAL => Layout::usize(ptr_bytes),
 
                         _ => unreachable!("not a valid int variant: {:?} {:?}", symbol, args),
                     };
 
-                    Ok(Layout::Builtin(Builtin::Int(width)))
+                    Ok(layout)
                 }
                 Content::FlexVar(_) | Content::RigidVar(_) => {
                     // default to i64
