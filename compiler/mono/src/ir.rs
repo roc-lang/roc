@@ -7982,7 +7982,7 @@ pub fn num_argument_to_int_or_float(
                 Symbol::NUM_NAT | Symbol::NUM_NATURAL | Symbol::NUM_AT_NATURAL => {
                     let int_width = match ptr_bytes {
                         4 => IntWidth::U32,
-                        8 => IntWidth::U32,
+                        8 => IntWidth::U64,
                         _ => panic!("unsupported word size"),
                     };
 

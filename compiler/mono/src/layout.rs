@@ -749,14 +749,12 @@ impl<'a> Layout<'a> {
             }
             Structure(flat_type) => layout_from_flat_type(env, flat_type),
 
-            Alias(symbol, args, _) => {
+            Alias(symbol, _args, actual_var) => {
                 if let Some(int_width) = IntWidth::try_from_symbol(symbol) {
-                    debug_assert!(args.is_empty());
                     return Ok(Layout::Builtin(Builtin::Int(int_width)));
                 }
 
                 if let Some(float_width) = FloatWidth::try_from_symbol(symbol) {
-                    debug_assert!(args.is_empty());
                     return Ok(Layout::Builtin(Builtin::Float(float_width)));
                 }
 
@@ -769,7 +767,7 @@ impl<'a> Layout<'a> {
                         return Ok(Layout::usize(env.ptr_bytes))
                     }
 
-                    _ => Self::from_var(env, var),
+                    _ => Self::from_var(env, actual_var),
                 }
             }
 
@@ -1124,7 +1122,7 @@ impl<'a> Layout<'a> {
     pub fn usize(ptr_bytes: u32) -> Layout<'a> {
         match ptr_bytes {
             4 => Self::u32(),
-            8 => Self::u32(),
+            8 => Self::u64(),
             _ => panic!("width of usize {} not supported", ptr_bytes),
         }
     }
@@ -1175,6 +1173,10 @@ impl<'a> Layout<'a> {
 
     pub fn default_integer() -> Layout<'a> {
         Layout::i64()
+    }
+
+    pub fn default_float() -> Layout<'a> {
+        Layout::f64()
     }
 }
 

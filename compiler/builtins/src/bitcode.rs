@@ -60,8 +60,6 @@ impl FloatWidth {
 
     pub const fn try_from_symbol(symbol: Symbol) -> Option<Self> {
         match symbol {
-            Symbol::NUM_FLOAT => Some(FloatWidth::F64),
-
             Symbol::NUM_F64 | Symbol::NUM_BINARY64 | Symbol::NUM_AT_BINARY64 => {
                 Some(FloatWidth::F64)
             }
@@ -124,7 +122,6 @@ impl IntWidth {
 
     pub const fn try_from_symbol(symbol: Symbol) -> Option<Self> {
         match symbol {
-            Symbol::NUM_INT => Some(IntWidth::I64),
             Symbol::NUM_I128 | Symbol::NUM_SIGNED128 | Symbol::NUM_AT_SIGNED128 => {
                 Some(IntWidth::I128)
             }
