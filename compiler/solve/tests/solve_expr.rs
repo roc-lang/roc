@@ -3951,6 +3951,30 @@ mod solve_expr {
     }
 
     #[test]
+    fn top_level_alias_ordering() {
+        // see https://github.com/rtfeldman/roc/issues/1162
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    app "test" provides [ main ] to "./platform"
+
+                    WrappedOnlyUnit : [ Wrapped OnlyUnit ]
+                    OnlyUnit : [ Unit ]
+
+                    main : List WrappedOnlyUnit
+                    main =
+                        [ Wrapped initUnit ]
+
+                    initUnit : OnlyUnit
+                    initUnit = Unit
+                "#
+            ),
+            "List WrappedOnlyUnit",
+        );
+    }
+
+
+    #[test]
     #[ignore]
     fn rbtree_full_remove_min() {
         infer_eq_without_problem(

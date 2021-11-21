@@ -301,9 +301,10 @@ pub fn sort_can_defs(
 ) -> (Result<Vec<Declaration>, RuntimeError>, Output) {
     let CanDefs {
         refs_by_symbol,
-        can_defs_by_symbol,
+        mut can_defs_by_symbol,
         aliases,
     } = defs;
+    let sorted_aliases = sort_aliases_topologically(&aliases);
 
     for (symbol, alias) in aliases.into_iter() {
         output.aliases.insert(symbol, alias);
@@ -478,6 +479,15 @@ pub fn sort_can_defs(
     ) {
         Ok(groups) => {
             let mut declarations = Vec::new();
+
+            dbg!(&sorted_aliases);
+            dbg!(&can_defs_by_symbol);
+            for alias in sorted_aliases.into_iter() {
+                if let Some(can_def) = can_defs_by_symbol.remove(&alias) {
+                    declarations.push(Declaration::Declare(can_def));
+                }
+            }
+            dbg!(&declarations);
 
             // groups are in reversed order
             for group in groups.into_iter().rev() {
@@ -1521,6 +1531,35 @@ fn pending_typed_body<'a>(
         output,
         PendingDef::TypedBody(loc_pattern, loc_can_pattern, loc_ann, loc_expr),
     )
+}
+
+///Put aliases in the correct order
+fn sort_aliases_topologically(
+    aliases: &SendMap<Symbol, Alias>
+) -> Vec<Symbol> {
+    let symbols: Vec<Symbol> = aliases.keys().copied().collect();
+    let all_successors_with_self = |symbol: &Symbol| -> ImSet<Symbol> {
+        match aliases.get(symbol) {
+            Some(alias) => {
+                let mut loc_succ = alias.typ.symbols();
+                // retain symbols defined in the current block
+                loc_succ.retain(|key| symbols.iter().any(|symbol| symbol == key));
+
+                loc_succ
+            }
+            None => ImSet::default(),
+        }
+    };
+
+    match ven_graph::topological_sort(&symbols, all_successors_with_self) {
+        Ok(mut sorted_symbols) => {
+            sorted_symbols.reverse();
+            sorted_symbols
+        }
+        Err(_) => {
+            todo!("Implement this")
+        }
+    }
 }
 
 /// Make aliases recursive

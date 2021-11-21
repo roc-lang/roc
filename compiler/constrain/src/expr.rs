@@ -1533,6 +1533,7 @@ pub fn rec_defs_help(
             }
 
             Some(annotation) => {
+                dbg!(&annotation);
                 let arity = annotation.signature.arity();
                 let mut ftv = env.rigids.clone();
 
