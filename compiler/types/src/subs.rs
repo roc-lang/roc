@@ -9,10 +9,12 @@ use ven_ena::unify::{InPlace, Snapshot, UnificationTable, UnifyKey};
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
-static_assertions::assert_eq_size!([u8; 48], Descriptor);
-static_assertions::assert_eq_size!([u8; 32], Content);
-static_assertions::assert_eq_size!([u8; 24], FlatType);
-static_assertions::assert_eq_size!([u8; 48], Problem);
+static_assertions::assert_eq_size!([u8; 6 * 8], Descriptor);
+static_assertions::assert_eq_size!([u8; 4 * 8], Content);
+static_assertions::assert_eq_size!([u8; 3 * 8], FlatType);
+static_assertions::assert_eq_size!([u8; 6 * 8], Problem);
+static_assertions::assert_eq_size!([u8; 12], UnionTags);
+static_assertions::assert_eq_size!([u8; 2 * 8], RecordFields);
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Mark(i32);
@@ -61,16 +63,7 @@ pub struct Subs {
 
 impl Default for Subs {
     fn default() -> Self {
-        Subs {
-            utable: Default::default(),
-            variables: Default::default(),
-            tag_names: Default::default(),
-            field_names: Default::default(),
-            record_fields: Default::default(),
-            // store an empty slice at the first position
-            // used for "TagOrFunction"
-            variable_slices: vec![VariableSubsSlice::default()],
-        }
+        Subs::new()
     }
 }
 
@@ -79,14 +72,14 @@ impl Default for Subs {
 /// The starting position is a u32 which should be plenty
 /// We limit slices to u16::MAX = 65535 elements
 pub struct SubsSlice<T> {
-    start: u32,
-    length: u16,
+    pub start: u32,
+    pub length: u16,
     _marker: std::marker::PhantomData<T>,
 }
 
 /// An index into the Vec<T> of subs
 pub struct SubsIndex<T> {
-    start: u32,
+    pub start: u32,
     _marker: std::marker::PhantomData<T>,
 }
 
@@ -324,7 +317,8 @@ fn subs_fmt_desc(this: &Descriptor, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
     subs_fmt_content(&this.content, subs, f)?;
 
     write!(f, " r: {:?}", &this.rank)?;
-    write!(f, " m: {:?}", &this.mark)
+    write!(f, " m: {:?}", &this.mark)?;
+    write!(f, " c: {:?}", &this.copy)
 }
 
 pub struct SubsFmtContent<'a>(pub &'a Content, pub &'a Subs);
@@ -679,11 +673,11 @@ impl Variable {
     ///
     /// This should only ever be called from tests!
     pub unsafe fn unsafe_test_debug_variable(v: u32) -> Self {
-        debug_assert!(v <= Self::NUM_RESERVED_VARS as u32);
+        debug_assert!(v >= Self::NUM_RESERVED_VARS as u32);
         Variable(v)
     }
 
-    pub fn index(&self) -> u32 {
+    pub const fn index(&self) -> u32 {
         self.0
     }
 }
@@ -985,21 +979,31 @@ fn define_integer_types(subs: &mut Subs) {
 }
 
 impl Subs {
-    pub fn new(var_store: VarStore) -> Self {
-        let entries = var_store.next;
+    pub fn new() -> Self {
+        Self::with_capacity(0)
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        let capacity = capacity.max(Variable::NUM_RESERVED_VARS);
 
         let mut subs = Subs {
             utable: UnificationTable::default(),
-            ..Default::default()
+            variables: Default::default(),
+            tag_names: Default::default(),
+            field_names: Default::default(),
+            record_fields: Default::default(),
+            // store an empty slice at the first position
+            // used for "TagOrFunction"
+            variable_slices: vec![VariableSubsSlice::default()],
         };
 
         // NOTE the utable does not (currently) have a with_capacity; using this as the next-best thing
-        subs.utable.reserve(entries as usize);
+        subs.utable.reserve(capacity);
 
         // TODO There are at least these opportunities for performance optimization here:
         // * Making the default flex_var_descriptor be all 0s, so no init step is needed.
 
-        for _ in 0..entries {
+        for _ in 0..capacity {
             subs.utable.new_key(flex_var_descriptor());
         }
 
@@ -1040,7 +1044,14 @@ impl Subs {
         subs
     }
 
+    pub fn new_from_varstore(var_store: VarStore) -> Self {
+        let entries = var_store.next;
+
+        Self::with_capacity(entries as usize)
+    }
+
     pub fn extend_by(&mut self, entries: usize) {
+        self.utable.reserve(entries);
         for _ in 0..entries {
             self.utable.new_key(flex_var_descriptor());
         }
@@ -1078,6 +1089,10 @@ impl Subs {
 
     pub fn get_ref(&self, key: Variable) -> &Descriptor {
         &self.utable.probe_value_ref(key).value
+    }
+
+    pub fn get_ref_mut(&mut self, key: Variable) -> &mut Descriptor {
+        &mut self.utable.probe_value_ref_mut(key).value
     }
 
     pub fn get_rank(&self, key: Variable) -> Rank {
@@ -1149,6 +1164,26 @@ impl Subs {
         });
     }
 
+    pub fn modify<F>(&mut self, key: Variable, mapper: F)
+    where
+        F: Fn(&mut Descriptor),
+    {
+        mapper(self.get_ref_mut(key));
+    }
+
+    pub fn get_rank_set_mark(&mut self, key: Variable, mark: Mark) -> Rank {
+        let l_key = self.utable.get_root_key(key);
+
+        let mut rank = Rank::NONE;
+
+        self.utable.update_value(l_key, |node| {
+            node.value.mark = mark;
+            rank = node.value.rank;
+        });
+
+        rank
+    }
+
     pub fn equivalent(&mut self, left: Variable, right: Variable) -> bool {
         self.utable.unioned(left, right)
     }
@@ -1192,22 +1227,7 @@ impl Subs {
     }
 
     pub fn restore(&mut self, var: Variable) {
-        let desc = self.get(var);
-
-        if desc.copy.is_some() {
-            let content = desc.content;
-
-            let desc = Descriptor {
-                content: content.clone(),
-                rank: Rank::NONE,
-                mark: Mark::NONE,
-                copy: OptVariable::NONE,
-            };
-
-            self.set(var, desc);
-
-            restore_content(self, &content);
-        }
+        restore_help(self, var)
     }
 
     pub fn len(&self) -> usize {
@@ -1216,6 +1236,10 @@ impl Subs {
 
     pub fn is_empty(&self) -> bool {
         self.utable.is_empty()
+    }
+
+    pub fn contains(&self, var: Variable) -> bool {
+        (var.index() as usize) < self.len()
     }
 
     pub fn snapshot(&mut self) -> Snapshot<InPlace<Variable>> {
@@ -1326,6 +1350,12 @@ impl From<Content> for Descriptor {
     }
 }
 
+static_assertions::assert_eq_size!([u8; 4 * 8], Content);
+static_assertions::assert_eq_size!([u8; 4 * 8], (Variable, Option<Lowercase>));
+static_assertions::assert_eq_size!([u8; 3 * 8], (Symbol, AliasVariables, Variable));
+static_assertions::assert_eq_size!([u8; 12], AliasVariables);
+static_assertions::assert_eq_size!([u8; 3 * 8], FlatType);
+
 #[derive(Clone, Debug)]
 pub enum Content {
     /// A type variable which the user did not name in an annotation,
@@ -1347,10 +1377,10 @@ pub enum Content {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AliasVariables {
-    lowercases_start: u32,
-    variables_start: u32,
-    lowercases_len: u16,
-    variables_len: u16,
+    pub lowercases_start: u32,
+    pub variables_start: u32,
+    pub lowercases_len: u16,
+    pub variables_len: u16,
 }
 
 impl AliasVariables {
@@ -1466,6 +1496,8 @@ impl Content {
     }
 }
 
+static_assertions::assert_eq_size!([u8; 3 * 8], FlatType);
+
 #[derive(Clone, Debug)]
 pub enum FlatType {
     Apply(Symbol, VariableSubsSlice),
@@ -1489,7 +1521,7 @@ pub enum Builtin {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct VariableSubsSlice {
-    slice: SubsSlice<Variable>,
+    pub slice: SubsSlice<Variable>,
 }
 
 impl VariableSubsSlice {
@@ -1811,6 +1843,12 @@ impl RecordFields {
             variables_start: 0,
             field_types_start: 0,
         }
+    }
+
+    pub const fn variables(&self) -> VariableSubsSlice {
+        let slice = SubsSlice::new(self.variables_start, self.length);
+
+        VariableSubsSlice { slice }
     }
 
     pub fn iter_variables(&self) -> impl Iterator<Item = SubsIndex<Variable>> {
@@ -2701,79 +2739,643 @@ fn get_fresh_var_name(state: &mut ErrorTypeState) -> Lowercase {
     name
 }
 
-fn restore_content(subs: &mut Subs, content: &Content) {
+fn restore_help(subs: &mut Subs, initial: Variable) {
+    let mut stack = vec![initial];
+
+    let variable_slices = &subs.variable_slices;
+
+    let variables = &subs.variables;
+    let var_slice = |variable_subs_slice: VariableSubsSlice| {
+        &variables[variable_subs_slice.slice.start as usize..]
+            [..variable_subs_slice.slice.length as usize]
+    };
+
+    while let Some(var) = stack.pop() {
+        let desc = &mut subs.utable.probe_value_ref_mut(var).value;
+
+        if desc.copy.is_some() {
+            desc.rank = Rank::NONE;
+            desc.mark = Mark::NONE;
+            desc.copy = OptVariable::NONE;
+
+            use Content::*;
+            use FlatType::*;
+
+            match &desc.content {
+                FlexVar(_) | RigidVar(_) | Error => (),
+
+                RecursionVar { structure, .. } => {
+                    stack.push(*structure);
+                }
+
+                Structure(flat_type) => match flat_type {
+                    Apply(_, args) => {
+                        stack.extend(var_slice(*args));
+                    }
+
+                    Func(arg_vars, closure_var, ret_var) => {
+                        stack.extend(var_slice(*arg_vars));
+
+                        stack.push(*ret_var);
+                        stack.push(*closure_var);
+                    }
+
+                    EmptyRecord => (),
+                    EmptyTagUnion => (),
+
+                    Record(fields, ext_var) => {
+                        stack.extend(var_slice(fields.variables()));
+
+                        stack.push(*ext_var);
+                    }
+                    TagUnion(tags, ext_var) => {
+                        for slice_index in tags.variables() {
+                            let slice = variable_slices[slice_index.start as usize];
+                            stack.extend(var_slice(slice));
+                        }
+
+                        stack.push(*ext_var);
+                    }
+                    FunctionOrTagUnion(_, _, ext_var) => {
+                        stack.push(*ext_var);
+                    }
+
+                    RecursiveTagUnion(rec_var, tags, ext_var) => {
+                        for slice_index in tags.variables() {
+                            let slice = variable_slices[slice_index.start as usize];
+                            stack.extend(var_slice(slice));
+                        }
+
+                        stack.push(*ext_var);
+                        stack.push(*rec_var);
+                    }
+
+                    Erroneous(_) => (),
+                },
+                Alias(_, args, var) => {
+                    stack.extend(var_slice(args.variables()));
+
+                    stack.push(*var);
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct StorageSubs {
+    subs: Subs,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct StorageSubsOffsets {
+    utable: u32,
+    variables: u32,
+    tag_names: u32,
+    field_names: u32,
+    record_fields: u32,
+    variable_slices: u32,
+}
+
+impl StorageSubs {
+    pub fn new(subs: Subs) -> Self {
+        Self { subs }
+    }
+
+    pub fn extend_with_variable(&mut self, source: &mut Subs, variable: Variable) -> Variable {
+        deep_copy_var_to(source, &mut self.subs, variable)
+    }
+
+    pub fn merge_into(self, target: &mut Subs) -> impl Fn(Variable) -> Variable {
+        let self_offsets = StorageSubsOffsets {
+            utable: self.subs.utable.len() as u32,
+            variables: self.subs.variables.len() as u32,
+            tag_names: self.subs.tag_names.len() as u32,
+            field_names: self.subs.field_names.len() as u32,
+            record_fields: self.subs.record_fields.len() as u32,
+            variable_slices: self.subs.variable_slices.len() as u32,
+        };
+
+        let offsets = StorageSubsOffsets {
+            utable: (target.utable.len() - Variable::NUM_RESERVED_VARS) as u32,
+            variables: target.variables.len() as u32,
+            tag_names: target.tag_names.len() as u32,
+            field_names: target.field_names.len() as u32,
+            record_fields: target.record_fields.len() as u32,
+            variable_slices: target.variable_slices.len() as u32,
+        };
+
+        // The first Variable::NUM_RESERVED_VARS are the same in every subs,
+        // so we can skip copying them!
+        let range = Variable::NUM_RESERVED_VARS..self.subs.utable.len();
+
+        // fill new slots with empty values
+        target.extend_by(range.len());
+
+        for i in range {
+            let variable = Variable(i as u32);
+            let descriptor = self.subs.get_ref(variable);
+            debug_assert!(descriptor.copy.is_none());
+
+            let new_content = Self::offset_content(&offsets, &descriptor.content);
+
+            let new_descriptor = Descriptor {
+                rank: descriptor.rank,
+                mark: descriptor.mark,
+                copy: OptVariable::NONE,
+                content: new_content,
+            };
+
+            let new_variable = Self::offset_variable(&offsets, variable);
+            target.set(new_variable, new_descriptor);
+        }
+
+        target.variables.extend(
+            self.subs
+                .variables
+                .iter()
+                .map(|v| Self::offset_variable(&offsets, *v)),
+        );
+
+        target.variable_slices.extend(
+            self.subs
+                .variable_slices
+                .into_iter()
+                .map(|v| Self::offset_variable_slice(&offsets, v)),
+        );
+
+        target.tag_names.extend(self.subs.tag_names);
+        target.field_names.extend(self.subs.field_names);
+        target.record_fields.extend(self.subs.record_fields);
+
+        debug_assert_eq!(
+            target.utable.len(),
+            (self_offsets.utable + offsets.utable) as usize
+        );
+
+        debug_assert_eq!(
+            target.tag_names.len(),
+            (self_offsets.tag_names + offsets.tag_names) as usize
+        );
+
+        move |v| {
+            let offsets = offsets;
+            Self::offset_variable(&offsets, v)
+        }
+    }
+    fn offset_flat_type(offsets: &StorageSubsOffsets, flat_type: &FlatType) -> FlatType {
+        match flat_type {
+            FlatType::Apply(symbol, arguments) => {
+                FlatType::Apply(*symbol, Self::offset_variable_slice(offsets, *arguments))
+            }
+            FlatType::Func(arguments, lambda_set, result) => FlatType::Func(
+                Self::offset_variable_slice(offsets, *arguments),
+                Self::offset_variable(offsets, *lambda_set),
+                Self::offset_variable(offsets, *result),
+            ),
+            FlatType::Record(record_fields, ext) => FlatType::Record(
+                Self::offset_record_fields(offsets, *record_fields),
+                Self::offset_variable(offsets, *ext),
+            ),
+            FlatType::TagUnion(union_tags, ext) => FlatType::TagUnion(
+                Self::offset_union_tags(offsets, *union_tags),
+                Self::offset_variable(offsets, *ext),
+            ),
+            FlatType::FunctionOrTagUnion(tag_name, symbol, ext) => FlatType::FunctionOrTagUnion(
+                Self::offset_tag_name_index(offsets, *tag_name),
+                *symbol,
+                Self::offset_variable(offsets, *ext),
+            ),
+            FlatType::RecursiveTagUnion(rec, union_tags, ext) => FlatType::RecursiveTagUnion(
+                Self::offset_variable(offsets, *rec),
+                Self::offset_union_tags(offsets, *union_tags),
+                Self::offset_variable(offsets, *ext),
+            ),
+            FlatType::Erroneous(problem) => FlatType::Erroneous(problem.clone()),
+            FlatType::EmptyRecord => FlatType::EmptyRecord,
+            FlatType::EmptyTagUnion => FlatType::EmptyTagUnion,
+        }
+    }
+
+    fn offset_content(offsets: &StorageSubsOffsets, content: &Content) -> Content {
+        use Content::*;
+
+        match content {
+            FlexVar(opt_name) => FlexVar(opt_name.clone()),
+            RigidVar(name) => RigidVar(name.clone()),
+            RecursionVar {
+                structure,
+                opt_name,
+            } => RecursionVar {
+                structure: Self::offset_variable(offsets, *structure),
+                opt_name: opt_name.clone(),
+            },
+            Structure(flat_type) => Structure(Self::offset_flat_type(offsets, flat_type)),
+            Alias(symbol, alias_variables, actual) => Alias(
+                *symbol,
+                Self::offset_alias_variables(offsets, *alias_variables),
+                Self::offset_variable(offsets, *actual),
+            ),
+            Error => Content::Error,
+        }
+    }
+
+    fn offset_alias_variables(
+        offsets: &StorageSubsOffsets,
+        mut alias_variables: AliasVariables,
+    ) -> AliasVariables {
+        alias_variables.lowercases_start += offsets.field_names;
+        alias_variables.variables_start += offsets.variables;
+
+        alias_variables
+    }
+
+    fn offset_union_tags(offsets: &StorageSubsOffsets, mut union_tags: UnionTags) -> UnionTags {
+        union_tags.tag_names_start += offsets.tag_names;
+        union_tags.variables_start += offsets.variable_slices;
+
+        union_tags
+    }
+
+    fn offset_record_fields(
+        offsets: &StorageSubsOffsets,
+        mut record_fields: RecordFields,
+    ) -> RecordFields {
+        record_fields.field_names_start += offsets.field_names;
+        record_fields.variables_start += offsets.variables;
+        record_fields.field_types_start += offsets.record_fields;
+
+        record_fields
+    }
+
+    fn offset_tag_name_index(
+        offsets: &StorageSubsOffsets,
+        mut tag_name: SubsIndex<TagName>,
+    ) -> SubsIndex<TagName> {
+        tag_name.start += offsets.tag_names;
+
+        tag_name
+    }
+
+    fn offset_variable(offsets: &StorageSubsOffsets, variable: Variable) -> Variable {
+        if variable.index() < Variable::FIRST_USER_SPACE_VAR.index() {
+            variable
+        } else {
+            let new_index = variable.0 + offsets.utable;
+            Variable(new_index)
+        }
+    }
+
+    fn offset_variable_slice(
+        offsets: &StorageSubsOffsets,
+        mut slice: VariableSubsSlice,
+    ) -> VariableSubsSlice {
+        slice.slice.start += offsets.variables;
+
+        slice
+    }
+}
+
+pub fn deep_copy_var_to(
+    source: &mut Subs, // mut to set the copy
+    target: &mut Subs,
+    var: Variable,
+) -> Variable {
+    let rank = Rank::toplevel();
+
+    // capacity based on the false hello world program
+    let arena = bumpalo::Bump::with_capacity(4 * 1024);
+
+    let mut visited = bumpalo::collections::Vec::with_capacity_in(256, &arena);
+
+    let copy = deep_copy_var_to_help(&arena, &mut visited, source, target, rank, var);
+
+    // we have tracked all visited variables, and can now traverse them
+    // in one go (without looking at the UnificationTable) and clear the copy field
+    for var in visited {
+        let descriptor = source.get_ref_mut(var);
+
+        if descriptor.copy.is_some() {
+            descriptor.rank = Rank::NONE;
+            descriptor.mark = Mark::NONE;
+            descriptor.copy = OptVariable::NONE;
+        }
+    }
+
+    copy
+}
+
+fn deep_copy_var_to_help<'a>(
+    arena: &'a bumpalo::Bump,
+    visited: &mut bumpalo::collections::Vec<'a, Variable>,
+    source: &mut Subs,
+    target: &mut Subs,
+    max_rank: Rank,
+    var: Variable,
+) -> Variable {
+    use bumpalo::collections::Vec;
     use Content::*;
     use FlatType::*;
 
-    match content {
-        FlexVar(_) | RigidVar(_) | RecursionVar { .. } | Error => (),
+    let desc = source.get_without_compacting(var);
 
-        Structure(flat_type) => match flat_type {
-            Apply(_, args) => {
-                for index in args.into_iter() {
-                    let var = subs[index];
-                    subs.restore(var);
-                }
-            }
+    if let Some(copy) = desc.copy.into_variable() {
+        debug_assert!(target.contains(copy));
+        return copy;
+    } else if desc.rank != Rank::NONE {
+        // DO NOTHING, Fall through
+        //
+        // The original deep_copy_var can do
+        // return var;
+        //
+        // but we cannot, because this `var` is in the source, not the target, and we
+        // should only return variables in the target
+    }
 
-            Func(arg_vars, closure_var, ret_var) => {
-                for index in arg_vars.into_iter() {
-                    let var = subs[index];
-                    subs.restore(var);
-                }
+    visited.push(var);
 
-                subs.restore(*ret_var);
-                subs.restore(*closure_var);
-            }
+    let make_descriptor = |content| Descriptor {
+        content,
+        rank: max_rank,
+        mark: Mark::NONE,
+        copy: OptVariable::NONE,
+    };
 
-            EmptyRecord => (),
-            EmptyTagUnion => (),
+    let copy = target.fresh_unnamed_flex_var();
 
-            Record(fields, ext_var) => {
-                for index in fields.iter_variables() {
-                    let var = subs[index];
-                    subs.restore(var);
-                }
+    // Link the original variable to the new variable. This lets us
+    // avoid making multiple copies of the variable we are instantiating.
+    //
+    // Need to do this before recursively copying to avoid looping.
+    source.modify(var, |descriptor| {
+        descriptor.mark = Mark::NONE;
+        descriptor.copy = copy.into();
+    });
 
-                subs.restore(*ext_var);
-            }
-            TagUnion(tags, ext_var) => {
-                for slice_index in tags.variables() {
-                    let slice = subs[slice_index];
-                    for var_index in slice {
-                        let var = subs[var_index];
-                        subs.restore(var);
+    // Now we recursively copy the content of the variable.
+    // We have already marked the variable as copied, so we
+    // will not repeat this work or crawl this variable again.
+    match desc.content {
+        Structure(flat_type) => {
+            let new_flat_type = match flat_type {
+                Apply(symbol, args) => {
+                    let mut new_args = Vec::with_capacity_in(args.len(), arena);
+
+                    for index in args.into_iter() {
+                        let var = source[index];
+                        new_args.push(deep_copy_var_to_help(
+                            arena, visited, source, target, max_rank, var,
+                        ));
                     }
+
+                    let arg_vars = VariableSubsSlice::insert_into_subs(target, new_args);
+
+                    Apply(symbol, arg_vars)
                 }
 
-                subs.restore(*ext_var);
-            }
-            FunctionOrTagUnion(_, _, ext_var) => {
-                subs.restore(*ext_var);
-            }
+                Func(arg_vars, closure_var, ret_var) => {
+                    let new_ret_var =
+                        deep_copy_var_to_help(arena, visited, source, target, max_rank, ret_var);
 
-            RecursiveTagUnion(rec_var, tags, ext_var) => {
-                for slice_index in tags.variables() {
-                    let slice = subs[slice_index];
-                    for var_index in slice {
-                        let var = subs[var_index];
-                        subs.restore(var);
+                    let new_closure_var = deep_copy_var_to_help(
+                        arena,
+                        visited,
+                        source,
+                        target,
+                        max_rank,
+                        closure_var,
+                    );
+
+                    let mut new_arg_vars = Vec::with_capacity_in(arg_vars.len(), arena);
+
+                    for index in arg_vars.into_iter() {
+                        let var = source[index];
+                        let copy_var =
+                            deep_copy_var_to_help(arena, visited, source, target, max_rank, var);
+                        new_arg_vars.push(copy_var);
                     }
+
+                    let arg_vars = VariableSubsSlice::insert_into_subs(target, new_arg_vars);
+
+                    Func(arg_vars, new_closure_var, new_ret_var)
                 }
 
-                subs.restore(*ext_var);
-                subs.restore(*rec_var);
+                same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
+
+                Record(fields, ext_var) => {
+                    let record_fields = {
+                        let mut new_vars = Vec::with_capacity_in(fields.len(), arena);
+
+                        for index in fields.iter_variables() {
+                            let var = source[index];
+                            let copy_var = deep_copy_var_to_help(
+                                arena, visited, source, target, max_rank, var,
+                            );
+
+                            new_vars.push(copy_var);
+                        }
+
+                        let field_names_start = target.field_names.len() as u32;
+                        let variables_start = target.variables.len() as u32;
+                        let field_types_start = target.record_fields.len() as u32;
+
+                        let mut length = 0;
+
+                        for ((i1, _, i3), var) in fields.iter_all().zip(new_vars) {
+                            let record_field = source[i3].map(|_| var);
+
+                            target.field_names.push(source[i1].clone());
+                            target.record_fields.push(record_field.map(|_| ()));
+                            target.variables.push(*record_field.as_inner());
+
+                            length += 1;
+                        }
+
+                        RecordFields {
+                            length,
+                            field_names_start,
+                            variables_start,
+                            field_types_start,
+                        }
+                    };
+
+                    Record(
+                        record_fields,
+                        deep_copy_var_to_help(arena, visited, source, target, max_rank, ext_var),
+                    )
+                }
+
+                TagUnion(tags, ext_var) => {
+                    let new_ext =
+                        deep_copy_var_to_help(arena, visited, source, target, max_rank, ext_var);
+
+                    let mut new_variable_slices = Vec::with_capacity_in(tags.len(), arena);
+
+                    let mut new_variables = Vec::with_capacity_in(tags.len(), arena);
+                    for index in tags.variables() {
+                        let slice = source[index];
+                        for var_index in slice {
+                            let var = source[var_index];
+                            let new_var = deep_copy_var_to_help(
+                                arena, visited, source, target, max_rank, var,
+                            );
+                            new_variables.push(new_var);
+                        }
+
+                        let new_slice =
+                            VariableSubsSlice::insert_into_subs(target, new_variables.drain(..));
+
+                        new_variable_slices.push(new_slice);
+                    }
+
+                    let new_variables = {
+                        let start = target.variable_slices.len() as u32;
+                        let length = new_variable_slices.len() as u16;
+                        target.variable_slices.extend(new_variable_slices);
+
+                        SubsSlice::new(start, length)
+                    };
+
+                    let new_tag_names = {
+                        let tag_names = tags.tag_names();
+                        let slice = &source.tag_names[tag_names.start as usize..]
+                            [..tag_names.length as usize];
+
+                        let start = target.tag_names.len() as u32;
+                        let length = tag_names.len() as u16;
+
+                        target.tag_names.extend(slice.iter().cloned());
+
+                        SubsSlice::new(start, length)
+                    };
+
+                    let union_tags = UnionTags::from_slices(new_tag_names, new_variables);
+
+                    TagUnion(union_tags, new_ext)
+                }
+
+                FunctionOrTagUnion(tag_name, symbol, ext_var) => {
+                    let new_tag_name = SubsIndex::new(target.tag_names.len() as u32);
+
+                    target.tag_names.push(source[tag_name].clone());
+
+                    FunctionOrTagUnion(
+                        new_tag_name,
+                        symbol,
+                        deep_copy_var_to_help(arena, visited, source, target, max_rank, ext_var),
+                    )
+                }
+
+                RecursiveTagUnion(rec_var, tags, ext_var) => {
+                    let mut new_variable_slices = Vec::with_capacity_in(tags.len(), arena);
+
+                    let mut new_variables = Vec::with_capacity_in(tags.len(), arena);
+                    for index in tags.variables() {
+                        let slice = source[index];
+                        for var_index in slice {
+                            let var = source[var_index];
+                            let new_var = deep_copy_var_to_help(
+                                arena, visited, source, target, max_rank, var,
+                            );
+                            new_variables.push(new_var);
+                        }
+
+                        let new_slice =
+                            VariableSubsSlice::insert_into_subs(target, new_variables.drain(..));
+
+                        new_variable_slices.push(new_slice);
+                    }
+
+                    let new_variables = {
+                        let start = target.variable_slices.len() as u32;
+                        let length = new_variable_slices.len() as u16;
+                        target.variable_slices.extend(new_variable_slices);
+
+                        SubsSlice::new(start, length)
+                    };
+
+                    let new_tag_names = {
+                        let tag_names = tags.tag_names();
+                        let slice = &source.tag_names[tag_names.start as usize..]
+                            [..tag_names.length as usize];
+
+                        let start = target.tag_names.len() as u32;
+                        let length = tag_names.len() as u16;
+
+                        target.tag_names.extend(slice.iter().cloned());
+
+                        SubsSlice::new(start, length)
+                    };
+
+                    let union_tags = UnionTags::from_slices(new_tag_names, new_variables);
+
+                    let new_ext =
+                        deep_copy_var_to_help(arena, visited, source, target, max_rank, ext_var);
+                    let new_rec_var =
+                        deep_copy_var_to_help(arena, visited, source, target, max_rank, rec_var);
+
+                    RecursiveTagUnion(new_rec_var, union_tags, new_ext)
+                }
+            };
+
+            target.set(copy, make_descriptor(Structure(new_flat_type)));
+
+            copy
+        }
+
+        FlexVar(_) | Error => copy,
+
+        RecursionVar {
+            opt_name,
+            structure,
+        } => {
+            let new_structure =
+                deep_copy_var_to_help(arena, visited, source, target, max_rank, structure);
+
+            debug_assert!((new_structure.index() as usize) < target.len());
+
+            target.set(
+                copy,
+                make_descriptor(RecursionVar {
+                    opt_name,
+                    structure: new_structure,
+                }),
+            );
+
+            copy
+        }
+
+        RigidVar(name) => {
+            target.set(copy, make_descriptor(FlexVar(Some(name))));
+
+            copy
+        }
+
+        Alias(symbol, mut args, real_type_var) => {
+            let mut new_vars = Vec::with_capacity_in(args.variables().len(), arena);
+
+            for var_index in args.variables() {
+                let var = source[var_index];
+                let new_var = deep_copy_var_to_help(arena, visited, source, target, max_rank, var);
+
+                new_vars.push(new_var);
             }
 
-            Erroneous(_) => (),
-        },
-        Alias(_, args, var) => {
-            for var_index in args.variables().into_iter() {
-                let var = subs[var_index];
-                subs.restore(var);
-            }
+            args.replace_variables(target, new_vars);
 
-            subs.restore(*var);
+            let lowercases = &source.field_names[args.lowercases_start as usize..]
+                [..args.lowercases_len as usize];
+
+            args.lowercases_start = target.field_names.len() as u32;
+            target.field_names.extend(lowercases.iter().cloned());
+
+            let new_real_type_var =
+                deep_copy_var_to_help(arena, visited, source, target, max_rank, real_type_var);
+            let new_content = Alias(symbol, args, new_real_type_var);
+
+            target.set(copy, make_descriptor(new_content));
+
+            copy
         }
     }
 }

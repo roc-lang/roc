@@ -277,7 +277,7 @@ pub fn constrain_expr<'a>(
             expr_id: expr_node_id,
             closure_var,
             fn_var,
-            ..
+            called_via,
         } => {
             // The expression that evaluates to the function being called, e.g. `foo` in
             // (foo) bar baz
@@ -349,7 +349,7 @@ pub fn constrain_expr<'a>(
                 region,
             );
 
-            let category = Category::CallResult(opt_symbol);
+            let category = Category::CallResult(opt_symbol, *called_via);
 
             let mut and_constraints = BumpVec::with_capacity_in(4, arena);
 
@@ -1919,7 +1919,7 @@ pub mod test_constrain {
             aliases,
         };
 
-        let mut subs = Subs::new(var_store);
+        let mut subs = Subs::new_from_varstore(var_store);
 
         for (var, name) in rigid_variables {
             subs.rigid_var(var, name);

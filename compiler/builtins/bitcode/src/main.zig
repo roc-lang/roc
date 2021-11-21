@@ -51,6 +51,7 @@ comptime {
     exportListFn(list.listSetInPlace, "set_in_place");
     exportListFn(list.listSwap, "swap");
     exportListFn(list.listAny, "any");
+    exportListFn(list.listAll, "all");
     exportListFn(list.listFindUnsafe, "find_unsafe");
 }
 

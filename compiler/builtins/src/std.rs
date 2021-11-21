@@ -1128,6 +1128,16 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(bool_type()),
     );
 
+    // all: List elem, (elem -> Bool) -> Bool
+    add_top_level_function_type!(
+        Symbol::LIST_ALL,
+        vec![
+            list_type(flex(TVAR1)),
+            closure(vec![flex(TVAR1)], TVAR2, Box::new(bool_type())),
+        ],
+        Box::new(bool_type()),
+    );
+
     // sortWith : List a, (a, a -> Ordering) -> List a
     add_top_level_function_type!(
         Symbol::LIST_SORT_WITH,
@@ -1158,6 +1168,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
             Box::new(result_type(flex(elem), not_found)),
         )
     }
+
+    // intersperse : List elem, elem -> List elem
+    add_top_level_function_type!(
+        Symbol::LIST_INTERSPERSE,
+        vec![list_type(flex(TVAR1)), flex(TVAR1)],
+        Box::new(list_type(flex(TVAR1))),
+    );
 
     // Dict module
 

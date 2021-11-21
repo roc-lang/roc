@@ -2,9 +2,9 @@
 
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use roc_module::called_via::BinOp::Pizza;
+use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
-use roc_module::operator::BinOp::Pizza;
-use roc_module::operator::{BinOp, CalledVia};
 use roc_parse::ast::Expr::{self, *};
 use roc_parse::ast::{AssignedField, Def, WhenBranch};
 use roc_region::all::{Located, Region};
@@ -277,7 +277,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             })
         }
         UnaryOp(loc_arg, loc_op) => {
-            use roc_module::operator::UnaryOp::*;
+            use roc_module::called_via::UnaryOp::*;
 
             let region = loc_op.region;
             let op = loc_op.value;
@@ -475,7 +475,7 @@ fn binop_step<'a>(
     op_stack: &mut Vec<Located<BinOp>>,
     next_op: Located<BinOp>,
 ) -> Step<'a> {
-    use roc_module::operator::Associativity::*;
+    use roc_module::called_via::Associativity::*;
     use std::cmp::Ordering;
 
     match op_stack.pop() {

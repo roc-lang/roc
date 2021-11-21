@@ -94,13 +94,7 @@ Install nix:
 
 `curl -L https://nixos.org/nix/install | sh`
 
-If you're on MacOS and using a OS version >= 10.15:
-
-`sh <(curl -L https://nixos.org/nix/install) --darwin-use-unencrypted-nix-store-volume`
-
-You may prefer to setup up the volume manually by following nix documentation.
-
-> You may need to restart your terminal
+You will need to start a fresh terminal session to use nix.
 
 ### Usage
 

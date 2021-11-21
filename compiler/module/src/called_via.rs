@@ -12,6 +12,10 @@ pub enum CalledVia {
 
     /// Calling with a unary operator, e.g. (!foo bar baz) or (-foo bar baz)
     UnaryOp(UnaryOp),
+
+    /// This call is the result of desugaring string interpolation,
+    /// e.g. "\(first) \(last)" is transformed into Str.concat (Str.concat first " ") last.
+    StringInterpolation,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

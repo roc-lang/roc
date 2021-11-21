@@ -691,6 +691,10 @@ all : List elem, (elem -> Bool) -> Bool
 ## any of the elements satisfy it.
 any : List elem, (elem -> Bool) -> Bool
 
+## Run the given predicate on each element of the list, returning `True` if
+## all of the elements satisfy it.
+all : List elem, (elem -> Bool) -> Bool
+
 ## Returns the first element of the list satisfying a predicate function.
 ## If no satisfying element is found, an `Err NotFound` is returned.
 find : List elem, (elem -> Bool) -> Result elem [ NotFound ]*
