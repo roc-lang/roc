@@ -6846,4 +6846,50 @@ I need all branches in an `if` to have the same type!
             ),
         )
     }
+
+    #[test]
+    fn error_wildcards_are_related_in_nested_defs() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : a, b, * -> *
+                f = \_, _, x2 ->
+                    inner : * -> *
+                    inner = \y -> y
+                    inner x2
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with the body of the `f` definition:
+
+                1│  f : a, b, * -> *
+                2│  f = \_, _, x2 ->
+                3│      inner : * -> *
+                4│      inner = \y -> y
+                5│      inner x2
+                        ^^^^^^^^
+
+                This `inner` call produces:
+
+                    *
+
+                But the type annotation on `f` says it should be:
+
+                    *
+
+                Tip: When two *s are connected, it tells me that they both refer to
+                the same type, in a way that doesn't require a *!
+
+                Since the type has to be the same in both places, the type can be more
+                specific than *. You can change the * to a named type variable like `c`
+                to reflect the connection.
+                "#
+            ),
+        )
+    }
 }
