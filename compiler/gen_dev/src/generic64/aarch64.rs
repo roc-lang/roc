@@ -46,6 +46,12 @@ pub enum AArch64GeneralReg {
 
 impl RegTrait for AArch64GeneralReg {}
 
+impl AArch64GeneralReg {
+    fn id(&self) -> u8 {
+        *self as u8
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 #[allow(dead_code)]
 pub enum AArch64FloatReg {}
@@ -506,14 +512,14 @@ impl AArch64Assembler {}
 // Map all instructions to a packed struct.
 
 #[derive(PackedStruct, Debug)]
-struct MoveWideImmediate {
-    reg_d: Integer<u8, packed_bits::Bits<5>>, // AArch64GeneralReg
-    #[packed_field(endian = "msb")]
-    imm16: u16,
-    hw: Integer<u8, packed_bits::Bits<2>>,
-    fixed: Integer<u8, packed_bits::Bits<6>>, // = 0b100101,
-    opc: Integer<u8, packed_bits::Bits<2>>,
+#[packed_struct(endian = "msb")]
+pub struct MoveWideImmediate {
     sf: bool,
+    opc: Integer<u8, packed_bits::Bits<2>>,
+    fixed: Integer<u8, packed_bits::Bits<6>>, // = 0b100101,
+    hw: Integer<u8, packed_bits::Bits<2>>,
+    imm16: u16,
+    reg_d: Integer<u8, packed_bits::Bits<5>>, // AArch64GeneralReg
 }
 
 impl MoveWideImmediate {
@@ -525,7 +531,7 @@ impl MoveWideImmediate {
 
         Self {
             // we want this to truncate, not sure if this does that
-            reg_d: rd.into(),
+            reg_d: rd.id().into(),
             imm16,
             hw: hw.into(),
             opc: opc.into(),
@@ -536,16 +542,16 @@ impl MoveWideImmediate {
 }
 
 #[derive(PackedStruct, Debug)]
-struct ArithmeticImmediate {
-    reg_d: Integer<u8, packed_bits::Bits<5>>,
-    reg_n: Integer<u8, packed_bits::Bits<5>>,
-    #[packed_field(endian = "msb")]
-    imm12: Integer<u16, packed_bits::Bits<12>>,
-    sh: bool,                                 // shift
-    fixed: Integer<u8, packed_bits::Bits<6>>, // = 0b100010,
-    s: bool,
-    op: bool, // add or subtract
+#[packed_struct(endian = "msb")]
+pub struct ArithmeticImmediate {
     sf: bool,
+    op: bool, // add or subtract
+    s: bool,
+    fixed: Integer<u8, packed_bits::Bits<6>>, // = 0b100010,
+    sh: bool,                                 // shift
+    imm12: Integer<u16, packed_bits::Bits<12>>,
+    reg_n: Integer<u8, packed_bits::Bits<5>>,
+    reg_d: Integer<u8, packed_bits::Bits<5>>,
 }
 
 impl ArithmeticImmediate {
@@ -558,8 +564,8 @@ impl ArithmeticImmediate {
         sh: bool,
     ) -> Self {
         Self {
-            reg_d: rd.into(),
-            reg_n: rn.into(),
+            reg_d: rd.id().into(),
+            reg_n: rn.id().into(),
             imm12: imm12.into(),
             sh,
             s,
@@ -572,6 +578,8 @@ impl ArithmeticImmediate {
     }
 }
 
+#[derive(Clone, Copy)]
+#[allow(dead_code)]
 enum ShiftType {
     LSL = 0,
     LSR = 1,
@@ -579,19 +587,25 @@ enum ShiftType {
     ROR = 3,
 }
 
+impl ShiftType {
+    fn id(&self) -> u8 {
+        *self as u8
+    }
+}
+
 #[derive(PackedStruct)]
-struct ArithmeticShifted {
-    reg_d: Integer<u8, packed_bits::Bits<5>>,
-    reg_n: Integer<u8, packed_bits::Bits<5>>,
-    #[packed_field(endian = "msb")]
-    imm6: Integer<u8, packed_bits::Bits<6>>,
-    reg_m: Integer<u8, packed_bits::Bits<5>>,
-    fixed2: bool,                             // = 0b0,
-    shift: Integer<u8, packed_bits::Bits<2>>, // shift
-    fixed: Integer<u8, packed_bits::Bits<5>>, // = 0b01011,
-    s: bool,
-    op: bool, // add or subtract
+#[packed_struct(endian = "msb")]
+pub struct ArithmeticShifted {
     sf: bool,
+    op: bool, // add or subtract
+    s: bool,
+    fixed: Integer<u8, packed_bits::Bits<5>>, // = 0b01011,
+    shift: Integer<u8, packed_bits::Bits<2>>, // shift
+    fixed2: bool,                             // = 0b0,
+    reg_m: Integer<u8, packed_bits::Bits<5>>,
+    imm6: Integer<u8, packed_bits::Bits<6>>,
+    reg_n: Integer<u8, packed_bits::Bits<5>>,
+    reg_d: Integer<u8, packed_bits::Bits<5>>,
 }
 
 impl ArithmeticShifted {
@@ -605,12 +619,12 @@ impl ArithmeticShifted {
         rd: AArch64GeneralReg,
     ) -> Self {
         Self {
-            reg_d: rd.into(),
-            reg_n: rn.into(),
+            reg_d: rd.id().into(),
+            reg_n: rn.id().into(),
             imm6: imm6.into(),
-            reg_m: rm.into(),
+            reg_m: rm.id().into(),
             fixed2: false,
-            shift: shift.into(),
+            shift: shift.id().into(),
             fixed: 0b01011.into(),
             s,
             op,
@@ -635,17 +649,17 @@ enum LogicalOp {
 }
 
 #[derive(PackedStruct)]
-struct LogicalShiftedRegister {
-    reg_d: Integer<u8, packed_bits::Bits<5>>,
-    reg_n: Integer<u8, packed_bits::Bits<5>>,
-    #[packed_field(endian = "msb")]
-    imm6: Integer<u8, packed_bits::Bits<6>>,
-    reg_m: Integer<u8, packed_bits::Bits<5>>,
-    n: bool,
-    shift: Integer<u8, packed_bits::Bits<2>>, // shift
-    fixed: Integer<u8, packed_bits::Bits<5>>, // = 0b01010,
-    op: Integer<u8, packed_bits::Bits<2>>,
+#[packed_struct(endian = "msb")]
+pub struct LogicalShiftedRegister {
     sf: bool,
+    op: Integer<u8, packed_bits::Bits<2>>,
+    fixed: Integer<u8, packed_bits::Bits<5>>, // = 0b01010,
+    shift: Integer<u8, packed_bits::Bits<2>>, // shift
+    n: bool,
+    reg_m: Integer<u8, packed_bits::Bits<5>>,
+    imm6: Integer<u8, packed_bits::Bits<6>>,
+    reg_n: Integer<u8, packed_bits::Bits<5>>,
+    reg_d: Integer<u8, packed_bits::Bits<5>>,
 }
 
 impl LogicalShiftedRegister {
@@ -669,12 +683,12 @@ impl LogicalShiftedRegister {
         };
 
         Self {
-            reg_d: rd.into(),
-            reg_n: rn.into(),
+            reg_d: rd.id().into(),
+            reg_n: rn.id().into(),
             imm6: imm6.into(),
-            reg_m: rm.into(),
+            reg_m: rm.id().into(),
             n,
-            shift: shift.into(),
+            shift: shift.id().into(),
             fixed: 0b01010.into(),
             op: op.into(),
             // true for 64 bit addition
@@ -685,24 +699,24 @@ impl LogicalShiftedRegister {
 }
 
 #[derive(PackedStruct)]
-struct UnconditionalBranchRegister {
-    fixed5: Integer<u8, packed_bits::Bits<5>>,
-    rn: Integer<u8, packed_bits::Bits<5>>,
-    m: bool,
-    a: bool,
-    fixed4: Integer<u8, packed_bits::Bits<4>>,
-    fixed3: Integer<u8, packed_bits::Bits<5>>,
-    op: Integer<u8, packed_bits::Bits<2>>,
-    fixed2: bool,
-    z: bool,
+pub struct UnconditionalBranchRegister {
     fixed: Integer<u8, packed_bits::Bits<7>>,
+    z: bool,
+    fixed2: bool,
+    op: Integer<u8, packed_bits::Bits<2>>,
+    fixed3: Integer<u8, packed_bits::Bits<5>>,
+    fixed4: Integer<u8, packed_bits::Bits<4>>,
+    a: bool,
+    m: bool,
+    rn: Integer<u8, packed_bits::Bits<5>>,
+    fixed5: Integer<u8, packed_bits::Bits<5>>,
 }
 
 impl UnconditionalBranchRegister {
     fn new(op: u8, rn: AArch64GeneralReg) -> Self {
         Self {
             fixed5: 0b00000.into(),
-            rn: rn.into(),
+            rn: rn.id().into(),
             m: false,
             a: false,
             fixed4: 0b0000.into(),
@@ -715,180 +729,46 @@ impl UnconditionalBranchRegister {
     }
 }
 
+// Uses unsigned Offset
+// opc = 0b01 means load
+// opc = 0b00 means store
 #[derive(PackedStruct, Debug)]
-struct LoadStoreRegister {
-    rt: Integer<u8, packed_bits::Bits<5>>,
-    rn: Integer<u8, packed_bits::Bits<5>>,
-    #[packed_field(endian = "msb")]
-    offset: Integer<u16, packed_bits::Bits<12>>,
-    opc: Integer<u8, packed_bits::Bits<2>>,
-    op1: Integer<u8, packed_bits::Bits<2>>,
-    v: bool,
-    fixed: Integer<u8, packed_bits::Bits<3>>, // = 0b111,
+#[packed_struct(endian = "msb")]
+pub struct LoadStoreRegisterImmediate {
     size: Integer<u8, packed_bits::Bits<2>>,
+    fixed: Integer<u8, packed_bits::Bits<3>>, // = 0b111,
+    fixed2: bool,
+    fixed3: Integer<u8, packed_bits::Bits<2>>,
+    opc: Integer<u8, packed_bits::Bits<2>>,
+    imm12: Integer<u16, packed_bits::Bits<12>>,
+    rn: Integer<u8, packed_bits::Bits<5>>,
+    rt: Integer<u8, packed_bits::Bits<5>>,
 }
 
-#[derive(Debug)]
-enum LdStrGroup {
-    UnsignedImm {
-        size: u8,
-        v: bool,
-        opc: u8,
-        imm12: u16,
-        reg_n: AArch64GeneralReg,
-        reg_t: AArch64GeneralReg,
-    },
-}
+impl LoadStoreRegisterImmediate {
+    fn new(size: u8, opc: u8, imm12: u16, rn: AArch64GeneralReg, rt: AArch64GeneralReg) -> Self {
+        debug_assert!(size <= 0b11);
+        debug_assert!(imm12 <= 0xFFF);
 
-#[inline(always)]
-fn build_instruction(inst: AArch64Instruction) -> [u8; 4] {
-    let mut out: u32 = 0;
-    match inst {
-        AArch64Instruction::Branch(branch) => {
-            out |= 0b101 << 26;
-            match branch {
-                BranchGroup::UnconditionBranchReg {
-                    opc,
-                    op2,
-                    op3,
-                    reg_n,
-                    op4,
-                } => {
-                    debug_assert!(opc <= 0b1111);
-                    debug_assert!(op2 <= 0b11111);
-                    debug_assert!(op3 <= 0b111111);
-                    debug_assert!(op4 <= 0b1111);
-                    out |= 0b1101011 << 25;
-                    out |= (opc as u32) << 21;
-                    out |= (op2 as u32) << 16;
-                    out |= (op3 as u32) << 10;
-                    out |= (reg_n as u32) << 5;
-                    out |= op4 as u32;
-                }
-            }
+        Self {
+            rt: rt.id().into(),
+            rn: rn.id().into(),
+            imm12: imm12.into(),
+            opc: opc.into(),
+            fixed3: 0b01.into(),
+            fixed2: false,
+            fixed: 0b111.into(),
+            size: size.into(),
         }
-        AArch64Instruction::DPImm(dpimm) => {
-            out |= 0b100 << 26;
-            match dpimm {
-                DPImmGroup::MoveWide {
-                    sf,
-                    opc,
-                    hw,
-                    imm16,
-                    reg_d,
-                } => {
-                    out |= (sf as u32) << 31;
-                    out |= (opc as u32) << 29;
-                    out |= 0b101 << 23;
-                    out |= (hw as u32) << 21;
-                    out |= (imm16 as u32) << 5;
-                    out |= reg_d as u32;
-                }
-                DPImmGroup::AddSubImm {
-                    sf,
-                    subtract,
-                    set_flags,
-                    shift,
-                    imm12,
-                    reg_n,
-                    reg_d,
-                } => {
-                    debug_assert!(imm12 <= 0xFFF);
-                    out |= (sf as u32) << 31;
-                    out |= (subtract as u32) << 30;
-                    out |= (set_flags as u32) << 29;
-                    out |= 0b010 << 23;
-                    out |= (shift as u32) << 22;
-                    out |= (imm12 as u32) << 10;
-                    out |= (reg_n as u32) << 5;
-                    out |= reg_d as u32;
-                }
-            }
-        }
-        AArch64Instruction::DPReg(dpreg) => {
-            out |= 0b101 << 25;
-            match dpreg {
-                DPRegGroup::Logical {
-                    sf,
-                    op,
-                    shift,
-                    reg_m,
-                    imm6,
-                    reg_n,
-                    reg_d,
-                } => {
-                    debug_assert!(shift <= 0b11);
-                    debug_assert!(imm6 <= 0b111111);
-                    let (opc, n) = match op {
-                        DPRegLogicalOp::AND => (0b00, 0),
-                        DPRegLogicalOp::BIC => (0b00, 1),
-                        DPRegLogicalOp::ORR => (0b01, 0),
-                        DPRegLogicalOp::ORN => (0b01, 1),
-                        DPRegLogicalOp::EOR => (0b10, 0),
-                        DPRegLogicalOp::EON => (0b10, 1),
-                        DPRegLogicalOp::ANDS => (0b11, 0),
-                        DPRegLogicalOp::BICS => (0b11, 1),
-                    };
-                    out |= (sf as u32) << 31;
-                    out |= opc << 29;
-                    out |= (shift as u32) << 22;
-                    out |= n << 21;
-                    out |= (reg_m as u32) << 16;
-                    out |= (imm6 as u32) << 10;
-                    out |= (reg_n as u32) << 5;
-                    out |= reg_d as u32;
-                }
-                DPRegGroup::AddSubShifted {
-                    sf,
-                    subtract,
-                    set_flags,
-                    shift,
-                    reg_m,
-                    imm6,
-                    reg_n,
-                    reg_d,
-                } => {
-                    debug_assert!(shift <= 0b11);
-                    debug_assert!(imm6 <= 0b111111);
-                    out |= (sf as u32) << 31;
-                    out |= (subtract as u32) << 30;
-                    out |= (set_flags as u32) << 29;
-                    out |= 0b1 << 24;
-                    out |= (shift as u32) << 22;
-                    out |= (reg_m as u32) << 16;
-                    out |= (imm6 as u32) << 10;
-                    out |= (reg_n as u32) << 5;
-                    out |= reg_d as u32;
-                }
-            }
-        }
-        AArch64Instruction::LdStr(ldstr) => {
-            out |= 0b1 << 27;
-            match ldstr {
-                LdStrGroup::UnsignedImm {
-                    size,
-                    v,
-                    opc,
-                    imm12,
-                    reg_n,
-                    reg_t,
-                } => {
-                    debug_assert!(size <= 0b11);
-                    debug_assert!(imm12 <= 0xFFF);
-                    out |= (size as u32) << 30;
-                    out |= 0b11 << 28;
-                    out |= (v as u32) << 26;
-                    out |= 0b1 << 24;
-                    out |= (opc as u32) << 22;
-                    out |= (imm12 as u32) << 10;
-                    out |= (reg_n as u32) << 5;
-                    out |= reg_t as u32;
-                }
-            }
-        }
-        x => unimplemented!("The instruction, {:?}, has not be implemented yet", x),
     }
-    out.to_le_bytes()
+
+    fn new_load(size: u8, imm12: u16, rn: AArch64GeneralReg, rt: AArch64GeneralReg) -> Self {
+        Self::new(size, 0b01, imm12, rn, rt)
+    }
+
+    fn new_store(size: u8, imm12: u16, rn: AArch64GeneralReg, rt: AArch64GeneralReg) -> Self {
+        Self::new(size, 0b00, imm12, rn, rt)
+    }
 }
 
 // Below here are the functions for all of the assembly instructions.
@@ -907,7 +787,11 @@ fn add_reg64_reg64_imm12(
 ) {
     let inst = ArithmeticImmediate::new(false, false, dst, src, imm12, false);
 
-    buf.extend(inst.pack().unwrap());
+    let mut bytes = inst.pack().unwrap();
+
+    bytes.reverse();
+
+    buf.extend(bytes);
 }
 
 /// `ADD Xd, Xm, Xn` -> Add Xm and Xn and place the result into Xd.
@@ -920,7 +804,11 @@ fn add_reg64_reg64_reg64(
 ) {
     let inst = ArithmeticShifted::new(false, false, ShiftType::LSL, 0, src1, src2, dst);
 
-    buf.extend(inst.pack().unwrap());
+    let mut bytes = inst.pack().unwrap();
+
+    bytes.reverse();
+
+    buf.extend(bytes);
 }
 
 /// `LDR Xt, [Xn, #offset]` -> Load Xn + Offset Xt. ZRSP is SP.
@@ -932,17 +820,13 @@ fn ldr_reg64_imm12(
     base: AArch64GeneralReg,
     imm12: u16,
 ) {
-    debug_assert!(imm12 <= 0xFFF);
-    buf.extend(&build_instruction(AArch64Instruction::LdStr(
-        LdStrGroup::UnsignedImm {
-            size: 0b11,
-            v: false,
-            opc: 0b01,
-            imm12,
-            reg_n: base,
-            reg_t: dst,
-        },
-    )));
+    let inst = LoadStoreRegisterImmediate::new_load(0b11, imm12, base, dst);
+
+    let mut bytes = inst.pack().unwrap();
+
+    bytes.reverse();
+
+    buf.extend(bytes);
 }
 
 /// `MOV Xd, Xm` -> Move Xm to Xd.
@@ -958,7 +842,11 @@ fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64Ge
         dst,
     );
 
-    buf.extend(inst.pack().unwrap());
+    let mut bytes = inst.pack().unwrap();
+
+    bytes.reverse();
+
+    buf.extend(bytes);
 }
 
 /// `MOVK Xd, imm16` -> Keeps Xd and moves an optionally shifted imm16 to Xd.
@@ -966,8 +854,11 @@ fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64Ge
 fn movk_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm16: u16, hw: u8) {
     let inst = MoveWideImmediate::new(0b11, dst, imm16, hw, true);
 
-    // MOV is equvalent to `ORR Xd, XZR, XM` in AARCH64.
-    buf.extend(inst.pack().unwrap());
+    let mut bytes = inst.pack().unwrap();
+
+    bytes.reverse();
+
+    buf.extend(bytes);
 }
 
 /// `MOVZ Xd, imm16` -> Zeros Xd and moves an optionally shifted imm16 to Xd.
@@ -975,8 +866,11 @@ fn movk_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm16: u16, h
 fn movz_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm16: u16, hw: u8) {
     let inst = MoveWideImmediate::new(0b10, dst, imm16, hw, true);
 
-    // MOV is equvalent to `ORR Xd, XZR, XM` in AARCH64.
-    buf.extend(inst.pack().unwrap());
+    let mut bytes = inst.pack().unwrap();
+
+    bytes.reverse();
+
+    buf.extend(bytes);
 }
 
 /// `STR Xt, [Xn, #offset]` -> Store Xt to Xn + Offset. ZRSP is SP.
@@ -988,17 +882,13 @@ fn str_reg64_imm12(
     base: AArch64GeneralReg,
     imm12: u16,
 ) {
-    debug_assert!(imm12 <= 0xFFF);
-    buf.extend(&build_instruction(AArch64Instruction::LdStr(
-        LdStrGroup::UnsignedImm {
-            size: 0b11,
-            v: false,
-            opc: 0b00,
-            imm12,
-            reg_n: base,
-            reg_t: src,
-        },
-    )));
+    let inst = LoadStoreRegisterImmediate::new_store(0b11, imm12, base, src);
+
+    let mut bytes = inst.pack().unwrap();
+
+    bytes.reverse();
+
+    buf.extend(bytes);
 }
 
 /// `SUB Xd, Xn, imm12` -> Subtract Xn and imm12 and place the result into Xd.
@@ -1011,7 +901,11 @@ fn sub_reg64_reg64_imm12(
 ) {
     let inst = ArithmeticImmediate::new(true, false, dst, src, imm12, false);
 
-    buf.extend(inst.pack().unwrap());
+    let mut bytes = inst.pack().unwrap();
+
+    bytes.reverse();
+
+    buf.extend(bytes);
 }
 
 /// `RET Xn` -> Return to the address stored in Xn.
@@ -1019,7 +913,11 @@ fn sub_reg64_reg64_imm12(
 fn ret_reg64(buf: &mut Vec<'_, u8>, xn: AArch64GeneralReg) {
     let inst = UnconditionalBranchRegister::new(0b10, xn);
 
-    buf.extend(inst.pack().unwrap());
+    let mut bytes = inst.pack().unwrap();
+
+    bytes.reverse();
+
+    buf.extend(bytes);
 }
 
 #[cfg(test)]
