@@ -7,7 +7,7 @@ use roc_region::all::{Located, Region};
 use roc_solve::solve;
 use roc_types::pretty_print::{Parens, WILDCARD};
 use roc_types::types::{
-    write_error_type, Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt,
+    name_type_var, Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt,
 };
 use std::path::PathBuf;
 
@@ -366,7 +366,9 @@ fn to_expr_report<'b>(
                 alloc,
                 found,
                 expected_type,
-                ExpectationContext::Annotation,
+                ExpectationContext::Annotation {
+                    signature: annotation_source.annotation().value.clone(),
+                },
                 i_am_seeing,
                 alloc.concat(vec![
                     alloc.text("But the type annotation"),
@@ -910,11 +912,11 @@ fn count_arguments(tipe: &ErrorType) -> usize {
 }
 
 /// The context a type expectation is derived from.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 enum ExpectationContext {
     /// An expected type was discovered from a type annotation. Corresponds to
     /// [`Expected::FromAnnotation`](Expected::FromAnnotation).
-    Annotation,
+    Annotation { signature: ErrorType },
     /// When we don't know the context, or it's not relevant.
     Arbitrary,
 }
@@ -2556,7 +2558,7 @@ fn type_problem_to_pretty<'b>(
             alloc.tip().append(line)
         }
 
-        (BadRigidVar(x, tipe), ExpectationContext::Annotation) => {
+        (BadRigidVar(x, tipe), ExpectationContext::Annotation { signature }) => {
             use ErrorType::*;
 
             let bad_rigid_var = |name: Lowercase, a_thing| {
@@ -2570,6 +2572,10 @@ fn type_problem_to_pretty<'b>(
             };
 
             let bad_double_wildcard = || {
+                let mut taken_names = MutSet::default();
+                signature.add_names(&mut taken_names);
+                let (named_var_suggest, _) = name_type_var(0, &mut taken_names);
+
                 alloc
                     .tip()
                     .append(alloc.stack(vec![
@@ -2586,7 +2592,7 @@ fn type_problem_to_pretty<'b>(
                             alloc.reflow(". You can change the "),
                             alloc.type_str(WILDCARD),
                             alloc.reflow(" to a named type variable like "),
-                            alloc.type_variable("a".into()),
+                            alloc.type_variable(named_var_suggest),
                             alloc.reflow(" to reflect the connection.")
                         ]),
                     ]))

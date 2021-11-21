@@ -6800,7 +6800,7 @@ I need all branches in an `if` to have the same type!
                 the same type, in a way that doesn't require a *!
 
                 Since the type has to be the same in both places, the type can be more
-                specific than *. You can change the * to a named type variable like `a`
+                specific than *. You can change the * to a named type variable like `b`
                 to reflect the connection.
                 "#
             ),
@@ -6812,8 +6812,8 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                f : a, * -> {x: a, y: *}
-                f = \x, y -> {x, y}
+                f : a, b, * -> {x: a, y: b, z: *}
+                f = \x, y, z -> {x, y, z}
 
                 f
                 "#
@@ -6824,23 +6824,23 @@ I need all branches in an `if` to have the same type!
 
                 Something is off with the body of the `f` definition:
 
-                1│  f : a, * -> {x: a, y: *}
-                2│  f = \x, y -> {x, y}
-                                 ^^^^^^
+                1│  f : a, b, * -> {x: a, y: b, z: *}
+                2│  f = \x, y, z -> {x, y, z}
+                                    ^^^^^^^^^
 
                 The body is a record of type:
 
-                    { x : a, y : * }
+                    { x : a, y : b, z : * }
 
                 But the type annotation on `f` says it should be:
 
-                    { x : a, y : * }
+                    { x : a, y : b, z : * }
 
                 Tip: When two *s are connected, it tells me that they both refer to
                 the same type, in a way that doesn't require a *!
 
                 Since the type has to be the same in both places, the type can be more
-                specific than *. You can change the * to a named type variable like `a`
+                specific than *. You can change the * to a named type variable like `c`
                 to reflect the connection.
                 "#
             ),
