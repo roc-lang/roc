@@ -277,6 +277,7 @@ impl<'a> WasmBackend<'a> {
                         location,
                         size,
                         alignment_bytes,
+                        ..
                     } => {
                         let (from_ptr, from_offset) =
                             location.local_and_offset(self.storage.stack_frame_pointer);

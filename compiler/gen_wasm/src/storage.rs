@@ -4,7 +4,7 @@ use bumpalo::Bump;
 use roc_collections::all::MutMap;
 use roc_module::symbol::Symbol;
 
-use crate::layout::WasmLayout;
+use crate::layout::{StackMemoryFormat, WasmLayout};
 use crate::wasm_module::{Align, CodeBuilder, LocalId, ValueType, VmSymbolState};
 use crate::{copy_memory, round_up_to_alignment, CopyMemoryConfig, PTR_SIZE, PTR_TYPE};
 
@@ -50,6 +50,7 @@ pub enum StoredValue {
         location: StackMemoryLocation,
         size: u32,
         alignment_bytes: u32,
+        format: StackMemoryFormat,
     },
 }
 
@@ -147,6 +148,7 @@ impl<'a> Storage<'a> {
             WasmLayout::StackMemory {
                 size,
                 alignment_bytes,
+                format,
             } => {
                 let location = match kind {
                     StoredValueKind::Parameter => {
@@ -175,6 +177,7 @@ impl<'a> Storage<'a> {
                     location,
                     size: *size,
                     alignment_bytes: *alignment_bytes,
+                    format: *format,
                 }
             }
         };
@@ -239,13 +242,26 @@ impl<'a> Storage<'a> {
                 code_builder.set_top_symbol(sym);
             }
 
-            StoredValue::StackMemory { location, .. } => {
+            StoredValue::StackMemory {
+                location, format, ..
+            } => {
                 let (local_id, offset) = location.local_and_offset(self.stack_frame_pointer);
+
+                // Load the address of the value
                 code_builder.get_local(local_id);
                 if offset != 0 {
                     code_builder.i32_const(offset as i32);
                     code_builder.i32_add();
                 }
+
+                if format != StackMemoryFormat::Aggregate {
+                    // It's one of the 128-bit numbers, all of which we load as two i64's
+                    // Mark the same Symbol twice in the VM value stack! Shouldn't matter except debug.
+                    code_builder.i64_load(Align::Bytes8, offset);
+                    code_builder.set_top_symbol(sym);
+                    code_builder.i64_load(Align::Bytes8, offset + 8);
+                }
+
                 code_builder.set_top_symbol(sym);
             }
         }
@@ -292,6 +308,7 @@ impl<'a> Storage<'a> {
                 location,
                 size,
                 alignment_bytes,
+                format: StackMemoryFormat::Aggregate,
             } = self.get(sym)
             {
                 if *size == 0 {
@@ -334,6 +351,7 @@ impl<'a> Storage<'a> {
                 location,
                 size,
                 alignment_bytes,
+                ..
             } => {
                 let (from_ptr, from_offset) = location.local_and_offset(self.stack_frame_pointer);
                 copy_memory(
@@ -390,6 +408,7 @@ impl<'a> Storage<'a> {
                 location,
                 size,
                 alignment_bytes,
+                ..
             } => {
                 let (to_ptr, to_offset) = location.local_and_offset(self.stack_frame_pointer);
                 copy_memory(
@@ -490,11 +509,13 @@ impl<'a> Storage<'a> {
                     location: to_location,
                     size: to_size,
                     alignment_bytes: to_alignment_bytes,
+                    ..
                 },
                 StackMemory {
                     location: from_location,
                     size: from_size,
                     alignment_bytes: from_alignment_bytes,
+                    ..
                 },
             ) => {
                 let (from_ptr, from_offset) =
