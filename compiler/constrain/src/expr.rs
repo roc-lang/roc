@@ -93,7 +93,7 @@ pub fn constrain_expr(
     env: &Env,
     region: Region,
     expr: &Expr,
-    expected: Expected<Type>,
+    expected: Expected<Type, Variable>,
 ) -> Constraint {
     match expr {
         Int(var, precision, _, _) => int_literal(*var, *precision, expected, region),
@@ -468,7 +468,7 @@ pub fn constrain_expr(
                                 AnnotationSource::TypedIfBranch {
                                     index: Index::zero_based(index),
                                     num_branches,
-                                    region: ann_source.region(),
+                                    annotation: *ann_source.annotation(),
                                 },
                                 tipe.clone(),
                             ),
@@ -488,7 +488,7 @@ pub fn constrain_expr(
                             AnnotationSource::TypedIfBranch {
                                 index: Index::zero_based(branches.len()),
                                 num_branches,
-                                region: ann_source.region(),
+                                annotation: *ann_source.annotation(),
                             },
                             tipe.clone(),
                         ),
@@ -606,7 +606,7 @@ pub fn constrain_expr(
                                 *arity,
                                 TypedWhenBranch {
                                     index: Index::zero_based(index),
-                                    region: ann_source.region(),
+                                    annotation: *ann_source.annotation(),
                                 },
                                 typ.clone(),
                             ),
@@ -1021,7 +1021,7 @@ fn constrain_when_branch(
     region: Region,
     when_branch: &WhenBranch,
     pattern_expected: PExpected<Type>,
-    expr_expected: Expected<Type>,
+    expr_expected: Expected<Type, Variable>,
 ) -> Constraint {
     let ret_constraint = constrain_expr(env, region, &when_branch.value.value, expr_expected);
 
@@ -1089,7 +1089,7 @@ fn constrain_field(env: &Env, field_var: Variable, loc_expr: &Located<Expr>) -> 
 }
 
 #[inline(always)]
-fn constrain_empty_record(region: Region, expected: Expected<Type>) -> Constraint {
+fn constrain_empty_record(region: Region, expected: Expected<Type, Variable>) -> Constraint {
     Eq(EmptyRec, expected, Category::Record, region)
 }
 
@@ -1182,20 +1182,30 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                 rigids: ftv,
             };
 
+            let annotation_ty = Located::at(annotation.region, annotation.annotation_var);
             let annotation_expected = FromAnnotation(
                 def.loc_pattern.clone(),
                 arity,
                 AnnotationSource::TypedBody {
-                    region: annotation.region,
+                    annotation: annotation_ty,
                 },
                 signature.clone(),
             );
-
             def_pattern_state.constraints.push(Eq(
                 expr_type,
                 annotation_expected.clone(),
                 Category::Storage(std::file!(), std::line!()),
                 Region::span_across(&annotation.region, &def.loc_expr.region),
+            ));
+
+            // Associate the original annotation type itself with an annotation variable,
+            // so we can get it back out later during error reporting if needed. This avoids
+            // passing down the bulky annotation type to everyone who cares about it.
+            def_pattern_state.constraints.push(Store(
+                annotation.signature.clone(),
+                annotation.annotation_var,
+                std::file!(),
+                std::line!(),
             ));
 
             // when a def is annotated, and it's body is a closure, treat this
@@ -1300,7 +1310,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                         def.loc_pattern.clone(),
                         arguments.len(),
                         AnnotationSource::TypedBody {
-                            region: annotation.region,
+                            annotation: annotation_ty,
                         },
                         ret_type.clone(),
                     );
@@ -1327,7 +1337,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                                     def.loc_pattern.clone(),
                                     arity,
                                     AnnotationSource::TypedBody {
-                                        region: annotation.region,
+                                        annotation: annotation_ty,
                                     },
                                     *signature_closure_type.clone(),
                                 ),
@@ -1559,9 +1569,18 @@ pub fn rec_defs_help(
                     def.loc_pattern.clone(),
                     arity,
                     AnnotationSource::TypedBody {
-                        region: annotation.region,
+                        annotation: Located::at(annotation.region, annotation.annotation_var),
                     },
                     signature.clone(),
+                );
+                // Associate the original annotation type itself with an annotation variable,
+                // so we can get it back out later during error reporting if needed. This avoids
+                // passing down the bulky annotation type to everyone who cares about it.
+                let annotation_constr = Store(
+                    annotation.signature.clone(),
+                    annotation.annotation_var,
+                    std::file!(),
+                    std::line!(),
                 );
 
                 // when a def is annotated, and it's body is a closure, treat this
@@ -1695,6 +1714,7 @@ pub fn rec_defs_help(
                                 Store(signature, expr_var, std::file!(), std::line!()),
                                 Store(ret_type, ret_var, std::file!(), std::line!()),
                                 closure_constraint,
+                                annotation_constr,
                             ]),
                         );
 
@@ -1725,6 +1745,7 @@ pub fn rec_defs_help(
                             })),
                             // Store type into AST vars. We use Store so errors aren't reported twice
                             Store(signature, expr_var, std::file!(), std::line!()),
+                            annotation_constr,
                         ]);
 
                         rigid_info.vars.extend(&new_rigids);

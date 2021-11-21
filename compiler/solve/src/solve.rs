@@ -11,8 +11,7 @@ use roc_types::subs::{
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{gather_fields_unsorted_iter, Alias, Category, ErrorType, PatternCategory};
-use roc_unify::unify::unify;
-use roc_unify::unify::Unified::*;
+use roc_unify::unify::{unify, Unified::*};
 use std::collections::hash_map::Entry;
 
 // Type checking system adapted from Elm by Evan Czaplicki, BSD-3-Clause Licensed
@@ -67,7 +66,7 @@ use std::collections::hash_map::Entry;
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum TypeError {
-    BadExpr(Region, Category, ErrorType, Expected<ErrorType>),
+    BadExpr(Region, Category, ErrorType, Expected<ErrorType, ErrorType>),
     BadPattern(Region, PatternCategory, ErrorType, PExpected<ErrorType>),
     CircularType(Region, Symbol, ErrorType),
     BadType(roc_types::types::Problem),
@@ -206,7 +205,9 @@ fn solve(
                 expectation.get_type_ref(),
             );
 
-            match unify(subs, actual, expected) {
+            // Don't transform bad types into errors in case we want to grab other types'
+            // original contents during a failure.
+            match unify_without_error_compaction(subs, actual, expected) {
                 Success(vars) => {
                     introduce(subs, rank, pools, &vars);
 
@@ -219,7 +220,12 @@ fn solve(
                         *region,
                         category.clone(),
                         actual_type,
-                        expectation.clone().replace(expected_type),
+                        expectation
+                            .clone()
+                            .replace(expected_type)
+                            .replace_annotation_with(|annot_var: Variable| {
+                                subs.var_to_error_type(annot_var).0
+                            }),
                     );
 
                     problems.push(problem);
@@ -295,7 +301,9 @@ fn solve(
                         cached_aliases,
                         expectation.get_type_ref(),
                     );
-                    match unify(subs, actual, expected) {
+                    // Don't transform bad types into errors in case we want to grab other types'
+                    // original contents during a failure.
+                    match unify_without_error_compaction(subs, actual, expected) {
                         Success(vars) => {
                             introduce(subs, rank, pools, &vars);
 
@@ -309,7 +317,12 @@ fn solve(
                                 *region,
                                 Category::Lookup(*symbol),
                                 actual_type,
-                                expectation.clone().replace(expected_type),
+                                expectation
+                                    .clone()
+                                    .replace(expected_type)
+                                    .replace_annotation_with(|annot_var: Variable| {
+                                        subs.var_to_error_type(annot_var).0
+                                    }),
                             );
 
                             problems.push(problem);

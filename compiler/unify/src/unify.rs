@@ -82,6 +82,16 @@ type Outcome = Vec<Mismatch>;
 
 #[inline(always)]
 pub fn unify(subs: &mut Subs, var1: Variable, var2: Variable) -> Unified {
+    unify_help(subs, var1, var2, true)
+}
+
+#[inline(always)]
+pub fn unify_without_error_compaction(subs: &mut Subs, var1: Variable, var2: Variable) -> Unified {
+    unify_help(subs, var1, var2, false)
+}
+
+#[inline(always)]
+fn unify_help(subs: &mut Subs, var1: Variable, var2: Variable, compact_errors: bool) -> Unified {
     let mut vars = Vec::new();
     let mismatches = unify_pool(subs, &mut vars, var1, var2);
 
@@ -93,7 +103,9 @@ pub fn unify(subs: &mut Subs, var1: Variable, var2: Variable) -> Unified {
 
         problems.extend(problems2);
 
-        subs.union(var1, var2, Content::Error.into());
+        if compact_errors {
+            subs.union(var1, var2, Content::Error.into());
+        }
 
         if !problems.is_empty() {
             Unified::BadType(vars, problems.remove(0))

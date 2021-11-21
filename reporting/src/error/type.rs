@@ -282,7 +282,7 @@ fn to_expr_report<'b>(
     expr_region: roc_region::all::Region,
     category: Category,
     found: ErrorType,
-    expected: Expected<ErrorType>,
+    expected: Expected<ErrorType, ErrorType>,
 ) -> Report<'b> {
     match expected {
         Expected::NoExpectation(expected_type) => {

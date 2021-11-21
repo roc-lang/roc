@@ -211,6 +211,16 @@ impl<T> Located<T> {
             value: transform(&self.value),
         }
     }
+
+    pub fn map_in_place<U, F>(self, transform: F) -> Located<U>
+    where
+        F: (FnOnce(T) -> U),
+    {
+        Located {
+            region: self.region,
+            value: transform(self.value),
+        }
+    }
 }
 
 impl<T> fmt::Debug for Located<T>
