@@ -20,7 +20,7 @@ use roc_types::subs::{Content, FlatType, StorageSubs, Subs, Variable, VariableSu
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
-pub const PRETTY_PRINT_IR_SYMBOLS: bool = false;
+pub const PRETTY_PRINT_IR_SYMBOLS: bool = true;
 
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
