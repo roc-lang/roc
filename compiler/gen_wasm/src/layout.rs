@@ -3,6 +3,15 @@ use roc_mono::layout::{Layout, UnionLayout};
 
 use crate::{wasm_module::ValueType, PTR_SIZE, PTR_TYPE};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StackMemoryFormat {
+    /// Record, Str, List, Dict, etc.
+    Aggregate,
+    Int128,
+    Float128,
+    Decimal,
+}
+
 // See README for background information on Wasm locals, memory and function calls
 #[derive(Debug, Clone)]
 pub enum WasmLayout {
@@ -11,7 +20,11 @@ pub enum WasmLayout {
     Primitive(ValueType, u32),
 
     // Local pointer to stack memory
-    StackMemory { size: u32, alignment_bytes: u32 },
+    StackMemory {
+        size: u32,
+        alignment_bytes: u32,
+        format: StackMemoryFormat,
+    },
 
     // Local pointer to heap memory
     HeapMemory,
@@ -36,6 +49,7 @@ impl WasmLayout {
                     I128 | U128 => Self::StackMemory {
                         size,
                         alignment_bytes,
+                        format: StackMemoryFormat::Int128,
                     },
                 }
             }
@@ -51,26 +65,26 @@ impl WasmLayout {
                     F128 => Self::StackMemory {
                         size,
                         alignment_bytes,
+                        format: StackMemoryFormat::Float128,
                     },
                 }
             }
 
+            Layout::Builtin(Decimal) => Self::StackMemory {
+                size,
+                alignment_bytes,
+                format: StackMemoryFormat::Decimal,
+            },
+
             Layout::Builtin(
-                Decimal
-                | Str
-                | Dict(_, _)
-                | Set(_)
-                | List(_)
-                | EmptyStr
-                | EmptyList
-                | EmptyDict
-                | EmptySet,
+                Str | Dict(_, _) | Set(_) | List(_) | EmptyStr | EmptyList | EmptyDict | EmptySet,
             )
             | Layout::Struct(_)
             | Layout::LambdaSet(_)
             | Layout::Union(NonRecursive(_)) => Self::StackMemory {
                 size,
                 alignment_bytes,
+                format: StackMemoryFormat::Aggregate,
             },
 
             Layout::Union(
