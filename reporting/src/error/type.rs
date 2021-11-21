@@ -313,7 +313,7 @@ fn to_expr_report<'b>(
                 None => (alloc.text("this"), alloc.nil()),
             };
 
-            let mut sub_region = None;
+            let ann_region = annotation_source.region();
 
             let thing = match annotation_source {
                 TypedIfBranch {
@@ -342,14 +342,11 @@ fn to_expr_report<'b>(
                     alloc.keyword("when"),
                     alloc.text(" expression:"),
                 ]),
-                TypedBody { region: ann_region } => {
-                    sub_region = Some(ann_region);
-                    alloc.concat(vec![
-                        alloc.text("body of "),
-                        the_name_text,
-                        alloc.text(" definition:"),
-                    ])
-                }
+                TypedBody { region: _ } => alloc.concat(vec![
+                    alloc.text("body of "),
+                    the_name_text,
+                    alloc.text(" definition:"),
+                ]),
             };
 
             let it_is = match annotation_source {
@@ -376,14 +373,11 @@ fn to_expr_report<'b>(
                 filename,
                 doc: alloc.stack(vec![
                     alloc.text("Something is off with the ").append(thing),
-                    match sub_region {
-                        None => alloc.region(expr_region),
-                        Some(ann_region) => {
-                            // for typed bodies, include the line(s) with the signature
-                            let joined =
-                                roc_region::all::Region::span_across(&ann_region, &expr_region);
-                            alloc.region_with_subregion(joined, expr_region)
-                        }
+                    {
+                        // for typed bodies, include the line(s) with the signature
+                        let joined =
+                            roc_region::all::Region::span_across(&ann_region, &expr_region);
+                        alloc.region_with_subregion(joined, expr_region)
                     },
                     comparison,
                 ]),

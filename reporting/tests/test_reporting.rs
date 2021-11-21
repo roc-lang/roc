@@ -1245,6 +1245,7 @@ mod test_reporting {
 
                 Something is off with the `then` branch of this `if` expression:
 
+                1│  x : Int *
                 2│  x = if True then 3.14 else 4
                                      ^^^^
 
@@ -1864,6 +1865,7 @@ mod test_reporting {
 
                 Something is off with the `else` branch of this `if` expression:
 
+                1│  f : a, b -> a
                 2│  f = \x, y -> if True then x else y
                                                      ^
 
