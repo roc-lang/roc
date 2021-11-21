@@ -1546,8 +1546,7 @@ impl<
 #[macro_export]
 macro_rules! single_register_integers {
     () => {
-        Builtin::Usize
-            | Builtin::Bool
+        Builtin::Bool
             | Builtin::Int(
                 IntWidth::I8
                     | IntWidth::I16
