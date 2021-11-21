@@ -10,4 +10,5 @@ roc_collections = { path = "../collections" }
 roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 ven_ena = { path = "../../vendor/ena" }
+bumpalo = { version = "3.8.0", features = ["collections"] }
 static_assertions = "1.1.0"
