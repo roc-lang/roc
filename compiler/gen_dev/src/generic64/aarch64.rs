@@ -46,12 +46,6 @@ pub enum AArch64GeneralReg {
 
 impl RegTrait for AArch64GeneralReg {}
 
-impl AArch64GeneralReg {
-    fn id(&self) -> u8 {
-        *self as u8
-    }
-}
-
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 #[allow(dead_code)]
 pub enum AArch64FloatReg {}
@@ -509,6 +503,7 @@ impl AArch64Assembler {}
 // Instructions
 // ARM manual section C3
 // https://developer.arm.com/documentation/ddi0487/ga
+// Map all instructions to a packed struct.
 
 #[derive(PackedStruct, Debug)]
 struct MoveWideImmediate {
@@ -530,7 +525,7 @@ impl MoveWideImmediate {
 
         Self {
             // we want this to truncate, not sure if this does that
-            reg_d: rd.id().into(),
+            reg_d: rd.into(),
             imm16,
             hw: hw.into(),
             opc: opc.into(),
@@ -563,8 +558,8 @@ impl ArithmeticImmediate {
         sh: bool,
     ) -> Self {
         Self {
-            reg_d: rd.id().into(),
-            reg_n: rn.id().into(),
+            reg_d: rd.into(),
+            reg_n: rn.into(),
             imm12: imm12.into(),
             sh,
             s,
@@ -578,10 +573,10 @@ impl ArithmeticImmediate {
 }
 
 enum ShiftType {
-    Lsl = 0,
-    Lsr = 1,
-    Asr = 2,
-    Ror = 3,
+    LSL = 0,
+    LSR = 1,
+    ASR = 2,
+    ROR = 3,
 }
 
 #[derive(PackedStruct)]
@@ -626,6 +621,69 @@ impl ArithmeticShifted {
     }
 }
 
+#[derive(Debug)]
+#[allow(dead_code)]
+enum LogicalOp {
+    AND,
+    BIC,
+    ORR,
+    ORN,
+    EOR,
+    EON,
+    ANDS,
+    BICS,
+}
+
+#[derive(PackedStruct)]
+struct LogicalShiftedRegister {
+    reg_d: Integer<u8, packed_bits::Bits<5>>,
+    reg_n: Integer<u8, packed_bits::Bits<5>>,
+    #[packed_field(endian = "msb")]
+    imm6: Integer<u8, packed_bits::Bits<6>>,
+    reg_m: Integer<u8, packed_bits::Bits<5>>,
+    n: bool,
+    shift: Integer<u8, packed_bits::Bits<2>>, // shift
+    fixed: Integer<u8, packed_bits::Bits<5>>, // = 0b01010,
+    op: Integer<u8, packed_bits::Bits<2>>,
+    sf: bool,
+}
+
+impl LogicalShiftedRegister {
+    fn new(
+        op: LogicalOp,
+        shift: ShiftType,
+        imm6: u8,
+        rm: AArch64GeneralReg,
+        rn: AArch64GeneralReg,
+        rd: AArch64GeneralReg,
+    ) -> Self {
+        let (op, n) = match op {
+            LogicalOp::AND => (0b00, false),
+            LogicalOp::BIC => (0b00, true),
+            LogicalOp::ORR => (0b01, false),
+            LogicalOp::ORN => (0b01, true),
+            LogicalOp::EOR => (0b10, false),
+            LogicalOp::EON => (0b10, true),
+            LogicalOp::ANDS => (0b11, false),
+            LogicalOp::BICS => (0b11, true),
+        };
+
+        Self {
+            reg_d: rd.into(),
+            reg_n: rn.into(),
+            imm6: imm6.into(),
+            reg_m: rm.into(),
+            n,
+            shift: shift.into(),
+            fixed: 0b01010.into(),
+            op: op.into(),
+            // true for 64 bit addition
+            // false for 32 bit addition
+            sf: true,
+        }
+    }
+}
+
 #[derive(PackedStruct, Debug)]
 struct LoadStoreRegister {
     rt: Integer<u8, packed_bits::Bits<5>>,
@@ -637,23 +695,6 @@ struct LoadStoreRegister {
     v: bool,
     fixed: Integer<u8, packed_bits::Bits<3>>, // = 0b111,
     size: Integer<u8, packed_bits::Bits<2>>,
-}
-
-/// AArch64Instruction, maps all instructions to an enum.
-/// Decoding the function should be cheap because we will always inline.
-/// All of the operations should resolved by constants, leave just some bit manipulation.
-/// Enums may not be complete since we will only add what we need.
-#[derive(Debug)]
-enum AArch64Instruction {
-    // _Reserved,
-    // _SVE,
-    // Branch(BranchGroup),
-    // LdStr(LdStrGroup),
-    // DPReg(DPRegGroup),
-    // _DPFloat,
-    MoveWideImmediate(MoveWideImmediate),
-    ArithmeticImmediate(ArithmeticImmediate),
-    LoadStoreRegister(LoadStoreRegister),
 }
 
 #[derive(Debug)]
@@ -668,29 +709,6 @@ enum BranchGroup {
 }
 
 #[derive(Debug)]
-enum DPRegGroup {
-    AddSubShifted {
-        sf: bool,
-        subtract: bool,
-        set_flags: bool,
-        shift: u8,
-        reg_m: AArch64GeneralReg,
-        imm6: u8,
-        reg_n: AArch64GeneralReg,
-        reg_d: AArch64GeneralReg,
-    },
-    Logical {
-        sf: bool,
-        op: DPRegLogicalOp,
-        shift: u8,
-        reg_m: AArch64GeneralReg,
-        imm6: u8,
-        reg_n: AArch64GeneralReg,
-        reg_d: AArch64GeneralReg,
-    },
-}
-
-#[derive(Debug)]
 enum LdStrGroup {
     UnsignedImm {
         size: u8,
@@ -700,19 +718,6 @@ enum LdStrGroup {
         reg_n: AArch64GeneralReg,
         reg_t: AArch64GeneralReg,
     },
-}
-
-#[derive(Debug)]
-#[allow(dead_code)]
-enum DPRegLogicalOp {
-    AND,
-    BIC,
-    ORR,
-    ORN,
-    EOR,
-    EON,
-    ANDS,
-    BICS,
 }
 
 #[inline(always)]
@@ -893,7 +898,7 @@ fn add_reg64_reg64_reg64(
     src1: AArch64GeneralReg,
     src2: AArch64GeneralReg,
 ) {
-    let inst = ArithmeticShifted::new(false, false, ShiftType::Lsl, 0, src1, src2, dst);
+    let inst = ArithmeticShifted::new(false, false, ShiftType::LSL, 0, src1, src2, dst);
 
     buf.extend(inst.pack().unwrap());
 }
@@ -923,18 +928,17 @@ fn ldr_reg64_imm12(
 /// `MOV Xd, Xm` -> Move Xm to Xd.
 #[inline(always)]
 fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64GeneralReg) {
+    let inst = LogicalShiftedRegister::new(
+        LogicalOp::ORR,
+        ShiftType::LSL,
+        0,
+        src,
+        AArch64GeneralReg::ZRSP,
+        dst,
+    );
+
     // MOV is equvalent to `ORR Xd, XZR, XM` in AARCH64.
-    buf.extend(&build_instruction(AArch64Instruction::DPReg(
-        DPRegGroup::Logical {
-            sf: true,
-            op: DPRegLogicalOp::ORR,
-            shift: 0,
-            reg_m: src,
-            imm6: 0,
-            reg_n: AArch64GeneralReg::ZRSP,
-            reg_d: dst,
-        },
-    )));
+    buf.extend(inst.pack().unwrap());
 }
 
 /// `MOVK Xd, imm16` -> Keeps Xd and moves an optionally shifted imm16 to Xd.
