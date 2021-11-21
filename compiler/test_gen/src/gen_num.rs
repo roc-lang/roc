@@ -727,6 +727,20 @@ fn gen_int_neq() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn gen_int_less_than() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    4 < 5
+                "#
+        ),
+        true,
+        bool
+    );
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn gen_dec_eq() {
     assert_evals_to!(

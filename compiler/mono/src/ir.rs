@@ -16,7 +16,6 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_region::all::{Located, Region};
 use roc_std::RocDec;
-use roc_types::solved_types::SolvedType;
 use roc_types::subs::{Content, FlatType, StorageSubs, Subs, Variable, VariableSubsSlice};
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
@@ -223,65 +222,6 @@ impl<'a> Default for CapturedSymbols<'a> {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct PendingSpecialization<'a> {
-    solved_type: SolvedType,
-    host_exposed_aliases: BumpMap<Symbol, SolvedType>,
-    _lifetime: std::marker::PhantomData<&'a u8>,
-}
-
-impl<'a> PendingSpecialization<'a> {
-    pub fn from_var(arena: &'a Bump, subs: &Subs, var: Variable) -> Self {
-        let solved_type = SolvedType::from_var(subs, var);
-        PendingSpecialization {
-            solved_type,
-            host_exposed_aliases: BumpMap::new_in(arena),
-            _lifetime: std::marker::PhantomData,
-        }
-    }
-
-    pub fn from_var_host_exposed(
-        arena: &'a Bump,
-        subs: &Subs,
-        var: Variable,
-        exposed: &MutMap<Symbol, Variable>,
-    ) -> Self {
-        let solved_type = SolvedType::from_var(subs, var);
-
-        let mut host_exposed_aliases = BumpMap::with_capacity_in(exposed.len(), arena);
-
-        host_exposed_aliases.extend(
-            exposed
-                .iter()
-                .map(|(symbol, variable)| (*symbol, SolvedType::from_var(subs, *variable))),
-        );
-
-        PendingSpecialization {
-            solved_type,
-            host_exposed_aliases,
-            _lifetime: std::marker::PhantomData,
-        }
-    }
-
-    /// Add a named function that will be publicly exposed to the host
-    pub fn from_exposed_function(
-        arena: &'a Bump,
-        subs: &Subs,
-        opt_annotation: Option<roc_can::def::Annotation>,
-        fn_var: Variable,
-    ) -> Self {
-        match opt_annotation {
-            None => PendingSpecialization::from_var(arena, subs, fn_var),
-            Some(annotation) => PendingSpecialization::from_var_host_exposed(
-                arena,
-                subs,
-                fn_var,
-                &annotation.introduced_variables.host_exposed_aliases,
-            ),
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct Proc<'a> {
     pub name: Symbol,
@@ -415,24 +355,108 @@ impl<'a> Proc<'a> {
     }
 }
 
+/// A host-exposed function must be specialized; it's a seed for subsequent specializations
 #[derive(Clone, Debug)]
-pub struct ExternalSpecializations<'a> {
+pub struct HostSpecializations {
+    /// Not a bumpalo vec because bumpalo is not thread safe
+    /// Separate array so we can search for membership quickly
+    symbols: std::vec::Vec<Symbol>,
+    storage_subs: StorageSubs,
+    /// For each symbol, what types to specialize it for, points into the storage_subs
+    types_to_specialize: std::vec::Vec<Variable>,
+    /// Variables for an exposed alias
+    exposed_aliases: std::vec::Vec<std::vec::Vec<(Symbol, Variable)>>,
+}
+
+impl Default for HostSpecializations {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HostSpecializations {
+    pub fn new() -> Self {
+        Self {
+            symbols: std::vec::Vec::new(),
+            storage_subs: StorageSubs::new(Subs::default()),
+            types_to_specialize: std::vec::Vec::new(),
+            exposed_aliases: std::vec::Vec::new(),
+        }
+    }
+
+    pub fn insert_host_exposed(
+        &mut self,
+        env_subs: &mut Subs,
+        symbol: Symbol,
+        opt_annotation: Option<roc_can::def::Annotation>,
+        variable: Variable,
+    ) {
+        let variable = self.storage_subs.extend_with_variable(env_subs, variable);
+
+        let mut host_exposed_aliases = std::vec::Vec::new();
+
+        if let Some(annotation) = opt_annotation {
+            host_exposed_aliases.extend(annotation.introduced_variables.host_exposed_aliases);
+        }
+
+        match self.symbols.iter().position(|s| *s == symbol) {
+            None => {
+                self.symbols.push(symbol);
+                self.types_to_specialize.push(variable);
+                self.exposed_aliases.push(host_exposed_aliases);
+            }
+            Some(_) => {
+                // we assume that only one specialization of a function is directly exposed to the
+                // host. Other host-exposed symbols may (transitively) specialize this symbol,
+                // but then the existing specialization mechanism will find those specializations
+                panic!("A host-exposed symbol can only be exposed once");
+            }
+        }
+
+        debug_assert_eq!(self.types_to_specialize.len(), self.exposed_aliases.len());
+    }
+
+    fn decompose(
+        self,
+    ) -> (
+        StorageSubs,
+        impl Iterator<Item = (Symbol, Variable, std::vec::Vec<(Symbol, Variable)>)>,
+    ) {
+        let it1 = self.symbols.into_iter();
+
+        let it2 = self.types_to_specialize.into_iter();
+        let it3 = self.exposed_aliases.into_iter();
+
+        (
+            self.storage_subs,
+            it1.zip(it2).zip(it3).map(|((a, b), c)| (a, b, c)),
+        )
+    }
+}
+
+/// Specializations of this module's symbols that other modules need
+#[derive(Clone, Debug)]
+pub struct ExternalSpecializations {
     /// Not a bumpalo vec because bumpalo is not thread safe
     /// Separate array so we can search for membership quickly
     symbols: std::vec::Vec<Symbol>,
     storage_subs: StorageSubs,
     /// For each symbol, what types to specialize it for, points into the storage_subs
     types_to_specialize: std::vec::Vec<std::vec::Vec<Variable>>,
-    _lifetime: std::marker::PhantomData<&'a u8>,
 }
 
-impl<'a> ExternalSpecializations<'a> {
-    pub fn new_in(_arena: &'a Bump) -> Self {
+impl Default for ExternalSpecializations {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ExternalSpecializations {
+    pub fn new() -> Self {
         Self {
             symbols: std::vec::Vec::new(),
             storage_subs: StorageSubs::new(Subs::default()),
             types_to_specialize: std::vec::Vec::new(),
-            _lifetime: std::marker::PhantomData,
         }
     }
 
@@ -637,7 +661,7 @@ pub struct Procs<'a> {
     pending_specializations: PendingSpecializations<'a>,
     specialized: Specialized<'a>,
     pub runtime_errors: BumpMap<Symbol, &'a str>,
-    pub externals_we_need: BumpMap<ModuleId, ExternalSpecializations<'a>>,
+    pub externals_we_need: BumpMap<ModuleId, ExternalSpecializations>,
 }
 
 impl<'a> Procs<'a> {
@@ -803,7 +827,7 @@ impl<'a> Procs<'a> {
                                 symbol,
                                 layout_cache,
                                 annotation,
-                                BumpMap::new_in(env.arena),
+                                &[],
                                 partial_proc_id,
                             ) {
                                 Ok((proc, layout)) => {
@@ -1890,14 +1914,87 @@ fn pattern_to_when<'a>(
     }
 }
 
+fn specialize_suspended<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    suspended: Suspended<'a>,
+) {
+    let offset_variable = StorageSubs::merge_into(suspended.store, env.subs);
+
+    for (i, (symbol, var)) in suspended
+        .symbols
+        .iter()
+        .zip(suspended.variables.iter())
+        .enumerate()
+    {
+        let name = *symbol;
+        let outside_layout = suspended.layouts[i];
+
+        let var = offset_variable(*var);
+
+        // TODO define our own Entry for Specialized?
+        let partial_proc = if procs.specialized.is_specialized(name, &outside_layout) {
+            // already specialized, just continue
+            continue;
+        } else {
+            match procs.partial_procs.symbol_to_id(name) {
+                Some(v) => {
+                    // Mark this proc as in-progress, so if we're dealing with
+                    // mutually recursive functions, we don't loop forever.
+                    // (We had a bug around this before this system existed!)
+                    procs.specialized.mark_in_progress(name, outside_layout);
+
+                    v
+                }
+                None => {
+                    // TODO this assumes the specialization is done by another module
+                    // make sure this does not become a problem down the road!
+                    continue;
+                }
+            }
+        };
+
+        match specialize_variable(env, procs, name, layout_cache, var, &[], partial_proc) {
+            Ok((proc, layout)) => {
+                // TODO thiscode is duplicated elsewhere
+                let top_level = ProcLayout::from_raw(env.arena, layout);
+
+                if procs.is_module_thunk(proc.name) {
+                    debug_assert!(
+                        top_level.arguments.is_empty(),
+                        "{:?} from {:?}",
+                        name,
+                        layout
+                    );
+                }
+
+                debug_assert_eq!(outside_layout, top_level, " in {:?}", name);
+                procs.specialized.insert_specialized(name, top_level, proc);
+            }
+            Err(SpecializeFailure {
+                attempted_layout, ..
+            }) => {
+                let proc = generate_runtime_error_function(env, name, attempted_layout);
+
+                let top_level = ProcLayout::from_raw(env.arena, attempted_layout);
+
+                procs.specialized.insert_specialized(name, top_level, proc);
+            }
+        }
+    }
+}
+
 pub fn specialize_all<'a>(
     env: &mut Env<'a, '_>,
     mut procs: Procs<'a>,
-    externals_others_need: std::vec::Vec<ExternalSpecializations<'a>>,
-    specializations_for_host: BumpMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>,
+    externals_others_need: std::vec::Vec<ExternalSpecializations>,
+    specializations_for_host: HostSpecializations,
     layout_cache: &mut LayoutCache<'a>,
 ) -> Procs<'a> {
-    specialize_externals_others_need(env, &mut procs, externals_others_need, layout_cache);
+    for externals in externals_others_need {
+        specialize_external_specializations(env, &mut procs, layout_cache, externals);
+    }
 
     // When calling from_can, pending_specializations should be unavailable.
     // This must be a single pass, and we must not add any more entries to it!
@@ -1909,200 +2006,110 @@ pub fn specialize_all<'a>(
     match pending_specializations {
         PendingSpecializations::Making => {}
         PendingSpecializations::Finding(suspended) => {
-            let offset_variable = StorageSubs::merge_into(suspended.store, env.subs);
-
-            for (i, (symbol, var)) in suspended
-                .symbols
-                .iter()
-                .zip(suspended.variables.iter())
-                .enumerate()
-            {
-                let name = *symbol;
-                let outside_layout = suspended.layouts[i];
-
-                let var = offset_variable(*var);
-
-                // TODO define our own Entry for Specialized?
-                let partial_proc = if procs.specialized.is_specialized(name, &outside_layout) {
-                    // already specialized, just continue
-                    continue;
-                } else {
-                    match procs.partial_procs.symbol_to_id(name) {
-                        Some(v) => {
-                            // Mark this proc as in-progress, so if we're dealing with
-                            // mutually recursive functions, we don't loop forever.
-                            // (We had a bug around this before this system existed!)
-                            procs.specialized.mark_in_progress(name, outside_layout);
-
-                            v
-                        }
-                        None => {
-                            // TODO this assumes the specialization is done by another module
-                            // make sure this does not become a problem down the road!
-                            continue;
-                        }
-                    }
-                };
-
-                match specialize_variable(
-                    env,
-                    &mut procs,
-                    name,
-                    layout_cache,
-                    var,
-                    BumpMap::new_in(env.arena),
-                    partial_proc,
-                ) {
-                    Ok((proc, layout)) => {
-                        // TODO thiscode is duplicated elsewhere
-                        let top_level = ProcLayout::from_raw(env.arena, layout);
-
-                        if procs.is_module_thunk(proc.name) {
-                            debug_assert!(
-                                top_level.arguments.is_empty(),
-                                "{:?} from {:?}",
-                                name,
-                                layout
-                            );
-                        }
-
-                        debug_assert_eq!(outside_layout, top_level, " in {:?}", name);
-                        procs.specialized.insert_specialized(name, top_level, proc);
-                    }
-                    Err(SpecializeFailure {
-                        attempted_layout, ..
-                    }) => {
-                        let proc = generate_runtime_error_function(env, name, attempted_layout);
-
-                        let top_level = ProcLayout::from_raw(env.arena, attempted_layout);
-
-                        procs.specialized.insert_specialized(name, top_level, proc);
-                    }
-                }
-            }
+            specialize_suspended(env, &mut procs, layout_cache, suspended)
         }
     }
 
-    let it = specializations_for_host.into_iter();
-
-    for (name, by_layout) in it {
-        for (outside_layout, pending) in by_layout.into_iter() {
-            // If we've already seen this (Symbol, Layout) combination before,
-            // don't try to specialize it again. If we do, we'll loop forever!
-
-            let partial_proc = if procs.specialized.is_specialized(name, &outside_layout) {
-                // already specialized, just continue
-                continue;
-            } else {
-                match procs.partial_procs.symbol_to_id(name) {
-                    Some(v) => {
-                        // Mark this proc as in-progress, so if we're dealing with
-                        // mutually recursive functions, we don't loop forever.
-                        // (We had a bug around this before this system existed!)
-                        procs.specialized.mark_in_progress(name, outside_layout);
-
-                        v
-                    }
-                    None => {
-                        // TODO this assumes the specialization is done by another module
-                        // make sure this does not become a problem down the road!
-                        continue;
-                    }
-                }
-            };
-
-            match specialize(env, &mut procs, name, layout_cache, pending, partial_proc) {
-                Ok((proc, layout)) => {
-                    // TODO thiscode is duplicated elsewhere
-                    let top_level = ProcLayout::from_raw(env.arena, layout);
-
-                    if procs.is_module_thunk(proc.name) {
-                        debug_assert!(
-                            top_level.arguments.is_empty(),
-                            "{:?} from {:?}",
-                            name,
-                            layout
-                        );
-                    }
-
-                    debug_assert_eq!(outside_layout, top_level, " in {:?}", name);
-                    procs.specialized.insert_specialized(name, top_level, proc);
-                }
-                Err(SpecializeFailure {
-                    attempted_layout, ..
-                }) => {
-                    let proc = generate_runtime_error_function(env, name, attempted_layout);
-
-                    let top_level = ProcLayout::from_raw(env.arena, attempted_layout);
-
-                    procs.specialized.insert_specialized(name, top_level, proc);
-                }
-            }
-        }
-    }
+    specialize_host_specializations(env, &mut procs, layout_cache, specializations_for_host);
 
     procs
 }
 
-fn specialize_externals_others_need<'a>(
+fn specialize_host_specializations<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
-    all_externals_others_need: std::vec::Vec<ExternalSpecializations<'a>>,
     layout_cache: &mut LayoutCache<'a>,
+    host_specializations: HostSpecializations,
 ) {
-    for externals_others_need in all_externals_others_need {
-        let (store, it) = externals_others_need.decompose();
+    let (store, it) = host_specializations.decompose();
 
-        let offset_variable = StorageSubs::merge_into(store, env.subs);
+    let offset_variable = StorageSubs::merge_into(store, env.subs);
 
-        for (symbol, solved_types) in it {
-            for store_variable in solved_types {
-                let variable = offset_variable(store_variable);
-                // historical note: we used to deduplicate with a hash here,
-                // but the cost of that hash is very high. So for now we make
-                // duplicate specializations, and the insertion into a hash map
-                // below will deduplicate them.
+    for (symbol, variable, host_exposed_aliases) in it {
+        specialize_external_help(
+            env,
+            procs,
+            layout_cache,
+            symbol,
+            offset_variable(variable),
+            &host_exposed_aliases,
+        )
+    }
+}
 
-                let name = symbol;
+fn specialize_external_specializations<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    externals_others_need: ExternalSpecializations,
+) {
+    let (store, it) = externals_others_need.decompose();
 
-                let partial_proc_id = match procs.partial_procs.symbol_to_id(name) {
-                    Some(v) => v,
-                    None => {
-                        panic!("Cannot find a partial proc for {:?}", name);
-                    }
-                };
+    let offset_variable = StorageSubs::merge_into(store, env.subs);
 
-                // TODO I believe this is also duplicated
-                match specialize_variable(
-                    env,
-                    procs,
-                    name,
-                    layout_cache,
-                    variable,
-                    BumpMap::new_in(env.arena),
-                    partial_proc_id,
-                ) {
-                    Ok((proc, layout)) => {
-                        let top_level = ProcLayout::from_raw(env.arena, layout);
+    for (symbol, solved_types) in it {
+        for store_variable in solved_types {
+            // historical note: we used to deduplicate with a hash here,
+            // but the cost of that hash is very high. So for now we make
+            // duplicate specializations, and the insertion into a hash map
+            // below will deduplicate them.
 
-                        if procs.is_module_thunk(name) {
-                            debug_assert!(top_level.arguments.is_empty());
-                        }
+            specialize_external_help(
+                env,
+                procs,
+                layout_cache,
+                symbol,
+                offset_variable(store_variable),
+                &[],
+            )
+        }
+    }
+}
 
-                        procs.specialized.insert_specialized(name, top_level, proc);
-                    }
-                    Err(SpecializeFailure {
-                        problem: _,
-                        attempted_layout,
-                    }) => {
-                        let proc = generate_runtime_error_function(env, name, attempted_layout);
+fn specialize_external_help<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    name: Symbol,
+    variable: Variable,
+    host_exposed_aliases: &[(Symbol, Variable)],
+) {
+    let partial_proc_id = match procs.partial_procs.symbol_to_id(name) {
+        Some(v) => v,
+        None => {
+            panic!("Cannot find a partial proc for {:?}", name);
+        }
+    };
 
-                        let top_level = ProcLayout::from_raw(env.arena, attempted_layout);
+    let specialization_result = specialize_variable(
+        env,
+        procs,
+        name,
+        layout_cache,
+        variable,
+        host_exposed_aliases,
+        partial_proc_id,
+    );
 
-                        procs.specialized.insert_specialized(name, top_level, proc);
-                    }
-                }
+    match specialization_result {
+        Ok((proc, layout)) => {
+            let top_level = ProcLayout::from_raw(env.arena, layout);
+
+            if procs.is_module_thunk(name) {
+                debug_assert!(top_level.arguments.is_empty());
             }
+
+            procs.specialized.insert_specialized(name, top_level, proc);
+        }
+        Err(SpecializeFailure {
+            problem: _,
+            attempted_layout,
+        }) => {
+            let proc = generate_runtime_error_function(env, name, attempted_layout);
+
+            let top_level = ProcLayout::from_raw(env.arena, attempted_layout);
+
+            procs.specialized.insert_specialized(name, top_level, proc);
         }
     }
 }
@@ -2672,77 +2679,13 @@ struct SpecializeFailure<'a> {
 
 type SpecializeSuccess<'a> = (Proc<'a>, RawFunctionLayout<'a>);
 
-fn specialize<'a, 'b>(
-    env: &mut Env<'a, '_>,
-    procs: &'b mut Procs<'a>,
-    proc_name: Symbol,
-    layout_cache: &mut LayoutCache<'a>,
-    pending: PendingSpecialization,
-    partial_proc_id: PartialProcId,
-) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
-    let PendingSpecialization {
-        solved_type,
-        host_exposed_aliases,
-        ..
-    } = pending;
-
-    specialize_solved_type(
-        env,
-        procs,
-        proc_name,
-        layout_cache,
-        &solved_type,
-        host_exposed_aliases,
-        partial_proc_id,
-    )
-}
-
-fn introduce_solved_type_to_subs<'a>(env: &mut Env<'a, '_>, solved_type: &SolvedType) -> Variable {
-    use roc_solve::solve::insert_type_into_subs;
-    use roc_types::solved_types::{to_type, FreeVars};
-    use roc_types::subs::VarStore;
-    let mut free_vars = FreeVars::default();
-    let mut var_store = VarStore::new_from_subs(env.subs);
-
-    let before = var_store.peek();
-
-    let normal_type = to_type(solved_type, &mut free_vars, &mut var_store);
-
-    let after = var_store.peek();
-    let variables_introduced = after - before;
-
-    env.subs.extend_by(variables_introduced as usize);
-
-    insert_type_into_subs(env.subs, &normal_type)
-}
-
-fn specialize_solved_type<'a>(
-    env: &mut Env<'a, '_>,
-    procs: &mut Procs<'a>,
-    proc_name: Symbol,
-    layout_cache: &mut LayoutCache<'a>,
-    solved_type: &SolvedType,
-    host_exposed_aliases: BumpMap<Symbol, SolvedType>,
-    partial_proc_id: PartialProcId,
-) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
-    specialize_variable_help(
-        env,
-        procs,
-        proc_name,
-        layout_cache,
-        |env| introduce_solved_type_to_subs(env, solved_type),
-        host_exposed_aliases,
-        partial_proc_id,
-    )
-}
-
 fn specialize_variable<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
     proc_name: Symbol,
     layout_cache: &mut LayoutCache<'a>,
     fn_var: Variable,
-    host_exposed_aliases: BumpMap<Symbol, SolvedType>,
+    host_exposed_aliases: &[(Symbol, Variable)],
     partial_proc_id: PartialProcId,
 ) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
     specialize_variable_help(
@@ -2762,7 +2705,7 @@ fn specialize_variable_help<'a, F>(
     proc_name: Symbol,
     layout_cache: &mut LayoutCache<'a>,
     fn_var_thunk: F,
-    host_exposed_aliases: BumpMap<Symbol, SolvedType>,
+    host_exposed_variables: &[(Symbol, Variable)],
     partial_proc_id: PartialProcId,
 ) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>>
 where
@@ -2797,21 +2740,13 @@ where
     let annotation_var = procs.partial_procs.get_id(partial_proc_id).annotation;
     instantiate_rigids(env.subs, annotation_var);
 
-    let mut host_exposed_variables = Vec::with_capacity_in(host_exposed_aliases.len(), env.arena);
-
-    for (symbol, solved_type) in host_exposed_aliases {
-        let alias_var = introduce_solved_type_to_subs(env, &solved_type);
-
-        host_exposed_variables.push((symbol, alias_var));
-    }
-
     let specialized = specialize_external(
         env,
         procs,
         proc_name,
         layout_cache,
         fn_var,
-        &host_exposed_variables,
+        host_exposed_variables,
         partial_proc_id,
     );
 
@@ -6552,7 +6487,7 @@ fn add_needed_external<'a>(
     use hashbrown::hash_map::Entry::{Occupied, Vacant};
 
     let existing = match procs.externals_we_need.entry(name.module_id()) {
-        Vacant(entry) => entry.insert(ExternalSpecializations::new_in(env.arena)),
+        Vacant(entry) => entry.insert(ExternalSpecializations::new()),
         Occupied(entry) => entry.into_mut(),
     };
 
@@ -6915,7 +6850,7 @@ fn call_by_name_help<'a>(
                             proc_name,
                             layout_cache,
                             fn_var,
-                            BumpMap::new_in(env.arena),
+                            &[],
                             partial_proc,
                         ) {
                             Ok((proc, layout)) => {
@@ -7037,7 +6972,7 @@ fn call_by_name_module_thunk<'a>(
                             proc_name,
                             layout_cache,
                             fn_var,
-                            BumpMap::new_in(env.arena),
+                            &[],
                             partial_proc,
                         ) {
                             Ok((proc, raw_layout)) => {

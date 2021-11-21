@@ -433,6 +433,23 @@ where
                 );
                 self.build_neq(sym, &args[0], &args[1], &arg_layouts[0])
             }
+            LowLevel::NumLt => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "NumLt: expected to have exactly two argument"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], arg_layouts[1],
+                    "NumLt: expected all arguments of to have the same layout"
+                );
+                debug_assert_eq!(
+                    Layout::Builtin(Builtin::Int1),
+                    *ret_layout,
+                    "NumLt: expected to have return layout of type I1"
+                );
+                self.build_num_lt(sym, &args[0], &args[1], &arg_layouts[0])
+            }
             LowLevel::NumRound => self.build_fn_call(
                 sym,
                 bitcode::NUM_ROUND[FloatWidth::F64].to_string(),
@@ -516,6 +533,15 @@ where
 
     /// build_neq stores the result of `src1 != src2` into dst.
     fn build_neq(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        arg_layout: &Layout<'a>,
+    ) -> Result<(), String>;
+
+    /// build_num_lt stores the result of `src1 < src2` into dst.
+    fn build_num_lt(
         &mut self,
         dst: &Symbol,
         src1: &Symbol,

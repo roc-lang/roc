@@ -180,6 +180,13 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait> {
         src2: GeneralReg,
     );
 
+    fn lt_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        src1: GeneralReg,
+        src2: GeneralReg,
+    );
+
     fn ret(buf: &mut Vec<'_, u8>);
 }
 
@@ -866,6 +873,25 @@ impl<
                 Ok(())
             }
             x => Err(format!("NumNeq: layout, {:?}, not implemented yet", x)),
+        }
+    }
+
+    fn build_num_lt(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        arg_layout: &Layout<'a>,
+    ) -> Result<(), String> {
+        match arg_layout {
+            Layout::Builtin(Builtin::Int64) => {
+                let dst_reg = self.claim_general_reg(dst)?;
+                let src1_reg = self.load_to_general_reg(src1)?;
+                let src2_reg = self.load_to_general_reg(src2)?;
+                ASM::lt_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+                Ok(())
+            }
+            x => Err(format!("NumLt: layout, {:?}, not implemented yet", x)),
         }
     }
 

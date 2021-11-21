@@ -3555,6 +3555,7 @@ version = "0.1.0"
 name = "roc_types"
 version = "0.1.0"
 dependencies = [
+ "bumpalo",
  "roc_collections",
  "roc_module",
  "roc_region",
