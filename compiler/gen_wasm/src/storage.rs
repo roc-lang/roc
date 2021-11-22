@@ -269,63 +269,24 @@ impl<'a> Storage<'a> {
         }
     }
 
-    /// Return a value with the C calling convention. The difference with passing an argument is in
-    /// the StackMemory case, where we pass a pointer to write the result into.
-    fn return_symbol_ccc(&mut self, code_builder: &mut CodeBuilder, sym: Symbol) {
+    /// stack memory values are returned by pointer. e.g. a roc function
+    ///
+    ///      add : I128, I128 -> I128
+    ///
+    /// is given the wasm type
+    ///
+    ///      add : (i32, i64, i64, i64, i64) -> nil
+    ///
+    /// The returned value is written to the address passed as the first argument
+    fn load_return_address_ccc(&mut self, code_builder: &mut CodeBuilder, sym: Symbol) {
         let storage = self.get(&sym).to_owned();
         match storage {
-            StoredValue::VirtualMachineStack {
-                vm_state,
-                value_type,
-                size,
-            } => {
-                let next_local_id = self.get_next_local_id();
-                let maybe_next_vm_state = code_builder.load_symbol(sym, vm_state, next_local_id);
-                match maybe_next_vm_state {
-                    // The act of loading the value changed the VM state, so update it
-                    Some(next_vm_state) => {
-                        self.symbol_storage_map.insert(
-                            sym,
-                            StoredValue::VirtualMachineStack {
-                                vm_state: next_vm_state,
-                                value_type,
-                                size,
-                            },
-                        );
-                    }
-                    None => {
-                        // Loading the value required creating a new local, because
-                        // it was not in a convenient position in the VM stack.
-                        self.local_types.push(value_type);
-                        self.symbol_storage_map.insert(
-                            sym,
-                            StoredValue::Local {
-                                local_id: next_local_id,
-                                value_type,
-                                size,
-                            },
-                        );
-                    }
-                }
+            StoredValue::VirtualMachineStack { .. } | StoredValue::Local { .. } => {
+                unreachable!("these storage types are not returned by writing to a pointer")
             }
-
-            StoredValue::Local { local_id, .. } => {
-                code_builder.get_local(local_id);
-                code_builder.set_top_symbol(sym);
-            }
-
             StoredValue::StackMemory { location, .. } => {
                 let (local_id, offset) = location.local_and_offset(self.stack_frame_pointer);
 
-                // stack memory values are returned by pointer. e.g. a roc function
-                //
-                //      add : I128, I128 -> I128
-                //
-                // is given the wasm type
-                //
-                //      add : (i32, i64, i64, i64, i64) -> nil
-                //
-                // The returned value is written to the address passed as the first argument
                 code_builder.get_local(local_id);
                 if offset != 0 {
                     code_builder.i32_const(offset as i32);
@@ -368,9 +329,8 @@ impl<'a> Storage<'a> {
 
         if return_layout.is_stack_memory() {
             // Load the address where the return value should be written
-            // Apparently for return values we still use a pointer to stack memory
-            self.return_symbol_ccc(code_builder, return_symbol);
-        };
+            self.load_return_address_ccc(code_builder, return_symbol);
+        }
 
         for sym in symbols {
             if let StoredValue::StackMemory {
