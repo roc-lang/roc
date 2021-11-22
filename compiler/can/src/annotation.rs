@@ -460,7 +460,10 @@ fn can_annotation_help(
             Type::Variable(var)
         }
         Inferred => {
-            unimplemented!();
+            // Inference variables aren't bound to a rigid or a wildcard, so all we have to do is
+            // make a fresh unconstrained variable, and let the type solver fill it in for us 🤠
+            let var = var_store.fresh();
+            Type::Variable(var)
         }
         Malformed(string) => {
             malformed(env, region, string);

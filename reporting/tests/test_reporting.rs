@@ -6667,4 +6667,102 @@ I need all branches in an `if` to have the same type!
             ),
         )
     }
+
+    #[test]
+    fn inference_var_not_enough_in_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                canIGo : _ -> Result _
+                canIGo = \color ->
+                    when color is
+                        "green" -> Ok "go!"
+                        "yellow" -> Err (SlowIt "whoa, let's slow down!")
+                        "red" -> Err (StopIt "absolutely not")
+                        _ -> Err (UnknownColor "this is a weird stoplight")
+                canIGo
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TOO FEW TYPE ARGUMENTS ──────────────────────────────────────────────────────
+
+                The `Result` alias expects 2 type arguments, but it got 1 instead:
+
+                1│  canIGo : _ -> Result _
+                                  ^^^^^^^^
+
+                Are there missing parentheses?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn inference_var_too_many_in_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                canIGo : _ -> Result _ _ _
+                canIGo = \color ->
+                    when color is
+                        "green" -> Ok "go!"
+                        "yellow" -> Err (SlowIt "whoa, let's slow down!")
+                        "red" -> Err (StopIt "absolutely not")
+                        _ -> Err (UnknownColor "this is a weird stoplight")
+                canIGo
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TOO MANY TYPE ARGUMENTS ─────────────────────────────────────────────────────
+
+                The `Result` alias expects 2 type arguments, but it got 3 instead:
+
+                1│  canIGo : _ -> Result _ _ _
+                                  ^^^^^^^^^^^^
+
+                Are there missing parentheses?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn inference_var_conflict_in_rigid_links() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : a -> (_ -> b)
+                f = \x -> \y -> if x == y then x else y
+                f
+                "#
+            ),
+            // TODO: We should tell the user that we inferred `_` as `a`
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with the body of the `f` definition:
+
+                1│  f : a -> (_ -> b)
+                2│  f = \x -> \y -> if x == y then x else y
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                The body is an anonymous function of type:
+
+                    a -> a
+
+                But the type annotation on `f` says it should be:
+
+                    a -> b
+
+                Tip: Your type annotation uses `a` and `b` as separate type variables.
+                Your code seems to be saying they are the same though. Maybe they
+                should be the same your type annotation? Maybe your code uses them in
+                a weird way?
+                "#
+            ),
+        )
+    }
 }

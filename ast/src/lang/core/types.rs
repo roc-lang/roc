@@ -390,7 +390,9 @@ pub fn to_type2<'a>(
             }
         }
         Inferred => {
-            unimplemented!();
+            let var = env.var_store.fresh();
+
+            Type2::Variable(var)
         }
         Wildcard | Malformed(_) => {
             let var = env.var_store.fresh();
