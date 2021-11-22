@@ -783,6 +783,8 @@ struct ParsedModule<'a> {
     parsed_defs: &'a [Located<roc_parse::ast::Def<'a>>],
 }
 
+/// A message sent out _from_ a worker thread,
+/// representing a result of work done, or a request for further work
 #[derive(Debug)]
 enum Msg<'a> {
     Many(Vec<Msg<'a>>),
@@ -1004,6 +1006,7 @@ impl ModuleTiming {
     }
 }
 
+/// A message sent _to_ a worker thread, describing the work to be done
 #[derive(Debug)]
 #[allow(dead_code)]
 enum BuildTask<'a> {
@@ -1134,6 +1137,7 @@ where
     }
 }
 
+/// Main entry point to the compiler from the CLI and tests
 pub fn load_and_monomorphize<'a, F>(
     arena: &'a Bump,
     filename: PathBuf,
@@ -1300,7 +1304,7 @@ enum LoadResult<'a> {
 /// 5. Parse the module's defs.
 /// 6. Canonicalize the module.
 /// 7. Before type checking, block on waiting for type checking to complete on all imports.
-///    (Since Roc doesn't allow cyclic dependencies, this ctypeot deadlock.)
+///    (Since Roc doesn't allow cyclic dependencies, this cannot deadlock.)
 /// 8. Type check the module and create type annotations for its top-level declarations.
 /// 9. Report the completed type annotation to the coordinator thread, so other modules
 ///    that are waiting in step 7 can unblock.
@@ -1324,9 +1328,9 @@ enum LoadResult<'a> {
 ///     in requests for others; these are added to the queue and worked through as normal.
 ///     This process continues until *both* all modules have reported that they've finished
 ///     adding specialization requests to the queue, *and* the queue is empty (including
-///     of any requestss that were added in the course of completing other requests). Now
+///     of any requests that were added in the course of completing other requests). Now
 ///     we have a map of specializations, and everything was assembled in parallel with
-///     no unique specialization ever getting assembled twice (meanaing no wasted effort).
+///     no unique specialization ever getting assembled twice (meaning no wasted effort).
 /// 12. Now that we have our final map of specializations, we can proceed to code gen!
 ///     As long as the specializations are stored in a per-ModuleId map, we can also
 ///     parallelize this code gen. (e.g. in dev builds, building separate LLVM modules
