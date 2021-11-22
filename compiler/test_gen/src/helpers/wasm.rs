@@ -17,6 +17,9 @@ use roc_gen_wasm::wasm_module::{
 };
 use roc_gen_wasm::MEMORY_NAME;
 
+#[allow(unused_imports)]
+use roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS;
+
 const TEST_WRAPPER_NAME: &str = "test_wrapper";
 
 std::thread_local! {
@@ -60,6 +63,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     }
 
     let exposed_types = MutMap::default();
+    let ptr_bytes = 4;
     let loaded = roc_load::file::load_and_monomorphize_from_str(
         arena,
         filename,
@@ -67,7 +71,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
         stdlib,
         src_dir,
         exposed_types,
-        8,
+        ptr_bytes,
         builtin_defs_map,
     );
 
@@ -83,19 +87,26 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
 
     // You can comment and uncomment this block out to get more useful information
     // while you're working on the wasm backend!
-    // {
-    //     println!("=========== Procedures ==========");
-    //     println!("{:?}", procedures);
-    //     println!("=================================\n");
+    {
+        // println!("=========== Procedures ==========");
+        // if PRETTY_PRINT_IR_SYMBOLS {
+        //     println!("");
+        //     for proc in procedures.values() {
+        //         println!("{}", proc.to_pretty(200));
+        //     }
+        // } else {
+        //     println!("{:?}", procedures.values());
+        // }
+        // println!("=================================\n");
 
-    //     println!("=========== Interns    ==========");
-    //     println!("{:?}", interns);
-    //     println!("=================================\n");
+        // println!("=========== Interns    ==========");
+        // println!("{:?}", interns);
+        // println!("=================================\n");
 
-    //     println!("=========== Exposed    ==========");
-    //     println!("{:?}", exposed_to_host);
-    //     println!("=================================\n");
-    // }
+        // println!("=========== Exposed    ==========");
+        // println!("{:?}", exposed_to_host);
+        // println!("=================================\n");
+    }
 
     debug_assert_eq!(exposed_to_host.len(), 1);
 

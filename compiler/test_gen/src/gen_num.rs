@@ -358,7 +358,7 @@ fn u8_hex_int_alias() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn dec_float_alias() {
     assert_evals_to!(
         indoc!(

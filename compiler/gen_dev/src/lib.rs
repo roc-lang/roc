@@ -413,9 +413,9 @@ where
                     "Eq: expected all arguments of to have the same layout"
                 );
                 debug_assert_eq!(
-                    Layout::Builtin(Builtin::Int1),
+                    Layout::Builtin(Builtin::Bool),
                     *ret_layout,
-                    "Eq: expected to have return layout of type I1"
+                    "Eq: expected to have return layout of type Bool"
                 );
                 self.build_eq(sym, &args[0], &args[1], &arg_layouts[0])
             }
@@ -430,9 +430,9 @@ where
                     "NotEq: expected all arguments of to have the same layout"
                 );
                 debug_assert_eq!(
-                    Layout::Builtin(Builtin::Int1),
+                    Layout::Builtin(Builtin::Bool),
                     *ret_layout,
-                    "NotEq: expected to have return layout of type I1"
+                    "NotEq: expected to have return layout of type Bool"
                 );
                 self.build_neq(sym, &args[0], &args[1], &arg_layouts[0])
             }
@@ -447,9 +447,9 @@ where
                     "NumLt: expected all arguments of to have the same layout"
                 );
                 debug_assert_eq!(
-                    Layout::Builtin(Builtin::Int1),
+                    Layout::Builtin(Builtin::Bool),
                     *ret_layout,
-                    "NumLt: expected to have return layout of type I1"
+                    "NumLt: expected to have return layout of type Bool"
                 );
                 self.build_num_lt(sym, &args[0], &args[1], &arg_layouts[0])
             }
@@ -489,7 +489,7 @@ where
                     "NumIsZero: expected to have exactly one argument"
                 );
                 debug_assert_eq!(
-                    Layout::Builtin(Builtin::Int1),
+                    Layout::Builtin(Builtin::Bool),
                     *ret_layout,
                     "NumIsZero: expected to have return layout of type I1"
                 );

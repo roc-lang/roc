@@ -7,6 +7,7 @@ use crate::layout::{
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_can::expr::ClosureData;
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
@@ -1139,8 +1140,17 @@ impl<'a> BranchInfo<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ModifyRc {
+    /// Increment a reference count
     Inc(Symbol, u64),
+    /// Decrement a reference count
     Dec(Symbol),
+    /// A DecRef is a non-recursive reference count decrement
+    /// e.g. If we Dec a list of lists, then if the reference count of the outer list is one,
+    /// a Dec will recursively decrement all elements, then free the memory of the outer list.
+    /// A DecRef would just free the outer list.
+    /// That is dangerous because you may not free the elements, but in our Zig builtins,
+    /// sometimes we know we already dealt with the elements (e.g. by copying them all over
+    /// to a new list) and so we can just do a DecRef, which is much cheaper in such a case.
     DecRef(Symbol),
 }
 
@@ -2431,11 +2441,11 @@ fn specialize_external<'a>(
                         }
 
                         ClosureRepresentation::Other(layout) => match layout {
-                            Layout::Builtin(Builtin::Int1) => {
+                            Layout::Builtin(Builtin::Bool) => {
                                 // just ignore this value
                                 // IDEA don't pass this value in the future
                             }
-                            Layout::Builtin(Builtin::Int8) => {
+                            Layout::Builtin(Builtin::Int(IntWidth::U8)) => {
                                 // just ignore this value
                                 // IDEA don't pass this value in the future
                             }
@@ -2888,21 +2898,22 @@ fn try_make_literal<'a>(
     match can_expr {
         Int(_, precision, _, int) => {
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *precision, false) {
-                IntOrFloat::SignedIntType(_) | IntOrFloat::UnsignedIntType(_) => {
-                    Some(Literal::Int(*int))
-                }
+                IntOrFloat::Int(_) => Some(Literal::Int(*int)),
                 _ => unreachable!("unexpected float precision for integer"),
             }
         }
 
         Float(_, precision, float_str, float) => {
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *precision, true) {
-                IntOrFloat::BinaryFloatType(_) => Some(Literal::Float(*float)),
+                IntOrFloat::Float(_) => Some(Literal::Float(*float)),
                 IntOrFloat::DecimalFloatType => {
                     let dec = match RocDec::from_str(float_str) {
-                            Some(d) => d,
-                            None => panic!("Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message", float_str),
-                        };
+                        Some(d) => d,
+                        None => panic!(
+                            r"Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message",
+                            float_str
+                        ),
+                    };
 
                     Some(Literal::Decimal(dec))
                 }
@@ -2915,10 +2926,8 @@ fn try_make_literal<'a>(
         Num(var, num_str, num) => {
             // first figure out what kind of number this is
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, false) {
-                IntOrFloat::SignedIntType(_) | IntOrFloat::UnsignedIntType(_) => {
-                    Some(Literal::Int((*num).into()))
-                }
-                IntOrFloat::BinaryFloatType(_) => Some(Literal::Float(*num as f64)),
+                IntOrFloat::Int(_) => Some(Literal::Int((*num).into())),
+                IntOrFloat::Float(_) => Some(Literal::Float(*num as f64)),
                 IntOrFloat::DecimalFloatType => {
                     let dec = match RocDec::from_str(num_str) {
                         Some(d) => d,
@@ -2952,16 +2961,10 @@ pub fn with_hole<'a>(
     match can_expr {
         Int(_, precision, _, int) => {
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, precision, false) {
-                IntOrFloat::SignedIntType(precision) => Stmt::Let(
+                IntOrFloat::Int(precision) => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Int(int)),
-                    precision.as_layout(),
-                    hole,
-                ),
-                IntOrFloat::UnsignedIntType(precision) => Stmt::Let(
-                    assigned,
-                    Expr::Literal(Literal::Int(int)),
-                    precision.as_layout(),
+                    Layout::Builtin(Builtin::Int(precision)),
                     hole,
                 ),
                 _ => unreachable!("unexpected float precision for integer"),
@@ -2970,10 +2973,10 @@ pub fn with_hole<'a>(
 
         Float(_, precision, float_str, float) => {
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, precision, true) {
-                IntOrFloat::BinaryFloatType(precision) => Stmt::Let(
+                IntOrFloat::Float(precision) => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Float(float)),
-                    precision.as_layout(),
+                    Layout::Builtin(Builtin::Float(precision)),
                     hole,
                 ),
                 IntOrFloat::DecimalFloatType => {
@@ -3002,22 +3005,16 @@ pub fn with_hole<'a>(
         Num(var, num_str, num) => {
             // first figure out what kind of number this is
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, var, false) {
-                IntOrFloat::SignedIntType(precision) => Stmt::Let(
+                IntOrFloat::Int(precision) => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Int(num.into())),
-                    precision.as_layout(),
+                    Layout::int_width(precision),
                     hole,
                 ),
-                IntOrFloat::UnsignedIntType(precision) => Stmt::Let(
-                    assigned,
-                    Expr::Literal(Literal::Int(num.into())),
-                    precision.as_layout(),
-                    hole,
-                ),
-                IntOrFloat::BinaryFloatType(precision) => Stmt::Let(
+                IntOrFloat::Float(precision) => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Float(num as f64)),
-                    precision.as_layout(),
+                    Layout::float_width(precision),
                     hole,
                 ),
                 IntOrFloat::DecimalFloatType => {
@@ -4402,7 +4399,7 @@ fn construct_closure_data<'a>(
 
             Stmt::Let(assigned, expr, lambda_set_layout, hole)
         }
-        ClosureRepresentation::Other(Layout::Builtin(Builtin::Int1)) => {
+        ClosureRepresentation::Other(Layout::Builtin(Builtin::Bool)) => {
             debug_assert_eq!(symbols.len(), 0);
 
             debug_assert_eq!(lambda_set.set.len(), 2);
@@ -4411,7 +4408,7 @@ fn construct_closure_data<'a>(
 
             Stmt::Let(assigned, expr, lambda_set_layout, hole)
         }
-        ClosureRepresentation::Other(Layout::Builtin(Builtin::Int8)) => {
+        ClosureRepresentation::Other(Layout::Builtin(Builtin::Int(IntWidth::U8))) => {
             debug_assert_eq!(symbols.len(), 0);
 
             debug_assert!(lambda_set.set.len() > 2);
@@ -4468,7 +4465,7 @@ fn convert_tag_union<'a>(
         BoolUnion { ttrue, .. } => Stmt::Let(
             assigned,
             Expr::Literal(Literal::Bool(tag_name == ttrue)),
-            Layout::Builtin(Builtin::Int1),
+            Layout::Builtin(Builtin::Bool),
             hole,
         ),
         ByteUnion(tag_names) => {
@@ -4478,7 +4475,7 @@ fn convert_tag_union<'a>(
                 Some(tag_id) => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Byte(tag_id as u8)),
-                    Layout::Builtin(Builtin::Int8),
+                    Layout::Builtin(Builtin::Int(IntWidth::U8)),
                     hole,
                 ),
                 None => Stmt::RuntimeError("tag must be in its own type"),
@@ -4989,7 +4986,7 @@ pub fn from_can<'a>(
         Expect(condition, rest) => {
             let rest = from_can(env, variable, rest.value, procs, layout_cache);
 
-            let bool_layout = Layout::Builtin(Builtin::Int1);
+            let bool_layout = Layout::Builtin(Builtin::Bool);
             let cond_symbol = env.unique_symbol();
 
             let op = LowLevel::ExpectTrue;
@@ -7172,8 +7169,8 @@ fn call_specialized_proc<'a>(
 pub enum Pattern<'a> {
     Identifier(Symbol),
     Underscore,
-    IntLiteral(i128, IntPrecision),
-    FloatLiteral(u64, FloatPrecision),
+    IntLiteral(i128, IntWidth),
+    FloatLiteral(u64, FloatWidth),
     DecimalLiteral(RocDec),
     BitLiteral {
         value: bool,
@@ -7253,9 +7250,7 @@ fn from_can_pattern_help<'a>(
         Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
         IntLiteral(var, _, int) => {
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, false) {
-                IntOrFloat::SignedIntType(precision) | IntOrFloat::UnsignedIntType(precision) => {
-                    Ok(Pattern::IntLiteral(*int as i128, precision))
-                }
+                IntOrFloat::Int(precision) => Ok(Pattern::IntLiteral(*int as i128, precision)),
                 other => {
                     panic!(
                         "Invalid precision for int pattern: {:?} has {:?}",
@@ -7267,10 +7262,10 @@ fn from_can_pattern_help<'a>(
         FloatLiteral(var, float_str, float) => {
             // TODO: Can I reuse num_argument_to_int_or_float here if I pass in true?
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, true) {
-                IntOrFloat::SignedIntType(_) | IntOrFloat::UnsignedIntType(_) => {
+                IntOrFloat::Int(_) => {
                     panic!("Invalid precision for float pattern {:?}", var)
                 }
-                IntOrFloat::BinaryFloatType(precision) => {
+                IntOrFloat::Float(precision) => {
                     Ok(Pattern::FloatLiteral(f64::to_bits(*float), precision))
                 }
                 IntOrFloat::DecimalFloatType => {
@@ -7297,15 +7292,8 @@ fn from_can_pattern_help<'a>(
         }
         NumLiteral(var, num_str, num) => {
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, false) {
-                IntOrFloat::SignedIntType(precision) => {
-                    Ok(Pattern::IntLiteral(*num as i128, precision))
-                }
-                IntOrFloat::UnsignedIntType(precision) => {
-                    Ok(Pattern::IntLiteral(*num as i128, precision))
-                }
-                IntOrFloat::BinaryFloatType(precision) => {
-                    Ok(Pattern::FloatLiteral(*num as u64, precision))
-                }
+                IntOrFloat::Int(precision) => Ok(Pattern::IntLiteral(*num as i128, precision)),
+                IntOrFloat::Float(precision) => Ok(Pattern::FloatLiteral(*num as u64, precision)),
                 IntOrFloat::DecimalFloatType => {
                     let dec = match RocDec::from_str(num_str) {
                             Some(d) => d,
@@ -7887,59 +7875,10 @@ fn from_can_record_destruct<'a>(
     })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Hash)]
-pub enum IntPrecision {
-    Usize,
-    I128,
-    I64,
-    I32,
-    I16,
-    I8,
-}
-
-impl IntPrecision {
-    pub fn as_layout(&self) -> Layout<'static> {
-        Layout::Builtin(self.as_builtin())
-    }
-
-    pub fn as_builtin(&self) -> Builtin<'static> {
-        use IntPrecision::*;
-        match self {
-            I128 => Builtin::Int128,
-            I64 => Builtin::Int64,
-            I32 => Builtin::Int32,
-            I16 => Builtin::Int16,
-            I8 => Builtin::Int8,
-            Usize => Builtin::Usize,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Hash)]
-pub enum FloatPrecision {
-    F64,
-    F32,
-}
-
-impl FloatPrecision {
-    pub fn as_layout(&self) -> Layout<'static> {
-        Layout::Builtin(self.as_builtin())
-    }
-
-    pub fn as_builtin(&self) -> Builtin<'static> {
-        use FloatPrecision::*;
-        match self {
-            F64 => Builtin::Float64,
-            F32 => Builtin::Float32,
-        }
-    }
-}
-
 #[derive(Debug)]
 pub enum IntOrFloat {
-    SignedIntType(IntPrecision),
-    UnsignedIntType(IntPrecision),
-    BinaryFloatType(FloatPrecision),
+    Int(IntWidth),
+    Float(FloatWidth),
     DecimalFloatType,
 }
 
@@ -7950,11 +7889,13 @@ pub fn num_argument_to_int_or_float(
     var: Variable,
     known_to_be_float: bool,
 ) -> IntOrFloat {
-    match subs.get_content_without_compacting(var){
-        Content::FlexVar(_) | Content::RigidVar(_) if known_to_be_float => IntOrFloat::BinaryFloatType(FloatPrecision::F64),
-        Content::FlexVar(_) | Content::RigidVar(_) => IntOrFloat::SignedIntType(IntPrecision::I64), // We default (Num *) to I64
+    match subs.get_content_without_compacting(var) {
+        Content::FlexVar(_) | Content::RigidVar(_) if known_to_be_float => {
+            IntOrFloat::Float(FloatWidth::F64)
+        }
+        Content::FlexVar(_) | Content::RigidVar(_) => IntOrFloat::Int(IntWidth::I64), // We default (Num *) to I64
 
-        Content::Alias(Symbol::NUM_INTEGER, args, _)  => {
+        Content::Alias(Symbol::NUM_INTEGER, args, _) => {
             debug_assert!(args.len() == 1);
 
             // Recurse on the second argument
@@ -7962,85 +7903,43 @@ pub fn num_argument_to_int_or_float(
             num_argument_to_int_or_float(subs, ptr_bytes, var, false)
         }
 
-        Content::Alias(Symbol::NUM_I128,  _, _)
-        | Content::Alias(Symbol::NUM_SIGNED128, _,  _)
-        | Content::Alias(Symbol::NUM_AT_SIGNED128, _, _) => {
-            IntOrFloat::SignedIntType(IntPrecision::I128)
-        }
-        Content::Alias(Symbol::NUM_INT,  _, _)// We default Integer to I64
-        | Content::Alias(Symbol::NUM_I64,  _, _)
-        | Content::Alias(Symbol::NUM_SIGNED64,  _, _)
-        | Content::Alias(Symbol::NUM_AT_SIGNED64, _, _) => {
-            IntOrFloat::SignedIntType(IntPrecision::I64)
-        }
-        Content::Alias(Symbol::NUM_I32, _, _)
-        | Content::Alias(Symbol::NUM_SIGNED32, _, _)
-        | Content::Alias(Symbol::NUM_AT_SIGNED32, _, _) => {
-            IntOrFloat::SignedIntType(IntPrecision::I32)
-        }
-        Content::Alias(Symbol::NUM_I16, _, _)
-        | Content::Alias(Symbol::NUM_SIGNED16, _, _)
-        | Content::Alias(Symbol::NUM_AT_SIGNED16, _, _) => {
-            IntOrFloat::SignedIntType(IntPrecision::I16)
-        }
-        Content::Alias(Symbol::NUM_I8, _, _)
-        | Content::Alias(Symbol::NUM_SIGNED8, _, _)
-        | Content::Alias(Symbol::NUM_AT_SIGNED8, _, _) => {
-            IntOrFloat::SignedIntType(IntPrecision::I8)
-        }
-        Content::Alias(Symbol::NUM_U128, _, _)
-        | Content::Alias(Symbol::NUM_UNSIGNED128, _, _)
-        | Content::Alias(Symbol::NUM_AT_UNSIGNED128, _, _) => {
-            IntOrFloat::UnsignedIntType(IntPrecision::I128)
-        }
-        Content::Alias(Symbol::NUM_U64, _, _)
-        | Content::Alias(Symbol::NUM_UNSIGNED64, _, _)
-        | Content::Alias(Symbol::NUM_AT_UNSIGNED64, _, _) => {
-            IntOrFloat::UnsignedIntType(IntPrecision::I64)
-        }
-        Content::Alias(Symbol::NUM_U32, _, _)
-        | Content::Alias(Symbol::NUM_UNSIGNED32, _, _)
-        | Content::Alias(Symbol::NUM_AT_UNSIGNED32, _, _) => {
-            IntOrFloat::UnsignedIntType(IntPrecision::I32)
-        }
-        Content::Alias(Symbol::NUM_U16, _, _)
-        | Content::Alias(Symbol::NUM_UNSIGNED16, _, _)
-        | Content::Alias(Symbol::NUM_AT_UNSIGNED16, _, _) => {
-            IntOrFloat::UnsignedIntType(IntPrecision::I16)
-        }
-        Content::Alias(Symbol::NUM_U8, _, _)
-        | Content::Alias(Symbol::NUM_UNSIGNED8, _, _)
-        | Content::Alias(Symbol::NUM_AT_UNSIGNED8, _, _) => {
-            IntOrFloat::UnsignedIntType(IntPrecision::I8)
-        }
-        Content::Alias(Symbol::NUM_FLOATINGPOINT, args, _)  => {
-            debug_assert!(args.len() == 1);
+        other @ Content::Alias(symbol, args, _) => {
+            if let Some(int_width) = IntWidth::try_from_symbol(*symbol) {
+                return IntOrFloat::Int(int_width);
+            }
 
-            // Recurse on the second argument
-            let var = subs[args.variables().into_iter().next().unwrap()];
-            num_argument_to_int_or_float(subs, ptr_bytes, var, true)
-        }
-        Content::Alias(Symbol::NUM_FLOAT, _, _) // We default FloatingPoint to F64
-        | Content::Alias(Symbol::NUM_F64, _, _)
-        | Content::Alias(Symbol::NUM_BINARY64, _, _)
-        | Content::Alias(Symbol::NUM_AT_BINARY64, _, _) => {
-            IntOrFloat::BinaryFloatType(FloatPrecision::F64)
-        }
-        Content::Alias(Symbol::NUM_DECIMAL, _, _)
-        | Content::Alias(Symbol::NUM_AT_DECIMAL, _, _) => {
-            IntOrFloat::DecimalFloatType
-        }
-        Content::Alias(Symbol::NUM_F32, _, _)
-        | Content::Alias(Symbol::NUM_BINARY32, _, _)
-        | Content::Alias(Symbol::NUM_AT_BINARY32, _, _) => {
-            IntOrFloat::BinaryFloatType(FloatPrecision::F32)
-        }
-        Content::Alias(Symbol::NUM_NAT, _, _)
-        | Content::Alias(Symbol::NUM_NATURAL, _, _)
-        | Content::Alias(Symbol::NUM_AT_NATURAL, _, _) => {
-            IntOrFloat::UnsignedIntType(IntPrecision::Usize)
+            if let Some(float_width) = FloatWidth::try_from_symbol(*symbol) {
+                return IntOrFloat::Float(float_width);
+            }
 
+            match *symbol {
+                Symbol::NUM_FLOATINGPOINT => {
+                    debug_assert!(args.len() == 1);
+
+                    // Recurse on the second argument
+                    let var = subs[args.variables().into_iter().next().unwrap()];
+                    num_argument_to_int_or_float(subs, ptr_bytes, var, true)
+                }
+
+                Symbol::NUM_DECIMAL | Symbol::NUM_AT_DECIMAL => IntOrFloat::DecimalFloatType,
+
+                Symbol::NUM_NAT | Symbol::NUM_NATURAL | Symbol::NUM_AT_NATURAL => {
+                    let int_width = match ptr_bytes {
+                        4 => IntWidth::U32,
+                        8 => IntWidth::U64,
+                        _ => panic!("unsupported word size"),
+                    };
+
+                    IntOrFloat::Int(int_width)
+                }
+
+                _ => panic!(
+                    "Unrecognized Num type argument for var {:?} with Content: {:?}",
+                    var, other
+                ),
+            }
         }
+
         other => {
             panic!(
                 "Unrecognized Num type argument for var {:?} with Content: {:?}",
@@ -8122,14 +8021,14 @@ where
                 hole.clone()
             }
         },
-        Layout::Builtin(Builtin::Int1) => {
+        Layout::Builtin(Builtin::Bool) => {
             let closure_tag_id_symbol = closure_data_symbol;
 
             lowlevel_enum_lambda_set_to_switch(
                 env,
                 lambda_set.set,
                 closure_tag_id_symbol,
-                Layout::Builtin(Builtin::Int1),
+                Layout::Builtin(Builtin::Bool),
                 closure_data_symbol,
                 lambda_set.is_represented(),
                 to_lowlevel_call,
@@ -8138,14 +8037,14 @@ where
                 hole,
             )
         }
-        Layout::Builtin(Builtin::Int8) => {
+        Layout::Builtin(Builtin::Int(IntWidth::U8)) => {
             let closure_tag_id_symbol = closure_data_symbol;
 
             lowlevel_enum_lambda_set_to_switch(
                 env,
                 lambda_set.set,
                 closure_tag_id_symbol,
-                Layout::Builtin(Builtin::Int8),
+                Layout::Builtin(Builtin::Int(IntWidth::U8)),
                 closure_data_symbol,
                 lambda_set.is_represented(),
                 to_lowlevel_call,
@@ -8286,14 +8185,14 @@ fn match_on_lambda_set<'a>(
                 hole,
             )
         }
-        Layout::Builtin(Builtin::Int1) => {
+        Layout::Builtin(Builtin::Bool) => {
             let closure_tag_id_symbol = closure_data_symbol;
 
             enum_lambda_set_to_switch(
                 env,
                 lambda_set.set,
                 closure_tag_id_symbol,
-                Layout::Builtin(Builtin::Int1),
+                Layout::Builtin(Builtin::Bool),
                 closure_data_symbol,
                 argument_symbols,
                 argument_layouts,
@@ -8302,14 +8201,14 @@ fn match_on_lambda_set<'a>(
                 hole,
             )
         }
-        Layout::Builtin(Builtin::Int8) => {
+        Layout::Builtin(Builtin::Int(IntWidth::U8)) => {
             let closure_tag_id_symbol = closure_data_symbol;
 
             enum_lambda_set_to_switch(
                 env,
                 lambda_set.set,
                 closure_tag_id_symbol,
-                Layout::Builtin(Builtin::Int8),
+                Layout::Builtin(Builtin::Int(IntWidth::U8)),
                 closure_data_symbol,
                 argument_symbols,
                 argument_layouts,
@@ -8437,7 +8336,9 @@ fn union_lambda_set_branch_help<'a>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     let (argument_layouts, argument_symbols) = match closure_data_layout {
-        Layout::Struct(&[]) | Layout::Builtin(Builtin::Int1) | Layout::Builtin(Builtin::Int8) => {
+        Layout::Struct(&[])
+        | Layout::Builtin(Builtin::Bool)
+        | Layout::Builtin(Builtin::Int(IntWidth::U8)) => {
             (argument_layouts_slice, argument_symbols_slice)
         }
         _ if lambda_set.member_does_not_need_closure_argument(function_symbol) => {
@@ -8562,7 +8463,9 @@ fn enum_lambda_set_branch<'a>(
     let assigned = result_symbol;
 
     let (argument_layouts, argument_symbols) = match closure_data_layout {
-        Layout::Struct(&[]) | Layout::Builtin(Builtin::Int1) | Layout::Builtin(Builtin::Int8) => {
+        Layout::Struct(&[])
+        | Layout::Builtin(Builtin::Bool)
+        | Layout::Builtin(Builtin::Int(IntWidth::U8)) => {
             (argument_layouts_slice, argument_symbols_slice)
         }
         _ => {

@@ -277,6 +277,7 @@ impl<'a> WasmBackend<'a> {
                         location,
                         size,
                         alignment_bytes,
+                        ..
                     } => {
                         let (from_ptr, from_offset) =
                             location.local_and_offset(self.storage.stack_frame_pointer);
@@ -328,7 +329,7 @@ impl<'a> WasmBackend<'a> {
                     self.start_block(BlockType::NoResult)
                 }
 
-                let is_bool = matches!(cond_layout, Layout::Builtin(Builtin::Int1));
+                let is_bool = matches!(cond_layout, Layout::Builtin(Builtin::Bool));
                 let cond_type = WasmLayout::new(cond_layout).value_type();
 
                 // then, we jump whenever the value under scrutiny is equal to the value of a branch
@@ -623,6 +624,21 @@ impl<'a> WasmBackend<'a> {
             }
 
             StoredValue::StackMemory { location, .. } => match lit {
+                Literal::Decimal(decimal) => {
+                    let (local_id, offset) =
+                        location.local_and_offset(self.storage.stack_frame_pointer);
+
+                    let lower_bits = decimal.0 as i64;
+                    let upper_bits = (decimal.0 >> 64) as i64;
+
+                    self.code_builder.get_local(local_id);
+                    self.code_builder.i64_const(lower_bits);
+                    self.code_builder.i64_store(Align::Bytes8, offset);
+
+                    self.code_builder.get_local(local_id);
+                    self.code_builder.i64_const(upper_bits);
+                    self.code_builder.i64_store(Align::Bytes8, offset + 8);
+                }
                 Literal::Str(string) => {
                     let (local_id, offset) =
                         location.local_and_offset(self.storage.stack_frame_pointer);

@@ -92,17 +92,16 @@ pub const REFCOUNT_ONE_ISIZE: isize = std.math.minInt(isize);
 pub const REFCOUNT_ONE: usize = @bitCast(usize, REFCOUNT_ONE_ISIZE);
 
 pub const IntWidth = enum(u8) {
-    U8,
-    U16,
-    U32,
-    U64,
-    U128,
-    I8,
-    I16,
-    I32,
-    I64,
-    I128,
-    Usize,
+    U8 = 0,
+    U16 = 1,
+    U32 = 2,
+    U64 = 3,
+    U128 = 4,
+    I8 = 5,
+    I16 = 6,
+    I32 = 7,
+    I64 = 8,
+    I128 = 9,
 };
 
 pub fn decrefC(

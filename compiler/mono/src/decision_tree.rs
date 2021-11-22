@@ -1,9 +1,9 @@
 use crate::exhaustive::{Ctor, RenderAs, TagId, Union};
 use crate::ir::{
-    BranchInfo, DestructType, Env, Expr, FloatPrecision, IntPrecision, JoinPointId, Literal, Param,
-    Pattern, Procs, Stmt,
+    BranchInfo, DestructType, Env, Expr, JoinPointId, Literal, Param, Pattern, Procs, Stmt,
 };
 use crate::layout::{Builtin, Layout, LayoutCache, TagIdIntType, UnionLayout};
+use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
@@ -86,8 +86,8 @@ enum Test<'a> {
         union: crate::exhaustive::Union,
         arguments: Vec<(Pattern<'a>, Layout<'a>)>,
     },
-    IsInt(i128, IntPrecision),
-    IsFloat(u64, FloatPrecision),
+    IsInt(i128, IntWidth),
+    IsFloat(u64, FloatWidth),
     IsDecimal(RocDec),
     IsStr(Box<str>),
     IsBit(bool),
@@ -1300,7 +1300,7 @@ fn test_to_equality<'a>(
             debug_assert!(test_int <= i64::MAX as i128);
             let lhs = Expr::Literal(Literal::Int(test_int as i128));
             let lhs_symbol = env.unique_symbol();
-            stores.push((lhs_symbol, precision.as_layout(), lhs));
+            stores.push((lhs_symbol, Layout::int_width(precision), lhs));
 
             (stores, lhs_symbol, rhs_symbol, None)
         }
@@ -1310,7 +1310,7 @@ fn test_to_equality<'a>(
             let test_float = f64::from_bits(test_int as u64);
             let lhs = Expr::Literal(Literal::Float(test_float));
             let lhs_symbol = env.unique_symbol();
-            stores.push((lhs_symbol, precision.as_layout(), lhs));
+            stores.push((lhs_symbol, Layout::float_width(precision), lhs));
 
             (stores, lhs_symbol, rhs_symbol, None)
         }
@@ -1330,7 +1330,7 @@ fn test_to_equality<'a>(
 
             let lhs = Expr::Literal(Literal::Byte(test_byte as u8));
             let lhs_symbol = env.unique_symbol();
-            stores.push((lhs_symbol, Layout::Builtin(Builtin::Int8), lhs));
+            stores.push((lhs_symbol, Layout::u8(), lhs));
 
             (stores, lhs_symbol, rhs_symbol, None)
         }
@@ -1338,7 +1338,7 @@ fn test_to_equality<'a>(
         Test::IsBit(test_bit) => {
             let lhs = Expr::Literal(Literal::Bool(test_bit));
             let lhs_symbol = env.unique_symbol();
-            stores.push((lhs_symbol, Layout::Builtin(Builtin::Int1), lhs));
+            stores.push((lhs_symbol, Layout::Builtin(Builtin::Bool), lhs));
 
             (stores, lhs_symbol, rhs_symbol, None)
         }
@@ -1459,7 +1459,7 @@ fn compile_test_help<'a>(
 
     cond = Stmt::Switch {
         cond_symbol: test_symbol,
-        cond_layout: Layout::Builtin(Builtin::Int1),
+        cond_layout: Layout::Builtin(Builtin::Bool),
         ret_layout,
         branches,
         default_branch,
@@ -1478,7 +1478,7 @@ fn compile_test_help<'a>(
     cond = Stmt::Let(
         test_symbol,
         test,
-        Layout::Builtin(Builtin::Int1),
+        Layout::Builtin(Builtin::Bool),
         arena.alloc(cond),
     );
 
@@ -1622,7 +1622,7 @@ fn decide_to_branching<'a>(
             let decide = crate::ir::cond(
                 env,
                 test_symbol,
-                Layout::Builtin(Builtin::Int1),
+                Layout::Builtin(Builtin::Bool),
                 pass_expr,
                 fail_expr,
                 ret_layout,
@@ -1631,7 +1631,7 @@ fn decide_to_branching<'a>(
             // calculate the guard value
             let param = Param {
                 symbol: test_symbol,
-                layout: Layout::Builtin(Builtin::Int1),
+                layout: Layout::Builtin(Builtin::Bool),
                 borrow: false,
             };
 

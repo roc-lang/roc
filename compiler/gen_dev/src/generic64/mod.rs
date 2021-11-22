@@ -1,5 +1,6 @@
 use crate::{Backend, Env, Relocation};
 use bumpalo::collections::Vec;
+use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::Symbol;
 use roc_mono::ir::{BranchInfo, JoinPointId, Literal, Param, SelfRecursive, Stmt};
@@ -502,12 +503,12 @@ impl<
 
         // move return value to dst.
         match ret_layout {
-            Layout::Builtin(Builtin::Int64 | Builtin::Int1) => {
+            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64) | Builtin::Bool) => {
                 let dst_reg = self.claim_general_reg(dst)?;
                 ASM::mov_reg64_reg64(&mut self.buf, dst_reg, CC::GENERAL_RETURN_REGS[0]);
                 Ok(())
             }
-            Layout::Builtin(Builtin::Float64) => {
+            Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
                 let dst_reg = self.claim_float_reg(dst)?;
                 ASM::mov_freg64_freg64(&mut self.buf, dst_reg, CC::FLOAT_RETURN_REGS[0]);
                 Ok(())
@@ -742,13 +743,13 @@ impl<
         layout: &Layout<'a>,
     ) -> Result<(), String> {
         match layout {
-            Layout::Builtin(Builtin::Int64) => {
+            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
                 let dst_reg = self.claim_general_reg(dst)?;
                 let src_reg = self.load_to_general_reg(src)?;
                 ASM::abs_reg64_reg64(&mut self.buf, dst_reg, src_reg);
                 Ok(())
             }
-            Layout::Builtin(Builtin::Float64) => {
+            Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
                 let dst_reg = self.claim_float_reg(dst)?;
                 let src_reg = self.load_to_float_reg(src)?;
                 ASM::abs_freg64_freg64(&mut self.buf, &mut self.relocs, dst_reg, src_reg);
@@ -766,14 +767,14 @@ impl<
         layout: &Layout<'a>,
     ) -> Result<(), String> {
         match layout {
-            Layout::Builtin(Builtin::Int64) => {
+            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
                 let dst_reg = self.claim_general_reg(dst)?;
                 let src1_reg = self.load_to_general_reg(src1)?;
                 let src2_reg = self.load_to_general_reg(src2)?;
                 ASM::add_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
                 Ok(())
             }
-            Layout::Builtin(Builtin::Float64) => {
+            Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
                 let dst_reg = self.claim_float_reg(dst)?;
                 let src1_reg = self.load_to_float_reg(src1)?;
                 let src2_reg = self.load_to_float_reg(src2)?;
@@ -792,7 +793,7 @@ impl<
         layout: &Layout<'a>,
     ) -> Result<(), String> {
         match layout {
-            Layout::Builtin(Builtin::Int64) => {
+            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
                 let dst_reg = self.claim_general_reg(dst)?;
                 let src1_reg = self.load_to_general_reg(src1)?;
                 let src2_reg = self.load_to_general_reg(src2)?;
@@ -810,7 +811,7 @@ impl<
         layout: &Layout<'a>,
     ) -> Result<(), String> {
         match layout {
-            Layout::Builtin(Builtin::Int64) => {
+            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
                 let dst_reg = self.claim_general_reg(dst)?;
                 let src_reg = self.load_to_general_reg(src)?;
                 ASM::neg_reg64_reg64(&mut self.buf, dst_reg, src_reg);
@@ -828,7 +829,7 @@ impl<
         layout: &Layout<'a>,
     ) -> Result<(), String> {
         match layout {
-            Layout::Builtin(Builtin::Int64) => {
+            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
                 let dst_reg = self.claim_general_reg(dst)?;
                 let src1_reg = self.load_to_general_reg(src1)?;
                 let src2_reg = self.load_to_general_reg(src2)?;
@@ -847,7 +848,7 @@ impl<
         arg_layout: &Layout<'a>,
     ) -> Result<(), String> {
         match arg_layout {
-            Layout::Builtin(Builtin::Int64) => {
+            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
                 let dst_reg = self.claim_general_reg(dst)?;
                 let src1_reg = self.load_to_general_reg(src1)?;
                 let src2_reg = self.load_to_general_reg(src2)?;
@@ -866,7 +867,7 @@ impl<
         arg_layout: &Layout<'a>,
     ) -> Result<(), String> {
         match arg_layout {
-            Layout::Builtin(Builtin::Int64) => {
+            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
                 let dst_reg = self.claim_general_reg(dst)?;
                 let src1_reg = self.load_to_general_reg(src1)?;
                 let src2_reg = self.load_to_general_reg(src2)?;
@@ -885,7 +886,7 @@ impl<
         arg_layout: &Layout<'a>,
     ) -> Result<(), String> {
         match arg_layout {
-            Layout::Builtin(Builtin::Int64) => {
+            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
                 let dst_reg = self.claim_general_reg(dst)?;
                 let src1_reg = self.load_to_general_reg(src1)?;
                 let src2_reg = self.load_to_general_reg(src2)?;
@@ -903,7 +904,7 @@ impl<
         arg_layout: &Layout<'a>,
     ) -> Result<(), String> {
         match arg_layout {
-            Layout::Builtin(Builtin::Int64) => {
+            Layout::Builtin(Builtin::Int(IntWidth::I64)) => {
                 let dst_reg = self.claim_general_reg(dst)?;
                 let src_reg = self.load_to_general_reg(src)?;
                 ASM::is_zero_reg64_reg64(&mut self.buf, dst_reg, src_reg);
@@ -1149,10 +1150,10 @@ impl<
                 ASM::mov_freg64_freg64(&mut self.buf, CC::FLOAT_RETURN_REGS[0], *reg);
             }
             Some(SymbolStorage::Base { offset, size, .. }) => match layout {
-                Layout::Builtin(Builtin::Int64) => {
+                Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
                     ASM::mov_reg64_base32(&mut self.buf, CC::GENERAL_RETURN_REGS[0], *offset);
                 }
-                Layout::Builtin(Builtin::Float64) => {
+                Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
                     ASM::mov_freg64_base32(&mut self.buf, CC::FLOAT_RETURN_REGS[0], *offset);
                 }
                 Layout::Builtin(Builtin::Str) => {
@@ -1505,12 +1506,12 @@ impl<
         layout: &Layout<'a>,
     ) -> Result<(), String> {
         match layout {
-            Layout::Builtin(Builtin::Int64) => {
+            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
                 let reg = self.load_to_general_reg(sym)?;
                 ASM::mov_base32_reg64(&mut self.buf, to_offset, reg);
                 Ok(())
             }
-            Layout::Builtin(Builtin::Float64) => {
+            Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
                 let reg = self.load_to_float_reg(sym)?;
                 ASM::mov_base32_freg64(&mut self.buf, to_offset, reg);
                 Ok(())
@@ -1590,19 +1591,24 @@ impl<
 #[macro_export]
 macro_rules! single_register_integers {
     () => {
-        Builtin::Int1
-            | Builtin::Int8
-            | Builtin::Int16
-            | Builtin::Int32
-            | Builtin::Int64
-            | Builtin::Usize
+        Builtin::Bool
+            | Builtin::Int(
+                IntWidth::I8
+                    | IntWidth::I16
+                    | IntWidth::I32
+                    | IntWidth::I64
+                    | IntWidth::U8
+                    | IntWidth::U16
+                    | IntWidth::U32
+                    | IntWidth::U64,
+            )
     };
 }
 
 #[macro_export]
 macro_rules! single_register_floats {
     () => {
-        Builtin::Float32 | Builtin::Float64
+        Builtin::Float(FloatWidth::F32 | FloatWidth::F64)
     };
 }
 

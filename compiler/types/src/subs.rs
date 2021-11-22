@@ -1057,12 +1057,14 @@ impl Subs {
         }
     }
 
+    #[inline(always)]
     pub fn fresh(&mut self, value: Descriptor) -> Variable {
         self.utable.new_key(value)
     }
 
+    #[inline(always)]
     pub fn fresh_unnamed_flex_var(&mut self) -> Variable {
-        self.fresh(unnamed_flex_var().into())
+        self.fresh(Descriptor::from(unnamed_flex_var()))
     }
 
     pub fn rigid_var(&mut self, var: Variable, name: Lowercase) {
@@ -1091,6 +1093,7 @@ impl Subs {
         &self.utable.probe_value_ref(key).value
     }
 
+    #[inline(always)]
     pub fn get_ref_mut(&mut self, key: Variable) -> &mut Descriptor {
         &mut self.utable.probe_value_ref_mut(key).value
     }
@@ -1109,6 +1112,7 @@ impl Subs {
         (desc.rank, desc.mark)
     }
 
+    #[inline(always)]
     pub fn get_without_compacting(&self, key: Variable) -> Descriptor {
         self.utable.probe_value_without_compacting(key)
     }
@@ -1125,6 +1129,7 @@ impl Subs {
         self.utable.get_root_key_without_compacting(key)
     }
 
+    #[inline(always)]
     pub fn set(&mut self, key: Variable, r_value: Descriptor) {
         let l_key = self.utable.get_root_key(key);
 
@@ -1261,7 +1266,7 @@ fn flex_var_descriptor() -> Descriptor {
 }
 
 #[inline(always)]
-fn unnamed_flex_var() -> Content {
+const fn unnamed_flex_var() -> Content {
     Content::FlexVar(None)
 }
 

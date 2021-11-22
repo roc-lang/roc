@@ -1,6 +1,16 @@
+use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_mono::layout::{Layout, UnionLayout};
 
 use crate::{wasm_module::ValueType, PTR_SIZE, PTR_TYPE};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StackMemoryFormat {
+    /// Record, Str, List, Dict, etc.
+    Aggregate,
+    Int128,
+    Float128,
+    Decimal,
+}
 
 // See README for background information on Wasm locals, memory and function calls
 #[derive(Debug, Clone)]
@@ -10,7 +20,11 @@ pub enum WasmLayout {
     Primitive(ValueType, u32),
 
     // Local pointer to stack memory
-    StackMemory { size: u32, alignment_bytes: u32 },
+    StackMemory {
+        size: u32,
+        alignment_bytes: u32,
+        format: StackMemoryFormat,
+    },
 
     // Local pointer to heap memory
     HeapMemory,
@@ -26,32 +40,51 @@ impl WasmLayout {
         let alignment_bytes = layout.alignment_bytes(PTR_SIZE);
 
         match layout {
-            Layout::Builtin(Int32 | Int16 | Int8 | Int1 | Usize) => Self::Primitive(I32, size),
+            Layout::Builtin(Int(int_width)) => {
+                use IntWidth::*;
 
-            Layout::Builtin(Int64) => Self::Primitive(I64, size),
+                match int_width {
+                    I32 | U32 | I16 | U16 | I8 | U8 => Self::Primitive(ValueType::I32, size),
+                    I64 | U64 => Self::Primitive(ValueType::I64, size),
+                    I128 | U128 => Self::StackMemory {
+                        size,
+                        alignment_bytes,
+                        format: StackMemoryFormat::Int128,
+                    },
+                }
+            }
 
-            Layout::Builtin(Float32) => Self::Primitive(F32, size),
+            Layout::Builtin(Bool) => Self::Primitive(I32, size),
 
-            Layout::Builtin(Float64) => Self::Primitive(F64, size),
+            Layout::Builtin(Float(float_width)) => {
+                use FloatWidth::*;
+
+                match float_width {
+                    F32 => Self::Primitive(ValueType::F32, size),
+                    F64 => Self::Primitive(ValueType::F64, size),
+                    F128 => Self::StackMemory {
+                        size,
+                        alignment_bytes,
+                        format: StackMemoryFormat::Float128,
+                    },
+                }
+            }
+
+            Layout::Builtin(Decimal) => Self::StackMemory {
+                size,
+                alignment_bytes,
+                format: StackMemoryFormat::Decimal,
+            },
 
             Layout::Builtin(
-                Int128
-                | Decimal
-                | Float128
-                | Str
-                | Dict(_, _)
-                | Set(_)
-                | List(_)
-                | EmptyStr
-                | EmptyList
-                | EmptyDict
-                | EmptySet,
+                Str | Dict(_, _) | Set(_) | List(_) | EmptyStr | EmptyList | EmptyDict | EmptySet,
             )
             | Layout::Struct(_)
             | Layout::LambdaSet(_)
             | Layout::Union(NonRecursive(_)) => Self::StackMemory {
                 size,
                 alignment_bytes,
+                format: StackMemoryFormat::Aggregate,
             },
 
             Layout::Union(
