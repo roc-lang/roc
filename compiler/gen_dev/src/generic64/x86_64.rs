@@ -1899,6 +1899,22 @@ mod tests {
         }
     }
 
+    // Checks an integer matches the capstone operand immediate.
+    fn assert_operand_imm_eq<T>(cs: &Capstone, expected: T, operand: &arch::ArchOperand) {
+        if let arch::ArchOperand::X86Operand(arch::x86::X86Operand {
+            op_type: arch::x86::X86OperandType::Imm(imm),
+            ..
+        }) = operand
+        {
+            assert_eq!(expected as i64, *imm);
+        } else {
+            panic!(
+                "Failed to match operand type with immediate instead got: {:?}",
+                operand
+            );
+        }
+    }
+
     fn test_reg64_reg64_helper(
         assemble: fn(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg),
         expected_mnemonic: &str,
@@ -1968,19 +1984,43 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_add_reg64_imm32() {
+    fn test_reg64_imm_helper<T>(
+        assemble: fn(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: T),
+        expected_mnemonic: &str,
+        regs_dst: &[X86_64GeneralReg],
+        immediates: &[T],
+    ) {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
-        for (dst, expected) in &[
-            (X86_64GeneralReg::RAX, [0x48, 0x81, 0xC0]),
-            (X86_64GeneralReg::R15, [0x49, 0x81, 0xC7]),
-        ] {
-            buf.clear();
-            add_reg64_imm32(&mut buf, *dst, TEST_I32);
-            assert_eq!(expected, &buf[..3]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
+        let cs = Capstone::new()
+            .x86()
+            .mode(arch::x86::ArchMode::Mode64)
+            .syntax(arch::x86::ArchSyntax::Intel)
+            .detail(true)
+            .build()
+            .expect("Failed to create Capstone object");
+        for dst in regs_dst {
+            for imm in immediates {
+                buf.clear();
+                assemble(&mut buf, *dst, *imm);
+
+                let instructions = cs.disasm_all(&buf, 0).unwrap();
+                assert_eq!(1, instructions.len());
+                let inst = &instructions[0];
+                assert_eq!(Some(expected_mnemonic), inst.mnemonic());
+
+                let detail = cs.insn_detail(inst).unwrap();
+                let operands = detail.arch_detail().operands();
+                assert_eq!(2, operands.len());
+                assert_operand_reg64_eq(&cs, *dst, &operands[0]);
+                assert_operand_imm_eq(&cs, *src, &operands[1]);
+            }
         }
+    }
+
+    #[test]
+    fn test_add_reg64_imm32() {
+        test_reg64_imm_helper(add_reg64_imm32, "add", ALL_GENERAL_REGS, &[TEST_I32]);
     }
 
     #[test]
