@@ -5,7 +5,7 @@
 use bumpalo::{collections::Vec, Bump};
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
-use roc_module::ident::TagName;
+use roc_module::ident::{ModuleName, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::ir::{
@@ -236,13 +236,24 @@ where
                                 arg_layouts,
                                 ret_layout,
                             )
-                        } else {
+                        } else if func_sym
+                            .module_string(&self.env().interns)
+                            .starts_with(ModuleName::APP)
+                        {
                             let fn_name = LayoutIds::default()
                                 .get(*func_sym, layout)
                                 .to_symbol_string(*func_sym, &self.env().interns);
                             // Now that the arguments are needed, load them if they are literals.
                             self.load_literal_symbols(arguments)?;
                             self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
+                        } else {
+                            self.build_run_low_level_dev(
+                                sym,
+                                *func_sym,
+                                arguments,
+                                arg_layouts,
+                                ret_layout,
+                            )
                         }
                     }
 
@@ -460,6 +471,37 @@ where
         }
     }
 
+    // build dev backend-only low-level
+    fn build_run_low_level_dev(
+        &mut self,
+        sym: &Symbol,
+        func_sym: Symbol,
+        args: &'a [Symbol],
+        arg_layouts: &[Layout<'a>],
+        ret_layout: &Layout<'a>,
+    ) -> Result<(), String> {
+        self.load_literal_symbols(args)?;
+        match func_sym {
+            Symbol::NUM_IS_ZERO => {
+                debug_assert_eq!(
+                    1,
+                    args.len(),
+                    "NumIsZero: expected to have exactly one argument"
+                );
+                debug_assert_eq!(
+                    Layout::Builtin(Builtin::Int1),
+                    *ret_layout,
+                    "NumIsZero: expected to have return layout of type I1"
+                );
+                self.build_num_is_zero(sym, &args[0], &arg_layouts[0])
+            }
+            _ => Err(format!(
+                "the function, {:?}, is not yet implemented",
+                func_sym
+            )),
+        }
+    }
+
     /// build_fn_call creates a call site for a function.
     /// This includes dealing with things like saving regs and propagating the returned value.
     fn build_fn_call(
@@ -538,6 +580,14 @@ where
         dst: &Symbol,
         src1: &Symbol,
         src2: &Symbol,
+        arg_layout: &Layout<'a>,
+    ) -> Result<(), String>;
+
+    /// build_num_is_zero stores the result of `src == 0` into dst.
+    fn build_num_is_zero(
+        &mut self,
+        dst: &Symbol,
+        src: &Symbol,
         arg_layout: &Layout<'a>,
     ) -> Result<(), String>;
 
