@@ -975,7 +975,6 @@ pub fn listRange(width: utils.IntWidth, low: Opaque, high: Opaque) callconv(.C) 
         .I32 => helper1(i32, low, high),
         .I64 => helper1(i64, low, high),
         .I128 => helper1(i128, low, high),
-        .Usize => helper1(usize, low, high),
     };
 }
 

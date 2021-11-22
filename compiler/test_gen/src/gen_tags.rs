@@ -16,11 +16,10 @@ use roc_std::{RocList, RocStr};
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn width_and_alignment_u8_u8() {
-    use roc_mono::layout::Builtin;
     use roc_mono::layout::Layout;
     use roc_mono::layout::UnionLayout;
 
-    let t = &[Layout::Builtin(Builtin::Int8)] as &[_];
+    let t = &[Layout::u8()] as &[_];
     let tt = [t, t];
 
     let layout = Layout::Union(UnionLayout::NonRecursive(&tt));

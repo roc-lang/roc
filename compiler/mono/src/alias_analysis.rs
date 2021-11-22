@@ -590,7 +590,7 @@ impl<'a> ResultRepr<'a> {
                 err: tags[ERR_TAG_ID as usize][0],
                 ok: tags[OK_TAG_ID as usize][0],
             },
-            Layout::Builtin(Builtin::Int1) => ResultRepr::Int1,
+            Layout::Builtin(Builtin::Bool) => ResultRepr::Int1,
             other => unreachable!("unexpected layout: {:?}", other),
         }
     }
@@ -1086,7 +1086,7 @@ fn call_spec(
                         Ok(new_state)
                     };
 
-                    let state_layout = Layout::Builtin(Builtin::Int1);
+                    let state_layout = Layout::Builtin(Builtin::Bool);
                     let state_type = layout_spec(builder, &state_layout)?;
 
                     let init_state = new_num(builder, block)?;
@@ -1105,7 +1105,7 @@ fn call_spec(
                         Ok(new_state)
                     };
 
-                    let state_layout = Layout::Builtin(Builtin::Int1);
+                    let state_layout = Layout::Builtin(Builtin::Bool);
                     let state_type = layout_spec(builder, &state_layout)?;
 
                     let init_state = new_num(builder, block)?;
@@ -1116,7 +1116,7 @@ fn call_spec(
                     let list = env.symbols[xs];
 
                     // ListFindUnsafe returns { value: v, found: Bool=Int1 }
-                    let output_layouts = vec![arg_layouts[0], Layout::Builtin(Builtin::Int1)];
+                    let output_layouts = vec![arg_layouts[0], Layout::Builtin(Builtin::Bool)];
                     let output_layout = Layout::Struct(&output_layouts);
                     let output_type = layout_spec(builder, &output_layout)?;
 
@@ -1718,8 +1718,8 @@ fn builtin_spec(
     use Builtin::*;
 
     match builtin {
-        Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Usize => builder.add_tuple_type(&[]),
-        Decimal | Float128 | Float64 | Float32 => builder.add_tuple_type(&[]),
+        Int(_) | Bool => builder.add_tuple_type(&[]),
+        Decimal | Float(_) => builder.add_tuple_type(&[]),
         Str | EmptyStr => str_type(builder),
         Dict(key_layout, value_layout) => {
             let value_type = layout_spec_help(builder, value_layout, when_recursive)?;
