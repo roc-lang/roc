@@ -21,7 +21,8 @@ Earthly may temporarily use a lot of disk space, up to 90 GB. This disk space is
 
 - Before making your first pull request, definitely talk to an existing contributor on [Roc Zulip](https://roc.zulipchat.com) first about what you plan to do! This can not only avoid duplicated effort, it can also avoid making a whole PR only to discover it won't be accepted because the change doesn't fit with the goals of the language's design or implementation.
 - It's a good idea to open a work-in-progress pull request as you begin working on something. This way, others can see that you're working on it, which avoids duplicate effort, and others can give feedback sooner rather than later if they notice a problem in the direction things are going. Be sure to include "WIP" in the title of the PR as long as it's not ready for review!
-- Make sure to create a branch on the roc repository for your changes. We do not allow CI to be run on forks for security.
+- Make sure to create a branch on the roc repository for your changes. Our CI can not be run on forks.
+- Create an issue if the purpose of a struct/field/type/function/... is not immediately clear from its name or nearby comments.
 
 ## Can we do better?
 
