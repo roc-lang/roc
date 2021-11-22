@@ -295,6 +295,8 @@ fn spawn_rebuild_thread(
 ) -> std::thread::JoinHandle<u128> {
     let thread_local_target = target.clone();
     std::thread::spawn(move || {
+        print!("🔨 Rebuilding host... ");
+
         let rebuild_host_start = SystemTime::now();
         if !precompiled {
             if surgically_link {
@@ -322,6 +324,9 @@ fn spawn_rebuild_thread(
             std::fs::copy(prehost, binary_path.as_path()).unwrap();
         }
         let rebuild_host_end = rebuild_host_start.elapsed().unwrap();
+
+        println!("Done!");
+
         rebuild_host_end.as_millis()
     })
 }

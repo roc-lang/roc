@@ -66,7 +66,7 @@ mod test_reporting {
             problems: can_problems,
             ..
         } = can_expr(arena, expr_src)?;
-        let mut subs = Subs::new(var_store);
+        let mut subs = Subs::new_from_varstore(var_store);
 
         for (var, name) in output.introduced_variables.name_by_var {
             subs.rigid_var(var, name);
@@ -298,17 +298,24 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                List.foobar 1 2
+                List.isempty 1 2
             "#
             ),
             indoc!(
                 r#"
                 ── NOT EXPOSED ─────────────────────────────────────────────────────────────────
 
-                The List module does not expose a foobar value:
+                The List module does not expose `isempty`:
 
-                1│  List.foobar 1 2
-                    ^^^^^^^^^^^
+                1│  List.isempty 1 2
+                    ^^^^^^^^^^^^
+
+                Did you mean one of these?
+
+                    List.isEmpty
+                    List.set
+                    List.get
+                    List.keepIf
                 "#
             ),
         )
@@ -547,7 +554,35 @@ mod test_reporting {
                     baz
                     Nat
                     Str
-                    U8
+                    Err
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn lowercase_primitive_tag_bool() {
+        report_problem_as(
+            indoc!(
+                r#"
+                if true then 1 else 2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
+                
+                I cannot find a `true` value
+                
+                1│  if true then 1 else 2
+                       ^^^^
+                
+                Did you mean one of these?
+                
+                    True
+                    Str
+                    Num
+                    Err
                 "#
             ),
         )
@@ -1950,10 +1985,10 @@ mod test_reporting {
 
                 Did you mean one of these?
 
+                    Ok
                     U8
                     f
                     I8
-                    F64
                "#
             ),
         )
@@ -5552,6 +5587,82 @@ mod test_reporting {
     }
 
     #[test]
+    // https://github.com/rtfeldman/roc/issues/1714
+    fn interpolate_concat_is_transparent_1714() {
+        report_problem_as(
+            indoc!(
+                r#"
+                greeting = "Privet"
+
+                if True then 1 else "\(greeting), World!"
+                "#,
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                This `if` has an `else` branch with a different type from its `then` branch:
+
+                3│  if True then 1 else "\(greeting), World!"
+                                        ^^^^^^^^^^^^^^^^^^^^^
+
+                The `else` branch is a string of type:
+
+                    Str
+
+                but the `then` branch has the type:
+
+                    Num a
+
+                I need all branches in an `if` to have the same type!
+                "#
+            ),
+        )
+    }
+
+    macro_rules! comparison_binop_transparency_tests {
+        ($($op:expr, $name:ident),* $(,)?) => {
+            $(
+            #[test]
+            fn $name() {
+                report_problem_as(
+                    &format!(r#"if True then "abc" else 1 {} 2"#, $op),
+                    &format!(
+r#"── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+This `if` has an `else` branch with a different type from its `then` branch:
+
+1│  if True then "abc" else 1 {} 2
+                            ^^{}^^
+
+This comparison produces:
+
+    Bool
+
+but the `then` branch has the type:
+
+    Str
+
+I need all branches in an `if` to have the same type!
+"#,
+                        $op, "^".repeat($op.len())
+                    ),
+                )
+            }
+            )*
+        }
+    }
+
+    comparison_binop_transparency_tests! {
+        "<", lt_binop_is_transparent,
+        ">", gt_binop_is_transparent,
+        "==", eq_binop_is_transparent,
+        "!=", neq_binop_is_transparent,
+        "<=", leq_binop_is_transparent,
+        ">=", geq_binop_is_transparent,
+    }
+
+    #[test]
     fn keyword_record_field_access() {
         report_problem_as(
             indoc!(
@@ -5596,10 +5707,17 @@ mod test_reporting {
                 r#"
                 ── NOT EXPOSED ─────────────────────────────────────────────────────────────────
 
-                The Num module does not expose a if value:
+                The Num module does not expose `if`:
 
                 1│  Num.if
                     ^^^^^^
+
+                Did you mean one of these?
+
+                    Num.sin
+                    Num.div
+                    Num.abs
+                    Num.neg
             "#
             ),
         )
@@ -5802,8 +5920,8 @@ mod test_reporting {
 
                     Nat
                     Str
+                    Err
                     U8
-                    F64
                 "#
             ),
         )

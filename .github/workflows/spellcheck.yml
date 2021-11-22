@@ -8,7 +8,7 @@ env:
 jobs:
   spell-check:
     name: spell check
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, linux]
     timeout-minutes: 10
     env:
       FORCE_COLOR: 1

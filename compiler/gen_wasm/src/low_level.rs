@@ -28,17 +28,38 @@ pub fn decode_low_level<'a>(
 
     match lowlevel {
         StrConcat => return BuiltinCall(bitcode::STR_CONCAT),
+        StrJoinWith => return NotImplemented, // needs Array
+        StrIsEmpty => {
+            code_builder.i64_const(i64::MIN);
+            code_builder.i64_eq();
+        }
+        StrStartsWith => return BuiltinCall(bitcode::STR_STARTS_WITH),
+        StrStartsWithCodePt => return BuiltinCall(bitcode::STR_STARTS_WITH_CODE_PT),
+        StrEndsWith => return BuiltinCall(bitcode::STR_ENDS_WITH),
+        StrSplit => return NotImplemented,          // needs Array
+        StrCountGraphemes => return NotImplemented, // test needs Array
+        StrFromInt => return NotImplemented,        // choose builtin based on storage size
+        StrFromUtf8 => return NotImplemented,       // needs Array
+        StrTrimLeft => return BuiltinCall(bitcode::STR_TRIM_LEFT),
+        StrTrimRight => return BuiltinCall(bitcode::STR_TRIM_RIGHT),
+        StrFromUtf8Range => return NotImplemented, // needs Array
+        StrToUtf8 => return NotImplemented,        // needs Array
+        StrRepeat => return BuiltinCall(bitcode::STR_REPEAT),
+        StrFromFloat => {
+            // linker errors for __ashlti3, __fixunsdfti, __multi3, __udivti3, __umodti3
+            // https://gcc.gnu.org/onlinedocs/gccint/Integer-library-routines.html
+            // https://gcc.gnu.org/onlinedocs/gccint/Soft-float-library-routines.html
+            return NotImplemented;
+        }
+        StrTrim => return BuiltinCall(bitcode::STR_TRIM),
 
-        StrJoinWith | StrIsEmpty | StrStartsWith | StrStartsWithCodePt | StrEndsWith | StrSplit
-        | StrCountGraphemes | StrFromInt | StrFromUtf8 | StrTrimLeft | StrTrimRight
-        | StrFromUtf8Range | StrToUtf8 | StrRepeat | StrFromFloat | StrTrim | ListLen
-        | ListGetUnsafe | ListSet | ListSingle | ListRepeat | ListReverse | ListConcat
+        ListLen | ListGetUnsafe | ListSet | ListSingle | ListRepeat | ListReverse | ListConcat
         | ListContains | ListAppend | ListPrepend | ListJoin | ListRange | ListMap | ListMap2
         | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk | ListWalkUntil
         | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith | ListSublist
-        | ListDropAt | ListSwap | ListAny | ListFindUnsafe | DictSize | DictEmpty | DictInsert
-        | DictRemove | DictContains | DictGetUnsafe | DictKeys | DictValues | DictUnion
-        | DictIntersection | DictDifference | DictWalk | SetFromList => {
+        | ListDropAt | ListSwap | ListAny | ListAll | ListFindUnsafe | DictSize | DictEmpty
+        | DictInsert | DictRemove | DictContains | DictGetUnsafe | DictKeys | DictValues
+        | DictUnion | DictIntersection | DictDifference | DictWalk | SetFromList => {
             return NotImplemented;
         }
 

@@ -536,6 +536,7 @@ impl<'a> Context<'a> {
                     | ListKeepOks { xs }
                     | ListKeepErrs { xs }
                     | ListAny { xs }
+                    | ListAll { xs }
                     | ListFindUnsafe { xs } => {
                         let borrows = [function_ps[0].borrow, FUNCTION, CLOSURE_DATA];
 
