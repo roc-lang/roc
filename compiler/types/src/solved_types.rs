@@ -254,16 +254,17 @@ impl SolvedType {
             Alias(symbol, args, actual_var) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
-                for (name_index, var_index) in args.named_type_arguments() {
+                for var_index in args.named_type_arguments() {
                     let arg_var = subs[var_index];
 
-                    new_args.push((
-                        subs[name_index].clone(),
-                        Self::from_var_help(subs, recursion_vars, arg_var),
-                    ));
+                    let node = Self::from_var_help(subs, recursion_vars, arg_var);
+
+                    // NOTE we fake the lowercase here: the user will never get to see it anyway
+                    new_args.push((Lowercase::default(), node));
                 }
 
                 let mut solved_lambda_sets = Vec::with_capacity(0);
+
                 for var_index in args.unnamed_type_arguments() {
                     let var = subs[var_index];
 

@@ -789,10 +789,10 @@ fn type_to_variable<'a>(
 
             let mut arg_vars = Vec::with_capacity_in(args.len(), arena);
 
-            for (arg, arg_type) in args {
+            for (_, arg_type) in args {
                 let arg_var = type_to_variable(subs, rank, pools, arena, arg_type);
 
-                arg_vars.push((arg.clone(), arg_var));
+                arg_vars.push(arg_var);
             }
 
             let lambda_set_variables_it = lambda_set_variables
@@ -817,10 +817,10 @@ fn type_to_variable<'a>(
         } => {
             let mut arg_vars = Vec::with_capacity_in(args.len(), arena);
 
-            for (arg, arg_type) in args {
+            for (_, arg_type) in args {
                 let arg_var = type_to_variable(subs, rank, pools, arena, arg_type);
 
-                arg_vars.push((arg.clone(), arg_var));
+                arg_vars.push(arg_var);
             }
 
             let lambda_set_variables_it = lambda_set_variables
