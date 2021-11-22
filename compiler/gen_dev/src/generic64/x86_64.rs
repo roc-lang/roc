@@ -1900,13 +1900,16 @@ mod tests {
     }
 
     // Checks an integer matches the capstone operand immediate.
-    fn assert_operand_imm_eq<T>(cs: &Capstone, expected: T, operand: &arch::ArchOperand) {
+    fn assert_operand_imm_eq<T>(expected: T, operand: &arch::ArchOperand)
+    where
+        i64: From<T>,
+    {
         if let arch::ArchOperand::X86Operand(arch::x86::X86Operand {
             op_type: arch::x86::X86OperandType::Imm(imm),
             ..
         }) = operand
         {
-            assert_eq!(expected as i64, *imm);
+            assert_eq!(i64::from(expected), *imm);
         } else {
             panic!(
                 "Failed to match operand type with immediate instead got: {:?}",
@@ -1984,12 +1987,15 @@ mod tests {
         }
     }
 
-    fn test_reg64_imm_helper<T>(
+    // TODO: look into nicer way to make this generic. I essentially want to support any int type.
+    fn test_reg64_imm_helper<T: Copy>(
         assemble: fn(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: T),
         expected_mnemonic: &str,
         regs_dst: &[X86_64GeneralReg],
         immediates: &[T],
-    ) {
+    ) where
+        i64: From<T>,
+    {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
         let cs = Capstone::new()
@@ -2013,7 +2019,7 @@ mod tests {
                 let operands = detail.arch_detail().operands();
                 assert_eq!(2, operands.len());
                 assert_operand_reg64_eq(&cs, *dst, &operands[0]);
-                assert_operand_imm_eq(&cs, *src, &operands[1]);
+                assert_operand_imm_eq(*imm, &operands[1]);
             }
         }
     }
@@ -2060,17 +2066,7 @@ mod tests {
 
     #[test]
     fn test_cmp_reg64_imm32() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for (dst, expected) in &[
-            (X86_64GeneralReg::RAX, [0x48, 0x81, 0xF8]),
-            (X86_64GeneralReg::R15, [0x49, 0x81, 0xFF]),
-        ] {
-            buf.clear();
-            cmp_reg64_imm32(&mut buf, *dst, TEST_I32);
-            assert_eq!(expected, &buf[..3]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
-        }
+        test_reg64_imm_helper(cmp_reg64_imm32, "cmp", ALL_GENERAL_REGS, &[TEST_I32]);
     }
 
     #[test]
@@ -2098,41 +2094,13 @@ mod tests {
 
     #[test]
     fn test_mov_reg64_imm32() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for (dst, expected) in &[
-            (X86_64GeneralReg::RAX, [0x48, 0xC7, 0xC0]),
-            (X86_64GeneralReg::R15, [0x49, 0xC7, 0xC7]),
-        ] {
-            buf.clear();
-            mov_reg64_imm32(&mut buf, *dst, TEST_I32);
-            assert_eq!(expected, &buf[..3]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
-        }
+        test_reg64_imm_helper(mov_reg64_imm32, "mov", ALL_GENERAL_REGS, &[TEST_I32]);
     }
 
     #[test]
     fn test_mov_reg64_imm64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for (dst, expected) in &[
-            (X86_64GeneralReg::RAX, [0x48, 0xB8]),
-            (X86_64GeneralReg::R15, [0x49, 0xBF]),
-        ] {
-            buf.clear();
-            mov_reg64_imm64(&mut buf, *dst, TEST_I64);
-            assert_eq!(expected, &buf[..2]);
-            assert_eq!(TEST_I64.to_le_bytes(), &buf[2..]);
-        }
-        for (dst, expected) in &[
-            (X86_64GeneralReg::RAX, [0x48, 0xC7, 0xC0]),
-            (X86_64GeneralReg::R15, [0x49, 0xC7, 0xC7]),
-        ] {
-            buf.clear();
-            mov_reg64_imm64(&mut buf, *dst, TEST_I32 as i64);
-            assert_eq!(expected, &buf[..3]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
-        }
+        test_reg64_imm_helper(mov_reg64_imm64, "movabs", ALL_GENERAL_REGS, &[TEST_I64]);
+        test_reg64_imm_helper(mov_reg64_imm64, "mov", ALL_GENERAL_REGS, &[TEST_I32 as i64]);
     }
 
     #[test]
@@ -2527,17 +2495,7 @@ mod tests {
 
     #[test]
     fn test_sub_reg64_imm32() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for (dst, expected) in &[
-            (X86_64GeneralReg::RAX, [0x48, 0x81, 0xE8]),
-            (X86_64GeneralReg::R15, [0x49, 0x81, 0xEF]),
-        ] {
-            buf.clear();
-            sub_reg64_imm32(&mut buf, *dst, TEST_I32);
-            assert_eq!(expected, &buf[..3]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
-        }
+        test_reg64_imm_helper(sub_reg64_imm32, "sub", ALL_GENERAL_REGS, &[TEST_I32]);
     }
 
     #[test]
