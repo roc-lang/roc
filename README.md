@@ -19,8 +19,6 @@ Many programs can however be compiled correctly. Check out [examples](examples) 
 
 ### Examples
 
-Took a look at the [examples folder](examples), [examples/benchmarks](examples/benchmarks) contains some larger examples.
-
 Run examples as follows:
 1. Navigate to `/examples`
 2. Run with:
@@ -28,7 +26,9 @@ Run examples as follows:
 cargo run hello-world/Hello.roc
 ```
 Some examples like `examples/benchmarks/NQueens.roc` require input after running.
-For NQueens, input 10 in the terminal and press enter.  
+For NQueens, input 10 in the terminal and press enter.
+
+[examples/benchmarks](examples/benchmarks) contains larger examples.
 
 ## Applications and Platforms
 
