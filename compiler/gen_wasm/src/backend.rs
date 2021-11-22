@@ -805,7 +805,7 @@ impl<'a> WasmBackend<'a> {
 
                 for arg in arguments {
                     match self.storage.get(arg) {
-                        stored @ StoredValue::StackMemory { size, format, .. } => {
+                        StoredValue::StackMemory { size, format, .. } => {
                             use StackMemoryFormat::*;
 
                             match format {
@@ -816,7 +816,11 @@ impl<'a> WasmBackend<'a> {
                                     if *size > 4 && *size <= 8 {
                                         param_types.push(ValueType::I64)
                                     } else {
-                                        param_types.push(stored.value_type())
+                                        // either
+                                        //
+                                        // - this is a small value, that fits in an i32
+                                        // - this is a big value, we pass a memory address
+                                        param_types.push(ValueType::I32)
                                     }
                                 }
                                 Int128 | Float128 | Decimal => {
