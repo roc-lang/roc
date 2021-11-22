@@ -686,6 +686,10 @@ fn type_to_variable<'a>(
             register(subs, rank, pools, content)
         }
         Record(fields, ext) => {
+            // An empty fields is inefficient (but would be correct)
+            // If hit, try to turn the value into an EmptyRecord in canonicalization
+            debug_assert!(!fields.is_empty() || !ext.is_empty_record());
+
             let mut field_vars = Vec::with_capacity_in(fields.len(), arena);
 
             for (field, field_type) in fields {
@@ -714,6 +718,10 @@ fn type_to_variable<'a>(
             register(subs, rank, pools, content)
         }
         TagUnion(tags, ext) => {
+            // An empty tags is inefficient (but would be correct)
+            // If hit, try to turn the value into an EmptyTagUnion in canonicalization
+            debug_assert!(!tags.is_empty() || !ext.is_empty_tag_union());
+
             let (union_tags, ext) = type_to_union_tags(subs, rank, pools, arena, tags, ext);
             let content = Content::Structure(FlatType::TagUnion(union_tags, ext));
 
@@ -742,6 +750,10 @@ fn type_to_variable<'a>(
             register(subs, rank, pools, content)
         }
         RecursiveTagUnion(rec_var, tags, ext) => {
+            // An empty tags is inefficient (but would be correct)
+            // If hit, try to turn the value into an EmptyTagUnion in canonicalization
+            debug_assert!(!tags.is_empty() || !ext.is_empty_tag_union());
+
             let (union_tags, ext) = type_to_union_tags(subs, rank, pools, arena, tags, ext);
             let content =
                 Content::Structure(FlatType::RecursiveTagUnion(*rec_var, union_tags, ext));

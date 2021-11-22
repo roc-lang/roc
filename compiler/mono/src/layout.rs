@@ -1578,9 +1578,7 @@ fn layout_from_flat_type<'a>(
 
             Ok(Layout::Union(union_layout))
         }
-        EmptyTagUnion => {
-            panic!("TODO make Layout for empty Tag Union");
-        }
+        EmptyTagUnion => Ok(Layout::Union(UnionLayout::NonRecursive(&[]))),
         Erroneous(_) => Err(LayoutProblem::Erroneous),
         EmptyRecord => Ok(Layout::Struct(&[])),
     }

@@ -436,6 +436,14 @@ impl Type {
         matches!(self, Type::RecursiveTagUnion(_, _, _))
     }
 
+    pub fn is_empty_tag_union(&self) -> bool {
+        matches!(self, Type::EmptyTagUnion)
+    }
+
+    pub fn is_empty_record(&self) -> bool {
+        matches!(self, Type::EmptyRec)
+    }
+
     pub fn variables(&self) -> ImSet<Variable> {
         let mut result = ImSet::default();
         variables_help(self, &mut result);
