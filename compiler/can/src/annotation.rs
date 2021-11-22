@@ -387,17 +387,6 @@ fn can_annotation_help(
         },
 
         Record { fields, ext, .. } => {
-            let field_types = can_assigned_fields(
-                env,
-                &fields.items,
-                region,
-                scope,
-                var_store,
-                introduced_variables,
-                local_aliases,
-                references,
-            );
-
             let ext_type = match ext {
                 Some(loc_ann) => can_annotation_help(
                     env,
@@ -412,20 +401,33 @@ fn can_annotation_help(
                 None => Type::EmptyRec,
             };
 
-            Type::Record(field_types, Box::new(ext_type))
+            if fields.is_empty() {
+                match ext {
+                    Some(_) => {
+                        // just `a` does not mean the same as `{}a`, so even
+                        // if there are no fields, still make this a `Record`,
+                        // not an EmptyRec
+                        Type::Record(Default::default(), Box::new(ext_type))
+                    }
+
+                    None => Type::EmptyRec,
+                }
+            } else {
+                let field_types = can_assigned_fields(
+                    env,
+                    &fields.items,
+                    region,
+                    scope,
+                    var_store,
+                    introduced_variables,
+                    local_aliases,
+                    references,
+                );
+
+                Type::Record(field_types, Box::new(ext_type))
+            }
         }
         TagUnion { tags, ext, .. } => {
-            let tag_types = can_tags(
-                env,
-                tags.items,
-                region,
-                scope,
-                var_store,
-                introduced_variables,
-                local_aliases,
-                references,
-            );
-
             let ext_type = match ext {
                 Some(loc_ann) => can_annotation_help(
                     env,
@@ -440,7 +442,31 @@ fn can_annotation_help(
                 None => Type::EmptyTagUnion,
             };
 
-            Type::TagUnion(tag_types, Box::new(ext_type))
+            if tags.is_empty() {
+                match ext {
+                    Some(_) => {
+                        // just `a` does not mean the same as `{}a`, so even
+                        // if there are no fields, still make this a `Record`,
+                        // not an EmptyRec
+                        Type::TagUnion(Default::default(), Box::new(ext_type))
+                    }
+
+                    None => Type::EmptyTagUnion,
+                }
+            } else {
+                let tag_types = can_tags(
+                    env,
+                    tags.items,
+                    region,
+                    scope,
+                    var_store,
+                    introduced_variables,
+                    local_aliases,
+                    references,
+                );
+
+                Type::TagUnion(tag_types, Box::new(ext_type))
+            }
         }
         SpaceBefore(nested, _) | SpaceAfter(nested, _) => can_annotation_help(
             env,
@@ -460,7 +486,10 @@ fn can_annotation_help(
             Type::Variable(var)
         }
         Inferred => {
-            unimplemented!();
+            // Inference variables aren't bound to a rigid or a wildcard, so all we have to do is
+            // make a fresh unconstrained variable, and let the type solver fill it in for us 🤠
+            let var = var_store.fresh();
+            Type::Variable(var)
         }
         Malformed(string) => {
             malformed(env, region, string);

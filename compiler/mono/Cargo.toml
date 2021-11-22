@@ -15,6 +15,7 @@ roc_unify = { path = "../unify" }
 roc_solve = { path = "../solve" }
 roc_std = { path = "../../roc_std" }
 roc_problem = { path = "../problem" }
+roc_builtins = { path = "../builtins" }
 ven_pretty = { path = "../../vendor/pretty" }
 morphic_lib = { path = "../../vendor/morphic_lib" }
 bumpalo = { version = "3.8.0", features = ["collections"] }

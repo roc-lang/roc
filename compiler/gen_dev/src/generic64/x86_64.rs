@@ -3,6 +3,7 @@ use crate::{
     single_register_builtins, single_register_floats, single_register_integers, Relocation,
 };
 use bumpalo::collections::Vec;
+use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};

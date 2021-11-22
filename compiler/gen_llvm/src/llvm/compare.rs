@@ -10,6 +10,7 @@ use inkwell::values::{
 };
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 use roc_builtins::bitcode;
+use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 
@@ -88,19 +89,39 @@ fn build_eq_builtin<'a, 'ctx, 'env>(
     };
 
     match builtin {
-        Builtin::Int128 => int_cmp(IntPredicate::EQ, "eq_i128"),
-        Builtin::Int64 => int_cmp(IntPredicate::EQ, "eq_i64"),
-        Builtin::Int32 => int_cmp(IntPredicate::EQ, "eq_i32"),
-        Builtin::Int16 => int_cmp(IntPredicate::EQ, "eq_i16"),
-        Builtin::Int8 => int_cmp(IntPredicate::EQ, "eq_i8"),
-        Builtin::Int1 => int_cmp(IntPredicate::EQ, "eq_i1"),
+        Builtin::Int(int_width) => {
+            use IntWidth::*;
 
-        Builtin::Usize => int_cmp(IntPredicate::EQ, "eq_usize"),
+            let name = match int_width {
+                I128 => "eq_i128",
+                I64 => "eq_i64",
+                I32 => "eq_i32",
+                I16 => "eq_i16",
+                I8 => "eq_i8",
+                U128 => "eq_u128",
+                U64 => "eq_u64",
+                U32 => "eq_u32",
+                U16 => "eq_u16",
+                U8 => "eq_u8",
+            };
 
+            int_cmp(IntPredicate::EQ, name)
+        }
+
+        Builtin::Float(float_width) => {
+            use FloatWidth::*;
+
+            let name = match float_width {
+                F128 => "eq_f128",
+                F64 => "eq_f64",
+                F32 => "eq_f32",
+            };
+
+            float_cmp(FloatPredicate::OEQ, name)
+        }
+
+        Builtin::Bool => int_cmp(IntPredicate::EQ, "eq_i1"),
         Builtin::Decimal => call_bitcode_fn(env, &[lhs_val, rhs_val], bitcode::DEC_EQ),
-        Builtin::Float128 => float_cmp(FloatPredicate::OEQ, "eq_f128"),
-        Builtin::Float64 => float_cmp(FloatPredicate::OEQ, "eq_f64"),
-        Builtin::Float32 => float_cmp(FloatPredicate::OEQ, "eq_f32"),
 
         Builtin::Str => str_equal(env, lhs_val, rhs_val),
         Builtin::List(elem) => build_list_eq(
@@ -231,19 +252,39 @@ fn build_neq_builtin<'a, 'ctx, 'env>(
     };
 
     match builtin {
-        Builtin::Int128 => int_cmp(IntPredicate::NE, "neq_i128"),
-        Builtin::Int64 => int_cmp(IntPredicate::NE, "neq_i64"),
-        Builtin::Int32 => int_cmp(IntPredicate::NE, "neq_i32"),
-        Builtin::Int16 => int_cmp(IntPredicate::NE, "neq_i16"),
-        Builtin::Int8 => int_cmp(IntPredicate::NE, "neq_i8"),
-        Builtin::Int1 => int_cmp(IntPredicate::NE, "neq_i1"),
+        Builtin::Int(int_width) => {
+            use IntWidth::*;
 
-        Builtin::Usize => int_cmp(IntPredicate::NE, "neq_usize"),
+            let name = match int_width {
+                I128 => "neq_i128",
+                I64 => "neq_i64",
+                I32 => "neq_i32",
+                I16 => "neq_i16",
+                I8 => "neq_i8",
+                U128 => "neq_u128",
+                U64 => "neq_u64",
+                U32 => "neq_u32",
+                U16 => "neq_u16",
+                U8 => "neq_u8",
+            };
 
+            int_cmp(IntPredicate::NE, name)
+        }
+
+        Builtin::Float(float_width) => {
+            use FloatWidth::*;
+
+            let name = match float_width {
+                F128 => "neq_f128",
+                F64 => "neq_f64",
+                F32 => "neq_f32",
+            };
+
+            float_cmp(FloatPredicate::ONE, name)
+        }
+
+        Builtin::Bool => int_cmp(IntPredicate::NE, "neq_i1"),
         Builtin::Decimal => call_bitcode_fn(env, &[lhs_val, rhs_val], bitcode::DEC_NEQ),
-        Builtin::Float128 => float_cmp(FloatPredicate::ONE, "neq_f128"),
-        Builtin::Float64 => float_cmp(FloatPredicate::ONE, "neq_f64"),
-        Builtin::Float32 => float_cmp(FloatPredicate::ONE, "neq_f32"),
 
         Builtin::Str => {
             let is_equal = str_equal(env, lhs_val, rhs_val).into_int_value();

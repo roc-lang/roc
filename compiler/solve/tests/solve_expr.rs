@@ -4604,4 +4604,117 @@ mod solve_expr {
             "RBTree {}",
         );
     }
+
+    #[test]
+    fn inference_var_inside_arrow() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                id : _ -> _
+                id = \x -> x
+                id
+                "#
+            ),
+            "a -> a",
+        )
+    }
+
+    #[test]
+    fn inference_var_inside_ctor() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                canIGo : _ -> Result _ _
+                canIGo = \color ->
+                    when color is
+                        "green" -> Ok "go!"
+                        "yellow" -> Err (SlowIt "whoa, let's slow down!")
+                        "red" -> Err (StopIt "absolutely not")
+                        _ -> Err (UnknownColor "this is a weird stoplight")
+                canIGo
+                "#
+            ),
+            "Str -> Result Str [ SlowIt Str, StopIt Str, UnknownColor Str ]*",
+        )
+    }
+
+    #[test]
+    fn inference_var_inside_ctor_linked() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                swapRcd: {x: _, y: _} -> {x: _, y: _}
+                swapRcd = \{x, y} -> {x: y, y: x}
+                swapRcd
+                "#
+            ),
+            "{ x : a, y : b } -> { x : b, y : a }",
+        )
+    }
+
+    #[test]
+    fn inference_var_link_with_rigid() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                swapRcd: {x: tx, y: ty} -> {x: _, y: _}
+                swapRcd = \{x, y} -> {x: y, y: x}
+                swapRcd
+                "#
+            ),
+            "{ x : tx, y : ty } -> { x : ty, y : tx }",
+        )
+    }
+
+    #[test]
+    fn inference_var_inside_tag_ctor() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                badComics: Bool -> [ CowTools _, Thagomizer _ ]
+                badComics = \c ->
+                    when c is
+                        True -> CowTools "The Far Side"
+                        False ->  Thagomizer "The Far Side"
+                badComics
+                "#
+            ),
+            "Bool -> [ CowTools Str, Thagomizer Str ]",
+        )
+    }
+
+    #[test]
+    fn inference_var_tag_union_ext() {
+        // TODO: we should really be inferring [ Blue, Orange ]a -> [ Lavender, Peach ]a here.
+        // See https://github.com/rtfeldman/roc/issues/2053
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                pastelize: _ -> [ Lavender, Peach ]_
+                pastelize = \color ->
+                    when color is
+                        Blue -> Lavender
+                        Orange -> Peach
+                        col -> col
+                pastelize
+                "#
+            ),
+            "[ Blue, Lavender, Orange, Peach ]a -> [ Blue, Lavender, Orange, Peach ]a",
+        )
+    }
+
+    #[test]
+    fn inference_var_rcd_union_ext() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                setRocEmail : _ -> { name: Str, email: Str }_
+                setRocEmail = \person ->
+                    { person & email: "\(person.name)@roclang.com" }
+                setRocEmail
+                "#
+            ),
+            "{ email : Str, name : Str }a -> { email : Str, name : Str }a",
+        )
+    }
 }

@@ -5,7 +5,7 @@ use crate::llvm::build::{
     FAST_CALL_CONV, TAG_DATA_INDEX, TAG_ID_INDEX,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
-use crate::llvm::convert::{basic_type_from_layout, basic_type_from_layout_1, ptr_int};
+use crate::llvm::convert::{basic_type_from_layout, basic_type_from_layout_1};
 use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
 use inkwell::context::Context;
@@ -46,7 +46,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
     /// alignment works out that way.
     pub unsafe fn from_ptr<'a, 'env>(env: &Env<'a, 'ctx, 'env>, ptr: PointerValue<'ctx>) -> Self {
         // must make sure it's a pointer to usize
-        let refcount_type = ptr_int(env.context, env.ptr_bytes);
+        let refcount_type = env.ptr_int();
 
         let value = env
             .builder
@@ -66,7 +66,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
     ) -> Self {
         let builder = env.builder;
         // pointer to usize
-        let refcount_type = ptr_int(env.context, env.ptr_bytes);
+        let refcount_type = env.ptr_int();
         let refcount_ptr_type = refcount_type.ptr_type(AddressSpace::Generic);
 
         let ptr_as_usize_ptr = builder
@@ -127,7 +127,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
     fn increment<'a, 'env>(&self, amount: IntValue<'ctx>, env: &Env<'a, 'ctx, 'env>) {
         let refcount = self.get_refcount(env);
         let builder = env.builder;
-        let refcount_type = ptr_int(env.context, env.ptr_bytes);
+        let refcount_type = env.ptr_int();
 
         let is_static_allocation = builder.build_int_compare(
             IntPredicate::EQ,
@@ -857,7 +857,7 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
     let is_big_and_non_empty = builder.build_int_compare(
         IntPredicate::SGT,
         len,
-        ptr_int(ctx, env.ptr_bytes).const_zero(),
+        env.ptr_int().const_zero(),
         "is_big_str",
     );
 
@@ -979,7 +979,7 @@ fn modify_refcount_dict_help<'a, 'ctx, 'env>(
     let is_non_empty = builder.build_int_compare(
         IntPredicate::SGT,
         len,
-        ptr_int(ctx, env.ptr_bytes).const_zero(),
+        env.ptr_int().const_zero(),
         "is_non_empty",
     );
 
@@ -1027,7 +1027,7 @@ fn build_header<'a, 'ctx, 'env>(
             env,
             fn_name,
             env.context.void_type().into(),
-            &[arg_type, ptr_int(env.context, env.ptr_bytes).into()],
+            &[arg_type, env.ptr_int().into()],
         ),
         Mode::Dec => build_header_help(env, fn_name, env.context.void_type().into(), &[arg_type]),
     }

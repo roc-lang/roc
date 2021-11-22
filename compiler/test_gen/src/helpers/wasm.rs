@@ -63,6 +63,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     }
 
     let exposed_types = MutMap::default();
+    let ptr_bytes = 4;
     let loaded = roc_load::file::load_and_monomorphize_from_str(
         arena,
         filename,
@@ -70,7 +71,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
         stdlib,
         src_dir,
         exposed_types,
-        8,
+        ptr_bytes,
         builtin_defs_map,
     );
 
