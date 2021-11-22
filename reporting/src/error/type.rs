@@ -930,7 +930,7 @@ fn type_comparison<'b>(
     instead_of: RocDocBuilder<'b>,
     context_hints: Option<RocDocBuilder<'b>>,
 ) -> RocDocBuilder<'b> {
-    let comparison = to_comparison(alloc, actual.clone(), expected.clone());
+    let comparison = to_comparison(alloc, actual, expected);
 
     let mut lines = vec![
         i_am_seeing,
