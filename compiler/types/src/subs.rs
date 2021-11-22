@@ -2536,7 +2536,7 @@ fn content_to_err_type(
 
                 let arg = var_to_err_type(subs, state, var);
 
-                err_args.push((name, arg));
+                err_args.push(arg);
             }
 
             ErrorType::Alias(symbol, err_args, Box::new(err_type))
