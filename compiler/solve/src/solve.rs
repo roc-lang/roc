@@ -100,15 +100,17 @@ impl Pools {
     }
 
     pub fn get_mut(&mut self, rank: Rank) -> &mut Vec<Variable> {
-        self.0
-            .get_mut(rank.into_usize())
-            .unwrap_or_else(|| panic!("Compiler bug: could not find pool at rank {}", rank))
+        match self.0.get_mut(rank.into_usize()) {
+            Some(reference) => reference,
+            None => panic!("Compiler bug: could not find pool at rank {}", rank),
+        }
     }
 
     pub fn get(&self, rank: Rank) -> &Vec<Variable> {
-        self.0
-            .get(rank.into_usize())
-            .unwrap_or_else(|| panic!("Compiler bug: could not find pool at rank {}", rank))
+        match self.0.get(rank.into_usize()) {
+            Some(reference) => reference,
+            None => panic!("Compiler bug: could not find pool at rank {}", rank),
+        }
     }
 
     pub fn iter(&self) -> std::slice::Iter<'_, Vec<Variable>> {
@@ -628,18 +630,6 @@ fn type_to_var(
     type_to_variable(subs, rank, pools, &arena, typ)
 }
 
-/// Abusing existing functions for our purposes
-/// this is to put a solved type back into subs
-pub fn insert_type_into_subs(subs: &mut Subs, typ: &Type) -> Variable {
-    let rank = Rank::NONE;
-    let mut pools = Pools::default();
-
-    // capacity based on the false hello world program
-    let arena = bumpalo::Bump::with_capacity(4 * 1024);
-
-    type_to_variable(subs, rank, &mut pools, &arena, typ)
-}
-
 fn type_to_variable<'a>(
     subs: &mut Subs,
     rank: Rank,
@@ -652,14 +642,13 @@ fn type_to_variable<'a>(
     match typ {
         Variable(var) => *var,
         Apply(symbol, args) => {
-            let mut new_arg_vars = Vec::with_capacity_in(args.len(), arena);
+            let arg_vars = VariableSubsSlice::reserve_into_subs(subs, args.len());
 
-            for arg in args {
+            for (i, arg) in (arg_vars.slice.start as usize..).zip(args) {
                 let var = type_to_variable(subs, rank, pools, arena, arg);
-                new_arg_vars.push(var);
+                subs.variables[i] = var;
             }
 
-            let arg_vars = VariableSubsSlice::insert_into_subs(subs, new_arg_vars);
             let flat_type = FlatType::Apply(*symbol, arg_vars);
             let content = Content::Structure(flat_type);
 
@@ -669,15 +658,13 @@ fn type_to_variable<'a>(
         EmptyTagUnion => Variable::EMPTY_TAG_UNION,
 
         // This case is important for the rank of boolean variables
-        Function(arg_vars, closure_type, ret_type) => {
-            let mut new_arg_vars = Vec::with_capacity_in(arg_vars.len(), arena);
+        Function(args, closure_type, ret_type) => {
+            let arg_vars = VariableSubsSlice::reserve_into_subs(subs, args.len());
 
-            for arg in arg_vars {
+            for (i, arg) in (arg_vars.slice.start as usize..).zip(args) {
                 let var = type_to_variable(subs, rank, pools, arena, arg);
-                new_arg_vars.push(var);
+                subs.variables[i] = var;
             }
-
-            let arg_vars = VariableSubsSlice::insert_into_subs(subs, new_arg_vars);
 
             let ret_var = type_to_variable(subs, rank, pools, arena, ret_type);
             let closure_var = type_to_variable(subs, rank, pools, arena, closure_type);
@@ -872,14 +859,13 @@ fn type_to_union_tags<'a>(
 
     let mut tag_vars = Vec::with_capacity_in(tags.len(), arena);
 
-    let mut tag_argument_vars = Vec::with_capacity_in(tags.len(), arena);
     for (tag, tag_argument_types) in tags {
-        for arg_type in tag_argument_types {
-            let new_var = type_to_variable(subs, rank, pools, arena, arg_type);
-            tag_argument_vars.push(new_var);
-        }
+        let new_slice = VariableSubsSlice::reserve_into_subs(subs, tag_argument_types.len());
 
-        let new_slice = VariableSubsSlice::insert_into_subs(subs, tag_argument_vars.drain(..));
+        for (i, arg) in (new_slice.slice.start as usize..).zip(tag_argument_types) {
+            let var = type_to_variable(subs, rank, pools, arena, arg);
+            subs.variables[i] = var;
+        }
 
         tag_vars.push((tag.clone(), new_slice));
     }
@@ -1642,12 +1628,14 @@ fn deep_copy_var_help(
 }
 
 fn register(subs: &mut Subs, rank: Rank, pools: &mut Pools, content: Content) -> Variable {
-    let var = subs.fresh(Descriptor {
+    let descriptor = Descriptor {
         content,
         rank,
         mark: Mark::NONE,
         copy: OptVariable::NONE,
-    });
+    };
+
+    let var = subs.fresh(descriptor);
 
     pools.get_mut(rank).push(var);
 
