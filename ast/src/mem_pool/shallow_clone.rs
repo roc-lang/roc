@@ -1,12 +1,17 @@
 use roc_can::expected::Expected;
 use roc_can::expected::PExpected;
+use roc_types::subs::Variable;
 
 /// Clones the outer node, but does not clone any nodeids
 pub trait ShallowClone {
     fn shallow_clone(&self) -> Self;
 }
 
-impl<T: ShallowClone> ShallowClone for Expected<T> {
+impl<T, Annot> ShallowClone for Expected<T, Annot>
+where
+    T: ShallowClone,
+    Annot: Clone,
+{
     fn shallow_clone(&self) -> Self {
         use Expected::*;
 
@@ -14,7 +19,7 @@ impl<T: ShallowClone> ShallowClone for Expected<T> {
             NoExpectation(t) => NoExpectation(t.shallow_clone()),
             ForReason(reason, t, region) => ForReason(reason.clone(), t.shallow_clone(), *region),
             FromAnnotation(loc_pat, n, source, t) => {
-                FromAnnotation(loc_pat.clone(), *n, *source, t.shallow_clone())
+                FromAnnotation(loc_pat.clone(), *n, source.clone(), t.shallow_clone())
             }
         }
     }

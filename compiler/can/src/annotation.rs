@@ -386,7 +386,18 @@ fn can_annotation_help(
             }
         },
 
-        Record { fields, ext, .. } => {
+        Record { fields, ext } => {
+            let field_types = can_assigned_fields(
+                env,
+                &fields.items,
+                region,
+                scope,
+                var_store,
+                introduced_variables,
+                local_aliases,
+                references,
+            );
+
             let ext_type = match ext {
                 Some(loc_ann) => can_annotation_help(
                     env,
