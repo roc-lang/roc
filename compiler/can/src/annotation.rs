@@ -410,7 +410,7 @@ fn can_annotation_help(
                         Type::Record(Default::default(), Box::new(ext_type))
                     }
 
-                    None => ext_type,
+                    None => Type::EmptyRec,
                 }
             } else {
                 let field_types = can_assigned_fields(
@@ -451,7 +451,7 @@ fn can_annotation_help(
                         Type::TagUnion(Default::default(), Box::new(ext_type))
                     }
 
-                    None => ext_type,
+                    None => Type::EmptyTagUnion,
                 }
             } else {
                 let tag_types = can_tags(
