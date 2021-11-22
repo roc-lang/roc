@@ -38,6 +38,32 @@ impl RegTrait for X86_64GeneralReg {
         *self as u8
     }
 }
+impl std::fmt::Display for X86_64GeneralReg {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                X86_64GeneralReg::RAX => "rax",
+                X86_64GeneralReg::RBX => "rbx",
+                X86_64GeneralReg::RCX => "rcx",
+                X86_64GeneralReg::RDX => "rdx",
+                X86_64GeneralReg::RBP => "rbp",
+                X86_64GeneralReg::RSP => "rsp",
+                X86_64GeneralReg::RDI => "rdi",
+                X86_64GeneralReg::RSI => "rsi",
+                X86_64GeneralReg::R8 => "r8",
+                X86_64GeneralReg::R9 => "r9",
+                X86_64GeneralReg::R10 => "r10",
+                X86_64GeneralReg::R11 => "r11",
+                X86_64GeneralReg::R12 => "r12",
+                X86_64GeneralReg::R13 => "r13",
+                X86_64GeneralReg::R14 => "r14",
+                X86_64GeneralReg::R15 => "r15",
+            }
+        )
+    }
+}
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub enum X86_64FloatReg {
@@ -61,6 +87,32 @@ pub enum X86_64FloatReg {
 impl RegTrait for X86_64FloatReg {
     fn value(&self) -> u8 {
         *self as u8
+    }
+}
+impl std::fmt::Display for X86_64FloatReg {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                X86_64FloatReg::XMM0 => "xmm0",
+                X86_64FloatReg::XMM1 => "xmm1",
+                X86_64FloatReg::XMM2 => "xmm2",
+                X86_64FloatReg::XMM3 => "xmm3",
+                X86_64FloatReg::XMM4 => "xmm4",
+                X86_64FloatReg::XMM5 => "xmm5",
+                X86_64FloatReg::XMM6 => "xmm6",
+                X86_64FloatReg::XMM7 => "xmm7",
+                X86_64FloatReg::XMM8 => "xmm8",
+                X86_64FloatReg::XMM9 => "xmm9",
+                X86_64FloatReg::XMM10 => "xmm10",
+                X86_64FloatReg::XMM11 => "xmm11",
+                X86_64FloatReg::XMM12 => "xmm12",
+                X86_64FloatReg::XMM13 => "xmm13",
+                X86_64FloatReg::XMM14 => "xmm14",
+                X86_64FloatReg::XMM15 => "xmm15",
+            }
+        )
     }
 }
 
@@ -885,10 +937,7 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         src1: X86_64GeneralReg,
         imm32: i32,
     ) {
-        if dst != src1 {
-            mov_reg64_reg64(buf, dst, src1);
-        }
-
+        mov_reg64_reg64(buf, dst, src1);
         add_reg64_imm32(buf, dst, imm32);
     }
     #[inline(always)]
@@ -940,10 +989,7 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
     ) {
-        if dst != src1 {
-            mov_reg64_reg64(buf, dst, src1);
-        }
-
+        mov_reg64_reg64(buf, dst, src1);
         imul_reg64_reg64(buf, dst, src2);
     }
 
@@ -1111,10 +1157,7 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         src1: X86_64GeneralReg,
         imm32: i32,
     ) {
-        if dst != src1 {
-            mov_reg64_reg64(buf, dst, src1);
-        }
-
+        mov_reg64_reg64(buf, dst, src1);
         sub_reg64_imm32(buf, dst, imm32);
     }
     #[inline(always)]
@@ -1124,10 +1167,7 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
     ) {
-        if dst != src1 {
-            mov_reg64_reg64(buf, dst, src1);
-        }
-
+        mov_reg64_reg64(buf, dst, src1);
         sub_reg64_reg64(buf, dst, src2);
     }
 
@@ -1431,11 +1471,19 @@ fn mov_reg64_imm64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i64) {
 }
 
 /// `MOV r/m64,r64` -> Move r64 to r/m64.
+/// This will not generate anything if dst and src are the same.
 #[inline(always)]
 fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
     if dst != src {
-        binop_reg64_reg64(0x89, buf, dst, src);
+        raw_mov_reg64_reg64(buf, dst, src);
     }
+}
+
+/// `MOV r/m64,r64` -> Move r64 to r/m64.
+/// This will always generate the move. It is used for verification.
+#[inline(always)]
+fn raw_mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
+    binop_reg64_reg64(0x89, buf, dst, src);
 }
 
 // The following base and stack based operations could be optimized based on how many bytes the offset actually is.
@@ -1504,11 +1552,18 @@ fn movzx_reg64_base8_offset32(
 }
 
 /// `MOVSD xmm1,xmm2` -> Move scalar double-precision floating-point value from xmm2 to xmm1 register.
+/// This will not generate anything if dst and src are the same.
 #[inline(always)]
 fn movsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
-    if dst == src {
-        return;
+    if dst != src {
+        raw_movsd_freg64_freg64(buf, dst, src);
     }
+}
+
+/// `MOVSD xmm1,xmm2` -> Move scalar double-precision floating-point value from xmm2 to xmm1 register.
+/// This will always generate the move. It is used for verification.
+#[inline(always)]
+fn raw_movsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
     let dst_high = dst as u8 > 7;
     let dst_mod = dst as u8 % 8;
     let src_high = src as u8 > 7;
@@ -1781,9 +1836,137 @@ fn xor_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64Gene
 #[cfg(test)]
 mod tests {
     use super::*;
+    use capstone::prelude::*;
 
     const TEST_I32: i32 = 0x12345678;
     const TEST_I64: i64 = 0x1234_5678_9ABC_DEF0;
+
+    const ALL_GENERAL_REGS: &'static [X86_64GeneralReg] = &[
+        X86_64GeneralReg::RAX,
+        X86_64GeneralReg::RBX,
+        X86_64GeneralReg::RCX,
+        X86_64GeneralReg::RDX,
+        X86_64GeneralReg::RBP,
+        X86_64GeneralReg::RSP,
+        X86_64GeneralReg::RDI,
+        X86_64GeneralReg::RSI,
+        X86_64GeneralReg::R8,
+        X86_64GeneralReg::R9,
+        X86_64GeneralReg::R10,
+        X86_64GeneralReg::R11,
+        X86_64GeneralReg::R12,
+        X86_64GeneralReg::R13,
+        X86_64GeneralReg::R14,
+        X86_64GeneralReg::R15,
+    ];
+    const ALL_FLOAT_REGS: &'static [X86_64FloatReg] = &[
+        X86_64FloatReg::XMM0,
+        X86_64FloatReg::XMM1,
+        X86_64FloatReg::XMM2,
+        X86_64FloatReg::XMM3,
+        X86_64FloatReg::XMM4,
+        X86_64FloatReg::XMM5,
+        X86_64FloatReg::XMM6,
+        X86_64FloatReg::XMM7,
+        X86_64FloatReg::XMM8,
+        X86_64FloatReg::XMM9,
+        X86_64FloatReg::XMM10,
+        X86_64FloatReg::XMM11,
+        X86_64FloatReg::XMM12,
+        X86_64FloatReg::XMM13,
+        X86_64FloatReg::XMM14,
+        X86_64FloatReg::XMM15,
+    ];
+
+    // Checks a register matches the capstone operand register.
+    // This works for both general and float regs.
+    fn assert_operand_reg64_eq<Reg: std::string::ToString>(
+        cs: &Capstone,
+        expected: Reg,
+        operand: &arch::ArchOperand,
+    ) {
+        if let arch::ArchOperand::X86Operand(arch::x86::X86Operand {
+            op_type: arch::x86::X86OperandType::Reg(reg_id),
+            ..
+        }) = operand
+        {
+            assert_eq!(Some(expected.to_string()), cs.reg_name(*reg_id));
+        } else {
+            panic!(
+                "Failed to match operand type with register instead got: {:?}",
+                operand
+            );
+        }
+    }
+
+    fn test_reg64_reg64_helper(
+        assemble: fn(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg),
+        expected_mnemonic: &str,
+        regs_dst: &[X86_64GeneralReg],
+        regs_src: &[X86_64GeneralReg],
+    ) {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        let cs = Capstone::new()
+            .x86()
+            .mode(arch::x86::ArchMode::Mode64)
+            .syntax(arch::x86::ArchSyntax::Intel)
+            .detail(true)
+            .build()
+            .expect("Failed to create Capstone object");
+        for dst in regs_dst {
+            for src in regs_src {
+                buf.clear();
+                assemble(&mut buf, *dst, *src);
+
+                let instructions = cs.disasm_all(&buf, 0).unwrap();
+                assert_eq!(1, instructions.len());
+                let inst = &instructions[0];
+                assert_eq!(Some(expected_mnemonic), inst.mnemonic());
+
+                let detail = cs.insn_detail(inst).unwrap();
+                let operands = detail.arch_detail().operands();
+                assert_eq!(2, operands.len());
+                assert_operand_reg64_eq(&cs, *dst, &operands[0]);
+                assert_operand_reg64_eq(&cs, *src, &operands[1]);
+            }
+        }
+    }
+
+    // TODO: look into merging this into the above function. They are the same except for types.
+    fn test_freg64_freg64_helper(
+        assemble: fn(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg),
+        expected_mnemonic: &str,
+        regs_dst: &[X86_64FloatReg],
+        regs_src: &[X86_64FloatReg],
+    ) {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        let cs = Capstone::new()
+            .x86()
+            .mode(arch::x86::ArchMode::Mode64)
+            .syntax(arch::x86::ArchSyntax::Intel)
+            .detail(true)
+            .build()
+            .expect("Failed to create Capstone object");
+        for dst in regs_dst {
+            for src in regs_src {
+                buf.clear();
+                assemble(&mut buf, *dst, *src);
+
+                let instructions = cs.disasm_all(&buf, 0).unwrap();
+                assert_eq!(1, instructions.len());
+                let inst = &instructions[0];
+                assert_eq!(Some(expected_mnemonic), inst.mnemonic());
+
+                let detail = cs.insn_detail(inst).unwrap();
+                let operands = detail.arch_detail().operands();
+                assert_eq!(2, operands.len());
+                assert_operand_reg64_eq(&cs, *dst, &operands[0]);
+                assert_operand_reg64_eq(&cs, *src, &operands[1]);
+            }
+        }
+    }
 
     #[test]
     fn test_add_reg64_imm32() {
@@ -1802,171 +1985,37 @@ mod tests {
 
     #[test]
     fn test_add_reg64_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, src), expected) in &[
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::RAX),
-                [0x48, 0x01, 0xC0],
-            ),
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::R15),
-                [0x4C, 0x01, 0xF8],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::RAX),
-                [0x49, 0x01, 0xC7],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::R15),
-                [0x4D, 0x01, 0xFF],
-            ),
-        ] {
-            buf.clear();
-            add_reg64_reg64(&mut buf, *dst, *src);
-            assert_eq!(expected, &buf[..]);
-        }
+        test_reg64_reg64_helper(add_reg64_reg64, "add", ALL_GENERAL_REGS, ALL_GENERAL_REGS);
     }
 
     #[test]
     fn test_sub_reg64_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, src), expected) in &[
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::RAX),
-                [0x48, 0x29, 0xC0],
-            ),
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::R15),
-                [0x4C, 0x29, 0xF8],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::RAX),
-                [0x49, 0x29, 0xC7],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::R15),
-                [0x4D, 0x29, 0xFF],
-            ),
-        ] {
-            buf.clear();
-            sub_reg64_reg64(&mut buf, *dst, *src);
-            assert_eq!(expected, &buf[..]);
-        }
+        test_reg64_reg64_helper(sub_reg64_reg64, "sub", ALL_GENERAL_REGS, ALL_GENERAL_REGS);
     }
 
     #[test]
     fn test_addsd_freg64_freg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, src), expected) in &[
-            (
-                (X86_64FloatReg::XMM0, X86_64FloatReg::XMM0),
-                vec![0xF2, 0x0F, 0x58, 0xC0],
-            ),
-            (
-                (X86_64FloatReg::XMM0, X86_64FloatReg::XMM15),
-                vec![0xF2, 0x41, 0x0F, 0x58, 0xC7],
-            ),
-            (
-                (X86_64FloatReg::XMM15, X86_64FloatReg::XMM0),
-                vec![0xF2, 0x44, 0x0F, 0x58, 0xF8],
-            ),
-            (
-                (X86_64FloatReg::XMM15, X86_64FloatReg::XMM15),
-                vec![0xF2, 0x45, 0x0F, 0x58, 0xFF],
-            ),
-        ] {
-            buf.clear();
-            addsd_freg64_freg64(&mut buf, *dst, *src);
-            assert_eq!(&expected[..], &buf[..]);
-        }
+        test_freg64_freg64_helper(addsd_freg64_freg64, "addsd", ALL_FLOAT_REGS, ALL_FLOAT_REGS);
     }
 
     #[test]
     fn test_andpd_freg64_freg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-
-        for ((dst, src), expected) in &[
-            (
-                (X86_64FloatReg::XMM0, X86_64FloatReg::XMM0),
-                vec![0x66, 0x0F, 0x54, 0xC0],
-            ),
-            (
-                (X86_64FloatReg::XMM0, X86_64FloatReg::XMM15),
-                vec![0x66, 0x41, 0x0F, 0x54, 0xC7],
-            ),
-            (
-                (X86_64FloatReg::XMM15, X86_64FloatReg::XMM0),
-                vec![0x66, 0x44, 0x0F, 0x54, 0xF8],
-            ),
-            (
-                (X86_64FloatReg::XMM15, X86_64FloatReg::XMM15),
-                vec![0x66, 0x45, 0x0F, 0x54, 0xFF],
-            ),
-        ] {
-            buf.clear();
-            andpd_freg64_freg64(&mut buf, *dst, *src);
-            assert_eq!(&expected[..], &buf[..]);
-        }
+        test_freg64_freg64_helper(andpd_freg64_freg64, "andpd", ALL_FLOAT_REGS, ALL_FLOAT_REGS);
     }
 
     #[test]
     fn test_xor_reg64_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, src), expected) in &[
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::RAX),
-                [0x48, 0x31, 0xC0],
-            ),
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::R15),
-                [0x4C, 0x31, 0xF8],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::RAX),
-                [0x49, 0x31, 0xC7],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::R15),
-                [0x4D, 0x31, 0xFF],
-            ),
-        ] {
-            buf.clear();
-            xor_reg64_reg64(&mut buf, *dst, *src);
-            assert_eq!(expected, &buf[..]);
-        }
+        test_reg64_reg64_helper(xor_reg64_reg64, "xor", ALL_GENERAL_REGS, ALL_GENERAL_REGS);
     }
 
     #[test]
     fn test_cmovl_reg64_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, src), expected) in &[
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::RAX),
-                [0x48, 0x0F, 0x4C, 0xC0],
-            ),
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::R15),
-                [0x49, 0x0F, 0x4C, 0xC7],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::RAX),
-                [0x4C, 0x0F, 0x4C, 0xF8],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::R15),
-                [0x4D, 0x0F, 0x4C, 0xFF],
-            ),
-        ] {
-            buf.clear();
-            cmovl_reg64_reg64(&mut buf, *dst, *src);
-            assert_eq!(expected, &buf[..]);
-        }
+        test_reg64_reg64_helper(
+            cmovl_reg64_reg64,
+            "cmovl",
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+        );
     }
 
     #[test]
@@ -1986,30 +2035,7 @@ mod tests {
 
     #[test]
     fn test_imul_reg64_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, src), expected) in &[
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::RAX),
-                [0x48, 0x0F, 0xAF, 0xC0],
-            ),
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::R15),
-                [0x49, 0x0F, 0xAF, 0xC7],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::RAX),
-                [0x4C, 0x0F, 0xAF, 0xF8],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::R15),
-                [0x4D, 0x0F, 0xAF, 0xFF],
-            ),
-        ] {
-            buf.clear();
-            imul_reg64_reg64(&mut buf, *dst, *src);
-            assert_eq!(expected, &buf[..]);
-        }
+        test_reg64_reg64_helper(imul_reg64_reg64, "imul", ALL_GENERAL_REGS, ALL_GENERAL_REGS);
     }
 
     #[test]
@@ -2071,31 +2097,12 @@ mod tests {
 
     #[test]
     fn test_mov_reg64_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, src), expected) in &[
-            ((X86_64GeneralReg::RAX, X86_64GeneralReg::RAX), vec![]),
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::RCX),
-                vec![0x48, 0x89, 0xC8],
-            ),
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::R15),
-                vec![0x4C, 0x89, 0xF8],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::RAX),
-                vec![0x49, 0x89, 0xC7],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::R14),
-                vec![0x4D, 0x89, 0xF7],
-            ),
-        ] {
-            buf.clear();
-            mov_reg64_reg64(&mut buf, *dst, *src);
-            assert_eq!(&expected[..], &buf[..]);
-        }
+        test_reg64_reg64_helper(
+            raw_mov_reg64_reg64,
+            "mov",
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+        );
     }
 
     #[test]
@@ -2273,24 +2280,12 @@ mod tests {
 
     #[test]
     fn test_movsd_freg64_freg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, src), expected) in &[
-            ((X86_64FloatReg::XMM0, X86_64FloatReg::XMM0), vec![]),
-            (
-                (X86_64FloatReg::XMM0, X86_64FloatReg::XMM15),
-                vec![0xF2, 0x41, 0x0F, 0x10, 0xC7],
-            ),
-            (
-                (X86_64FloatReg::XMM15, X86_64FloatReg::XMM0),
-                vec![0xF2, 0x44, 0x0F, 0x10, 0xF8],
-            ),
-            ((X86_64FloatReg::XMM15, X86_64FloatReg::XMM15), vec![]),
-        ] {
-            buf.clear();
-            movsd_freg64_freg64(&mut buf, *dst, *src);
-            assert_eq!(&expected[..], &buf[..]);
-        }
+        test_freg64_freg64_helper(
+            raw_movsd_freg64_freg64,
+            "movsd",
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS,
+        );
     }
 
     #[test]
