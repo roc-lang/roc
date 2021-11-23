@@ -545,9 +545,9 @@ impl MoveWideImmediate {
         // currently this is done in the assembler above
         // assert!(shift % 16 == 0 && shift <= 48);
         debug_assert!(hw <= 0b11);
+        debug_assert!(opc <= 0b11);
 
         Self {
-            // we want this to truncate, not sure if this does that
             reg_d: rd.id().into(),
             imm16,
             hw: hw.into(),
@@ -583,6 +583,8 @@ impl ArithmeticImmediate {
         imm12: u16,
         sh: bool,
     ) -> Self {
+        debug_assert!(imm12 <= 0xFFF);
+
         Self {
             reg_d: rd.id().into(),
             reg_n: rn.id().into(),
@@ -642,6 +644,8 @@ impl ArithmeticShifted {
         rn: AArch64GeneralReg,
         rd: AArch64GeneralReg,
     ) -> Self {
+        debug_assert!(imm6 <= 0b111111);
+
         Self {
             reg_d: rd.id().into(),
             reg_n: rn.id().into(),
@@ -698,6 +702,8 @@ impl LogicalShiftedRegister {
         rn: AArch64GeneralReg,
         rd: AArch64GeneralReg,
     ) -> Self {
+        debug_assert!(imm6 <= 0b111111);
+
         let (op, n) = match op {
             LogicalOp::AND => (0b00, false),
             LogicalOp::BIC => (0b00, true),
@@ -744,6 +750,8 @@ impl Aarch64Bytes for UnconditionalBranchRegister {}
 impl UnconditionalBranchRegister {
     #[inline(always)]
     fn new(op: u8, rn: AArch64GeneralReg) -> Self {
+        debug_assert!(op <= 0b11);
+
         Self {
             fixed5: 0b00000.into(),
             rn: rn.id().into(),
