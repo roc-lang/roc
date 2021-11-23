@@ -585,14 +585,6 @@ where
         arg_layout: &Layout<'a>,
     ) -> Result<(), String>;
 
-    /// build_num_is_zero stores the result of `src == 0` into dst.
-    fn build_num_is_zero(
-        &mut self,
-        dst: &Symbol,
-        src: &Symbol,
-        arg_layout: &Layout<'a>,
-    ) -> Result<(), String>;
-
     /// literal_map gets the map from symbol to literal, used for lazy loading and literal folding.
     fn literal_map(&mut self) -> &mut MutMap<Symbol, Literal<'a>>;
 

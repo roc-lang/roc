@@ -187,8 +187,6 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait> {
         src2: GeneralReg,
     );
 
-    fn is_zero_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg);
-
     fn ret(buf: &mut Vec<'_, u8>);
 }
 
@@ -894,23 +892,6 @@ impl<
                 Ok(())
             }
             x => Err(format!("NumLt: layout, {:?}, not implemented yet", x)),
-        }
-    }
-
-    fn build_num_is_zero(
-        &mut self,
-        dst: &Symbol,
-        src: &Symbol,
-        arg_layout: &Layout<'a>,
-    ) -> Result<(), String> {
-        match arg_layout {
-            Layout::Builtin(Builtin::Int(IntWidth::I64)) => {
-                let dst_reg = self.claim_general_reg(dst)?;
-                let src_reg = self.load_to_general_reg(src)?;
-                ASM::is_zero_reg64_reg64(&mut self.buf, dst_reg, src_reg);
-                Ok(())
-            }
-            x => Err(format!("NumIsZero: layout, {:?}, not implemented yet", x)),
         }
     }
 
