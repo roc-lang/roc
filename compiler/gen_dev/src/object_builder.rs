@@ -82,6 +82,28 @@ pub fn build_module<'a>(
                 Object::new(BinaryFormat::Elf, Architecture::Aarch64, Endianness::Little),
             )
         }
+        Triple {
+            architecture: TargetArch::Aarch64(_),
+            binary_format: TargetBF::Macho,
+            ..
+        } if cfg!(feature = "target-aarch64") => {
+            let backend: Backend64Bit<
+                aarch64::AArch64GeneralReg,
+                aarch64::AArch64FloatReg,
+                aarch64::AArch64Assembler,
+                aarch64::AArch64Call,
+            > = Backend::new(env)?;
+            build_object(
+                env,
+                procedures,
+                backend,
+                Object::new(
+                    BinaryFormat::MachO,
+                    Architecture::Aarch64,
+                    Endianness::Little,
+                ),
+            )
+        }
         x => Err(format! {
         "the target, {:?}, is not yet implemented",
         x}),
