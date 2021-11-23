@@ -101,7 +101,10 @@ fn main() -> io::Result<()> {
             match maybe_values {
                 None => {
                     let mut os_string_values: Vec<OsString> = Vec::new();
-                    read_all_roc_files(&OsStr::new("./").to_os_string(), &mut os_string_values)?;
+                    read_all_roc_files(
+                        &std::env::current_dir()?.as_os_str().to_os_string(),
+                        &mut os_string_values,
+                    )?;
                     for os_string in os_string_values {
                         values.push(os_string);
                     }
@@ -136,7 +139,10 @@ fn main() -> io::Result<()> {
             match maybe_values {
                 None => {
                     let mut os_string_values: Vec<OsString> = Vec::new();
-                    read_all_roc_files(&OsStr::new("./").to_os_string(), &mut os_string_values)?;
+                    read_all_roc_files(
+                        &std::env::current_dir()?.as_os_str().to_os_string(),
+                        &mut os_string_values,
+                    )?;
                     for os_string in os_string_values {
                         values.push(os_string);
                     }
