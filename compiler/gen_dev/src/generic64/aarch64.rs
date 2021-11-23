@@ -47,6 +47,7 @@ pub enum AArch64GeneralReg {
 impl RegTrait for AArch64GeneralReg {}
 
 impl AArch64GeneralReg {
+    #[inline(always)]
     fn id(&self) -> u8 {
         *self as u8
     }
@@ -511,6 +512,21 @@ impl AArch64Assembler {}
 // https://developer.arm.com/documentation/ddi0487/ga
 // Map all instructions to a packed struct.
 
+trait Aarch64Bytes: PackedStruct {
+    const N: usize = 4;
+
+    #[inline(always)]
+    fn bytes(&self) -> [u8; 4] {
+        let mut bytes: [u8; 4] = [0, 0, 0, 0];
+
+        self.pack_to_slice(&mut bytes).unwrap();
+
+        bytes.reverse();
+
+        bytes
+    }
+}
+
 #[derive(PackedStruct, Debug)]
 #[packed_struct(endian = "msb")]
 pub struct MoveWideImmediate {
@@ -522,7 +538,10 @@ pub struct MoveWideImmediate {
     reg_d: Integer<u8, packed_bits::Bits<5>>, // AArch64GeneralReg
 }
 
+impl Aarch64Bytes for MoveWideImmediate {}
+
 impl MoveWideImmediate {
+    #[inline(always)]
     fn new(opc: u8, rd: AArch64GeneralReg, imm16: u16, hw: u8, sf: bool) -> Self {
         // TODO: revisit this is we change where we want to check the shift
         // currently this is done in the assembler above
@@ -554,7 +573,10 @@ pub struct ArithmeticImmediate {
     reg_d: Integer<u8, packed_bits::Bits<5>>,
 }
 
+impl Aarch64Bytes for ArithmeticImmediate {}
+
 impl ArithmeticImmediate {
+    #[inline(always)]
     fn new(
         op: bool,
         s: bool,
@@ -588,6 +610,7 @@ enum ShiftType {
 }
 
 impl ShiftType {
+    #[inline(always)]
     fn id(&self) -> u8 {
         *self as u8
     }
@@ -608,7 +631,10 @@ pub struct ArithmeticShifted {
     reg_d: Integer<u8, packed_bits::Bits<5>>,
 }
 
+impl Aarch64Bytes for ArithmeticShifted {}
+
 impl ArithmeticShifted {
+    #[inline(always)]
     fn new(
         op: bool,
         s: bool,
@@ -662,7 +688,10 @@ pub struct LogicalShiftedRegister {
     reg_d: Integer<u8, packed_bits::Bits<5>>,
 }
 
+impl Aarch64Bytes for LogicalShiftedRegister {}
+
 impl LogicalShiftedRegister {
+    #[inline(always)]
     fn new(
         op: LogicalOp,
         shift: ShiftType,
@@ -712,7 +741,10 @@ pub struct UnconditionalBranchRegister {
     fixed5: Integer<u8, packed_bits::Bits<5>>,
 }
 
+impl Aarch64Bytes for UnconditionalBranchRegister {}
+
 impl UnconditionalBranchRegister {
+    #[inline(always)]
     fn new(op: u8, rn: AArch64GeneralReg) -> Self {
         Self {
             fixed5: 0b00000.into(),
@@ -745,7 +777,10 @@ pub struct LoadStoreRegisterImmediate {
     rt: Integer<u8, packed_bits::Bits<5>>,
 }
 
+impl Aarch64Bytes for LoadStoreRegisterImmediate {}
+
 impl LoadStoreRegisterImmediate {
+    #[inline(always)]
     fn new(size: u8, opc: u8, imm12: u16, rn: AArch64GeneralReg, rt: AArch64GeneralReg) -> Self {
         debug_assert!(size <= 0b11);
         debug_assert!(imm12 <= 0xFFF);
@@ -762,10 +797,12 @@ impl LoadStoreRegisterImmediate {
         }
     }
 
+    #[inline(always)]
     fn new_load(size: u8, imm12: u16, rn: AArch64GeneralReg, rt: AArch64GeneralReg) -> Self {
         Self::new(size, 0b01, imm12, rn, rt)
     }
 
+    #[inline(always)]
     fn new_store(size: u8, imm12: u16, rn: AArch64GeneralReg, rt: AArch64GeneralReg) -> Self {
         Self::new(size, 0b00, imm12, rn, rt)
     }
@@ -787,11 +824,7 @@ fn add_reg64_reg64_imm12(
 ) {
     let inst = ArithmeticImmediate::new(false, false, dst, src, imm12, false);
 
-    let mut bytes = inst.pack().unwrap();
-
-    bytes.reverse();
-
-    buf.extend(bytes);
+    buf.extend(inst.bytes());
 }
 
 /// `ADD Xd, Xm, Xn` -> Add Xm and Xn and place the result into Xd.
@@ -804,11 +837,7 @@ fn add_reg64_reg64_reg64(
 ) {
     let inst = ArithmeticShifted::new(false, false, ShiftType::LSL, 0, src1, src2, dst);
 
-    let mut bytes = inst.pack().unwrap();
-
-    bytes.reverse();
-
-    buf.extend(bytes);
+    buf.extend(inst.bytes());
 }
 
 /// `LDR Xt, [Xn, #offset]` -> Load Xn + Offset Xt. ZRSP is SP.
@@ -822,11 +851,7 @@ fn ldr_reg64_imm12(
 ) {
     let inst = LoadStoreRegisterImmediate::new_load(0b11, imm12, base, dst);
 
-    let mut bytes = inst.pack().unwrap();
-
-    bytes.reverse();
-
-    buf.extend(bytes);
+    buf.extend(inst.bytes());
 }
 
 /// `MOV Xd, Xm` -> Move Xm to Xd.
@@ -842,11 +867,7 @@ fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64Ge
         dst,
     );
 
-    let mut bytes = inst.pack().unwrap();
-
-    bytes.reverse();
-
-    buf.extend(bytes);
+    buf.extend(inst.bytes());
 }
 
 /// `MOVK Xd, imm16` -> Keeps Xd and moves an optionally shifted imm16 to Xd.
@@ -854,11 +875,7 @@ fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64Ge
 fn movk_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm16: u16, hw: u8) {
     let inst = MoveWideImmediate::new(0b11, dst, imm16, hw, true);
 
-    let mut bytes = inst.pack().unwrap();
-
-    bytes.reverse();
-
-    buf.extend(bytes);
+    buf.extend(inst.bytes());
 }
 
 /// `MOVZ Xd, imm16` -> Zeros Xd and moves an optionally shifted imm16 to Xd.
@@ -866,11 +883,7 @@ fn movk_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm16: u16, h
 fn movz_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm16: u16, hw: u8) {
     let inst = MoveWideImmediate::new(0b10, dst, imm16, hw, true);
 
-    let mut bytes = inst.pack().unwrap();
-
-    bytes.reverse();
-
-    buf.extend(bytes);
+    buf.extend(inst.bytes());
 }
 
 /// `STR Xt, [Xn, #offset]` -> Store Xt to Xn + Offset. ZRSP is SP.
@@ -884,11 +897,7 @@ fn str_reg64_imm12(
 ) {
     let inst = LoadStoreRegisterImmediate::new_store(0b11, imm12, base, src);
 
-    let mut bytes = inst.pack().unwrap();
-
-    bytes.reverse();
-
-    buf.extend(bytes);
+    buf.extend(inst.bytes());
 }
 
 /// `SUB Xd, Xn, imm12` -> Subtract Xn and imm12 and place the result into Xd.
@@ -901,11 +910,7 @@ fn sub_reg64_reg64_imm12(
 ) {
     let inst = ArithmeticImmediate::new(true, false, dst, src, imm12, false);
 
-    let mut bytes = inst.pack().unwrap();
-
-    bytes.reverse();
-
-    buf.extend(bytes);
+    buf.extend(inst.bytes());
 }
 
 /// `RET Xn` -> Return to the address stored in Xn.
@@ -913,11 +918,7 @@ fn sub_reg64_reg64_imm12(
 fn ret_reg64(buf: &mut Vec<'_, u8>, xn: AArch64GeneralReg) {
     let inst = UnconditionalBranchRegister::new(0b10, xn);
 
-    let mut bytes = inst.pack().unwrap();
-
-    bytes.reverse();
-
-    buf.extend(bytes);
+    buf.extend(inst.bytes());
 }
 
 #[cfg(test)]
