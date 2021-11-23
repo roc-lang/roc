@@ -1388,9 +1388,22 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
 }
 
 fn deep_copy_var(subs: &mut Subs, rank: Rank, pools: &mut Pools, var: Variable) -> Variable {
-    let copy = deep_copy_var_help(subs, rank, pools, var);
+    let arena = bumpalo::Bump::with_capacity(4 * 1024);
+    let mut visited = bumpalo::collections::Vec::with_capacity_in(4 * 1024, &arena);
 
-    subs.restore(var);
+    let copy = deep_copy_var_help(subs, rank, pools, &mut visited, var);
+
+    // we have tracked all visited variables, and can now traverse them
+    // in one go (without looking at the UnificationTable) and clear the copy field
+    for var in visited {
+        let descriptor = subs.get_ref_mut(var);
+
+        if descriptor.copy.is_some() {
+            descriptor.rank = Rank::NONE;
+            descriptor.mark = Mark::NONE;
+            descriptor.copy = OptVariable::NONE;
+        }
+    }
 
     copy
 }
@@ -1399,6 +1412,7 @@ fn deep_copy_var_help(
     subs: &mut Subs,
     max_rank: Rank,
     pools: &mut Pools,
+    visited: &mut bumpalo::collections::Vec<'_, Variable>,
     var: Variable,
 ) -> Variable {
     use roc_types::subs::Content::*;
@@ -1411,6 +1425,8 @@ fn deep_copy_var_help(
     } else if desc.rank != Rank::NONE {
         return var;
     }
+
+    visited.push(var);
 
     let make_descriptor = |content| Descriptor {
         content,
@@ -1449,7 +1465,7 @@ fn deep_copy_var_help(
 
                     for index in args.into_iter() {
                         let var = subs[index];
-                        let copy_var = deep_copy_var_help(subs, max_rank, pools, var);
+                        let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
                         new_arg_vars.push(copy_var);
                     }
 
@@ -1459,14 +1475,15 @@ fn deep_copy_var_help(
                 }
 
                 Func(arg_vars, closure_var, ret_var) => {
-                    let new_ret_var = deep_copy_var_help(subs, max_rank, pools, ret_var);
-                    let new_closure_var = deep_copy_var_help(subs, max_rank, pools, closure_var);
+                    let new_ret_var = deep_copy_var_help(subs, max_rank, pools, visited, ret_var);
+                    let new_closure_var =
+                        deep_copy_var_help(subs, max_rank, pools, visited, closure_var);
 
                     let mut new_arg_vars = Vec::with_capacity(arg_vars.len());
 
                     for index in arg_vars.into_iter() {
                         let var = subs[index];
-                        let copy_var = deep_copy_var_help(subs, max_rank, pools, var);
+                        let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
                         new_arg_vars.push(copy_var);
                     }
 
@@ -1483,7 +1500,7 @@ fn deep_copy_var_help(
 
                         for index in fields.iter_variables() {
                             let var = subs[index];
-                            let copy_var = deep_copy_var_help(subs, max_rank, pools, var);
+                            let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
 
                             new_vars.push(copy_var);
                         }
@@ -1514,7 +1531,7 @@ fn deep_copy_var_help(
 
                     Record(
                         record_fields,
-                        deep_copy_var_help(subs, max_rank, pools, ext_var),
+                        deep_copy_var_help(subs, max_rank, pools, visited, ext_var),
                     )
                 }
 
@@ -1526,7 +1543,7 @@ fn deep_copy_var_help(
                         let slice = subs[index];
                         for var_index in slice {
                             let var = subs[var_index];
-                            let new_var = deep_copy_var_help(subs, max_rank, pools, var);
+                            let new_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
                             new_variables.push(new_var);
                         }
 
@@ -1546,14 +1563,14 @@ fn deep_copy_var_help(
 
                     let union_tags = UnionTags::from_slices(tags.tag_names(), new_variables);
 
-                    let new_ext = deep_copy_var_help(subs, max_rank, pools, ext_var);
+                    let new_ext = deep_copy_var_help(subs, max_rank, pools, visited, ext_var);
                     TagUnion(union_tags, new_ext)
                 }
 
                 FunctionOrTagUnion(tag_name, symbol, ext_var) => FunctionOrTagUnion(
                     tag_name,
                     symbol,
-                    deep_copy_var_help(subs, max_rank, pools, ext_var),
+                    deep_copy_var_help(subs, max_rank, pools, visited, ext_var),
                 ),
 
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
@@ -1564,7 +1581,7 @@ fn deep_copy_var_help(
                         let slice = subs[index];
                         for var_index in slice {
                             let var = subs[var_index];
-                            let new_var = deep_copy_var_help(subs, max_rank, pools, var);
+                            let new_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
                             new_variables.push(new_var);
                         }
 
@@ -1584,8 +1601,8 @@ fn deep_copy_var_help(
 
                     let union_tags = UnionTags::from_slices(tags.tag_names(), new_variables);
 
-                    let new_ext = deep_copy_var_help(subs, max_rank, pools, ext_var);
-                    let new_rec_var = deep_copy_var_help(subs, max_rank, pools, rec_var);
+                    let new_ext = deep_copy_var_help(subs, max_rank, pools, visited, ext_var);
+                    let new_rec_var = deep_copy_var_help(subs, max_rank, pools, visited, rec_var);
 
                     RecursiveTagUnion(new_rec_var, union_tags, new_ext)
                 }
@@ -1602,7 +1619,7 @@ fn deep_copy_var_help(
             opt_name,
             structure,
         } => {
-            let new_structure = deep_copy_var_help(subs, max_rank, pools, structure);
+            let new_structure = deep_copy_var_help(subs, max_rank, pools, visited, structure);
 
             subs.set(
                 copy,
@@ -1626,14 +1643,15 @@ fn deep_copy_var_help(
 
             for var_index in args.variables() {
                 let var = subs[var_index];
-                let new_var = deep_copy_var_help(subs, max_rank, pools, var);
+                let new_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
 
                 new_vars.push(new_var);
             }
 
             args.replace_variables(subs, new_vars);
 
-            let new_real_type_var = deep_copy_var_help(subs, max_rank, pools, real_type_var);
+            let new_real_type_var =
+                deep_copy_var_help(subs, max_rank, pools, visited, real_type_var);
             let new_content = Alias(symbol, args, new_real_type_var);
 
             subs.set(copy, make_descriptor(new_content));
