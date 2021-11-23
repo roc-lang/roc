@@ -797,7 +797,7 @@ fn integer_type(
         Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
     });
 
-    let vars = AliasVariables::insert_into_subs(subs, [("range".into(), signed64)], []);
+    let vars = AliasVariables::insert_into_subs(subs, [signed64], []);
     subs.set_content(num_integer_signed64, {
         Content::Alias(Symbol::NUM_INTEGER, vars, at_signed64)
     });
@@ -812,7 +812,7 @@ fn integer_type(
         Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
     });
 
-    let vars = AliasVariables::insert_into_subs(subs, [("range".into(), integer_signed64)], []);
+    let vars = AliasVariables::insert_into_subs(subs, [integer_signed64], []);
     subs.set_content(num_integer_signed64, {
         Content::Alias(Symbol::NUM_NUM, vars, at_num_integer_signed64)
     });
@@ -1358,7 +1358,7 @@ impl From<Content> for Descriptor {
 static_assertions::assert_eq_size!([u8; 4 * 8], Content);
 static_assertions::assert_eq_size!([u8; 4 * 8], (Variable, Option<Lowercase>));
 static_assertions::assert_eq_size!([u8; 3 * 8], (Symbol, AliasVariables, Variable));
-static_assertions::assert_eq_size!([u8; 12], AliasVariables);
+static_assertions::assert_eq_size!([u8; 8], AliasVariables);
 static_assertions::assert_eq_size!([u8; 3 * 8], FlatType);
 
 #[derive(Clone, Debug)]
@@ -1382,29 +1382,26 @@ pub enum Content {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AliasVariables {
-    pub lowercases_start: u32,
     pub variables_start: u32,
-    pub lowercases_len: u16,
-    pub variables_len: u16,
+    pub all_variables_len: u16,
+
+    /// an alias has type variables and lambda set variables
+    pub type_variables_len: u16,
 }
 
 impl AliasVariables {
-    pub const fn names(&self) -> SubsSlice<Lowercase> {
-        SubsSlice::new(self.lowercases_start, self.lowercases_len)
-    }
-
     pub const fn variables(&self) -> VariableSubsSlice {
         VariableSubsSlice {
-            slice: SubsSlice::new(self.variables_start, self.variables_len),
+            slice: SubsSlice::new(self.variables_start, self.all_variables_len),
         }
     }
 
     pub const fn len(&self) -> usize {
-        self.lowercases_len as usize
+        self.type_variables_len as usize
     }
 
     pub const fn is_empty(&self) -> bool {
-        self.lowercases_len == 0
+        self.type_variables_len == 0
     }
 
     pub fn replace_variables(
@@ -1416,24 +1413,21 @@ impl AliasVariables {
         subs.variables.extend(variables);
         let variables_len = (subs.variables.len() - variables_start as usize) as u16;
 
-        debug_assert_eq!(variables_len, self.variables_len);
+        debug_assert_eq!(variables_len, self.all_variables_len);
 
         self.variables_start = variables_start;
     }
 
-    pub fn named_type_arguments(
-        &self,
-    ) -> impl Iterator<Item = (SubsIndex<Lowercase>, SubsIndex<Variable>)> {
-        let names = self.names();
-        let vars = self.variables();
-
-        names.into_iter().zip(vars.into_iter())
+    pub fn named_type_arguments(&self) -> impl Iterator<Item = SubsIndex<Variable>> {
+        self.variables()
+            .into_iter()
+            .take(self.type_variables_len as usize)
     }
 
     pub fn unnamed_type_arguments(&self) -> impl Iterator<Item = SubsIndex<Variable>> {
         self.variables()
             .into_iter()
-            .skip(self.lowercases_len as usize)
+            .skip(self.type_variables_len as usize)
     }
 
     pub fn insert_into_subs<I1, I2>(
@@ -1442,35 +1436,38 @@ impl AliasVariables {
         unnamed_arguments: I2,
     ) -> Self
     where
-        I1: IntoIterator<Item = (Lowercase, Variable)>,
+        I1: IntoIterator<Item = Variable>,
         I2: IntoIterator<Item = Variable>,
     {
-        let lowercases_start = subs.field_names.len() as u32;
         let variables_start = subs.variables.len() as u32;
 
-        let it1 = type_arguments.into_iter();
-        let it2 = unnamed_arguments.into_iter();
+        subs.variables.extend(type_arguments);
 
-        subs.variables
-            .reserve(it1.size_hint().0 + it2.size_hint().0);
-        subs.field_names.reserve(it1.size_hint().0);
+        let type_variables_len = (subs.variables.len() as u32 - variables_start) as u16;
 
-        for (field_name, var) in it1 {
-            subs.field_names.push(field_name);
-            subs.variables.push(var);
+        subs.variables.extend(unnamed_arguments);
+
+        let all_variables_len = (subs.variables.len() as u32 - variables_start) as u16;
+
+        if type_variables_len == 3 {
+            panic!();
         }
-
-        subs.variables.extend(it2);
-
-        let lowercases_len = (subs.field_names.len() as u32 - lowercases_start) as u16;
-        let variables_len = (subs.variables.len() as u32 - variables_start) as u16;
 
         Self {
-            lowercases_start,
             variables_start,
-            lowercases_len,
-            variables_len,
+            type_variables_len,
+            all_variables_len,
         }
+    }
+}
+
+impl IntoIterator for AliasVariables {
+    type Item = <VariableSubsSlice as IntoIterator>::Item;
+
+    type IntoIter = <VariableSubsSlice as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.variables().into_iter()
     }
 }
 
@@ -2090,7 +2087,7 @@ fn occurs(
                 let mut new_seen = seen.clone();
                 new_seen.insert(root_var);
 
-                for var_index in args.variables().into_iter() {
+                for var_index in args.into_iter() {
                     let var = subs[var_index];
                     short_circuit_help(subs, root_var, &new_seen, var)?;
                 }
@@ -2274,7 +2271,7 @@ fn explicit_substitute(
                     in_var
                 }
                 Alias(symbol, args, actual) => {
-                    for index in args.variables().into_iter() {
+                    for index in args.into_iter() {
                         let var = subs[index];
                         let new_var = explicit_substitute(subs, from, to, var, seen);
                         subs[index] = new_var;
@@ -2331,12 +2328,9 @@ fn get_var_names(
 
             RigidVar(name) => add_name(subs, 0, name, var, RigidVar, taken_names),
 
-            Alias(_, args, _) => args
-                .variables()
-                .into_iter()
-                .fold(taken_names, |answer, arg_var| {
-                    get_var_names(subs, subs[arg_var], answer)
-                }),
+            Alias(_, args, _) => args.into_iter().fold(taken_names, |answer, arg_var| {
+                get_var_names(subs, subs[arg_var], answer)
+            }),
 
             Structure(flat_type) => match flat_type {
                 FlatType::Apply(_, args) => {
@@ -2537,15 +2531,14 @@ fn content_to_err_type(
         Alias(symbol, args, aliased_to) => {
             let err_type = var_to_err_type(subs, state, aliased_to);
 
-            let mut err_args = Vec::with_capacity(args.names().len());
+            let mut err_args = Vec::with_capacity(args.len());
 
-            for (name_index, var_index) in args.named_type_arguments() {
-                let name = subs[name_index].clone();
+            for var_index in args.into_iter() {
                 let var = subs[var_index];
 
                 let arg = var_to_err_type(subs, state, var);
 
-                err_args.push((name, arg));
+                err_args.push(arg);
             }
 
             ErrorType::Alias(symbol, err_args, Box::new(err_type))
@@ -2998,7 +2991,6 @@ impl StorageSubs {
         offsets: &StorageSubsOffsets,
         mut alias_variables: AliasVariables,
     ) -> AliasVariables {
-        alias_variables.lowercases_start += offsets.field_names;
         alias_variables.variables_start += offsets.variables;
 
         alias_variables
@@ -3366,9 +3358,9 @@ fn deep_copy_var_to_help<'a>(
         }
 
         Alias(symbol, mut args, real_type_var) => {
-            let mut new_vars = Vec::with_capacity_in(args.variables().len(), arena);
+            let mut new_vars = Vec::with_capacity_in(args.len(), arena);
 
-            for var_index in args.variables() {
+            for var_index in args.into_iter() {
                 let var = source[var_index];
                 let new_var = deep_copy_var_to_help(arena, visited, source, target, max_rank, var);
 
@@ -3376,12 +3368,6 @@ fn deep_copy_var_to_help<'a>(
             }
 
             args.replace_variables(target, new_vars);
-
-            let lowercases = &source.field_names[args.lowercases_start as usize..]
-                [..args.lowercases_len as usize];
-
-            args.lowercases_start = target.field_names.len() as u32;
-            target.field_names.extend(lowercases.iter().cloned());
 
             let new_real_type_var =
                 deep_copy_var_to_help(arena, visited, source, target, max_rank, real_type_var);

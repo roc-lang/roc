@@ -199,7 +199,7 @@ fn find_names_needed(
         }
         Alias(_symbol, args, _actual) => {
             // only find names for named parameters!
-            for var_index in args.variables().into_iter().take(args.len()) {
+            for var_index in args.into_iter().take(args.len()) {
                 let var = subs[var_index];
                 find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
@@ -309,7 +309,6 @@ fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, pa
                     debug_assert_eq!(args.len(), 1);
 
                     let arg_var_index = args
-                        .variables()
                         .into_iter()
                         .next()
                         .expect("Num was not applied to a type argument!");
@@ -337,7 +336,7 @@ fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, pa
                 _ => write_parens!(write_parens, buf, {
                     write_symbol(env, *symbol, buf);
 
-                    for var_index in args.variables() {
+                    for var_index in args.into_iter() {
                         let var = subs[var_index];
                         buf.push(' ');
                         write_content(
