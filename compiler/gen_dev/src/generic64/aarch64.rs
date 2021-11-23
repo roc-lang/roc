@@ -513,8 +513,6 @@ impl AArch64Assembler {}
 // Map all instructions to a packed struct.
 
 trait Aarch64Bytes: PackedStruct {
-    const N: usize = 4;
-
     #[inline(always)]
     fn bytes(&self) -> [u8; 4] {
         let mut bytes: [u8; 4] = [0, 0, 0, 0];
