@@ -2024,6 +2024,36 @@ mod tests {
         }
     }
 
+    fn test_reg64_helper(
+        assemble: fn(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg),
+        expected_mnemonic: &str,
+        regs_dst: &[X86_64GeneralReg],
+    ) {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        let cs = Capstone::new()
+            .x86()
+            .mode(arch::x86::ArchMode::Mode64)
+            .syntax(arch::x86::ArchSyntax::Intel)
+            .detail(true)
+            .build()
+            .expect("Failed to create Capstone object");
+        for dst in regs_dst {
+            buf.clear();
+            assemble(&mut buf, *dst);
+
+            let instructions = cs.disasm_all(&buf, 0).unwrap();
+            assert_eq!(1, instructions.len());
+            let inst = &instructions[0];
+            assert_eq!(Some(expected_mnemonic), inst.mnemonic());
+
+            let detail = cs.insn_detail(inst).unwrap();
+            let operands = detail.arch_detail().operands();
+            assert_eq!(1, operands.len());
+            assert_operand_reg64_eq(&cs, *dst, &operands[0]);
+        }
+    }
+
     #[test]
     fn test_add_reg64_imm32() {
         test_reg64_imm_helper(add_reg64_imm32, "add", ALL_GENERAL_REGS, &[TEST_I32]);
@@ -2340,16 +2370,7 @@ mod tests {
 
     #[test]
     fn test_neg_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for (reg, expected) in &[
-            (X86_64GeneralReg::RAX, [0x48, 0xF7, 0xD8]),
-            (X86_64GeneralReg::R15, [0x49, 0xF7, 0xDF]),
-        ] {
-            buf.clear();
-            neg_reg64(&mut buf, *reg);
-            assert_eq!(expected, &buf[..]);
-        }
+        test_reg64_helper(neg_reg64, "neg", ALL_GENERAL_REGS);
     }
 
     #[test]
@@ -2500,29 +2521,11 @@ mod tests {
 
     #[test]
     fn test_pop_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for (dst, expected) in &[
-            (X86_64GeneralReg::RAX, vec![0x58]),
-            (X86_64GeneralReg::R15, vec![0x41, 0x5F]),
-        ] {
-            buf.clear();
-            pop_reg64(&mut buf, *dst);
-            assert_eq!(&expected[..], &buf[..]);
-        }
+        test_reg64_helper(pop_reg64, "pop", ALL_GENERAL_REGS);
     }
 
     #[test]
     fn test_push_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for (src, expected) in &[
-            (X86_64GeneralReg::RAX, vec![0x50]),
-            (X86_64GeneralReg::R15, vec![0x41, 0x57]),
-        ] {
-            buf.clear();
-            push_reg64(&mut buf, *src);
-            assert_eq!(&expected[..], &buf[..]);
-        }
+        test_reg64_helper(push_reg64, "push", ALL_GENERAL_REGS);
     }
 }
