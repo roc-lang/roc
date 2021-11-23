@@ -1,4 +1,4 @@
-1. Download the latest nighly from the assets [here](https://github.com/rtfeldman/roc/releases).
+1. Download the latest nightly from the assets [here](https://github.com/rtfeldman/roc/releases).
 2. Untar the archive:
     ```
     tar -xf roc_nightly-linux_x86_64-<VERSION>.tar.gz
