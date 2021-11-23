@@ -1493,7 +1493,7 @@ pub fn to_doc<'b>(
             parens,
             alloc.symbol_foreign_qualified(symbol),
             args.into_iter()
-                .map(|(_, arg)| to_doc(alloc, Parens::InTypeParam, arg))
+                .map(|arg| to_doc(alloc, Parens::InTypeParam, arg))
                 .collect(),
         ),
 
@@ -1657,10 +1657,7 @@ fn to_diff<'b>(
         }
 
         (Alias(symbol1, args1, _), Alias(symbol2, args2, _)) if symbol1 == symbol2 => {
-            // TODO remove collects
-            let a1 = args1.into_iter().map(|(_, v)| v).collect::<Vec<_>>();
-            let a2 = args2.into_iter().map(|(_, v)| v).collect::<Vec<_>>();
-            let args_diff = traverse(alloc, Parens::InTypeParam, a1, a2);
+            let args_diff = traverse(alloc, Parens::InTypeParam, args1, args2);
             let left = report_text::apply(
                 alloc,
                 parens,
@@ -1729,8 +1726,8 @@ fn to_diff<'b>(
                 ErrorType::Alias(Symbol::NUM_NUM, args, _) => {
                     matches!(
                         &args.get(0),
-                        Some((_, ErrorType::Type(Symbol::NUM_INTEGER, _)))
-                            | Some((_, ErrorType::Alias(Symbol::NUM_INTEGER, _, _)))
+                        Some(ErrorType::Type(Symbol::NUM_INTEGER, _))
+                            | Some(ErrorType::Alias(Symbol::NUM_INTEGER, _, _))
                     )
                 }
                 _ => false,
@@ -1750,8 +1747,8 @@ fn to_diff<'b>(
                 ErrorType::Alias(Symbol::NUM_NUM, args, _) => {
                     matches!(
                         &args.get(0),
-                        Some((_, ErrorType::Type(Symbol::NUM_FLOATINGPOINT, _)))
-                            | Some((_, ErrorType::Alias(Symbol::NUM_FLOATINGPOINT, _, _)))
+                        Some(ErrorType::Type(Symbol::NUM_FLOATINGPOINT, _))
+                            | Some(ErrorType::Alias(Symbol::NUM_FLOATINGPOINT, _, _))
                     )
                 }
                 _ => false,

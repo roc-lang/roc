@@ -810,17 +810,13 @@ fn type_to_variable<'a>(
             */
 
             let mut arg_vars = Vec::with_capacity(args.len());
-            let mut new_aliases = BumpMap::new_in(arena);
 
-            for (arg, arg_type_id) in args.iter(mempool) {
+            for (_, arg_type_id) in args.iter(mempool) {
                 let arg_type = mempool.get(*arg_type_id);
 
                 let arg_var = type_to_variable(arena, mempool, subs, rank, pools, cached, arg_type);
 
-                let arg_str = arg.as_str(mempool);
-
-                arg_vars.push((roc_module::ident::Lowercase::from(arg_str), arg_var));
-                new_aliases.insert(arg_str, arg_var);
+                arg_vars.push(arg_var);
             }
 
             let arg_vars = AliasVariables::insert_into_subs(subs, arg_vars, []);

@@ -471,12 +471,7 @@ fn read_main_roc_file(project_dir_path_opt: Option<&Path>) -> (PathStr, String) 
         let project_dir_path_str = path_to_string(project_dir_path);
 
         if let Some(&roc_file_name) = roc_file_names.first() {
-            let full_roc_file_path_str = vec![
-                project_dir_path_str.clone(),
-                "/".to_owned(),
-                roc_file_name.clone(),
-            ]
-            .join("");
+            let full_roc_file_path_str = path_to_string(&project_dir_path.join(roc_file_name));
             let file_as_str = std::fs::read_to_string(&Path::new(&full_roc_file_path_str))
                 .unwrap_or_else(|err| panic!("In the provided project {:?}, I found the roc file {}, but I failed to read it: {}", &project_dir_path_str, &full_roc_file_path_str, err));
 
