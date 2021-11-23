@@ -20,7 +20,6 @@ This `Expr` representation of the expression is useful for things like:
 
 - Checking that all variables are declared before they're used
 - Type checking
-- Running Roc code in Interpreted Mode (that is, without having to compile it to Rust first - useful for development, since it's a faster feedback loop, but there's a runtime performance penalty compared to doing a full compile to Rust).
 
 > As of this writing, the compiler doesn't do any of those things yet. They'll be added later!
 
