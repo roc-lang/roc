@@ -271,11 +271,11 @@ impl<'a> Storage<'a> {
 
     /// stack memory values are returned by pointer. e.g. a roc function
     ///
-    ///      add : I128, I128 -> I128
+    /// add : I128, I128 -> I128
     ///
     /// is given the wasm type
     ///
-    ///      add : (i32, i64, i64, i64, i64) -> nil
+    /// add : (i32, i64, i64, i64, i64) -> nil
     ///
     /// The returned value is written to the address passed as the first argument
     fn load_return_address_ccc(&mut self, code_builder: &mut CodeBuilder, sym: Symbol) {
