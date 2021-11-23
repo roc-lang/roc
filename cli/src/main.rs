@@ -1,7 +1,7 @@
 use roc_cli::build::check_file;
 use roc_cli::{
-    build_app, docs, repl, BuildConfig, CMD_BUILD, CMD_CHECK, CMD_DOCS, CMD_EDIT, CMD_REPL,
-    CMD_VERSION, DIRECTORY_OR_FILES, FLAG_TIME, ROC_FILE,
+    build_app, docs, format, repl, BuildConfig, CMD_BUILD, CMD_CHECK, CMD_DOCS, CMD_EDIT,
+    CMD_FORMAT, CMD_REPL, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_TIME, ROC_FILE,
 };
 use roc_load::file::LoadingProblem;
 use std::fs::{self, FileType};
@@ -122,6 +122,41 @@ fn main() -> io::Result<()> {
             }
 
             docs(roc_files);
+
+            Ok(0)
+        }
+        Some(CMD_FORMAT) => {
+            let maybe_values = matches
+                .subcommand_matches(CMD_FORMAT)
+                .unwrap()
+                .values_of_os(DIRECTORY_OR_FILES);
+
+            let mut values: Vec<OsString> = Vec::new();
+
+            match maybe_values {
+                None => {
+                    let mut os_string_values: Vec<OsString> = Vec::new();
+                    read_all_roc_files(&OsStr::new("./").to_os_string(), &mut os_string_values)?;
+                    for os_string in os_string_values {
+                        values.push(os_string);
+                    }
+                }
+                Some(os_values) => {
+                    for os_str in os_values {
+                        values.push(os_str.to_os_string());
+                    }
+                }
+            }
+
+            let mut roc_files = Vec::new();
+
+            // Populate roc_files
+            for os_str in values {
+                let metadata = fs::metadata(os_str.clone())?;
+                roc_files_recursive(os_str.as_os_str(), metadata.file_type(), &mut roc_files)?;
+            }
+
+            format(roc_files);
 
             Ok(0)
         }
