@@ -188,4 +188,12 @@ main = "Hello, world!"
             "<span class=\"syntax-value\">myId</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-operator\">\\</span><span class=\"syntax-function-arg-name\">something</span><span class=\"syntax-operator\"> -> </span>\n<span class=\"syntax-indent\">    </span><span class=\"syntax-value\">something</span>\n\n",
         );
     }
+
+    #[test]
+    fn tld_with_comment() {
+        expect_html_def(
+            r#"myVal = "Hello, World!" # COMMENT"#,
+            "<span class=\"syntax-value\">myVal</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-string\">\"Hello, World!\"</span><span class=\"syntax-comment\"> # COMMENT</span>\n\n",
+        );
+    }
 }

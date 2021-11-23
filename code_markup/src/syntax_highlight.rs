@@ -19,6 +19,8 @@ pub enum HighlightStyle {
     Import,
     Provides,
     Blank,
+    Comment,
+    DocsComment,
 }
 
 pub fn default_highlight_map() -> HashMap<HighlightStyle, RgbaTup> {
@@ -42,7 +44,8 @@ pub fn default_highlight_map() -> HashMap<HighlightStyle, RgbaTup> {
         (Import, from_hsb(225, 50, 100)),
         (Provides, from_hsb(225, 50, 100)),
         (Blank, from_hsb(258, 50, 90)),
-        // comment from_hsb(285, 6, 47) or 186, 35, 40
+        (Comment, from_hsb(258, 50, 90)), // TODO check color
+        (DocsComment, from_hsb(258, 50, 90)), // TODO check color
     ]
     .iter()
     .for_each(|tup| {
