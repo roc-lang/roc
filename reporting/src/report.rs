@@ -16,7 +16,6 @@ const CYCLE_ELEMENTS: [&str; 4] = ["+-----+", "|     ", "|     |", "+-<---+"];
 #[cfg(not(windows))]
 const CYCLE_ELEMENTS: [&str; 4] = ["┌─────┐", "│     ", "│     ↓", "└─────┘"];
 
-// trick to branch in a const. Can be replaced by an if when that is merged into rustc
 const CYCLE_TOP: &str = CYCLE_ELEMENTS[0];
 const CYCLE_LN: &str = CYCLE_ELEMENTS[1];
 const CYCLE_MID: &str = CYCLE_ELEMENTS[2];
