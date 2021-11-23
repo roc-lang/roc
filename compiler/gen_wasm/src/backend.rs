@@ -237,33 +237,38 @@ impl<'a> WasmBackend<'a> {
 
     fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) -> Result<(), String> {
         match stmt {
-            Stmt::Let(sym, expr, layout, following) => {
-                let wasm_layout = WasmLayout::new(layout);
+            Stmt::Let(_, _, _, _) => {
+                let mut current_stmt = stmt;
+                while let Stmt::Let(sym, expr, layout, following) = current_stmt {
+                    let wasm_layout = WasmLayout::new(layout);
 
-                let kind = match following {
-                    Stmt::Ret(ret_sym) if *sym == *ret_sym => StoredValueKind::ReturnValue,
-                    _ => StoredValueKind::Variable,
-                };
+                    let kind = match following {
+                        Stmt::Ret(ret_sym) if *sym == *ret_sym => StoredValueKind::ReturnValue,
+                        _ => StoredValueKind::Variable,
+                    };
 
-                let sym_storage = self.storage.allocate(&wasm_layout, *sym, kind);
+                    let sym_storage = self.storage.allocate(&wasm_layout, *sym, kind);
 
-                self.build_expr(sym, expr, layout, &sym_storage)?;
+                    self.build_expr(sym, expr, layout, &sym_storage)?;
 
-                // For primitives, we record that this symbol is at the top of the VM stack
-                // (For other values, we wrote to memory and there's nothing on the VM stack)
-                if let WasmLayout::Primitive(value_type, size) = wasm_layout {
-                    let vm_state = self.code_builder.set_top_symbol(*sym);
-                    self.storage.symbol_storage_map.insert(
-                        *sym,
-                        StoredValue::VirtualMachineStack {
-                            vm_state,
-                            value_type,
-                            size,
-                        },
-                    );
+                    // For primitives, we record that this symbol is at the top of the VM stack
+                    // (For other values, we wrote to memory and there's nothing on the VM stack)
+                    if let WasmLayout::Primitive(value_type, size) = wasm_layout {
+                        let vm_state = self.code_builder.set_top_symbol(*sym);
+                        self.storage.symbol_storage_map.insert(
+                            *sym,
+                            StoredValue::VirtualMachineStack {
+                                vm_state,
+                                value_type,
+                                size,
+                            },
+                        );
+                    }
+
+                    current_stmt = *following;
                 }
 
-                self.build_stmt(following, ret_layout)?;
+                self.build_stmt(current_stmt, ret_layout)?;
                 Ok(())
             }
 
