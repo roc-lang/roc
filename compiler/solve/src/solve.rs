@@ -621,13 +621,13 @@ fn type_to_var(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
-    _: &mut MutMap<Symbol, Variable>,
+    cached_aliases: &mut MutMap<Symbol, Variable>,
     typ: &Type,
 ) -> Variable {
     // capacity based on the false hello world program
     let arena = bumpalo::Bump::with_capacity(4 * 1024);
 
-    type_to_variable(subs, rank, pools, &arena, typ)
+    type_to_variable(subs, rank, pools, &arena, cached_aliases, typ)
 }
 
 fn type_to_variable<'a>(
@@ -635,6 +635,7 @@ fn type_to_variable<'a>(
     rank: Rank,
     pools: &mut Pools,
     arena: &'a bumpalo::Bump,
+    cached_aliases: &mut MutMap<Symbol, Variable>,
     typ: &Type,
 ) -> Variable {
     use bumpalo::collections::Vec;
@@ -645,7 +646,7 @@ fn type_to_variable<'a>(
             let arg_vars = VariableSubsSlice::reserve_into_subs(subs, args.len());
 
             for (i, arg) in (arg_vars.slice.start as usize..).zip(args) {
-                let var = type_to_variable(subs, rank, pools, arena, arg);
+                let var = type_to_variable(subs, rank, pools, arena, cached_aliases, arg);
                 subs.variables[i] = var;
             }
 
@@ -662,12 +663,13 @@ fn type_to_variable<'a>(
             let arg_vars = VariableSubsSlice::reserve_into_subs(subs, args.len());
 
             for (i, arg) in (arg_vars.slice.start as usize..).zip(args) {
-                let var = type_to_variable(subs, rank, pools, arena, arg);
+                let var = type_to_variable(subs, rank, pools, arena, cached_aliases, arg);
                 subs.variables[i] = var;
             }
 
-            let ret_var = type_to_variable(subs, rank, pools, arena, ret_type);
-            let closure_var = type_to_variable(subs, rank, pools, arena, closure_type);
+            let ret_var = type_to_variable(subs, rank, pools, arena, cached_aliases, ret_type);
+            let closure_var =
+                type_to_variable(subs, rank, pools, arena, cached_aliases, closure_type);
             let content = Content::Structure(FlatType::Func(arg_vars, closure_var, ret_var));
 
             register(subs, rank, pools, content)
@@ -680,13 +682,13 @@ fn type_to_variable<'a>(
             let mut field_vars = Vec::with_capacity_in(fields.len(), arena);
 
             for (field, field_type) in fields {
-                let field_var =
-                    field_type.map(|typ| type_to_variable(subs, rank, pools, arena, typ));
+                let field_var = field_type
+                    .map(|typ| type_to_variable(subs, rank, pools, arena, cached_aliases, typ));
 
                 field_vars.push((field.clone(), field_var));
             }
 
-            let temp_ext_var = type_to_variable(subs, rank, pools, arena, ext);
+            let temp_ext_var = type_to_variable(subs, rank, pools, arena, cached_aliases, ext);
 
             let (it, new_ext_var) =
                 gather_fields_unsorted_iter(subs, RecordFields::empty(), temp_ext_var);
@@ -709,13 +711,14 @@ fn type_to_variable<'a>(
             // If hit, try to turn the value into an EmptyTagUnion in canonicalization
             debug_assert!(!tags.is_empty() || !ext.is_empty_tag_union());
 
-            let (union_tags, ext) = type_to_union_tags(subs, rank, pools, arena, tags, ext);
+            let (union_tags, ext) =
+                type_to_union_tags(subs, rank, pools, arena, cached_aliases, tags, ext);
             let content = Content::Structure(FlatType::TagUnion(union_tags, ext));
 
             register(subs, rank, pools, content)
         }
         FunctionOrTagUnion(tag_name, symbol, ext) => {
-            let temp_ext_var = type_to_variable(subs, rank, pools, arena, ext);
+            let temp_ext_var = type_to_variable(subs, rank, pools, arena, cached_aliases, ext);
             let mut ext_tag_vec = std::vec::Vec::new();
             let new_ext_var = match roc_types::pretty_print::chase_ext_tag_union(
                 subs,
@@ -741,7 +744,8 @@ fn type_to_variable<'a>(
             // If hit, try to turn the value into an EmptyTagUnion in canonicalization
             debug_assert!(!tags.is_empty() || !ext.is_empty_tag_union());
 
-            let (union_tags, ext) = type_to_union_tags(subs, rank, pools, arena, tags, ext);
+            let (union_tags, ext) =
+                type_to_union_tags(subs, rank, pools, arena, cached_aliases, tags, ext);
             let content =
                 Content::Structure(FlatType::RecursiveTagUnion(*rec_var, union_tags, ext));
 
@@ -781,7 +785,6 @@ fn type_to_variable<'a>(
                     Symbol::NUM_U16 => return Variable::U16,
                     Symbol::NUM_U8 => return Variable::U8,
 
-                    // Symbol::NUM_NAT => return Variable::NAT,
                     _ => {}
                 }
             }
@@ -789,19 +792,19 @@ fn type_to_variable<'a>(
             let mut arg_vars = Vec::with_capacity_in(args.len(), arena);
 
             for (_, arg_type) in args {
-                let arg_var = type_to_variable(subs, rank, pools, arena, arg_type);
+                let arg_var = type_to_variable(subs, rank, pools, arena, cached_aliases, arg_type);
 
                 arg_vars.push(arg_var);
             }
 
             let lambda_set_variables_it = lambda_set_variables
                 .iter()
-                .map(|ls| type_to_variable(subs, rank, pools, arena, &ls.0));
+                .map(|ls| type_to_variable(subs, rank, pools, arena, cached_aliases, &ls.0));
             let lambda_set_variables = Vec::from_iter_in(lambda_set_variables_it, arena);
 
             let arg_vars = AliasVariables::insert_into_subs(subs, arg_vars, lambda_set_variables);
 
-            let alias_var = type_to_variable(subs, rank, pools, arena, alias_type);
+            let alias_var = type_to_variable(subs, rank, pools, arena, cached_aliases, alias_type);
             let content = Content::Alias(*symbol, arg_vars, alias_var);
 
             register(subs, rank, pools, content)
@@ -817,19 +820,19 @@ fn type_to_variable<'a>(
             let mut arg_vars = Vec::with_capacity_in(args.len(), arena);
 
             for (_, arg_type) in args {
-                let arg_var = type_to_variable(subs, rank, pools, arena, arg_type);
+                let arg_var = type_to_variable(subs, rank, pools, arena, cached_aliases, arg_type);
 
                 arg_vars.push(arg_var);
             }
 
             let lambda_set_variables_it = lambda_set_variables
                 .iter()
-                .map(|ls| type_to_variable(subs, rank, pools, arena, &ls.0));
+                .map(|ls| type_to_variable(subs, rank, pools, arena, cached_aliases, &ls.0));
             let lambda_set_variables = Vec::from_iter_in(lambda_set_variables_it, arena);
 
             let arg_vars = AliasVariables::insert_into_subs(subs, arg_vars, lambda_set_variables);
 
-            let alias_var = type_to_variable(subs, rank, pools, arena, alias_type);
+            let alias_var = type_to_variable(subs, rank, pools, arena, cached_aliases, alias_type);
 
             // unify the actual_var with the result var
             // this can be used to access the type of the actual_var
@@ -864,6 +867,7 @@ fn type_to_union_tags<'a>(
     rank: Rank,
     pools: &mut Pools,
     arena: &'a bumpalo::Bump,
+    cached_aliases: &mut MutMap<Symbol, Variable>,
     tags: &[(TagName, Vec<Type>)],
     ext: &Type,
 ) -> (UnionTags, Variable) {
@@ -875,14 +879,14 @@ fn type_to_union_tags<'a>(
         let new_slice = VariableSubsSlice::reserve_into_subs(subs, tag_argument_types.len());
 
         for (i, arg) in (new_slice.slice.start as usize..).zip(tag_argument_types) {
-            let var = type_to_variable(subs, rank, pools, arena, arg);
+            let var = type_to_variable(subs, rank, pools, arena, cached_aliases, arg);
             subs.variables[i] = var;
         }
 
         tag_vars.push((tag.clone(), new_slice));
     }
 
-    let temp_ext_var = type_to_variable(subs, rank, pools, arena, ext);
+    let temp_ext_var = type_to_variable(subs, rank, pools, arena, cached_aliases, ext);
 
     let ext = {
         let (it, ext) =
