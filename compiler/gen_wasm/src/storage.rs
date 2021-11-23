@@ -247,21 +247,51 @@ impl<'a> Storage<'a> {
             } => {
                 let (local_id, offset) = location.local_and_offset(self.stack_frame_pointer);
 
-                // Load the address of the value
+                code_builder.get_local(local_id);
+
+                if format == StackMemoryFormat::Aggregate {
+                    if offset != 0 {
+                        code_builder.i32_const(offset as i32);
+                        code_builder.i32_add();
+                    }
+                } else {
+                    // It's one of the 128-bit numbers, all of which we load as two i64's
+                    // (Mark the same Symbol twice. Shouldn't matter except for debugging.)
+                    code_builder.i64_load(Align::Bytes8, offset);
+                    code_builder.set_top_symbol(sym);
+
+                    code_builder.get_local(local_id);
+                    code_builder.i64_load(Align::Bytes8, offset + 8);
+                }
+
+                code_builder.set_top_symbol(sym);
+            }
+        }
+    }
+
+    /// stack memory values are returned by pointer. e.g. a roc function
+    ///
+    /// add : I128, I128 -> I128
+    ///
+    /// is given the wasm type
+    ///
+    /// add : (i32, i64, i64, i64, i64) -> nil
+    ///
+    /// The returned value is written to the address passed as the first argument
+    fn load_return_address_ccc(&mut self, code_builder: &mut CodeBuilder, sym: Symbol) {
+        let storage = self.get(&sym).to_owned();
+        match storage {
+            StoredValue::VirtualMachineStack { .. } | StoredValue::Local { .. } => {
+                unreachable!("these storage types are not returned by writing to a pointer")
+            }
+            StoredValue::StackMemory { location, .. } => {
+                let (local_id, offset) = location.local_and_offset(self.stack_frame_pointer);
+
                 code_builder.get_local(local_id);
                 if offset != 0 {
                     code_builder.i32_const(offset as i32);
                     code_builder.i32_add();
                 }
-
-                if format != StackMemoryFormat::Aggregate {
-                    // It's one of the 128-bit numbers, all of which we load as two i64's
-                    // Mark the same Symbol twice in the VM value stack! Shouldn't matter except debug.
-                    code_builder.i64_load(Align::Bytes8, offset);
-                    code_builder.set_top_symbol(sym);
-                    code_builder.i64_load(Align::Bytes8, offset + 8);
-                }
-
                 code_builder.set_top_symbol(sym);
             }
         }
@@ -299,9 +329,8 @@ impl<'a> Storage<'a> {
 
         if return_layout.is_stack_memory() {
             // Load the address where the return value should be written
-            // Apparently for return values we still use a pointer to stack memory
-            self.load_symbol_ccc(code_builder, return_symbol);
-        };
+            self.load_return_address_ccc(code_builder, return_symbol);
+        }
 
         for sym in symbols {
             if let StoredValue::StackMemory {
