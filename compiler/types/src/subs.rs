@@ -1548,6 +1548,15 @@ impl VariableSubsSlice {
         }
     }
 
+    pub fn reserve_into_subs(subs: &mut Subs, length: usize) -> Self {
+        let start = subs.variables.len() as u32;
+
+        subs.variables
+            .extend(std::iter::repeat(Variable::NULL).take(length));
+
+        Self::new(start, length as u16)
+    }
+
     pub fn insert_into_subs<I>(subs: &mut Subs, input: I) -> Self
     where
         I: IntoIterator<Item = Variable>,
