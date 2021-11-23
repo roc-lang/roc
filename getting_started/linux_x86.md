@@ -12,12 +12,11 @@
     ```
     wget https://ziglang.org/download/0.8.1/zig-linux-x86_64-0.8.1.tar.xz
     tar -xf zig-linux-x86_64-0.8.1.tar.xz
-    sudo ln -s  $(pwd)/zig-linux-x86_64-0.8.1/zig /usr/bin/zig
+    sudo ln -s  $(pwd)/zig-linux-x86_64-0.8.1/zig /usr/local/bin/zig
     ```
     - for the C example:
     ```
-    sudo apt install clang-12
-    sudo ln -s /usr/bin/clang-12 /usr/bin/clang
+    sudo apt install clang
     ```
 4. Run examples with:
     ```
