@@ -491,9 +491,11 @@ where
                 debug_assert_eq!(
                     Layout::Builtin(Builtin::Bool),
                     *ret_layout,
-                    "NumIsZero: expected to have return layout of type I1"
+                    "NumIsZero: expected to have return layout of type Bool"
                 );
-                self.build_num_is_zero(sym, &args[0], &arg_layouts[0])
+
+                self.load_literal(&Symbol::DEV_TMP, &Literal::Int(0))?;
+                self.build_eq(sym, &args[0], &Symbol::DEV_TMP, &arg_layouts[0])
             }
             _ => Err(format!(
                 "the function, {:?}, is not yet implemented",
