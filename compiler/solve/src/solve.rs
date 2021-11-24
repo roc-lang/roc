@@ -742,7 +742,7 @@ fn type_to_variable<'a>(
                 .map(|(field, field_type)| (field.clone(), field_type));
 
             field_vars.extend(it);
-            field_vars.sort_unstable_by(RecordFields::compare);
+            insertion_sort_by(&mut field_vars, RecordFields::compare);
 
             let record_fields = RecordFields::insert_into_subs(subs, field_vars);
 
@@ -912,6 +912,24 @@ fn alias_to_var<'a>(
     }
 }
 
+fn insertion_sort_by<T, F>(arr: &mut [T], mut compare: F)
+where
+    F: FnMut(&T, &T) -> std::cmp::Ordering,
+{
+    for i in 1..arr.len() {
+        let val = &arr[i];
+        let mut j = i;
+        let pos = arr[..i]
+            .binary_search_by(|x| compare(x, val))
+            .unwrap_or_else(|pos| pos);
+        // Swap all elements until specific position.
+        while j > pos {
+            arr.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+}
+
 fn sorted_no_duplicates<T>(slice: &[(TagName, T)]) -> bool {
     match slice.split_first() {
         None => true,
@@ -932,7 +950,7 @@ fn sorted_no_duplicates<T>(slice: &[(TagName, T)]) -> bool {
 }
 
 fn sort_and_deduplicate<T>(tag_vars: &mut bumpalo::collections::Vec<(TagName, T)>) {
-    tag_vars.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+    insertion_sort_by(tag_vars, |(a, _), (b, _)| a.cmp(b));
 
     // deduplicate, keeping the right-most occurrence of a tag name
     let mut i = 0;
