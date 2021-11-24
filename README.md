@@ -4,9 +4,6 @@ Roc is a language for making delightful software.
 
 If you already know [Elm](https://elm-lang.org/), then [Roc for Elm Programmers](https://github.com/rtfeldman/roc/blob/trunk/roc-for-elm-programmers.md) may be of interest.
 
-If you're curious about where the language's name and logo came from,
-[here's an explanation](https://github.com/rtfeldman/roc/blob/trunk/name-and-logo.md).
-
 You can get help and discuss with other people on the [Roc Zulip chat](https://roc.zulipchat.com).
 
 ## State of Roc
@@ -16,26 +13,20 @@ Many programs can however be compiled correctly. Check out [examples](examples) 
 
 ## Getting started
 
-1. [Install Rust](https://rustup.rs/)
-2. [Build from source](BUILDING_FROM_SOURCE.md)
-3. In a terminal, run this from the root folder:
-    ```
-    cargo run repl
-    ```
-4. Check out [these tests](https://github.com/rtfeldman/roc/blob/trunk/cli/tests/repl_eval.rs) for examples of using the REPL
+- [Linux x86](getting_started/linux_x86.md)
+- [Windows](getting_started/windows.md)
+- [Other](getting_started/other.md)
 
 ### Examples
 
-Took a look at the [examples folder](examples), [examples/benchmarks](examples/benchmarks) contains some larger examples.
-
 Run examples as follows:
-1. Navigate to `/examples`
-2. Run with:
 ```
-cargo run hello-world/Hello.roc
+cargo run examples/hello-world/Hello.roc
 ```
 Some examples like `examples/benchmarks/NQueens.roc` require input after running.
-For NQueens, input 10 in the terminal and press enter.  
+For NQueens, input 10 in the terminal and press enter.
+
+[examples/benchmarks](examples/benchmarks) contains larger examples.
 
 ## Applications and Platforms
 
@@ -108,3 +99,8 @@ been able to find beginner-friendly projects to get people up to speed gradually
 
 If you're interested in getting involved, check out
 [CONTRIBUTING.md](https://github.com/rtfeldman/roc/blob/trunk/CONTRIBUTING.md)!
+
+## Name and Logo
+
+If you're curious about where the language's name and logo came from,
+[here's an explanation](https://github.com/rtfeldman/roc/blob/trunk/name-and-logo.md).
