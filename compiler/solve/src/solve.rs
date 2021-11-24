@@ -1612,7 +1612,8 @@ fn deep_copy_var_help(
         }
 
         Alias(symbol, arguments, real_type_var) => {
-            let new_variables = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
+            let new_variables =
+                VariableSubsSlice::reserve_into_subs(subs, arguments.all_variables_len as _);
             for (target_index, var_index) in (new_variables.indices()).zip(arguments.variables()) {
                 let var = subs[var_index];
                 let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
