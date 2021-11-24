@@ -969,6 +969,67 @@ fn sort_and_deduplicate<T>(tag_vars: &mut bumpalo::collections::Vec<(TagName, T)
     }
 }
 
+/// Find whether the current run of tag names is in the subs.tag_names array already. If so,
+/// we take a SubsSlice to the existing tag names, so we don't have to add/clone those tag names
+/// and keep subs memory consumption low
+fn find_tag_name_run<T>(slice: &[(TagName, T)], subs: &mut Subs) -> Option<SubsSlice<TagName>> {
+    use std::cmp::Ordering;
+
+    let tag_name = slice.get(0)?.0.clone();
+
+    let mut result = None;
+
+    // the `SubsSlice<TagName>` that inserting `slice` intot subs would give
+    let bigger_slice = SubsSlice::new(subs.tag_names.len() as _, slice.len() as _);
+
+    match subs.tag_name_cache.entry(tag_name) {
+        Entry::Occupied(mut occupied) => {
+            let subs_slice = *occupied.get();
+
+            let prefix_slice = SubsSlice::new(subs_slice.start, slice.len() as _);
+
+            if slice.len() == 1 {
+                return Some(prefix_slice);
+            }
+
+            match slice.len().cmp(&subs_slice.len()) {
+                Ordering::Less => {
+                    // we might have a prefix
+                    let tag_names = &subs.tag_names[subs_slice.start as usize..];
+
+                    for (from_subs, (from_slice, _)) in tag_names.iter().zip(slice.iter()) {
+                        if from_subs != from_slice {
+                            return None;
+                        }
+                    }
+
+                    result = Some(prefix_slice);
+                }
+                Ordering::Equal => {
+                    let tag_names = &subs.tag_names[subs_slice.indices()];
+
+                    for (from_subs, (from_slice, _)) in tag_names.iter().zip(slice.iter()) {
+                        if from_subs != from_slice {
+                            return None;
+                        }
+                    }
+
+                    result = Some(subs_slice);
+                }
+                Ordering::Greater => {
+                    // switch to the bigger slice that is not inserted yet, but will be soon
+                    occupied.insert(bigger_slice);
+                }
+            }
+        }
+        Entry::Vacant(vacant) => {
+            vacant.insert(bigger_slice);
+        }
+    }
+
+    result
+}
+
 /// Assumes that the tags are sorted and there are no duplicates!
 fn insert_tags_fast_path<'a>(
     subs: &mut Subs,
@@ -978,26 +1039,48 @@ fn insert_tags_fast_path<'a>(
     tags: &[(TagName, Vec<Type>)],
 ) -> UnionTags {
     let new_variable_slices = SubsSlice::reserve_variable_slices(subs, tags.len());
-    let new_tag_names = SubsSlice::reserve_tag_names(subs, tags.len());
 
-    let it = (new_variable_slices.indices())
-        .zip(new_tag_names.indices())
-        .zip(tags);
+    match find_tag_name_run(tags, subs) {
+        Some(new_tag_names) => {
+            let it = (new_variable_slices.indices()).zip(tags);
 
-    for ((variable_slice_index, tag_name_index), (tag_name, arguments)) in it {
-        // turn the arguments into variables
-        let new_variables = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
-        let it = (new_variables.indices()).zip(arguments);
-        for (target_index, argument) in it {
-            let var = type_to_variable(subs, rank, pools, arena, argument);
-            subs.variables[target_index] = var;
+            for (variable_slice_index, (_, arguments)) in it {
+                // turn the arguments into variables
+                let new_variables = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
+                let it = (new_variables.indices()).zip(arguments);
+                for (target_index, argument) in it {
+                    let var = type_to_variable(subs, rank, pools, arena, argument);
+                    subs.variables[target_index] = var;
+                }
+
+                subs.variable_slices[variable_slice_index] = new_variables;
+            }
+
+            UnionTags::from_slices(new_tag_names, new_variable_slices)
         }
+        None => {
+            let new_tag_names = SubsSlice::reserve_tag_names(subs, tags.len());
 
-        subs.variable_slices[variable_slice_index] = new_variables;
-        subs.tag_names[tag_name_index] = tag_name.clone();
+            let it = (new_variable_slices.indices())
+                .zip(new_tag_names.indices())
+                .zip(tags);
+
+            for ((variable_slice_index, tag_name_index), (tag_name, arguments)) in it {
+                // turn the arguments into variables
+                let new_variables = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
+                let it = (new_variables.indices()).zip(arguments);
+                for (target_index, argument) in it {
+                    let var = type_to_variable(subs, rank, pools, arena, argument);
+                    subs.variables[target_index] = var;
+                }
+
+                subs.variable_slices[variable_slice_index] = new_variables;
+                subs.tag_names[tag_name_index] = tag_name.clone();
+            }
+
+            UnionTags::from_slices(new_tag_names, new_variable_slices)
+        }
     }
-
-    UnionTags::from_slices(new_tag_names, new_variable_slices)
 }
 
 fn insert_tags_slow_path<'a>(

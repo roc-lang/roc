@@ -1,5 +1,5 @@
 use crate::types::{name_type_var, ErrorType, Problem, RecordField, TypeExt};
-use roc_collections::all::{ImMap, ImSet, MutSet, SendMap};
+use roc_collections::all::{ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName, Uppercase};
 use roc_module::symbol::Symbol;
 use std::fmt;
@@ -59,6 +59,7 @@ pub struct Subs {
     pub field_names: Vec<Lowercase>,
     pub record_fields: Vec<RecordField<()>>,
     pub variable_slices: Vec<VariableSubsSlice>,
+    pub tag_name_cache: MutMap<TagName, SubsSlice<TagName>>,
 }
 
 impl Default for Subs {
@@ -1027,6 +1028,7 @@ impl Subs {
             // store an empty slice at the first position
             // used for "TagOrFunction"
             variable_slices: vec![VariableSubsSlice::default()],
+            tag_name_cache: MutMap::default(),
         };
 
         // NOTE the utable does not (currently) have a with_capacity; using this as the next-best thing
