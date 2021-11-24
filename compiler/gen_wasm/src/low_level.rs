@@ -370,6 +370,7 @@ pub fn decode_low_level<'a>(
         Not => code_builder.i32_eqz(),
         Hash => return NotImplemented,
         ExpectTrue => return NotImplemented,
+        RefCountGetPtr | RefCountInc | RefCountDec => return NotImplemented,
     }
     Done
 }
