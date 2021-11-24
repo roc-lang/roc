@@ -626,6 +626,27 @@ fn solve(
     }
 }
 
+use std::cell::RefCell;
+std::thread_local! {
+    /// Scratchpad arena so we don't need to allocate a new one all the time
+    static SCRATCHPAD: RefCell<bumpalo::Bump> = RefCell::new(bumpalo::Bump::with_capacity(4 * 1024));
+}
+
+fn take_scratchpad() -> bumpalo::Bump {
+    let mut result = bumpalo::Bump::new();
+    SCRATCHPAD.with(|f| {
+        result = f.replace(bumpalo::Bump::new());
+    });
+
+    result
+}
+
+fn put_scratchpad(scratchpad: bumpalo::Bump) {
+    SCRATCHPAD.with(|f| {
+        f.replace(scratchpad);
+    });
+}
+
 fn type_to_var(
     subs: &mut Subs,
     rank: Rank,
@@ -633,10 +654,14 @@ fn type_to_var(
     _: &mut MutMap<Symbol, Variable>,
     typ: &Type,
 ) -> Variable {
-    // capacity based on the false hello world program
-    let arena = bumpalo::Bump::with_capacity(4 * 1024);
+    let mut arena = take_scratchpad();
 
-    type_to_variable(subs, rank, pools, &arena, typ)
+    let var = type_to_variable(subs, rank, pools, &arena, typ);
+
+    arena.reset();
+    put_scratchpad(arena);
+
+    var
 }
 
 fn type_to_variable<'a>(
