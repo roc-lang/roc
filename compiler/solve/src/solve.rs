@@ -13,6 +13,7 @@ use roc_types::types::Type::{self, *};
 use roc_types::types::{gather_fields_unsorted_iter, Alias, Category, ErrorType, PatternCategory};
 use roc_unify::unify::unify;
 use roc_unify::unify::Unified::*;
+use std::collections::hash_map::Entry;
 
 // Type checking system adapted from Elm by Evan Czaplicki, BSD-3-Clause Licensed
 // https://github.com/elm/compiler
@@ -435,9 +436,13 @@ fn solve(
 
                     let mut new_env = env.clone();
                     for (symbol, loc_var) in local_def_vars.iter() {
-                        // better to ask for forgiveness than for permission
-                        if let Some(old) = new_env.vars_by_symbol.insert(*symbol, loc_var.value) {
-                            new_env.vars_by_symbol.insert(*symbol, old);
+                        match new_env.vars_by_symbol.entry(*symbol) {
+                            Entry::Occupied(_) => {
+                                // keep the existing value
+                            }
+                            Entry::Vacant(vacant) => {
+                                vacant.insert(loc_var.value);
+                            }
                         }
                     }
 
@@ -580,9 +585,13 @@ fn solve(
 
                     let mut new_env = env.clone();
                     for (symbol, loc_var) in local_def_vars.iter() {
-                        // when there are duplicates, keep the one from `env`
-                        if !new_env.vars_by_symbol.contains_key(symbol) {
-                            new_env.vars_by_symbol.insert(*symbol, loc_var.value);
+                        match new_env.vars_by_symbol.entry(*symbol) {
+                            Entry::Occupied(_) => {
+                                // keep the existing value
+                            }
+                            Entry::Vacant(vacant) => {
+                                vacant.insert(loc_var.value);
+                            }
                         }
                     }
 
