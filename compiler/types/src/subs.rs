@@ -216,11 +216,16 @@ impl<T> Default for SubsSlice<T> {
 
 impl<T> SubsSlice<T> {
     pub fn get_slice<'a>(&self, slice: &'a [T]) -> &'a [T] {
-        &slice[self.start as usize..][..self.length as usize]
+        &slice[self.indices()]
     }
 
     pub fn get_slice_mut<'a>(&self, slice: &'a mut [T]) -> &'a mut [T] {
-        &mut slice[self.start as usize..][..self.length as usize]
+        &mut slice[self.indices()]
+    }
+
+    #[inline(always)]
+    pub fn indices(&self) -> std::ops::Range<usize> {
+        self.start as usize..(self.start as usize + self.length as usize)
     }
 
     pub const fn len(&self) -> usize {
@@ -1543,6 +1548,10 @@ impl VariableSubsSlice {
         Self {
             slice: SubsSlice::new(start, length),
         }
+    }
+
+    pub fn indices(&self) -> std::ops::Range<usize> {
+        self.slice.indices()
     }
 
     pub fn reserve_into_subs(subs: &mut Subs, length: usize) -> Self {

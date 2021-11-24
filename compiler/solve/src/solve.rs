@@ -1456,72 +1456,51 @@ fn deep_copy_var_help(
     match content {
         Structure(flat_type) => {
             let new_flat_type = match flat_type {
-                Apply(symbol, args) => {
-                    let mut new_arg_vars = Vec::with_capacity(args.len());
-
-                    for index in args.into_iter() {
-                        let var = subs[index];
+                Apply(symbol, arguments) => {
+                    let new_arguments = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
+                    for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
+                        let var = subs[var_index];
                         let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
-                        new_arg_vars.push(copy_var);
+                        subs.variables[target_index] = copy_var;
                     }
 
-                    let arg_vars = VariableSubsSlice::insert_into_subs(subs, new_arg_vars);
-
-                    Apply(symbol, arg_vars)
+                    Apply(symbol, new_arguments)
                 }
 
-                Func(arg_vars, closure_var, ret_var) => {
+                Func(arguments, closure_var, ret_var) => {
                     let new_ret_var = deep_copy_var_help(subs, max_rank, pools, visited, ret_var);
                     let new_closure_var =
                         deep_copy_var_help(subs, max_rank, pools, visited, closure_var);
 
-                    let mut new_arg_vars = Vec::with_capacity(arg_vars.len());
-
-                    for index in arg_vars.into_iter() {
-                        let var = subs[index];
+                    let new_arguments = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
+                    for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
+                        let var = subs[var_index];
                         let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
-                        new_arg_vars.push(copy_var);
+                        subs.variables[target_index] = copy_var;
                     }
 
-                    let arg_vars = VariableSubsSlice::insert_into_subs(subs, new_arg_vars);
-
-                    Func(arg_vars, new_closure_var, new_ret_var)
+                    Func(new_arguments, new_closure_var, new_ret_var)
                 }
 
                 same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
 
                 Record(fields, ext_var) => {
                     let record_fields = {
-                        let mut new_vars = Vec::with_capacity(fields.len());
+                        let new_variables =
+                            VariableSubsSlice::reserve_into_subs(subs, fields.len());
 
-                        for index in fields.iter_variables() {
-                            let var = subs[index];
+                        let it = (new_variables.indices()).zip(fields.iter_variables());
+                        for (target_index, var_index) in it {
+                            let var = subs[var_index];
                             let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
-
-                            new_vars.push(copy_var);
-                        }
-
-                        let field_names_start = subs.field_names.len() as u32;
-                        let variables_start = subs.variables.len() as u32;
-                        let field_types_start = subs.record_fields.len() as u32;
-
-                        let mut length = 0;
-
-                        for ((i1, _, i3), var) in fields.iter_all().zip(new_vars) {
-                            let record_field = subs[i3].map(|_| var);
-
-                            subs.field_names.push(subs[i1].clone());
-                            subs.record_fields.push(record_field.map(|_| ()));
-                            subs.variables.push(*record_field.as_inner());
-
-                            length += 1;
+                            subs.variables[target_index] = copy_var;
                         }
 
                         RecordFields {
-                            length,
-                            field_names_start,
-                            variables_start,
-                            field_types_start,
+                            length: fields.length,
+                            field_names_start: fields.field_names_start,
+                            variables_start: new_variables.slice.start,
+                            field_types_start: fields.field_types_start,
                         }
                     };
 
@@ -1534,19 +1513,18 @@ fn deep_copy_var_help(
                 TagUnion(tags, ext_var) => {
                     let mut new_variable_slices = Vec::with_capacity(tags.len());
 
-                    let mut new_variables = Vec::new();
                     for index in tags.variables() {
                         let slice = subs[index];
-                        for var_index in slice {
+
+                        let new_variables = VariableSubsSlice::reserve_into_subs(subs, slice.len());
+                        let it = (new_variables.indices()).zip(slice);
+                        for (target_index, var_index) in it {
                             let var = subs[var_index];
-                            let new_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
-                            new_variables.push(new_var);
+                            let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
+                            subs.variables[target_index] = copy_var;
                         }
 
-                        let new_slice =
-                            VariableSubsSlice::insert_into_subs(subs, new_variables.drain(..));
-
-                        new_variable_slices.push(new_slice);
+                        new_variable_slices.push(new_variables);
                     }
 
                     let new_variables = {
@@ -1572,19 +1550,18 @@ fn deep_copy_var_help(
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
                     let mut new_variable_slices = Vec::with_capacity(tags.len());
 
-                    let mut new_variables = Vec::new();
                     for index in tags.variables() {
                         let slice = subs[index];
-                        for var_index in slice {
+
+                        let new_variables = VariableSubsSlice::reserve_into_subs(subs, slice.len());
+                        let it = (new_variables.indices()).zip(slice);
+                        for (target_index, var_index) in it {
                             let var = subs[var_index];
-                            let new_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
-                            new_variables.push(new_var);
+                            let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
+                            subs.variables[target_index] = copy_var;
                         }
 
-                        let new_slice =
-                            VariableSubsSlice::insert_into_subs(subs, new_variables.drain(..));
-
-                        new_variable_slices.push(new_slice);
+                        new_variable_slices.push(new_variables);
                     }
 
                     let new_variables = {
@@ -1634,21 +1611,22 @@ fn deep_copy_var_help(
             copy
         }
 
-        Alias(symbol, mut args, real_type_var) => {
-            let mut new_vars = Vec::with_capacity(args.variables().len());
-
-            for var_index in args.variables() {
+        Alias(symbol, arguments, real_type_var) => {
+            let new_variables = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
+            for (target_index, var_index) in (new_variables.indices()).zip(arguments.variables()) {
                 let var = subs[var_index];
-                let new_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
-
-                new_vars.push(new_var);
+                let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
+                subs.variables[target_index] = copy_var;
             }
 
-            args.replace_variables(subs, new_vars);
+            let new_arguments = AliasVariables {
+                variables_start: new_variables.slice.start,
+                ..arguments
+            };
 
             let new_real_type_var =
                 deep_copy_var_help(subs, max_rank, pools, visited, real_type_var);
-            let new_content = Alias(symbol, args, new_real_type_var);
+            let new_content = Alias(symbol, new_arguments, new_real_type_var);
 
             subs.set(copy, make_descriptor(new_content));
 
