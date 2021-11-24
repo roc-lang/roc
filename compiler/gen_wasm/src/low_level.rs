@@ -370,7 +370,12 @@ pub fn decode_low_level<'a>(
         Not => code_builder.i32_eqz(),
         Hash => return NotImplemented,
         ExpectTrue => return NotImplemented,
-        RefCountGetPtr | RefCountInc | RefCountDec => return NotImplemented,
+        RefCountGetPtr => {
+            code_builder.i32_const(4);
+            code_builder.i32_sub();
+        }
+        RefCountInc => return BuiltinCall(bitcode::UTILS_INCREF),
+        RefCountDec => return BuiltinCall(bitcode::UTILS_DECREF),
     }
     Done
 }
