@@ -739,11 +739,10 @@ pub fn constrain_expr(
                 region,
             );
 
-            let ext = Type::Variable(*closure_var);
-            let lambda_set = Type::TagUnion(
-                vec![(TagName::Closure(*closure_name), vec![])],
-                Box::new(ext),
-            );
+            let lambda_set = Type::ClosureTag {
+                name: *closure_name,
+                ext: *closure_var,
+            };
 
             let function_type = Type::Function(
                 vec![record_type],
@@ -1416,7 +1415,7 @@ fn constrain_closure_size(
         ));
     }
 
-    let tag_name = roc_module::ident::TagName::Closure(name);
+    let tag_name = TagName::Closure(name);
     let closure_type = Type::TagUnion(
         vec![(tag_name, tag_arguments)],
         Box::new(Type::Variable(closure_ext_var)),

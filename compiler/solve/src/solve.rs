@@ -690,6 +690,19 @@ fn type_to_variable<'a>(
         EmptyRec => Variable::EMPTY_RECORD,
         EmptyTagUnion => Variable::EMPTY_TAG_UNION,
 
+        ClosureTag { name, ext } => {
+            let tag_name = TagName::Closure(*name);
+            let tag_names = SubsSlice::new(subs.tag_names.len() as u32, 1);
+
+            subs.tag_names.push(tag_name);
+
+            let union_tags = UnionTags::from_slices(tag_names, SubsSlice::default());
+
+            let content = Content::Structure(FlatType::TagUnion(union_tags, *ext));
+
+            register(subs, rank, pools, content)
+        }
+
         // This case is important for the rank of boolean variables
         Function(arguments, closure_type, ret_type) => {
             let new_arguments = VariableSubsSlice::reserve_into_subs(subs, arguments.len());

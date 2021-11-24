@@ -169,6 +169,11 @@ pub enum Type {
     Record(SendMap<Lowercase, RecordField<Type>>, Box<Type>),
     TagUnion(Vec<(TagName, Vec<Type>)>, Box<Type>),
     FunctionOrTagUnion(TagName, Symbol, Box<Type>),
+    /// A function name that is used in our defunctionalization algorithm
+    ClosureTag {
+        name: Symbol,
+        ext: Variable,
+    },
     Alias {
         symbol: Symbol,
         type_arguments: Vec<(Lowercase, Type)>,
@@ -378,6 +383,15 @@ impl fmt::Debug for Type {
                     }
                 }
             }
+            Type::ClosureTag { name, ext } => {
+                write!(f, "ClosureTag(")?;
+
+                name.fmt(f)?;
+                write!(f, ", ")?;
+                ext.fmt(f)?;
+
+                write!(f, ")")
+            }
             Type::RecursiveTagUnion(rec, tags, ext) => {
                 write!(f, "[")?;
 
@@ -462,7 +476,7 @@ impl Type {
         use Type::*;
 
         match self {
-            Variable(v) => {
+            ClosureTag { ext: v, .. } | Variable(v) => {
                 if let Some(replacement) = substitutions.get(v) {
                     *self = replacement.clone();
                 }
@@ -590,7 +604,7 @@ impl Type {
                     arg.substitute_alias(rep_symbol, actual);
                 }
             }
-            EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) => {}
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
         }
     }
 
@@ -627,7 +641,7 @@ impl Type {
             }
             Apply(symbol, _) if *symbol == rep_symbol => true,
             Apply(_, args) => args.iter().any(|arg| arg.contains_symbol(rep_symbol)),
-            EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) => false,
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => false,
         }
     }
 
@@ -635,7 +649,7 @@ impl Type {
         use Type::*;
 
         match self {
-            Variable(v) => *v == rep_variable,
+            ClosureTag { ext: v, .. } | Variable(v) => *v == rep_variable,
             Function(args, closure, ret) => {
                 ret.contains_variable(rep_variable)
                     || closure.contains_variable(rep_variable)
@@ -819,7 +833,7 @@ impl Type {
                     }
                 }
             }
-            EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) => {}
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
         }
     }
 }
@@ -872,7 +886,7 @@ fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
             accum.insert(*symbol);
             args.iter().for_each(|arg| symbols_help(arg, accum));
         }
-        EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) => {}
+        EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
     }
 }
 
@@ -882,7 +896,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
     match tipe {
         EmptyRec | EmptyTagUnion | Erroneous(_) => (),
 
-        Variable(v) => {
+        ClosureTag { ext: v, .. } | Variable(v) => {
             accum.insert(*v);
         }
 
@@ -979,7 +993,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
     match tipe {
         EmptyRec | EmptyTagUnion | Erroneous(_) => (),
 
-        Variable(v) => {
+        ClosureTag { ext: v, .. } | Variable(v) => {
             accum.type_variables.insert(*v);
         }
 
