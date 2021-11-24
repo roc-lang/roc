@@ -825,7 +825,7 @@ fn type_to_variable<'a>(
                     Symbol::NUM_U16 => return Variable::U16,
                     Symbol::NUM_U8 => return Variable::U8,
 
-                    // Symbol::NUM_NAT => return Variable::NAT,
+                    Symbol::NUM_NAT => return Variable::NAT,
                     _ => {}
                 }
             }
