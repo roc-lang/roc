@@ -641,15 +641,14 @@ fn type_to_variable<'a>(
 
     match typ {
         Variable(var) => *var,
-        Apply(symbol, args) => {
-            let arg_vars = VariableSubsSlice::reserve_into_subs(subs, args.len());
-
-            for (i, arg) in (arg_vars.slice.start as usize..).zip(args) {
-                let var = type_to_variable(subs, rank, pools, arena, arg);
-                subs.variables[i] = var;
+        Apply(symbol, arguments) => {
+            let new_arguments = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
+            for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
+                let var = type_to_variable(subs, rank, pools, arena, var_index);
+                subs.variables[target_index] = var;
             }
 
-            let flat_type = FlatType::Apply(*symbol, arg_vars);
+            let flat_type = FlatType::Apply(*symbol, new_arguments);
             let content = Content::Structure(flat_type);
 
             register(subs, rank, pools, content)
@@ -658,17 +657,16 @@ fn type_to_variable<'a>(
         EmptyTagUnion => Variable::EMPTY_TAG_UNION,
 
         // This case is important for the rank of boolean variables
-        Function(args, closure_type, ret_type) => {
-            let arg_vars = VariableSubsSlice::reserve_into_subs(subs, args.len());
-
-            for (i, arg) in (arg_vars.slice.start as usize..).zip(args) {
-                let var = type_to_variable(subs, rank, pools, arena, arg);
-                subs.variables[i] = var;
+        Function(arguments, closure_type, ret_type) => {
+            let new_arguments = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
+            for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
+                let var = type_to_variable(subs, rank, pools, arena, var_index);
+                subs.variables[target_index] = var;
             }
 
             let ret_var = type_to_variable(subs, rank, pools, arena, ret_type);
             let closure_var = type_to_variable(subs, rank, pools, arena, closure_type);
-            let content = Content::Structure(FlatType::Func(arg_vars, closure_var, ret_var));
+            let content = Content::Structure(FlatType::Func(new_arguments, closure_var, ret_var));
 
             register(subs, rank, pools, content)
         }
@@ -786,20 +784,25 @@ fn type_to_variable<'a>(
                 }
             }
 
-            let mut arg_vars = Vec::with_capacity_in(args.len(), arena);
+            let length = args.len() + lambda_set_variables.len();
+            let new_variables = VariableSubsSlice::reserve_into_subs(subs, length);
 
-            for (_, arg_type) in args {
-                let arg_var = type_to_variable(subs, rank, pools, arena, arg_type);
-
-                arg_vars.push(arg_var);
+            for (target_index, (_, arg_type)) in (new_variables.indices()).zip(args) {
+                let copy_var = type_to_variable(subs, rank, pools, arena, arg_type);
+                subs.variables[target_index] = copy_var;
             }
 
-            let lambda_set_variables_it = lambda_set_variables
-                .iter()
-                .map(|ls| type_to_variable(subs, rank, pools, arena, &ls.0));
-            let lambda_set_variables = Vec::from_iter_in(lambda_set_variables_it, arena);
+            let it = (new_variables.indices().skip(args.len())).zip(lambda_set_variables);
+            for (target_index, ls) in it {
+                let copy_var = type_to_variable(subs, rank, pools, arena, &ls.0);
+                subs.variables[target_index] = copy_var;
+            }
 
-            let arg_vars = AliasVariables::insert_into_subs(subs, arg_vars, lambda_set_variables);
+            let arg_vars = AliasVariables {
+                variables_start: new_variables.slice.start,
+                type_variables_len: args.len() as _,
+                all_variables_len: length as _,
+            };
 
             let alias_var = type_to_variable(subs, rank, pools, arena, alias_type);
             let content = Content::Alias(*symbol, arg_vars, alias_var);
@@ -814,29 +817,27 @@ fn type_to_variable<'a>(
             lambda_set_variables,
             ..
         } => {
-            let mut arg_vars = Vec::with_capacity_in(args.len(), arena);
+            let length = args.len() + lambda_set_variables.len();
+            let new_variables = VariableSubsSlice::reserve_into_subs(subs, length);
 
-            for (_, arg_type) in args {
-                let arg_var = type_to_variable(subs, rank, pools, arena, arg_type);
-
-                arg_vars.push(arg_var);
+            for (target_index, (_, arg_type)) in (new_variables.indices()).zip(args) {
+                let copy_var = type_to_variable(subs, rank, pools, arena, arg_type);
+                subs.variables[target_index] = copy_var;
             }
 
-            let lambda_set_variables_it = lambda_set_variables
-                .iter()
-                .map(|ls| type_to_variable(subs, rank, pools, arena, &ls.0));
-            let lambda_set_variables = Vec::from_iter_in(lambda_set_variables_it, arena);
+            let it = (new_variables.indices().skip(args.len())).zip(lambda_set_variables);
+            for (target_index, ls) in it {
+                let copy_var = type_to_variable(subs, rank, pools, arena, &ls.0);
+                subs.variables[target_index] = copy_var;
+            }
 
-            let arg_vars = AliasVariables::insert_into_subs(subs, arg_vars, lambda_set_variables);
+            let arg_vars = AliasVariables {
+                variables_start: new_variables.slice.start,
+                type_variables_len: args.len() as _,
+                all_variables_len: length as _,
+            };
 
             let alias_var = type_to_variable(subs, rank, pools, arena, alias_type);
-
-            // unify the actual_var with the result var
-            // this can be used to access the type of the actual_var
-            // to determine its layout later
-            // subs.set_content(*actual_var, descriptor.content);
-
-            //subs.set(*actual_var, descriptor.clone());
             let content = Content::Alias(*symbol, arg_vars, alias_var);
 
             let result = register(subs, rank, pools, content);
