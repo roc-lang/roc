@@ -1361,8 +1361,7 @@ impl ErrorType {
                 ret.add_names(taken);
             }
             Alias(_, ts, t) => {
-                ts.iter().for_each(|(a, t)| {
-                    taken.insert(a.clone());
+                ts.iter().for_each(|t| {
                     t.add_names(taken);
                 });
                 t.add_names(taken);
