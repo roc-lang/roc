@@ -964,8 +964,8 @@ enum ExpectationContext<'a> {
 impl<'a> std::fmt::Debug for ExpectationContext<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            &ExpectationContext::Annotation { .. } => f.write_str("Annotation"),
-            &ExpectationContext::Arbitrary => f.write_str("Arbitrary"),
+            ExpectationContext::Annotation { .. } => f.write_str("Annotation"),
+            ExpectationContext::Arbitrary => f.write_str("Arbitrary"),
         }
     }
 }
