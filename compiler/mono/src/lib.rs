@@ -4,6 +4,7 @@
 
 pub mod alias_analysis;
 pub mod borrow;
+pub mod gen_refcount;
 pub mod inc_dec;
 pub mod ir;
 pub mod layout;
