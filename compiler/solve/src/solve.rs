@@ -696,7 +696,8 @@ fn type_to_variable<'a>(
 
             subs.tag_names.push(tag_name);
 
-            let union_tags = UnionTags::from_slices(tag_names, SubsSlice::default());
+            // the first VariableSubsSlice in the array is a zero-length slice
+            let union_tags = UnionTags::from_slices(tag_names, SubsSlice::new(0, 1));
 
             let content = Content::Structure(FlatType::TagUnion(union_tags, *ext));
 
