@@ -209,7 +209,8 @@ fn unify_alias(
 
                     problems
                 } else {
-                    mismatch!("{}", symbol)
+                    dbg!(args.len(), other_args.len());
+                    mismatch!("{:?}", symbol)
                 }
             } else {
                 unify_pool(subs, pool, real_var, *other_real_var)

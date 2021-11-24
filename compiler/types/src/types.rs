@@ -1241,7 +1241,7 @@ pub enum ErrorType {
     TagUnion(SendMap<TagName, Vec<ErrorType>>, TypeExt),
     RecursiveTagUnion(Box<ErrorType>, SendMap<TagName, Vec<ErrorType>>, TypeExt),
     Function(Vec<ErrorType>, Box<ErrorType>, Box<ErrorType>),
-    Alias(Symbol, Vec<(Lowercase, ErrorType)>, Box<ErrorType>),
+    Alias(Symbol, Vec<ErrorType>, Box<ErrorType>),
     Error,
 }
 
@@ -1303,7 +1303,7 @@ fn write_error_type_help(
         Alias(Symbol::NUM_NUM, mut arguments, _actual) => {
             debug_assert!(arguments.len() == 1);
 
-            let argument = arguments.remove(0).1;
+            let argument = arguments.remove(0);
 
             match argument {
                 Type(Symbol::NUM_INTEGER, _) => {
@@ -1421,7 +1421,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
         Alias(Symbol::NUM_NUM, mut arguments, _actual) => {
             debug_assert!(arguments.len() == 1);
 
-            let argument = arguments.remove(0).1;
+            let argument = arguments.remove(0);
 
             match argument {
                 Type(Symbol::NUM_INTEGER, _) => {
@@ -1456,7 +1456,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
             for arg in arguments {
                 buf.push(' ');
 
-                write_debug_error_type_help(arg.1, buf, Parens::InTypeParam);
+                write_debug_error_type_help(arg, buf, Parens::InTypeParam);
             }
 
             // useful for debugging

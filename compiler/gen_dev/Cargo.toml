@@ -23,6 +23,7 @@ target-lexicon = "0.12.2"
 # Probably just need to specify an extra field that used to be implicit or something.
 # When fixed also update the version of object in the linker.
 object = { version = "0.26.2", features = ["write"] }
+packed_struct = "0.10.0"
 
 [dev-dependencies]
 roc_can = { path = "../can" }

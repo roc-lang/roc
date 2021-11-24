@@ -2,7 +2,7 @@ use roc_builtins::bitcode::{self, FloatWidth};
 use roc_module::low_level::{LowLevel, LowLevel::*};
 use roc_module::symbol::Symbol;
 
-use crate::layout::WasmLayout;
+use crate::layout::{StackMemoryFormat, WasmLayout};
 use crate::storage::Storage;
 use crate::wasm_module::{
     CodeBuilder,
@@ -63,11 +63,20 @@ pub fn decode_low_level<'a>(
             return NotImplemented;
         }
 
-        NumAdd => match ret_layout.value_type() {
-            I32 => code_builder.i32_add(),
-            I64 => code_builder.i64_add(),
-            F32 => code_builder.f32_add(),
-            F64 => code_builder.f64_add(),
+        NumAdd => match ret_layout {
+            WasmLayout::Primitive(value_type, _) => match value_type {
+                I32 => code_builder.i32_add(),
+                I64 => code_builder.i64_add(),
+                F32 => code_builder.f32_add(),
+                F64 => code_builder.f64_add(),
+            },
+            WasmLayout::StackMemory { format, .. } => match format {
+                StackMemoryFormat::Aggregate => return NotImplemented,
+                StackMemoryFormat::Int128 => return NotImplemented,
+                StackMemoryFormat::Float128 => return NotImplemented,
+                StackMemoryFormat::Decimal => return BuiltinCall(bitcode::DEC_ADD_WITH_OVERFLOW),
+            },
+            WasmLayout::HeapMemory { .. } => return NotImplemented,
         },
         NumAddWrap => match ret_layout.value_type() {
             I32 => {

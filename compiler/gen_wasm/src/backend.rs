@@ -7,7 +7,7 @@ use roc_module::symbol::Symbol;
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
-use crate::layout::WasmLayout;
+use crate::layout::{StackMemoryFormat, WasmLayout};
 use crate::low_level::{decode_low_level, LowlevelBuildResult};
 use crate::storage::{Storage, StoredValue, StoredValueKind};
 use crate::wasm_module::linking::{
@@ -237,33 +237,38 @@ impl<'a> WasmBackend<'a> {
 
     fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) -> Result<(), String> {
         match stmt {
-            Stmt::Let(sym, expr, layout, following) => {
-                let wasm_layout = WasmLayout::new(layout);
+            Stmt::Let(_, _, _, _) => {
+                let mut current_stmt = stmt;
+                while let Stmt::Let(sym, expr, layout, following) = current_stmt {
+                    let wasm_layout = WasmLayout::new(layout);
 
-                let kind = match following {
-                    Stmt::Ret(ret_sym) if *sym == *ret_sym => StoredValueKind::ReturnValue,
-                    _ => StoredValueKind::Variable,
-                };
+                    let kind = match following {
+                        Stmt::Ret(ret_sym) if *sym == *ret_sym => StoredValueKind::ReturnValue,
+                        _ => StoredValueKind::Variable,
+                    };
 
-                let sym_storage = self.storage.allocate(&wasm_layout, *sym, kind);
+                    let sym_storage = self.storage.allocate(&wasm_layout, *sym, kind);
 
-                self.build_expr(sym, expr, layout, &sym_storage)?;
+                    self.build_expr(sym, expr, layout, &sym_storage)?;
 
-                // For primitives, we record that this symbol is at the top of the VM stack
-                // (For other values, we wrote to memory and there's nothing on the VM stack)
-                if let WasmLayout::Primitive(value_type, size) = wasm_layout {
-                    let vm_state = self.code_builder.set_top_symbol(*sym);
-                    self.storage.symbol_storage_map.insert(
-                        *sym,
-                        StoredValue::VirtualMachineStack {
-                            vm_state,
-                            value_type,
-                            size,
-                        },
-                    );
+                    // For primitives, we record that this symbol is at the top of the VM stack
+                    // (For other values, we wrote to memory and there's nothing on the VM stack)
+                    if let WasmLayout::Primitive(value_type, size) = wasm_layout {
+                        let vm_state = self.code_builder.set_top_symbol(*sym);
+                        self.storage.symbol_storage_map.insert(
+                            *sym,
+                            StoredValue::VirtualMachineStack {
+                                vm_state,
+                                value_type,
+                                size,
+                            },
+                        );
+                    }
+
+                    current_stmt = *following;
                 }
 
-                self.build_stmt(following, ret_layout)?;
+                self.build_stmt(current_stmt, ret_layout)?;
                 Ok(())
             }
 
@@ -803,15 +808,35 @@ impl<'a> WasmBackend<'a> {
                     Some(ret_layout.value_type())
                 };
 
-                // Zig's "fast calling convention" packs structs into CPU registers (stack machine slots) if possible.
-                // If they're small enough they can go into an I32 or I64. If they're big, they're pointers (I32).
                 for arg in arguments {
-                    param_types.push(match self.storage.get(arg) {
-                        StoredValue::StackMemory { size, .. } if *size > 4 && *size <= 8 => {
-                            ValueType::I64
+                    match self.storage.get(arg) {
+                        StoredValue::StackMemory { size, format, .. } => {
+                            use StackMemoryFormat::*;
+
+                            match format {
+                                Aggregate => {
+                                    // Zig's "fast calling convention" packs structs into CPU registers
+                                    // (stack machine slots) if possible.  If they're small enough they
+                                    // can go into an I32 or I64. If they're big, they're pointers (I32).
+                                    if *size > 4 && *size <= 8 {
+                                        param_types.push(ValueType::I64)
+                                    } else {
+                                        // either
+                                        //
+                                        // - this is a small value, that fits in an i32
+                                        // - this is a big value, we pass a memory address
+                                        param_types.push(ValueType::I32)
+                                    }
+                                }
+                                Int128 | Float128 | Decimal => {
+                                    // these types are passed as 2 i64s
+                                    param_types.push(ValueType::I64);
+                                    param_types.push(ValueType::I64);
+                                }
+                            }
                         }
-                        stored => stored.value_type(),
-                    });
+                        stored => param_types.push(stored.value_type()),
+                    }
                 }
 
                 let signature_index = self.module.types.insert(Signature {
