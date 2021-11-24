@@ -10,14 +10,16 @@ pub use crate::error::mono::mono_problem;
 pub use crate::error::parse::parse_problem;
 pub use crate::error::r#type::type_problem;
 
-// const IS_WINDOWS: bool = std::env::consts::OS == "windows";
-const IS_WINDOWS: bool = false;
+#[cfg(windows)]
+const CYCLE_ELEMENTS: [&str; 4] = ["+-----+", "|     ", "|     |", "+-<---+"];
 
-// trick to branch in a const. Can be replaced by an if when that is merged into rustc
-const CYCLE_TOP: &str = ["+-----+", "┌─────┐"][(!IS_WINDOWS) as usize];
-const CYCLE_LN: &str = ["|     ", "│     "][!IS_WINDOWS as usize];
-const CYCLE_MID: &str = ["|     |", "│     ↓"][!IS_WINDOWS as usize];
-const CYCLE_END: &str = ["+-<---+", "└─────┘"][!IS_WINDOWS as usize];
+#[cfg(not(windows))]
+const CYCLE_ELEMENTS: [&str; 4] = ["┌─────┐", "│     ", "│     ↓", "└─────┘"];
+
+const CYCLE_TOP: &str = CYCLE_ELEMENTS[0];
+const CYCLE_LN: &str = CYCLE_ELEMENTS[1];
+const CYCLE_MID: &str = CYCLE_ELEMENTS[2];
+const CYCLE_END: &str = CYCLE_ELEMENTS[3];
 
 const GUTTER_BAR: &str = "│";
 const ERROR_UNDERLINE: &str = "^";
