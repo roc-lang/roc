@@ -1554,6 +1554,14 @@ impl VariableSubsSlice {
         self.slice.indices()
     }
 
+    /// Reserve space for `length` variables in the subs.variables array
+    ///
+    /// This is useful when we know how many variables e.g. a loop will produce,
+    /// but the loop itself also produces new variables. We often want to work
+    /// with slices, and the loop itself would break up our contiguous slice of variables
+    ///
+    /// This function often helps prevent an intermediate array. See also `indices` above
+    /// to conveniently get a slice or iterator over the indices
     pub fn reserve_into_subs(subs: &mut Subs, length: usize) -> Self {
         let start = subs.variables.len() as u32;
 
