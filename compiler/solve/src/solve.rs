@@ -894,6 +894,76 @@ fn type_to_variable<'a>(
     }
 }
 
+fn sorted_no_duplicates<T>(slice: &[(TagName, T)]) -> bool {
+    match slice.split_first() {
+        None => true,
+        Some(((first, _), rest)) => {
+            let mut current = first;
+
+            for (next, _) in rest {
+                if current >= next {
+                    return false;
+                } else {
+                    current = next;
+                }
+            }
+
+            true
+        }
+    }
+}
+
+fn sort_and_deduplicate<T>(tag_vars: &mut bumpalo::collections::Vec<(TagName, T)>) {
+    tag_vars.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+
+    // deduplicate, keeping the right-most occurrence of a tag name
+    let mut i = 0;
+
+    while i < tag_vars.len() {
+        match (tag_vars.get(i), tag_vars.get(i + 1)) {
+            (Some((t1, _)), Some((t2, _))) => {
+                if t1 == t2 {
+                    tag_vars.remove(i);
+                } else {
+                    i += 1;
+                }
+            }
+            _ => break,
+        }
+    }
+}
+
+/// Assumes that the tags are sorted and there are no duplicates!
+fn insert_tags_fast_path<'a>(
+    subs: &mut Subs,
+    rank: Rank,
+    pools: &mut Pools,
+    arena: &'a bumpalo::Bump,
+    tags: &[(TagName, Vec<Type>)],
+) -> UnionTags {
+    let new_variable_slices = SubsSlice::reserve_variable_slices(subs, tags.len());
+    let new_tag_names = SubsSlice::reserve_tag_names(subs, tags.len());
+
+    let it = (new_variable_slices.indices())
+        .zip(new_tag_names.indices())
+        .zip(tags);
+
+    for ((variable_slice_index, tag_name_index), (tag_name, arguments)) in it {
+        // turn the arguments into variables
+        let new_variables = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
+        let it = (new_variables.indices()).zip(arguments);
+        for (target_index, argument) in it {
+            let var = type_to_variable(subs, rank, pools, arena, argument);
+            subs.variables[target_index] = var;
+        }
+
+        subs.variable_slices[variable_slice_index] = new_variables;
+        subs.tag_names[tag_name_index] = tag_name.clone();
+    }
+
+    UnionTags::from_slices(new_tag_names, new_variable_slices)
+}
+
 fn type_to_union_tags<'a>(
     subs: &mut Subs,
     rank: Rank,
@@ -904,48 +974,62 @@ fn type_to_union_tags<'a>(
 ) -> (UnionTags, Variable) {
     use bumpalo::collections::Vec;
 
-    let mut tag_vars = Vec::with_capacity_in(tags.len(), arena);
+    if ext.is_empty_tag_union() {
+        let ext = type_to_variable(subs, rank, pools, arena, &Type::EmptyTagUnion);
 
-    for (tag, tag_argument_types) in tags {
-        let new_slice = VariableSubsSlice::reserve_into_subs(subs, tag_argument_types.len());
+        if tags.len() == 1 || sorted_no_duplicates(tags) {
+            (insert_tags_fast_path(subs, rank, pools, arena, tags), ext)
+        } else {
+            let mut tag_vars = Vec::with_capacity_in(tags.len(), arena);
 
-        for (i, arg) in (new_slice.slice.start as usize..).zip(tag_argument_types) {
-            let var = type_to_variable(subs, rank, pools, arena, arg);
-            subs.variables[i] = var;
-        }
+            for (tag, tag_argument_types) in tags {
+                let new_slice =
+                    VariableSubsSlice::reserve_into_subs(subs, tag_argument_types.len());
 
-        tag_vars.push((tag.clone(), new_slice));
-    }
-
-    let temp_ext_var = type_to_variable(subs, rank, pools, arena, ext);
-
-    let ext = {
-        let (it, ext) =
-            roc_types::types::gather_tags_unsorted_iter(subs, UnionTags::default(), temp_ext_var);
-
-        tag_vars.extend(it.map(|(n, v)| (n.clone(), v)));
-        tag_vars.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
-
-        // deduplicate, keeping the right-most occurrence of a tag name
-        let mut i = 0;
-
-        while i < tag_vars.len() {
-            match (tag_vars.get(i), tag_vars.get(i + 1)) {
-                (Some((t1, _)), Some((t2, _))) => {
-                    if t1 == t2 {
-                        tag_vars.remove(i);
-                    } else {
-                        i += 1;
-                    }
+                for (i, arg) in (new_slice.indices()).zip(tag_argument_types) {
+                    let var = type_to_variable(subs, rank, pools, arena, arg);
+                    subs.variables[i] = var;
                 }
-                _ => break,
+
+                tag_vars.push((tag.clone(), new_slice));
             }
+
+            sort_and_deduplicate(&mut tag_vars);
+
+            (UnionTags::insert_slices_into_subs(subs, tag_vars), ext)
+        }
+    } else {
+        let mut tag_vars = Vec::with_capacity_in(tags.len(), arena);
+
+        for (tag, tag_argument_types) in tags {
+            let new_slice = VariableSubsSlice::reserve_into_subs(subs, tag_argument_types.len());
+
+            for (i, arg) in (new_slice.slice.start as usize..).zip(tag_argument_types) {
+                let var = type_to_variable(subs, rank, pools, arena, arg);
+                subs.variables[i] = var;
+            }
+
+            tag_vars.push((tag.clone(), new_slice));
         }
 
-        ext
-    };
+        let temp_ext_var = type_to_variable(subs, rank, pools, arena, ext);
 
-    (UnionTags::insert_slices_into_subs(subs, tag_vars), ext)
+        let ext = {
+            let (it, ext) = roc_types::types::gather_tags_unsorted_iter(
+                subs,
+                UnionTags::default(),
+                temp_ext_var,
+            );
+
+            tag_vars.extend(it.map(|(n, v)| (n.clone(), v)));
+
+            sort_and_deduplicate(&mut tag_vars);
+
+            ext
+        };
+
+        (UnionTags::insert_slices_into_subs(subs, tag_vars), ext)
+    }
 }
 
 fn check_for_infinite_type(

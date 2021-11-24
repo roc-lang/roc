@@ -1,6 +1,6 @@
 use crate::types::{name_type_var, ErrorType, Problem, RecordField, TypeExt};
 use roc_collections::all::{ImMap, ImSet, MutSet, SendMap};
-use roc_module::ident::{Lowercase, TagName};
+use roc_module::ident::{Lowercase, TagName, Uppercase};
 use roc_module::symbol::Symbol;
 use std::fmt;
 use std::iter::{once, Iterator, Map};
@@ -251,6 +251,17 @@ impl SubsSlice<VariableSubsSlice> {
 
         subs.variable_slices
             .extend(std::iter::repeat(VariableSubsSlice::default()).take(length));
+
+        Self::new(start, length as u16)
+    }
+}
+
+impl SubsSlice<TagName> {
+    pub fn reserve_tag_names(subs: &mut Subs, length: usize) -> Self {
+        let start = subs.tag_names.len() as u32;
+
+        subs.tag_names
+            .extend(std::iter::repeat(TagName::Global(Uppercase::default())).take(length));
 
         Self::new(start, length as u16)
     }
