@@ -247,7 +247,7 @@ where
                             self.load_literal_symbols(arguments)?;
                             self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
                         } else {
-                            self.build_run_low_level_dev(
+                            self.build_inline_builtin(
                                 sym,
                                 *func_sym,
                                 arguments,
@@ -471,8 +471,8 @@ where
         }
     }
 
-    // build dev backend-only low-level
-    fn build_run_low_level_dev(
+    // inlines simple builtin functions that do not map directly to a low level
+    fn build_inline_builtin(
         &mut self,
         sym: &Symbol,
         func_sym: Symbol,
@@ -495,7 +495,8 @@ where
                 );
 
                 self.load_literal(&Symbol::DEV_TMP, &Literal::Int(0))?;
-                self.build_eq(sym, &args[0], &Symbol::DEV_TMP, &arg_layouts[0])
+                self.build_eq(sym, &args[0], &Symbol::DEV_TMP, &arg_layouts[0])?;
+                self.free_symbol(&Symbol::DEV_TMP)
             }
             _ => Err(format!(
                 "the function, {:?}, is not yet implemented",
