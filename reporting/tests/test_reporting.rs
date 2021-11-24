@@ -6768,6 +6768,7 @@ I need all branches in an `if` to have the same type!
         )
     }
 
+    #[test]
     fn error_wildcards_are_related() {
         report_problem_as(
             indoc!(
@@ -6788,20 +6789,16 @@ I need all branches in an `if` to have the same type!
                 2│  f = \x -> x
                               ^
 
-                This `x` value is a:
+                The type annotation on `f` says this `x` value should have the type:
 
                     *
 
-                But the type annotation on `f` says it should be:
+                However, the type of this `x` value is connected to another type in a
+                way that isn't reflected in this annotation.
 
-                    *
-
-                Tip: When two *s are connected, it tells me that they both refer to
-                the same type, in a way that doesn't require a *!
-
-                Since the type has to be the same in both places, the type can be more
-                specific than *. You can change the * to a named type variable like `b`
-                to reflect the connection.
+                Tip: Any connection between types must use a named type variable, not
+                a `*`! Maybe the annotation  on `f` should have a named type variable,
+                like `b` in place of the `*`?
                 "#
             ),
         )
@@ -6828,20 +6825,17 @@ I need all branches in an `if` to have the same type!
                 2│  f = \x, y, z -> {x, y, z}
                                     ^^^^^^^^^
 
-                The body is a record of type:
+                The type annotation on `f` says the body is a record should have the
+                type:
 
                     { x : a, y : b, z : * }
 
-                But the type annotation on `f` says it should be:
+                However, the type of the body is a record is connected to another type
+                in a way that isn't reflected in this annotation.
 
-                    { x : a, y : b, z : * }
-
-                Tip: When two *s are connected, it tells me that they both refer to
-                the same type, in a way that doesn't require a *!
-
-                Since the type has to be the same in both places, the type can be more
-                specific than *. You can change the * to a named type variable like `c`
-                to reflect the connection.
+                Tip: Any connection between types must use a named type variable, not
+                a `*`! Maybe the annotation  on `f` should have a named type variable,
+                like `c` in place of the `*`?
                 "#
             ),
         )
@@ -6874,20 +6868,16 @@ I need all branches in an `if` to have the same type!
                 5│      inner x2
                         ^^^^^^^^
 
-                This `inner` call produces:
+                The type annotation on `f` says this `inner` call should have the type:
 
                     *
 
-                But the type annotation on `f` says it should be:
+                However, the type of this `inner` call is connected to another type in a
+                way that isn't reflected in this annotation.
 
-                    *
-
-                Tip: When two *s are connected, it tells me that they both refer to
-                the same type, in a way that doesn't require a *!
-
-                Since the type has to be the same in both places, the type can be more
-                specific than *. You can change the * to a named type variable like `c`
-                to reflect the connection.
+                Tip: Any connection between types must use a named type variable, not
+                a `*`! Maybe the annotation  on `f` should have a named type variable,
+                like `c` in place of the `*`?
                 "#
             ),
         )

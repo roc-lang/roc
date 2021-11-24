@@ -251,6 +251,7 @@ fn report_bad_type<'b>(
             alloc,
             found,
             expected_type,
+            ExpectationContext::Arbitrary,
             add_category(alloc, this_is, category),
             further_details,
         ),
@@ -273,6 +274,14 @@ fn pattern_to_doc<'b>(
     match pattern {
         Identifier(symbol) => Some(alloc.symbol_unqualified(*symbol)),
         _ => None,
+    }
+}
+
+fn lowercase_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => Default::default(),
+        Some(c) => c.to_lowercase().chain(chars).collect(),
     }
 }
 
@@ -360,23 +369,51 @@ fn to_expr_report<'b>(
                 TypedBody { .. } => "The body is".into(),
             };
 
-            let i_am_seeing = add_category(alloc, alloc.text(it_is), &category);
+            let expectation_context = ExpectationContext::Annotation {
+                on: on_name_text.clone(),
+                signature: annotation_source.annotation().value.clone(),
+            };
 
-            let comparison = type_comparison(
+            let comparison = if diff_is_wildcard_comparison(
                 alloc,
-                found,
-                expected_type,
-                ExpectationContext::Annotation {
-                    signature: annotation_source.annotation().value.clone(),
-                },
-                i_am_seeing,
-                alloc.concat(vec![
-                    alloc.text("But the type annotation"),
-                    on_name_text,
-                    alloc.text(" says it should be:"),
-                ]),
-                None,
-            );
+                found.clone(),
+                expected_type.clone(),
+            ) {
+                let it_is = lowercase_first(&it_is);
+                let (it, _) = format_category(alloc, alloc.text(it_is), &category, false);
+                lone_type(
+                        alloc,
+                        found,
+                        expected_type,
+                        expectation_context,
+                        alloc.concat(vec![
+                            alloc.reflow("The type annotation"),
+                            on_name_text,
+                            alloc.reflow(" says "),
+                            it.clone(),
+                            alloc.reflow(" should have the type:"),
+                        ]),
+                        alloc.concat(vec![
+                            alloc.reflow("However, the type of "),
+                            it,
+                            alloc.reflow(" is connected to another type in a way that isn't reflected in this annotation.")
+                        ]),
+                    )
+            } else {
+                type_comparison(
+                    alloc,
+                    found,
+                    expected_type,
+                    expectation_context,
+                    add_category(alloc, alloc.text(it_is), &category),
+                    alloc.concat(vec![
+                        alloc.text("But the type annotation"),
+                        on_name_text,
+                        alloc.text(" says it should be:"),
+                    ]),
+                    None,
+                )
+            };
 
             Report {
                 title: "TYPE MISMATCH".to_string(),
@@ -912,20 +949,32 @@ fn count_arguments(tipe: &ErrorType) -> usize {
 }
 
 /// The context a type expectation is derived from.
-#[derive(Debug, Clone)]
-enum ExpectationContext {
+#[derive(Clone)]
+enum ExpectationContext<'a> {
     /// An expected type was discovered from a type annotation. Corresponds to
     /// [`Expected::FromAnnotation`](Expected::FromAnnotation).
-    Annotation { signature: ErrorType },
+    Annotation {
+        on: RocDocBuilder<'a>,
+        signature: ErrorType,
+    },
     /// When we don't know the context, or it's not relevant.
     Arbitrary,
+}
+
+impl<'a> std::fmt::Debug for ExpectationContext<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            &ExpectationContext::Annotation { .. } => f.write_str("Annotation"),
+            &ExpectationContext::Arbitrary => f.write_str("Arbitrary"),
+        }
+    }
 }
 
 fn type_comparison<'b>(
     alloc: &'b RocDocAllocator<'b>,
     actual: ErrorType,
     expected: ErrorType,
-    expectation_context: ExpectationContext,
+    expectation_context: ExpectationContext<'b>,
     i_am_seeing: RocDocBuilder<'b>,
     instead_of: RocDocBuilder<'b>,
     context_hints: Option<RocDocBuilder<'b>>,
@@ -956,6 +1005,7 @@ fn lone_type<'b>(
     alloc: &'b RocDocAllocator<'b>,
     actual: ErrorType,
     expected: ErrorType,
+    expectation_context: ExpectationContext<'b>,
     i_am_seeing: RocDocBuilder<'b>,
     further_details: RocDocBuilder<'b>,
 ) -> RocDocBuilder<'b> {
@@ -966,108 +1016,163 @@ fn lone_type<'b>(
     lines.extend(problems_to_tip(
         alloc,
         comparison.problems,
-        ExpectationContext::Arbitrary,
+        expectation_context,
     ));
 
     alloc.stack(lines)
 }
 
-fn add_category<'b>(
+/// Formats an item in a Roc program to a tuple (summary, has_type_colon), where
+/// concatenation of the tuple items introduces the item and leads up to its type.
+fn format_category<'b>(
     alloc: &'b RocDocAllocator<'b>,
     this_is: RocDocBuilder<'b>,
     category: &Category,
-) -> RocDocBuilder<'b> {
+    capitalize_start: bool,
+) -> (RocDocBuilder<'b>, RocDocBuilder<'b>) {
     use Category::*;
 
+    let t = if capitalize_start { "T" } else { "t" };
+
     match category {
-        Lookup(name) => alloc.concat(vec![
-            alloc.text("This "),
-            alloc.symbol_foreign_qualified(*name),
-            alloc.text(" value is a:"),
-        ]),
+        Lookup(name) => (
+            alloc.concat(vec![
+                alloc.text(format!("{}his ", t)),
+                alloc.symbol_foreign_qualified(*name),
+                alloc.text(" value"),
+            ]),
+            alloc.text(" is a:"),
+        ),
 
-        If => alloc.concat(vec![
-            alloc.text("This "),
-            alloc.keyword("if"),
-            alloc.text(" expression produces:"),
-        ]),
-        When => alloc.concat(vec![
-            alloc.text("This "),
-            alloc.keyword("when"),
-            alloc.text(" expression produces:"),
-        ]),
+        If => (
+            alloc.concat(vec![
+                alloc.text(format!("{}his ", t)),
+                alloc.keyword("if"),
+                alloc.text(" expression"),
+            ]),
+            alloc.text(" produces:"),
+        ),
+        When => (
+            alloc.concat(vec![
+                alloc.text(format!("{}his ", t)),
+                alloc.keyword("when"),
+                alloc.text(" expression"),
+            ]),
+            alloc.text(" produces:"),
+        ),
 
-        List => alloc.concat(vec![this_is, alloc.text(" a list of type:")]),
-        Num => alloc.concat(vec![this_is, alloc.text(" a number of type:")]),
-        Int => alloc.concat(vec![this_is, alloc.text(" an integer of type:")]),
-        Float => alloc.concat(vec![this_is, alloc.text(" a float of type:")]),
-        Str => alloc.concat(vec![this_is, alloc.text(" a string of type:")]),
-        StrInterpolation => alloc.concat(vec![
-            this_is,
-            alloc.text(" a value in a string interpolation, which was of type:"),
-        ]),
+        List => (
+            alloc.concat(vec![this_is, alloc.text(" a list")]),
+            alloc.text(" of type:"),
+        ),
+        Num => (
+            alloc.concat(vec![this_is, alloc.text(" a number")]),
+            alloc.text(" of type:"),
+        ),
+        Int => (
+            alloc.concat(vec![this_is, alloc.text(" an integer")]),
+            alloc.text(" of type:"),
+        ),
+        Float => (
+            alloc.concat(vec![this_is, alloc.text(" a float")]),
+            alloc.text(" of type:"),
+        ),
+        Str => (
+            alloc.concat(vec![this_is, alloc.text(" a string")]),
+            alloc.text(" of type:"),
+        ),
+        StrInterpolation => (
+            alloc.concat(vec![
+                this_is,
+                alloc.text(" a value in a string interpolation,"),
+            ]),
+            alloc.text(" which was of type:"),
+        ),
 
-        Lambda => alloc.concat(vec![this_is, alloc.text(" an anonymous function of type:")]),
+        Lambda => (
+            alloc.concat(vec![this_is, alloc.text(" an anonymous function")]),
+            alloc.text(" of type:"),
+        ),
 
-        ClosureSize => alloc.concat(vec![
-            this_is,
-            alloc.text(" the closure size of a function of type:"),
-        ]),
+        ClosureSize => (
+            alloc.concat(vec![this_is, alloc.text(" the closure size of a function")]),
+            alloc.text(" of type:"),
+        ),
 
         TagApply {
             tag_name: TagName::Global(name),
             args_count: 0,
-        } => alloc.concat(vec![
-            alloc.text("This "),
-            alloc.global_tag_name(name.to_owned()),
-            if name.as_str() == "True" || name.as_str() == "False" {
-                alloc.text(" boolean has the type:")
-            } else {
-                alloc.text(" global tag has the type:")
-            },
-        ]),
+        } => (
+            alloc.concat(vec![
+                alloc.text(format!("{}his ", t)),
+                alloc.global_tag_name(name.to_owned()),
+                if name.as_str() == "True" || name.as_str() == "False" {
+                    alloc.text(" boolean")
+                } else {
+                    alloc.text(" global tag")
+                },
+            ]),
+            alloc.text(" has the type:"),
+        ),
         TagApply {
             tag_name: TagName::Private(name),
             args_count: 0,
-        } => alloc.concat(vec![
-            alloc.text("This "),
-            alloc.private_tag_name(*name),
-            alloc.text(" private tag has the type:"),
-        ]),
+        } => (
+            alloc.concat(vec![
+                alloc.text(format!("{}his ", t)),
+                alloc.private_tag_name(*name),
+                alloc.text(" private tag"),
+            ]),
+            alloc.text(" has the type:"),
+        ),
 
         TagApply {
             tag_name: TagName::Global(name),
             args_count: _,
-        } => alloc.concat(vec![
-            alloc.text("This "),
-            alloc.global_tag_name(name.to_owned()),
-            alloc.text(" global tag application has the type:"),
-        ]),
+        } => (
+            alloc.concat(vec![
+                alloc.text(format!("{}his ", t)),
+                alloc.global_tag_name(name.to_owned()),
+                alloc.text(" global tag application"),
+            ]),
+            alloc.text(" has the type:"),
+        ),
         TagApply {
             tag_name: TagName::Private(name),
             args_count: _,
-        } => alloc.concat(vec![
-            alloc.text("This "),
-            alloc.private_tag_name(*name),
-            alloc.text(" private tag application has the type:"),
-        ]),
+        } => (
+            alloc.concat(vec![
+                alloc.text("This "),
+                alloc.private_tag_name(*name),
+                alloc.text(" private tag application"),
+            ]),
+            alloc.text(" has the type:"),
+        ),
         TagApply {
             tag_name: TagName::Closure(_name),
             args_count: _,
         } => unreachable!("closure tags are for internal use only"),
 
-        Record => alloc.concat(vec![this_is, alloc.text(" a record of type:")]),
+        Record => (
+            alloc.concat(vec![this_is, alloc.text(" a record")]),
+            alloc.text(" of type:"),
+        ),
 
-        Accessor(field) => alloc.concat(vec![
-            alloc.text("This "),
-            alloc.record_field(field.to_owned()),
-            alloc.text(" value is a:"),
-        ]),
-        Access(field) => alloc.concat(vec![
-            alloc.text("The value at "),
-            alloc.record_field(field.to_owned()),
+        Accessor(field) => (
+            alloc.concat(vec![
+                alloc.text(format!("{}his ", t)),
+                alloc.record_field(field.to_owned()),
+                alloc.text(" value"),
+            ]),
             alloc.text(" is a:"),
-        ]),
+        ),
+        Access(field) => (
+            alloc.concat(vec![
+                alloc.text(format!("{}he value at ", t)),
+                alloc.record_field(field.to_owned()),
+            ]),
+            alloc.text(" is a:"),
+        ),
         CallResult(
             Some(_),
             CalledVia::BinOp(
@@ -1078,16 +1183,23 @@ fn add_category<'b>(
                 | BinOp::LessThanOrEq
                 | BinOp::GreaterThanOrEq,
             ),
-        ) => alloc.concat(vec![alloc.text("This comparison produces:")]),
-        CallResult(Some(_), CalledVia::StringInterpolation) => {
-            alloc.concat(vec![this_is, alloc.text(" a string of type:")])
-        }
-        CallResult(Some(symbol), _) => alloc.concat(vec![
-            alloc.text("This "),
-            alloc.symbol_foreign_qualified(*symbol),
-            alloc.text(" call produces:"),
-        ]),
-        CallResult(None, _) => alloc.concat(vec![this_is, alloc.text(":")]),
+        ) => (
+            alloc.text(format!("{}his comparison", t)),
+            alloc.text(" produces:"),
+        ),
+        CallResult(Some(_), CalledVia::StringInterpolation) => (
+            alloc.concat(vec![this_is, alloc.text(" a string")]),
+            alloc.text(" of type:"),
+        ),
+        CallResult(Some(symbol), _) => (
+            alloc.concat(vec![
+                alloc.text(format!("{}his ", t)),
+                alloc.symbol_foreign_qualified(*symbol),
+                alloc.text(" call"),
+            ]),
+            alloc.text(" produces:"),
+        ),
+        CallResult(None, _) => (this_is, alloc.text(":")),
         LowLevelOpResult(op) => {
             panic!(
                 "Compiler bug: invalid return type from low-level op {:?}",
@@ -1098,14 +1210,28 @@ fn add_category<'b>(
             panic!("Compiler bug: invalid return type from foreign call",);
         }
 
-        Uniqueness => alloc.concat(vec![
-            this_is,
-            alloc.text(" an uniqueness attribute of type:"),
-        ]),
-        Storage(_file, _line) => alloc.concat(vec![this_is, alloc.text(" a value of type:")]),
-
-        DefaultValue(_) => alloc.concat(vec![this_is, alloc.text(" a default field of type:")]),
+        Uniqueness => (
+            alloc.concat(vec![this_is, alloc.text(" an uniqueness attribute")]),
+            alloc.text(" of type:"),
+        ),
+        Storage(_file, _line) => (
+            alloc.concat(vec![this_is, alloc.text(" a value")]),
+            alloc.text(" of type:"),
+        ),
+        DefaultValue(_) => (
+            alloc.concat(vec![this_is, alloc.text(" a default field")]),
+            alloc.text(" of type:"),
+        ),
     }
+}
+
+fn add_category<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    this_is: RocDocBuilder<'b>,
+    category: &Category,
+) -> RocDocBuilder<'b> {
+    let (summary, suffix) = format_category(alloc, this_is, category, true);
+    alloc.concat(vec![summary, suffix])
 }
 
 fn to_pattern_report<'b>(
@@ -1356,7 +1482,7 @@ pub enum Problem {
 fn problems_to_tip<'b>(
     alloc: &'b RocDocAllocator<'b>,
     mut problems: Vec<Problem>,
-    expectation_context: ExpectationContext,
+    expectation_context: ExpectationContext<'b>,
 ) -> Option<RocDocBuilder<'b>> {
     if problems.is_empty() {
         None
@@ -1441,6 +1567,20 @@ fn to_comparison<'b>(
             Status::Similar => vec![],
             Status::Different(problems) => problems,
         },
+    }
+}
+
+fn diff_is_wildcard_comparison<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    actual: ErrorType,
+    expected: ErrorType,
+) -> bool {
+    let Comparison { problems, .. } = to_comparison(alloc, actual, expected);
+    match problems.last() {
+        Some(Problem::BadRigidVar(v1, ErrorType::RigidVar(v2))) => {
+            v1.as_str() == WILDCARD && v2.as_str() == WILDCARD
+        }
+        _ => false,
     }
 }
 
@@ -2460,7 +2600,7 @@ mod report_text {
 fn type_problem_to_pretty<'b>(
     alloc: &'b RocDocAllocator<'b>,
     problem: crate::error::r#type::Problem,
-    expectation_context: ExpectationContext,
+    expectation_context: ExpectationContext<'b>,
 ) -> RocDocBuilder<'b> {
     use crate::error::r#type::Problem::*;
 
@@ -2558,7 +2698,7 @@ fn type_problem_to_pretty<'b>(
             alloc.tip().append(line)
         }
 
-        (BadRigidVar(x, tipe), ExpectationContext::Annotation { signature }) => {
+        (BadRigidVar(x, tipe), ExpectationContext::Annotation { on, signature }) => {
             use ErrorType::*;
 
             let bad_rigid_var = |name: Lowercase, a_thing| {
@@ -2576,26 +2716,19 @@ fn type_problem_to_pretty<'b>(
                 signature.add_names(&mut taken_names);
                 let (named_var_suggest, _) = name_type_var(0, &mut taken_names);
 
-                alloc
-                    .tip()
-                    .append(alloc.stack(vec![
-                        alloc.concat(vec![
-                            alloc.reflow("When two "),
-                            alloc.type_str(WILDCARD),
-                            alloc.reflow("s are connected, it tells me that they both refer to the same type, in a way that doesn't require a "),
-                            alloc.type_str(WILDCARD),
-                            alloc.reflow("!")
-                        ]),
-                        alloc.concat(vec![
-                            alloc.reflow("Since the type has to be the same in both places, the type can be more specific than "),
-                            alloc.type_str(WILDCARD),
-                            alloc.reflow(". You can change the "),
-                            alloc.type_str(WILDCARD),
-                            alloc.reflow(" to a named type variable like "),
-                            alloc.type_variable(named_var_suggest),
-                            alloc.reflow(" to reflect the connection.")
-                        ]),
-                    ]))
+                alloc.tip().append(alloc.concat(vec![
+                    alloc.reflow(
+                        "Any connection between types must use a named type variable, not a ",
+                    ),
+                    alloc.type_variable(WILDCARD.into()),
+                    alloc.reflow("! Maybe the annotation "),
+                    on,
+                    alloc.reflow(" should have a named type variable, like "),
+                    alloc.type_variable(named_var_suggest),
+                    alloc.reflow(" in place of the "),
+                    alloc.type_variable(WILDCARD.into()),
+                    alloc.reflow("?"),
+                ]))
             };
 
             let bad_double_rigid = |a: Lowercase, b: Lowercase| {
