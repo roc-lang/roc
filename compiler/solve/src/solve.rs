@@ -630,6 +630,8 @@ fn type_to_var(
     type_to_variable(subs, rank, pools, &arena, cached_aliases, typ)
 }
 
+static mut FIRST: Option<Symbol> = None;
+
 fn type_to_variable<'a>(
     subs: &mut Subs,
     rank: Rank,
@@ -761,6 +763,62 @@ fn type_to_variable<'a>(
 
             tag_union_var
         }
+        Type::UninstantiatedAlias {
+            symbol,
+            type_arguments,
+            lambda_set_variables,
+            actual,
+        } => {
+            let cached_variable = match cached_aliases.get(symbol) {
+                None => {
+                    println!("not cached");
+                    dbg!(&actual);
+                    let actual =
+                        type_to_variable(subs, Rank::NONE, pools, arena, cached_aliases, actual);
+
+                    cached_aliases.insert(*symbol, actual);
+
+                    actual
+                }
+                Some(variable) => {
+                    println!("cached");
+                    *variable
+                }
+            };
+
+            let mut alias_variables = Vec::new_in(arena);
+            alias_variables.extend(type_arguments.iter().map(|t| t.2));
+            alias_variables.extend(lambda_set_variables);
+
+            for v in alias_variables.iter() {
+                subs.set_rank(*v, Rank::NONE);
+            }
+
+            // dbg!(symbol, type_arguments, actual, &subs);
+
+            let alias_variable =
+                instantiate_alias(subs, rank, pools, &mut alias_variables, cached_variable);
+
+            // unify type arguments with instantiated variables
+            for ((_, t, _), v) in type_arguments.iter().zip(alias_variables.iter()) {
+                let type_as_var =
+                    type_to_variable(subs, Rank::NONE, pools, arena, cached_aliases, t);
+                roc_unify::unify::unify(subs, *v, type_as_var);
+            }
+
+            let type_variables = alias_variables[..type_arguments.len()].iter().copied();
+            let lambda_set_variables = alias_variables[type_arguments.len()..].iter().copied();
+            let arg_vars =
+                AliasVariables::insert_into_subs(subs, type_variables, lambda_set_variables);
+
+            let content = Content::Alias(*symbol, arg_vars, alias_variable);
+            let v = register(subs, rank, pools, content);
+
+            // dbg!(subs);
+            // panic!();
+
+            v
+        }
 
         Type::Alias {
             symbol,
@@ -788,6 +846,11 @@ fn type_to_variable<'a>(
                     _ => {}
                 }
             }
+            unsafe {
+                if FIRST.is_none() && !symbol.is_builtin() {
+                    FIRST.insert(*symbol);
+                }
+            }
 
             let mut arg_vars = Vec::with_capacity_in(args.len(), arena);
 
@@ -807,7 +870,16 @@ fn type_to_variable<'a>(
             let alias_var = type_to_variable(subs, rank, pools, arena, cached_aliases, alias_type);
             let content = Content::Alias(*symbol, arg_vars, alias_var);
 
-            register(subs, rank, pools, content)
+            let v = register(subs, rank, pools, content);
+
+            unsafe {
+                if FIRST == Some(*symbol) {
+                    // dbg!(&subs);
+                    // panic!();
+                }
+            }
+
+            v
         }
         HostExposedAlias {
             name: symbol,
@@ -1385,6 +1457,42 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
             descriptor.copy = OptVariable::NONE;
         }
     }
+}
+
+fn instantiate_alias(
+    subs: &mut Subs,
+    rank: Rank,
+    pools: &mut Pools,
+    alias_variables: &mut bumpalo::collections::Vec<Variable>,
+    var: Variable,
+) -> Variable {
+    let arena = bumpalo::Bump::with_capacity(4 * 1024);
+    let mut visited = bumpalo::collections::Vec::with_capacity_in(4 * 1024, &arena);
+
+    let copy = deep_copy_var_help(subs, rank, pools, &mut visited, var);
+
+    for var in alias_variables.iter_mut() {
+        let opt_var: Option<_> = subs.get(*var).copy.into();
+        if let Some(copied) = opt_var {
+            *var = copied; // deep_copy_var_help(subs, rank, pools, visited, *var);
+        } else {
+            panic!(" {:?}", var);
+        }
+    }
+
+    // we have tracked all visited variables, and can now traverse them
+    // in one go (without looking at the UnificationTable) and clear the copy field
+    for var in visited {
+        let descriptor = subs.get_ref_mut(var);
+
+        if descriptor.copy.is_some() {
+            descriptor.rank = Rank::NONE;
+            descriptor.mark = Mark::NONE;
+            descriptor.copy = OptVariable::NONE;
+        }
+    }
+
+    copy
 }
 
 fn deep_copy_var(subs: &mut Subs, rank: Rank, pools: &mut Pools, var: Variable) -> Variable {

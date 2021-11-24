@@ -171,6 +171,47 @@ impl SolvedType {
                 )
             }
             Erroneous(problem) => SolvedType::Erroneous(problem.clone()),
+            UninstantiatedAlias {
+                symbol,
+                type_arguments,
+                lambda_set_variables,
+                actual: box_type,
+            } => {
+                dbg!(symbol);
+                panic!();
+
+                let mut actual = box_type.clone();
+
+                let mut substitutions = ImMap::default();
+                for (_, arg_ann, var) in type_arguments.iter() {
+                    substitutions.insert(*var, arg_ann.clone());
+                }
+
+                actual.substitute(&substitutions);
+
+                let solved_type = Self::from_type(solved_subs, box_type);
+                let mut solved_args = Vec::with_capacity(type_arguments.len());
+
+                for (name, var, _) in type_arguments {
+                    solved_args.push((name.clone(), Self::from_type(solved_subs, var)));
+                }
+
+                let mut solved_lambda_sets = Vec::with_capacity(lambda_set_variables.len());
+
+                for var in lambda_set_variables {
+                    solved_lambda_sets.push(SolvedLambdaSet(Self::from_type(
+                        solved_subs,
+                        &Type::Variable(*var),
+                    )));
+                }
+
+                SolvedType::Alias(
+                    *symbol,
+                    solved_args,
+                    solved_lambda_sets,
+                    Box::new(solved_type),
+                )
+            }
             Alias {
                 symbol,
                 type_arguments,

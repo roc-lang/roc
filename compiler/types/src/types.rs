@@ -169,6 +169,12 @@ pub enum Type {
     Record(SendMap<Lowercase, RecordField<Type>>, Box<Type>),
     TagUnion(Vec<(TagName, Vec<Type>)>, Box<Type>),
     FunctionOrTagUnion(TagName, Symbol, Box<Type>),
+    UninstantiatedAlias {
+        symbol: Symbol,
+        type_arguments: Vec<(Lowercase, Type, Variable)>,
+        lambda_set_variables: Vec<Variable>,
+        actual: Box<Type>,
+    },
     Alias {
         symbol: Symbol,
         type_arguments: Vec<(Lowercase, Type)>,
@@ -230,6 +236,26 @@ impl fmt::Debug for Type {
                 problem.fmt(f)?;
 
                 write!(f, ")")
+            }
+            Type::UninstantiatedAlias {
+                symbol,
+                type_arguments,
+                lambda_set_variables,
+                actual: _,
+            } => {
+                write!(f, "UninstantiatedAlias {:?}", symbol)?;
+
+                for (_, arg, _) in type_arguments {
+                    write!(f, " {:?} ", arg)?;
+                }
+
+                for (lambda_set, greek_letter) in
+                    lambda_set_variables.iter().zip(GREEK_LETTERS.iter())
+                {
+                    write!(f, " {}@{:?}", greek_letter, lambda_set)?;
+                }
+
+                Ok(())
             }
             Type::Alias {
                 symbol,
@@ -499,6 +525,7 @@ impl Type {
                 }
                 ext.substitute(substitutions);
             }
+            Type::UninstantiatedAlias { .. } => todo!(),
             Alias {
                 type_arguments,
                 lambda_set_variables,
@@ -564,6 +591,7 @@ impl Type {
                 }
                 ext.substitute_alias(rep_symbol, actual);
             }
+            Type::UninstantiatedAlias { .. } => todo!(),
             Alias {
                 actual: alias_actual,
                 ..
@@ -617,7 +645,12 @@ impl Type {
                 ext.contains_symbol(rep_symbol)
                     || fields.values().any(|arg| arg.contains_symbol(rep_symbol))
             }
-            Alias {
+            UninstantiatedAlias {
+                symbol: alias_symbol,
+                actual: actual_type,
+                ..
+            }
+            | Alias {
                 symbol: alias_symbol,
                 actual: actual_type,
                 ..
@@ -657,7 +690,11 @@ impl Type {
                         .values()
                         .any(|arg| arg.contains_variable(rep_variable))
             }
-            Alias {
+            UninstantiatedAlias {
+                actual: actual_type,
+                ..
+            }
+            | Alias {
                 actual: actual_type,
                 ..
             } => actual_type.contains_variable(rep_variable),
@@ -716,6 +753,7 @@ impl Type {
                 }
                 ext.instantiate_aliases(region, aliases, var_store, introduced);
             }
+            UninstantiatedAlias { .. } => todo!(),
             HostExposedAlias {
                 type_arguments: type_args,
                 lambda_set_variables,
@@ -856,7 +894,12 @@ fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
                 }
             });
         }
-        Alias {
+        UninstantiatedAlias {
+            symbol: alias_symbol,
+            actual: actual_type,
+            ..
+        }
+        | Alias {
             symbol: alias_symbol,
             actual: actual_type,
             ..
@@ -930,6 +973,10 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             // this rec var doesn't need to be in flex_vars or rigid_vars
             accum.remove(rec);
         }
+        UninstantiatedAlias { actual, .. } => {
+            variables_help(actual, accum);
+        }
+
         Alias {
             type_arguments,
             actual,
@@ -1033,6 +1080,9 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             accum.type_variables.remove(rec);
 
             accum.recursion_variables.insert(*rec);
+        }
+        UninstantiatedAlias { actual, .. } => {
+            variables_help_detailed(actual, accum);
         }
         Alias {
             type_arguments,

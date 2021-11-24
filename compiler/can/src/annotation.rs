@@ -212,6 +212,37 @@ fn can_annotation_help(
                         return error;
                     }
 
+                    if false {
+                        let type_arguments = alias
+                            .type_variables
+                            .iter()
+                            .zip(args)
+                            .map(|(l, t)| {
+                                let (l, v) = l.value.clone();
+
+                                (l, t, v)
+                            })
+                            .collect();
+
+                        let lambda_set_variables = alias
+                            .lambda_set_variables
+                            .iter()
+                            .map(|l| match l.0 {
+                                Type::Variable(v) => v,
+                                _ => unreachable!(),
+                            })
+                            .collect();
+
+                        let uninstantiated = Type::UninstantiatedAlias {
+                            symbol,
+                            type_arguments,
+                            lambda_set_variables,
+                            actual: Box::new(actual),
+                        };
+
+                        return uninstantiated;
+                    }
+
                     for (loc_var, arg_ann) in alias.type_variables.iter().zip(args.into_iter()) {
                         let name = loc_var.value.0.clone();
                         let var = loc_var.value.1;
