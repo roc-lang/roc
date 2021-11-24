@@ -804,49 +804,54 @@ fn integer_type(
 
     var_i64: Variable,
 ) {
-    let tags = UnionTags::insert_into_subs(subs, [(TagName::Private(num_at_signed64), [])]);
+    // define the type Signed64 (which is an alias for [ @Signed64 ])
+    {
+        let tags = UnionTags::insert_into_subs(subs, [(TagName::Private(num_at_signed64), [])]);
 
-    subs.set_content(at_signed64, {
-        Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
-    });
+        subs.set_content(at_signed64, {
+            Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
+        });
 
-    subs.set_content(signed64, {
-        Content::Alias(num_signed64, AliasVariables::default(), at_signed64)
-    });
+        subs.set_content(signed64, {
+            Content::Alias(num_signed64, AliasVariables::default(), at_signed64)
+        });
+    }
 
-    // Num.Integer Num.Signed64
+    // define the type `Num.Integer Num.Signed64`
+    {
+        let tags = UnionTags::insert_into_subs(
+            subs,
+            [(TagName::Private(Symbol::NUM_AT_INTEGER), [signed64])],
+        );
+        subs.set_content(at_integer_signed64, {
+            Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
+        });
 
-    let tags = UnionTags::insert_into_subs(
-        subs,
-        [(TagName::Private(Symbol::NUM_AT_INTEGER), [signed64])],
-    );
-    subs.set_content(at_integer_signed64, {
-        Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
-    });
+        let vars = AliasVariables::insert_into_subs(subs, [signed64], []);
+        subs.set_content(integer_signed64, {
+            Content::Alias(Symbol::NUM_INTEGER, vars, at_signed64)
+        });
+    }
 
-    let vars = AliasVariables::insert_into_subs(subs, [signed64], []);
-    subs.set_content(num_integer_signed64, {
-        Content::Alias(Symbol::NUM_INTEGER, vars, at_signed64)
-    });
+    // define the type `Num.Num (Num.Integer Num.Signed64)`
+    {
+        let tags = UnionTags::insert_into_subs(
+            subs,
+            [(TagName::Private(Symbol::NUM_AT_NUM), [integer_signed64])],
+        );
+        subs.set_content(at_num_integer_signed64, {
+            Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
+        });
 
-    // Num.Num (Num.Integer Num.Signed64)
+        let vars = AliasVariables::insert_into_subs(subs, [integer_signed64], []);
+        subs.set_content(num_integer_signed64, {
+            Content::Alias(Symbol::NUM_NUM, vars, at_num_integer_signed64)
+        });
 
-    let tags = UnionTags::insert_into_subs(
-        subs,
-        [(TagName::Private(Symbol::NUM_AT_NUM), [integer_signed64])],
-    );
-    subs.set_content(at_num_integer_signed64, {
-        Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
-    });
-
-    let vars = AliasVariables::insert_into_subs(subs, [integer_signed64], []);
-    subs.set_content(num_integer_signed64, {
-        Content::Alias(Symbol::NUM_NUM, vars, at_num_integer_signed64)
-    });
-
-    subs.set_content(var_i64, {
-        Content::Alias(num_i64, AliasVariables::default(), num_integer_signed64)
-    });
+        subs.set_content(var_i64, {
+            Content::Alias(num_i64, AliasVariables::default(), num_integer_signed64)
+        });
+    }
 }
 
 fn define_integer_types(subs: &mut Subs) {
