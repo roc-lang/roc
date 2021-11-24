@@ -1415,11 +1415,19 @@ fn constrain_closure_size(
         ));
     }
 
-    let tag_name = TagName::Closure(name);
-    let closure_type = Type::TagUnion(
-        vec![(tag_name, tag_arguments)],
-        Box::new(Type::Variable(closure_ext_var)),
-    );
+    // pick a more efficient representation if we don't actually capture anything
+    let closure_type = if tag_arguments.is_empty() {
+        Type::ClosureTag {
+            name,
+            ext: closure_ext_var,
+        }
+    } else {
+        let tag_name = TagName::Closure(name);
+        Type::TagUnion(
+            vec![(tag_name, tag_arguments)],
+            Box::new(Type::Variable(closure_ext_var)),
+        )
+    };
 
     let finalizer = Eq(
         Type::Variable(closure_var),
