@@ -454,7 +454,7 @@ fn can_annotation_help(
                     None => Type::EmptyTagUnion,
                 }
             } else {
-                let tag_types = can_tags(
+                let mut tag_types = can_tags(
                     env,
                     tags.items,
                     region,
@@ -464,6 +464,11 @@ fn can_annotation_help(
                     local_aliases,
                     references,
                 );
+
+                // sort here; we later instantiate type aliases, so this type might get duplicated
+                // many times. Then, when inserting into the subs, the tags are sorted.
+                // in theory we save a lot of time by sorting once here
+                tag_types.sort_by(|a, b| a.0.cmp(&b.0));
 
                 Type::TagUnion(tag_types, Box::new(ext_type))
             }

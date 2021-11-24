@@ -1004,7 +1004,7 @@ fn type_to_union_tags<'a>(
         for (tag, tag_argument_types) in tags {
             let new_slice = VariableSubsSlice::reserve_into_subs(subs, tag_argument_types.len());
 
-            for (i, arg) in (new_slice.slice.start as usize..).zip(tag_argument_types) {
+            for (i, arg) in (new_slice.indices()).zip(tag_argument_types) {
                 let var = type_to_variable(subs, rank, pools, arena, arg);
                 subs.variables[i] = var;
             }
