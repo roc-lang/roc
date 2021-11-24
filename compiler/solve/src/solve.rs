@@ -1512,9 +1512,10 @@ fn deep_copy_var_help(
                 }
 
                 TagUnion(tags, ext_var) => {
-                    let mut new_variable_slices = Vec::with_capacity(tags.len());
+                    let new_variable_slices = SubsSlice::reserve_variable_slices(subs, tags.len());
 
-                    for index in tags.variables() {
+                    let it = (new_variable_slices.indices()).zip(tags.variables());
+                    for (target_index, index) in it {
                         let slice = subs[index];
 
                         let new_variables = VariableSubsSlice::reserve_into_subs(subs, slice.len());
@@ -1525,18 +1526,10 @@ fn deep_copy_var_help(
                             subs.variables[target_index] = copy_var;
                         }
 
-                        new_variable_slices.push(new_variables);
+                        subs.variable_slices[target_index] = new_variables;
                     }
 
-                    let new_variables = {
-                        let start = subs.variable_slices.len() as u32;
-                        let length = new_variable_slices.len() as u16;
-                        subs.variable_slices.extend(new_variable_slices);
-
-                        SubsSlice::new(start, length)
-                    };
-
-                    let union_tags = UnionTags::from_slices(tags.tag_names(), new_variables);
+                    let union_tags = UnionTags::from_slices(tags.tag_names(), new_variable_slices);
 
                     let new_ext = deep_copy_var_help(subs, max_rank, pools, visited, ext_var);
                     TagUnion(union_tags, new_ext)
@@ -1549,9 +1542,10 @@ fn deep_copy_var_help(
                 ),
 
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
-                    let mut new_variable_slices = Vec::with_capacity(tags.len());
+                    let new_variable_slices = SubsSlice::reserve_variable_slices(subs, tags.len());
 
-                    for index in tags.variables() {
+                    let it = (new_variable_slices.indices()).zip(tags.variables());
+                    for (target_index, index) in it {
                         let slice = subs[index];
 
                         let new_variables = VariableSubsSlice::reserve_into_subs(subs, slice.len());
@@ -1562,18 +1556,10 @@ fn deep_copy_var_help(
                             subs.variables[target_index] = copy_var;
                         }
 
-                        new_variable_slices.push(new_variables);
+                        subs.variable_slices[target_index] = new_variables;
                     }
 
-                    let new_variables = {
-                        let start = subs.variable_slices.len() as u32;
-                        let length = new_variable_slices.len() as u16;
-                        subs.variable_slices.extend(new_variable_slices);
-
-                        SubsSlice::new(start, length)
-                    };
-
-                    let union_tags = UnionTags::from_slices(tags.tag_names(), new_variables);
+                    let union_tags = UnionTags::from_slices(tags.tag_names(), new_variable_slices);
 
                     let new_ext = deep_copy_var_help(subs, max_rank, pools, visited, ext_var);
                     let new_rec_var = deep_copy_var_help(subs, max_rank, pools, visited, rec_var);
