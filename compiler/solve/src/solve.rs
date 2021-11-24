@@ -804,8 +804,8 @@ fn type_to_variable<'a>(
 
         Type::Alias {
             symbol,
-            type_arguments: args,
-            actual: alias_type,
+            type_arguments,
+            actual,
             lambda_set_variables,
         } => {
             // the rank of these variables is NONE (encoded as 0 in practice)
@@ -830,62 +830,39 @@ fn type_to_variable<'a>(
                 }
             }
 
-            let length = args.len() + lambda_set_variables.len();
-            let new_variables = VariableSubsSlice::reserve_into_subs(subs, length);
+            let alias_variables = alias_to_var(
+                subs,
+                rank,
+                pools,
+                arena,
+                type_arguments,
+                lambda_set_variables,
+            );
 
-            for (target_index, (_, arg_type)) in (new_variables.indices()).zip(args) {
-                let copy_var = type_to_variable(subs, rank, pools, arena, arg_type);
-                subs.variables[target_index] = copy_var;
-            }
-
-            let it = (new_variables.indices().skip(args.len())).zip(lambda_set_variables);
-            for (target_index, ls) in it {
-                let copy_var = type_to_variable(subs, rank, pools, arena, &ls.0);
-                subs.variables[target_index] = copy_var;
-            }
-
-            let arg_vars = AliasVariables {
-                variables_start: new_variables.slice.start,
-                type_variables_len: args.len() as _,
-                all_variables_len: length as _,
-            };
-
-            let alias_var = type_to_variable(subs, rank, pools, arena, alias_type);
-            let content = Content::Alias(*symbol, arg_vars, alias_var);
+            let alias_variable = type_to_variable(subs, rank, pools, arena, actual);
+            let content = Content::Alias(*symbol, alias_variables, alias_variable);
 
             register(subs, rank, pools, content)
         }
         HostExposedAlias {
             name: symbol,
-            type_arguments: args,
+            type_arguments,
             actual: alias_type,
             actual_var,
             lambda_set_variables,
             ..
         } => {
-            let length = args.len() + lambda_set_variables.len();
-            let new_variables = VariableSubsSlice::reserve_into_subs(subs, length);
+            let alias_variables = alias_to_var(
+                subs,
+                rank,
+                pools,
+                arena,
+                type_arguments,
+                lambda_set_variables,
+            );
 
-            for (target_index, (_, arg_type)) in (new_variables.indices()).zip(args) {
-                let copy_var = type_to_variable(subs, rank, pools, arena, arg_type);
-                subs.variables[target_index] = copy_var;
-            }
-
-            let it = (new_variables.indices().skip(args.len())).zip(lambda_set_variables);
-            for (target_index, ls) in it {
-                let copy_var = type_to_variable(subs, rank, pools, arena, &ls.0);
-                subs.variables[target_index] = copy_var;
-            }
-
-            let arg_vars = AliasVariables {
-                variables_start: new_variables.slice.start,
-                type_variables_len: args.len() as _,
-                all_variables_len: length as _,
-            };
-
-            let alias_var = type_to_variable(subs, rank, pools, arena, alias_type);
-            let content = Content::Alias(*symbol, arg_vars, alias_var);
-
+            let alias_variable = type_to_variable(subs, rank, pools, arena, alias_type);
+            let content = Content::Alias(*symbol, alias_variables, alias_variable);
             let result = register(subs, rank, pools, content);
 
             // We only want to unify the actual_var with the alias once
@@ -903,6 +880,35 @@ fn type_to_variable<'a>(
 
             register(subs, rank, pools, content)
         }
+    }
+}
+
+fn alias_to_var<'a>(
+    subs: &mut Subs,
+    rank: Rank,
+    pools: &mut Pools,
+    arena: &'a bumpalo::Bump,
+    type_arguments: &[(roc_module::ident::Lowercase, Type)],
+    lambda_set_variables: &[roc_types::types::LambdaSet],
+) -> AliasVariables {
+    let length = type_arguments.len() + lambda_set_variables.len();
+    let new_variables = VariableSubsSlice::reserve_into_subs(subs, length);
+
+    for (target_index, (_, arg_type)) in (new_variables.indices()).zip(type_arguments) {
+        let copy_var = type_to_variable(subs, rank, pools, arena, arg_type);
+        subs.variables[target_index] = copy_var;
+    }
+
+    let it = (new_variables.indices().skip(type_arguments.len())).zip(lambda_set_variables);
+    for (target_index, ls) in it {
+        let copy_var = type_to_variable(subs, rank, pools, arena, &ls.0);
+        subs.variables[target_index] = copy_var;
+    }
+
+    AliasVariables {
+        variables_start: new_variables.slice.start,
+        type_variables_len: type_arguments.len() as _,
+        all_variables_len: length as _,
     }
 }
 
