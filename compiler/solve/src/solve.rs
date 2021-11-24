@@ -762,23 +762,21 @@ fn type_to_variable<'a>(
         }
         FunctionOrTagUnion(tag_name, symbol, ext) => {
             let temp_ext_var = type_to_variable(subs, rank, pools, arena, ext);
-            let mut ext_tag_vec = std::vec::Vec::new();
-            let new_ext_var = match roc_types::pretty_print::chase_ext_tag_union(
+
+            let (it, ext) = roc_types::types::gather_tags_unsorted_iter(
                 subs,
+                UnionTags::default(),
                 temp_ext_var,
-                &mut ext_tag_vec,
-            ) {
-                Ok(()) => Variable::EMPTY_TAG_UNION,
-                Err((new, _)) => new,
-            };
-            debug_assert!(ext_tag_vec.is_empty());
+            );
 
-            let start = subs.tag_names.len() as u32;
+            for _ in it {
+                unreachable!("we assert that the ext var is empty; otherwise we'd already know it was a tag union!");
+            }
+
+            let slice = SubsIndex::new(subs.tag_names.len() as u32);
             subs.tag_names.push(tag_name.clone());
-            let slice = SubsIndex::new(start);
 
-            let content =
-                Content::Structure(FlatType::FunctionOrTagUnion(slice, *symbol, new_ext_var));
+            let content = Content::Structure(FlatType::FunctionOrTagUnion(slice, *symbol, ext));
 
             register(subs, rank, pools, content)
         }
