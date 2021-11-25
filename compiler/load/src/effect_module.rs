@@ -191,7 +191,6 @@ fn build_effect_always(
     let def_annotation = roc_can::def::Annotation {
         signature,
         introduced_variables,
-        annotation_var: var_store.fresh(),
         aliases: SendMap::default(),
         region: Region::zero(),
     };
@@ -404,7 +403,6 @@ fn build_effect_map(
     let def_annotation = roc_can::def::Annotation {
         signature,
         introduced_variables,
-        annotation_var: var_store.fresh(),
         aliases: SendMap::default(),
         region: Region::zero(),
     };
@@ -572,7 +570,6 @@ fn build_effect_after(
     let def_annotation = roc_can::def::Annotation {
         signature,
         introduced_variables,
-        annotation_var: var_store.fresh(),
         aliases: SendMap::default(),
         region: Region::zero(),
     };
@@ -745,7 +742,6 @@ pub fn build_host_exposed_def(
     let def_annotation = roc_can::def::Annotation {
         signature: annotation.typ,
         introduced_variables: annotation.introduced_variables,
-        annotation_var: var_store.fresh(),
         aliases: annotation.aliases,
         region: Region::zero(),
     };

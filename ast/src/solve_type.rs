@@ -75,7 +75,7 @@ use crate::mem_pool::shallow_clone::ShallowClone;
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum TypeError {
-    BadExpr(Region, Category, ErrorType, Expected<ErrorType, Variable>),
+    BadExpr(Region, Category, ErrorType, Expected<ErrorType>),
     BadPattern(Region, PatternCategory, ErrorType, PExpected<ErrorType>),
     CircularType(Region, Symbol, ErrorType),
     BadType(roc_types::types::Problem),

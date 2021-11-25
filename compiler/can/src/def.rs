@@ -35,7 +35,6 @@ pub struct Def {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Annotation {
     pub signature: Type,
-    pub annotation_var: Variable,
     pub introduced_variables: IntroducedVariables,
     pub aliases: SendMap<Symbol, Alias>,
     pub region: Region,
@@ -876,7 +875,6 @@ fn canonicalize_pending_def<'a>(
                         pattern_vars: vars_by_symbol.clone(),
                         annotation: Some(Annotation {
                             signature: typ.clone(),
-                            annotation_var: var_store.fresh(),
                             introduced_variables: output.introduced_variables.clone(),
                             aliases: ann.aliases.clone(),
                             region: loc_ann.region,
@@ -1098,7 +1096,6 @@ fn canonicalize_pending_def<'a>(
                         pattern_vars: vars_by_symbol.clone(),
                         annotation: Some(Annotation {
                             signature: typ.clone(),
-                            annotation_var: var_store.fresh(),
                             introduced_variables: output.introduced_variables.clone(),
                             aliases: ann.aliases.clone(),
                             region: loc_ann.region,

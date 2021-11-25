@@ -14,7 +14,7 @@ use roc_types::types::Type::{self, *};
 pub fn int_literal(
     num_var: Variable,
     precision_var: Variable,
-    expected: Expected<Type, Variable>,
+    expected: Expected<Type>,
     region: Region,
 ) -> Constraint {
     let num_type = Variable(num_var);
@@ -38,7 +38,7 @@ pub fn int_literal(
 pub fn float_literal(
     num_var: Variable,
     precision_var: Variable,
-    expected: Expected<Type, Variable>,
+    expected: Expected<Type>,
     region: Region,
 ) -> Constraint {
     let num_type = Variable(num_var);

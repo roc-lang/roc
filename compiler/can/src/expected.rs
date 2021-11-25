@@ -3,9 +3,9 @@ use roc_region::all::{Located, Region};
 use roc_types::types::{AnnotationSource, PReason, Reason};
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Expected<T, Annot> {
+pub enum Expected<T> {
     NoExpectation(T),
-    FromAnnotation(Located<Pattern>, usize, AnnotationSource<Annot>, T),
+    FromAnnotation(Located<Pattern>, usize, AnnotationSource, T),
     ForReason(Reason, T, Region),
 }
 
@@ -46,7 +46,7 @@ impl<T> PExpected<T> {
     }
 }
 
-impl<T, Annot> Expected<T, Annot> {
+impl<T> Expected<T> {
     pub fn get_type(self) -> T {
         match self {
             Expected::NoExpectation(val) => val,
@@ -73,12 +73,14 @@ impl<T, Annot> Expected<T, Annot> {
 
     pub fn get_annotation_region(&self) -> Option<Region> {
         match self {
-            Expected::FromAnnotation(_, _, ann_source, _) => Some(ann_source.region()),
+            Expected::FromAnnotation(_, _, AnnotationSource::TypedBody { region }, _) => {
+                Some(*region)
+            }
             _ => None,
         }
     }
 
-    pub fn replace<U>(self, new: U) -> Expected<U, Annot> {
+    pub fn replace<U>(self, new: U) -> Expected<U> {
         match self {
             Expected::NoExpectation(_val) => Expected::NoExpectation(new),
             Expected::ForReason(reason, _val, region) => Expected::ForReason(reason, new, region),
@@ -88,34 +90,15 @@ impl<T, Annot> Expected<T, Annot> {
         }
     }
 
-    pub fn replace_ref<U>(&self, new: U) -> Expected<U, Annot>
-    where
-        Annot: Clone,
-    {
+    pub fn replace_ref<U>(&self, new: U) -> Expected<U> {
         match self {
             Expected::NoExpectation(_val) => Expected::NoExpectation(new),
             Expected::ForReason(reason, _val, region) => {
                 Expected::ForReason(reason.clone(), new, *region)
             }
             Expected::FromAnnotation(pattern, size, source, _val) => {
-                Expected::FromAnnotation(pattern.clone(), *size, source.clone(), new)
+                Expected::FromAnnotation(pattern.clone(), *size, *source, new)
             }
-        }
-    }
-
-    pub fn replace_annotation_with<Annot2, F>(self, create_new_annotation: F) -> Expected<T, Annot2>
-    where
-        F: FnOnce(Annot) -> Annot2,
-    {
-        match self {
-            Expected::NoExpectation(val) => Expected::NoExpectation(val),
-            Expected::ForReason(reason, val, region) => Expected::ForReason(reason, val, region),
-            Expected::FromAnnotation(pattern, size, ann_source, val) => Expected::FromAnnotation(
-                pattern,
-                size,
-                ann_source.replace_with(create_new_annotation),
-                val,
-            ),
         }
     }
 }

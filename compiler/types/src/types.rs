@@ -1107,61 +1107,28 @@ pub enum PReason {
     OptionalField,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum AnnotationSource<Annot> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnnotationSource {
     TypedIfBranch {
         index: Index,
         num_branches: usize,
-        annotation: Located<Annot>,
+        region: Region,
     },
     TypedWhenBranch {
         index: Index,
-        annotation: Located<Annot>,
+        region: Region,
     },
     TypedBody {
-        annotation: Located<Annot>,
+        region: Region,
     },
 }
 
-impl<Annot> AnnotationSource<Annot> {
+impl AnnotationSource {
     pub fn region(&self) -> Region {
         match self {
-            Self::TypedIfBranch { annotation, .. }
-            | Self::TypedWhenBranch { annotation, .. }
-            | Self::TypedBody { annotation, .. } => annotation.region,
-        }
-    }
-
-    pub fn annotation(&self) -> &Located<Annot> {
-        match self {
-            Self::TypedIfBranch { annotation, .. }
-            | Self::TypedWhenBranch { annotation, .. }
-            | Self::TypedBody { annotation, .. } => annotation,
-        }
-    }
-
-    pub fn replace_with<Annot2, F>(self, create_new_annotation: F) -> AnnotationSource<Annot2>
-    where
-        F: FnOnce(Annot) -> Annot2,
-    {
-        use AnnotationSource::*;
-        match self {
-            TypedIfBranch {
-                index,
-                num_branches,
-                annotation,
-            } => TypedIfBranch {
-                index,
-                num_branches,
-                annotation: annotation.map_in_place(create_new_annotation),
-            },
-            TypedWhenBranch { index, annotation } => TypedWhenBranch {
-                index,
-                annotation: annotation.map_in_place(create_new_annotation),
-            },
-            TypedBody { annotation } => TypedBody {
-                annotation: annotation.map_in_place(create_new_annotation),
-            },
+            &Self::TypedIfBranch { region, .. }
+            | &Self::TypedWhenBranch { region, .. }
+            | &Self::TypedBody { region, .. } => region,
         }
     }
 }

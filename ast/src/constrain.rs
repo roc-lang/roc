@@ -6,7 +6,7 @@ use roc_module::{
     ident::{Lowercase, TagName},
     symbol::Symbol,
 };
-use roc_region::all::{Located, Region};
+use roc_region::all::Region;
 use roc_types::{
     subs::Variable,
     types::{self, AnnotationSource, PReason, PatternCategory},
@@ -32,9 +32,9 @@ use crate::{
 
 #[derive(Debug)]
 pub enum Constraint<'a> {
-    Eq(Type2, Expected<Type2, Variable>, Category, Region),
+    Eq(Type2, Expected<Type2>, Category, Region),
     // Store(Type, Variable, &'static str, u32),
-    Lookup(Symbol, Expected<Type2, Variable>, Region),
+    Lookup(Symbol, Expected<Type2>, Region),
     Pattern(Region, PatternCategory, Type2, PExpected<Type2>),
     And(BumpVec<'a, Constraint<'a>>),
     Let(&'a LetConstraint<'a>),
@@ -55,7 +55,7 @@ pub fn constrain_expr<'a>(
     arena: &'a Bump,
     env: &mut Env,
     expr: &Expr2,
-    expected: Expected<Type2, Variable>,
+    expected: Expected<Type2>,
     region: Region,
 ) -> Constraint<'a> {
     use Constraint::*;
@@ -528,10 +528,7 @@ pub fn constrain_expr<'a>(
                                 AnnotationSource::TypedIfBranch {
                                     index: Index::zero_based(index),
                                     num_branches,
-                                    annotation: Located::at(
-                                        ann_source.region(),
-                                        ann_source.annotation().value,
-                                    ),
+                                    region: ann_source.region(),
                                 },
                                 tipe.shallow_clone(),
                             ),
@@ -552,10 +549,7 @@ pub fn constrain_expr<'a>(
                             AnnotationSource::TypedIfBranch {
                                 index: Index::zero_based(branches.len()),
                                 num_branches,
-                                annotation: Located::at(
-                                    ann_source.region(),
-                                    ann_source.annotation().value,
-                                ),
+                                region: ann_source.region(),
                             },
                             tipe.shallow_clone(),
                         ),
@@ -695,10 +689,7 @@ pub fn constrain_expr<'a>(
                                 *arity,
                                 AnnotationSource::TypedWhenBranch {
                                     index: Index::zero_based(index),
-                                    annotation: Located::at(
-                                        ann_source.region(),
-                                        ann_source.annotation().value,
-                                    ),
+                                    region: ann_source.region(),
                                 },
                                 typ.shallow_clone(),
                             ),
@@ -1185,7 +1176,7 @@ fn exists<'a>(
 fn constrain_tag<'a>(
     arena: &'a Bump,
     env: &mut Env,
-    expected: Expected<Type2, Variable>,
+    expected: Expected<Type2>,
     region: Region,
     tag_name: TagName,
     arguments: &PoolVec<(Variable, ExprId)>,
@@ -1275,10 +1266,7 @@ fn constrain_field_update<'a>(
     (field_type, con)
 }
 
-fn constrain_empty_record<'a>(
-    expected: Expected<Type2, Variable>,
-    region: Region,
-) -> Constraint<'a> {
+fn constrain_empty_record<'a>(expected: Expected<Type2>, region: Region) -> Constraint<'a> {
     Constraint::Eq(Type2::EmptyRec, expected, Category::Record, region)
 }
 
@@ -1289,7 +1277,7 @@ fn constrain_when_branch<'a>(
     region: Region,
     when_branch: &WhenBranch,
     pattern_expected: PExpected<Type2>,
-    expr_expected: Expected<Type2, Variable>,
+    expr_expected: Expected<Type2>,
 ) -> Constraint<'a> {
     let when_expr = env.pool.get(when_branch.body);
 

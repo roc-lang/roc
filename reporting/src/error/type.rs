@@ -6,9 +6,7 @@ use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_solve::solve;
 use roc_types::pretty_print::{Parens, WILDCARD};
-use roc_types::types::{
-    name_type_var, Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt,
-};
+use roc_types::types::{Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt};
 use std::path::PathBuf;
 
 use crate::internal_error;
@@ -291,7 +289,7 @@ fn to_expr_report<'b>(
     expr_region: roc_region::all::Region,
     category: Category,
     found: ErrorType,
-    expected: Expected<ErrorType, ErrorType>,
+    expected: Expected<ErrorType>,
 ) -> Report<'b> {
     match expected {
         Expected::NoExpectation(expected_type) => {
@@ -371,7 +369,6 @@ fn to_expr_report<'b>(
 
             let expectation_context = ExpectationContext::Annotation {
                 on: on_name_text.clone(),
-                signature: annotation_source.annotation().value.clone(),
             };
 
             let comparison = if diff_is_wildcard_comparison(
@@ -953,10 +950,7 @@ fn count_arguments(tipe: &ErrorType) -> usize {
 enum ExpectationContext<'a> {
     /// An expected type was discovered from a type annotation. Corresponds to
     /// [`Expected::FromAnnotation`](Expected::FromAnnotation).
-    Annotation {
-        on: RocDocBuilder<'a>,
-        signature: ErrorType,
-    },
+    Annotation { on: RocDocBuilder<'a> },
     /// When we don't know the context, or it's not relevant.
     Arbitrary,
 }
@@ -2698,7 +2692,7 @@ fn type_problem_to_pretty<'b>(
             alloc.tip().append(line)
         }
 
-        (BadRigidVar(x, tipe), ExpectationContext::Annotation { on, signature }) => {
+        (BadRigidVar(x, tipe), ExpectationContext::Annotation { on }) => {
             use ErrorType::*;
 
             let bad_rigid_var = |name: Lowercase, a_thing| {
@@ -2712,10 +2706,6 @@ fn type_problem_to_pretty<'b>(
             };
 
             let bad_double_wildcard = || {
-                let mut taken_names = MutSet::default();
-                signature.add_names(&mut taken_names);
-                let (named_var_suggest, _) = name_type_var(0, &mut taken_names);
-
                 alloc.tip().append(alloc.concat(vec![
                     alloc.reflow(
                         "Any connection between types must use a named type variable, not a ",
@@ -2723,9 +2713,7 @@ fn type_problem_to_pretty<'b>(
                     alloc.type_variable(WILDCARD.into()),
                     alloc.reflow("! Maybe the annotation "),
                     on,
-                    alloc.reflow(" should have a named type variable, like "),
-                    alloc.type_variable(named_var_suggest),
-                    alloc.reflow(" in place of the "),
+                    alloc.reflow(" should have a named type variable in place of the "),
                     alloc.type_variable(WILDCARD.into()),
                     alloc.reflow("?"),
                 ]))

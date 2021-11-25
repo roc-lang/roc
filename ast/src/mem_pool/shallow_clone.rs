@@ -6,10 +6,9 @@ pub trait ShallowClone {
     fn shallow_clone(&self) -> Self;
 }
 
-impl<T, Annot> ShallowClone for Expected<T, Annot>
+impl<T> ShallowClone for Expected<T>
 where
     T: ShallowClone,
-    Annot: Clone,
 {
     fn shallow_clone(&self) -> Self {
         use Expected::*;
@@ -18,7 +17,7 @@ where
             NoExpectation(t) => NoExpectation(t.shallow_clone()),
             ForReason(reason, t, region) => ForReason(reason.clone(), t.shallow_clone(), *region),
             FromAnnotation(loc_pat, n, source, t) => {
-                FromAnnotation(loc_pat.clone(), *n, source.clone(), t.shallow_clone())
+                FromAnnotation(loc_pat.clone(), *n, *source, t.shallow_clone())
             }
         }
     }

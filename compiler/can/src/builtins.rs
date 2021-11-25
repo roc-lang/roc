@@ -1204,7 +1204,6 @@ fn num_max_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     let annotation = crate::def::Annotation {
         signature,
-        annotation_var: var_store.fresh(),
         introduced_variables: Default::default(),
         region: Region::zero(),
         aliases: Default::default(),

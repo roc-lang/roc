@@ -6797,8 +6797,8 @@ I need all branches in an `if` to have the same type!
                 way that isn't reflected in this annotation.
 
                 Tip: Any connection between types must use a named type variable, not
-                a `*`! Maybe the annotation  on `f` should have a named type variable,
-                like `b` in place of the `*`?
+                a `*`! Maybe the annotation  on `f` should have a named type variable in
+                place of the `*`?
                 "#
             ),
         )
@@ -6834,8 +6834,8 @@ I need all branches in an `if` to have the same type!
                 in a way that isn't reflected in this annotation.
 
                 Tip: Any connection between types must use a named type variable, not
-                a `*`! Maybe the annotation  on `f` should have a named type variable,
-                like `c` in place of the `*`?
+                a `*`! Maybe the annotation  on `f` should have a named type variable in
+                place of the `*`?
                 "#
             ),
         )
@@ -6876,8 +6876,8 @@ I need all branches in an `if` to have the same type!
                 way that isn't reflected in this annotation.
 
                 Tip: Any connection between types must use a named type variable, not
-                a `*`! Maybe the annotation  on `f` should have a named type variable,
-                like `c` in place of the `*`?
+                a `*`! Maybe the annotation  on `f` should have a named type variable in
+                place of the `*`?
                 "#
             ),
         )
