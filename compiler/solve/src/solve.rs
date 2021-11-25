@@ -979,7 +979,7 @@ fn find_tag_name_run<T>(slice: &[(TagName, T)], subs: &mut Subs) -> Option<SubsS
 
     let mut result = None;
 
-    // the `SubsSlice<TagName>` that inserting `slice` intot subs would give
+    // the `SubsSlice<TagName>` that inserting `slice` into subs would give
     let bigger_slice = SubsSlice::new(subs.tag_names.len() as _, slice.len() as _);
 
     match subs.tag_name_cache.entry(tag_name) {
