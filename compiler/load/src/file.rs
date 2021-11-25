@@ -3437,7 +3437,7 @@ fn fabricate_effects_module<'a>(
 
     let module_id: ModuleId;
 
-    let effect_entries = unpack_exposes_entries(arena, effects.entries);
+    let effect_entries = unpack_exposes_entries(arena, effects.entries.items);
     let name = effects.effect_type_name;
     let declared_name: ModuleName = name.into();
 
