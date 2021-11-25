@@ -1983,9 +1983,11 @@ impl RecordFields {
             SubsIndex<RecordField<()>>,
         ),
     > {
-        let range1 = self.field_names_start..self.field_names_start + self.length as u32;
-        let range2 = self.variables_start..self.variables_start + self.length as u32;
-        let range3 = self.field_types_start..self.field_types_start + self.length as u32;
+        let helper = |start| start..(start + self.length as u32);
+
+        let range1 = helper(self.field_names_start);
+        let range2 = helper(self.variables_start);
+        let range3 = helper(self.field_types_start);
 
         let it = range1
             .into_iter()
@@ -3247,8 +3249,7 @@ fn deep_copy_var_to_help<'a>(
 
                     let new_tag_names = {
                         let tag_names = tags.tag_names();
-                        let slice = &source.tag_names[tag_names.start as usize..]
-                            [..tag_names.length as usize];
+                        let slice = &source.tag_names[tag_names.indices()];
 
                         let start = target.tag_names.len() as u32;
                         let length = tag_names.len() as u16;
@@ -3305,8 +3306,7 @@ fn deep_copy_var_to_help<'a>(
 
                     let new_tag_names = {
                         let tag_names = tags.tag_names();
-                        let slice = &source.tag_names[tag_names.start as usize..]
-                            [..tag_names.length as usize];
+                        let slice = &source.tag_names[tag_names.indices()];
 
                         let start = target.tag_names.len() as u32;
                         let length = tag_names.len() as u16;

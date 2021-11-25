@@ -1175,23 +1175,25 @@ fn check_for_infinite_type(
                     },
                 );
 
-                let mut new_tags = Vec::with_capacity(tags.len());
+                let new_variable_slices = SubsSlice::reserve_variable_slices(subs, tags.len());
 
-                for (name_index, slice_index) in tags.iter_all() {
+                let it = new_variable_slices.indices().zip(tags.iter_all());
+                for (variable_slice_index, (_, slice_index)) in it {
                     let slice = subs[slice_index];
 
-                    let mut new_vars = Vec::new();
-                    for var_index in slice {
+                    let new_variables = VariableSubsSlice::reserve_into_subs(subs, slice.len());
+                    for (target_index, var_index) in new_variables.indices().zip(slice) {
                         let var = subs[var_index];
-                        new_vars.push(subs.explicit_substitute(recursive, rec_var, var));
+                        subs.variables[target_index] =
+                            subs.explicit_substitute(recursive, rec_var, var);
                     }
 
-                    new_tags.push((subs[name_index].clone(), new_vars));
+                    subs.variable_slices[variable_slice_index] = new_variables;
                 }
 
                 let new_ext_var = subs.explicit_substitute(recursive, rec_var, ext_var);
 
-                let new_tags = UnionTags::insert_into_subs(subs, new_tags);
+                let new_tags = UnionTags::from_slices(tags.tag_names(), new_variable_slices);
 
                 let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, new_ext_var);
 
