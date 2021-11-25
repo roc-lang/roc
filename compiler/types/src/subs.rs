@@ -80,7 +80,7 @@ pub struct SubsSlice<T> {
 
 /// An index into the Vec<T> of subs
 pub struct SubsIndex<T> {
-    pub start: u32,
+    pub index: u32,
     _marker: std::marker::PhantomData<T>,
 }
 
@@ -91,13 +91,13 @@ impl std::ops::Index<SubsIndex<Variable>> for Subs {
     type Output = Variable;
 
     fn index(&self, index: SubsIndex<Variable>) -> &Self::Output {
-        &self.variables[index.start as usize]
+        &self.variables[index.index as usize]
     }
 }
 
 impl std::ops::IndexMut<SubsIndex<Variable>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<Variable>) -> &mut Self::Output {
-        &mut self.variables[index.start as usize]
+        &mut self.variables[index.index as usize]
     }
 }
 
@@ -105,7 +105,7 @@ impl std::ops::Index<SubsIndex<Lowercase>> for Subs {
     type Output = Lowercase;
 
     fn index(&self, index: SubsIndex<Lowercase>) -> &Self::Output {
-        &self.field_names[index.start as usize]
+        &self.field_names[index.index as usize]
     }
 }
 
@@ -113,19 +113,19 @@ impl std::ops::Index<SubsIndex<TagName>> for Subs {
     type Output = TagName;
 
     fn index(&self, index: SubsIndex<TagName>) -> &Self::Output {
-        &self.tag_names[index.start as usize]
+        &self.tag_names[index.index as usize]
     }
 }
 
 impl std::ops::IndexMut<SubsIndex<TagName>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<TagName>) -> &mut Self::Output {
-        &mut self.tag_names[index.start as usize]
+        &mut self.tag_names[index.index as usize]
     }
 }
 
 impl std::ops::IndexMut<SubsIndex<Lowercase>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<Lowercase>) -> &mut Self::Output {
-        &mut self.field_names[index.start as usize]
+        &mut self.field_names[index.index as usize]
     }
 }
 
@@ -133,13 +133,13 @@ impl std::ops::Index<SubsIndex<RecordField<()>>> for Subs {
     type Output = RecordField<()>;
 
     fn index(&self, index: SubsIndex<RecordField<()>>) -> &Self::Output {
-        &self.record_fields[index.start as usize]
+        &self.record_fields[index.index as usize]
     }
 }
 
 impl std::ops::IndexMut<SubsIndex<RecordField<()>>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<RecordField<()>>) -> &mut Self::Output {
-        &mut self.record_fields[index.start as usize]
+        &mut self.record_fields[index.index as usize]
     }
 }
 
@@ -147,13 +147,13 @@ impl std::ops::Index<SubsIndex<VariableSubsSlice>> for Subs {
     type Output = VariableSubsSlice;
 
     fn index(&self, index: SubsIndex<VariableSubsSlice>) -> &Self::Output {
-        &self.variable_slices[index.start as usize]
+        &self.variable_slices[index.index as usize]
     }
 }
 
 impl std::ops::IndexMut<SubsIndex<VariableSubsSlice>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<VariableSubsSlice>) -> &mut Self::Output {
-        &mut self.variable_slices[index.start as usize]
+        &mut self.variable_slices[index.index as usize]
     }
 }
 
@@ -165,7 +165,7 @@ impl<T> std::fmt::Debug for SubsIndex<T> {
             f,
             "SubsIndex<{}>({})",
             std::any::type_name::<T>(),
-            self.start
+            self.index
         )
     }
 }
@@ -187,7 +187,7 @@ impl<T> Copy for SubsIndex<T> {}
 impl<T> Clone for SubsIndex<T> {
     fn clone(&self) -> Self {
         Self {
-            start: self.start,
+            index: self.index,
             _marker: self._marker,
         }
     }
@@ -271,7 +271,7 @@ impl SubsSlice<TagName> {
 impl<T> SubsIndex<T> {
     pub fn new(start: u32) -> Self {
         Self {
-            start,
+            index: start,
             _marker: std::marker::PhantomData,
         }
     }
@@ -290,7 +290,7 @@ impl<T> IntoIterator for SubsSlice<T> {
 
 fn u32_to_index<T>(i: u32) -> SubsIndex<T> {
     SubsIndex {
-        start: i,
+        index: i,
         _marker: std::marker::PhantomData,
     }
 }
@@ -1643,7 +1643,7 @@ impl UnionTags {
 
     pub fn from_tag_name_index(index: SubsIndex<TagName>) -> Self {
         Self::from_slices(
-            SubsSlice::new(index.start, 1),
+            SubsSlice::new(index.index, 1),
             SubsSlice::new(0, 1), // the first variablesubsslice is the empty slice
         )
     }
@@ -2843,7 +2843,7 @@ fn restore_help(subs: &mut Subs, initial: Variable) {
                     }
                     TagUnion(tags, ext_var) => {
                         for slice_index in tags.variables() {
-                            let slice = variable_slices[slice_index.start as usize];
+                            let slice = variable_slices[slice_index.index as usize];
                             stack.extend(var_slice(slice));
                         }
 
@@ -2855,7 +2855,7 @@ fn restore_help(subs: &mut Subs, initial: Variable) {
 
                     RecursiveTagUnion(rec_var, tags, ext_var) => {
                         for slice_index in tags.variables() {
-                            let slice = variable_slices[slice_index.start as usize];
+                            let slice = variable_slices[slice_index.index as usize];
                             stack.extend(var_slice(slice));
                         }
 
@@ -3064,7 +3064,7 @@ impl StorageSubs {
         offsets: &StorageSubsOffsets,
         mut tag_name: SubsIndex<TagName>,
     ) -> SubsIndex<TagName> {
-        tag_name.start += offsets.tag_names;
+        tag_name.index += offsets.tag_names;
 
         tag_name
     }
