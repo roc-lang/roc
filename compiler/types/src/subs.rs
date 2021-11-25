@@ -1,5 +1,5 @@
 use crate::types::{name_type_var, ErrorType, Problem, RecordField, TypeExt};
-use roc_collections::all::{ImMap, ImSet, MutSet, SendMap};
+use roc_collections::all::{ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName, Uppercase};
 use roc_module::symbol::Symbol;
 use std::fmt;
@@ -59,6 +59,7 @@ pub struct Subs {
     pub field_names: Vec<Lowercase>,
     pub record_fields: Vec<RecordField<()>>,
     pub variable_slices: Vec<VariableSubsSlice>,
+    pub tag_name_cache: MutMap<TagName, SubsSlice<TagName>>,
 }
 
 impl Default for Subs {
@@ -804,49 +805,54 @@ fn integer_type(
 
     var_i64: Variable,
 ) {
-    let tags = UnionTags::insert_into_subs(subs, [(TagName::Private(num_at_signed64), [])]);
+    // define the type Signed64 (which is an alias for [ @Signed64 ])
+    {
+        let tags = UnionTags::insert_into_subs(subs, [(TagName::Private(num_at_signed64), [])]);
 
-    subs.set_content(at_signed64, {
-        Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
-    });
+        subs.set_content(at_signed64, {
+            Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
+        });
 
-    subs.set_content(signed64, {
-        Content::Alias(num_signed64, AliasVariables::default(), at_signed64)
-    });
+        subs.set_content(signed64, {
+            Content::Alias(num_signed64, AliasVariables::default(), at_signed64)
+        });
+    }
 
-    // Num.Integer Num.Signed64
+    // define the type `Num.Integer Num.Signed64`
+    {
+        let tags = UnionTags::insert_into_subs(
+            subs,
+            [(TagName::Private(Symbol::NUM_AT_INTEGER), [signed64])],
+        );
+        subs.set_content(at_integer_signed64, {
+            Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
+        });
 
-    let tags = UnionTags::insert_into_subs(
-        subs,
-        [(TagName::Private(Symbol::NUM_AT_INTEGER), [signed64])],
-    );
-    subs.set_content(at_integer_signed64, {
-        Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
-    });
+        let vars = AliasVariables::insert_into_subs(subs, [signed64], []);
+        subs.set_content(integer_signed64, {
+            Content::Alias(Symbol::NUM_INTEGER, vars, at_signed64)
+        });
+    }
 
-    let vars = AliasVariables::insert_into_subs(subs, [signed64], []);
-    subs.set_content(num_integer_signed64, {
-        Content::Alias(Symbol::NUM_INTEGER, vars, at_signed64)
-    });
+    // define the type `Num.Num (Num.Integer Num.Signed64)`
+    {
+        let tags = UnionTags::insert_into_subs(
+            subs,
+            [(TagName::Private(Symbol::NUM_AT_NUM), [integer_signed64])],
+        );
+        subs.set_content(at_num_integer_signed64, {
+            Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
+        });
 
-    // Num.Num (Num.Integer Num.Signed64)
+        let vars = AliasVariables::insert_into_subs(subs, [integer_signed64], []);
+        subs.set_content(num_integer_signed64, {
+            Content::Alias(Symbol::NUM_NUM, vars, at_num_integer_signed64)
+        });
 
-    let tags = UnionTags::insert_into_subs(
-        subs,
-        [(TagName::Private(Symbol::NUM_AT_NUM), [integer_signed64])],
-    );
-    subs.set_content(at_num_integer_signed64, {
-        Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
-    });
-
-    let vars = AliasVariables::insert_into_subs(subs, [integer_signed64], []);
-    subs.set_content(num_integer_signed64, {
-        Content::Alias(Symbol::NUM_NUM, vars, at_num_integer_signed64)
-    });
-
-    subs.set_content(var_i64, {
-        Content::Alias(num_i64, AliasVariables::default(), num_integer_signed64)
-    });
+        subs.set_content(var_i64, {
+            Content::Alias(num_i64, AliasVariables::default(), num_integer_signed64)
+        });
+    }
 }
 
 fn define_integer_types(subs: &mut Subs) {
@@ -1022,6 +1028,7 @@ impl Subs {
             // store an empty slice at the first position
             // used for "TagOrFunction"
             variable_slices: vec![VariableSubsSlice::default()],
+            tag_name_cache: MutMap::default(),
         };
 
         // NOTE the utable does not (currently) have a with_capacity; using this as the next-best thing

@@ -130,6 +130,11 @@ impl SolvedType {
                     ext: Box::new(solved_ext),
                 }
             }
+            ClosureTag { name, ext } => {
+                let solved_ext = Self::from_type(solved_subs, &Type::Variable(*ext));
+                let solved_tags = vec![(TagName::Closure(*name), vec![])];
+                SolvedType::TagUnion(solved_tags, Box::new(solved_ext))
+            }
             TagUnion(tags, box_ext) => {
                 let solved_ext = Self::from_type(solved_subs, box_ext);
                 let mut solved_tags = Vec::with_capacity(tags.len());

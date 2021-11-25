@@ -766,8 +766,8 @@ pub fn ordering_type() -> SolvedType {
     // [ LT, EQ, GT ]
     SolvedType::TagUnion(
         vec![
-            (TagName::Global("GT".into()), vec![]),
             (TagName::Global("EQ".into()), vec![]),
+            (TagName::Global("GT".into()), vec![]),
             (TagName::Global("LT".into()), vec![]),
         ],
         Box::new(SolvedType::EmptyTagUnion),
@@ -788,8 +788,8 @@ pub fn result_type(a: SolvedType, e: SolvedType) -> SolvedType {
 fn result_alias_content(a: SolvedType, e: SolvedType) -> SolvedType {
     SolvedType::TagUnion(
         vec![
-            (TagName::Global("Ok".into()), vec![a]),
             (TagName::Global("Err".into()), vec![e]),
+            (TagName::Global("Ok".into()), vec![a]),
         ],
         Box::new(SolvedType::EmptyTagUnion),
     )
