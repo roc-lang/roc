@@ -2480,6 +2480,15 @@ mod test_fmt {
         ));
     }
 
+    #[test]
+    fn single_line_app() {
+        module_formats_same(indoc!(
+            r#"
+                app "Foo" packages { base: "platform" } imports [] provides [ main ] to base
+            "#
+        ));
+    }
+
     /// Annotations and aliases
 
     #[test]

@@ -16,9 +16,22 @@ pub fn add_spaces(buf: &mut String<'_>, spaces: u16) {
     }
 }
 
-pub fn fmt_spaces<'a, I>(buf: &mut String<'a>, spaces: I, indent: u16)
+pub fn fmt_default_spaces<'a>(
+    buf: &mut String<'a>,
+    spaces: &[CommentOrNewline<'a>],
+    default: &str,
+    indent: u16,
+) {
+    if spaces.is_empty() {
+        buf.push_str(default);
+    } else {
+        fmt_spaces(buf, spaces.iter(), indent);
+    }
+}
+
+pub fn fmt_spaces<'b, 'a: 'b, I>(buf: &mut String<'a>, spaces: I, indent: u16)
 where
-    I: Iterator<Item = &'a CommentOrNewline<'a>>,
+    I: Iterator<Item = &'b CommentOrNewline<'a>>,
 {
     use self::CommentOrNewline::*;
 

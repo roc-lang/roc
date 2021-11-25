@@ -55,6 +55,30 @@ pub trait Formattable<'a> {
     }
 }
 
+/// A reference to a formattable value is also formattable
+impl<'a, T> Formattable<'a> for &'a T
+where
+    T: Formattable<'a>,
+{
+    fn is_multiline(&self) -> bool {
+        (*self).is_multiline()
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut String<'a>,
+        parens: Parens,
+        newlines: Newlines,
+        indent: u16,
+    ) {
+        (*self).format_with_options(buf, parens, newlines, indent)
+    }
+
+    fn format(&self, buf: &mut String<'a>, indent: u16) {
+        (*self).format(buf, indent)
+    }
+}
+
 /// A Located formattable value is also formattable
 impl<'a, T> Formattable<'a> for Located<T>
 where

@@ -1747,7 +1747,7 @@ fn update<'a>(
             match header_extra {
                 App { to_platform } => {
                     debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
-                    state.platform_path = PlatformPath::Valid(to_platform.clone());
+                    state.platform_path = PlatformPath::Valid(to_platform);
                 }
                 PkgConfig { main_for_host, .. } => {
                     debug_assert!(matches!(state.platform_data, None));
@@ -2632,7 +2632,7 @@ fn parse_header<'a>(
                 packages,
                 exposes: header.provides.items,
                 imports: header.imports.items,
-                to_platform: Some(header.to.value.clone()),
+                to_platform: Some(header.to.value),
             };
 
             let (module_id, app_module_header_msg) = send_header(

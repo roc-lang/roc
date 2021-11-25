@@ -72,7 +72,7 @@ pub struct InterfaceHeader<'a> {
     pub after_imports: &'a [CommentOrNewline<'a>],
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum To<'a> {
     ExistingPackage(&'a str),
     NewPackage(PackageOrPath<'a>),

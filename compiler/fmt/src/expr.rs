@@ -4,10 +4,10 @@ use crate::pattern::fmt_pattern;
 use crate::spaces::{add_spaces, fmt_comments_only, fmt_spaces, newline, NewlineAt, INDENT};
 use bumpalo::collections::String;
 use roc_module::called_via::{self, BinOp};
-use roc_parse::ast::StrSegment;
 use roc_parse::ast::{
     AssignedField, Base, Collection, CommentOrNewline, Expr, Pattern, WhenBranch,
 };
+use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_region::all::Located;
 
 impl<'a> Formattable<'a> for Expr<'a> {
@@ -144,53 +144,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 }
             }
             Str(literal) => {
-                use roc_parse::ast::StrLiteral::*;
-
-                buf.push('"');
-                match literal {
-                    PlainLine(string) => {
-                        buf.push_str(string);
-                    }
-                    Line(segments) => {
-                        for seg in segments.iter() {
-                            format_str_segment(seg, buf, 0)
-                        }
-                    }
-                    Block(lines) => {
-                        buf.push_str("\"\"");
-
-                        if lines.len() > 1 {
-                            // Since we have multiple lines, format this with
-                            // the `"""` symbols on their own lines, and the
-                            newline(buf, indent);
-
-                            for segments in lines.iter() {
-                                for seg in segments.iter() {
-                                    format_str_segment(seg, buf, indent);
-                                }
-
-                                newline(buf, indent);
-                            }
-                        } else {
-                            // This is a single-line block string, for example:
-                            //
-                            //     """Whee, "quotes" inside quotes!"""
-
-                            // This loop will run either 0 or 1 times.
-                            for segments in lines.iter() {
-                                for seg in segments.iter() {
-                                    format_str_segment(seg, buf, indent);
-                                }
-
-                                // Don't print a newline here, because we either
-                                // just printed 1 or 0 lines.
-                            }
-                        }
-
-                        buf.push_str("\"\"");
-                    }
-                }
-                buf.push('"');
+                fmt_str_literal(buf, *literal, indent);
             }
             Var { module_name, ident } => {
                 if !module_name.is_empty() {
@@ -375,6 +329,56 @@ fn push_op(buf: &mut String, op: BinOp) {
         called_via::BinOp::HasType => unreachable!(),
         called_via::BinOp::Backpassing => unreachable!(),
     }
+}
+
+pub fn fmt_str_literal<'a>(buf: &mut String<'a>, literal: StrLiteral<'a>, indent: u16) {
+    use roc_parse::ast::StrLiteral::*;
+
+    buf.push('"');
+    match literal {
+        PlainLine(string) => {
+            buf.push_str(string);
+        }
+        Line(segments) => {
+            for seg in segments.iter() {
+                format_str_segment(seg, buf, 0)
+            }
+        }
+        Block(lines) => {
+            buf.push_str("\"\"");
+
+            if lines.len() > 1 {
+                // Since we have multiple lines, format this with
+                // the `"""` symbols on their own lines, and the
+                newline(buf, indent);
+
+                for segments in lines.iter() {
+                    for seg in segments.iter() {
+                        format_str_segment(seg, buf, indent);
+                    }
+
+                    newline(buf, indent);
+                }
+            } else {
+                // This is a single-line block string, for example:
+                //
+                //     """Whee, "quotes" inside quotes!"""
+
+                // This loop will run either 0 or 1 times.
+                for segments in lines.iter() {
+                    for seg in segments.iter() {
+                        format_str_segment(seg, buf, indent);
+                    }
+
+                    // Don't print a newline here, because we either
+                    // just printed 1 or 0 lines.
+                }
+            }
+
+            buf.push_str("\"\"");
+        }
+    }
+    buf.push('"');
 }
 
 fn fmt_bin_ops<'a>(
