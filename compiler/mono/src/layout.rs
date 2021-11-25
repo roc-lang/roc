@@ -2379,7 +2379,7 @@ fn layout_from_tag_union<'a>(
 }
 
 #[cfg(debug_assertions)]
-fn ext_var_is_empty_record(subs: &Subs, ext_var: Variable) -> bool {
+pub fn ext_var_is_empty_record(subs: &Subs, ext_var: Variable) -> bool {
     // the ext_var is empty
     let fields = roc_types::types::gather_fields(subs, RecordFields::empty(), ext_var);
 
@@ -2393,7 +2393,7 @@ fn ext_var_is_empty_record(_subs: &Subs, _ext_var: Variable) -> bool {
 }
 
 #[cfg(debug_assertions)]
-fn ext_var_is_empty_tag_union(subs: &Subs, ext_var: Variable) -> bool {
+pub fn ext_var_is_empty_tag_union(subs: &Subs, ext_var: Variable) -> bool {
     // the ext_var is empty
     let mut ext_fields = std::vec::Vec::new();
     match roc_types::pretty_print::chase_ext_tag_union(subs, ext_var, &mut ext_fields) {
