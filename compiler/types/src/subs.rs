@@ -1,6 +1,6 @@
 use crate::types::{name_type_var, ErrorType, Problem, RecordField, TypeExt};
-use roc_collections::all::{ImMap, ImSet, MutSet, SendMap};
-use roc_module::ident::{Lowercase, TagName};
+use roc_collections::all::{ImMap, ImSet, MutMap, MutSet, SendMap};
+use roc_module::ident::{Lowercase, TagName, Uppercase};
 use roc_module::symbol::Symbol;
 use std::fmt;
 use std::iter::{once, Iterator, Map};
@@ -59,6 +59,7 @@ pub struct Subs {
     pub field_names: Vec<Lowercase>,
     pub record_fields: Vec<RecordField<()>>,
     pub variable_slices: Vec<VariableSubsSlice>,
+    pub tag_name_cache: MutMap<TagName, SubsSlice<TagName>>,
 }
 
 impl Default for Subs {
@@ -216,11 +217,16 @@ impl<T> Default for SubsSlice<T> {
 
 impl<T> SubsSlice<T> {
     pub fn get_slice<'a>(&self, slice: &'a [T]) -> &'a [T] {
-        &slice[self.start as usize..][..self.length as usize]
+        &slice[self.indices()]
     }
 
     pub fn get_slice_mut<'a>(&self, slice: &'a mut [T]) -> &'a mut [T] {
-        &mut slice[self.start as usize..][..self.length as usize]
+        &mut slice[self.indices()]
+    }
+
+    #[inline(always)]
+    pub fn indices(&self) -> std::ops::Range<usize> {
+        self.start as usize..(self.start as usize + self.length as usize)
     }
 
     pub const fn len(&self) -> usize {
@@ -237,6 +243,28 @@ impl<T> SubsSlice<T> {
             length,
             _marker: std::marker::PhantomData,
         }
+    }
+}
+
+impl SubsSlice<VariableSubsSlice> {
+    pub fn reserve_variable_slices(subs: &mut Subs, length: usize) -> Self {
+        let start = subs.variable_slices.len() as u32;
+
+        subs.variable_slices
+            .extend(std::iter::repeat(VariableSubsSlice::default()).take(length));
+
+        Self::new(start, length as u16)
+    }
+}
+
+impl SubsSlice<TagName> {
+    pub fn reserve_tag_names(subs: &mut Subs, length: usize) -> Self {
+        let start = subs.tag_names.len() as u32;
+
+        subs.tag_names
+            .extend(std::iter::repeat(TagName::Global(Uppercase::default())).take(length));
+
+        Self::new(start, length as u16)
     }
 }
 
@@ -777,49 +805,54 @@ fn integer_type(
 
     var_i64: Variable,
 ) {
-    let tags = UnionTags::insert_into_subs(subs, [(TagName::Private(num_at_signed64), [])]);
+    // define the type Signed64 (which is an alias for [ @Signed64 ])
+    {
+        let tags = UnionTags::insert_into_subs(subs, [(TagName::Private(num_at_signed64), [])]);
 
-    subs.set_content(at_signed64, {
-        Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
-    });
+        subs.set_content(at_signed64, {
+            Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
+        });
 
-    subs.set_content(signed64, {
-        Content::Alias(num_signed64, AliasVariables::default(), at_signed64)
-    });
+        subs.set_content(signed64, {
+            Content::Alias(num_signed64, AliasVariables::default(), at_signed64)
+        });
+    }
 
-    // Num.Integer Num.Signed64
+    // define the type `Num.Integer Num.Signed64`
+    {
+        let tags = UnionTags::insert_into_subs(
+            subs,
+            [(TagName::Private(Symbol::NUM_AT_INTEGER), [signed64])],
+        );
+        subs.set_content(at_integer_signed64, {
+            Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
+        });
 
-    let tags = UnionTags::insert_into_subs(
-        subs,
-        [(TagName::Private(Symbol::NUM_AT_INTEGER), [signed64])],
-    );
-    subs.set_content(at_integer_signed64, {
-        Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
-    });
+        let vars = AliasVariables::insert_into_subs(subs, [signed64], []);
+        subs.set_content(integer_signed64, {
+            Content::Alias(Symbol::NUM_INTEGER, vars, at_signed64)
+        });
+    }
 
-    let vars = AliasVariables::insert_into_subs(subs, [signed64], []);
-    subs.set_content(num_integer_signed64, {
-        Content::Alias(Symbol::NUM_INTEGER, vars, at_signed64)
-    });
+    // define the type `Num.Num (Num.Integer Num.Signed64)`
+    {
+        let tags = UnionTags::insert_into_subs(
+            subs,
+            [(TagName::Private(Symbol::NUM_AT_NUM), [integer_signed64])],
+        );
+        subs.set_content(at_num_integer_signed64, {
+            Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
+        });
 
-    // Num.Num (Num.Integer Num.Signed64)
+        let vars = AliasVariables::insert_into_subs(subs, [integer_signed64], []);
+        subs.set_content(num_integer_signed64, {
+            Content::Alias(Symbol::NUM_NUM, vars, at_num_integer_signed64)
+        });
 
-    let tags = UnionTags::insert_into_subs(
-        subs,
-        [(TagName::Private(Symbol::NUM_AT_NUM), [integer_signed64])],
-    );
-    subs.set_content(at_num_integer_signed64, {
-        Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
-    });
-
-    let vars = AliasVariables::insert_into_subs(subs, [integer_signed64], []);
-    subs.set_content(num_integer_signed64, {
-        Content::Alias(Symbol::NUM_NUM, vars, at_num_integer_signed64)
-    });
-
-    subs.set_content(var_i64, {
-        Content::Alias(num_i64, AliasVariables::default(), num_integer_signed64)
-    });
+        subs.set_content(var_i64, {
+            Content::Alias(num_i64, AliasVariables::default(), num_integer_signed64)
+        });
+    }
 }
 
 fn define_integer_types(subs: &mut Subs) {
@@ -995,6 +1028,7 @@ impl Subs {
             // store an empty slice at the first position
             // used for "TagOrFunction"
             variable_slices: vec![VariableSubsSlice::default()],
+            tag_name_cache: MutMap::default(),
         };
 
         // NOTE the utable does not (currently) have a with_capacity; using this as the next-best thing
@@ -1545,6 +1579,18 @@ impl VariableSubsSlice {
         }
     }
 
+    pub fn indices(&self) -> std::ops::Range<usize> {
+        self.slice.indices()
+    }
+
+    /// Reserve space for `length` variables in the subs.variables array
+    ///
+    /// This is useful when we know how many variables e.g. a loop will produce,
+    /// but the loop itself also produces new variables. We often want to work
+    /// with slices, and the loop itself would break up our contiguous slice of variables
+    ///
+    /// This function often helps prevent an intermediate array. See also `indices` above
+    /// to conveniently get a slice or iterator over the indices
     pub fn reserve_into_subs(subs: &mut Subs, length: usize) -> Self {
         let start = subs.variables.len() as u32;
 

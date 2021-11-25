@@ -33,7 +33,7 @@ impl std::ops::Deref for ModuleName {
 pub struct Lowercase(IdentStr);
 
 /// A capitalized identifier, such as a tag name or module name
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Uppercase(IdentStr);
 
 /// A string representing a foreign (linked-in) symbol
