@@ -647,8 +647,8 @@ fn unpack_single_element_tag_union(subs: &Subs, tags: UnionTags) -> (&TagName, &
     let (tag_name_index, payload_vars_index) = tags.iter_all().next().unwrap();
 
     let tag_name = &subs[tag_name_index];
-    let subs_slice = subs[payload_vars_index].as_subs_slice();
-    let payload_vars = subs.get_subs_slice(*subs_slice);
+    let subs_slice = subs[payload_vars_index];
+    let payload_vars = subs.get_subs_slice(subs_slice);
 
     (tag_name, payload_vars)
 }
@@ -661,14 +661,14 @@ fn unpack_two_element_tag_union(
     let (tag_name_index, payload_vars_index) = it.next().unwrap();
 
     let tag_name1 = &subs[tag_name_index];
-    let subs_slice = subs[payload_vars_index].as_subs_slice();
-    let payload_vars1 = subs.get_subs_slice(*subs_slice);
+    let subs_slice = subs[payload_vars_index];
+    let payload_vars1 = subs.get_subs_slice(subs_slice);
 
     let (tag_name_index, payload_vars_index) = it.next().unwrap();
 
     let tag_name2 = &subs[tag_name_index];
-    let subs_slice = subs[payload_vars_index].as_subs_slice();
-    let payload_vars2 = subs.get_subs_slice(*subs_slice);
+    let subs_slice = subs[payload_vars_index];
+    let payload_vars2 = subs.get_subs_slice(subs_slice);
 
     (tag_name1, payload_vars1, tag_name2, payload_vars2)
 }

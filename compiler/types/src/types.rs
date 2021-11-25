@@ -1765,7 +1765,7 @@ pub fn gather_tags_slices(
     let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, var);
 
     let mut result: Vec<_> = it
-        .map(|(ref_label, field)| (ref_label.clone(), field))
+        .map(|(ref_label, field): (_, VariableSubsSlice)| (ref_label.clone(), field))
         .collect();
 
     result.sort_by(|(a, _), (b, _)| a.cmp(b));
@@ -1777,11 +1777,8 @@ pub fn gather_tags(subs: &Subs, other_fields: UnionTags, var: Variable) -> TagUn
     let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, var);
 
     let mut result: Vec<_> = it
-        .map(|(ref_label, field)| {
-            (
-                ref_label.clone(),
-                subs.get_subs_slice(*field.as_subs_slice()),
-            )
+        .map(|(ref_label, field): (_, VariableSubsSlice)| {
+            (ref_label.clone(), subs.get_subs_slice(field))
         })
         .collect();
 

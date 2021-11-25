@@ -906,7 +906,7 @@ fn alias_to_var<'a>(
     }
 
     AliasVariables {
-        variables_start: new_variables.slice.start,
+        variables_start: new_variables.start,
         type_variables_len: type_arguments.len() as _,
         all_variables_len: length as _,
     }
@@ -1501,7 +1501,7 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
     macro_rules! var_slice {
         ($variable_subs_slice:expr) => {{
             let slice = $variable_subs_slice;
-            &subs.variables[slice.slice.start as usize..][..slice.slice.length as usize]
+            &subs.variables[slice.indices()]
         }};
     }
 
@@ -1570,7 +1570,7 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
                     let ext_var = *ext_var;
 
                     for slice_index in tags.variables() {
-                        let slice = subs.variable_slices[slice_index.start as usize];
+                        let slice = subs.variable_slices[slice_index.index as usize];
                         stack.extend(var_slice!(slice));
                     }
 
@@ -1586,7 +1586,7 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
                     let rec_var = *rec_var;
 
                     for slice_index in tags.variables() {
-                        let slice = subs.variable_slices[slice_index.start as usize];
+                        let slice = subs.variable_slices[slice_index.index as usize];
                         stack.extend(var_slice!(slice));
                     }
 
@@ -1736,7 +1736,7 @@ fn deep_copy_var_help(
                         RecordFields {
                             length: fields.length,
                             field_names_start: fields.field_names_start,
-                            variables_start: new_variables.slice.start,
+                            variables_start: new_variables.start,
                             field_types_start: fields.field_types_start,
                         }
                     };
@@ -1844,7 +1844,7 @@ fn deep_copy_var_help(
             }
 
             let new_arguments = AliasVariables {
-                variables_start: new_variables.slice.start,
+                variables_start: new_variables.start,
                 ..arguments
             };
 
