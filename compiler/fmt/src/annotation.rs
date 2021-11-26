@@ -523,7 +523,7 @@ impl<'a> Formattable<'a> for Tag<'a> {
                 }
             }
             Tag::Private { name, args } => {
-                buf.push('@');
+                debug_assert!(name.value.starts_with('@'));
                 buf.push_str(name.value);
                 if is_multiline {
                     let arg_indent = indent + INDENT;
