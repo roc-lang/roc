@@ -1,3 +1,4 @@
+use crate::layout::{ext_var_is_empty_record, ext_var_is_empty_tag_union};
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
 use roc_module::ident::TagName;
@@ -5,9 +6,6 @@ use roc_module::symbol::Symbol;
 use roc_types::subs::{Content, FlatType, Subs, Variable};
 use roc_types::types::RecordField;
 use std::collections::hash_map::Entry;
-
-#[cfg(debug_assertions)]
-use crate::layout::{ext_var_is_empty_record, ext_var_is_empty_tag_union};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Index<T> {
