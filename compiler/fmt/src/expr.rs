@@ -672,8 +672,12 @@ fn fmt_if<'a>(
         indent
     };
 
-    for (loc_condition, loc_then) in branches.iter() {
+    for (i, (loc_condition, loc_then)) in branches.iter().enumerate() {
         let is_multiline_condition = loc_condition.is_multiline();
+
+        if i > 0 {
+            buf.push_str("else ");
+        }
 
         buf.push_str("if");
 
