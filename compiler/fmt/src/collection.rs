@@ -14,7 +14,7 @@ pub struct CollectionConfig {
 
 pub fn fmt_collection<'a, F: Formattable<'a>>(
     buf: &mut String<'a>,
-    items: Collection<'a, F>,
+    items: Collection<'_, F>,
     indent: u16,
     config: CollectionConfig,
 ) {

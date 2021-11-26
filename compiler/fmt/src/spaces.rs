@@ -29,9 +29,9 @@ pub fn fmt_default_spaces<'a>(
     }
 }
 
-pub fn fmt_spaces<'b, 'a: 'b, I>(buf: &mut String<'a>, spaces: I, indent: u16)
+pub fn fmt_spaces<'a, 'b, I>(buf: &mut String<'a>, spaces: I, indent: u16)
 where
-    I: Iterator<Item = &'b CommentOrNewline<'a>>,
+    I: Iterator<Item = &'b CommentOrNewline<'b>>,
 {
     use self::CommentOrNewline::*;
 
@@ -85,13 +85,13 @@ pub enum NewlineAt {
 /// The `new_line_at` argument describes how new lines should be inserted
 /// at the beginning or at the end of the block
 /// in the case of there is some comment in the `spaces` argument.
-pub fn fmt_comments_only<'a, I>(
+pub fn fmt_comments_only<'a, 'b, I>(
     buf: &mut String<'a>,
     spaces: I,
     new_line_at: NewlineAt,
     indent: u16,
 ) where
-    I: Iterator<Item = &'a CommentOrNewline<'a>>,
+    I: Iterator<Item = &'b CommentOrNewline<'b>>,
 {
     use self::CommentOrNewline::*;
     use NewlineAt::*;
@@ -122,7 +122,7 @@ pub fn fmt_comments_only<'a, I>(
     }
 }
 
-fn fmt_comment<'a>(buf: &mut String<'a>, comment: &'a str) {
+fn fmt_comment<'a>(buf: &mut String<'a>, comment: &str) {
     buf.push('#');
     if !comment.starts_with(' ') {
         buf.push(' ');
@@ -130,7 +130,7 @@ fn fmt_comment<'a>(buf: &mut String<'a>, comment: &'a str) {
     buf.push_str(comment);
 }
 
-fn fmt_docs<'a>(buf: &mut String<'a>, docs: &'a str) {
+fn fmt_docs<'a>(buf: &mut String<'a>, docs: &str) {
     buf.push_str("##");
     if !docs.starts_with(' ') {
         buf.push(' ');
