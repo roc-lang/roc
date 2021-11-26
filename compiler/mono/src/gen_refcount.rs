@@ -1,11 +1,12 @@
+use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_builtins::bitcode::IntWidth;
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::{IdentIds, ModuleId, Symbol};
+use roc_module::symbol::{Interns, ModuleId, Symbol};
 
 use crate::ir::{
-    BranchInfo, Call, CallType, Expr, HostExposedLayouts, Literal, Proc, ProcLayout, SelfRecursive,
-    Stmt, UpdateModeId,
+    BranchInfo, Call, CallSpecId, CallType, Expr, HostExposedLayouts, Literal, ModifyRc, Proc,
+    ProcLayout, SelfRecursive, Stmt, UpdateModeId,
 };
 use crate::layout::{Builtin, Layout};
 
@@ -14,6 +15,10 @@ use crate::layout::{Builtin, Layout};
     which can then be lowered by any of the backends
 */
 
+const LAYOUT_BOOL: Layout = Layout::Builtin(Builtin::Bool);
+const LAYOUT_UNIT: Layout = Layout::Struct(&[]);
+const LAYOUT_PTR: Layout = Layout::RecursivePointer;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RefcountOp {
     Inc,
@@ -21,195 +26,324 @@ pub enum RefcountOp {
     DecRef,
 }
 
-const LAYOUT_BOOL: Layout = Layout::Builtin(Builtin::Bool);
-const LAYOUT_UNIT: Layout = Layout::Struct(&[]);
-
-struct Env<'a, 'i> {
-    pub arena: &'a Bump,
-    pub home: ModuleId,
-    pub ident_ids: &'i mut IdentIds,
-    pub intwidth_isize: IntWidth, // this is the only thing not on the ir.rs Env
-    pub update_mode_counter: u64,
+impl From<&ModifyRc> for RefcountOp {
+    fn from(modify_rc: &ModifyRc) -> Self {
+        match modify_rc {
+            ModifyRc::Inc(_, _) => Self::Inc,
+            ModifyRc::Dec(_) => Self::Dec,
+            ModifyRc::DecRef(_) => Self::DecRef,
+        }
+    }
 }
 
-impl<'a, 'i> Env<'a, 'i> {
-    fn layout_isize(&self) -> Layout<'a> {
-        Layout::Builtin(Builtin::Int(self.intwidth_isize))
+pub struct RefcountProcGenerator<'a> {
+    arena: &'a Bump,
+    home: ModuleId,
+    next_symbol_id: u32,
+    layout_isize: Layout<'a>,
+    /// List of refcounting procs to generate, specialised by Layout and RefCountOp
+    /// Order of insertion is preserved, since it is important for Wasm backend
+    procs_to_generate: Vec<'a, (Layout<'a>, RefcountOp, Symbol)>,
+}
+
+impl<'a> RefcountProcGenerator<'a> {
+    pub fn new(arena: &'a Bump, intwidth_isize: IntWidth, home: ModuleId) -> Self {
+        RefcountProcGenerator {
+            arena,
+            home,
+            next_symbol_id: 0,
+            layout_isize: Layout::Builtin(Builtin::Int(intwidth_isize)),
+            procs_to_generate: Vec::with_capacity_in(16, arena),
+        }
     }
 
-    fn layout_ptr(&self) -> Layout<'a> {
-        Layout::RecursivePointer
+    /// Expands the IR for a Refcounting statement to a more detailed form that calls helper functions.
+    /// Any backend can use this to help generate code for Refcounting.
+    /// Calling this function may generate new IR procedures that will also need to be lowered later.
+    pub fn call_refcount_proc<'b>(
+        &mut self,
+        layout: Layout<'a>,
+        modify: &ModifyRc,
+        following: &'a Stmt<'a>,
+    ) -> (Stmt<'a>, Option<(Symbol, ProcLayout<'a>)>) {
+        match modify {
+            ModifyRc::Inc(structure, amount) => {
+                let (is_existing, proc_name) = self.get_proc_name(layout, RefcountOp::Inc);
+
+                // Define a constant for the amount to increment
+                let amount_sym = self.unique_symbol();
+                let amount_expr = Expr::Literal(Literal::Int(*amount as i128));
+                let amount_stmt = |next| Stmt::Let(amount_sym, amount_expr, LAYOUT_UNIT, next);
+
+                // Call helper proc, passing the Roc structure and constant amount
+                let arg_layouts = self.arena.alloc([layout, self.layout_isize]);
+                let call_result_dummy = self.unique_symbol();
+                let call_expr = Expr::Call(Call {
+                    call_type: CallType::ByName {
+                        name: proc_name,
+                        ret_layout: &LAYOUT_UNIT,
+                        arg_layouts,
+                        specialization_id: CallSpecId::BACKEND_DUMMY,
+                    },
+                    arguments: self.arena.alloc([*structure, amount_sym]),
+                });
+                let call_stmt = Stmt::Let(call_result_dummy, call_expr, LAYOUT_UNIT, following);
+                let rc_stmt = amount_stmt(self.arena.alloc(call_stmt));
+
+                // Create a linker symbol for the helper proc if this is the first usage
+                let new_proc_info = if is_existing {
+                    None
+                } else {
+                    Some((
+                        proc_name,
+                        ProcLayout {
+                            arguments: arg_layouts,
+                            result: LAYOUT_UNIT,
+                        },
+                    ))
+                };
+
+                (rc_stmt, new_proc_info)
+            }
+
+            ModifyRc::Dec(structure) => {
+                let (is_existing, proc_name) = self.get_proc_name(layout, RefcountOp::Dec);
+
+                // Call helper proc, passing the Roc structure
+                let arg_layouts = self.arena.alloc([layout, self.layout_isize]);
+                let call_result_dummy = self.unique_symbol();
+                let call_expr = Expr::Call(Call {
+                    call_type: CallType::ByName {
+                        name: proc_name,
+                        ret_layout: &LAYOUT_UNIT,
+                        arg_layouts: self.arena.alloc([layout]),
+                        specialization_id: CallSpecId::BACKEND_DUMMY,
+                    },
+                    arguments: self.arena.alloc([*structure]),
+                });
+
+                let rc_stmt = Stmt::Let(call_result_dummy, call_expr, LAYOUT_UNIT, following);
+
+                // Create a linker symbol for the helper proc if this is the first usage
+                let new_proc_info = if is_existing {
+                    None
+                } else {
+                    Some((
+                        proc_name,
+                        ProcLayout {
+                            arguments: arg_layouts,
+                            result: LAYOUT_UNIT,
+                        },
+                    ))
+                };
+
+                (rc_stmt, new_proc_info)
+            }
+
+            ModifyRc::DecRef(structure) => {
+                // No generated procs for DecRef, just lowlevel calls
+
+                // Get a pointer to the actual refcount
+                let rc_ptr_sym = self.unique_symbol();
+                let rc_ptr_expr = Expr::Call(Call {
+                    call_type: CallType::LowLevel {
+                        op: LowLevel::RefCountGetPtr,
+                        update_mode: UpdateModeId::BACKEND_DUMMY,
+                    },
+                    arguments: self.arena.alloc([*structure]),
+                });
+                let rc_ptr_stmt = |next| Stmt::Let(rc_ptr_sym, rc_ptr_expr, LAYOUT_PTR, next);
+
+                // Pass the refcount pointer to the Zig lowlevel
+                let call_result_dummy = self.unique_symbol();
+                let call_expr = Expr::Call(Call {
+                    call_type: CallType::LowLevel {
+                        op: LowLevel::RefCountDec,
+                        update_mode: UpdateModeId::BACKEND_DUMMY,
+                    },
+                    arguments: self.arena.alloc([rc_ptr_sym]),
+                });
+                let call_stmt = Stmt::Let(call_result_dummy, call_expr, LAYOUT_UNIT, following);
+                let rc_stmt = rc_ptr_stmt(self.arena.alloc(call_stmt));
+
+                (rc_stmt, None)
+            }
+        }
+    }
+
+    fn get_proc_name(&mut self, layout: Layout<'a>, op: RefcountOp) -> (bool, Symbol) {
+        let found = self
+            .procs_to_generate
+            .iter()
+            .find(|(l, o, _)| *l == layout && *o == op);
+
+        if let Some(existing) = found {
+            (true, existing.2)
+        } else {
+            let new_name: Symbol = self.unique_symbol();
+            self.procs_to_generate.push((layout, op, new_name));
+            (false, new_name)
+        }
     }
 
     fn unique_symbol(&mut self) -> Symbol {
-        let ident_id = self.ident_ids.gen_unique();
-
-        Symbol::new(self.home, ident_id)
+        let id = self.next_symbol_id;
+        self.next_symbol_id += 1;
+        Interns::from_index(self.home, id)
     }
 
-    fn next_update_mode_id(&mut self) -> UpdateModeId {
-        let id = UpdateModeId {
-            id: self.update_mode_counter,
+    /// Helper to return Unit from a procedure
+    fn return_unit(&mut self) -> Stmt<'a> {
+        let unit = self.unique_symbol();
+        let ret_stmt = self.arena.alloc(Stmt::Ret(unit));
+        Stmt::Let(unit, Expr::Struct(&[]), LAYOUT_UNIT, ret_stmt)
+    }
+
+    /// Helper to generate procedure arguments
+    fn gen_args(
+        &mut self,
+        op: RefcountOp,
+        layout: Layout<'a>,
+    ) -> (&'a [Layout<'a>], &'a [(Layout<'a>, Symbol)]) {
+        let roc_value = (layout, Symbol::ARG_1);
+        match op {
+            RefcountOp::Inc => {
+                let inc_amount = (self.layout_isize, Symbol::ARG_2);
+                (
+                    self.arena.alloc([roc_value.0, inc_amount.0]),
+                    self.arena.alloc([roc_value, inc_amount]),
+                )
+            }
+            RefcountOp::Dec | RefcountOp::DecRef => (
+                self.arena.alloc([roc_value.0]),
+                self.arena.alloc([roc_value]),
+            ),
+        }
+    }
+
+    /// Generate a procedure to modify the reference count of a Str
+    #[allow(dead_code)]
+    fn gen_modify_str(&mut self, op: RefcountOp) -> (Symbol, ProcLayout<'a>, Proc<'a>) {
+        let string = Symbol::ARG_1;
+        let layout_isize = self.layout_isize;
+
+        // Get the string length as a signed int
+        let len = self.unique_symbol();
+        let len_expr = Expr::StructAtIndex {
+            index: 1,
+            field_layouts: self.arena.alloc([LAYOUT_PTR, layout_isize]),
+            structure: string,
+        };
+        let len_stmt = |next| Stmt::Let(len, len_expr, layout_isize, next);
+
+        // Zero
+        let zero = self.unique_symbol();
+        let zero_expr = Expr::Literal(Literal::Int(0));
+        let zero_stmt = |next| Stmt::Let(zero, zero_expr, layout_isize, next);
+
+        // is_big_str = (len >= 0);
+        // Check the "sign bit" (small string flag) is zero
+        let is_big_str = self.unique_symbol();
+        let is_big_str_expr = Expr::Call(Call {
+            call_type: CallType::LowLevel {
+                op: LowLevel::NumGte,
+                update_mode: UpdateModeId::BACKEND_DUMMY,
+            },
+            arguments: self.arena.alloc([len, zero]),
+        });
+        let is_big_str_stmt = |next| Stmt::Let(is_big_str, is_big_str_expr, LAYOUT_BOOL, next);
+
+        // Get the pointer to the string elements
+        let elements = self.unique_symbol();
+        let elements_expr = Expr::StructAtIndex {
+            index: 0,
+            field_layouts: self.arena.alloc([LAYOUT_PTR, layout_isize]),
+            structure: string,
+        };
+        let elements_stmt = |next| Stmt::Let(elements, elements_expr, LAYOUT_PTR, next);
+
+        // Get a pointer to the refcount value, just below the elements pointer
+        let rc_ptr = self.unique_symbol();
+        let rc_ptr_expr = Expr::Call(Call {
+            call_type: CallType::LowLevel {
+                op: LowLevel::RefCountGetPtr,
+                update_mode: UpdateModeId::BACKEND_DUMMY,
+            },
+            arguments: self.arena.alloc([string]),
+        });
+        let rc_ptr_stmt = |next| Stmt::Let(rc_ptr, rc_ptr_expr, LAYOUT_PTR, next);
+
+        // Call the relevant Zig lowlevel to actually modify the refcount
+        let zig_call_result = self.unique_symbol();
+        let zig_call_expr = match op {
+            RefcountOp::Inc => Expr::Call(Call {
+                call_type: CallType::LowLevel {
+                    op: LowLevel::RefCountInc,
+                    update_mode: UpdateModeId::BACKEND_DUMMY,
+                },
+                arguments: self.arena.alloc([rc_ptr, Symbol::ARG_2]),
+            }),
+            RefcountOp::Dec | RefcountOp::DecRef => Expr::Call(Call {
+                call_type: CallType::LowLevel {
+                    op: LowLevel::RefCountDec,
+                    update_mode: UpdateModeId::BACKEND_DUMMY,
+                },
+                arguments: self.arena.alloc([rc_ptr]),
+            }),
+        };
+        let zig_call_stmt = |next| Stmt::Let(zig_call_result, zig_call_expr, LAYOUT_BOOL, next);
+
+        // Generate an `if` to skip small strings but modify big strings
+        let then_branch = elements_stmt(self.arena.alloc(
+            //
+            rc_ptr_stmt(self.arena.alloc(
+                //
+                zig_call_stmt(self.arena.alloc(
+                    //
+                    Stmt::Ret(zig_call_result),
+                )),
+            )),
+        ));
+        let if_stmt = Stmt::Switch {
+            cond_symbol: is_big_str,
+            cond_layout: LAYOUT_BOOL,
+            branches: self.arena.alloc([(1, BranchInfo::None, then_branch)]),
+            default_branch: (BranchInfo::None, self.arena.alloc(self.return_unit())),
+            ret_layout: LAYOUT_UNIT,
         };
 
-        self.update_mode_counter += 1;
-
-        id
-    }
-}
-
-/// Helper to return Unit from a procedure
-fn return_unit<'a>(env: &mut Env<'a, '_>) -> Stmt<'a> {
-    let unit = env.unique_symbol();
-    let ret_stmt = env.arena.alloc(Stmt::Ret(unit));
-    Stmt::Let(unit, Expr::Struct(&[]), LAYOUT_UNIT, ret_stmt)
-}
-
-/// Helper to generate procedure arguments
-fn gen_args<'a>(
-    env: &mut Env<'a, '_>,
-    op: RefcountOp,
-    layout: Layout<'a>,
-) -> (&'a [Layout<'a>], &'a [(Layout<'a>, Symbol)]) {
-    let roc_value = (layout, Symbol::ARG_1);
-    match op {
-        RefcountOp::Inc => {
-            let layout_isize = env.layout_isize();
-            let inc_amount = (layout_isize, Symbol::ARG_2);
-            (
-                env.arena.alloc([roc_value.0, inc_amount.0]),
-                env.arena.alloc([roc_value, inc_amount]),
-            )
-        }
-        RefcountOp::Dec | RefcountOp::DecRef => {
-            (env.arena.alloc([roc_value.0]), env.arena.alloc([roc_value]))
-        }
-    }
-}
-
-/// Generate a procedure to modify the reference count of a Str
-#[allow(dead_code)]
-fn gen_modify_str<'a>(env: &mut Env<'a, '_>, op: RefcountOp) -> (Symbol, ProcLayout<'a>, Proc<'a>) {
-    let string = Symbol::ARG_1;
-    let layout_isize = env.layout_isize();
-    let layout_ptr = env.layout_ptr();
-
-    // Get the string length as a signed int
-    let len = env.unique_symbol();
-    let len_expr = Expr::StructAtIndex {
-        index: 1,
-        field_layouts: env.arena.alloc([layout_ptr, layout_isize]),
-        structure: string,
-    };
-    let len_stmt = |next| Stmt::Let(len, len_expr, layout_isize, next);
-
-    // Zero
-    let zero = env.unique_symbol();
-    let zero_expr = Expr::Literal(Literal::Int(0));
-    let zero_stmt = |next| Stmt::Let(zero, zero_expr, layout_isize, next);
-
-    // is_big_str = (len >= 0);
-    // Check the "sign bit" (small string flag) is zero
-    let is_big_str = env.unique_symbol();
-    let is_big_str_expr = Expr::Call(Call {
-        call_type: CallType::LowLevel {
-            op: LowLevel::NumGte,
-            update_mode: env.next_update_mode_id(),
-        },
-        arguments: env.arena.alloc([len, zero]),
-    });
-    let is_big_str_stmt = |next| Stmt::Let(is_big_str, is_big_str_expr, LAYOUT_BOOL, next);
-
-    // Get the pointer to the string elements
-    let elements = env.unique_symbol();
-    let elements_expr = Expr::StructAtIndex {
-        index: 0,
-        field_layouts: env.arena.alloc([layout_ptr, layout_isize]),
-        structure: string,
-    };
-    let elements_stmt = |next| Stmt::Let(elements, elements_expr, layout_ptr, next);
-
-    // Get a pointer to the refcount value, just below the elements pointer
-    let rc_ptr = env.unique_symbol();
-    let rc_ptr_expr = Expr::Call(Call {
-        call_type: CallType::LowLevel {
-            op: LowLevel::RefCountGetPtr,
-            update_mode: env.next_update_mode_id(),
-        },
-        arguments: env.arena.alloc([string]),
-    });
-    let rc_ptr_stmt = |next| Stmt::Let(rc_ptr, rc_ptr_expr, layout_ptr, next);
-
-    // Call the relevant Zig lowlevel to actually modify the refcount
-    let zig_call_result = env.unique_symbol();
-    let zig_call_expr = match op {
-        RefcountOp::Inc => Expr::Call(Call {
-            call_type: CallType::LowLevel {
-                op: LowLevel::RefCountInc,
-                update_mode: env.next_update_mode_id(),
-            },
-            arguments: env.arena.alloc([rc_ptr, Symbol::ARG_2]),
-        }),
-        RefcountOp::Dec | RefcountOp::DecRef => Expr::Call(Call {
-            call_type: CallType::LowLevel {
-                op: LowLevel::RefCountDec,
-                update_mode: env.next_update_mode_id(),
-            },
-            arguments: env.arena.alloc([rc_ptr]),
-        }),
-    };
-    let zig_call_stmt = |next| Stmt::Let(zig_call_result, zig_call_expr, LAYOUT_BOOL, next);
-
-    // Generate an `if` to skip small strings but modify big strings
-    let then_branch = elements_stmt(env.arena.alloc(
-        //
-        rc_ptr_stmt(env.arena.alloc(
+        // Combine the statements in sequence
+        let body = len_stmt(self.arena.alloc(
             //
-            zig_call_stmt(env.arena.alloc(
+            zero_stmt(self.arena.alloc(
                 //
-                Stmt::Ret(zig_call_result),
+                is_big_str_stmt(self.arena.alloc(
+                    //
+                    if_stmt,
+                )),
             )),
-        )),
-    ));
-    let if_stmt = Stmt::Switch {
-        cond_symbol: is_big_str,
-        cond_layout: LAYOUT_BOOL,
-        branches: env.arena.alloc([(1, BranchInfo::None, then_branch)]),
-        default_branch: (BranchInfo::None, env.arena.alloc(return_unit(env))),
-        ret_layout: LAYOUT_UNIT,
-    };
+        ));
 
-    // Combine the statements in sequence
-    let body = len_stmt(env.arena.alloc(
-        //
-        zero_stmt(env.arena.alloc(
-            //
-            is_big_str_stmt(env.arena.alloc(
-                //
-                if_stmt,
-            )),
-        )),
-    ));
+        let name = self.unique_symbol();
+        let (arg_layouts, args) = self.gen_args(op, Layout::Builtin(Builtin::Str));
+        let proc_layout = ProcLayout {
+            arguments: arg_layouts,
+            result: LAYOUT_UNIT,
+        };
 
-    let name = env.unique_symbol();
-    let (arg_layouts, args) = gen_args(env, op, Layout::Builtin(Builtin::Str));
-    let proc_layout = ProcLayout {
-        arguments: arg_layouts,
-        result: LAYOUT_UNIT,
-    };
+        let proc = Proc {
+            name,
+            args,
+            body,
+            closure_data_layout: None,
+            ret_layout: LAYOUT_UNIT,
+            is_self_recursive: SelfRecursive::NotSelfRecursive,
+            must_own_arguments: false,
+            host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+        };
 
-    let proc = Proc {
-        name,
-        args,
-        body,
-        closure_data_layout: None,
-        ret_layout: LAYOUT_UNIT,
-        is_self_recursive: SelfRecursive::NotSelfRecursive,
-        must_own_arguments: false,
-        host_exposed_layouts: HostExposedLayouts::NotHostExposed,
-    };
-
-    (name, proc_layout, proc)
+        (name, proc_layout, proc)
+    }
 }
 
 #[cfg(test)]
@@ -259,7 +393,6 @@ mod tests {
                 home,
                 ident_ids: &mut ident_ids,
                 intwidth_isize,
-                update_mode_counter: 0,
             };
             let (name, proc_layout, proc) = gen_modify_str(&mut env, mode);
             println!(

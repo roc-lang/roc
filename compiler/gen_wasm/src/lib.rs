@@ -6,9 +6,11 @@ pub mod wasm_module;
 
 use bumpalo::{self, collections::Vec, Bump};
 
+use roc_builtins::bitcode::IntWidth;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::{Interns, Symbol};
+use roc_module::symbol::{Interns, ModuleId, Symbol};
+use roc_mono::gen_refcount::RefcountProcGenerator;
 use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::LayoutIds;
 
@@ -34,22 +36,25 @@ pub struct Env<'a> {
 }
 
 pub fn build_module<'a>(
-    env: &'a Env,
+    env: &'a mut Env<'a>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+    refcount_home: ModuleId,
 ) -> Result<std::vec::Vec<u8>, String> {
-    let (mut wasm_module, _) = build_module_help(env, procedures)?;
+    let (mut wasm_module, _) = build_module_help(env, procedures, refcount_home)?;
     let mut buffer = std::vec::Vec::with_capacity(4096);
     wasm_module.serialize_mut(&mut buffer);
     Ok(buffer)
 }
 
 pub fn build_module_help<'a>(
-    env: &'a Env,
+    env: &'a mut Env<'a>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+    refcount_home: ModuleId,
 ) -> Result<(WasmModule<'a>, u32), String> {
     let mut layout_ids = LayoutIds::default();
     let mut generated_procs = Vec::with_capacity_in(procedures.len(), env.arena);
     let mut generated_symbols = Vec::with_capacity_in(procedures.len(), env.arena);
+    let mut proc_symbols = Vec::with_capacity_in(procedures.len() * 2, env.arena);
     let mut linker_symbols = Vec::with_capacity_in(procedures.len() * 2, env.arena);
     let mut exports = Vec::with_capacity_in(4, env.arena);
     let mut main_fn_index = None;
@@ -78,6 +83,7 @@ pub fn build_module_help<'a>(
         }
 
         let linker_sym = SymInfo::for_function(fn_index, fn_name);
+        proc_symbols.push((sym, linker_symbols.len() as u32));
         linker_symbols.push(linker_sym);
 
         fn_index += 1;
@@ -88,9 +94,10 @@ pub fn build_module_help<'a>(
         let mut backend = WasmBackend::new(
             env,
             layout_ids,
-            generated_symbols.clone(),
+            proc_symbols,
             linker_symbols,
             exports,
+            RefcountProcGenerator::new(env.arena, IntWidth::I32, refcount_home),
         );
 
         for (proc, sym) in generated_procs.into_iter().zip(generated_symbols) {

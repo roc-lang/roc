@@ -1289,6 +1289,10 @@ impl CallSpecId {
     pub fn to_bytes(self) -> [u8; 4] {
         self.id.to_ne_bytes()
     }
+
+    /// Dummy value for generating refcount helper procs in the backends
+    /// This happens *after* specialization so it's safe
+    pub const BACKEND_DUMMY: Self = Self { id: 0 };
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1300,6 +1304,10 @@ impl UpdateModeId {
     pub fn to_bytes(self) -> [u8; 4] {
         self.id.to_ne_bytes()
     }
+
+    /// Dummy value for generating refcount helper procs in the backends
+    /// This happens *after* alias analysis so it's safe
+    pub const BACKEND_DUMMY: Self = Self { id: 0 };
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

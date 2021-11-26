@@ -4,6 +4,7 @@ use code_builder::Align;
 use roc_collections::all::MutMap;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
+use roc_mono::gen_refcount::RefcountProcGenerator;
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
@@ -43,12 +44,14 @@ pub struct WasmBackend<'a> {
     layout_ids: LayoutIds<'a>,
     constant_sym_index_map: MutMap<&'a str, usize>,
     builtin_sym_index_map: MutMap<&'a str, usize>,
-    proc_symbols: Vec<'a, Symbol>,
+    proc_symbols: Vec<'a, (Symbol, u32)>,
     pub linker_symbols: Vec<'a, SymInfo>,
+    pub refcount_proc_gen: RefcountProcGenerator<'a>,
 
     // Function-level data
     code_builder: CodeBuilder<'a>,
     storage: Storage<'a>,
+    symbol_layouts: MutMap<Symbol, Layout<'a>>,
 
     /// how many blocks deep are we (used for jumps)
     block_depth: u32,
@@ -59,9 +62,10 @@ impl<'a> WasmBackend<'a> {
     pub fn new(
         env: &'a Env<'a>,
         layout_ids: LayoutIds<'a>,
-        proc_symbols: Vec<'a, Symbol>,
+        proc_symbols: Vec<'a, (Symbol, u32)>,
         mut linker_symbols: Vec<'a, SymInfo>,
         mut exports: Vec<'a, Export>,
+        refcount_proc_gen: RefcountProcGenerator<'a>,
     ) -> Self {
         const MEMORY_INIT_SIZE: u32 = 1024 * 1024;
         let arena = env.arena;
@@ -133,12 +137,14 @@ impl<'a> WasmBackend<'a> {
             builtin_sym_index_map: MutMap::default(),
             proc_symbols,
             linker_symbols,
+            refcount_proc_gen,
 
             // Function-level data
             block_depth: 0,
             joinpoint_label_map: MutMap::default(),
             code_builder: CodeBuilder::new(arena),
             storage: Storage::new(arena),
+            symbol_layouts: MutMap::default(),
         }
     }
 
@@ -151,6 +157,7 @@ impl<'a> WasmBackend<'a> {
 
         self.storage.clear();
         self.joinpoint_label_map.clear();
+        self.symbol_layouts.clear();
         assert_eq!(self.block_depth, 0);
     }
 
@@ -267,6 +274,8 @@ impl<'a> WasmBackend<'a> {
                             },
                         );
                     }
+
+                    self.symbol_layouts.insert(*sym, *layout);
 
                     current_stmt = *following;
                 }
@@ -458,9 +467,32 @@ impl<'a> WasmBackend<'a> {
                 Ok(())
             }
 
-            Stmt::Refcounting(_modify, following) => {
-                // TODO: actually deal with refcounting. For hello world, we just skipped it.
-                self.build_stmt(following, ret_layout)?;
+            Stmt::Refcounting(modify, following) => {
+                let value = modify.get_symbol();
+                let layout = self.symbol_layouts.get(&value).unwrap().clone();
+
+                let (rc_stmt, new_proc_info) = self
+                    .refcount_proc_gen
+                    .call_refcount_proc(layout, modify, *following);
+
+                // If we're creating a new RC procedure, we need to store its symbol data,
+                // so that we can correctly generate calls to it.
+                if let Some((rc_proc_sym, rc_proc_layout)) = new_proc_info {
+                    let name = self
+                        .layout_ids
+                        .get_toplevel(rc_proc_sym, &rc_proc_layout)
+                        .to_symbol_string(rc_proc_sym, &self.env.interns);
+                    let linker_sym_index = self.proc_symbols.len() as u32;
+                    self.proc_symbols.push((rc_proc_sym, linker_sym_index));
+                    self.linker_symbols
+                        .push(SymInfo::Function(WasmObjectSymbol::Defined {
+                            flags: 0,
+                            index: linker_sym_index,
+                            name,
+                        }));
+                }
+
+                self.build_stmt(&rc_stmt, ret_layout)?;
                 Ok(())
             }
 
@@ -504,29 +536,26 @@ impl<'a> WasmBackend<'a> {
                         CallConv::C,
                     );
 
-                    // Index of the called function in the code section. Assumes all functions end up in the binary.
-                    // (We may decide to keep all procs even if calls are inlined, in case platform calls them)
-                    let func_index = match self.proc_symbols.iter().position(|s| s == func_sym) {
-                        Some(i) => i as u32,
-                        None => {
-                            // TODO: actually useful linking! Push a relocation for it.
-                            return Err(format!(
-                                "Not yet supported: calling foreign function {:?}",
-                                func_sym
-                            ));
+                    for (func_index, (ir_sym, linker_sym_index)) in
+                        self.proc_symbols.iter().enumerate()
+                    {
+                        if ir_sym == func_sym {
+                            let num_wasm_args = param_types.len();
+                            let has_return_val = ret_type.is_some();
+                            self.code_builder.call(
+                                func_index as u32,
+                                *linker_sym_index,
+                                num_wasm_args,
+                                has_return_val,
+                            );
+                            return Ok(());
                         }
-                    };
+                    }
 
-                    // Index of the function's name in the symbol table
-                    // Same as the function index since those are the first symbols we add
-                    let symbol_index = func_index;
-
-                    let num_wasm_args = param_types.len();
-                    let has_return_val = ret_type.is_some();
-                    self.code_builder
-                        .call(func_index, symbol_index, num_wasm_args, has_return_val);
-
-                    Ok(())
+                    unreachable!(
+                        "Could not find procedure {:?}\nKnown procedures: {:?}",
+                        func_sym, self.proc_symbols
+                    );
                 }
 
                 CallType::LowLevel { op: lowlevel, .. } => {
