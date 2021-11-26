@@ -2655,6 +2655,18 @@ mod test_fmt {
     }
 
     #[test]
+    fn function_application_package_type() {
+        expr_formats_same(indoc!(
+            r#"
+            main : Task.Task {} []
+            main = 42
+
+            main
+            "#
+        ));
+    }
+
+    #[test]
     fn record_type() {
         expr_formats_same(indoc!(
             r#"
