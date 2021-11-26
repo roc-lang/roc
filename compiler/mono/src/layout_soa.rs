@@ -1,5 +1,6 @@
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
+use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_types::subs::{Content, FlatType, Subs, Variable};
 use roc_types::types::RecordField;
@@ -9,7 +10,7 @@ use std::collections::hash_map::Entry;
 use crate::layout::{ext_var_is_empty_record, ext_var_is_empty_tag_union};
 
 #[derive(Clone, Copy)]
-struct Index<T> {
+pub struct Index<T> {
     index: u32,
     _marker: std::marker::PhantomData<T>,
 }
@@ -24,7 +25,7 @@ impl<T> Index<T> {
 }
 
 #[derive(Clone, Copy)]
-struct Slice<T> {
+pub struct Slice<T> {
     start: u32,
     length: u16,
     _marker: std::marker::PhantomData<T>,
@@ -50,23 +51,14 @@ impl<T> Slice<T> {
     pub const fn indices(&self) -> std::ops::Range<usize> {
         self.start as usize..(self.start as usize + self.length as usize)
     }
+
+    pub fn into_iter(&self) -> impl Iterator<Item = Index<T>> {
+        self.indices().map(|i| Index::new(i as _))
+    }
 }
 
 trait Reserve {
     fn reserve(layouts: &mut Layouts, length: usize) -> Self;
-}
-
-impl Index<Layout> {
-    fn reserve(layouts: &mut Layouts) -> Self {
-        let index = layouts.layouts.len() as u32;
-
-        layouts.layouts.push(Layout::Reserved);
-
-        Self {
-            index,
-            _marker: Default::default(),
-        }
-    }
 }
 
 impl Reserve for Slice<Layout> {
@@ -100,42 +92,263 @@ impl Reserve for Slice<Slice<Layout>> {
     }
 }
 
-type SliceSlice = Slice<Slice<Layout>>;
-type LayoutIndex = Index<Layout>;
-type LambdaSetIndex = u32;
-type NullableUnionIndex = u32;
-type LayoutTuple = u32;
-type SymbolSlice = (u32, u16);
-
 static_assertions::assert_eq_size!([u8; 12], Layout);
 
 pub struct Layouts {
     layouts: Vec<Layout>,
     layout_slices: Vec<Slice<Layout>>,
-    function_layouts: Vec<(Slice<Layout>, LambdaSetIndex)>,
+    // function_layouts: Vec<(Slice<Layout>, Index<LambdaSet>)>,
     lambda_sets: Vec<LambdaSet>,
     symbols: Vec<Symbol>,
-    nullable_unions: Vec<SliceSlice>,
     recursion_variable_to_structure_variable_map: MutMap<Variable, Index<Layout>>,
     usize_int_width: IntWidth,
 }
 
-struct FunctionLayout {
-    /// An index into the Layouts.function_layouts array:
-    ///
+pub struct FunctionLayout {
     /// last element is the result, prior elements the arguments
-    /// arguments_and_result: Slice<Layout>,
-    /// lambda_set: LambdaSetIndex,
-    index: u32,
+    arguments_and_result: Slice<Layout>,
+    pub lambda_set: Index<LambdaSet>,
 }
-struct LambdaSet {
-    representation: LayoutIndex,
-    set_symbols: SymbolSlice,
-    set_layouts: SliceSlice,
+
+impl FunctionLayout {
+    pub fn from_var(
+        layouts: &mut Layouts,
+        subs: &Subs,
+        var: Variable,
+    ) -> Result<Self, LayoutError> {
+        // so we can set some things/clean up
+        Self::from_var_help(layouts, subs, var)
+    }
+
+    fn from_var_help(
+        layouts: &mut Layouts,
+        subs: &Subs,
+        var: Variable,
+    ) -> Result<Self, LayoutError> {
+        let content = &subs.get_ref(var).content;
+        Self::from_content(layouts, subs, var, content)
+    }
+
+    fn from_content(
+        layouts: &mut Layouts,
+        subs: &Subs,
+        var: Variable,
+        content: &Content,
+    ) -> Result<Self, LayoutError> {
+        use LayoutError::*;
+
+        match content {
+            Content::FlexVar(_) => Err(UnresolvedVariable(var)),
+            Content::RigidVar(_) => Err(UnresolvedVariable(var)),
+            Content::RecursionVar { .. } => Err(TypeError(())),
+            Content::Structure(flat_type) => Self::from_flat_type(layouts, subs, flat_type),
+            Content::Alias(_, _, actual) => Self::from_var_help(layouts, subs, *actual),
+            Content::Error => Err(TypeError(())),
+        }
+    }
+
+    fn from_flat_type(
+        layouts: &mut Layouts,
+        subs: &Subs,
+        flat_type: &FlatType,
+    ) -> Result<Self, LayoutError> {
+        use LayoutError::*;
+
+        match flat_type {
+            FlatType::Func(arguments, lambda_set, result) => {
+                let slice = Slice::reserve(layouts, arguments.len() + 1);
+
+                let variable_slice = &subs.variables[arguments.indices()];
+                let it = slice.indices().zip(variable_slice);
+                for (target_index, var) in it {
+                    let layout = Layout::from_var_help(layouts, subs, *var)?;
+                    layouts.layouts[target_index] = layout;
+                }
+
+                let result_layout = Layout::from_var_help(layouts, subs, *result)?;
+                let result_index: Index<Layout> = Index::new(slice.start + slice.len() as u32 - 1);
+                layouts.layouts[result_index.index as usize] = result_layout;
+
+                let lambda_set = LambdaSet::from_var(layouts, subs, *lambda_set)?;
+                let lambda_set_index = Index::new(layouts.lambda_sets.len() as u32);
+                layouts.lambda_sets.push(lambda_set);
+
+                Ok(Self {
+                    arguments_and_result: slice,
+                    lambda_set: lambda_set_index,
+                })
+            }
+
+            FlatType::Erroneous(_) => Err(TypeError(())),
+
+            _ => todo!(),
+        }
+    }
+
+    pub fn argument_slice(&self) -> Slice<Layout> {
+        let mut result = self.arguments_and_result;
+        result.length -= 1;
+
+        result
+    }
+    pub fn result_index(&self) -> Index<Layout> {
+        Index::new(self.arguments_and_result.start + self.arguments_and_result.length as u32 - 1)
+    }
+}
+
+/// Idea: don't include the symbols for the first 3 cases in --optimize mode
+pub enum LambdaSet {
+    Empty {
+        symbol: Index<Symbol>,
+    },
+    Single {
+        symbol: Index<Symbol>,
+        layout: Index<Layout>,
+    },
+    Struct {
+        symbol: Index<Symbol>,
+        layouts: Slice<Layout>,
+    },
+    Union {
+        symbols: Slice<Symbol>,
+        layouts: Slice<Slice<Layout>>,
+    },
+}
+
+impl LambdaSet {
+    pub fn from_var(
+        layouts: &mut Layouts,
+        subs: &Subs,
+        var: Variable,
+    ) -> Result<Self, LayoutError> {
+        // so we can set some things/clean up
+        Self::from_var_help(layouts, subs, var)
+    }
+
+    fn from_var_help(
+        layouts: &mut Layouts,
+        subs: &Subs,
+        var: Variable,
+    ) -> Result<Self, LayoutError> {
+        let content = &subs.get_ref(var).content;
+        Self::from_content(layouts, subs, var, content)
+    }
+
+    fn from_content(
+        layouts: &mut Layouts,
+        subs: &Subs,
+        var: Variable,
+        content: &Content,
+    ) -> Result<Self, LayoutError> {
+        use LayoutError::*;
+
+        match content {
+            Content::FlexVar(_) => Err(UnresolvedVariable(var)),
+            Content::RigidVar(_) => Err(UnresolvedVariable(var)),
+            Content::RecursionVar { .. } => {
+                unreachable!("lambda sets cannot currently be recursive")
+            }
+            Content::Structure(flat_type) => Self::from_flat_type(layouts, subs, flat_type),
+            Content::Alias(_, _, actual) => Self::from_var_help(layouts, subs, *actual),
+            Content::Error => Err(TypeError(())),
+        }
+    }
+
+    fn from_flat_type(
+        layouts: &mut Layouts,
+        subs: &Subs,
+        flat_type: &FlatType,
+    ) -> Result<Self, LayoutError> {
+        use FlatType::*;
+        use LayoutError::*;
+
+        match flat_type {
+            TagUnion(union_tags, ext) => {
+                debug_assert!(ext_var_is_empty_tag_union(subs, *ext));
+
+                debug_assert!(
+                    !union_tags.is_empty(),
+                    "lambda set must contain atleast the function itself"
+                );
+
+                let tag_names = union_tags.tag_names();
+                let closure_names = Self::get_closure_names(layouts, subs, tag_names);
+
+                let variables = union_tags.variables();
+                if variables.len() == 1 {
+                    let tag_name = &subs.tag_names[tag_names.start as usize];
+                    let symbol = if let TagName::Closure(symbol) = tag_name {
+                        let index = Index::new(layouts.symbols.len() as u32);
+                        layouts.symbols.push(*symbol);
+                        index
+                    } else {
+                        unreachable!("must be a closure tag")
+                    };
+                    let variable_slice = subs.variable_slices[variables.start as usize];
+
+                    match variable_slice.len() {
+                        0 => Ok(LambdaSet::Empty { symbol }),
+                        1 => {
+                            let var = subs.variables[variable_slice.slice.start as usize];
+                            let layout = Layout::from_var(layouts, subs, var)?;
+
+                            let index = Index::new(layouts.layouts.len() as u32);
+                            layouts.layouts.push(layout);
+
+                            Ok(LambdaSet::Single {
+                                symbol,
+                                layout: index,
+                            })
+                        }
+                        _ => {
+                            let slice = Layout::from_variable_slice(layouts, subs, variable_slice)?;
+
+                            Ok(LambdaSet::Struct {
+                                symbol,
+                                layouts: slice,
+                            })
+                        }
+                    }
+                } else {
+                    let layouts =
+                        Layout::from_slice_variable_slice(layouts, subs, union_tags.variables())?;
+
+                    Ok(LambdaSet::Union {
+                        symbols: closure_names,
+                        layouts,
+                    })
+                }
+            }
+            Erroneous(_) => Err(TypeError(())),
+            _ => unreachable!(),
+        }
+    }
+
+    fn get_closure_names(
+        layouts: &mut Layouts,
+        subs: &Subs,
+        subs_slice: roc_types::subs::SubsSlice<TagName>,
+    ) -> Slice<Symbol> {
+        let slice = Slice::new(layouts.symbols.len() as u32, subs_slice.len() as u16);
+
+        let tag_names = &subs.tag_names[subs_slice.indices()];
+
+        for tag_name in tag_names {
+            match tag_name {
+                TagName::Closure(symbol) => {
+                    layouts.symbols.push(*symbol);
+                }
+                TagName::Global(_) => unreachable!("lambda set tags must be closure tags"),
+                TagName::Private(_) => unreachable!("lambda set tags must be closure tags"),
+            }
+        }
+
+        slice
+    }
 }
 
 #[derive(Clone, Copy)]
-enum Layout {
+pub enum Layout {
     // theory: we can zero out memory to reserve space for many layouts
     Reserved,
 
@@ -145,42 +358,178 @@ enum Layout {
     Decimal,
 
     Str,
-    Dict(LayoutTuple),
-    Set(LayoutIndex),
-    List(LayoutIndex),
+    Dict(Index<(Layout, Layout)>),
+    Set(Index<Layout>),
+    List(Index<Layout>),
 
     Struct(Slice<Layout>),
 
+    UnionNonRecursive(Slice<Slice<Layout>>),
+
     Boxed(Index<Layout>),
-    UnionNonRecursive(SliceSlice),
-    UnionRecursive(SliceSlice),
-    UnionNonNullableUnwrapped(Slice<Layout>),
-    UnionNullableWrapper {
-        data: NullableUnionIndex,
-        tag_id: u16,
-    },
+    UnionRecursive(Slice<Slice<Layout>>),
+    //    UnionNonNullableUnwrapped(Slice<Layout>),
+    //    UnionNullableWrapper {
+    //        data: NullableUnionIndex,
+    //        tag_id: u16,
+    //    },
+    //
+    //    UnionNullableUnwrappedTrue(Slice<Layout>),
+    //    UnionNullableUnwrappedFalse(Slice<Layout>),
 
-    UnionNullableUnwrappedTrue(Slice<Layout>),
-    UnionNullableUnwrappedFalse(Slice<Layout>),
+    // RecursivePointer,
+}
 
-    RecursivePointer,
+fn round_up_to_alignment(unaligned: u16, alignment_bytes: u16) -> u16 {
+    let unaligned = unaligned as i32;
+    let alignment_bytes = alignment_bytes as i32;
+    if alignment_bytes <= 1 {
+        return unaligned as u16;
+    }
+    if alignment_bytes.count_ones() != 1 {
+        panic!(
+            "Cannot align to {} bytes. Not a power of 2.",
+            alignment_bytes
+        );
+    }
+    let mut aligned = unaligned;
+    aligned += alignment_bytes - 1; // if lower bits are non-zero, push it over the next boundary
+    aligned &= -alignment_bytes; // mask with a flag that has upper bits 1, lower bits 0
+
+    aligned as u16
 }
 
 impl Layouts {
     const VOID_INDEX: Index<Layout> = Index::new(0);
-    const UNIT_INDEX: Index<Layout> = Index::new(1);
+    // const UNIT_INDEX: Index<Layout> = Index::new(1);
 
     /// sort a slice according to elements' alignment
-    fn sort_slice(&mut self, slice: Slice<Layout>) {
-        todo!()
+    fn sort_slice_by_alignment(&mut self, layout_slice: Slice<Layout>) {
+        let slice = &mut self.layouts[layout_slice.indices()];
+
+        // SAFETY: the align_of function does not mutate the layouts vector
+        // this unsafety is required to circumvent the borrow checker
+        let sneaky_slice =
+            unsafe { std::slice::from_raw_parts_mut(slice.as_mut_ptr(), slice.len()) };
+
+        sneaky_slice.sort_by(|layout1, layout2| {
+            let align1 = self.align_of_layout(*layout1);
+            let align2 = self.align_of_layout(*layout2);
+
+            // we want the biggest alignment first
+            align2.cmp(&align1)
+        });
     }
 
     fn usize(&self) -> Layout {
         Layout::Int(self.usize_int_width)
     }
+
+    fn align_of_layout_index(&self, index: Index<Layout>) -> u16 {
+        let layout = self.layouts[index.index as usize];
+
+        self.align_of_layout(layout)
+    }
+
+    fn align_of_layout(&self, layout: Layout) -> u16 {
+        let ptr_alignment = self.usize_int_width.alignment_bytes() as u16;
+
+        match layout {
+            Layout::Reserved => unreachable!(),
+            Layout::Int(int_width) => int_width.alignment_bytes() as u16,
+            Layout::Float(float_width) => float_width.alignment_bytes() as u16,
+            Layout::Decimal => IntWidth::U128.alignment_bytes() as u16,
+            Layout::Str | Layout::Dict(_) | Layout::Set(_) | Layout::List(_) => ptr_alignment,
+            Layout::Struct(slice) => self.align_of_layout_slice(slice),
+            Layout::Boxed(_) | Layout::UnionRecursive(_) => ptr_alignment,
+            Layout::UnionNonRecursive(slices) => {
+                let tag_id_align = IntWidth::I64.alignment_bytes() as u16;
+
+                self.align_of_layout_slices(slices).max(tag_id_align)
+            }
+//            Layout::UnionNonNullableUnwrapped(_) => todo!(),
+//            Layout::UnionNullableWrapper { data, tag_id } => todo!(),
+//            Layout::UnionNullableUnwrappedTrue(_) => todo!(),
+//            Layout::UnionNullableUnwrappedFalse(_) => todo!(),
+//            Layout::RecursivePointer => todo!(),
+        }
+    }
+
+    /// Invariant: the layouts are sorted from biggest to smallest alignment
+    fn align_of_layout_slice(&self, slice: Slice<Layout>) -> u16 {
+        match slice.into_iter().next() {
+            None => 0,
+            Some(first_index) => self.align_of_layout_index(first_index),
+        }
+    }
+
+    fn align_of_layout_slices(&self, slice: Slice<Slice<Layout>>) -> u16 {
+        slice
+            .into_iter()
+            .map(|index| self.layout_slices[index.index as usize])
+            .map(|slice| self.align_of_layout_slice(slice))
+            .max()
+            .unwrap_or_default()
+    }
+
+    /// Invariant: the layouts are sorted from biggest to smallest alignment
+    fn size_of_layout_slice(&self, slice: Slice<Layout>) -> u16 {
+        match slice.into_iter().next() {
+            None => 0,
+            Some(first_index) => {
+                let alignment = self.align_of_layout_index(first_index);
+
+                let mut sum = 0;
+
+                for index in slice.into_iter() {
+                    sum += self.size_of_layout_index(index);
+                }
+
+                round_up_to_alignment(sum, alignment)
+            }
+        }
+    }
+
+    pub fn size_of_layout_index(&self, index: Index<Layout>) -> u16 {
+        let layout = self.layouts[index.index as usize];
+
+        self.size_of_layout(layout)
+    }
+
+    pub fn size_of_layout(&self, layout: Layout) -> u16 {
+        let ptr_width = self.usize_int_width.stack_size() as u16;
+
+        match layout {
+            Layout::Reserved => unreachable!(),
+            Layout::Int(int_width) => int_width.stack_size() as _,
+            Layout::Float(float_width) => float_width as _,
+            Layout::Decimal => (std::mem::size_of::<roc_std::RocDec>()) as _,
+            Layout::Str | Layout::Dict(_) | Layout::Set(_) | Layout::List(_) => 2 * ptr_width,
+            Layout::Struct(slice) => self.size_of_layout_slice(slice),
+            Layout::Boxed(_) | Layout::UnionRecursive(_) => ptr_width,
+            Layout::UnionNonRecursive(slices) if slices.is_empty() => 0,
+            Layout::UnionNonRecursive(slices) => {
+                let tag_id = IntWidth::I64;
+
+                let max_slice_size = slices
+                    .into_iter()
+                    .map(|index| self.layout_slices[index.index as usize])
+                    .map(|slice| self.align_of_layout_slice(slice))
+                    .max()
+                    .unwrap_or_default();
+
+                tag_id.stack_size() as u16 + max_slice_size
+            }
+//            Layout::UnionNonNullableUnwrapped(_) => todo!(),
+//            Layout::UnionNullableWrapper { data, tag_id } => todo!(),
+//            Layout::UnionNullableUnwrappedTrue(_) => todo!(),
+//            Layout::UnionNullableUnwrappedFalse(_) => todo!(),
+//            Layout::RecursivePointer => todo!(),
+        }
+    }
 }
 
-enum LayoutError {
+pub enum LayoutError {
     UnresolvedVariable(Variable),
     TypeError(()),
 }
@@ -339,7 +688,7 @@ impl Layout {
                 // we have some wasted space in the case of optional fields; so be it
                 slice.length = non_optional_fields;
 
-                layouts.sort_slice(slice);
+                layouts.sort_slice_by_alignment(slice);
 
                 Ok(Layout::Struct(slice))
             }
@@ -420,7 +769,7 @@ impl Layout {
             layouts.layouts[target_index] = layout;
         }
 
-        layouts.sort_slice(slice);
+        layouts.sort_slice_by_alignment(slice);
 
         Ok(slice)
     }
