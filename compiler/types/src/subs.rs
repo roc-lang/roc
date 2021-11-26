@@ -80,7 +80,7 @@ pub struct SubsSlice<T> {
 
 /// An index into the Vec<T> of subs
 pub struct SubsIndex<T> {
-    pub start: u32,
+    pub index: u32,
     _marker: std::marker::PhantomData<T>,
 }
 
@@ -91,13 +91,13 @@ impl std::ops::Index<SubsIndex<Variable>> for Subs {
     type Output = Variable;
 
     fn index(&self, index: SubsIndex<Variable>) -> &Self::Output {
-        &self.variables[index.start as usize]
+        &self.variables[index.index as usize]
     }
 }
 
 impl std::ops::IndexMut<SubsIndex<Variable>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<Variable>) -> &mut Self::Output {
-        &mut self.variables[index.start as usize]
+        &mut self.variables[index.index as usize]
     }
 }
 
@@ -105,7 +105,7 @@ impl std::ops::Index<SubsIndex<Lowercase>> for Subs {
     type Output = Lowercase;
 
     fn index(&self, index: SubsIndex<Lowercase>) -> &Self::Output {
-        &self.field_names[index.start as usize]
+        &self.field_names[index.index as usize]
     }
 }
 
@@ -113,19 +113,19 @@ impl std::ops::Index<SubsIndex<TagName>> for Subs {
     type Output = TagName;
 
     fn index(&self, index: SubsIndex<TagName>) -> &Self::Output {
-        &self.tag_names[index.start as usize]
+        &self.tag_names[index.index as usize]
     }
 }
 
 impl std::ops::IndexMut<SubsIndex<TagName>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<TagName>) -> &mut Self::Output {
-        &mut self.tag_names[index.start as usize]
+        &mut self.tag_names[index.index as usize]
     }
 }
 
 impl std::ops::IndexMut<SubsIndex<Lowercase>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<Lowercase>) -> &mut Self::Output {
-        &mut self.field_names[index.start as usize]
+        &mut self.field_names[index.index as usize]
     }
 }
 
@@ -133,13 +133,13 @@ impl std::ops::Index<SubsIndex<RecordField<()>>> for Subs {
     type Output = RecordField<()>;
 
     fn index(&self, index: SubsIndex<RecordField<()>>) -> &Self::Output {
-        &self.record_fields[index.start as usize]
+        &self.record_fields[index.index as usize]
     }
 }
 
 impl std::ops::IndexMut<SubsIndex<RecordField<()>>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<RecordField<()>>) -> &mut Self::Output {
-        &mut self.record_fields[index.start as usize]
+        &mut self.record_fields[index.index as usize]
     }
 }
 
@@ -147,13 +147,13 @@ impl std::ops::Index<SubsIndex<VariableSubsSlice>> for Subs {
     type Output = VariableSubsSlice;
 
     fn index(&self, index: SubsIndex<VariableSubsSlice>) -> &Self::Output {
-        &self.variable_slices[index.start as usize]
+        &self.variable_slices[index.index as usize]
     }
 }
 
 impl std::ops::IndexMut<SubsIndex<VariableSubsSlice>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<VariableSubsSlice>) -> &mut Self::Output {
-        &mut self.variable_slices[index.start as usize]
+        &mut self.variable_slices[index.index as usize]
     }
 }
 
@@ -165,7 +165,7 @@ impl<T> std::fmt::Debug for SubsIndex<T> {
             f,
             "SubsIndex<{}>({})",
             std::any::type_name::<T>(),
-            self.start
+            self.index
         )
     }
 }
@@ -187,7 +187,7 @@ impl<T> Copy for SubsIndex<T> {}
 impl<T> Clone for SubsIndex<T> {
     fn clone(&self) -> Self {
         Self {
-            start: self.start,
+            index: self.index,
             _marker: self._marker,
         }
     }
@@ -271,7 +271,7 @@ impl SubsSlice<TagName> {
 impl<T> SubsIndex<T> {
     pub fn new(start: u32) -> Self {
         Self {
-            start,
+            index: start,
             _marker: std::marker::PhantomData,
         }
     }
@@ -290,7 +290,7 @@ impl<T> IntoIterator for SubsSlice<T> {
 
 fn u32_to_index<T>(i: u32) -> SubsIndex<T> {
     SubsIndex {
-        start: i,
+        index: i,
         _marker: std::marker::PhantomData,
     }
 }
@@ -367,7 +367,7 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
         } => write!(f, "Recursion({:?}, {:?})", structure, opt_name),
         Content::Structure(flat_type) => subs_fmt_flat_type(flat_type, subs, f),
         Content::Alias(name, arguments, actual) => {
-            let slice = subs.get_subs_slice(*arguments.variables().as_subs_slice());
+            let slice = subs.get_subs_slice(arguments.variables());
 
             write!(f, "Alias({:?}, {:?}, {:?})", name, slice, actual)
         }
@@ -386,12 +386,12 @@ impl<'a> fmt::Debug for SubsFmtFlatType<'a> {
 fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> fmt::Result {
     match this {
         FlatType::Apply(name, arguments) => {
-            let slice = subs.get_subs_slice(*arguments.as_subs_slice());
+            let slice = subs.get_subs_slice(*arguments);
 
             write!(f, "Apply({:?}, {:?})", name, slice)
         }
         FlatType::Func(arguments, lambda_set, result) => {
-            let slice = subs.get_subs_slice(*arguments.as_subs_slice());
+            let slice = subs.get_subs_slice(*arguments);
             write!(f, "Func({:?}, {:?}, {:?})", slice, lambda_set, result)
         }
         FlatType::Record(fields, ext) => {
@@ -1425,9 +1425,7 @@ pub struct AliasVariables {
 
 impl AliasVariables {
     pub const fn variables(&self) -> VariableSubsSlice {
-        VariableSubsSlice {
-            slice: SubsSlice::new(self.variables_start, self.all_variables_len),
-        }
+        SubsSlice::new(self.variables_start, self.all_variables_len)
     }
 
     pub const fn len(&self) -> usize {
@@ -1555,34 +1553,9 @@ pub enum Builtin {
     EmptyRecord,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct VariableSubsSlice {
-    pub slice: SubsSlice<Variable>,
-}
+pub type VariableSubsSlice = SubsSlice<Variable>;
 
 impl VariableSubsSlice {
-    pub fn len(&self) -> usize {
-        self.slice.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    pub fn as_subs_slice(&self) -> &SubsSlice<Variable> {
-        &self.slice
-    }
-
-    pub fn new(start: u32, length: u16) -> Self {
-        Self {
-            slice: SubsSlice::new(start, length),
-        }
-    }
-
-    pub fn indices(&self) -> std::ops::Range<usize> {
-        self.slice.indices()
-    }
-
     /// Reserve space for `length` variables in the subs.variables array
     ///
     /// This is useful when we know how many variables e.g. a loop will produce,
@@ -1614,16 +1587,6 @@ impl VariableSubsSlice {
     }
 }
 
-impl IntoIterator for VariableSubsSlice {
-    type Item = SubsIndex<Variable>;
-
-    type IntoIter = <SubsSlice<Variable> as IntoIterator>::IntoIter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.slice.into_iter()
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default)]
 pub struct UnionTags {
     length: u16,
@@ -1637,13 +1600,13 @@ impl UnionTags {
             return false;
         }
 
-        let slice = subs.variable_slices[self.variables_start as usize].slice;
+        let slice = subs.variable_slices[self.variables_start as usize];
         slice.length == 1
     }
 
     pub fn from_tag_name_index(index: SubsIndex<TagName>) -> Self {
         Self::from_slices(
-            SubsSlice::new(index.start, 1),
+            SubsSlice::new(index.index, 1),
             SubsSlice::new(0, 1), // the first variablesubsslice is the empty slice
         )
     }
@@ -1764,7 +1727,9 @@ impl UnionTags {
     ) -> impl Iterator<Item = (&TagName, &[Variable])> + 'a {
         let (it, _) = crate::types::gather_tags_unsorted_iter(subs, *self, ext);
 
-        it.map(move |(label, slice)| (label, subs.get_subs_slice(*slice.as_subs_slice())))
+        let f = move |(label, slice): (_, SubsSlice<Variable>)| (label, subs.get_subs_slice(slice));
+
+        it.map(f)
     }
 
     pub fn unsorted_iterator_and_ext<'a>(
@@ -1774,10 +1739,9 @@ impl UnionTags {
     ) -> (impl Iterator<Item = (&TagName, &[Variable])> + 'a, Variable) {
         let (it, ext) = crate::types::gather_tags_unsorted_iter(subs, *self, ext);
 
-        (
-            it.map(move |(label, slice)| (label, subs.get_subs_slice(*slice.as_subs_slice()))),
-            ext,
-        )
+        let f = move |(label, slice): (_, SubsSlice<Variable>)| (label, subs.get_subs_slice(slice));
+
+        (it.map(f), ext)
     }
 
     #[inline(always)]
@@ -1792,7 +1756,7 @@ impl UnionTags {
                     let tag_name: &TagName = &subs[i1];
                     let subs_slice = subs[i2];
 
-                    let slice = subs.get_subs_slice(*subs_slice.as_subs_slice());
+                    let slice = subs.get_subs_slice(subs_slice);
 
                     (tag_name.clone(), slice)
                 })),
@@ -1903,9 +1867,7 @@ impl RecordFields {
     }
 
     pub const fn variables(&self) -> VariableSubsSlice {
-        let slice = SubsSlice::new(self.variables_start, self.length);
-
-        VariableSubsSlice { slice }
+        SubsSlice::new(self.variables_start, self.length)
     }
 
     pub fn iter_variables(&self) -> impl Iterator<Item = SubsIndex<Variable>> {
@@ -2021,9 +1983,11 @@ impl RecordFields {
             SubsIndex<RecordField<()>>,
         ),
     > {
-        let range1 = self.field_names_start..self.field_names_start + self.length as u32;
-        let range2 = self.variables_start..self.variables_start + self.length as u32;
-        let range3 = self.field_types_start..self.field_types_start + self.length as u32;
+        let helper = |start| start..(start + self.length as u32);
+
+        let range1 = helper(self.field_names_start);
+        let range2 = helper(self.variables_start);
+        let range3 = helper(self.field_types_start);
 
         let it = range1
             .into_iter()
@@ -2081,16 +2045,13 @@ fn occurs(
                 new_seen.insert(root_var);
 
                 match flat_type {
-                    Apply(_, args) => short_circuit(
-                        subs,
-                        root_var,
-                        &new_seen,
-                        subs.get_subs_slice(*args.as_subs_slice()).iter(),
-                    ),
+                    Apply(_, args) => {
+                        short_circuit(subs, root_var, &new_seen, subs.get_subs_slice(*args).iter())
+                    }
                     Func(arg_vars, closure_var, ret_var) => {
                         let it = once(ret_var)
                             .chain(once(closure_var))
-                            .chain(subs.get_subs_slice(*arg_vars.as_subs_slice()).iter());
+                            .chain(subs.get_subs_slice(*arg_vars).iter());
                         short_circuit(subs, root_var, &new_seen, it)
                     }
                     Record(vars_by_field, ext_var) => {
@@ -2798,10 +2759,8 @@ fn restore_help(subs: &mut Subs, initial: Variable) {
     let variable_slices = &subs.variable_slices;
 
     let variables = &subs.variables;
-    let var_slice = |variable_subs_slice: VariableSubsSlice| {
-        &variables[variable_subs_slice.slice.start as usize..]
-            [..variable_subs_slice.slice.length as usize]
-    };
+    let var_slice =
+        |variable_subs_slice: VariableSubsSlice| &variables[variable_subs_slice.indices()];
 
     while let Some(var) = stack.pop() {
         let desc = &mut subs.utable.probe_value_ref_mut(var).value;
@@ -2843,7 +2802,7 @@ fn restore_help(subs: &mut Subs, initial: Variable) {
                     }
                     TagUnion(tags, ext_var) => {
                         for slice_index in tags.variables() {
-                            let slice = variable_slices[slice_index.start as usize];
+                            let slice = variable_slices[slice_index.index as usize];
                             stack.extend(var_slice(slice));
                         }
 
@@ -2855,7 +2814,7 @@ fn restore_help(subs: &mut Subs, initial: Variable) {
 
                     RecursiveTagUnion(rec_var, tags, ext_var) => {
                         for slice_index in tags.variables() {
-                            let slice = variable_slices[slice_index.start as usize];
+                            let slice = variable_slices[slice_index.index as usize];
                             stack.extend(var_slice(slice));
                         }
 
@@ -3064,7 +3023,7 @@ impl StorageSubs {
         offsets: &StorageSubsOffsets,
         mut tag_name: SubsIndex<TagName>,
     ) -> SubsIndex<TagName> {
-        tag_name.start += offsets.tag_names;
+        tag_name.index += offsets.tag_names;
 
         tag_name
     }
@@ -3082,7 +3041,7 @@ impl StorageSubs {
         offsets: &StorageSubsOffsets,
         mut slice: VariableSubsSlice,
     ) -> VariableSubsSlice {
-        slice.slice.start += offsets.variables;
+        slice.start += offsets.variables;
 
         slice
     }
@@ -3290,8 +3249,7 @@ fn deep_copy_var_to_help<'a>(
 
                     let new_tag_names = {
                         let tag_names = tags.tag_names();
-                        let slice = &source.tag_names[tag_names.start as usize..]
-                            [..tag_names.length as usize];
+                        let slice = &source.tag_names[tag_names.indices()];
 
                         let start = target.tag_names.len() as u32;
                         let length = tag_names.len() as u16;
@@ -3348,8 +3306,7 @@ fn deep_copy_var_to_help<'a>(
 
                     let new_tag_names = {
                         let tag_names = tags.tag_names();
-                        let slice = &source.tag_names[tag_names.start as usize..]
-                            [..tag_names.length as usize];
+                        let slice = &source.tag_names[tag_names.indices()];
 
                         let start = target.tag_names.len() as u32;
                         let length = tag_names.len() as u16;

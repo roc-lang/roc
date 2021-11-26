@@ -289,7 +289,7 @@ impl LambdaSet {
                     match variable_slice.len() {
                         0 => Ok(LambdaSet::Empty { symbol }),
                         1 => {
-                            let var = subs.variables[variable_slice.slice.start as usize];
+                            let var = subs.variables[variable_slice.start as usize];
                             let layout = Layout::from_var(layouts, subs, var)?;
 
                             let index = Index::new(layouts.layouts.len() as u32);
@@ -677,7 +677,7 @@ impl Layout {
             FlatType::Apply(Symbol::LIST_LIST, arguments) => {
                 debug_assert_eq!(arguments.len(), 1);
 
-                let element_var = subs.variables[arguments.slice.start as usize];
+                let element_var = subs.variables[arguments.start as usize];
                 let element_layout = Self::from_var_help_or_void(layouts, subs, element_var)?;
 
                 let element_index = Index::new(layouts.layouts.len() as _);
@@ -689,8 +689,8 @@ impl Layout {
             FlatType::Apply(Symbol::DICT_DICT, arguments) => {
                 debug_assert_eq!(arguments.len(), 2);
 
-                let key_var = subs.variables[arguments.slice.start as usize];
-                let value_var = subs.variables[arguments.slice.start as usize + 1];
+                let key_var = subs.variables[arguments.start as usize];
+                let value_var = subs.variables[arguments.start as usize + 1];
 
                 let key_layout = Self::from_var_help_or_void(layouts, subs, key_var)?;
                 let value_layout = Self::from_var_help_or_void(layouts, subs, value_var)?;
@@ -705,7 +705,7 @@ impl Layout {
             FlatType::Apply(Symbol::SET_SET, arguments) => {
                 debug_assert_eq!(arguments.len(), 1);
 
-                let element_var = subs.variables[arguments.slice.start as usize];
+                let element_var = subs.variables[arguments.start as usize];
                 let element_layout = Self::from_var_help_or_void(layouts, subs, element_var)?;
 
                 let element_index = Index::new(layouts.layouts.len() as _);
@@ -732,12 +732,12 @@ impl Layout {
                 let mut non_optional_fields = 0;
                 let it = slice.indices().zip(fields.iter_all());
                 for (target_index, (_, field_index, var_index)) in it {
-                    match subs.record_fields[field_index.start as usize] {
+                    match subs.record_fields[field_index.index as usize] {
                         RecordField::Optional(_) => {
                             // do nothing
                         }
                         RecordField::Required(_) | RecordField::Demanded(_) => {
-                            let var = subs.variables[var_index.start as usize];
+                            let var = subs.variables[var_index.index as usize];
                             let layout = Layout::from_var_help(layouts, subs, var)?;
 
                             layouts.layouts[target_index] = layout;

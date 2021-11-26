@@ -299,7 +299,7 @@ impl SolvedType {
             Apply(symbol, args) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
-                for var in subs.get_subs_slice(*args.as_subs_slice()) {
+                for var in subs.get_subs_slice(*args) {
                     new_args.push(Self::from_var_help(subs, recursion_vars, *var));
                 }
 
@@ -308,7 +308,7 @@ impl SolvedType {
             Func(args, closure, ret) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
-                for var in subs.get_subs_slice(*args.as_subs_slice()) {
+                for var in subs.get_subs_slice(*args) {
                     new_args.push(Self::from_var_help(subs, recursion_vars, *var));
                 }
 
