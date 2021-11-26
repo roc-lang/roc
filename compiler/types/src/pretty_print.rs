@@ -504,24 +504,14 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
     use crate::subs::FlatType::*;
 
     match flat_type {
-        Apply(symbol, args) => write_apply(
-            env,
-            *symbol,
-            subs.get_subs_slice(*args.as_subs_slice()),
-            subs,
-            buf,
-            parens,
-        ),
+        Apply(symbol, args) => {
+            write_apply(env, *symbol, subs.get_subs_slice(*args), subs, buf, parens)
+        }
         EmptyRecord => buf.push_str(EMPTY_RECORD),
         EmptyTagUnion => buf.push_str(EMPTY_TAG_UNION),
-        Func(args, _closure, ret) => write_fn(
-            env,
-            subs.get_subs_slice(*args.as_subs_slice()),
-            *ret,
-            subs,
-            buf,
-            parens,
-        ),
+        Func(args, _closure, ret) => {
+            write_fn(env, subs.get_subs_slice(*args), *ret, subs, buf, parens)
+        }
         Record(fields, ext_var) => {
             use crate::types::{gather_fields, RecordStructure};
 
@@ -640,7 +630,7 @@ pub fn chase_ext_tag_union<'a>(
         Content::Structure(TagUnion(tags, ext_var)) => {
             for (name_index, slice_index) in tags.iter_all() {
                 let subs_slice = subs[slice_index];
-                let slice = subs.get_subs_slice(*subs_slice.as_subs_slice());
+                let slice = subs.get_subs_slice(subs_slice);
                 let tag_name = subs[name_index].clone();
 
                 fields.push((tag_name, slice.to_vec()));
@@ -652,7 +642,7 @@ pub fn chase_ext_tag_union<'a>(
         Content::Structure(RecursiveTagUnion(_, tags, ext_var)) => {
             for (name_index, slice_index) in tags.iter_all() {
                 let subs_slice = subs[slice_index];
-                let slice = subs.get_subs_slice(*subs_slice.as_subs_slice());
+                let slice = subs.get_subs_slice(subs_slice);
                 let tag_name = subs[name_index].clone();
 
                 fields.push((tag_name, slice.to_vec()));
