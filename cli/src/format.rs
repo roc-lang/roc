@@ -83,6 +83,16 @@ fn fmt_all<'a>(arena: &'a Bump, buf: &mut String<'a>, ast: &'a Ast) {
     }
 }
 
+/// RemoveSpaces normalizes the ast to something that we _expect_ to be invariant under formatting.
+///
+/// Currently this consists of:
+/// * Removing newlines
+/// * Removing comments
+/// * Removing parens in Exprs
+///
+/// Long term, we actuall want this transform to preserve comments (so we can assert they're maintained by formatting)
+/// - but there are currently several bugs where they're _not_ preserved.
+/// TODO: ensure formatting retains comments
 trait RemoveSpaces<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self;
 }
