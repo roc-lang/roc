@@ -9,7 +9,7 @@ use std::collections::hash_map::Entry;
 #[cfg(debug_assertions)]
 use crate::layout::{ext_var_is_empty_record, ext_var_is_empty_tag_union};
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Index<T> {
     index: u32,
     _marker: std::marker::PhantomData<T>,
@@ -24,7 +24,7 @@ impl<T> Index<T> {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Slice<T> {
     start: u32,
     length: u16,
@@ -347,7 +347,7 @@ impl LambdaSet {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Layout {
     // theory: we can zero out memory to reserve space for many layouts
     Reserved,
@@ -401,7 +401,30 @@ fn round_up_to_alignment(unaligned: u16, alignment_bytes: u16) -> u16 {
 
 impl Layouts {
     const VOID_INDEX: Index<Layout> = Index::new(0);
-    // const UNIT_INDEX: Index<Layout> = Index::new(1);
+    const VOID_TUPLE: Index<(Layout, Layout)> = Index::new(0);
+    const UNIT_INDEX: Index<Layout> = Index::new(2);
+
+    pub fn new(usize_int_width: IntWidth) -> Self {
+        let mut layouts = Vec::with_capacity(64);
+
+        layouts.push(Layout::VOID);
+        layouts.push(Layout::VOID);
+        layouts.push(Layout::UNIT);
+
+        // sanity check
+        debug_assert_eq!(layouts[Self::VOID_INDEX.index as usize], Layout::VOID);
+        debug_assert_eq!(layouts[Self::VOID_TUPLE.index as usize + 1], Layout::VOID);
+        debug_assert_eq!(layouts[Self::UNIT_INDEX.index as usize], Layout::UNIT);
+
+        Layouts {
+            layouts: Vec::default(),
+            layout_slices: Vec::default(),
+            lambda_sets: Vec::default(),
+            symbols: Vec::default(),
+            recursion_variable_to_structure_variable_map: MutMap::default(),
+            usize_int_width,
+        }
+    }
 
     /// sort a slice according to elements' alignment
     fn sort_slice_by_alignment(&mut self, layout_slice: Slice<Layout>) {
@@ -539,6 +562,8 @@ impl Layout {
     pub const VOID: Self = Self::UnionNonRecursive(Slice::new(0, 0));
 
     pub const EMPTY_LIST: Self = Self::List(Layouts::VOID_INDEX);
+    pub const EMPTY_DICT: Self = Self::Dict(Layouts::VOID_TUPLE);
+    pub const EMPTY_SET: Self = Self::Set(Layouts::VOID_INDEX);
 
     pub fn from_var(
         layouts: &mut Layouts,
@@ -556,6 +581,19 @@ impl Layout {
     ) -> Result<Layout, LayoutError> {
         let content = &subs.get_ref(var).content;
         Self::from_content(layouts, subs, var, content)
+    }
+
+    fn from_var_help_or_void(
+        layouts: &mut Layouts,
+        subs: &Subs,
+        var: Variable,
+    ) -> Result<Layout, LayoutError> {
+        let content = &subs.get_ref(var).content;
+        match Self::from_content(layouts, subs, var, content) {
+            Ok(layout) => Ok(layout),
+            Err(LayoutError::UnresolvedVariable(_)) => Ok(Layout::VOID),
+            Err(other) => Err(other),
+        }
     }
 
     fn from_content(
@@ -640,16 +678,40 @@ impl Layout {
                 debug_assert_eq!(arguments.len(), 1);
 
                 let element_var = subs.variables[arguments.slice.start as usize];
-                match Self::from_var_help(layouts, subs, element_var) {
-                    Ok(element_layout) => {
-                        let element_index = Index::new(layouts.layouts.len() as _);
-                        layouts.layouts.push(element_layout);
+                let element_layout = Self::from_var_help_or_void(layouts, subs, element_var)?;
 
-                        Ok(Layout::List(element_index))
-                    }
-                    Err(UnresolvedVariable(_)) => Ok(Layout::EMPTY_LIST),
-                    Err(other) => Err(other),
-                }
+                let element_index = Index::new(layouts.layouts.len() as _);
+                layouts.layouts.push(element_layout);
+
+                Ok(Layout::List(element_index))
+            }
+
+            FlatType::Apply(Symbol::DICT_DICT, arguments) => {
+                debug_assert_eq!(arguments.len(), 2);
+
+                let key_var = subs.variables[arguments.slice.start as usize];
+                let value_var = subs.variables[arguments.slice.start as usize + 1];
+
+                let key_layout = Self::from_var_help_or_void(layouts, subs, key_var)?;
+                let value_layout = Self::from_var_help_or_void(layouts, subs, value_var)?;
+
+                let index = Index::new(layouts.layouts.len() as _);
+                layouts.layouts.push(key_layout);
+                layouts.layouts.push(value_layout);
+
+                Ok(Layout::Dict(index))
+            }
+
+            FlatType::Apply(Symbol::SET_SET, arguments) => {
+                debug_assert_eq!(arguments.len(), 1);
+
+                let element_var = subs.variables[arguments.slice.start as usize];
+                let element_layout = Self::from_var_help_or_void(layouts, subs, element_var)?;
+
+                let element_index = Index::new(layouts.layouts.len() as _);
+                layouts.layouts.push(element_layout);
+
+                Ok(Layout::Set(element_index))
             }
 
             FlatType::Apply(symbol, _) => {
