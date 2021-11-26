@@ -277,12 +277,17 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
                     buf.push(')')
                 }
             }
-            Apply(_, name, arguments) => {
+            Apply(pkg, name, arguments) => {
                 // NOTE apply is never multiline
                 let write_parens = parens == Parens::InApply && !arguments.is_empty();
 
                 if write_parens {
                     buf.push('(')
+                }
+
+                if !pkg.is_empty() {
+                    buf.push_str(pkg);
+                    buf.push('.');
                 }
 
                 buf.push_str(name);
