@@ -31,6 +31,7 @@ pub const STACK_POINTER_NAME: &str = "__stack_pointer";
 
 pub struct Env<'a> {
     pub arena: &'a Bump,
+    pub module_id: ModuleId,
     pub interns: Interns,
     pub exposed_to_host: MutSet<Symbol>,
 }
@@ -38,9 +39,8 @@ pub struct Env<'a> {
 pub fn build_module<'a>(
     env: &'a Env<'a>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-    refcount_home: ModuleId,
 ) -> Result<std::vec::Vec<u8>, String> {
-    let (mut wasm_module, _) = build_module_help(env, procedures, refcount_home)?;
+    let (mut wasm_module, _) = build_module_help(env, procedures)?;
     let mut buffer = std::vec::Vec::with_capacity(4096);
     wasm_module.serialize_mut(&mut buffer);
     Ok(buffer)
@@ -49,7 +49,6 @@ pub fn build_module<'a>(
 pub fn build_module_help<'a>(
     env: &'a Env<'a>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-    refcount_home: ModuleId,
 ) -> Result<(WasmModule<'a>, u32), String> {
     let mut layout_ids = LayoutIds::default();
     let mut generated_procs = Vec::with_capacity_in(procedures.len(), env.arena);
@@ -97,7 +96,7 @@ pub fn build_module_help<'a>(
             proc_symbols,
             linker_symbols,
             exports,
-            RefcountProcGenerator::new(env.arena, IntWidth::I32, refcount_home),
+            RefcountProcGenerator::new(env.arena, IntWidth::I32, env.module_id),
         );
 
         // Main loop: Generate the procs from the IR

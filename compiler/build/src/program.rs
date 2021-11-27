@@ -491,11 +491,12 @@ fn gen_from_mono_module_dev_wasm32(
     loaded: MonomorphizedModule,
     app_o_file: &Path,
 ) -> CodeGenTiming {
-    let mut procedures = MutMap::default();
-
-    for (key, proc) in loaded.procedures {
-        procedures.insert(key, proc);
-    }
+    let MonomorphizedModule {
+        module_id,
+        procedures,
+        interns,
+        ..
+    } = loaded;
 
     let exposed_to_host = loaded
         .exposed_to_host
@@ -503,15 +504,14 @@ fn gen_from_mono_module_dev_wasm32(
         .copied()
         .collect::<MutSet<_>>();
 
-    let mut env = roc_gen_wasm::Env {
+    let env = roc_gen_wasm::Env {
         arena,
-        interns: loaded.interns,
+        module_id,
+        interns,
         exposed_to_host,
     };
 
-    let refcount_home = env.interns.module_id(&"$RefCount".into());
-
-    let bytes = roc_gen_wasm::build_module(&env, procedures, refcount_home).unwrap();
+    let bytes = roc_gen_wasm::build_module(&env, procedures).unwrap();
 
     std::fs::write(&app_o_file, &bytes).expect("failed to write object to file");
 
