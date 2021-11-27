@@ -3047,6 +3047,27 @@ impl StorageSubs {
     }
 }
 
+use std::cell::RefCell;
+std::thread_local! {
+    /// Scratchpad arena so we don't need to allocate a new one all the time
+    static SCRATCHPAD: RefCell<bumpalo::Bump> = RefCell::new(bumpalo::Bump::with_capacity(4 * 1024));
+}
+
+fn take_scratchpad() -> bumpalo::Bump {
+    let mut result = bumpalo::Bump::new();
+    SCRATCHPAD.with(|f| {
+        result = f.replace(bumpalo::Bump::new());
+    });
+
+    result
+}
+
+fn put_scratchpad(scratchpad: bumpalo::Bump) {
+    SCRATCHPAD.with(|f| {
+        f.replace(scratchpad);
+    });
+}
+
 pub fn deep_copy_var_to(
     source: &mut Subs, // mut to set the copy
     target: &mut Subs,
@@ -3054,8 +3075,7 @@ pub fn deep_copy_var_to(
 ) -> Variable {
     let rank = Rank::toplevel();
 
-    // capacity based on the false hello world program
-    let arena = bumpalo::Bump::with_capacity(4 * 1024);
+    let mut arena = take_scratchpad();
 
     let mut visited = bumpalo::collections::Vec::with_capacity_in(256, &arena);
 
@@ -3072,6 +3092,9 @@ pub fn deep_copy_var_to(
             descriptor.copy = OptVariable::NONE;
         }
     }
+
+    arena.reset();
+    put_scratchpad(arena);
 
     copy
 }
