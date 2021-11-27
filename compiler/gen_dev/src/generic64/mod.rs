@@ -501,7 +501,7 @@ impl<
 
         // move return value to dst.
         match ret_layout {
-            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
+            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64) | Builtin::Bool) => {
                 let dst_reg = self.claim_general_reg(dst)?;
                 ASM::mov_reg64_reg64(&mut self.buf, dst_reg, CC::GENERAL_RETURN_REGS[0]);
                 Ok(())

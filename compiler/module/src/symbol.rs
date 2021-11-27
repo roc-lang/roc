@@ -880,6 +880,9 @@ define_builtins! {
 
         // the _ used in mono when a specialized symbol is deleted
         25 REMOVED_SPECIALIZATION: "#removed_specialization"
+
+        // used in dev backend
+        26 DEV_TMP: "#dev_tmp"
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
