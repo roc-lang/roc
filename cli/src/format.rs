@@ -34,7 +34,13 @@ pub fn format(files: std::vec::Vec<PathBuf>) {
             let mut fail_file = file.clone();
             fail_file.set_extension("roc-format-failed");
             std::fs::write(&fail_file, &buf).unwrap();
-            internal_error!("Formatting bug; formatted code isn't valid\n\nI wrote the incorrect result to this file for debugging purposes:\n{}\n\nParse error was: {:?}", fail_file.display(), e);
+            internal_error!(
+                "Formatting bug; formatted code isn't valid\n\n\
+                I wrote the incorrect result to this file for debugging purposes:\n{}\n\n\
+                Parse error was: {:?}\n\n",
+                fail_file.display(),
+                e
+            );
         }));
 
         let ast = ast.remove_spaces(&arena);
@@ -46,15 +52,25 @@ pub fn format(files: std::vec::Vec<PathBuf>) {
         // I don't have the patience to debug this right now, so let's leave it for another day...
         // TODO: fix PartialEq impl on ast types
         if format!("{:?}", ast) != format!("{:?}", reparsed_ast) {
+            let mut fail_file = file.clone();
+            fail_file.set_extension("roc-format-failed");
+            std::fs::write(&fail_file, &buf).unwrap();
+
             let mut before_file = file.clone();
-            before_file.set_extension("roc-failed-format-ast-before");
+            before_file.set_extension("roc-format-failed-ast-before");
             std::fs::write(&before_file, &format!("{:#?}\n", ast)).unwrap();
 
             let mut after_file = file.clone();
-            after_file.set_extension("roc-failed-format-ast-after");
+            after_file.set_extension("roc-format-failed-ast-after");
             std::fs::write(&after_file, &format!("{:#?}\n", reparsed_ast)).unwrap();
 
-            internal_error!("Formatting bug; formatting didn't reparse as the same tree\n\nI wrote the tree before and after formatting to these files, for debugging purposes:\n{}\n{}", before_file.display(), after_file.display());
+            internal_error!(
+                "Formatting bug; formatting didn't reparse as the same tree\n\n\
+                I wrote the incorrect result to this file for debugging purposes:\n{}\n\n\
+                I wrote the tree before and after formatting to these files for debugging purposes:\n{}\n{}\n\n",
+                fail_file.display(),
+                before_file.display(),
+                after_file.display());
         }
 
         std::fs::write(&file, &buf).unwrap();
