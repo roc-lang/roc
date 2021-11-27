@@ -1653,7 +1653,8 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
 }
 
 fn deep_copy_var(subs: &mut Subs, rank: Rank, pools: &mut Pools, var: Variable) -> Variable {
-    let arena = bumpalo::Bump::with_capacity(4 * 1024);
+    let mut arena = take_scratchpad();
+
     let mut visited = bumpalo::collections::Vec::with_capacity_in(4 * 1024, &arena);
 
     let copy = deep_copy_var_help(subs, rank, pools, &mut visited, var);
@@ -1669,6 +1670,9 @@ fn deep_copy_var(subs: &mut Subs, rank: Rank, pools: &mut Pools, var: Variable) 
             descriptor.copy = OptVariable::NONE;
         }
     }
+
+    arena.reset();
+    put_scratchpad(arena);
 
     copy
 }
