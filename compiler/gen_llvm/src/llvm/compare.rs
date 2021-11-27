@@ -14,6 +14,8 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 
+use super::build::load_roc_value;
+
 #[derive(Clone, Debug)]
 enum WhenRecursive<'a> {
     Unreachable,
@@ -521,13 +523,13 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
             let elem1 = {
                 let elem_ptr =
                     unsafe { builder.build_in_bounds_gep(ptr1, &[curr_index], "load_index") };
-                builder.build_load(elem_ptr, "get_elem")
+                load_roc_value(env, *element_layout, elem_ptr, "get_elem")
             };
 
             let elem2 = {
                 let elem_ptr =
                     unsafe { builder.build_in_bounds_gep(ptr2, &[curr_index], "load_index") };
-                builder.build_load(elem_ptr, "get_elem")
+                load_roc_value(env, *element_layout, elem_ptr, "get_elem")
             };
 
             let are_equal = build_eq(
@@ -870,6 +872,10 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
     use UnionLayout::*;
 
     match union_layout {
+        NonRecursive(&[]) => {
+            // we're comparing empty tag unions; this code is effectively unreachable
+            env.builder.build_unreachable();
+        }
         NonRecursive(tags) => {
             let ptr_equal = env.builder.build_int_compare(
                 IntPredicate::EQ,
@@ -930,9 +936,15 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
             env.builder.position_at_end(compare_tag_fields);
 
-            let default = cases.pop().unwrap().1;
-
-            env.builder.build_switch(id1, default, &cases);
+            match cases.pop() {
+                Some((_, default)) => {
+                    env.builder.build_switch(id1, default, &cases);
+                }
+                None => {
+                    // we're comparing empty tag unions; this code is effectively unreachable
+                    env.builder.build_unreachable();
+                }
+            }
         }
         Recursive(tags) => {
             let ptr_equal = env.builder.build_int_compare(

@@ -327,7 +327,6 @@ fn build_hash_tag<'a, 'ctx, 'env>(
             let seed_type = env.context.i64_type();
 
             let arg_type = basic_type_from_layout_1(env, layout);
-            dbg!(layout, arg_type);
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
@@ -443,9 +442,15 @@ fn hash_tag<'a, 'ctx, 'env>(
 
             env.builder.position_at_end(entry_block);
 
-            let default = cases.pop().unwrap().1;
-
-            env.builder.build_switch(current_tag_id, default, &cases);
+            match cases.pop() {
+                Some((_, default)) => {
+                    env.builder.build_switch(current_tag_id, default, &cases);
+                }
+                None => {
+                    // we're hashing empty tag unions; this code is effectively unreachable
+                    env.builder.build_unreachable();
+                }
+            }
         }
         Recursive(tags) => {
             let current_tag_id = get_tag_id(env, parent, union_layout, tag);

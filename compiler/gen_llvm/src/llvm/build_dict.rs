@@ -3,7 +3,8 @@ use crate::llvm::bitcode::{
     build_dec_wrapper, build_eq_wrapper, build_inc_wrapper, call_bitcode_fn, call_void_bitcode_fn,
 };
 use crate::llvm::build::{
-    complex_bitcast, load_symbol, load_symbol_and_layout, Env, RocFunctionCall, Scope,
+    complex_bitcast, load_roc_value, load_symbol, load_symbol_and_layout, Env, RocFunctionCall,
+    Scope,
 };
 use crate::llvm::build_list::{layout_width, pass_as_opaque};
 use crate::llvm::convert::{basic_type_from_layout, zig_dict_type, zig_list_type};
@@ -810,7 +811,7 @@ fn build_hash_wrapper<'a, 'ctx, 'env>(
                 .build_bitcast(value_ptr, value_type, "load_opaque")
                 .into_pointer_value();
 
-            let val_arg = env.builder.build_load(value_cast, "load_opaque");
+            let val_arg = load_roc_value(env, *layout, value_cast, "load_opaque");
 
             let result =
                 crate::llvm::build_hash::generic_hash(env, layout_ids, seed_arg, val_arg, layout);

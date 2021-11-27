@@ -593,21 +593,31 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
         Union(variant) => {
             use UnionLayout::*;
 
-            if let NonRecursive(tags) = variant {
-                let function = modify_refcount_union(env, layout_ids, mode, when_recursive, tags);
+            match variant {
+                NonRecursive(&[]) => {
+                    // void type, nothing to refcount here
+                    None
+                }
 
-                return Some(function);
+                NonRecursive(tags) => {
+                    let function =
+                        modify_refcount_union(env, layout_ids, mode, when_recursive, tags);
+
+                    Some(function)
+                }
+
+                _ => {
+                    let function = build_rec_union(
+                        env,
+                        layout_ids,
+                        mode,
+                        &WhenRecursive::Loop(*variant),
+                        *variant,
+                    );
+
+                    Some(function)
+                }
             }
-
-            let function = build_rec_union(
-                env,
-                layout_ids,
-                mode,
-                &WhenRecursive::Loop(*variant),
-                *variant,
-            );
-
-            Some(function)
         }
 
         Struct(layouts) => {

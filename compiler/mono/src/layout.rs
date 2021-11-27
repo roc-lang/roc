@@ -609,7 +609,7 @@ impl<'a> LambdaSet<'a> {
                 // this can happen when there is a type error somewhere
                 Ok(LambdaSet {
                     set: &[],
-                    representation: arena.alloc(Layout::Struct(&[])),
+                    representation: arena.alloc(Layout::UNIT),
                 })
             }
             _ => panic!("called LambdaSet.from_var on invalid input"),
@@ -627,12 +627,12 @@ impl<'a> LambdaSet<'a> {
 
         use UnionVariant::*;
         match variant {
-            Never => Layout::Union(UnionLayout::NonRecursive(&[])),
+            Never => Layout::VOID,
             BoolUnion { .. } => Layout::bool(),
             ByteUnion { .. } => Layout::u8(),
             Unit | UnitWithArguments => {
                 // no useful information to store
-                Layout::Struct(&[])
+                Layout::UNIT
             }
             Newtype {
                 arguments: layouts, ..
@@ -732,6 +732,7 @@ const fn round_up_to_alignment(width: u32, alignment: u32) -> u32 {
 
 impl<'a> Layout<'a> {
     pub const VOID: Self = Layout::Union(UnionLayout::NonRecursive(&[]));
+    pub const UNIT: Self = Layout::Struct(&[]);
 
     fn new_help<'b>(
         env: &mut Env<'a, 'b>,
@@ -1566,7 +1567,7 @@ fn layout_from_flat_type<'a>(
         }
         EmptyTagUnion => Ok(Layout::VOID),
         Erroneous(_) => Err(LayoutProblem::Erroneous),
-        EmptyRecord => Ok(Layout::Struct(&[])),
+        EmptyRecord => Ok(Layout::UNIT),
     }
 }
 
@@ -1843,8 +1844,8 @@ fn union_sorted_tags_help_new<'a>(
                             Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                                 // If we encounter an unbound type var (e.g. `Ok *`)
                                 // then it's zero-sized; In the future we may drop this argument
-                                // completely, but for now we represent it with the empty struct
-                                layouts.push(Layout::Struct(&[]))
+                                // completely, but for now we represent it with the empty tag union
+                                layouts.push(Layout::VOID)
                             }
                             Err(LayoutProblem::Erroneous) => {
                                 // An erroneous type var will code gen to a runtime
@@ -1924,8 +1925,8 @@ fn union_sorted_tags_help_new<'a>(
                         Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                             // If we encounter an unbound type var (e.g. `Ok *`)
                             // then it's zero-sized; In the future we may drop this argument
-                            // completely, but for now we represent it with the empty struct
-                            arg_layouts.push(Layout::Struct(&[]));
+                            // completely, but for now we represent it with the empty tag union
+                            arg_layouts.push(Layout::VOID);
                         }
                         Err(LayoutProblem::Erroneous) => {
                             // An erroneous type var will code gen to a runtime
@@ -2052,8 +2053,8 @@ pub fn union_sorted_tags_help<'a>(
                             Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                                 // If we encounter an unbound type var (e.g. `Ok *`)
                                 // then it's zero-sized; In the future we may drop this argument
-                                // completely, but for now we represent it with the empty struct
-                                layouts.push(Layout::Struct(&[]))
+                                // completely, but for now we represent it with the empty tag union
+                                layouts.push(Layout::VOID)
                             }
                             Err(LayoutProblem::Erroneous) => {
                                 // An erroneous type var will code gen to a runtime
@@ -2136,8 +2137,9 @@ pub fn union_sorted_tags_help<'a>(
                         Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                             // If we encounter an unbound type var (e.g. `Ok *`)
                             // then it's zero-sized; In the future we may drop this argument
-                            // completely, but for now we represent it with the empty struct
-                            arg_layouts.push(Layout::Struct(&[]));
+                            // completely, but for now we represent it with the empty struct tag
+                            // union
+                            arg_layouts.push(Layout::VOID);
                         }
                         Err(LayoutProblem::Erroneous) => {
                             // An erroneous type var will code gen to a runtime
@@ -2262,8 +2264,8 @@ fn layout_from_newtype<'a>(
             Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                 // If we encounter an unbound type var (e.g. `Ok *`)
                 // then it's zero-sized; In the future we may drop this argument
-                // completely, but for now we represent it with the empty struct
-                Layout::Struct(&[])
+                // completely, but for now we represent it with the empty tag union
+                Layout::VOID
             }
             Err(LayoutProblem::Erroneous) => {
                 // An erroneous type var will code gen to a runtime
@@ -2303,7 +2305,7 @@ fn layout_from_tag_union<'a>(
 
             match variant {
                 Never => Layout::VOID,
-                Unit | UnitWithArguments => Layout::Struct(&[]),
+                Unit | UnitWithArguments => Layout::UNIT,
                 BoolUnion { .. } => Layout::bool(),
                 ByteUnion(_) => Layout::u8(),
                 Newtype {
@@ -2716,10 +2718,10 @@ mod test {
     fn width_and_alignment_union_empty_struct() {
         let lambda_set = LambdaSet {
             set: &[(Symbol::LIST_MAP, &[])],
-            representation: &Layout::Struct(&[]),
+            representation: &Layout::UNIT,
         };
 
-        let a = &[Layout::Struct(&[])] as &[_];
+        let a = &[Layout::UNIT] as &[_];
         let b = &[Layout::LambdaSet(lambda_set)] as &[_];
         let tt = [a, b];
 

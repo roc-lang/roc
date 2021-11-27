@@ -585,6 +585,14 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
     )
 }
 
+fn empty_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
+    let struct_type = super::convert::zig_list_type(env);
+
+    // The pointer should be null (aka zero) and the length should be zero,
+    // so the whole struct should be a const_zero
+    BasicValueEnum::StructValue(struct_type.const_zero())
+}
+
 /// List.keepOks : List before, (before -> Result after *) -> List after
 pub fn list_keep_oks<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -607,6 +615,10 @@ pub fn list_keep_oks<'a, 'ctx, 'env>(
 
     let has_tag_id = match result_layout {
         Layout::Union(union_layout) => build_has_tag_id(env, function, *union_layout),
+        Layout::Builtin(Builtin::Bool) => {
+            // a `Result [] whatever`, so there is nothing to keep
+            return empty_list(env);
+        }
         _ => unreachable!(),
     };
 
@@ -651,6 +663,10 @@ pub fn list_keep_errs<'a, 'ctx, 'env>(
 
     let has_tag_id = match result_layout {
         Layout::Union(union_layout) => build_has_tag_id(env, function, *union_layout),
+        Layout::Builtin(Builtin::Bool) => {
+            // a `Result whatever []`, so there is nothing to keep
+            return empty_list(env);
+        }
         _ => unreachable!(),
     };
 

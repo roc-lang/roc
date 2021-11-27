@@ -4,6 +4,7 @@ procedure Dict.2 ():
 
 procedure Dict.8 (#Attr.2):
     let Test.3 = lowlevel DictSize #Attr.2;
+    dec #Attr.2;
     ret Test.3;
 
 procedure Test.0 ():
