@@ -533,8 +533,7 @@ fn gen_from_mono_module_dev_assembly(
         generate_allocators,
     };
 
-    let module_object = roc_gen_dev::build_module(&env, target, loaded.procedures)
-        .expect("failed to compile module");
+    let module_object = roc_gen_dev::build_module(&env, target, loaded.procedures);
 
     let module_out = module_object
         .write()

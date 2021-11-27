@@ -5,6 +5,7 @@ use packed_struct::prelude::*;
 use roc_collections::all::MutMap;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::Layout;
+use roc_reporting::internal_error;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 #[allow(dead_code)]
@@ -151,13 +152,15 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
         saved_regs: &[AArch64GeneralReg],
         requested_stack_size: i32,
         fn_call_stack_size: i32,
-    ) -> Result<i32, String> {
+    ) -> i32 {
         // Full size is upcast to i64 to make sure we don't overflow here.
-        let full_stack_size = requested_stack_size
+        let full_stack_size = match requested_stack_size
             .checked_add(8 * saved_regs.len() as i32 + 8) // The extra 8 is space to store the frame pointer.
-            .ok_or("Ran out of stack space")?
-            .checked_add(fn_call_stack_size)
-            .ok_or("Ran out of stack space")?;
+            .and_then(|size| size.checked_add(fn_call_stack_size))
+        {
+            Some(size) => size,
+            _ => internal_error!("Ran out of stack space"),
+        };
         let alignment = if full_stack_size <= 0 {
             0
         } else {
@@ -194,12 +197,12 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
                     offset -= 8;
                     AArch64Assembler::mov_base32_reg64(buf, offset, *reg);
                 }
-                Ok(aligned_stack_size)
+                aligned_stack_size
             } else {
-                Ok(0)
+                0
             }
         } else {
-            Err("Ran out of stack space".to_string())
+            internal_error!("Ran out of stack space");
         }
     }
 
@@ -209,7 +212,7 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
         saved_regs: &[AArch64GeneralReg],
         aligned_stack_size: i32,
         fn_call_stack_size: i32,
-    ) -> Result<(), String> {
+    ) {
         if aligned_stack_size > 0 {
             // All the following stores could be optimized by using `STP` to store pairs.
             let mut offset = aligned_stack_size;
@@ -230,7 +233,6 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
                 aligned_stack_size,
             );
         }
-        Ok(())
     }
 
     #[inline(always)]
@@ -239,8 +241,8 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
         _symbol_map: &mut MutMap<Symbol, SymbolStorage<AArch64GeneralReg, AArch64FloatReg>>,
         _args: &'a [(Layout<'a>, Symbol)],
         _ret_layout: &Layout<'a>,
-    ) -> Result<(), String> {
-        Err("Loading args not yet implemented for AArch64".to_string())
+    ) {
+        unimplemented!("Loading args not yet implemented for AArch64");
     }
 
     #[inline(always)]
@@ -250,8 +252,8 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
         _args: &'a [Symbol],
         _arg_layouts: &[Layout<'a>],
         _ret_layout: &Layout<'a>,
-    ) -> Result<u32, String> {
-        Err("Storing args not yet implemented for AArch64".to_string())
+    ) -> u32 {
+        unimplemented!("Storing args not yet implemented for AArch64");
     }
 
     fn return_struct<'a>(
@@ -260,12 +262,12 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
         _struct_size: u32,
         _field_layouts: &[Layout<'a>],
         _ret_reg: Option<AArch64GeneralReg>,
-    ) -> Result<(), String> {
-        Err("Returning structs not yet implemented for AArch64".to_string())
+    ) {
+        unimplemented!("Returning structs not yet implemented for AArch64");
     }
 
-    fn returns_via_arg_pointer(_ret_layout: &Layout) -> Result<bool, String> {
-        Err("Returning via arg pointer not yet implemented for AArch64".to_string())
+    fn returns_via_arg_pointer(_ret_layout: &Layout) -> bool {
+        unimplemented!("Returning via arg pointer not yet implemented for AArch64");
     }
 }
 
