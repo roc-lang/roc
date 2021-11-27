@@ -688,10 +688,6 @@ pub enum Builtin<'a> {
     Dict(&'a Layout<'a>, &'a Layout<'a>),
     Set(&'a Layout<'a>),
     List(&'a Layout<'a>),
-    EmptyStr,
-    EmptyList,
-    EmptyDict,
-    EmptySet,
 }
 
 pub struct Env<'a, 'b> {
@@ -735,6 +731,8 @@ const fn round_up_to_alignment(width: u32, alignment: u32) -> u32 {
 }
 
 impl<'a> Layout<'a> {
+    pub const VOID: Self = Layout::Union(UnionLayout::NonRecursive(&[]));
+
     fn new_help<'b>(
         env: &mut Env<'a, 'b>,
         var: Variable,
@@ -1205,10 +1203,10 @@ impl<'a> Builtin<'a> {
             Float(float) => float.stack_size(),
             Bool => Builtin::I1_SIZE,
             Decimal => Builtin::DECIMAL_SIZE,
-            Str | EmptyStr => Builtin::STR_WORDS * pointer_size,
-            Dict(_, _) | EmptyDict => Builtin::DICT_WORDS * pointer_size,
-            Set(_) | EmptySet => Builtin::SET_WORDS * pointer_size,
-            List(_) | EmptyList => Builtin::LIST_WORDS * pointer_size,
+            Str => Builtin::STR_WORDS * pointer_size,
+            Dict(_, _) => Builtin::DICT_WORDS * pointer_size,
+            Set(_) => Builtin::SET_WORDS * pointer_size,
+            List(_) => Builtin::LIST_WORDS * pointer_size,
         }
     }
 
@@ -1224,15 +1222,15 @@ impl<'a> Builtin<'a> {
             Float(float_width) => float_width.alignment_bytes(),
             Bool => align_of::<bool>() as u32,
             Decimal => align_of::<i128>() as u32,
-            Dict(_, _) | EmptyDict => pointer_size,
-            Set(_) | EmptySet => pointer_size,
+            Dict(_, _) => pointer_size,
+            Set(_) => pointer_size,
             // we often treat these as i128 (64-bit systems)
             // or i64 (32-bit systems).
             //
             // In webassembly, For that to be safe
             // they must be aligned to allow such access
-            List(_) | EmptyList => pointer_size,
-            Str | EmptyStr => pointer_size,
+            List(_) => pointer_size,
+            Str => pointer_size,
         }
     }
 
@@ -1240,9 +1238,7 @@ impl<'a> Builtin<'a> {
         use Builtin::*;
 
         match self {
-            Int(_) | Float(_) | Bool | Decimal | EmptyStr | EmptyDict | EmptyList | EmptySet => {
-                true
-            }
+            Int(_) | Float(_) | Bool | Decimal => true,
 
             Str | Dict(_, _) | Set(_) | List(_) => false,
         }
@@ -1253,9 +1249,7 @@ impl<'a> Builtin<'a> {
         use Builtin::*;
 
         match self {
-            Int(_) | Float(_) | Bool | Decimal | EmptyStr | EmptyDict | EmptyList | EmptySet => {
-                false
-            }
+            Int(_) | Float(_) | Bool | Decimal => false,
             List(_) => true,
 
             Str | Dict(_, _) | Set(_) => true,
@@ -1301,11 +1295,6 @@ impl<'a> Builtin<'a> {
             Bool => alloc.text("Int1"),
             Decimal => alloc.text("Decimal"),
 
-            EmptyStr => alloc.text("EmptyStr"),
-            EmptyList => alloc.text("EmptyList"),
-            EmptyDict => alloc.text("EmptyDict"),
-            EmptySet => alloc.text("EmptySet"),
-
             Str => alloc.text("Str"),
             List(layout) => alloc
                 .text("List ")
@@ -1333,9 +1322,6 @@ impl<'a> Builtin<'a> {
                 .max(pointer_size),
             Builtin::Set(k) => k.alignment_bytes(pointer_size).max(pointer_size),
             Builtin::List(e) => e.alignment_bytes(pointer_size).max(pointer_size),
-            Builtin::EmptyStr | Builtin::EmptyList | Builtin::EmptyDict | Builtin::EmptySet => {
-                unreachable!("not heap-allocated")
-            }
         };
 
         allocation.max(pointer_size)
@@ -1578,7 +1564,7 @@ fn layout_from_flat_type<'a>(
 
             Ok(Layout::Union(union_layout))
         }
-        EmptyTagUnion => Ok(Layout::Union(UnionLayout::NonRecursive(&[]))),
+        EmptyTagUnion => Ok(Layout::VOID),
         Erroneous(_) => Err(LayoutProblem::Erroneous),
         EmptyRecord => Ok(Layout::Struct(&[])),
     }
@@ -2316,7 +2302,7 @@ fn layout_from_tag_union<'a>(
             let variant = union_sorted_tags_help_new(arena, tags_vec, opt_rec_var, subs, ptr_bytes);
 
             match variant {
-                Never => Layout::Union(UnionLayout::NonRecursive(&[])),
+                Never => Layout::VOID,
                 Unit | UnitWithArguments => Layout::Struct(&[]),
                 BoolUnion { .. } => Layout::bool(),
                 ByteUnion(_) => Layout::u8(),
@@ -2552,40 +2538,54 @@ fn dict_layout_from_key_value<'a>(
     key_var: Variable,
     value_var: Variable,
 ) -> Result<Layout<'a>, LayoutProblem> {
-    match env.subs.get_content_without_compacting(key_var) {
-        Content::FlexVar(_) | Content::RigidVar(_) => {
-            // If this was still a (Dict * *) then it must have been an empty dict
-            Ok(Layout::Builtin(Builtin::EmptyDict))
-        }
-        key_content => {
-            let value_content = env.subs.get_content_without_compacting(value_var);
-            let key_layout = Layout::new_help(env, key_var, key_content.clone())?;
-            let value_layout = Layout::new_help(env, value_var, value_content.clone())?;
+    let is_variable = |content| matches!(content, &Content::FlexVar(_) | &Content::RigidVar(_));
 
-            // This is a normal list.
-            Ok(Layout::Builtin(Builtin::Dict(
-                env.arena.alloc(key_layout),
-                env.arena.alloc(value_layout),
-            )))
-        }
-    }
+    let key_content = env.subs.get_content_without_compacting(key_var);
+    let value_content = env.subs.get_content_without_compacting(value_var);
+
+    let key_layout = if is_variable(key_content) {
+        Layout::VOID
+    } else {
+        // NOTE: cannot re-use Content, because it may be recursive
+        // then some state is not correctly kept, we have to go through from_var
+        Layout::from_var(env, key_var)?
+    };
+
+    let value_layout = if is_variable(value_content) {
+        Layout::VOID
+    } else {
+        // NOTE: cannot re-use Content, because it may be recursive
+        // then some state is not correctly kept, we have to go through from_var
+        Layout::from_var(env, value_var)?
+    };
+
+    // This is a normal list.
+    Ok(Layout::Builtin(Builtin::Dict(
+        env.arena.alloc(key_layout),
+        env.arena.alloc(value_layout),
+    )))
 }
 
 pub fn list_layout_from_elem<'a>(
     env: &mut Env<'a, '_>,
-    elem_var: Variable,
+    element_var: Variable,
 ) -> Result<Layout<'a>, LayoutProblem> {
-    match env.subs.get_content_without_compacting(elem_var) {
-        Content::FlexVar(_) | Content::RigidVar(_) => {
-            // If this was still a (List *) then it must have been an empty list
-            Ok(Layout::Builtin(Builtin::EmptyList))
-        }
-        _ => {
-            let elem_layout = Layout::from_var(env, elem_var)?;
+    let is_variable = |content| matches!(content, &Content::FlexVar(_) | &Content::RigidVar(_));
 
-            Ok(Layout::Builtin(Builtin::List(env.arena.alloc(elem_layout))))
-        }
-    }
+    let element_content = env.subs.get_content_without_compacting(element_var);
+
+    let element_layout = if is_variable(element_content) {
+        // If this was still a (List *) then it must have been an empty list
+        Layout::VOID
+    } else {
+        // NOTE: cannot re-use Content, because it may be recursive
+        // then some state is not correctly kept, we have to go through from_var
+        Layout::from_var(env, element_var)?
+    };
+
+    Ok(Layout::Builtin(Builtin::List(
+        env.arena.alloc(element_layout),
+    )))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2704,24 +2704,6 @@ impl<'a> LayoutIds<'a> {
                 layout_id
             }
             Entry::Occupied(mut occupied_ids) => occupied_ids.get_mut().insert_toplevel(*layout),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ListLayout<'a> {
-    EmptyList,
-    List(&'a Layout<'a>),
-}
-
-impl<'a> std::convert::TryFrom<&Layout<'a>> for ListLayout<'a> {
-    type Error = ();
-
-    fn try_from(value: &Layout<'a>) -> Result<Self, Self::Error> {
-        match value {
-            Layout::Builtin(Builtin::EmptyList) => Ok(ListLayout::EmptyList),
-            Layout::Builtin(Builtin::List(element)) => Ok(ListLayout::List(element)),
-            _ => Err(()),
         }
     }
 }

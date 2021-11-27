@@ -135,12 +135,6 @@ fn build_eq_builtin<'a, 'ctx, 'env>(
         ),
         Builtin::Set(_elem) => todo!("equality on Set"),
         Builtin::Dict(_key, _value) => todo!("equality on Dict"),
-
-        // empty structures are always equal to themselves
-        Builtin::EmptyStr => env.context.bool_type().const_int(1, false).into(),
-        Builtin::EmptyList => env.context.bool_type().const_int(1, false).into(),
-        Builtin::EmptyDict => env.context.bool_type().const_int(1, false).into(),
-        Builtin::EmptySet => env.context.bool_type().const_int(1, false).into(),
     }
 }
 
@@ -310,12 +304,6 @@ fn build_neq_builtin<'a, 'ctx, 'env>(
         }
         Builtin::Set(_elem) => todo!("equality on Set"),
         Builtin::Dict(_key, _value) => todo!("equality on Dict"),
-
-        // empty structures are always equal to themselves
-        Builtin::EmptyStr => env.context.bool_type().const_int(0, false).into(),
-        Builtin::EmptyList => env.context.bool_type().const_int(0, false).into(),
-        Builtin::EmptyDict => env.context.bool_type().const_int(0, false).into(),
-        Builtin::EmptySet => env.context.bool_type().const_int(0, false).into(),
     }
 }
 

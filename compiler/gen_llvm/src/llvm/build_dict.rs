@@ -64,7 +64,6 @@ pub fn dict_len<'a, 'ctx, 'env>(
                 .build_int_cast(length_i64.into_int_value(), env.ptr_int(), "to_usize")
                 .into()
         }
-        Layout::Builtin(Builtin::EmptyDict) => env.ptr_int().const_zero().into(),
         _ => unreachable!("Invalid layout given to Dict.len : {:?}", dict_layout),
     }
 }

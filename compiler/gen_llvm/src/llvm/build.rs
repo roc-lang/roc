@@ -8,11 +8,11 @@ use crate::llvm::build_dict::{
 };
 use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
-    self, allocate_list, empty_list, empty_polymorphic_list, list_all, list_any, list_append,
-    list_concat, list_contains, list_drop_at, list_find_trivial_not_found, list_find_unsafe,
-    list_get_unsafe, list_join, list_keep_errs, list_keep_if, list_keep_oks, list_len, list_map,
-    list_map2, list_map3, list_map4, list_map_with_index, list_prepend, list_range, list_repeat,
-    list_reverse, list_set, list_single, list_sort_with, list_sublist, list_swap,
+    self, allocate_list, empty_polymorphic_list, list_all, list_any, list_append, list_concat,
+    list_contains, list_drop_at, list_find_unsafe, list_get_unsafe, list_join, list_keep_errs,
+    list_keep_if, list_keep_oks, list_len, list_map, list_map2, list_map3, list_map4,
+    list_map_with_index, list_prepend, list_range, list_repeat, list_reverse, list_set,
+    list_single, list_sort_with, list_sublist, list_swap,
 };
 use crate::llvm::build_str::{
     empty_str, str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int,
@@ -4726,7 +4726,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             let (function, closure, closure_layout) = function_details!();
 
             match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => default,
                 Layout::Builtin(Builtin::List(element_layout)) => {
                     let argument_layouts = &[*default_layout, **element_layout];
 
@@ -4765,7 +4764,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             let (function, closure, closure_layout) = function_details!();
 
             match (list_layout, return_layout) {
-                (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
                 (
                     Layout::Builtin(Builtin::List(element_layout)),
                     Layout::Builtin(Builtin::List(result_layout)),
@@ -4824,8 +4822,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         result_layout,
                     )
                 }
-                (Layout::Builtin(Builtin::EmptyList), _, _)
-                | (_, Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
                 _ => unreachable!("invalid list layout"),
             }
         }
@@ -4870,9 +4866,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         result_layout,
                     )
                 }
-                (Layout::Builtin(Builtin::EmptyList), _, _, _)
-                | (_, Layout::Builtin(Builtin::EmptyList), _, _)
-                | (_, _, Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
                 _ => unreachable!("invalid list layout"),
             }
         }
@@ -4931,10 +4924,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         result_layout,
                     )
                 }
-                (Layout::Builtin(Builtin::EmptyList), _, _, _, _)
-                | (_, Layout::Builtin(Builtin::EmptyList), _, _, _)
-                | (_, _, Layout::Builtin(Builtin::EmptyList), _, _)
-                | (_, _, _, Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
                 _ => unreachable!("invalid list layout"),
             }
         }
@@ -4945,7 +4934,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             let (function, closure, closure_layout) = function_details!();
 
             match (list_layout, return_layout) {
-                (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
                 (
                     Layout::Builtin(Builtin::List(element_layout)),
                     Layout::Builtin(Builtin::List(result_layout)),
@@ -4975,7 +4963,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             let (function, closure, closure_layout) = function_details!();
 
             match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
                 Layout::Builtin(Builtin::List(element_layout)) => {
                     let argument_layouts = &[**element_layout];
 
@@ -5002,8 +4989,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             let (function, closure, closure_layout) = function_details!();
 
             match (list_layout, return_layout) {
-                (_, Layout::Builtin(Builtin::EmptyList))
-                | (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
                 (
                     Layout::Builtin(Builtin::List(before_layout)),
                     Layout::Builtin(Builtin::List(after_layout)),
@@ -5043,8 +5028,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             let (function, closure, closure_layout) = function_details!();
 
             match (list_layout, return_layout) {
-                (_, Layout::Builtin(Builtin::EmptyList))
-                | (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
                 (
                     Layout::Builtin(Builtin::List(before_layout)),
                     Layout::Builtin(Builtin::List(after_layout)),
@@ -5093,7 +5076,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             let (function, closure, closure_layout) = function_details!();
 
             match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
                 Layout::Builtin(Builtin::List(element_layout)) => {
                     use crate::llvm::bitcode::build_compare_wrapper;
 
@@ -5131,7 +5113,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             let (function, closure, closure_layout) = function_details!();
 
             match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => env.context.bool_type().const_zero().into(),
                 Layout::Builtin(Builtin::List(element_layout)) => {
                     let argument_layouts = &[**element_layout];
 
@@ -5156,9 +5137,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             let (function, closure, closure_layout) = function_details!();
 
             match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => {
-                    env.context.bool_type().const_int(1, false).into()
-                }
                 Layout::Builtin(Builtin::List(element_layout)) => {
                     let argument_layouts = &[**element_layout];
 
@@ -5184,15 +5162,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             let (function, closure, closure_layout) = function_details!();
 
             match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => {
-                    // Returns { found: False, elem: \empty }, where the `elem` field is zero-sized.
-                    // NB: currently we never hit this case, since the only caller of this
-                    // lowlevel, namely List.find, will fail during monomorphization when there is no
-                    // concrete list element type. This is because List.find returns a
-                    // `Result elem [ NotFound ]*`, and we can't figure out the size of that if
-                    // `elem` is not concrete.
-                    list_find_trivial_not_found(env)
-                }
                 Layout::Builtin(Builtin::List(element_layout)) => {
                     let argument_layouts = &[**element_layout];
                     let roc_function_call = roc_function_call(
@@ -5217,10 +5186,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             let (function, closure, closure_layout) = function_details!();
 
             match dict_layout {
-                Layout::Builtin(Builtin::EmptyDict) => {
-                    // no elements, so `key` is not in here
-                    panic!("key type unknown")
-                }
                 Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
                     let argument_layouts = &[*default_layout, **key_layout, **value_layout];
 
@@ -5484,7 +5449,6 @@ fn run_low_level<'a, 'ctx, 'env>(
             let index_2 = load_symbol(scope, &args[2]);
 
             match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
                 Layout::Builtin(Builtin::List(element_layout)) => list_swap(
                     env,
                     original_wrapper,
@@ -5510,7 +5474,6 @@ fn run_low_level<'a, 'ctx, 'env>(
             let len = load_symbol(scope, &args[2]);
 
             match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
                 Layout::Builtin(Builtin::List(element_layout)) => list_sublist(
                     env,
                     layout_ids,
@@ -5532,7 +5495,6 @@ fn run_low_level<'a, 'ctx, 'env>(
             let count = load_symbol(scope, &args[1]);
 
             match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
                 Layout::Builtin(Builtin::List(element_layout)) => list_drop_at(
                     env,
                     layout_ids,
@@ -5846,10 +5808,6 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (element, _) = load_symbol_and_layout(scope, &args[2]);
 
             match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => {
-                    // no elements, so nothing to remove
-                    empty_list(env)
-                }
                 Layout::Builtin(Builtin::List(element_layout)) => list_set(
                     env,
                     layout_ids,
@@ -5894,10 +5852,6 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (key, key_layout) = load_symbol_and_layout(scope, &args[1]);
 
             match dict_layout {
-                Layout::Builtin(Builtin::EmptyDict) => {
-                    // no elements, so nothing to remove
-                    dict
-                }
                 Layout::Builtin(Builtin::Dict(_, value_layout)) => {
                     dict_remove(env, layout_ids, dict, key, key_layout, value_layout)
                 }
@@ -5911,10 +5865,6 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (key, key_layout) = load_symbol_and_layout(scope, &args[1]);
 
             match dict_layout {
-                Layout::Builtin(Builtin::EmptyDict) => {
-                    // no elements, so `key` is not in here
-                    env.context.bool_type().const_zero().into()
-                }
                 Layout::Builtin(Builtin::Dict(_, value_layout)) => {
                     dict_contains(env, layout_ids, dict, key, key_layout, value_layout)
                 }
@@ -5928,10 +5878,6 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (key, key_layout) = load_symbol_and_layout(scope, &args[1]);
 
             match dict_layout {
-                Layout::Builtin(Builtin::EmptyDict) => {
-                    unreachable!("we can't make up a layout for the return value");
-                    // in other words, make sure to check whether the dict is empty first
-                }
                 Layout::Builtin(Builtin::Dict(_, value_layout)) => {
                     dict_get(env, layout_ids, dict, key, key_layout, value_layout)
                 }
@@ -5944,10 +5890,6 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
 
             match dict_layout {
-                Layout::Builtin(Builtin::EmptyDict) => {
-                    // no elements, so `key` is not in here
-                    empty_list(env)
-                }
                 Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
                     dict_keys(env, layout_ids, dict, key_layout, value_layout)
                 }
@@ -5960,10 +5902,6 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
 
             match dict_layout {
-                Layout::Builtin(Builtin::EmptyDict) => {
-                    // no elements, so `key` is not in here
-                    empty_list(env)
-                }
                 Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
                     dict_values(env, layout_ids, dict, key_layout, value_layout)
                 }
@@ -5977,10 +5915,6 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (dict2, _) = load_symbol_and_layout(scope, &args[1]);
 
             match dict_layout {
-                Layout::Builtin(Builtin::EmptyDict) => {
-                    // no elements, so `key` is not in here
-                    panic!("key type unknown")
-                }
                 Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
                     dict_union(env, layout_ids, dict1, dict2, key_layout, value_layout)
                 }
@@ -5994,10 +5928,6 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (dict2, _) = load_symbol_and_layout(scope, &args[1]);
 
             match dict_layout {
-                Layout::Builtin(Builtin::EmptyDict) => {
-                    // no elements, so `key` is not in here
-                    panic!("key type unknown")
-                }
                 Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
                     dict_difference(env, layout_ids, dict1, dict2, key_layout, value_layout)
                 }
@@ -6011,10 +5941,6 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (dict2, _) = load_symbol_and_layout(scope, &args[1]);
 
             match dict_layout {
-                Layout::Builtin(Builtin::EmptyDict) => {
-                    // no elements, so `key` is not in here
-                    panic!("key type unknown")
-                }
                 Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
                     dict_intersection(env, layout_ids, dict1, dict2, key_layout, value_layout)
                 }
@@ -6027,7 +5953,6 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
             match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => dict_empty(env),
                 Layout::Builtin(Builtin::List(key_layout)) => {
                     set_from_list(env, layout_ids, list, key_layout)
                 }
@@ -6123,10 +6048,8 @@ fn to_cc_type_builtin<'a, 'ctx, 'env>(
         Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal => {
             basic_type_from_builtin(env, builtin)
         }
-        Builtin::Str | Builtin::EmptyStr | Builtin::List(_) | Builtin::EmptyList => {
-            env.str_list_c_abi().into()
-        }
-        Builtin::Dict(_, _) | Builtin::Set(_) | Builtin::EmptyDict | Builtin::EmptySet => {
+        Builtin::Str | Builtin::List(_) => env.str_list_c_abi().into(),
+        Builtin::Dict(_, _) | Builtin::Set(_) => {
             // TODO verify this is what actually happens
             basic_type_from_builtin(env, builtin)
         }

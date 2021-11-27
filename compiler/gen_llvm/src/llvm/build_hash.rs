@@ -136,9 +136,6 @@ fn hash_builtin<'a, 'ctx, 'env>(
             )
             .into_int_value()
         }
-        Builtin::EmptyStr | Builtin::EmptyDict | Builtin::EmptyList | Builtin::EmptySet => {
-            hash_empty_collection(seed)
-        }
 
         Builtin::Dict(_, _) => {
             todo!("Implement hash for Dict")
@@ -790,10 +787,6 @@ fn hash_list<'a, 'ctx, 'env>(
 }
 
 fn hash_null(seed: IntValue<'_>) -> IntValue<'_> {
-    seed
-}
-
-fn hash_empty_collection(seed: IntValue<'_>) -> IntValue<'_> {
     seed
 }
 

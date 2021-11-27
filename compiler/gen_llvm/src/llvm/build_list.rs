@@ -150,12 +150,6 @@ pub fn list_join<'a, 'ctx, 'env>(
     outer_list_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
     match outer_list_layout {
-        Layout::Builtin(Builtin::EmptyList)
-        | Layout::Builtin(Builtin::List(Layout::Builtin(Builtin::EmptyList))) => {
-            // If the input list is empty, or if it is a list of empty lists
-            // then simply return an empty list
-            empty_list(env)
-        }
         Layout::Builtin(Builtin::List(Layout::Builtin(Builtin::List(element_layout)))) => {
             call_bitcode_fn_returns_list(
                 env,
@@ -181,11 +175,6 @@ pub fn list_reverse<'a, 'ctx, 'env>(
     update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
     let element_layout = match *list_layout {
-        Layout::Builtin(Builtin::EmptyList) => {
-            // this pointer will never actually be dereferenced
-            Layout::i64()
-        }
-
         Layout::Builtin(Builtin::List(elem_layout)) => *elem_layout,
 
         _ => unreachable!("Invalid layout {:?} in List.reverse", list_layout),
@@ -881,11 +870,6 @@ pub fn list_concat<'a, 'ctx, 'env>(
     list_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
     match list_layout {
-        Layout::Builtin(Builtin::EmptyList) => {
-            // If the input list is empty, or if it is a list of empty lists
-            // then simply return an empty list
-            empty_list(env)
-        }
         Layout::Builtin(Builtin::List(elem_layout)) => call_bitcode_fn_returns_list(
             env,
             &[
@@ -1033,29 +1017,6 @@ pub fn list_find_unsafe<'a, 'ctx, 'env>(
 
     env.builder
         .build_insert_value(result, found, 1, "insert_found")
-        .unwrap()
-        .into_struct_value()
-        .into()
-}
-
-/// Returns { value: \empty, found: False }, representing that no element was found in a call
-/// to List.find when the layout of the element is also unknown.
-pub fn list_find_trivial_not_found<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-) -> BasicValueEnum<'ctx> {
-    let empty_type = env.context.custom_width_int_type(0);
-    let result = env
-        .context
-        .struct_type(&[empty_type.into(), env.context.bool_type().into()], false)
-        .const_zero();
-
-    env.builder
-        .build_insert_value(
-            result,
-            env.context.bool_type().const_zero(),
-            1,
-            "insert_found",
-        )
         .unwrap()
         .into_struct_value()
         .into()
@@ -1262,15 +1223,6 @@ where
 }
 
 pub fn empty_polymorphic_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
-    let struct_type = super::convert::zig_list_type(env);
-
-    // The pointer should be null (aka zero) and the length should be zero,
-    // so the whole struct should be a const_zero
-    BasicValueEnum::StructValue(struct_type.const_zero())
-}
-
-// TODO investigate: does this cause problems when the layout is known? this value is now not refcounted!
-pub fn empty_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
     let struct_type = super::convert::zig_list_type(env);
 
     // The pointer should be null (aka zero) and the length should be zero,

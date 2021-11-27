@@ -126,16 +126,12 @@ fn jit_to_ast_help<'a>(
 
             Ok(result)
         }
-        Layout::Builtin(Builtin::Str) | Layout::Builtin(Builtin::EmptyStr) => Ok(
-            run_jit_function!(lib, main_fn_name, &'static str, |string: &'static str| {
-                str_to_ast(env.arena, env.arena.alloc(string))
-            }),
-        ),
-        Layout::Builtin(Builtin::EmptyList) => {
-            Ok(run_jit_function!(lib, main_fn_name, &'static str, |_| {
-                Expr::List(Collection::empty())
-            }))
-        }
+        Layout::Builtin(Builtin::Str) => Ok(run_jit_function!(
+            lib,
+            main_fn_name,
+            &'static str,
+            |string: &'static str| { str_to_ast(env.arena, env.arena.alloc(string)) }
+        )),
         Layout::Builtin(Builtin::List(elem_layout)) => Ok(run_jit_function!(
             lib,
             main_fn_name,
@@ -421,7 +417,6 @@ fn ptr_to_ast<'a>(
                 F128 => todo!("F128 not implemented"),
             }
         }
-        Layout::Builtin(Builtin::EmptyList) => Expr::List(Collection::empty()),
         Layout::Builtin(Builtin::List(elem_layout)) => {
             // Turn the (ptr, len) wrapper struct into actual ptr and len values.
             let len = unsafe { *(ptr.offset(env.ptr_bytes as isize) as *const usize) };
@@ -429,7 +424,6 @@ fn ptr_to_ast<'a>(
 
             list_to_ast(env, ptr, len, elem_layout, content)
         }
-        Layout::Builtin(Builtin::EmptyStr) => Expr::Str(StrLiteral::PlainLine("")),
         Layout::Builtin(Builtin::Str) => {
             let arena_str = unsafe { *(ptr as *const &'static str) };
 
