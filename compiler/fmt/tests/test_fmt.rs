@@ -2324,6 +2324,25 @@ mod test_fmt {
         ));
     }
 
+    #[test]
+    fn unary_call_parens() {
+        expr_formats_same(indoc!(
+            r#"
+                !(f 1)
+            "#
+        ));
+    }
+
+    #[test]
+    fn unary_call_no_parens() {
+        // TIL: Negating a function "does what you might expect"... which is cool!
+        expr_formats_same(indoc!(
+            r#"
+                !f 1
+            "#
+        ));
+    }
+
     // BINARY OP
 
     #[test]
