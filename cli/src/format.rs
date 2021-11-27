@@ -5,10 +5,13 @@ use bumpalo::Bump;
 use roc_fmt::def::fmt_def;
 use roc_fmt::module::fmt_module;
 use roc_module::called_via::{BinOp, UnaryOp};
-use roc_parse::ast::{AssignedField, Collection, Expr, Pattern, Tag, TypeAnnotation, WhenBranch};
+use roc_parse::ast::{
+    AssignedField, Collection, Expr, Pattern, StrLiteral, StrSegment, Tag, TypeAnnotation,
+    WhenBranch,
+};
 use roc_parse::header::{
     AppHeader, Effects, ExposesEntry, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
-    PlatformHeader, PlatformRequires, PlatformRigid, TypedIdent,
+    PackageName, PackageOrPath, PlatformHeader, PlatformRequires, PlatformRigid, To, TypedIdent,
 };
 use roc_parse::{
     ast::{Def, Module},
@@ -133,7 +136,7 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
         match self {
             Module::Interface { header } => Module::Interface {
                 header: InterfaceHeader {
-                    name: header.name,
+                    name: header.name.remove_spaces(arena),
                     exposes: header.exposes.remove_spaces(arena),
                     imports: header.imports.remove_spaces(arena),
                     before_header: &[],
@@ -146,11 +149,11 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
             },
             Module::App { header } => Module::App {
                 header: AppHeader {
-                    name: header.name,
+                    name: header.name.remove_spaces(arena),
                     packages: header.packages.remove_spaces(arena),
                     imports: header.imports.remove_spaces(arena),
                     provides: header.provides.remove_spaces(arena),
-                    to: header.to,
+                    to: header.to.remove_spaces(arena),
                     before_header: &[],
                     after_app_keyword: &[],
                     before_packages: &[],
@@ -165,7 +168,7 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
             },
             Module::Platform { header } => Module::Platform {
                 header: PlatformHeader {
-                    name: header.name,
+                    name: header.name.remove_spaces(arena),
                     requires: header.requires.remove_spaces(arena),
                     exposes: header.exposes.remove_spaces(arena),
                     packages: header.packages.remove_spaces(arena),
@@ -219,6 +222,21 @@ impl<'a> RemoveSpaces<'a> for ModuleName<'a> {
     }
 }
 
+impl<'a> RemoveSpaces<'a> for PackageName<'a> {
+    fn remove_spaces(&self, _arena: &'a Bump) -> Self {
+        *self
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for To<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        match *self {
+            To::ExistingPackage(a) => To::ExistingPackage(a),
+            To::NewPackage(a) => To::NewPackage(a.remove_spaces(arena)),
+        }
+    }
+}
+
 impl<'a> RemoveSpaces<'a> for TypedIdent<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
@@ -266,10 +284,19 @@ impl<'a> RemoveSpaces<'a> for PackageEntry<'a> {
             } => PackageEntry::Entry {
                 shorthand,
                 spaces_after_shorthand: &[],
-                package_or_path,
+                package_or_path: package_or_path.remove_spaces(arena),
             },
             PackageEntry::SpaceBefore(a, _) => a.remove_spaces(arena),
             PackageEntry::SpaceAfter(a, _) => a.remove_spaces(arena),
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for PackageOrPath<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        match *self {
+            PackageOrPath::Package(a, b) => PackageOrPath::Package(a, b),
+            PackageOrPath::Path(p) => PackageOrPath::Path(p.remove_spaces(arena)),
         }
     }
 }
@@ -409,6 +436,27 @@ impl<'a, T: RemoveSpaces<'a> + Copy + std::fmt::Debug> RemoveSpaces<'a> for Assi
     }
 }
 
+impl<'a> RemoveSpaces<'a> for StrLiteral<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        match *self {
+            StrLiteral::PlainLine(t) => StrLiteral::PlainLine(t),
+            StrLiteral::Line(t) => StrLiteral::Line(t.remove_spaces(arena)),
+            StrLiteral::Block(t) => StrLiteral::Block(t.remove_spaces(arena)),
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for StrSegment<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        match *self {
+            StrSegment::Plaintext(t) => StrSegment::Plaintext(t),
+            StrSegment::Unicode(t) => StrSegment::Unicode(t.remove_spaces(arena)),
+            StrSegment::EscapedChar(c) => StrSegment::EscapedChar(c),
+            StrSegment::Interpolated(t) => StrSegment::Interpolated(t.remove_spaces(arena)),
+        }
+    }
+}
+
 impl<'a> RemoveSpaces<'a> for Expr<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
@@ -423,7 +471,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
                 base,
                 is_negative,
             },
-            Expr::Str(a) => Expr::Str(a),
+            Expr::Str(a) => Expr::Str(a.remove_spaces(arena)),
             Expr::Access(a, b) => Expr::Access(arena.alloc(a.remove_spaces(arena)), b),
             Expr::AccessorFunction(a) => Expr::AccessorFunction(a),
             Expr::List(a) => Expr::List(a.remove_spaces(arena)),
