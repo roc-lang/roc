@@ -442,8 +442,8 @@ fn modify_refcount_builtin<'a, 'ctx, 'env>(
             Some(function)
         }
         Set(element_layout) => {
-            let key_layout = &Layout::Struct(&[]);
-            let value_layout = element_layout;
+            let key_layout = element_layout;
+            let value_layout = &Layout::Struct(&[]);
 
             let function = modify_refcount_dict(
                 env,
