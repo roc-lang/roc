@@ -237,7 +237,7 @@ impl<'a> RefcountProcGenerator<'a> {
         let zero_stmt = |next| Stmt::Let(zero, zero_expr, layout_isize, next);
 
         // is_big_str = (len >= 0);
-        // Check the "sign bit" (small string flag) is zero
+        // Treat len as isize so that the small string flag is the same as the sign bit
         let is_big_str = self.unique_symbol();
         let is_big_str_expr = Expr::Call(Call {
             call_type: CallType::LowLevel {

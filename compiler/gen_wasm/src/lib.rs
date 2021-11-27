@@ -107,13 +107,17 @@ pub fn build_module_help<'a>(
         // The RefcountProcGenerator has now built up a vector of extra procs to generate.
         // But we need to move that vector to be able to safely loop over it.
         let mut procs_to_generate = Vec::with_capacity_in(0, env.arena);
-        std::mem::swap(&mut backend.refcount_proc_gen.procs_to_generate, &mut procs_to_generate);
+        std::mem::swap(
+            &mut backend.refcount_proc_gen.procs_to_generate,
+            &mut procs_to_generate,
+        );
 
         // Generate the refcount helper procedures
         for (layout, op, symbol) in procs_to_generate.drain(0..) {
             let proc = backend
                 .refcount_proc_gen
                 .generate_refcount_proc(layout, op, symbol);
+
             backend.build_proc(proc, symbol)?;
         }
 
