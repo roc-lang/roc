@@ -2733,6 +2733,46 @@ mod test_fmt {
         ));
     }
 
+    #[test]
+    fn backpassing_simple() {
+        expr_formats_same(indoc!(
+            r#"
+                getChar = \ctx ->
+                    x <- Task.await (getCharScope scope)
+                    42
+
+                42
+            "#
+        ));
+    }
+
+    #[test]
+    fn backpassing_apply_tag() {
+        expr_formats_same(indoc!(
+            r#"
+                getChar = \ctx ->
+                    (T val newScope) <- Task.await (getCharScope scope)
+                    42
+
+                42
+            "#
+        ));
+    }
+
+    #[test]
+    fn backpassing_body_on_newline() {
+        expr_formats_same(indoc!(
+            r#"
+                getChar = \ctx ->
+                    x <-
+                        Task.await (getCharScope scope)
+                    42
+
+                42
+            "#
+        ));
+    }
+
     // this is a parse error atm
     //    #[test]
     //    fn multiline_apply() {

@@ -861,6 +861,14 @@ fn fmt_backpassing<'a>(
         indent
     };
 
+    let pattern_needs_parens = loc_patterns
+        .iter()
+        .any(|p| pattern_needs_parens_when_backpassing(&p.value));
+
+    if pattern_needs_parens {
+        buf.push('(');
+    }
+
     let mut it = loc_patterns.iter().peekable();
 
     while let Some(loc_pattern) = it.next() {
@@ -874,6 +882,10 @@ fn fmt_backpassing<'a>(
                 buf.push_str(", ");
             }
         }
+    }
+
+    if pattern_needs_parens {
+        buf.push(')');
     }
 
     if arguments_are_multiline {
@@ -896,7 +908,7 @@ fn fmt_backpassing<'a>(
     // the body of the Backpass can be on the same line, or
     // on a new line. If it's on the same line, insert a space.
 
-    match &loc_ret.value {
+    match &loc_body.value {
         SpaceBefore(_, _) => {
             // the body starts with (first comment and then) a newline
             // do nothing
@@ -909,6 +921,16 @@ fn fmt_backpassing<'a>(
 
     loc_body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, body_indent);
     loc_ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
+}
+
+fn pattern_needs_parens_when_backpassing(pat: &Pattern) -> bool {
+    match pat {
+        Pattern::Apply(_, _) => true,
+        Pattern::SpaceBefore(a, _) | Pattern::SpaceAfter(a, _) => {
+            pattern_needs_parens_when_backpassing(a)
+        }
+        _ => false,
+    }
 }
 
 fn fmt_record<'a>(
