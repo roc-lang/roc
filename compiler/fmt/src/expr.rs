@@ -258,7 +258,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
                     }
                 }
 
-                sub_expr.format_with_options(buf, parens, newlines, indent);
+                sub_expr.format_with_options(buf, Parens::InApply, newlines, indent);
             }
             AccessorFunction(key) => {
                 buf.push('.');
