@@ -1866,8 +1866,16 @@ impl RecordFields {
         }
     }
 
-    pub const fn variables(&self) -> VariableSubsSlice {
+    pub const fn variables(&self) -> SubsSlice<Variable> {
         SubsSlice::new(self.variables_start, self.length)
+    }
+
+    pub const fn field_names(&self) -> SubsSlice<Lowercase> {
+        SubsSlice::new(self.field_names_start, self.length)
+    }
+
+    pub const fn record_fields(&self) -> SubsSlice<RecordField<()>> {
+        SubsSlice::new(self.field_types_start, self.length)
     }
 
     pub fn iter_variables(&self) -> impl Iterator<Item = SubsIndex<Variable>> {
@@ -3047,6 +3055,27 @@ impl StorageSubs {
     }
 }
 
+use std::cell::RefCell;
+std::thread_local! {
+    /// Scratchpad arena so we don't need to allocate a new one all the time
+    static SCRATCHPAD: RefCell<bumpalo::Bump> = RefCell::new(bumpalo::Bump::with_capacity(4 * 1024));
+}
+
+fn take_scratchpad() -> bumpalo::Bump {
+    let mut result = bumpalo::Bump::new();
+    SCRATCHPAD.with(|f| {
+        result = f.replace(bumpalo::Bump::new());
+    });
+
+    result
+}
+
+fn put_scratchpad(scratchpad: bumpalo::Bump) {
+    SCRATCHPAD.with(|f| {
+        f.replace(scratchpad);
+    });
+}
+
 pub fn deep_copy_var_to(
     source: &mut Subs, // mut to set the copy
     target: &mut Subs,
@@ -3054,8 +3083,7 @@ pub fn deep_copy_var_to(
 ) -> Variable {
     let rank = Rank::toplevel();
 
-    // capacity based on the false hello world program
-    let arena = bumpalo::Bump::with_capacity(4 * 1024);
+    let mut arena = take_scratchpad();
 
     let mut visited = bumpalo::collections::Vec::with_capacity_in(256, &arena);
 
@@ -3073,6 +3101,9 @@ pub fn deep_copy_var_to(
         }
     }
 
+    arena.reset();
+    put_scratchpad(arena);
+
     copy
 }
 
@@ -3084,7 +3115,6 @@ fn deep_copy_var_to_help<'a>(
     max_rank: Rank,
     var: Variable,
 ) -> Variable {
-    use bumpalo::collections::Vec;
     use Content::*;
     use FlatType::*;
 
@@ -3129,22 +3159,20 @@ fn deep_copy_var_to_help<'a>(
     match desc.content {
         Structure(flat_type) => {
             let new_flat_type = match flat_type {
-                Apply(symbol, args) => {
-                    let mut new_args = Vec::with_capacity_in(args.len(), arena);
+                Apply(symbol, arguments) => {
+                    let new_arguments = SubsSlice::reserve_into_subs(target, arguments.len());
 
-                    for index in args.into_iter() {
-                        let var = source[index];
-                        new_args.push(deep_copy_var_to_help(
-                            arena, visited, source, target, max_rank, var,
-                        ));
+                    for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
+                        let var = source[var_index];
+                        let copy_var =
+                            deep_copy_var_to_help(arena, visited, source, target, max_rank, var);
+                        target.variables[target_index] = copy_var;
                     }
 
-                    let arg_vars = VariableSubsSlice::insert_into_subs(target, new_args);
-
-                    Apply(symbol, arg_vars)
+                    Apply(symbol, new_arguments)
                 }
 
-                Func(arg_vars, closure_var, ret_var) => {
+                Func(arguments, closure_var, ret_var) => {
                     let new_ret_var =
                         deep_copy_var_to_help(arena, visited, source, target, max_rank, ret_var);
 
@@ -3157,55 +3185,47 @@ fn deep_copy_var_to_help<'a>(
                         closure_var,
                     );
 
-                    let mut new_arg_vars = Vec::with_capacity_in(arg_vars.len(), arena);
+                    let new_arguments = SubsSlice::reserve_into_subs(target, arguments.len());
 
-                    for index in arg_vars.into_iter() {
-                        let var = source[index];
+                    for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
+                        let var = source[var_index];
                         let copy_var =
                             deep_copy_var_to_help(arena, visited, source, target, max_rank, var);
-                        new_arg_vars.push(copy_var);
+                        target.variables[target_index] = copy_var;
                     }
 
-                    let arg_vars = VariableSubsSlice::insert_into_subs(target, new_arg_vars);
-
-                    Func(arg_vars, new_closure_var, new_ret_var)
+                    Func(new_arguments, new_closure_var, new_ret_var)
                 }
 
                 same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
 
                 Record(fields, ext_var) => {
                     let record_fields = {
-                        let mut new_vars = Vec::with_capacity_in(fields.len(), arena);
+                        let new_variables =
+                            VariableSubsSlice::reserve_into_subs(target, fields.len());
 
-                        for index in fields.iter_variables() {
-                            let var = source[index];
+                        let it = (new_variables.indices()).zip(fields.iter_variables());
+                        for (target_index, var_index) in it {
+                            let var = source[var_index];
                             let copy_var = deep_copy_var_to_help(
                                 arena, visited, source, target, max_rank, var,
                             );
-
-                            new_vars.push(copy_var);
+                            target.variables[target_index] = copy_var;
                         }
 
                         let field_names_start = target.field_names.len() as u32;
-                        let variables_start = target.variables.len() as u32;
                         let field_types_start = target.record_fields.len() as u32;
 
-                        let mut length = 0;
+                        let field_names = &source.field_names[fields.field_names().indices()];
+                        target.field_names.extend(field_names.iter().cloned());
 
-                        for ((i1, _, i3), var) in fields.iter_all().zip(new_vars) {
-                            let record_field = source[i3].map(|_| var);
-
-                            target.field_names.push(source[i1].clone());
-                            target.record_fields.push(record_field.map(|_| ()));
-                            target.variables.push(*record_field.as_inner());
-
-                            length += 1;
-                        }
+                        let record_fields = &source.record_fields[fields.record_fields().indices()];
+                        target.record_fields.extend(record_fields.iter().copied());
 
                         RecordFields {
-                            length,
+                            length: fields.len() as _,
                             field_names_start,
-                            variables_start,
+                            variables_start: new_variables.start,
                             field_types_start,
                         }
                     };
@@ -3220,32 +3240,25 @@ fn deep_copy_var_to_help<'a>(
                     let new_ext =
                         deep_copy_var_to_help(arena, visited, source, target, max_rank, ext_var);
 
-                    let mut new_variable_slices = Vec::with_capacity_in(tags.len(), arena);
+                    let new_variable_slices =
+                        SubsSlice::reserve_variable_slices(target, tags.len());
 
-                    let mut new_variables = Vec::with_capacity_in(tags.len(), arena);
-                    for index in tags.variables() {
+                    let it = (new_variable_slices.indices()).zip(tags.variables());
+                    for (target_index, index) in it {
                         let slice = source[index];
-                        for var_index in slice {
+
+                        let new_variables = SubsSlice::reserve_into_subs(target, slice.len());
+                        let it = (new_variables.indices()).zip(slice);
+                        for (target_index, var_index) in it {
                             let var = source[var_index];
-                            let new_var = deep_copy_var_to_help(
+                            let copy_var = deep_copy_var_to_help(
                                 arena, visited, source, target, max_rank, var,
                             );
-                            new_variables.push(new_var);
+                            target.variables[target_index] = copy_var;
                         }
 
-                        let new_slice =
-                            VariableSubsSlice::insert_into_subs(target, new_variables.drain(..));
-
-                        new_variable_slices.push(new_slice);
+                        target.variable_slices[target_index] = new_variables;
                     }
-
-                    let new_variables = {
-                        let start = target.variable_slices.len() as u32;
-                        let length = new_variable_slices.len() as u16;
-                        target.variable_slices.extend(new_variable_slices);
-
-                        SubsSlice::new(start, length)
-                    };
 
                     let new_tag_names = {
                         let tag_names = tags.tag_names();
@@ -3259,7 +3272,7 @@ fn deep_copy_var_to_help<'a>(
                         SubsSlice::new(start, length)
                     };
 
-                    let union_tags = UnionTags::from_slices(new_tag_names, new_variables);
+                    let union_tags = UnionTags::from_slices(new_tag_names, new_variable_slices);
 
                     TagUnion(union_tags, new_ext)
                 }
@@ -3277,32 +3290,25 @@ fn deep_copy_var_to_help<'a>(
                 }
 
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
-                    let mut new_variable_slices = Vec::with_capacity_in(tags.len(), arena);
+                    let new_variable_slices =
+                        SubsSlice::reserve_variable_slices(target, tags.len());
 
-                    let mut new_variables = Vec::with_capacity_in(tags.len(), arena);
-                    for index in tags.variables() {
+                    let it = (new_variable_slices.indices()).zip(tags.variables());
+                    for (target_index, index) in it {
                         let slice = source[index];
-                        for var_index in slice {
+
+                        let new_variables = SubsSlice::reserve_into_subs(target, slice.len());
+                        let it = (new_variables.indices()).zip(slice);
+                        for (target_index, var_index) in it {
                             let var = source[var_index];
-                            let new_var = deep_copy_var_to_help(
+                            let copy_var = deep_copy_var_to_help(
                                 arena, visited, source, target, max_rank, var,
                             );
-                            new_variables.push(new_var);
+                            target.variables[target_index] = copy_var;
                         }
 
-                        let new_slice =
-                            VariableSubsSlice::insert_into_subs(target, new_variables.drain(..));
-
-                        new_variable_slices.push(new_slice);
+                        target.variable_slices[target_index] = new_variables;
                     }
-
-                    let new_variables = {
-                        let start = target.variable_slices.len() as u32;
-                        let length = new_variable_slices.len() as u16;
-                        target.variable_slices.extend(new_variable_slices);
-
-                        SubsSlice::new(start, length)
-                    };
 
                     let new_tag_names = {
                         let tag_names = tags.tag_names();
@@ -3316,7 +3322,7 @@ fn deep_copy_var_to_help<'a>(
                         SubsSlice::new(start, length)
                     };
 
-                    let union_tags = UnionTags::from_slices(new_tag_names, new_variables);
+                    let union_tags = UnionTags::from_slices(new_tag_names, new_variable_slices);
 
                     let new_ext =
                         deep_copy_var_to_help(arena, visited, source, target, max_rank, ext_var);
@@ -3360,21 +3366,23 @@ fn deep_copy_var_to_help<'a>(
             copy
         }
 
-        Alias(symbol, mut args, real_type_var) => {
-            let mut new_vars = Vec::with_capacity_in(args.len(), arena);
-
-            for var_index in args.into_iter() {
+        Alias(symbol, arguments, real_type_var) => {
+            let new_variables =
+                SubsSlice::reserve_into_subs(target, arguments.all_variables_len as _);
+            for (target_index, var_index) in (new_variables.indices()).zip(arguments.variables()) {
                 let var = source[var_index];
-                let new_var = deep_copy_var_to_help(arena, visited, source, target, max_rank, var);
-
-                new_vars.push(new_var);
+                let copy_var = deep_copy_var_to_help(arena, visited, source, target, max_rank, var);
+                target.variables[target_index] = copy_var;
             }
 
-            args.replace_variables(target, new_vars);
+            let new_arguments = AliasVariables {
+                variables_start: new_variables.start,
+                ..arguments
+            };
 
             let new_real_type_var =
                 deep_copy_var_to_help(arena, visited, source, target, max_rank, real_type_var);
-            let new_content = Alias(symbol, args, new_real_type_var);
+            let new_content = Alias(symbol, new_arguments, new_real_type_var);
 
             target.set(copy, make_descriptor(new_content));
 
