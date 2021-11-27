@@ -581,16 +581,22 @@ impl Layout {
         Self::from_content(layouts, subs, var, content)
     }
 
+    /// Used in situations where an unspecialized variable is not a problem,
+    /// and we can substitute with `[]`, the empty tag union.
+    /// e.g. an empty list literal has type `List *`. We can still generate code
+    /// in those cases by just picking any concrete type for the list element,
+    /// and we pick the empty tag union in practice.
     fn from_var_help_or_void(
         layouts: &mut Layouts,
         subs: &Subs,
         var: Variable,
     ) -> Result<Layout, LayoutError> {
         let content = &subs.get_ref(var).content;
-        match Self::from_content(layouts, subs, var, content) {
-            Ok(layout) => Ok(layout),
-            Err(LayoutError::UnresolvedVariable(_)) => Ok(Layout::VOID),
-            Err(other) => Err(other),
+
+        match content {
+            Content::FlexVar(_) | Content::RigidVar(_) => Ok(Layout::VOID),
+
+            _ => Self::from_content(layouts, subs, var, content),
         }
     }
 
