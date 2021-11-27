@@ -11,8 +11,7 @@ use roc_types::subs::{
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{gather_fields_unsorted_iter, Alias, Category, ErrorType, PatternCategory};
-use roc_unify::unify::unify;
-use roc_unify::unify::Unified::*;
+use roc_unify::unify::{unify, Unified::*};
 use std::collections::hash_map::Entry;
 
 // Type checking system adapted from Elm by Evan Czaplicki, BSD-3-Clause Licensed

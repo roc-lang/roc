@@ -1109,9 +1109,28 @@ pub enum PReason {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnnotationSource {
-    TypedIfBranch { index: Index, num_branches: usize },
-    TypedWhenBranch { index: Index },
-    TypedBody { region: Region },
+    TypedIfBranch {
+        index: Index,
+        num_branches: usize,
+        region: Region,
+    },
+    TypedWhenBranch {
+        index: Index,
+        region: Region,
+    },
+    TypedBody {
+        region: Region,
+    },
+}
+
+impl AnnotationSource {
+    pub fn region(&self) -> Region {
+        match self {
+            &Self::TypedIfBranch { region, .. }
+            | &Self::TypedWhenBranch { region, .. }
+            | &Self::TypedBody { region, .. } => region,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1271,6 +1290,50 @@ impl ErrorType {
         match self {
             ErrorType::Alias(_, _, real) => real.unwrap_alias(),
             real => real,
+        }
+    }
+
+    /// Adds all named type variables used in the type to a set.
+    pub fn add_names(&self, taken: &mut MutSet<Lowercase>) {
+        use ErrorType::*;
+        match self {
+            Infinite => {}
+            Type(_, ts) => ts.iter().for_each(|t| t.add_names(taken)),
+            FlexVar(v) => {
+                taken.insert(v.clone());
+            }
+            RigidVar(v) => {
+                taken.insert(v.clone());
+            }
+            Record(fields, ext) => {
+                fields
+                    .iter()
+                    .for_each(|(_, t)| t.as_inner().add_names(taken));
+                ext.add_names(taken);
+            }
+            TagUnion(tags, ext) => {
+                tags.iter()
+                    .for_each(|(_, ts)| ts.iter().for_each(|t| t.add_names(taken)));
+                ext.add_names(taken);
+            }
+            RecursiveTagUnion(t, tags, ext) => {
+                t.add_names(taken);
+                tags.iter()
+                    .for_each(|(_, ts)| ts.iter().for_each(|t| t.add_names(taken)));
+                ext.add_names(taken);
+            }
+            Function(args, capt, ret) => {
+                args.iter().for_each(|t| t.add_names(taken));
+                capt.add_names(taken);
+                ret.add_names(taken);
+            }
+            Alias(_, ts, t) => {
+                ts.iter().for_each(|t| {
+                    t.add_names(taken);
+                });
+                t.add_names(taken);
+            }
+            Error => {}
         }
     }
 }
@@ -1589,6 +1652,18 @@ pub enum TypeExt {
     Closed,
     FlexOpen(Lowercase),
     RigidOpen(Lowercase),
+}
+
+impl TypeExt {
+    pub fn add_names(&self, taken: &mut MutSet<Lowercase>) {
+        use TypeExt::*;
+        match self {
+            Closed => {}
+            FlexOpen(n) | RigidOpen(n) => {
+                taken.insert(n.clone());
+            }
+        }
+    }
 }
 
 fn write_type_ext(ext: TypeExt, buf: &mut String) {

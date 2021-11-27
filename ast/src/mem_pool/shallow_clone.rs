@@ -6,7 +6,10 @@ pub trait ShallowClone {
     fn shallow_clone(&self) -> Self;
 }
 
-impl<T: ShallowClone> ShallowClone for Expected<T> {
+impl<T> ShallowClone for Expected<T>
+where
+    T: ShallowClone,
+{
     fn shallow_clone(&self) -> Self {
         use Expected::*;
 

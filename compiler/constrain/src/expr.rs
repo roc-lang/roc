@@ -448,7 +448,7 @@ pub fn constrain_expr(
             branch_cons.push(cond_var_is_bool_con);
 
             match expected {
-                FromAnnotation(name, arity, _, tipe) => {
+                FromAnnotation(name, arity, ann_source, tipe) => {
                     let num_branches = branches.len() + 1;
                     for (index, (loc_cond, loc_body)) in branches.iter().enumerate() {
                         let cond_con = constrain_expr(
@@ -468,6 +468,7 @@ pub fn constrain_expr(
                                 AnnotationSource::TypedIfBranch {
                                     index: Index::zero_based(index),
                                     num_branches,
+                                    region: ann_source.region(),
                                 },
                                 tipe.clone(),
                             ),
@@ -487,6 +488,7 @@ pub fn constrain_expr(
                             AnnotationSource::TypedIfBranch {
                                 index: Index::zero_based(branches.len()),
                                 num_branches,
+                                region: ann_source.region(),
                             },
                             tipe.clone(),
                         ),
@@ -577,7 +579,7 @@ pub fn constrain_expr(
             constraints.push(expr_con);
 
             match &expected {
-                FromAnnotation(name, arity, _, _typ) => {
+                FromAnnotation(name, arity, ann_source, _typ) => {
                     // NOTE deviation from elm.
                     //
                     // in elm, `_typ` is used, but because we have this `expr_var` too
@@ -604,6 +606,7 @@ pub fn constrain_expr(
                                 *arity,
                                 TypedWhenBranch {
                                     index: Index::zero_based(index),
+                                    region: ann_source.region(),
                                 },
                                 typ.clone(),
                             ),

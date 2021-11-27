@@ -386,7 +386,7 @@ fn can_annotation_help(
             }
         },
 
-        Record { fields, ext, .. } => {
+        Record { fields, ext } => {
             let ext_type = match ext {
                 Some(loc_ann) => can_annotation_help(
                     env,

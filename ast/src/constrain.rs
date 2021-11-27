@@ -506,7 +506,7 @@ pub fn constrain_expr<'a>(
             flex_vars.push(*expr_var);
 
             match expected {
-                Expected::FromAnnotation(name, arity, _, tipe) => {
+                Expected::FromAnnotation(name, arity, ann_source, tipe) => {
                     let num_branches = branches.len() + 1;
 
                     for (index, branch_id) in branches.iter_node_ids().enumerate() {
@@ -528,6 +528,7 @@ pub fn constrain_expr<'a>(
                                 AnnotationSource::TypedIfBranch {
                                     index: Index::zero_based(index),
                                     num_branches,
+                                    region: ann_source.region(),
                                 },
                                 tipe.shallow_clone(),
                             ),
@@ -548,6 +549,7 @@ pub fn constrain_expr<'a>(
                             AnnotationSource::TypedIfBranch {
                                 index: Index::zero_based(branches.len()),
                                 num_branches,
+                                region: ann_source.region(),
                             },
                             tipe.shallow_clone(),
                         ),
@@ -654,7 +656,7 @@ pub fn constrain_expr<'a>(
             flex_vars.push(*expr_var);
 
             match &expected {
-                Expected::FromAnnotation(name, arity, _, _typ) => {
+                Expected::FromAnnotation(name, arity, ann_source, _typ) => {
                     // NOTE deviation from elm.
                     //
                     // in elm, `_typ` is used, but because we have this `expr_var` too
@@ -687,6 +689,7 @@ pub fn constrain_expr<'a>(
                                 *arity,
                                 AnnotationSource::TypedWhenBranch {
                                     index: Index::zero_based(index),
+                                    region: ann_source.region(),
                                 },
                                 typ.shallow_clone(),
                             ),
