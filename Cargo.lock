@@ -3577,6 +3577,7 @@ dependencies = [
 name = "roc_solve"
 version = "0.1.0"
 dependencies = [
+ "arrayvec 0.7.2",
  "bumpalo",
  "indoc",
  "pretty_assertions",

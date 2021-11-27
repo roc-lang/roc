@@ -420,7 +420,7 @@ fn solve(
                     );
 
                     // Add a variable for each def to new_vars_by_env.
-                    let mut local_def_vars = Vec::with_capacity(let_con.def_types.len());
+                    let mut local_def_vars = LocalDefVarsVec::with_length(let_con.def_types.len());
 
                     for (symbol, loc_type) in let_con.def_types.iter() {
                         let var = type_to_var(subs, rank, pools, cached_aliases, &loc_type.value);
@@ -457,8 +457,8 @@ fn solve(
                         ret_con,
                     );
 
-                    for (symbol, loc_var) in local_def_vars {
-                        check_for_infinite_type(subs, problems, symbol, loc_var);
+                    for (symbol, loc_var) in local_def_vars.iter() {
+                        check_for_infinite_type(subs, problems, *symbol, *loc_var);
                     }
 
                     new_state
@@ -497,7 +497,7 @@ fn solve(
                     // run solver in next pool
 
                     // Add a variable for each def to local_def_vars.
-                    let mut local_def_vars = Vec::with_capacity(let_con.def_types.len());
+                    let mut local_def_vars = LocalDefVarsVec::with_length(let_con.def_types.len());
 
                     for (symbol, loc_type) in let_con.def_types.iter() {
                         let def_type = &loc_type.value;
@@ -615,13 +615,43 @@ fn solve(
                         ret_con,
                     );
 
-                    for (symbol, loc_var) in local_def_vars {
-                        check_for_infinite_type(subs, problems, symbol, loc_var);
+                    for (symbol, loc_var) in local_def_vars.iter() {
+                        check_for_infinite_type(subs, problems, *symbol, *loc_var);
                     }
 
                     new_state
                 }
             }
+        }
+    }
+}
+
+enum LocalDefVarsVec<T> {
+    Stack(arrayvec::ArrayVec<T, 32>),
+    Heap(Vec<T>),
+}
+
+impl<T> LocalDefVarsVec<T> {
+    #[inline(always)]
+    fn with_length(length: usize) -> Self {
+        if length <= 32 {
+            Self::Stack(Default::default())
+        } else {
+            Self::Heap(Default::default())
+        }
+    }
+
+    fn push(&mut self, element: T) {
+        match self {
+            LocalDefVarsVec::Stack(vec) => vec.push(element),
+            LocalDefVarsVec::Heap(vec) => vec.push(element),
+        }
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &T> {
+        match self {
+            LocalDefVarsVec::Stack(vec) => vec.iter(),
+            LocalDefVarsVec::Heap(vec) => vec.iter(),
         }
     }
 }
