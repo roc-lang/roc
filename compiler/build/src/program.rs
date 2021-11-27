@@ -503,13 +503,15 @@ fn gen_from_mono_module_dev_wasm32(
         .copied()
         .collect::<MutSet<_>>();
 
-    let env = roc_gen_wasm::Env {
+    let mut env = roc_gen_wasm::Env {
         arena,
         interns: loaded.interns,
         exposed_to_host,
     };
 
-    let bytes = roc_gen_wasm::build_module(&env, procedures).unwrap();
+    let refcount_home = env.interns.module_id(&"$RefCount".into());
+
+    let bytes = roc_gen_wasm::build_module(&env, procedures, refcount_home).unwrap();
 
     std::fs::write(&app_o_file, &bytes).expect("failed to write object to file");
 

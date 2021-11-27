@@ -26,16 +26,6 @@ pub enum RefcountOp {
     DecRef,
 }
 
-impl From<&ModifyRc> for RefcountOp {
-    fn from(modify_rc: &ModifyRc) -> Self {
-        match modify_rc {
-            ModifyRc::Inc(_, _) => Self::Inc,
-            ModifyRc::Dec(_) => Self::Dec,
-            ModifyRc::DecRef(_) => Self::DecRef,
-        }
-    }
-}
-
 pub struct RefcountProcGenerator<'a> {
     arena: &'a Bump,
     home: ModuleId,
@@ -43,7 +33,7 @@ pub struct RefcountProcGenerator<'a> {
     layout_isize: Layout<'a>,
     /// List of refcounting procs to generate, specialised by Layout and RefCountOp
     /// Order of insertion is preserved, since it is important for Wasm backend
-    procs_to_generate: Vec<'a, (Layout<'a>, RefcountOp, Symbol)>,
+    pub procs_to_generate: Vec<'a, (Layout<'a>, RefcountOp, Symbol)>,
 }
 
 impl<'a> RefcountProcGenerator<'a> {
@@ -57,10 +47,10 @@ impl<'a> RefcountProcGenerator<'a> {
         }
     }
 
-    /// Expands the IR for a Refcounting statement to a more detailed form that calls helper functions.
-    /// Any backend can use this to help generate code for Refcounting.
-    /// Calling this function may generate new IR procedures that will also need to be lowered later.
-    pub fn call_refcount_proc<'b>(
+    /// Expands the IR node Stmt::Refcounting to a more detailed IR Stmt that calls a helper proc.
+    /// The helper procs themselves can be generated later by calling `generate_refcount_proc`
+    /// in a loop over `procs_to_generate`. Helpers are specialized to a particular Layout.
+    pub fn expand_refcount_stmt_to_proc_call<'b>(
         &mut self,
         layout: Layout<'a>,
         modify: &ModifyRc,
@@ -143,7 +133,7 @@ impl<'a> RefcountProcGenerator<'a> {
             ModifyRc::DecRef(structure) => {
                 // No generated procs for DecRef, just lowlevel calls
 
-                // Get a pointer to the actual refcount
+                // Get a pointer to the refcount itself
                 let rc_ptr_sym = self.unique_symbol();
                 let rc_ptr_expr = Expr::Call(Call {
                     call_type: CallType::LowLevel {
@@ -154,7 +144,7 @@ impl<'a> RefcountProcGenerator<'a> {
                 });
                 let rc_ptr_stmt = |next| Stmt::Let(rc_ptr_sym, rc_ptr_expr, LAYOUT_PTR, next);
 
-                // Pass the refcount pointer to the Zig lowlevel
+                // Pass the refcount pointer to the lowlevel call (see utils.zig)
                 let call_result_dummy = self.unique_symbol();
                 let call_expr = Expr::Call(Call {
                     call_type: CallType::LowLevel {
@@ -171,14 +161,32 @@ impl<'a> RefcountProcGenerator<'a> {
         }
     }
 
+    /// Generate a refcounting helper proc, specialized to a particular Layout.
+    /// For example `List (Result { a: Str, b: Int } Str)` would get its own helper
+    /// to update the refcounts on the List, the Result and the strings.
+    /// This method should be called once for every item in procs_to_generate
+    pub fn generate_refcount_proc(
+        &mut self,
+        layout: Layout<'a>,
+        op: RefcountOp,
+        symbol: Symbol,
+    ) -> Proc<'a> {
+        match layout {
+            Layout::Builtin(Builtin::Str) => self.gen_modify_str(op, symbol),
+            _ => todo!("Refcounting is not yet implemented for Layout {:?}", layout),
+        }
+    }
+
+    /// Find the name of the procedure for this layout and refcount operation,
+    /// or create one if needed. "Names" are really just auto-generated Symbols.
     fn get_proc_name(&mut self, layout: Layout<'a>, op: RefcountOp) -> (bool, Symbol) {
         let found = self
             .procs_to_generate
             .iter()
             .find(|(l, o, _)| *l == layout && *o == op);
 
-        if let Some(existing) = found {
-            (true, existing.2)
+        if let Some((_, _, existing_name)) = found {
+            (true, *existing_name)
         } else {
             let new_name: Symbol = self.unique_symbol();
             self.procs_to_generate.push((layout, op, new_name));
@@ -192,38 +200,25 @@ impl<'a> RefcountProcGenerator<'a> {
         Interns::from_index(self.home, id)
     }
 
-    /// Helper to return Unit from a procedure
     fn return_unit(&mut self) -> Stmt<'a> {
         let unit = self.unique_symbol();
         let ret_stmt = self.arena.alloc(Stmt::Ret(unit));
         Stmt::Let(unit, Expr::Struct(&[]), LAYOUT_UNIT, ret_stmt)
     }
 
-    /// Helper to generate procedure arguments
-    fn gen_args(
-        &mut self,
-        op: RefcountOp,
-        layout: Layout<'a>,
-    ) -> (&'a [Layout<'a>], &'a [(Layout<'a>, Symbol)]) {
+    fn gen_args(&mut self, op: RefcountOp, layout: Layout<'a>) -> &'a [(Layout<'a>, Symbol)] {
         let roc_value = (layout, Symbol::ARG_1);
         match op {
             RefcountOp::Inc => {
                 let inc_amount = (self.layout_isize, Symbol::ARG_2);
-                (
-                    self.arena.alloc([roc_value.0, inc_amount.0]),
-                    self.arena.alloc([roc_value, inc_amount]),
-                )
+                self.arena.alloc([roc_value, inc_amount])
             }
-            RefcountOp::Dec | RefcountOp::DecRef => (
-                self.arena.alloc([roc_value.0]),
-                self.arena.alloc([roc_value]),
-            ),
+            RefcountOp::Dec | RefcountOp::DecRef => self.arena.alloc([roc_value]),
         }
     }
 
     /// Generate a procedure to modify the reference count of a Str
-    #[allow(dead_code)]
-    fn gen_modify_str(&mut self, op: RefcountOp) -> (Symbol, ProcLayout<'a>, Proc<'a>) {
+    fn gen_modify_str(&mut self, op: RefcountOp, proc_name: Symbol) -> Proc<'a> {
         let string = Symbol::ARG_1;
         let layout_isize = self.layout_isize;
 
@@ -324,15 +319,10 @@ impl<'a> RefcountProcGenerator<'a> {
             )),
         ));
 
-        let name = self.unique_symbol();
-        let (arg_layouts, args) = self.gen_args(op, Layout::Builtin(Builtin::Str));
-        let proc_layout = ProcLayout {
-            arguments: arg_layouts,
-            result: LAYOUT_UNIT,
-        };
+        let args = self.gen_args(op, Layout::Builtin(Builtin::Str));
 
-        let proc = Proc {
-            name,
+        Proc {
+            name: proc_name,
             args,
             body,
             closure_data_layout: None,
@@ -340,9 +330,7 @@ impl<'a> RefcountProcGenerator<'a> {
             is_self_recursive: SelfRecursive::NotSelfRecursive,
             must_own_arguments: false,
             host_exposed_layouts: HostExposedLayouts::NotHostExposed,
-        };
-
-        (name, proc_layout, proc)
+        }
     }
 }
 

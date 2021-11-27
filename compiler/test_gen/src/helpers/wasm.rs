@@ -80,7 +80,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     use roc_load::file::MonomorphizedModule;
     let MonomorphizedModule {
         procedures,
-        interns,
+        mut interns,
         exposed_to_host,
         ..
     } = loaded;
@@ -114,7 +114,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
 
     let refcount_home = interns.module_id(&"$RefCount".into());
 
-    let mut env = roc_gen_wasm::Env {
+    let env = roc_gen_wasm::Env {
         arena,
         interns,
         exposed_to_host,
@@ -139,7 +139,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     let store = Store::default();
 
     // Keep the final .wasm file for debugging with wasm-objdump or wasm2wat
-    const DEBUG_WASM_FILE: bool = true;
+    const DEBUG_WASM_FILE: bool = false;
 
     let wasmer_module = {
         let tmp_dir: TempDir; // directory for normal test runs, deleted when dropped

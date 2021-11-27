@@ -473,7 +473,7 @@ impl<'a> WasmBackend<'a> {
 
                 let (rc_stmt, new_proc_info) = self
                     .refcount_proc_gen
-                    .call_refcount_proc(layout, modify, *following);
+                    .expand_refcount_stmt_to_proc_call(layout, modify, *following);
 
                 // If we're creating a new RC procedure, we need to store its symbol data,
                 // so that we can correctly generate calls to it.
