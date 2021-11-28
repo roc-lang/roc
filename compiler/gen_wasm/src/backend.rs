@@ -178,14 +178,17 @@ impl<'a> WasmBackend<'a> {
     fn start_proc(&mut self, proc: &Proc<'a>) {
         let ret_layout = WasmLayout::new(&proc.ret_layout);
         let ret_type = if ret_layout.is_stack_memory() {
-            self.storage.arg_types.push(PTR_TYPE);
-            self.start_block(BlockType::NoResult); // block to ensure all paths pop stack memory (if any)
+            if ret_layout.size() != 0 {
+                self.storage.arg_types.push(PTR_TYPE);
+            }
             None
         } else {
-            let ty = ret_layout.value_type();
-            self.start_block(BlockType::Value(ty)); // block to ensure all paths pop stack memory (if any)
-            Some(ty)
+            Some(ret_layout.value_type())
         };
+
+        // Create a block so we can exit the function without skipping stack frame "pop" code.
+        // We never use the `return` instruction. Instead, we break from this block.
+        self.start_block(BlockType::from(ret_type));
 
         for (layout, symbol) in proc.args {
             let arg_layout = WasmLayout::new(layout);
@@ -767,7 +770,9 @@ impl<'a> WasmBackend<'a> {
                             );
                         }
                     } else {
-                        return Err(format!("Not supported yet: zero-size struct at {:?}", sym));
+                        // Zero-size struct. No code to emit.
+                        // These values are purely conceptual, they only exist internally in the compiler
+                        return Ok(());
                     }
                 }
                 _ => {

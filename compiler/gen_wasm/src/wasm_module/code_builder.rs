@@ -50,6 +50,15 @@ impl BlockType {
     }
 }
 
+impl From<Option<ValueType>> for BlockType {
+    fn from(opt: Option<ValueType>) -> Self {
+        match opt {
+            Some(ty) => BlockType::Value(ty),
+            None => BlockType::NoResult,
+        }
+    }
+}
+
 /// A control block in our model of the VM
 /// Child blocks cannot "see" values from their parent block
 struct VmBlock<'a> {
