@@ -210,7 +210,7 @@ where
 
             let mut builder = TypeDefBuilder::new();
 
-            let variant_types = build_variant_types(&mut builder, &union_layout)?;
+            let variant_types = recursive_variant_types(&mut builder, &union_layout)?;
             let root_type = if let UnionLayout::NonNullableUnwrapped(_) = union_layout {
                 debug_assert_eq!(variant_types.len(), 1);
                 variant_types[0]
@@ -1380,7 +1380,7 @@ fn recursive_tag_variant(
     builder.add_tuple_type(&[cell_id, data_id])
 }
 
-fn build_variant_types(
+fn recursive_variant_types(
     builder: &mut impl TypeContext,
     union_layout: &UnionLayout,
 ) -> Result<Vec<TypeId>> {
@@ -1389,12 +1389,8 @@ fn build_variant_types(
     let mut result;
 
     match union_layout {
-        NonRecursive(tags) => {
-            result = Vec::with_capacity(tags.len());
-
-            for tag in tags.iter() {
-                result.push(build_tuple_type(builder, tag)?);
-            }
+        NonRecursive(_) => {
+            unreachable!()
         }
         Recursive(tags) => {
             result = Vec::with_capacity(tags.len());
@@ -1474,12 +1470,11 @@ fn expr_spec<'a>(
             tag_id,
             arguments,
         } => {
-            let variant_types = build_variant_types(builder, tag_layout)?;
-
             let data_id = build_tuple_value(builder, env, block, arguments)?;
 
             let value_id = match tag_layout {
-                UnionLayout::NonRecursive(_) => {
+                UnionLayout::NonRecursive(tags) => {
+                    let variant_types = non_recursive_variant_types(builder, tags)?;
                     let value_id = build_tuple_value(builder, env, block, arguments)?;
                     return builder.add_make_union(block, &variant_types, *tag_id as u32, value_id);
                 }
@@ -1499,6 +1494,8 @@ fn expr_spec<'a>(
                     with_new_heap_cell(builder, block, data_id)?
                 }
             };
+
+            let variant_types = recursive_variant_types(builder, tag_layout)?;
 
             let union_id =
                 builder.add_make_union(block, &variant_types, *tag_id as u32, value_id)?;
@@ -1637,6 +1634,19 @@ fn layout_spec(builder: &mut impl TypeContext, layout: &Layout) -> Result<TypeId
     layout_spec_help(builder, layout, &WhenRecursive::Unreachable)
 }
 
+fn non_recursive_variant_types(
+    builder: &mut impl TypeContext,
+    tags: &[&[Layout]],
+) -> Result<Vec<TypeId>> {
+    let mut result = Vec::with_capacity(tags.len());
+
+    for tag in tags.iter() {
+        result.push(build_tuple_type(builder, tag)?);
+    }
+
+    Ok(result)
+}
+
 fn layout_spec_help(
     builder: &mut impl TypeContext,
     layout: &Layout,
@@ -1653,8 +1663,6 @@ fn layout_spec_help(
             when_recursive,
         ),
         Union(union_layout) => {
-            let variant_types = build_variant_types(builder, union_layout)?;
-
             match union_layout {
                 UnionLayout::NonRecursive(&[]) => {
                     // must model Void as Unit, otherwise we run into problems where
@@ -1662,7 +1670,10 @@ fn layout_spec_help(
                     // which is of course not possible
                     builder.add_tuple_type(&[])
                 }
-                UnionLayout::NonRecursive(_) => builder.add_union_type(&variant_types),
+                UnionLayout::NonRecursive(tags) => {
+                    let variant_types = non_recursive_variant_types(builder, tags)?;
+                    builder.add_union_type(&variant_types)
+                }
                 UnionLayout::Recursive(_)
                 | UnionLayout::NullableUnwrapped { .. }
                 | UnionLayout::NullableWrapped { .. }
