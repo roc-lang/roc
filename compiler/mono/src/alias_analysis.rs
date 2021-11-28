@@ -867,8 +867,7 @@ fn call_spec(
 
                         builder.add_update(block, update_mode_var, cell)?;
 
-                        let new_cell = builder.add_new_heap_cell(block)?;
-                        builder.add_make_tuple(block, &[new_cell, bag])
+                        with_new_heap_cell(builder, block, bag)
                     };
 
                     let state_layout = Layout::Builtin(Builtin::List(&arg_layouts[0]));
@@ -998,9 +997,8 @@ fn call_spec(
                         builder.add_recursive_touch(block, removed_element)?;
 
                         let new_bag = builder.add_get_tuple_field(block, removed, 0)?;
-                        let new_cell = builder.add_new_heap_cell(block)?;
 
-                        builder.add_make_tuple(block, &[new_cell, new_bag])
+                        with_new_heap_cell(builder, block, new_bag)
                     };
 
                     let state_layout = Layout::Builtin(Builtin::List(&arg_layouts[0]));
@@ -1181,8 +1179,7 @@ fn list_append(
 
     let new_bag = builder.add_bag_insert(block, bag, to_insert)?;
 
-    let new_cell = builder.add_new_heap_cell(block)?;
-    builder.add_make_tuple(block, &[new_cell, new_bag])
+    with_new_heap_cell(builder, block, new_bag)
 }
 
 fn lowlevel_spec(
@@ -1268,8 +1265,7 @@ fn lowlevel_spec(
 
             builder.add_bag_insert(block, bag, to_insert)?;
 
-            let new_cell = builder.add_new_heap_cell(block)?;
-            builder.add_make_tuple(block, &[new_cell, bag])
+            with_new_heap_cell(builder, block, bag)
         }
         ListSwap => {
             let list = env.symbols[&arguments[0]];
@@ -1279,8 +1275,7 @@ fn lowlevel_spec(
 
             let _unit = builder.add_update(block, update_mode_var, cell)?;
 
-            let new_cell = builder.add_new_heap_cell(block)?;
-            builder.add_make_tuple(block, &[new_cell, bag])
+            with_new_heap_cell(builder, block, bag)
         }
         ListReverse => {
             let list = env.symbols[&arguments[0]];
@@ -1290,8 +1285,7 @@ fn lowlevel_spec(
 
             let _unit = builder.add_update(block, update_mode_var, cell)?;
 
-            let new_cell = builder.add_new_heap_cell(block)?;
-            builder.add_make_tuple(block, &[new_cell, bag])
+            with_new_heap_cell(builder, block, bag)
         }
         ListAppend => {
             let list = env.symbols[&arguments[0]];
@@ -1359,8 +1353,7 @@ fn lowlevel_spec(
 
             builder.add_bag_insert(block, bag, key_value)?;
 
-            let new_cell = builder.add_new_heap_cell(block)?;
-            builder.add_make_tuple(block, &[new_cell, bag])
+            with_new_heap_cell(builder, block, bag)
         }
         _other => {
             // println!("missing {:?}", _other);
@@ -1485,7 +1478,6 @@ fn expr_spec<'a>(
             let variant_types = build_variant_types(builder, tag_layout)?;
 
             let data_id = build_tuple_value(builder, env, block, arguments)?;
-            let cell_id = builder.add_new_heap_cell(block)?;
 
             let value_id = match tag_layout {
                 UnionLayout::NonRecursive(_) => {
@@ -1493,7 +1485,7 @@ fn expr_spec<'a>(
                     return builder.add_make_union(block, &variant_types, *tag_id as u32, value_id);
                 }
                 UnionLayout::NonNullableUnwrapped(_) => {
-                    let value_id = builder.add_make_tuple(block, &[cell_id, data_id])?;
+                    let value_id = with_new_heap_cell(builder, block, data_id)?;
 
                     let type_name_bytes = recursive_tag_union_name_bytes(tag_layout).as_bytes();
                     let type_name = TypeName(&type_name_bytes);
@@ -1502,19 +1494,19 @@ fn expr_spec<'a>(
 
                     return builder.add_make_named(block, MOD_APP, type_name, value_id);
                 }
-                UnionLayout::Recursive(_) => builder.add_make_tuple(block, &[cell_id, data_id])?,
+                UnionLayout::Recursive(_) => with_new_heap_cell(builder, block, data_id)?,
                 UnionLayout::NullableWrapped { nullable_id, .. } => {
                     if *tag_id == *nullable_id as _ {
                         data_id
                     } else {
-                        builder.add_make_tuple(block, &[cell_id, data_id])?
+                        with_new_heap_cell(builder, block, data_id)?
                     }
                 }
                 UnionLayout::NullableUnwrapped { nullable_id, .. } => {
                     if *tag_id == *nullable_id as _ {
                         data_id
                     } else {
-                        builder.add_make_tuple(block, &[cell_id, data_id])?
+                        with_new_heap_cell(builder, block, data_id)?
                     }
                 }
             };
@@ -1613,9 +1605,7 @@ fn expr_spec<'a>(
             if all_constants {
                 new_static_list(builder, block)
             } else {
-                let cell = builder.add_new_heap_cell(block)?;
-
-                builder.add_make_tuple(block, &[cell, bag])
+                with_new_heap_cell(builder, block, bag)
             }
         }
 
@@ -1777,10 +1767,18 @@ const LIST_BAG_INDEX: u32 = 1;
 const DICT_CELL_INDEX: u32 = LIST_CELL_INDEX;
 const DICT_BAG_INDEX: u32 = LIST_BAG_INDEX;
 
-fn new_list(builder: &mut FuncDefBuilder, block: BlockId, element_type: TypeId) -> Result<ValueId> {
+fn with_new_heap_cell(
+    builder: &mut FuncDefBuilder,
+    block: BlockId,
+    value: ValueId,
+) -> Result<ValueId> {
     let cell = builder.add_new_heap_cell(block)?;
+    builder.add_make_tuple(block, &[cell, value])
+}
+
+fn new_list(builder: &mut FuncDefBuilder, block: BlockId, element_type: TypeId) -> Result<ValueId> {
     let bag = builder.add_empty_bag(block, element_type)?;
-    builder.add_make_tuple(block, &[cell, bag])
+    with_new_heap_cell(builder, block, bag)
 }
 
 fn new_dict(
@@ -1789,10 +1787,9 @@ fn new_dict(
     key_type: TypeId,
     value_type: TypeId,
 ) -> Result<ValueId> {
-    let cell = builder.add_new_heap_cell(block)?;
     let element_type = builder.add_tuple_type(&[key_type, value_type])?;
     let bag = builder.add_empty_bag(block, element_type)?;
-    builder.add_make_tuple(block, &[cell, bag])
+    with_new_heap_cell(builder, block, bag)
 }
 
 fn new_static_string(builder: &mut FuncDefBuilder, block: BlockId) -> Result<ValueId> {
