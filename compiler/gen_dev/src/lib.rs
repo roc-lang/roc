@@ -13,6 +13,7 @@ use roc_mono::ir::{
     SelfRecursive, Stmt,
 };
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
+use roc_reporting::internal_error;
 
 mod generic64;
 mod object_builder;
@@ -58,7 +59,7 @@ where
     Self: Sized,
 {
     /// new creates a new backend that will output to the specific Object.
-    fn new(env: &'a Env) -> Result<Self, String>;
+    fn new(env: &'a Env) -> Self;
 
     fn env(&self) -> &'a Env<'a>;
 
@@ -70,55 +71,48 @@ where
     /// finalize does setup because things like stack size and jump locations are not know until the function is written.
     /// For example, this can store the frame pointer and setup stack space.
     /// finalize is run at the end of build_proc when all internal code is finalized.
-    fn finalize(&mut self) -> Result<(&'a [u8], &[Relocation]), String>;
+    fn finalize(&mut self) -> (&'a [u8], &[Relocation]);
 
     // load_args is used to let the backend know what the args are.
     // The backend should track these args so it can use them as needed.
-    fn load_args(
-        &mut self,
-        args: &'a [(Layout<'a>, Symbol)],
-        ret_layout: &Layout<'a>,
-    ) -> Result<(), String>;
+    fn load_args(&mut self, args: &'a [(Layout<'a>, Symbol)], ret_layout: &Layout<'a>);
 
     /// Used for generating wrappers for malloc/realloc/free
-    fn build_wrapped_jmp(&mut self) -> Result<(&'a [u8], u64), String>;
+    fn build_wrapped_jmp(&mut self) -> (&'a [u8], u64);
 
     /// build_proc creates a procedure and outputs it to the wrapped object writer.
-    fn build_proc(&mut self, proc: Proc<'a>) -> Result<(&'a [u8], &[Relocation]), String> {
+    fn build_proc(&mut self, proc: Proc<'a>) -> (&'a [u8], &[Relocation]) {
         let proc_name = LayoutIds::default()
             .get(proc.name, &proc.ret_layout)
             .to_symbol_string(proc.name, &self.env().interns);
         self.reset(proc_name, proc.is_self_recursive);
-        self.load_args(proc.args, &proc.ret_layout)?;
+        self.load_args(proc.args, &proc.ret_layout);
         for (layout, sym) in proc.args {
-            self.set_layout_map(*sym, layout)?;
+            self.set_layout_map(*sym, layout);
         }
         self.scan_ast(&proc.body);
         self.create_free_map();
-        self.build_stmt(&proc.body, &proc.ret_layout)?;
+        self.build_stmt(&proc.body, &proc.ret_layout);
         self.finalize()
     }
 
     /// build_stmt builds a statement and outputs at the end of the buffer.
-    fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) -> Result<(), String> {
+    fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) {
         match stmt {
             Stmt::Let(sym, expr, layout, following) => {
-                self.build_expr(sym, expr, layout)?;
-                self.set_layout_map(*sym, layout)?;
-                self.free_symbols(stmt)?;
-                self.build_stmt(following, ret_layout)?;
-                Ok(())
+                self.build_expr(sym, expr, layout);
+                self.set_layout_map(*sym, layout);
+                self.free_symbols(stmt);
+                self.build_stmt(following, ret_layout);
             }
             Stmt::Ret(sym) => {
-                self.load_literal_symbols(&[*sym])?;
-                self.return_symbol(sym, ret_layout)?;
-                self.free_symbols(stmt)?;
-                Ok(())
+                self.load_literal_symbols(&[*sym]);
+                self.return_symbol(sym, ret_layout);
+                self.free_symbols(stmt);
             }
             Stmt::Refcounting(_modify, following) => {
                 // TODO: actually deal with refcounting. For hello world, we just skipped it.
-                self.build_stmt(following, ret_layout)?;
-                Ok(())
+                self.build_stmt(following, ret_layout);
             }
             Stmt::Switch {
                 cond_symbol,
@@ -127,16 +121,15 @@ where
                 default_branch,
                 ret_layout,
             } => {
-                self.load_literal_symbols(&[*cond_symbol])?;
+                self.load_literal_symbols(&[*cond_symbol]);
                 self.build_switch(
                     cond_symbol,
                     cond_layout,
                     branches,
                     default_branch,
                     ret_layout,
-                )?;
-                self.free_symbols(stmt)?;
-                Ok(())
+                );
+                self.free_symbols(stmt);
             }
             Stmt::Join {
                 id,
@@ -145,11 +138,10 @@ where
                 remainder,
             } => {
                 for param in parameters.iter() {
-                    self.set_layout_map(param.symbol, &param.layout)?;
+                    self.set_layout_map(param.symbol, &param.layout);
                 }
-                self.build_join(id, parameters, body, remainder, ret_layout)?;
-                self.free_symbols(stmt)?;
-                Ok(())
+                self.build_join(id, parameters, body, remainder, ret_layout);
+                self.free_symbols(stmt);
             }
             Stmt::Jump(id, args) => {
                 let mut arg_layouts: bumpalo::collections::Vec<Layout<'a>> =
@@ -160,14 +152,13 @@ where
                     if let Some(layout) = layout_map.get(arg) {
                         arg_layouts.push(*layout);
                     } else {
-                        return Err(format!("the argument, {:?}, has no know layout", arg));
+                        internal_error!("the argument, {:?}, has no know layout", arg);
                     }
                 }
-                self.build_jump(id, args, arg_layouts.into_bump_slice(), ret_layout)?;
-                self.free_symbols(stmt)?;
-                Ok(())
+                self.build_jump(id, args, arg_layouts.into_bump_slice(), ret_layout);
+                self.free_symbols(stmt);
             }
-            x => Err(format!("the statement, {:?}, is not yet implemented", x)),
+            x => unimplemented!("the statement, {:?}, is not yet implemented", x),
         }
     }
     // build_switch generates a instructions for a switch statement.
@@ -178,7 +169,7 @@ where
         branches: &'a [(u64, BranchInfo<'a>, Stmt<'a>)],
         default_branch: &(BranchInfo<'a>, &'a Stmt<'a>),
         ret_layout: &Layout<'a>,
-    ) -> Result<(), String>;
+    );
 
     // build_join generates a instructions for a join statement.
     fn build_join(
@@ -188,7 +179,7 @@ where
         body: &'a Stmt<'a>,
         remainder: &'a Stmt<'a>,
         ret_layout: &Layout<'a>,
-    ) -> Result<(), String>;
+    );
 
     // build_jump generates a instructions for a jump statement.
     fn build_jump(
@@ -197,24 +188,18 @@ where
         args: &'a [Symbol],
         arg_layouts: &[Layout<'a>],
         ret_layout: &Layout<'a>,
-    ) -> Result<(), String>;
+    );
 
     /// build_expr builds the expressions for the specified symbol.
     /// The builder must keep track of the symbol because it may be referred to later.
-    fn build_expr(
-        &mut self,
-        sym: &Symbol,
-        expr: &Expr<'a>,
-        layout: &Layout<'a>,
-    ) -> Result<(), String> {
+    fn build_expr(&mut self, sym: &Symbol, expr: &Expr<'a>, layout: &Layout<'a>) {
         match expr {
             Expr::Literal(lit) => {
                 if self.env().lazy_literals {
                     self.literal_map().insert(*sym, *lit);
                 } else {
-                    self.load_literal(sym, lit)?;
+                    self.load_literal(sym, lit);
                 }
-                Ok(())
             }
             Expr::Call(roc_mono::ir::Call {
                 call_type,
@@ -244,7 +229,7 @@ where
                                 .get(*func_sym, layout)
                                 .to_symbol_string(*func_sym, &self.env().interns);
                             // Now that the arguments are needed, load them if they are literals.
-                            self.load_literal_symbols(arguments)?;
+                            self.load_literal_symbols(arguments);
                             self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
                         } else {
                             self.build_inline_builtin(
@@ -266,7 +251,7 @@ where
                             if let Some(layout) = layout_map.get(arg) {
                                 arg_layouts.push(*layout);
                             } else {
-                                return Err(format!("the argument, {:?}, has no know layout", arg));
+                                internal_error!("the argument, {:?}, has no know layout", arg);
                             }
                         }
                         self.build_run_low_level(
@@ -277,19 +262,21 @@ where
                             layout,
                         )
                     }
-                    x => Err(format!("the call type, {:?}, is not yet implemented", x)),
+                    x => unimplemented!("the call type, {:?}, is not yet implemented", x),
                 }
             }
             Expr::Struct(fields) => {
-                self.load_literal_symbols(fields)?;
-                self.create_struct(sym, layout, fields)
+                self.load_literal_symbols(fields);
+                self.create_struct(sym, layout, fields);
             }
             Expr::StructAtIndex {
                 index,
                 field_layouts,
                 structure,
-            } => self.load_struct_at_index(sym, structure, *index, field_layouts),
-            x => Err(format!("the expression, {:?}, is not yet implemented", x)),
+            } => {
+                self.load_struct_at_index(sym, structure, *index, field_layouts);
+            }
+            x => unimplemented!("the expression, {:?}, is not yet implemented", x),
         }
     }
 
@@ -302,9 +289,9 @@ where
         args: &'a [Symbol],
         arg_layouts: &[Layout<'a>],
         ret_layout: &Layout<'a>,
-    ) -> Result<(), String> {
+    ) {
         // Now that the arguments are needed, load them if they are literals.
-        self.load_literal_symbols(args)?;
+        self.load_literal_symbols(args);
         match lowlevel {
             LowLevel::NumAbs => {
                 debug_assert_eq!(
@@ -467,7 +454,7 @@ where
                 arg_layouts,
                 ret_layout,
             ),
-            x => Err(format!("low level, {:?}. is not yet implemented", x)),
+            x => unimplemented!("low level, {:?}. is not yet implemented", x),
         }
     }
 
@@ -479,8 +466,8 @@ where
         args: &'a [Symbol],
         arg_layouts: &[Layout<'a>],
         ret_layout: &Layout<'a>,
-    ) -> Result<(), String> {
-        self.load_literal_symbols(args)?;
+    ) {
+        self.load_literal_symbols(args);
         match func_sym {
             Symbol::NUM_IS_ZERO => {
                 debug_assert_eq!(
@@ -494,14 +481,11 @@ where
                     "NumIsZero: expected to have return layout of type Bool"
                 );
 
-                self.load_literal(&Symbol::DEV_TMP, &Literal::Int(0))?;
-                self.build_eq(sym, &args[0], &Symbol::DEV_TMP, &arg_layouts[0])?;
+                self.load_literal(&Symbol::DEV_TMP, &Literal::Int(0));
+                self.build_eq(sym, &args[0], &Symbol::DEV_TMP, &arg_layouts[0]);
                 self.free_symbol(&Symbol::DEV_TMP)
             }
-            _ => Err(format!(
-                "the function, {:?}, is not yet implemented",
-                func_sym
-            )),
+            _ => unimplemented!("the function, {:?}, is not yet implemented", func_sym),
         }
     }
 
@@ -514,99 +498,47 @@ where
         args: &'a [Symbol],
         arg_layouts: &[Layout<'a>],
         ret_layout: &Layout<'a>,
-    ) -> Result<(), String>;
+    );
 
     /// build_num_abs stores the absolute value of src into dst.
-    fn build_num_abs(
-        &mut self,
-        dst: &Symbol,
-        src: &Symbol,
-        layout: &Layout<'a>,
-    ) -> Result<(), String>;
+    fn build_num_abs(&mut self, dst: &Symbol, src: &Symbol, layout: &Layout<'a>);
 
     /// build_num_add stores the sum of src1 and src2 into dst.
-    fn build_num_add(
-        &mut self,
-        dst: &Symbol,
-        src1: &Symbol,
-        src2: &Symbol,
-        layout: &Layout<'a>,
-    ) -> Result<(), String>;
+    fn build_num_add(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>);
 
     /// build_num_mul stores `src1 * src2` into dst.
-    fn build_num_mul(
-        &mut self,
-        dst: &Symbol,
-        src1: &Symbol,
-        src2: &Symbol,
-        layout: &Layout<'a>,
-    ) -> Result<(), String>;
+    fn build_num_mul(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>);
 
     /// build_num_neg stores the negated value of src into dst.
-    fn build_num_neg(
-        &mut self,
-        dst: &Symbol,
-        src: &Symbol,
-        layout: &Layout<'a>,
-    ) -> Result<(), String>;
+    fn build_num_neg(&mut self, dst: &Symbol, src: &Symbol, layout: &Layout<'a>);
 
     /// build_num_sub stores the `src1 - src2` difference into dst.
-    fn build_num_sub(
-        &mut self,
-        dst: &Symbol,
-        src1: &Symbol,
-        src2: &Symbol,
-        layout: &Layout<'a>,
-    ) -> Result<(), String>;
+    fn build_num_sub(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>);
 
     /// build_eq stores the result of `src1 == src2` into dst.
-    fn build_eq(
-        &mut self,
-        dst: &Symbol,
-        src1: &Symbol,
-        src2: &Symbol,
-        arg_layout: &Layout<'a>,
-    ) -> Result<(), String>;
+    fn build_eq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &Layout<'a>);
 
     /// build_neq stores the result of `src1 != src2` into dst.
-    fn build_neq(
-        &mut self,
-        dst: &Symbol,
-        src1: &Symbol,
-        src2: &Symbol,
-        arg_layout: &Layout<'a>,
-    ) -> Result<(), String>;
+    fn build_neq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &Layout<'a>);
 
     /// build_num_lt stores the result of `src1 < src2` into dst.
-    fn build_num_lt(
-        &mut self,
-        dst: &Symbol,
-        src1: &Symbol,
-        src2: &Symbol,
-        arg_layout: &Layout<'a>,
-    ) -> Result<(), String>;
+    fn build_num_lt(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &Layout<'a>);
 
     /// literal_map gets the map from symbol to literal, used for lazy loading and literal folding.
     fn literal_map(&mut self) -> &mut MutMap<Symbol, Literal<'a>>;
 
-    fn load_literal_symbols(&mut self, syms: &[Symbol]) -> Result<(), String> {
+    fn load_literal_symbols(&mut self, syms: &[Symbol]) {
         if self.env().lazy_literals {
             for sym in syms {
                 if let Some(lit) = self.literal_map().remove(sym) {
-                    self.load_literal(sym, &lit)?;
+                    self.load_literal(sym, &lit);
                 }
             }
         }
-        Ok(())
     }
 
     /// create_struct creates a struct with the elements specified loaded into it as data.
-    fn create_struct(
-        &mut self,
-        sym: &Symbol,
-        layout: &Layout<'a>,
-        fields: &'a [Symbol],
-    ) -> Result<(), String>;
+    fn create_struct(&mut self, sym: &Symbol, layout: &Layout<'a>, fields: &'a [Symbol]);
 
     /// load_struct_at_index loads into `sym` the value at `index` in `structure`.
     fn load_struct_at_index(
@@ -615,27 +547,26 @@ where
         structure: &Symbol,
         index: u64,
         field_layouts: &'a [Layout<'a>],
-    ) -> Result<(), String>;
+    );
 
     /// load_literal sets a symbol to be equal to a literal.
-    fn load_literal(&mut self, sym: &Symbol, lit: &Literal<'a>) -> Result<(), String>;
+    fn load_literal(&mut self, sym: &Symbol, lit: &Literal<'a>);
 
     /// return_symbol moves a symbol to the correct return location for the backend and adds a jump to the end of the function.
-    fn return_symbol(&mut self, sym: &Symbol, layout: &Layout<'a>) -> Result<(), String>;
+    fn return_symbol(&mut self, sym: &Symbol, layout: &Layout<'a>);
 
     /// free_symbols will free all symbols for the given statement.
-    fn free_symbols(&mut self, stmt: &Stmt<'a>) -> Result<(), String> {
+    fn free_symbols(&mut self, stmt: &Stmt<'a>) {
         if let Some(syms) = self.free_map().remove(&(stmt as *const Stmt<'a>)) {
             for sym in syms {
                 // println!("Freeing symbol: {:?}", sym);
-                self.free_symbol(&sym)?;
+                self.free_symbol(&sym);
             }
         }
-        Ok(())
     }
 
     /// free_symbol frees any registers or stack space used to hold a symbol.
-    fn free_symbol(&mut self, sym: &Symbol) -> Result<(), String>;
+    fn free_symbol(&mut self, sym: &Symbol);
 
     /// set_last_seen sets the statement a symbol was last seen in.
     fn set_last_seen(
@@ -654,20 +585,18 @@ where
     fn last_seen_map(&mut self) -> &mut MutMap<Symbol, *const Stmt<'a>>;
 
     /// set_layout_map sets the layout for a specific symbol.
-    fn set_layout_map(&mut self, sym: Symbol, layout: &Layout<'a>) -> Result<(), String> {
+    fn set_layout_map(&mut self, sym: Symbol, layout: &Layout<'a>) {
         if let Some(old_layout) = self.layout_map().insert(sym, *layout) {
             // Layout map already contains the symbol. We should never need to overwrite.
             // If the layout is not the same, that is a bug.
             if &old_layout != layout {
-                Err(format!(
-                    "Overwriting layout for symbol, {:?}. This should never happen. got {:?}, want {:?}",
-                    sym, layout, old_layout
-                ))
-            } else {
-                Ok(())
+                internal_error!(
+                    "Overwriting layout for symbol, {:?}: got {:?}, want {:?}",
+                    sym,
+                    layout,
+                    old_layout
+                )
             }
-        } else {
-            Ok(())
         }
     }
 
