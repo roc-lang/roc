@@ -215,7 +215,10 @@ where
                 debug_assert_eq!(variant_types.len(), 1);
                 variant_types[0]
             } else {
-                builder.add_union_type(&variant_types)?
+                let data_type = builder.add_union_type(&variant_types)?;
+                let cell_type = builder.add_heap_cell_type();
+
+                builder.add_tuple_type(&[cell_type, data_type])?
             };
 
             let type_def = builder.build(root_type)?;
@@ -1374,10 +1377,7 @@ fn recursive_tag_variant(
 ) -> Result<TypeId> {
     let when_recursive = WhenRecursive::Loop(*union_layout);
 
-    let data_id = build_recursive_tuple_type(builder, fields, &when_recursive)?;
-    let cell_id = builder.add_heap_cell_type();
-
-    builder.add_tuple_type(&[cell_id, data_id])
+    build_recursive_tuple_type(builder, fields, &when_recursive)
 }
 
 fn recursive_variant_types(
@@ -1479,7 +1479,7 @@ fn expr_spec<'a>(
                     return builder.add_make_union(block, &variant_types, *tag_id as u32, value_id);
                 }
                 UnionLayout::NonNullableUnwrapped(_) => {
-                    let value_id = with_new_heap_cell(builder, block, data_id)?;
+                    let value_id = data_id;
 
                     let type_name_bytes = recursive_tag_union_name_bytes(tag_layout).as_bytes();
                     let type_name = TypeName(&type_name_bytes);
@@ -1488,11 +1488,9 @@ fn expr_spec<'a>(
 
                     return builder.add_make_named(block, MOD_APP, type_name, value_id);
                 }
-                UnionLayout::Recursive(_) => with_new_heap_cell(builder, block, data_id)?,
-                UnionLayout::NullableWrapped { .. } => with_new_heap_cell(builder, block, data_id)?,
-                UnionLayout::NullableUnwrapped { .. } => {
-                    with_new_heap_cell(builder, block, data_id)?
-                }
+                UnionLayout::Recursive(_) => data_id,
+                UnionLayout::NullableWrapped { .. } => data_id,
+                UnionLayout::NullableUnwrapped { .. } => data_id,
             };
 
             let variant_types = recursive_variant_types(builder, tag_layout)?;
@@ -1500,12 +1498,14 @@ fn expr_spec<'a>(
             let union_id =
                 builder.add_make_union(block, &variant_types, *tag_id as u32, value_id)?;
 
+            let tag_value_id = with_new_heap_cell(builder, block, union_id)?;
+
             let type_name_bytes = recursive_tag_union_name_bytes(tag_layout).as_bytes();
             let type_name = TypeName(&type_name_bytes);
 
             env.type_names.insert(*tag_layout);
 
-            builder.add_make_named(block, MOD_APP, type_name, union_id)
+            builder.add_make_named(block, MOD_APP, type_name, tag_value_id)
         }
         Struct(fields) => build_tuple_value(builder, env, block, fields),
         UnionAtIndex {
@@ -1531,16 +1531,20 @@ fn expr_spec<'a>(
                 let type_name_bytes = recursive_tag_union_name_bytes(union_layout).as_bytes();
                 let type_name = TypeName(&type_name_bytes);
 
+                // unwrap the named wrapper
                 let union_id = builder.add_unwrap_named(block, MOD_APP, type_name, tag_value_id)?;
-                let variant_id = builder.add_unwrap_union(block, union_id, *tag_id as u32)?;
+
+                // now we have a tuple (cell, union { ... }); decompose
+                let heap_cell = builder.add_get_tuple_field(block, union_id, TAG_CELL_INDEX)?;
+                let union_data = builder.add_get_tuple_field(block, union_id, TAG_DATA_INDEX)?;
 
                 // we're reading from this value, so touch the heap cell
-                let heap_cell = builder.add_get_tuple_field(block, variant_id, 0)?;
                 builder.add_touch(block, heap_cell)?;
 
-                let tuple_value_id = builder.add_get_tuple_field(block, variant_id, 1)?;
+                // next, unwrap the union at the tag id that we've got
+                let variant_id = builder.add_unwrap_union(block, union_data, *tag_id as u32)?;
 
-                builder.add_get_tuple_field(block, tuple_value_id, index)
+                builder.add_get_tuple_field(block, variant_id, index)
             }
             UnionLayout::NonNullableUnwrapped { .. } => {
                 let index = (*index) as u32;
@@ -1551,16 +1555,20 @@ fn expr_spec<'a>(
                 let type_name_bytes = recursive_tag_union_name_bytes(union_layout).as_bytes();
                 let type_name = TypeName(&type_name_bytes);
 
-                let variant_id =
-                    builder.add_unwrap_named(block, MOD_APP, type_name, tag_value_id)?;
+                // a tuple ( cell, union { ... } )
+                let union_id = builder.add_unwrap_named(block, MOD_APP, type_name, tag_value_id)?;
+
+                // decompose
+                let heap_cell = builder.add_get_tuple_field(block, union_id, TAG_CELL_INDEX)?;
+                let union_data = builder.add_get_tuple_field(block, union_id, TAG_DATA_INDEX)?;
 
                 // we're reading from this value, so touch the heap cell
-                let heap_cell = builder.add_get_tuple_field(block, variant_id, 0)?;
                 builder.add_touch(block, heap_cell)?;
 
-                let tuple_value_id = builder.add_get_tuple_field(block, variant_id, 1)?;
+                // next, unwrap the union at the tag id that we've got
+                let variant_id = builder.add_unwrap_union(block, union_data, *tag_id as u32)?;
 
-                builder.add_get_tuple_field(block, tuple_value_id, index)
+                builder.add_get_tuple_field(block, variant_id, index)
             }
         },
         StructAtIndex {
@@ -1613,7 +1621,11 @@ fn expr_spec<'a>(
 
             builder.add_terminate(block, type_id)
         }
-        GetTagId { .. } => builder.add_make_tuple(block, &[]),
+        GetTagId { .. } => {
+            // TODO touch heap cell in recursive cases
+
+            builder.add_make_tuple(block, &[])
+        }
     }
 }
 
@@ -1766,6 +1778,9 @@ const LIST_BAG_INDEX: u32 = 1;
 
 const DICT_CELL_INDEX: u32 = LIST_CELL_INDEX;
 const DICT_BAG_INDEX: u32 = LIST_BAG_INDEX;
+
+const TAG_CELL_INDEX: u32 = 0;
+const TAG_DATA_INDEX: u32 = 1;
 
 fn with_new_heap_cell(
     builder: &mut FuncDefBuilder,
