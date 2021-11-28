@@ -988,7 +988,7 @@ pub struct Env<'a, 'i> {
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
     pub ptr_bytes: u32,
-    pub update_mode_counter: u64,
+    pub update_mode_ids: &'i mut UpdateModeIds,
     pub call_specialization_counter: u64,
 }
 
@@ -1000,13 +1000,7 @@ impl<'a, 'i> Env<'a, 'i> {
     }
 
     pub fn next_update_mode_id(&mut self) -> UpdateModeId {
-        let id = UpdateModeId {
-            id: self.update_mode_counter,
-        };
-
-        self.update_mode_counter += 1;
-
-        id
+        self.update_mode_ids.next_id()
     }
 
     pub fn next_call_specialization_id(&mut self) -> CallSpecId {
@@ -1302,6 +1296,23 @@ impl UpdateModeId {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UpdateModeIds {
+    next: u64,
+}
+
+impl UpdateModeIds {
+    pub const fn new() -> Self {
+        Self { next: 0 }
+    }
+
+    fn next_id(&mut self) -> UpdateModeId {
+        let id = UpdateModeId { id: self.next };
+        self.next += 1;
+        id
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum CallType<'a> {
     ByName {
@@ -1390,12 +1401,14 @@ pub enum Expr<'a> {
     Reuse {
         symbol: Symbol,
         update_tag_id: bool,
+        // update_mode: UpdateModeId,
         // normal Tag fields
         tag_layout: UnionLayout<'a>,
         tag_name: TagName,
         tag_id: TagIdIntType,
         arguments: &'a [Symbol],
     },
+    // Reset { symbol: Symbol, update_mode: UpdateModeId, },
     Reset(Symbol),
 
     RuntimeErrorFunction(&'a str),

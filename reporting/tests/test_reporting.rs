@@ -102,7 +102,7 @@ mod test_reporting {
                 home,
                 ident_ids: &mut ident_ids,
                 ptr_bytes,
-                update_mode_counter: 0,
+                update_mode_ids: 0,
                 // call_specialization_counter=0 is reserved
                 call_specialization_counter: 1,
             };
