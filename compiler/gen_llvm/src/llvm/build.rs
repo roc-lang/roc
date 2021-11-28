@@ -1136,7 +1136,21 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
             let refcount_ptr =
                 PointerToRefcount::from_ptr_to_data(env, tag_pointer_clear_tag_id(env, tag_ptr));
-            let is_unique = refcount_ptr.is_1(env);
+
+            let is_unique = match update_mode {
+                UpdateMode::InPlace => {
+                    // what we'd like to do here is just
+                    //
+                    // env.context.bool_type().const_int(1, false),
+                    //
+                    // but it seems that our specification is incorrect,
+                    // and morphic tells us to update in-place when that is unsafe
+
+                    // hence
+                    refcount_ptr.is_1(env)
+                }
+                UpdateMode::Immutable => refcount_ptr.is_1(env),
+            };
 
             env.builder
                 .build_conditional_branch(is_unique, then_block, else_block);
