@@ -2,7 +2,7 @@ use roc_builtins::bitcode::{self, FloatWidth};
 use roc_module::low_level::{LowLevel, LowLevel::*};
 use roc_module::symbol::Symbol;
 
-use crate::layout::{StackMemoryFormat, WasmLayout};
+use crate::layout::{CallConv, StackMemoryFormat, WasmLayout};
 use crate::storage::Storage;
 use crate::wasm_module::{
     CodeBuilder,
@@ -71,14 +71,14 @@ pub fn decode_low_level<'a>(
                 F64 => code_builder.f64_add(),
             },
             WasmLayout::StackMemory { format, .. } => match format {
-                StackMemoryFormat::Aggregate => return NotImplemented,
+                StackMemoryFormat::DataStructure => return NotImplemented,
                 StackMemoryFormat::Int128 => return NotImplemented,
                 StackMemoryFormat::Float128 => return NotImplemented,
                 StackMemoryFormat::Decimal => return BuiltinCall(bitcode::DEC_ADD_WITH_OVERFLOW),
             },
             WasmLayout::HeapMemory { .. } => return NotImplemented,
         },
-        NumAddWrap => match ret_layout.value_type() {
+        NumAddWrap => match ret_layout.arg_types(CallConv::Zig)[0] {
             I32 => {
                 code_builder.i32_add();
                 wrap_i32(code_builder, ret_layout.size());
@@ -88,13 +88,13 @@ pub fn decode_low_level<'a>(
             F64 => code_builder.f64_add(),
         },
         NumAddChecked => return NotImplemented,
-        NumSub => match ret_layout.value_type() {
+        NumSub => match ret_layout.arg_types(CallConv::Zig)[0] {
             I32 => code_builder.i32_sub(),
             I64 => code_builder.i64_sub(),
             F32 => code_builder.f32_sub(),
             F64 => code_builder.f64_sub(),
         },
-        NumSubWrap => match ret_layout.value_type() {
+        NumSubWrap => match ret_layout.arg_types(CallConv::Zig)[0] {
             I32 => {
                 code_builder.i32_sub();
                 wrap_i32(code_builder, ret_layout.size());
@@ -104,13 +104,13 @@ pub fn decode_low_level<'a>(
             F64 => code_builder.f64_sub(),
         },
         NumSubChecked => return NotImplemented,
-        NumMul => match ret_layout.value_type() {
+        NumMul => match ret_layout.arg_types(CallConv::Zig)[0] {
             I32 => code_builder.i32_mul(),
             I64 => code_builder.i64_mul(),
             F32 => code_builder.f32_mul(),
             F64 => code_builder.f64_mul(),
         },
-        NumMulWrap => match ret_layout.value_type() {
+        NumMulWrap => match ret_layout.arg_types(CallConv::Zig)[0] {
             I32 => {
                 code_builder.i32_mul();
                 wrap_i32(code_builder, ret_layout.size());
@@ -120,46 +120,46 @@ pub fn decode_low_level<'a>(
             F64 => code_builder.f64_mul(),
         },
         NumMulChecked => return NotImplemented,
-        NumGt => match storage.get(&args[0]).value_type() {
+        NumGt => match storage.get(&args[0]).arg_types(CallConv::Zig)[0] {
             I32 => code_builder.i32_gt_s(),
             I64 => code_builder.i64_gt_s(),
             F32 => code_builder.f32_gt(),
             F64 => code_builder.f64_gt(),
         },
-        NumGte => match storage.get(&args[0]).value_type() {
+        NumGte => match storage.get(&args[0]).arg_types(CallConv::Zig)[0] {
             I32 => code_builder.i32_ge_s(),
             I64 => code_builder.i64_ge_s(),
             F32 => code_builder.f32_ge(),
             F64 => code_builder.f64_ge(),
         },
-        NumLt => match storage.get(&args[0]).value_type() {
+        NumLt => match storage.get(&args[0]).arg_types(CallConv::Zig)[0] {
             I32 => code_builder.i32_lt_s(),
             I64 => code_builder.i64_lt_s(),
             F32 => code_builder.f32_lt(),
             F64 => code_builder.f64_lt(),
         },
-        NumLte => match storage.get(&args[0]).value_type() {
+        NumLte => match storage.get(&args[0]).arg_types(CallConv::Zig)[0] {
             I32 => code_builder.i32_le_s(),
             I64 => code_builder.i64_le_s(),
             F32 => code_builder.f32_le(),
             F64 => code_builder.f64_le(),
         },
         NumCompare => return NotImplemented,
-        NumDivUnchecked => match ret_layout.value_type() {
+        NumDivUnchecked => match ret_layout.arg_types(CallConv::Zig)[0] {
             I32 => code_builder.i32_div_s(),
             I64 => code_builder.i64_div_s(),
             F32 => code_builder.f32_div(),
             F64 => code_builder.f64_div(),
         },
         NumDivCeilUnchecked => return NotImplemented,
-        NumRemUnchecked => match ret_layout.value_type() {
+        NumRemUnchecked => match ret_layout.arg_types(CallConv::Zig)[0] {
             I32 => code_builder.i32_rem_s(),
             I64 => code_builder.i64_rem_s(),
             F32 => return NotImplemented,
             F64 => return NotImplemented,
         },
         NumIsMultipleOf => return NotImplemented,
-        NumAbs => match ret_layout.value_type() {
+        NumAbs => match ret_layout.arg_types(CallConv::Zig)[0] {
             I32 => {
                 let arg_storage = storage.get(&args[0]).to_owned();
                 storage.ensure_value_has_local(code_builder, args[0], arg_storage);
@@ -188,7 +188,7 @@ pub fn decode_low_level<'a>(
             F64 => code_builder.f64_abs(),
         },
         NumNeg => {
-            match ret_layout.value_type() {
+            match ret_layout.arg_types(CallConv::Zig)[0] {
                 I32 => {
                     // Unfortunate local.set/local.get
                     code_builder.i32_const(0);
@@ -219,7 +219,10 @@ pub fn decode_low_level<'a>(
             let width = float_width_from_layout(ret_layout);
             return BuiltinCall(&bitcode::NUM_ROUND[width]);
         }
-        NumToFloat => match (ret_layout.value_type(), storage.get(&args[0]).value_type()) {
+        NumToFloat => match (
+            ret_layout.arg_types(CallConv::Zig)[0],
+            storage.get(&args[0]).arg_types(CallConv::Zig)[0],
+        ) {
             (F32, I32) => code_builder.f32_convert_s_i32(),
             (F32, I64) => code_builder.f32_convert_s_i64(),
             (F32, F32) => {}
@@ -231,7 +234,7 @@ pub fn decode_low_level<'a>(
             _ => panic_ret_type(),
         },
         NumPow => return NotImplemented,
-        NumCeiling => match ret_layout.value_type() {
+        NumCeiling => match ret_layout.arg_types(CallConv::Zig)[0] {
             I32 => {
                 code_builder.f32_ceil();
                 code_builder.i32_trunc_s_f32()
@@ -243,7 +246,7 @@ pub fn decode_low_level<'a>(
             _ => panic_ret_type(),
         },
         NumPowInt => return NotImplemented,
-        NumFloor => match ret_layout.value_type() {
+        NumFloor => match ret_layout.arg_types(CallConv::Zig)[0] {
             I32 => {
                 code_builder.f32_floor();
                 code_builder.i32_trunc_s_f32()
@@ -254,7 +257,7 @@ pub fn decode_low_level<'a>(
             }
             _ => panic_ret_type(),
         },
-        NumIsFinite => match ret_layout.value_type() {
+        NumIsFinite => match ret_layout.arg_types(CallConv::Zig)[0] {
             I32 => code_builder.i32_const(1),
             I64 => code_builder.i32_const(1),
             F32 => {
@@ -286,17 +289,17 @@ pub fn decode_low_level<'a>(
         }
         NumBytesToU16 => return NotImplemented,
         NumBytesToU32 => return NotImplemented,
-        NumBitwiseAnd => match ret_layout.value_type() {
+        NumBitwiseAnd => match ret_layout.arg_types(CallConv::Zig)[0] {
             I32 => code_builder.i32_and(),
             I64 => code_builder.i64_and(),
             _ => panic_ret_type(),
         },
-        NumBitwiseXor => match ret_layout.value_type() {
+        NumBitwiseXor => match ret_layout.arg_types(CallConv::Zig)[0] {
             I32 => code_builder.i32_xor(),
             I64 => code_builder.i64_xor(),
             _ => panic_ret_type(),
         },
-        NumBitwiseOr => match ret_layout.value_type() {
+        NumBitwiseOr => match ret_layout.arg_types(CallConv::Zig)[0] {
             I32 => code_builder.i32_or(),
             I64 => code_builder.i64_or(),
             _ => panic_ret_type(),
@@ -304,23 +307,26 @@ pub fn decode_low_level<'a>(
         NumShiftLeftBy => {
             // Unfortunate local.set/local.get
             storage.load_symbols(code_builder, &[args[1], args[0]]);
-            match ret_layout.value_type() {
+            match ret_layout.arg_types(CallConv::Zig)[0] {
                 I32 => code_builder.i32_shl(),
                 I64 => code_builder.i64_shl(),
                 _ => panic_ret_type(),
             }
         }
-        NumShiftRightBy => match ret_layout.value_type() {
+        NumShiftRightBy => match ret_layout.arg_types(CallConv::Zig)[0] {
             I32 => code_builder.i32_shr_s(),
             I64 => code_builder.i64_shr_s(),
             _ => panic_ret_type(),
         },
-        NumShiftRightZfBy => match ret_layout.value_type() {
+        NumShiftRightZfBy => match ret_layout.arg_types(CallConv::Zig)[0] {
             I32 => code_builder.i32_shr_u(),
             I64 => code_builder.i64_shr_u(),
             _ => panic_ret_type(),
         },
-        NumIntCast => match (ret_layout.value_type(), storage.get(&args[0]).value_type()) {
+        NumIntCast => match (
+            ret_layout.arg_types(CallConv::Zig)[0],
+            storage.get(&args[0]).arg_types(CallConv::Zig)[0],
+        ) {
             (I32, I32) => {}
             (I32, I64) => code_builder.i32_wrap_i64(),
             (I32, F32) => code_builder.i32_trunc_s_f32(),
@@ -343,7 +349,7 @@ pub fn decode_low_level<'a>(
         },
         Eq => {
             // TODO: For non-number types, this will implement pointer equality, which is wrong
-            match storage.get(&args[0]).value_type() {
+            match storage.get(&args[0]).arg_types(CallConv::Zig)[0] {
                 I32 => code_builder.i32_eq(),
                 I64 => code_builder.i64_eq(),
                 F32 => code_builder.f32_eq(),
@@ -352,7 +358,7 @@ pub fn decode_low_level<'a>(
         }
         NotEq => {
             // TODO: For non-number types, this will implement pointer inequality, which is wrong
-            match storage.get(&args[0]).value_type() {
+            match storage.get(&args[0]).arg_types(CallConv::Zig)[0] {
                 I32 => code_builder.i32_ne(),
                 I64 => code_builder.i64_ne(),
                 F32 => code_builder.f32_ne(),
@@ -390,7 +396,7 @@ fn wrap_i32(code_builder: &mut CodeBuilder, size: u32) {
 }
 
 fn float_width_from_layout(wasm_layout: &WasmLayout) -> FloatWidth {
-    if wasm_layout.value_type() == ValueType::F32 {
+    if wasm_layout.arg_types(CallConv::Zig)[0] == ValueType::F32 {
         FloatWidth::F32
     } else {
         FloatWidth::F64
