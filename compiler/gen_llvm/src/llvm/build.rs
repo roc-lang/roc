@@ -1108,7 +1108,18 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             ..
         } => build_tag(env, scope, union_layout, *tag_id, arguments, None, parent),
 
-        Reset { symbol, .. } => {
+        Reset {
+            symbol,
+            update_mode,
+        } => {
+            let bytes = update_mode.to_bytes();
+            let update_var = UpdateModeVar(&bytes);
+            let update_mode = func_spec_solutions
+                .update_mode(update_var)
+                .unwrap_or(UpdateMode::Immutable);
+
+            dbg!(update_mode);
+
             let (tag_ptr, layout) = load_symbol_and_layout(scope, symbol);
             let tag_ptr = tag_ptr.into_pointer_value();
 
