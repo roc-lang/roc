@@ -1418,8 +1418,7 @@ fn build_variant_types(
                 result.push(recursive_tag_variant(builder, union_layout, tag)?);
             }
 
-            let unit = builder.add_tuple_type(&[])?;
-            result.push(unit);
+            result.push(recursive_tag_variant(builder, union_layout, &[])?);
 
             for tag in tags[cutoff..].iter() {
                 result.push(recursive_tag_variant(builder, union_layout, tag)?);
@@ -1429,7 +1428,7 @@ fn build_variant_types(
             nullable_id,
             other_fields: fields,
         } => {
-            let unit = builder.add_tuple_type(&[])?;
+            let unit = recursive_tag_variant(builder, union_layout, &[])?;
             let other_type = recursive_tag_variant(builder, union_layout, fields)?;
 
             if *nullable_id {
@@ -1495,19 +1494,9 @@ fn expr_spec<'a>(
                     return builder.add_make_named(block, MOD_APP, type_name, value_id);
                 }
                 UnionLayout::Recursive(_) => with_new_heap_cell(builder, block, data_id)?,
-                UnionLayout::NullableWrapped { nullable_id, .. } => {
-                    if *tag_id == *nullable_id as _ {
-                        data_id
-                    } else {
-                        with_new_heap_cell(builder, block, data_id)?
-                    }
-                }
-                UnionLayout::NullableUnwrapped { nullable_id, .. } => {
-                    if *tag_id == *nullable_id as _ {
-                        data_id
-                    } else {
-                        with_new_heap_cell(builder, block, data_id)?
-                    }
+                UnionLayout::NullableWrapped { .. } => with_new_heap_cell(builder, block, data_id)?,
+                UnionLayout::NullableUnwrapped { .. } => {
+                    with_new_heap_cell(builder, block, data_id)?
                 }
             };
 
