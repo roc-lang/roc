@@ -232,7 +232,13 @@ where
                             self.load_literal_symbols(arguments);
                             self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
                         } else {
-                            unimplemented!("the function, {:?}, is not yet implemented", func_sym)
+                            self.build_inline_builtin(
+                                sym,
+                                *func_sym,
+                                arguments,
+                                arg_layouts,
+                                ret_layout,
+                            )
                         }
                     }
 
@@ -449,6 +455,37 @@ where
                 ret_layout,
             ),
             x => unimplemented!("low level, {:?}. is not yet implemented", x),
+        }
+    }
+
+    // inlines simple builtin functions that do not map directly to a low level
+    fn build_inline_builtin(
+        &mut self,
+        sym: &Symbol,
+        func_sym: Symbol,
+        args: &'a [Symbol],
+        arg_layouts: &[Layout<'a>],
+        ret_layout: &Layout<'a>,
+    ) {
+        self.load_literal_symbols(args);
+        match func_sym {
+            Symbol::NUM_IS_ZERO => {
+                debug_assert_eq!(
+                    1,
+                    args.len(),
+                    "NumIsZero: expected to have exactly one argument"
+                );
+                debug_assert_eq!(
+                    Layout::Builtin(Builtin::Bool),
+                    *ret_layout,
+                    "NumIsZero: expected to have return layout of type Bool"
+                );
+
+                self.load_literal(&Symbol::DEV_TMP, &Literal::Int(0));
+                self.build_eq(sym, &args[0], &Symbol::DEV_TMP, &arg_layouts[0]);
+                self.free_symbol(&Symbol::DEV_TMP)
+            }
+            _ => unimplemented!("the function, {:?}, is not yet implemented", func_sym),
         }
     }
 
