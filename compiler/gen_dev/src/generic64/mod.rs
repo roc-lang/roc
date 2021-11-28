@@ -1385,8 +1385,7 @@ impl<
                 internal_error!("Ran out of stack space");
             } else {
                 self.stack_size = new_size;
-                let offset = -(self.stack_size as i32);
-                offset
+                -(self.stack_size as i32)
             }
         } else {
             internal_error!("Ran out of stack space");
