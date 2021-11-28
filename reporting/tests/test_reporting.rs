@@ -13,7 +13,7 @@ mod test_reporting {
     use crate::helpers::{can_expr, infer_expr, CanExprOut, ParseErrOut};
     use bumpalo::Bump;
     use roc_module::symbol::{Interns, ModuleId};
-    use roc_mono::ir::{Procs, Stmt};
+    use roc_mono::ir::{Procs, Stmt, UpdateModeIds};
     use roc_mono::layout::LayoutCache;
     use roc_reporting::report::{
         can_problem, mono_problem, parse_problem, type_problem, Report, Severity, BLUE_CODE,
@@ -91,6 +91,7 @@ mod test_reporting {
             // Compile and add all the Procs before adding main
             let mut procs = Procs::new_in(&arena);
             let mut ident_ids = interns.all_ident_ids.remove(&home).unwrap();
+            let mut update_mode_ids = UpdateModeIds::new();
 
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
             let ptr_bytes = 8;
@@ -101,8 +102,8 @@ mod test_reporting {
                 problems: &mut mono_problems,
                 home,
                 ident_ids: &mut ident_ids,
+                update_mode_ids: &mut update_mode_ids,
                 ptr_bytes,
-                update_mode_ids: 0,
                 // call_specialization_counter=0 is reserved
                 call_specialization_counter: 1,
             };
