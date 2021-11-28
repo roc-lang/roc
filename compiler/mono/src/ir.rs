@@ -31,14 +31,14 @@ pub const PRETTY_PRINT_IR_SYMBOLS: bool = false;
 static_assertions::assert_eq_size!([u8; 4 * 8], Literal);
 #[cfg(not(target_arch = "aarch64"))]
 static_assertions::assert_eq_size!([u8; 3 * 8], Literal);
-static_assertions::assert_eq_size!([u8; 11 * 8], Expr);
+static_assertions::assert_eq_size!([u8; 10 * 8], Expr);
 #[cfg(not(target_arch = "aarch64"))]
 static_assertions::assert_eq_size!([u8; 19 * 8], Stmt);
 #[cfg(target_arch = "aarch64")]
 static_assertions::assert_eq_size!([u8; 20 * 8], Stmt);
 static_assertions::assert_eq_size!([u8; 6 * 8], ProcLayout);
-static_assertions::assert_eq_size!([u8; 8 * 8], Call);
-static_assertions::assert_eq_size!([u8; 6 * 8], CallType);
+static_assertions::assert_eq_size!([u8; 7 * 8], Call);
+static_assertions::assert_eq_size!([u8; 5 * 8], CallType);
 
 macro_rules! return_on_layout_error {
     ($env:expr, $layout_result:expr) => {
@@ -995,7 +995,7 @@ pub struct Env<'a, 'i> {
     pub ident_ids: &'i mut IdentIds,
     pub ptr_bytes: u32,
     pub update_mode_ids: &'i mut UpdateModeIds,
-    pub call_specialization_counter: u64,
+    pub call_specialization_counter: u32,
 }
 
 impl<'a, 'i> Env<'a, 'i> {
@@ -1282,29 +1282,29 @@ impl<'a> Call<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CallSpecId {
-    id: u64,
+    id: u32,
 }
 
 impl CallSpecId {
-    pub fn to_bytes(self) -> [u8; 8] {
+    pub fn to_bytes(self) -> [u8; 4] {
         self.id.to_ne_bytes()
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UpdateModeId {
-    id: u64,
+    id: u32,
 }
 
 impl UpdateModeId {
-    pub fn to_bytes(self) -> [u8; 8] {
+    pub fn to_bytes(self) -> [u8; 4] {
         self.id.to_ne_bytes()
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UpdateModeIds {
-    next: u64,
+    next: u32,
 }
 
 impl UpdateModeIds {
