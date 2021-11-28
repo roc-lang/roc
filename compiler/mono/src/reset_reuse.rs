@@ -1,5 +1,7 @@
 use crate::inc_dec::{collect_stmt, occurring_variables_expr, JPLiveVarMap, LiveVarSet};
-use crate::ir::{BranchInfo, Call, Expr, ListLiteralElement, Proc, Stmt, UpdateModeIds};
+use crate::ir::{
+    BranchInfo, Call, Expr, ListLiteralElement, Proc, Stmt, UpdateModeId, UpdateModeIds,
+};
 use crate::layout::{Layout, TagIdIntType, UnionLayout};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -67,7 +69,7 @@ impl<'a, 'i> Env<'a, 'i> {
 
 fn function_s<'a, 'i>(
     env: &mut Env<'a, 'i>,
-    w: Symbol,
+    w: Opportunity,
     c: &CtorInfo<'a>,
     stmt: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
@@ -85,12 +87,11 @@ fn function_s<'a, 'i>(
             } if may_reuse(*tag_layout, *tag_id, c) => {
                 // for now, always overwrite the tag ID just to be sure
                 let update_tag_id = true;
-                let update_mode = env.update_mode_ids.next_id();
 
                 let new_expr = Expr::Reuse {
-                    symbol: w,
+                    symbol: w.symbol,
+                    update_mode: w.update_mode,
                     update_tag_id,
-                    update_mode,
                     tag_layout: *tag_layout,
                     tag_id: *tag_id,
                     tag_name: tag_name.clone(),
@@ -180,13 +181,22 @@ fn function_s<'a, 'i>(
     }
 }
 
+#[derive(Clone, Copy)]
+struct Opportunity {
+    symbol: Symbol,
+    update_mode: UpdateModeId,
+}
+
 fn try_function_s<'a, 'i>(
     env: &mut Env<'a, 'i>,
     x: Symbol,
     c: &CtorInfo<'a>,
     stmt: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
-    let w = env.unique_symbol();
+    let w = Opportunity {
+        symbol: env.unique_symbol(),
+        update_mode: env.update_mode_ids.next_id(),
+    };
 
     let new_stmt = function_s(env, w, c, stmt);
 
@@ -199,7 +209,7 @@ fn try_function_s<'a, 'i>(
 
 fn insert_reset<'a>(
     env: &mut Env<'a, '_>,
-    w: Symbol,
+    w: Opportunity,
     x: Symbol,
     union_layout: UnionLayout<'a>,
     mut stmt: &'a Stmt<'a>,
@@ -226,15 +236,16 @@ fn insert_reset<'a>(
         }
     }
 
-    let update_mode = env.update_mode_ids.next_id();
     let reset_expr = Expr::Reset {
         symbol: x,
-        update_mode,
+        update_mode: w.update_mode,
     };
 
     let layout = Layout::Union(union_layout);
 
-    stmt = env.arena.alloc(Stmt::Let(w, reset_expr, layout, stmt));
+    stmt = env
+        .arena
+        .alloc(Stmt::Let(w.symbol, reset_expr, layout, stmt));
 
     for (symbol, expr, expr_layout) in stack.into_iter().rev() {
         stmt = env

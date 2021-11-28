@@ -1512,6 +1512,7 @@ impl<'a> Expr<'a> {
                 symbol,
                 tag_name,
                 arguments,
+                update_mode,
                 ..
             } => {
                 let doc_tag = match tag_name {
@@ -1529,11 +1530,19 @@ impl<'a> Expr<'a> {
                     .text("Reuse ")
                     .append(symbol_to_doc(alloc, *symbol))
                     .append(alloc.space())
+                    .append(format!("{:?}", update_mode))
+                    .append(alloc.space())
                     .append(doc_tag)
                     .append(alloc.space())
                     .append(alloc.intersperse(it, " "))
             }
-            Reset { symbol, .. } => alloc.text("Reset ").append(symbol_to_doc(alloc, *symbol)),
+            Reset {
+                symbol,
+                update_mode,
+            } => alloc.text(format!(
+                "Reset {{ symbol: {:?}, id: {} }}",
+                symbol, update_mode.id
+            )),
 
             Struct(args) => {
                 let it = args.iter().map(|s| symbol_to_doc(alloc, *s));
