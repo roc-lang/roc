@@ -3562,7 +3562,12 @@ pub fn with_hole<'a>(
                 }
                 Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                     let expr = Expr::EmptyArray;
-                    Stmt::Let(assigned, expr, Layout::Builtin(Builtin::EmptyList), hole)
+                    Stmt::Let(
+                        assigned,
+                        expr,
+                        Layout::Builtin(Builtin::List(&Layout::VOID)),
+                        hole,
+                    )
                 }
                 Err(LayoutProblem::Erroneous) => panic!("list element is error type"),
             }

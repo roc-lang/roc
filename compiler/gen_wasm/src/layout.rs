@@ -76,9 +76,7 @@ impl WasmLayout {
                 format: StackMemoryFormat::Decimal,
             },
 
-            Layout::Builtin(
-                Str | Dict(_, _) | Set(_) | List(_) | EmptyStr | EmptyList | EmptyDict | EmptySet,
-            )
+            Layout::Builtin(Str | Dict(_, _) | Set(_) | List(_))
             | Layout::Struct(_)
             | Layout::LambdaSet(_)
             | Layout::Union(NonRecursive(_)) => Self::StackMemory {

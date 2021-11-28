@@ -7,13 +7,12 @@ use morphic_lib::{
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
-use std::convert::TryFrom;
 
 use crate::ir::{
     Call, CallType, Expr, HigherOrderLowLevel, HostExposedLayouts, ListLiteralElement, Literal,
     ModifyRc, OptLevel, Proc, Stmt,
 };
-use crate::layout::{Builtin, Layout, ListLayout, RawFunctionLayout, UnionLayout};
+use crate::layout::{Builtin, Layout, RawFunctionLayout, UnionLayout};
 
 // just using one module for now
 pub const MOD_APP: ModName = ModName(b"UserApp");
@@ -56,7 +55,7 @@ pub fn func_name_bytes_help<'a, I>(
     return_layout: &Layout<'a>,
 ) -> [u8; SIZE]
 where
-    I: Iterator<Item = Layout<'a>>,
+    I: IntoIterator<Item = Layout<'a>>,
 {
     let mut name_bytes = [0u8; SIZE];
 
@@ -167,8 +166,8 @@ where
                             host_exposed_functions.push((bytes, top_level.arguments));
                         }
                         RawFunctionLayout::ZeroArgumentThunk(_) => {
-                            let it = std::iter::once(Layout::Struct(&[]));
-                            let bytes = func_name_bytes_help(*symbol, it, &top_level.result);
+                            let bytes =
+                                func_name_bytes_help(*symbol, [Layout::UNIT], &top_level.result);
 
                             host_exposed_functions.push((bytes, top_level.arguments));
                         }
@@ -579,18 +578,25 @@ impl KeepResult {
 
 #[derive(Clone, Copy)]
 enum ResultRepr<'a> {
-    Int1,
-    NonRecursive { err: Layout<'a>, ok: Layout<'a> },
+    /// This is basically a `Result * whatever` or `Result [] whatever` (in keepOks, arguments flipped for keepErrs).
+    /// Such a `Result` gets a `Bool` layout at currently. We model the `*` or `[]` as a unit
+    /// (empty tuple) in morphic, otherwise we run into trouble when we need to crate a value of
+    /// type void
+    ResultStarStar,
+    ResultConcrete {
+        err: Layout<'a>,
+        ok: Layout<'a>,
+    },
 }
 
 impl<'a> ResultRepr<'a> {
     fn from_layout(layout: &Layout<'a>) -> Self {
         match layout {
-            Layout::Union(UnionLayout::NonRecursive(tags)) => ResultRepr::NonRecursive {
+            Layout::Union(UnionLayout::NonRecursive(tags)) => ResultRepr::ResultConcrete {
                 err: tags[ERR_TAG_ID as usize][0],
                 ok: tags[OK_TAG_ID as usize][0],
             },
-            Layout::Builtin(Builtin::Bool) => ResultRepr::Int1,
+            Layout::Builtin(Builtin::Bool) => ResultRepr::ResultStarStar,
             other => unreachable!("unexpected layout: {:?}", other),
         }
     }
@@ -603,12 +609,16 @@ impl<'a> ResultRepr<'a> {
         keep_tag_id: u32,
     ) -> Result<ValueId> {
         match self {
-            ResultRepr::NonRecursive { .. } => {
+            ResultRepr::ResultConcrete { .. } => {
                 let unwrapped = builder.add_unwrap_union(block, err_or_ok, keep_tag_id)?;
 
                 builder.add_get_tuple_field(block, unwrapped, 0)
             }
-            ResultRepr::Int1 => builder.add_make_tuple(block, &[]),
+            ResultRepr::ResultStarStar => {
+                // Void/EmptyTagUnion is represented as a unit value in morphic
+                // using `union {}` runs into trouble where we have to crate a value of that type
+                builder.add_make_tuple(block, &[])
+            }
         }
     }
 }
@@ -1011,9 +1021,14 @@ fn call_spec(
                     let result_repr = ResultRepr::from_layout(ret_layout);
 
                     let output_element_layout = match (keep_result, result_repr) {
-                        (KeepResult::Errs, ResultRepr::NonRecursive { err, .. }) => err,
-                        (KeepResult::Oks, ResultRepr::NonRecursive { ok, .. }) => ok,
-                        (_, ResultRepr::Int1) => Layout::Struct(&[]),
+                        (KeepResult::Errs, ResultRepr::ResultConcrete { err, .. }) => err,
+                        (KeepResult::Oks, ResultRepr::ResultConcrete { ok, .. }) => ok,
+                        (_, ResultRepr::ResultStarStar) => {
+                            // we represent this case as Unit, while Void is maybe more natural
+                            // but using Void we'd need to crate values of type Void, which is not
+                            // possible
+                            Layout::UNIT
+                        }
                     };
 
                     let loop_body = |builder: &mut FuncDefBuilder, block, state| {
@@ -1305,21 +1320,14 @@ fn lowlevel_spec(
 
             builder.add_make_tuple(block, &[byte_index, string, is_ok, problem_code])
         }
-        DictEmpty => {
-            match layout {
-                Layout::Builtin(Builtin::EmptyDict) => {
-                    // just make up an element type
-                    let type_id = builder.add_tuple_type(&[])?;
-                    new_dict(builder, block, type_id, type_id)
-                }
-                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
-                    let key_id = layout_spec(builder, key_layout)?;
-                    let value_id = layout_spec(builder, value_layout)?;
-                    new_dict(builder, block, key_id, value_id)
-                }
-                _ => unreachable!("empty array does not have a list layout"),
+        DictEmpty => match layout {
+            Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
+                let key_id = layout_spec(builder, key_layout)?;
+                let value_id = layout_spec(builder, value_layout)?;
+                new_dict(builder, block, key_id, value_id)
             }
-        }
+            _ => unreachable!("empty array does not have a list layout"),
+        },
         DictGetUnsafe => {
             // NOTE DictGetUnsafe returns a { flag: Bool, value: v }
             // when the flag is True, the value is found and defined;
@@ -1611,22 +1619,13 @@ fn expr_spec<'a>(
             }
         }
 
-        EmptyArray => {
-            use ListLayout::*;
-
-            match ListLayout::try_from(layout) {
-                Ok(EmptyList) => {
-                    // just make up an element type
-                    let type_id = builder.add_tuple_type(&[])?;
-                    new_list(builder, block, type_id)
-                }
-                Ok(List(element_layout)) => {
-                    let type_id = layout_spec(builder, element_layout)?;
-                    new_list(builder, block, type_id)
-                }
-                Err(()) => unreachable!("empty array does not have a list layout"),
+        EmptyArray => match layout {
+            Layout::Builtin(Builtin::List(element_layout)) => {
+                let type_id = layout_spec(builder, element_layout)?;
+                new_list(builder, block, type_id)
             }
-        }
+            _ => unreachable!("empty array does not have a list layout"),
+        },
         Reset(symbol) => {
             let type_id = layout_spec(builder, layout)?;
             let value_id = env.symbols[symbol];
@@ -1678,6 +1677,12 @@ fn layout_spec_help(
             let variant_types = build_variant_types(builder, union_layout)?;
 
             match union_layout {
+                UnionLayout::NonRecursive(&[]) => {
+                    // must model Void as Unit, otherwise we run into problems where
+                    // we have to construct values of the void type,
+                    // which is of course not possible
+                    builder.add_tuple_type(&[])
+                }
                 UnionLayout::NonRecursive(_) => builder.add_union_type(&variant_types),
                 UnionLayout::Recursive(_)
                 | UnionLayout::NullableUnwrapped { .. }
@@ -1720,7 +1725,7 @@ fn builtin_spec(
     match builtin {
         Int(_) | Bool => builder.add_tuple_type(&[]),
         Decimal | Float(_) => builder.add_tuple_type(&[]),
-        Str | EmptyStr => str_type(builder),
+        Str => str_type(builder),
         Dict(key_layout, value_layout) => {
             let value_type = layout_spec_help(builder, value_layout, when_recursive)?;
             let key_type = layout_spec_help(builder, key_layout, when_recursive)?;
@@ -1741,25 +1746,6 @@ fn builtin_spec(
         }
         List(element_layout) => {
             let element_type = layout_spec_help(builder, element_layout, when_recursive)?;
-
-            let cell = builder.add_heap_cell_type();
-            let bag = builder.add_bag_type(element_type)?;
-
-            builder.add_tuple_type(&[cell, bag])
-        }
-        EmptyList => {
-            // TODO make sure that we consistently treat the EmptyList as a list of unit values
-            let element_type = builder.add_tuple_type(&[])?;
-
-            let cell = builder.add_heap_cell_type();
-            let bag = builder.add_bag_type(element_type)?;
-
-            builder.add_tuple_type(&[cell, bag])
-        }
-        EmptyDict | EmptySet => {
-            // TODO make sure that we consistently treat the these as a dict of unit values
-            let unit = builder.add_tuple_type(&[])?;
-            let element_type = builder.add_tuple_type(&[unit, unit])?;
 
             let cell = builder.add_heap_cell_type();
             let bag = builder.add_bag_type(element_type)?;

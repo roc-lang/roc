@@ -2289,7 +2289,16 @@ fn list_product() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn list_keep_oks() {
-    assert_evals_to!("List.keepOks [] (\\x -> x)", 0, i64);
+    assert_evals_to!(
+        "List.keepOks [] (\\x -> x)",
+        RocList::from_slice(&[]),
+        RocList<()>
+    );
+    assert_evals_to!(
+        "List.keepOks [Ok {}, Ok {}] (\\x -> x)",
+        RocList::from_slice(&[(), ()]),
+        RocList<()>
+    );
     assert_evals_to!(
         "List.keepOks [1,2] (\\x -> Ok x)",
         RocList::from_slice(&[1, 2]),
@@ -2310,7 +2319,16 @@ fn list_keep_oks() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn list_keep_errs() {
-    assert_evals_to!("List.keepErrs [] (\\x -> x)", 0, i64);
+    assert_evals_to!(
+        "List.keepErrs [] (\\x -> x)",
+        RocList::from_slice(&[]),
+        RocList<()>
+    );
+    assert_evals_to!(
+        "List.keepErrs [Err {}, Err {}] (\\x -> x)",
+        RocList::from_slice(&[(), ()]),
+        RocList<()>
+    );
     assert_evals_to!(
         "List.keepErrs [1,2] (\\x -> Err x)",
         RocList::from_slice(&[1, 2]),

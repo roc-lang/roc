@@ -1,6 +1,8 @@
 /// Helpers for interacting with the zig that generates bitcode
 use crate::debug_info_init;
-use crate::llvm::build::{struct_from_fields, Env, C_CALL_CONV, FAST_CALL_CONV, TAG_DATA_INDEX};
+use crate::llvm::build::{
+    load_roc_value, struct_from_fields, Env, C_CALL_CONV, FAST_CALL_CONV, TAG_DATA_INDEX,
+};
 use crate::llvm::convert::basic_type_from_layout;
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_n_refcount_layout, increment_refcount_layout,
@@ -506,8 +508,9 @@ pub fn build_eq_wrapper<'a, 'ctx, 'env>(
                 .build_bitcast(value_ptr2, value_type, "load_opaque")
                 .into_pointer_value();
 
-            let value1 = env.builder.build_load(value_cast1, "load_opaque");
-            let value2 = env.builder.build_load(value_cast2, "load_opaque");
+            // load_roc_value(env, *element_layout, elem_ptr, "get_elem")
+            let value1 = load_roc_value(env, *layout, value_cast1, "load_opaque");
+            let value2 = load_roc_value(env, *layout, value_cast2, "load_opaque");
 
             let result =
                 crate::llvm::compare::generic_eq(env, layout_ids, value1, value2, layout, layout);
