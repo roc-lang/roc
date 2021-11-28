@@ -31,7 +31,7 @@ pub const PRETTY_PRINT_IR_SYMBOLS: bool = false;
 static_assertions::assert_eq_size!([u8; 4 * 8], Literal);
 #[cfg(not(target_arch = "aarch64"))]
 static_assertions::assert_eq_size!([u8; 3 * 8], Literal);
-static_assertions::assert_eq_size!([u8; 10 * 8], Expr);
+static_assertions::assert_eq_size!([u8; 11 * 8], Expr);
 #[cfg(not(target_arch = "aarch64"))]
 static_assertions::assert_eq_size!([u8; 19 * 8], Stmt);
 #[cfg(target_arch = "aarch64")]
@@ -318,11 +318,17 @@ impl<'a> Proc<'a> {
         arena: &'a Bump,
         home: ModuleId,
         ident_ids: &'i mut IdentIds,
+        update_mode_ids: &'i mut UpdateModeIds,
         procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
     ) {
         for (_, proc) in procs.iter_mut() {
-            let new_proc =
-                crate::reset_reuse::insert_reset_reuse(arena, home, ident_ids, proc.clone());
+            let new_proc = crate::reset_reuse::insert_reset_reuse(
+                arena,
+                home,
+                ident_ids,
+                update_mode_ids,
+                proc.clone(),
+            );
             *proc = new_proc;
         }
     }
@@ -1306,7 +1312,7 @@ impl UpdateModeIds {
         Self { next: 0 }
     }
 
-    fn next_id(&mut self) -> UpdateModeId {
+    pub fn next_id(&mut self) -> UpdateModeId {
         let id = UpdateModeId { id: self.next };
         self.next += 1;
         id
@@ -1401,15 +1407,17 @@ pub enum Expr<'a> {
     Reuse {
         symbol: Symbol,
         update_tag_id: bool,
-        // update_mode: UpdateModeId,
+        update_mode: UpdateModeId,
         // normal Tag fields
         tag_layout: UnionLayout<'a>,
         tag_name: TagName,
         tag_id: TagIdIntType,
         arguments: &'a [Symbol],
     },
-    // Reset { symbol: Symbol, update_mode: UpdateModeId, },
-    Reset(Symbol),
+    Reset {
+        symbol: Symbol,
+        update_mode: UpdateModeId,
+    },
 
     RuntimeErrorFunction(&'a str),
 }
@@ -1525,7 +1533,7 @@ impl<'a> Expr<'a> {
                     .append(alloc.space())
                     .append(alloc.intersperse(it, " "))
             }
-            Reset(symbol) => alloc.text("Reset ").append(symbol_to_doc(alloc, *symbol)),
+            Reset { symbol, .. } => alloc.text("Reset ").append(symbol_to_doc(alloc, *symbol)),
 
             Struct(args) => {
                 let it = args.iter().map(|s| symbol_to_doc(alloc, *s));
@@ -5728,7 +5736,7 @@ fn substitute_in_expr<'a>(
             }
         }
 
-        Reuse { .. } | Reset(_) => unreachable!("reset/reuse have not been introduced yet"),
+        Reuse { .. } | Reset { .. } => unreachable!("reset/reuse have not been introduced yet"),
 
         Struct(args) => {
             let mut did_change = false;

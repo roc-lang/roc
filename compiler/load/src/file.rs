@@ -2100,6 +2100,7 @@ fn update<'a>(
         MadeSpecializations {
             module_id,
             mut ident_ids,
+            mut update_mode_ids,
             subs,
             procedures,
             external_specializations_requested,
@@ -2126,6 +2127,7 @@ fn update<'a>(
                     arena,
                     module_id,
                     &mut ident_ids,
+                    &mut update_mode_ids,
                     &mut state.procedures,
                 );
 

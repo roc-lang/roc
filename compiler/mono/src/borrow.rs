@@ -726,7 +726,7 @@ impl<'a> BorrowInfState<'a> {
                 // the function must take it as an owned parameter
                 self.own_args_if_param(xs);
             }
-            Reset(x) => {
+            Reset { symbol: x, .. } => {
                 self.own_var(z);
                 self.own_var(*x);
             }

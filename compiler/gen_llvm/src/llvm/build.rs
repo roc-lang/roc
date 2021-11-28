@@ -1108,7 +1108,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             ..
         } => build_tag(env, scope, union_layout, *tag_id, arguments, None, parent),
 
-        Reset(symbol) => {
+        Reset { symbol, .. } => {
             let (tag_ptr, layout) = load_symbol_and_layout(scope, symbol);
             let tag_ptr = tag_ptr.into_pointer_value();
 

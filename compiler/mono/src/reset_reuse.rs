@@ -1,5 +1,5 @@
 use crate::inc_dec::{collect_stmt, occurring_variables_expr, JPLiveVarMap, LiveVarSet};
-use crate::ir::{BranchInfo, Call, Expr, ListLiteralElement, Proc, Stmt};
+use crate::ir::{BranchInfo, Call, Expr, ListLiteralElement, Proc, Stmt, UpdateModeIds};
 use crate::layout::{Layout, TagIdIntType, UnionLayout};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -10,12 +10,14 @@ pub fn insert_reset_reuse<'a, 'i>(
     arena: &'a Bump,
     home: ModuleId,
     ident_ids: &'i mut IdentIds,
+    update_mode_ids: &'i mut UpdateModeIds,
     mut proc: Proc<'a>,
 ) -> Proc<'a> {
     let mut env = Env {
         arena,
         home,
         ident_ids,
+        update_mode_ids,
         jp_live_vars: Default::default(),
     };
 
@@ -50,6 +52,7 @@ struct Env<'a, 'i> {
     /// required for creating new `Symbol`s
     home: ModuleId,
     ident_ids: &'i mut IdentIds,
+    update_mode_ids: &'i mut UpdateModeIds,
 
     jp_live_vars: JPLiveVarMap,
 }
@@ -82,10 +85,12 @@ fn function_s<'a, 'i>(
             } if may_reuse(*tag_layout, *tag_id, c) => {
                 // for now, always overwrite the tag ID just to be sure
                 let update_tag_id = true;
+                let update_mode = env.update_mode_ids.next_id();
 
                 let new_expr = Expr::Reuse {
                     symbol: w,
                     update_tag_id,
+                    update_mode,
                     tag_layout: *tag_layout,
                     tag_id: *tag_id,
                     tag_name: tag_name.clone(),
@@ -216,12 +221,16 @@ fn insert_reset<'a>(
             | Array { .. }
             | EmptyArray
             | Reuse { .. }
-            | Reset(_)
+            | Reset { .. }
             | RuntimeErrorFunction(_) => break,
         }
     }
 
-    let reset_expr = Expr::Reset(x);
+    let update_mode = env.update_mode_ids.next_id();
+    let reset_expr = Expr::Reset {
+        symbol: x,
+        update_mode,
+    };
 
     let layout = Layout::Union(union_layout);
 
@@ -584,7 +593,7 @@ fn has_live_var_expr<'a>(expr: &'a Expr<'a>, needle: Symbol) -> bool {
         Expr::Reuse {
             symbol, arguments, ..
         } => needle == *symbol || arguments.iter().any(|s| *s == needle),
-        Expr::Reset(symbol) => needle == *symbol,
+        Expr::Reset { symbol, .. } => needle == *symbol,
         Expr::RuntimeErrorFunction(_) => false,
     }
 }

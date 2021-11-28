@@ -1626,7 +1626,7 @@ fn expr_spec<'a>(
             }
             _ => unreachable!("empty array does not have a list layout"),
         },
-        Reset(symbol) => {
+        Reset { symbol, .. } => {
             let type_id = layout_spec(builder, layout)?;
             let value_id = env.symbols[symbol];
 
