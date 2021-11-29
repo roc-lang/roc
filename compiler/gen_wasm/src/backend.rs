@@ -859,10 +859,11 @@ impl<'a> WasmBackend<'a> {
 
             None => {
                 // Wasm function signature
-                let signature_index = self.module.types.insert(Signature {
+                let signature = Signature {
                     param_types,
                     ret_type,
-                });
+                };
+                let signature_index = self.module.types.insert(signature);
 
                 // Declare it as an import since it comes from a different .o file
                 let import_index = self.module.import.entries.len() as u32;

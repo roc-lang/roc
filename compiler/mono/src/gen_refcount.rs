@@ -18,6 +18,7 @@ use crate::layout::{Builtin, Layout};
 const LAYOUT_BOOL: Layout = Layout::Builtin(Builtin::Bool);
 const LAYOUT_UNIT: Layout = Layout::Struct(&[]);
 const LAYOUT_PTR: Layout = Layout::RecursivePointer;
+const LAYOUT_U32: Layout = Layout::Builtin(Builtin::Int(IntWidth::U32));
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RefcountOp {
@@ -30,6 +31,7 @@ pub struct RefcountProcGenerator<'a> {
     arena: &'a Bump,
     home: ModuleId,
     next_symbol_id: u32,
+    ptr_size: u32,
     layout_isize: Layout<'a>,
     /// List of refcounting procs to generate, specialised by Layout and RefCountOp
     /// Order of insertion is preserved, since it is important for Wasm backend
@@ -42,6 +44,7 @@ impl<'a> RefcountProcGenerator<'a> {
             arena,
             home,
             next_symbol_id: 0,
+            ptr_size: intwidth_isize.stack_size(),
             layout_isize: Layout::Builtin(Builtin::Int(intwidth_isize)),
             procs_to_generate: Vec::with_capacity_in(16, arena),
         }
@@ -268,6 +271,11 @@ impl<'a> RefcountProcGenerator<'a> {
         });
         let rc_ptr_stmt = |next| Stmt::Let(rc_ptr, rc_ptr_expr, LAYOUT_PTR, next);
 
+        // Alignment constant
+        let alignment = self.unique_symbol();
+        let alignment_expr = Expr::Literal(Literal::Int(self.ptr_size as i128));
+        let alignment_stmt = |next| Stmt::Let(alignment, alignment_expr, LAYOUT_U32, next);
+
         // Call the relevant Zig lowlevel to actually modify the refcount
         let zig_call_result = self.unique_symbol();
         let zig_call_expr = match op {
@@ -283,19 +291,22 @@ impl<'a> RefcountProcGenerator<'a> {
                     op: LowLevel::RefCountDec,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
-                arguments: self.arena.alloc([rc_ptr]),
+                arguments: self.arena.alloc([rc_ptr, alignment]),
             }),
         };
-        let zig_call_stmt = |next| Stmt::Let(zig_call_result, zig_call_expr, LAYOUT_BOOL, next);
+        let zig_call_stmt = |next| Stmt::Let(zig_call_result, zig_call_expr, LAYOUT_UNIT, next);
 
         // Generate an `if` to skip small strings but modify big strings
         let then_branch = elements_stmt(self.arena.alloc(
             //
             rc_ptr_stmt(self.arena.alloc(
                 //
-                zig_call_stmt(self.arena.alloc(
+                alignment_stmt(self.arena.alloc(
                     //
-                    Stmt::Ret(zig_call_result),
+                    zig_call_stmt(self.arena.alloc(
+                        //
+                        Stmt::Ret(zig_call_result),
+                    )),
                 )),
             )),
         ));
