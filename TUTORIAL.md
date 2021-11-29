@@ -109,9 +109,9 @@ Create a new file called `Hello.roc` and put this inside it:
 
 ```coffee
 app "hello"
-    packages [ pf: "examples/cli/platform" ]
+    packages { pf: "examples/cli/platform" }
     imports [ pf.Stdout ]
-    provides main to pf
+    provides [ main ] to pf
 
 main = Stdout.line "I'm a Roc application!"
 ```
