@@ -17,7 +17,7 @@
     ```
     - for the C example:
     ```
-    sudo apt install build-essentials clang
+    sudo apt install build-essential clang
     ```
 0. Run examples with:
     ```
