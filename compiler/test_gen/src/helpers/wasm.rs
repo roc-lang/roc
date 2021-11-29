@@ -113,7 +113,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
 
     let exposed_to_host = exposed_to_host.keys().copied().collect::<MutSet<_>>();
 
-    let env = roc_gen_wasm::Env {
+    let mut env = roc_gen_wasm::Env {
         arena,
         module_id,
         interns,
@@ -122,7 +122,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
 
 
     let (mut wasm_module, main_fn_index) =
-        roc_gen_wasm::build_module_help(&env, procedures).unwrap();
+        roc_gen_wasm::build_module_help(&mut env, procedures).unwrap();
 
     T::insert_test_wrapper(arena, &mut wasm_module, TEST_WRAPPER_NAME, main_fn_index);
 

@@ -53,7 +53,7 @@ impl<'a> RefcountProcGenerator<'a> {
     /// Expands the IR node Stmt::Refcounting to a more detailed IR Stmt that calls a helper proc.
     /// The helper procs themselves can be generated later by calling `generate_refcount_proc`
     /// in a loop over `procs_to_generate`. Helpers are specialized to a particular Layout.
-    pub fn expand_refcount_stmt_to_proc_call<'b>(
+    pub fn expand_refcount_stmt<'b>(
         &mut self,
         layout: Layout<'a>,
         modify: &ModifyRc,

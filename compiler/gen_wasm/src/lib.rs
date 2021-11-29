@@ -37,7 +37,7 @@ pub struct Env<'a> {
 }
 
 pub fn build_module<'a>(
-    env: &'a Env<'a>,
+    env: &'a mut Env<'a>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Result<std::vec::Vec<u8>, String> {
     let (mut wasm_module, _) = build_module_help(env, procedures)?;
@@ -47,7 +47,7 @@ pub fn build_module<'a>(
 }
 
 pub fn build_module_help<'a>(
-    env: &'a Env<'a>,
+    env: &'a mut Env<'a>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Result<(WasmModule<'a>, u32), String> {
     let mut layout_ids = LayoutIds::default();
@@ -90,6 +90,8 @@ pub fn build_module_help<'a>(
 
     // Build the Wasm module
     let (mut module, linker_symbols) = {
+        let mut refcount_procs = Vec::with_capacity_in(generated_procs.len(), env.arena);
+
         let mut backend = WasmBackend::new(
             env,
             layout_ids,
@@ -106,17 +108,21 @@ pub fn build_module_help<'a>(
 
         // The RefcountProcGenerator has now built up a vector of extra procs to generate.
         // But we need to move that vector to be able to safely loop over it.
-        let mut procs_to_generate = Vec::with_capacity_in(0, env.arena);
         std::mem::swap(
             &mut backend.refcount_proc_gen.procs_to_generate,
-            &mut procs_to_generate,
+            &mut refcount_procs,
         );
 
         // Generate the refcount helper procedures
-        for (layout, op, symbol) in procs_to_generate.drain(0..) {
+        for (layout, op, symbol) in refcount_procs.drain(0..) {
             let proc = backend
                 .refcount_proc_gen
                 .generate_refcount_proc(layout, op, symbol);
+
+            if false {
+                println!("{}", proc.to_pretty(200));
+                println!("{:#?}", proc);
+            }
 
             backend.build_proc(proc, symbol)?;
         }

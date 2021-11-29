@@ -3,7 +3,7 @@ use bumpalo::{self, collections::Vec};
 use code_builder::Align;
 use roc_collections::all::MutMap;
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{IdentIds, Symbol};
 use roc_mono::gen_refcount::RefcountProcGenerator;
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
@@ -37,7 +37,7 @@ const CONST_SEGMENT_BASE_ADDR: u32 = 1024;
 const CONST_SEGMENT_INDEX: usize = 0;
 
 pub struct WasmBackend<'a> {
-    env: &'a Env<'a>,
+    env: &'a mut Env<'a>,
 
     // Module-level data
     pub module: WasmModule<'a>,
@@ -60,7 +60,7 @@ pub struct WasmBackend<'a> {
 
 impl<'a> WasmBackend<'a> {
     pub fn new(
-        env: &'a Env<'a>,
+        env: &'a mut Env<'a>,
         layout_ids: LayoutIds<'a>,
         proc_symbols: Vec<'a, (Symbol, u32)>,
         mut linker_symbols: Vec<'a, SymInfo>,
@@ -473,7 +473,14 @@ impl<'a> WasmBackend<'a> {
 
                 let (rc_stmt, new_proc_info) = self
                     .refcount_proc_gen
-                    .expand_refcount_stmt_to_proc_call(layout, modify, *following);
+                    .expand_refcount_stmt(layout, modify, *following);
+
+                let ident_ids: &mut IdentIds = self
+                    .env
+                    .interns
+                    .all_ident_ids
+                    .get_mut(&self.env.module_id)
+                    .unwrap();
 
                 // If we're creating a new RC procedure, we need to store its symbol data,
                 // so that we can correctly generate calls to it.
