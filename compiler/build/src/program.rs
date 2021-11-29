@@ -494,7 +494,7 @@ fn gen_from_mono_module_dev_wasm32(
     let MonomorphizedModule {
         module_id,
         procedures,
-        interns,
+        mut interns,
         ..
     } = loaded;
 
@@ -504,14 +504,13 @@ fn gen_from_mono_module_dev_wasm32(
         .copied()
         .collect::<MutSet<_>>();
 
-    let mut env = roc_gen_wasm::Env {
+    let env = roc_gen_wasm::Env {
         arena,
         module_id,
-        interns,
         exposed_to_host,
     };
 
-    let bytes = roc_gen_wasm::build_module(&mut env, procedures).unwrap();
+    let bytes = roc_gen_wasm::build_module(&env, &mut interns, procedures).unwrap();
 
     std::fs::write(&app_o_file, &bytes).expect("failed to write object to file");
 

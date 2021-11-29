@@ -81,7 +81,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     let MonomorphizedModule {
         module_id,
         procedures,
-        interns,
+        mut interns,
         exposed_to_host,
         ..
     } = loaded;
@@ -113,16 +113,14 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
 
     let exposed_to_host = exposed_to_host.keys().copied().collect::<MutSet<_>>();
 
-    let mut env = roc_gen_wasm::Env {
+    let env = roc_gen_wasm::Env {
         arena,
         module_id,
-        interns,
         exposed_to_host,
     };
 
-
     let (mut wasm_module, main_fn_index) =
-        roc_gen_wasm::build_module_help(&mut env, procedures).unwrap();
+        roc_gen_wasm::build_module_help(&env, &mut interns, procedures).unwrap();
 
     T::insert_test_wrapper(arena, &mut wasm_module, TEST_WRAPPER_NAME, main_fn_index);
 

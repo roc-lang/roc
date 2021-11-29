@@ -16,8 +16,7 @@ use roc_mono::layout::LayoutIds;
 
 use crate::backend::WasmBackend;
 use crate::wasm_module::{
-    Align, CodeBuilder, Export, ExportType, LinkingSubSection, LocalId, SymInfo, ValueType,
-    WasmModule,
+    Align, CodeBuilder, Export, ExportType, LocalId, SymInfo, ValueType, WasmModule,
 };
 
 const PTR_SIZE: u32 = 4;
@@ -32,27 +31,27 @@ pub const STACK_POINTER_NAME: &str = "__stack_pointer";
 pub struct Env<'a> {
     pub arena: &'a Bump,
     pub module_id: ModuleId,
-    pub interns: Interns,
     pub exposed_to_host: MutSet<Symbol>,
 }
 
 pub fn build_module<'a>(
-    env: &'a mut Env<'a>,
+    env: &'a Env<'a>,
+    interns: &'a mut Interns,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Result<std::vec::Vec<u8>, String> {
-    let (mut wasm_module, _) = build_module_help(env, procedures)?;
+    let (mut wasm_module, _) = build_module_help(env, interns, procedures)?;
     let mut buffer = std::vec::Vec::with_capacity(4096);
     wasm_module.serialize_mut(&mut buffer);
     Ok(buffer)
 }
 
 pub fn build_module_help<'a>(
-    env: &'a mut Env<'a>,
+    env: &'a Env<'a>,
+    interns: &'a mut Interns,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Result<(WasmModule<'a>, u32), String> {
     let mut layout_ids = LayoutIds::default();
-    let mut generated_procs = Vec::with_capacity_in(procedures.len(), env.arena);
-    let mut generated_symbols = Vec::with_capacity_in(procedures.len(), env.arena);
+    let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
     let mut proc_symbols = Vec::with_capacity_in(procedures.len() * 2, env.arena);
     let mut linker_symbols = Vec::with_capacity_in(procedures.len() * 2, env.arena);
     let mut exports = Vec::with_capacity_in(4, env.arena);
@@ -65,12 +64,11 @@ pub fn build_module_help<'a>(
         if LowLevel::from_inlined_wrapper(sym).is_some() {
             continue;
         }
-        generated_procs.push(proc);
-        generated_symbols.push(sym);
+        procs.push(proc);
 
         let fn_name = layout_ids
             .get_toplevel(sym, &layout)
-            .to_symbol_string(sym, &env.interns);
+            .to_symbol_string(sym, interns);
 
         if env.exposed_to_host.contains(&sym) {
             main_fn_index = Some(fn_index);
@@ -88,50 +86,36 @@ pub fn build_module_help<'a>(
         fn_index += 1;
     }
 
-    // Build the Wasm module
-    let (mut module, linker_symbols) = {
-        let mut refcount_procs = Vec::with_capacity_in(generated_procs.len(), env.arena);
+    let mut backend = WasmBackend::new(
+        env,
+        interns,
+        layout_ids,
+        proc_symbols,
+        linker_symbols,
+        exports,
+        RefcountProcGenerator::new(env.arena, IntWidth::I32, env.module_id),
+    );
 
-        let mut backend = WasmBackend::new(
-            env,
-            layout_ids,
-            proc_symbols,
-            linker_symbols,
-            exports,
-            RefcountProcGenerator::new(env.arena, IntWidth::I32, env.module_id),
-        );
+    // Generate procs from user code
+    for proc in procs.iter() {
+        backend.build_proc(proc)?;
+    }
 
-        // Main loop: Generate the procs from the IR
-        for (proc, sym) in generated_procs.into_iter().zip(generated_symbols) {
-            backend.build_proc(proc, sym)?;
+    // Generate IR for refcounting procs
+    let refcount_procs = backend.refcount_proc_gen.generate_refcount_procs(env.arena);
+
+    // Generate Wasm for refcounting procs
+    for proc in refcount_procs.iter() {
+        backend.build_proc(proc)?;
+    }
+
+    let module = backend.finalize_module();
+
+    if false {
+        for proc in refcount_procs.into_iter() {
+            println!("{}", proc.to_pretty(200));
         }
-
-        // The RefcountProcGenerator has now built up a vector of extra procs to generate.
-        // But we need to move that vector to be able to safely loop over it.
-        std::mem::swap(
-            &mut backend.refcount_proc_gen.procs_to_generate,
-            &mut refcount_procs,
-        );
-
-        // Generate the refcount helper procedures
-        for (layout, op, symbol) in refcount_procs.drain(0..) {
-            let proc = backend
-                .refcount_proc_gen
-                .generate_refcount_proc(layout, op, symbol);
-
-            if false {
-                println!("{}", proc.to_pretty(200));
-                println!("{:#?}", proc);
-            }
-
-            backend.build_proc(proc, symbol)?;
-        }
-
-        (backend.module, backend.linker_symbols)
-    };
-
-    let symbol_table = LinkingSubSection::SymbolTable(linker_symbols);
-    module.linking.subsections.push(symbol_table);
+    }
 
     Ok((module, main_fn_index.unwrap()))
 }

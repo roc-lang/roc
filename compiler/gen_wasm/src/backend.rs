@@ -3,7 +3,7 @@ use bumpalo::{self, collections::Vec};
 use code_builder::Align;
 use roc_collections::all::MutMap;
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::{IdentIds, Symbol};
+use roc_module::symbol::{Interns, Symbol};
 use roc_mono::gen_refcount::RefcountProcGenerator;
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
@@ -21,7 +21,7 @@ use crate::wasm_module::sections::{
 };
 use crate::wasm_module::{
     code_builder, BlockType, CodeBuilder, ConstExpr, Export, ExportType, Global, GlobalType,
-    LocalId, Signature, SymInfo, ValueType,
+    LinkingSubSection, LocalId, Signature, SymInfo, ValueType,
 };
 use crate::{
     copy_memory, CopyMemoryConfig, Env, BUILTINS_IMPORT_MODULE_NAME, MEMORY_NAME, PTR_SIZE,
@@ -36,8 +36,14 @@ const CONST_SEGMENT_BASE_ADDR: u32 = 1024;
 /// Index of the data segment where we store constants
 const CONST_SEGMENT_INDEX: usize = 0;
 
+#[cfg(debug_assertions)]
+const DEBUG_BUILD: bool = true;
+#[cfg(not(debug_assertions))]
+const DEBUG_BUILD: bool = false;
+
 pub struct WasmBackend<'a> {
-    env: &'a mut Env<'a>,
+    env: &'a Env<'a>,
+    interns: &'a mut Interns,
 
     // Module-level data
     pub module: WasmModule<'a>,
@@ -60,7 +66,8 @@ pub struct WasmBackend<'a> {
 
 impl<'a> WasmBackend<'a> {
     pub fn new(
-        env: &'a mut Env<'a>,
+        env: &'a Env<'a>,
+        interns: &'a mut Interns,
         layout_ids: LayoutIds<'a>,
         proc_symbols: Vec<'a, (Symbol, u32)>,
         mut linker_symbols: Vec<'a, SymInfo>,
@@ -128,6 +135,7 @@ impl<'a> WasmBackend<'a> {
 
         WasmBackend {
             env,
+            interns,
 
             // Module-level data
             module,
@@ -146,6 +154,17 @@ impl<'a> WasmBackend<'a> {
             storage: Storage::new(arena),
             symbol_layouts: MutMap::default(),
         }
+    }
+
+    pub fn finalize_module(mut self) -> WasmModule<'a> {
+        if DEBUG_BUILD {
+            let module_id = self.env.module_id;
+            let ident_ids = self.interns.all_ident_ids.get(&module_id).unwrap();
+            self.env.module_id.register_debug_idents(ident_ids);
+        }
+        let symbol_table = LinkingSubSection::SymbolTable(self.linker_symbols);
+        self.module.linking.subsections.push(symbol_table);
+        self.module
     }
 
     /// Reset function-level data
@@ -167,17 +186,17 @@ impl<'a> WasmBackend<'a> {
 
     ***********************************************************/
 
-    pub fn build_proc(&mut self, proc: Proc<'a>, _sym: Symbol) -> Result<(), String> {
-        // println!("\ngenerating procedure {:?}\n", _sym);
+    pub fn build_proc(&mut self, proc: &Proc<'a>) -> Result<(), String> {
+        // println!("\ngenerating procedure {:?}\n", proc.name);
 
-        self.start_proc(&proc);
+        self.start_proc(proc);
 
         self.build_stmt(&proc.body, &proc.ret_layout)?;
 
         self.finalize_proc()?;
         self.reset();
 
-        // println!("\nfinished generating {:?}\n", _sym);
+        // println!("\nfinished generating {:?}\n", proc.name);
 
         Ok(())
     }
@@ -469,18 +488,17 @@ impl<'a> WasmBackend<'a> {
 
             Stmt::Refcounting(modify, following) => {
                 let value = modify.get_symbol();
-                let layout = self.symbol_layouts.get(&value).unwrap().clone();
+                let layout = self.symbol_layouts.get(&value).unwrap();
 
-                let (rc_stmt, new_proc_info) = self
-                    .refcount_proc_gen
-                    .expand_refcount_stmt(layout, modify, *following);
-
-                let ident_ids: &mut IdentIds = self
-                    .env
+                let ident_ids = self
                     .interns
                     .all_ident_ids
                     .get_mut(&self.env.module_id)
                     .unwrap();
+
+                let (rc_stmt, new_proc_info) = self
+                    .refcount_proc_gen
+                    .expand_refcount_stmt(ident_ids, *layout, modify, *following);
 
                 // If we're creating a new RC procedure, we need to store its symbol data,
                 // so that we can correctly generate calls to it.
@@ -488,7 +506,7 @@ impl<'a> WasmBackend<'a> {
                     let name = self
                         .layout_ids
                         .get_toplevel(rc_proc_sym, &rc_proc_layout)
-                        .to_symbol_string(rc_proc_sym, &self.env.interns);
+                        .to_symbol_string(rc_proc_sym, self.interns);
                     let linker_sym_index = self.proc_symbols.len() as u32;
                     self.proc_symbols.push((rc_proc_sym, linker_sym_index));
                     self.linker_symbols
@@ -779,7 +797,7 @@ impl<'a> WasmBackend<'a> {
                 let name = self
                     .layout_ids
                     .get(sym, layout)
-                    .to_symbol_string(sym, &self.env.interns);
+                    .to_symbol_string(sym, self.interns);
                 let linker_symbol = SymInfo::Data(DataSymbol::Defined {
                     flags: 0,
                     name,

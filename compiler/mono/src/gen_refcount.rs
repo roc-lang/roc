@@ -1,8 +1,9 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_builtins::bitcode::IntWidth;
+use roc_module::ident::Ident;
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::{Interns, ModuleId, Symbol};
+use roc_module::symbol::{IdentIds, Interns, ModuleId, Symbol};
 
 use crate::ir::{
     BranchInfo, Call, CallSpecId, CallType, Expr, HostExposedLayouts, Literal, ModifyRc, Proc,
@@ -51,20 +52,21 @@ impl<'a> RefcountProcGenerator<'a> {
     }
 
     /// Expands the IR node Stmt::Refcounting to a more detailed IR Stmt that calls a helper proc.
-    /// The helper procs themselves can be generated later by calling `generate_refcount_proc`
-    /// in a loop over `procs_to_generate`. Helpers are specialized to a particular Layout.
-    pub fn expand_refcount_stmt<'b>(
+    /// The helper procs themselves can be generated later by calling `generate_refcount_procs`
+    pub fn expand_refcount_stmt(
         &mut self,
+        ident_ids: &mut IdentIds,
         layout: Layout<'a>,
         modify: &ModifyRc,
         following: &'a Stmt<'a>,
     ) -> (Stmt<'a>, Option<(Symbol, ProcLayout<'a>)>) {
         match modify {
             ModifyRc::Inc(structure, amount) => {
-                let (is_existing, proc_name) = self.get_proc_name(layout, RefcountOp::Inc);
+                let (is_existing, proc_name) =
+                    self.get_proc_symbol(ident_ids, layout, RefcountOp::Inc);
 
                 // Define a constant for the amount to increment
-                let amount_sym = self.unique_symbol();
+                let amount_sym = self.create_symbol(ident_ids, "amount");
                 let amount_expr = Expr::Literal(Literal::Int(*amount as i128));
                 let amount_stmt = |next| Stmt::Let(amount_sym, amount_expr, LAYOUT_UNIT, next);
 
@@ -100,7 +102,8 @@ impl<'a> RefcountProcGenerator<'a> {
             }
 
             ModifyRc::Dec(structure) => {
-                let (is_existing, proc_name) = self.get_proc_name(layout, RefcountOp::Dec);
+                let (is_existing, proc_name) =
+                    self.get_proc_symbol(ident_ids, layout, RefcountOp::Dec);
 
                 // Call helper proc, passing the Roc structure
                 let arg_layouts = self.arena.alloc([layout, self.layout_isize]);
@@ -164,36 +167,48 @@ impl<'a> RefcountProcGenerator<'a> {
         }
     }
 
-    /// Generate a refcounting helper proc, specialized to a particular Layout.
+    /// Generate refcounting helper procs, each specialized to a particular Layout.
     /// For example `List (Result { a: Str, b: Int } Str)` would get its own helper
     /// to update the refcounts on the List, the Result and the strings.
-    /// This method should be called once for every item in procs_to_generate
-    pub fn generate_refcount_proc(
-        &mut self,
-        layout: Layout<'a>,
-        op: RefcountOp,
-        symbol: Symbol,
-    ) -> Proc<'a> {
-        match layout {
-            Layout::Builtin(Builtin::Str) => self.gen_modify_str(op, symbol),
-            _ => todo!("Refcounting is not yet implemented for Layout {:?}", layout),
+    pub fn generate_refcount_procs(&mut self, arena: &'a Bump) -> Vec<'a, Proc<'a>> {
+        // Move the vector so we can loop over it safely
+        let mut procs_to_generate = Vec::with_capacity_in(0, arena);
+        std::mem::swap(&mut self.procs_to_generate, &mut procs_to_generate);
+
+        let mut procs = Vec::with_capacity_in(procs_to_generate.len(), arena);
+        for (layout, op, symbol) in procs_to_generate.drain(0..) {
+            let proc = match layout {
+                Layout::Builtin(Builtin::Str) => self.gen_modify_str(op, symbol),
+                _ => todo!("Refcounting is not yet implemented for Layout {:?}", layout),
+            };
+            procs.push(proc);
         }
+
+        procs
     }
 
-    /// Find the name of the procedure for this layout and refcount operation,
-    /// or create one if needed. "Names" are really just auto-generated Symbols.
-    fn get_proc_name(&mut self, layout: Layout<'a>, op: RefcountOp) -> (bool, Symbol) {
+    /// Find the Symbol of the procedure for this layout and refcount operation,
+    /// or create one if needed.
+    fn get_proc_symbol(
+        &mut self,
+        ident_ids: &mut IdentIds,
+        layout: Layout<'a>,
+        op: RefcountOp,
+    ) -> (bool, Symbol) {
         let found = self
             .procs_to_generate
             .iter()
             .find(|(l, o, _)| *l == layout && *o == op);
 
-        if let Some((_, _, existing_name)) = found {
-            (true, *existing_name)
+        if let Some((_, _, existing_symbol)) = found {
+            (true, *existing_symbol)
         } else {
-            let new_name: Symbol = self.unique_symbol();
-            self.procs_to_generate.push((layout, op, new_name));
-            (false, new_name)
+            let layout_name = layout_debug_name(&layout);
+            let unique_idx = self.procs_to_generate.len();
+            let debug_name = format!("#rc{:?}_{}_{}", op, layout_name, unique_idx);
+            let new_symbol: Symbol = self.create_symbol(ident_ids, &debug_name);
+            self.procs_to_generate.push((layout, op, new_symbol));
+            (false, new_symbol)
         }
     }
 
@@ -201,6 +216,11 @@ impl<'a> RefcountProcGenerator<'a> {
         let id = self.next_symbol_id;
         self.next_symbol_id += 1;
         Interns::from_index(self.home, id)
+    }
+
+    fn create_symbol(&mut self, ident_ids: &mut IdentIds, name: &str) -> Symbol {
+        let ident_id = ident_ids.add(Ident::from(name));
+        Symbol::new(self.home, ident_id)
     }
 
     fn return_unit(&mut self) -> Stmt<'a> {
@@ -342,5 +362,23 @@ impl<'a> RefcountProcGenerator<'a> {
             must_own_arguments: false,
             host_exposed_layouts: HostExposedLayouts::NotHostExposed,
         }
+    }
+}
+
+/// Helper to derive a debug function name from a layout
+fn layout_debug_name<'a>(layout: &Layout<'a>) -> &'static str {
+    match layout {
+        Layout::Builtin(Builtin::List(_)) => "list",
+        Layout::Builtin(Builtin::Set(_)) => "set",
+        Layout::Builtin(Builtin::Dict(_, _)) => "dict",
+        Layout::Builtin(Builtin::Str) => "str",
+        Layout::Builtin(builtin) => {
+            debug_assert!(!builtin.is_refcounted());
+            unreachable!("Builtin {:?} is not refcounted", builtin);
+        }
+        Layout::Struct(_) => "struct",
+        Layout::Union(_) => "union",
+        Layout::LambdaSet(_) => "lambdaset",
+        Layout::RecursivePointer => "recursive_pointer",
     }
 }
