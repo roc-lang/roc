@@ -438,10 +438,12 @@ impl<'a> CodeBuilder<'a> {
     ) {
         self.build_local_declarations(local_types);
 
-        if let Some(frame_ptr_id) = frame_pointer {
-            let aligned_size = round_up_to_alignment(frame_size, FRAME_ALIGNMENT_BYTES);
-            self.build_stack_frame_push(aligned_size, frame_ptr_id);
-            self.build_stack_frame_pop(aligned_size, frame_ptr_id);
+        if frame_size != 0 {
+            if let Some(frame_ptr_id) = frame_pointer {
+                let aligned_size = round_up_to_alignment(frame_size, FRAME_ALIGNMENT_BYTES);
+                self.build_stack_frame_push(aligned_size, frame_ptr_id);
+                self.build_stack_frame_pop(aligned_size, frame_ptr_id);
+            }
         }
 
         self.code.push(END as u8);

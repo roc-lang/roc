@@ -165,12 +165,18 @@ impl<'a> Storage<'a> {
             } => {
                 let location = match kind {
                     StoredValueKind::Parameter => {
-                        self.arg_types.push(PTR_TYPE);
-                        StackMemoryLocation::PointerArg(next_local_id)
+                        if *size > 0 {
+                            self.arg_types.push(PTR_TYPE);
+                            StackMemoryLocation::PointerArg(next_local_id)
+                        } else {
+                            // An argument with zero size is purely conceptual, and will not exist in Wasm.
+                            // However we need to track the symbol, so we treat it like a local variable.
+                            StackMemoryLocation::FrameOffset(0)
+                        }
                     }
 
                     StoredValueKind::Variable => {
-                        if self.stack_frame_pointer.is_none() {
+                        if self.stack_frame_pointer.is_none() && *size > 0 {
                             self.stack_frame_pointer = Some(next_local_id);
                             self.local_types.push(PTR_TYPE);
                         }

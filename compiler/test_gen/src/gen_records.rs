@@ -254,7 +254,7 @@ fn twice_record_access() {
     );
 }
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn empty_record() {
     assert_evals_to!(
         indoc!(
