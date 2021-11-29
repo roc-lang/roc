@@ -1,3 +1,6 @@
+#![cfg(feature = "gen-llvm")]
+#![cfg(feature = "gen-wasm")]
+
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
 
