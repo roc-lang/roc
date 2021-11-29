@@ -686,8 +686,8 @@ where
                             self.set_last_seen(*sym, stmt, &owning_symbol);
                         }
                     }
-                    Expr::Reset(sym) => {
-                        self.set_last_seen(*sym, stmt, &owning_symbol);
+                    Expr::Reset { symbol, .. } => {
+                        self.set_last_seen(*symbol, stmt, &owning_symbol);
                     }
                     Expr::EmptyArray => {}
                     Expr::RuntimeErrorFunction(_) => {}

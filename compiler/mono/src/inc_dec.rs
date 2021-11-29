@@ -110,7 +110,7 @@ pub fn occurring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
             result.extend(arguments.iter().copied());
             result.insert(*symbol);
         }
-        Reset(x) => {
+        Reset { symbol: x, .. } => {
             result.insert(*x);
         }
 
@@ -761,7 +761,7 @@ impl<'a> Context<'a> {
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
-            EmptyArray | Literal(_) | Reset(_) | RuntimeErrorFunction(_) => {
+            EmptyArray | Literal(_) | Reset { .. } | RuntimeErrorFunction(_) => {
                 // EmptyArray is always stack-allocated
                 // function pointers are persistent
                 self.arena.alloc(Stmt::Let(z, v, l, b))
@@ -779,7 +779,7 @@ impl<'a> Context<'a> {
         // must this value be consumed?
         let consume = consume_expr(&self.vars, expr);
 
-        let reset = matches!(expr, Expr::Reset(_));
+        let reset = matches!(expr, Expr::Reset { .. });
 
         self.update_var_info_help(symbol, layout, persistent, consume, reset)
     }
