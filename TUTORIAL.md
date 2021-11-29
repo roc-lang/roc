@@ -774,7 +774,7 @@ In fact, it's such a common pattern that there's a whole module called `Result` 
 Here are some examples of `Result` functions:
 
 ```coffee
-Result.withDefault "" (List.get [ "a", "b", "c" ] 100)
+Result.withDefault (List.get [ "a", "b", "c" ] 100) ""
 # returns "" because that's the default we said to use if List.get returned an Err
 ```
 
@@ -792,7 +792,7 @@ style using the `|>` operator. Here are three examples of writing the same expre
 compile to exactly the same thing, but two of them use the `|>` operator to change how the calls look.
 
 ```coffee
-Result.withDefault "" (List.get [ "a", "b", "c" ] 1)
+Result.withDefault (List.get [ "a", "b", "c" ] 1) ""
 ```
 
 ```coffee
