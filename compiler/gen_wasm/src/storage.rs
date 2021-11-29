@@ -4,7 +4,9 @@ use bumpalo::Bump;
 use roc_collections::all::MutMap;
 use roc_module::symbol::Symbol;
 
-use crate::layout::{StackMemoryFormat, WasmLayout};
+use crate::layout::{
+    CallConv, ReturnMethod, StackMemoryFormat, WasmLayout, ZigVersion, BUILTINS_ZIG_VERSION,
+};
 use crate::wasm_module::{Align, CodeBuilder, LocalId, ValueType, VmSymbolState};
 use crate::{copy_memory, round_up_to_alignment, CopyMemoryConfig, PTR_SIZE, PTR_TYPE};
 
@@ -55,11 +57,22 @@ pub enum StoredValue {
 }
 
 impl StoredValue {
-    pub fn value_type(&self) -> ValueType {
+    /// Value types to pass to Wasm functions
+    /// One Roc value can become 0, 1, or 2 Wasm arguments
+    pub fn arg_types(&self, conv: CallConv) -> &'static [ValueType] {
+        use ValueType::*;
         match self {
-            Self::VirtualMachineStack { value_type, .. } => *value_type,
-            Self::Local { value_type, .. } => *value_type,
-            Self::StackMemory { .. } => ValueType::I32,
+            // Simple numbers: 1 Roc argument => 1 Wasm argument
+            Self::VirtualMachineStack { value_type, .. } | Self::Local { value_type, .. } => {
+                match value_type {
+                    I32 => &[I32],
+                    I64 => &[I64],
+                    F32 => &[F32],
+                    F64 => &[F64],
+                }
+            }
+            // Stack memory values: 1 Roc argument => 0-2 Wasm arguments
+            Self::StackMemory { size, format, .. } => conv.stack_memory_arg_types(*size, *format),
         }
     }
 }
@@ -152,12 +165,18 @@ impl<'a> Storage<'a> {
             } => {
                 let location = match kind {
                     StoredValueKind::Parameter => {
-                        self.arg_types.push(PTR_TYPE);
-                        StackMemoryLocation::PointerArg(next_local_id)
+                        if *size > 0 {
+                            self.arg_types.push(PTR_TYPE);
+                            StackMemoryLocation::PointerArg(next_local_id)
+                        } else {
+                            // An argument with zero size is purely conceptual, and will not exist in Wasm.
+                            // However we need to track the symbol, so we treat it like a local variable.
+                            StackMemoryLocation::FrameOffset(0)
+                        }
                     }
 
                     StoredValueKind::Variable => {
-                        if self.stack_frame_pointer.is_none() {
+                        if self.stack_frame_pointer.is_none() && *size > 0 {
                             self.stack_frame_pointer = Some(next_local_id);
                             self.local_types.push(PTR_TYPE);
                         }
@@ -243,13 +262,20 @@ impl<'a> Storage<'a> {
             }
 
             StoredValue::StackMemory {
-                location, format, ..
+                location,
+                format,
+                size,
+                ..
             } => {
+                if size == 0 {
+                    return;
+                }
+
                 let (local_id, offset) = location.local_and_offset(self.stack_frame_pointer);
 
                 code_builder.get_local(local_id);
 
-                if format == StackMemoryFormat::Aggregate {
+                if format == StackMemoryFormat::DataStructure {
                     if offset != 0 {
                         code_builder.i32_const(offset as i32);
                         code_builder.i32_add();
@@ -269,6 +295,44 @@ impl<'a> Storage<'a> {
         }
     }
 
+    fn load_symbol_zig(&mut self, code_builder: &mut CodeBuilder, arg: Symbol) {
+        if let StoredValue::StackMemory {
+            location,
+            size,
+            alignment_bytes,
+            format: StackMemoryFormat::DataStructure,
+        } = self.get(&arg)
+        {
+            if *size == 0 {
+                // do nothing
+            } else if *size > 16 {
+                self.load_symbol_ccc(code_builder, arg);
+            } else {
+                let (local_id, offset) = location.local_and_offset(self.stack_frame_pointer);
+                code_builder.get_local(local_id);
+                let align = Align::from(*alignment_bytes);
+
+                if *size == 1 {
+                    code_builder.i32_load8_u(align, offset);
+                } else if *size == 2 {
+                    code_builder.i32_load16_u(align, offset);
+                } else if *size <= 4 {
+                    code_builder.i32_load(align, offset);
+                } else if *size <= 8 {
+                    code_builder.i64_load(align, offset);
+                } else if *size <= 12 && BUILTINS_ZIG_VERSION == ZigVersion::Zig9 {
+                    code_builder.i64_load(align, offset);
+                    code_builder.i32_load(align, offset + 8);
+                } else {
+                    code_builder.i64_load(align, offset);
+                    code_builder.i64_load(align, offset + 8);
+                }
+            }
+        } else {
+            self.load_symbol_ccc(code_builder, arg);
+        }
+    }
+
     /// stack memory values are returned by pointer. e.g. a roc function
     ///
     /// add : I128, I128 -> I128
@@ -284,7 +348,11 @@ impl<'a> Storage<'a> {
             StoredValue::VirtualMachineStack { .. } | StoredValue::Local { .. } => {
                 unreachable!("these storage types are not returned by writing to a pointer")
             }
-            StoredValue::StackMemory { location, .. } => {
+            StoredValue::StackMemory { location, size, .. } => {
+                if size == 0 {
+                    return;
+                }
+
                 let (local_id, offset) = location.local_and_offset(self.stack_frame_pointer);
 
                 code_builder.get_local(local_id);
@@ -311,58 +379,58 @@ impl<'a> Storage<'a> {
         }
     }
 
-    /// Load symbols in a way compatible with LLVM's "fast calling convention"
-    /// A bug in Zig means it always uses this for Wasm even when we specify C calling convention.
-    /// It squashes small structs into primitive values where possible, avoiding stack memory
-    /// in favour of CPU registers (or VM stack values, which eventually become CPU registers).
-    /// We need to convert some of our structs from our internal C-like representation to work with Zig.
-    /// We are sticking to C ABI for better compatibility on the platform side.
-    pub fn load_symbols_fastcc(
+    /// Load symbols for a function call
+    pub fn load_symbols_for_call(
         &mut self,
+        arena: &'a Bump,
         code_builder: &mut CodeBuilder,
-        symbols: &[Symbol],
+        arguments: &[Symbol],
         return_symbol: Symbol,
         return_layout: &WasmLayout,
-    ) {
-        // Note: we are not doing verify_stack_match in this case so we may generate more code.
-        // We would need more bookkeeping in CodeBuilder to track which representation is on the stack!
+        call_conv: CallConv,
+    ) -> (Vec<'a, ValueType>, Option<ValueType>) {
+        let mut wasm_arg_types = Vec::with_capacity_in(arguments.len() * 2 + 1, arena);
+        let mut wasm_args = Vec::with_capacity_in(arguments.len() * 2 + 1, arena);
 
-        if return_layout.is_stack_memory() {
-            // Load the address where the return value should be written
-            self.load_return_address_ccc(code_builder, return_symbol);
-        }
+        let return_method = return_layout.return_method();
+        let return_type = match return_method {
+            ReturnMethod::Primitive(ty) => Some(ty),
+            ReturnMethod::NoReturnValue => None,
+            ReturnMethod::WriteToPointerArg => {
+                wasm_arg_types.push(PTR_TYPE);
+                wasm_args.push(return_symbol);
+                None
+            }
+        };
 
-        for sym in symbols {
-            if let StoredValue::StackMemory {
-                location,
-                size,
-                alignment_bytes,
-                format: StackMemoryFormat::Aggregate,
-            } = self.get(sym)
-            {
-                if *size == 0 {
-                    unimplemented!("Passing zero-sized values is not implemented yet");
-                } else if *size > 8 {
-                    return self.load_symbol_ccc(code_builder, *sym);
-                }
-
-                let (local_id, offset) = location.local_and_offset(self.stack_frame_pointer);
-                code_builder.get_local(local_id);
-                let align = Align::from(*alignment_bytes);
-
-                if *size == 1 {
-                    code_builder.i32_load8_u(align, offset);
-                } else if *size == 2 {
-                    code_builder.i32_load16_u(align, offset);
-                } else if *size <= 4 {
-                    code_builder.i32_load(align, offset);
-                } else {
-                    code_builder.i64_load(align, offset);
-                }
-            } else {
-                self.load_symbol_ccc(code_builder, *sym);
+        for arg in arguments {
+            let stored = self.symbol_storage_map.get(arg).unwrap();
+            let arg_types = stored.arg_types(call_conv);
+            wasm_arg_types.extend_from_slice(arg_types);
+            match arg_types.len() {
+                0 => {}
+                1 => wasm_args.push(*arg),
+                2 => wasm_args.extend_from_slice(&[*arg, *arg]),
+                n => unreachable!("Cannot have {} Wasm arguments for 1 Roc argument", n),
             }
         }
+
+        // If the symbols were already at the top of the stack, do nothing!
+        // Should be common for simple cases, due to the structure of the Mono IR
+        if !code_builder.verify_stack_match(&wasm_args) {
+            if return_method == ReturnMethod::WriteToPointerArg {
+                self.load_return_address_ccc(code_builder, return_symbol);
+            };
+
+            for arg in arguments {
+                match call_conv {
+                    CallConv::C => self.load_symbol_ccc(code_builder, *arg),
+                    CallConv::Zig => self.load_symbol_zig(code_builder, *arg),
+                }
+            }
+        }
+
+        (wasm_arg_types, return_type)
     }
 
     /// Generate code to copy a StoredValue to an arbitrary memory location

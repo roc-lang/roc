@@ -7,7 +7,7 @@ use roc_module::symbol::Symbol;
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
-use crate::layout::{StackMemoryFormat, WasmLayout};
+use crate::layout::{CallConv, ReturnMethod, WasmLayout};
 use crate::low_level::{decode_low_level, LowlevelBuildResult};
 use crate::storage::{Storage, StoredValue, StoredValueKind};
 use crate::wasm_module::linking::{
@@ -177,15 +177,19 @@ impl<'a> WasmBackend<'a> {
 
     fn start_proc(&mut self, proc: &Proc<'a>) {
         let ret_layout = WasmLayout::new(&proc.ret_layout);
-        let ret_type = if ret_layout.is_stack_memory() {
-            self.storage.arg_types.push(PTR_TYPE);
-            self.start_block(BlockType::NoResult); // block to ensure all paths pop stack memory (if any)
-            None
-        } else {
-            let ty = ret_layout.value_type();
-            self.start_block(BlockType::Value(ty)); // block to ensure all paths pop stack memory (if any)
-            Some(ty)
+
+        let ret_type = match ret_layout.return_method() {
+            ReturnMethod::Primitive(ty) => Some(ty),
+            ReturnMethod::NoReturnValue => None,
+            ReturnMethod::WriteToPointerArg => {
+                self.storage.arg_types.push(PTR_TYPE);
+                None
+            }
         };
+
+        // Create a block so we can exit the function without skipping stack frame "pop" code.
+        // We never use the `return` instruction. Instead, we break from this block.
+        self.start_block(BlockType::from(ret_type));
 
         for (layout, symbol) in proc.args {
             let arg_layout = WasmLayout::new(layout);
@@ -219,10 +223,9 @@ impl<'a> WasmBackend<'a> {
 
     ***********************************************************/
 
-    /// start a loop that leaves a value on the stack
-    fn start_loop_with_return(&mut self, value_type: ValueType) {
+    fn start_loop(&mut self, block_type: BlockType) {
         self.block_depth += 1;
-        self.code_builder.loop_(BlockType::Value(value_type));
+        self.code_builder.loop_(block_type);
     }
 
     fn start_block(&mut self, block_type: BlockType) {
@@ -335,7 +338,7 @@ impl<'a> WasmBackend<'a> {
                 }
 
                 let is_bool = matches!(cond_layout, Layout::Builtin(Builtin::Bool));
-                let cond_type = WasmLayout::new(cond_layout).value_type();
+                let cond_type = WasmLayout::new(cond_layout).arg_types(CallConv::C)[0];
 
                 // then, we jump whenever the value under scrutiny is equal to the value of a branch
                 for (i, (value, _, _)) in branches.iter().enumerate() {
@@ -419,10 +422,14 @@ impl<'a> WasmBackend<'a> {
 
                 self.end_block();
 
-                // A `return` inside of a `loop` seems to make it so that the `loop` itself
-                // also "returns" (so, leaves on the stack) a value of the return type.
-                let return_wasm_layout = WasmLayout::new(ret_layout);
-                self.start_loop_with_return(return_wasm_layout.value_type());
+                // A loop (or any block) needs to declare the type of the value it leaves on the stack on exit.
+                // The runtime needs this to statically validate the program before running it.
+                let loop_block_type = match WasmLayout::new(ret_layout).return_method() {
+                    ReturnMethod::Primitive(ty) => BlockType::Value(ty),
+                    ReturnMethod::WriteToPointerArg => BlockType::NoResult,
+                    ReturnMethod::NoReturnValue => BlockType::NoResult,
+                };
+                self.start_loop(loop_block_type);
 
                 self.build_stmt(body, ret_layout)?;
 
@@ -488,19 +495,14 @@ impl<'a> WasmBackend<'a> {
                         return self.build_low_level(lowlevel, arguments, *sym, wasm_layout);
                     }
 
-                    let mut wasm_args_tmp: Vec<Symbol>;
-                    let (wasm_args, has_return_val) = match wasm_layout {
-                        WasmLayout::StackMemory { .. } => {
-                            wasm_args_tmp =
-                                Vec::with_capacity_in(arguments.len() + 1, self.env.arena);
-                            wasm_args_tmp.push(*sym);
-                            wasm_args_tmp.extend_from_slice(*arguments);
-                            (wasm_args_tmp.as_slice(), false)
-                        }
-                        _ => (*arguments, true),
-                    };
-
-                    self.storage.load_symbols(&mut self.code_builder, wasm_args);
+                    let (param_types, ret_type) = self.storage.load_symbols_for_call(
+                        self.env.arena,
+                        &mut self.code_builder,
+                        arguments,
+                        *sym,
+                        &wasm_layout,
+                        CallConv::C,
+                    );
 
                     // Index of the called function in the code section. Assumes all functions end up in the binary.
                     // (We may decide to keep all procs even if calls are inlined, in case platform calls them)
@@ -519,12 +521,10 @@ impl<'a> WasmBackend<'a> {
                     // Same as the function index since those are the first symbols we add
                     let symbol_index = func_index;
 
-                    self.code_builder.call(
-                        func_index,
-                        symbol_index,
-                        wasm_args.len(),
-                        has_return_val,
-                    );
+                    let num_wasm_args = param_types.len();
+                    let has_return_val = ret_type.is_some();
+                    self.code_builder
+                        .call(func_index, symbol_index, num_wasm_args, has_return_val);
 
                     Ok(())
                 }
@@ -572,14 +572,13 @@ impl<'a> WasmBackend<'a> {
         return_sym: Symbol,
         return_layout: WasmLayout,
     ) -> Result<(), String> {
-        // Load symbols using the "fast calling convention" that Zig uses instead of the C ABI we normally use.
-        // It's only different from the C ABI for small structs, and we are using Zig for all of those cases.
-        // This is a workaround for a bug in Zig. If later versions fix it, we can change to the C ABI.
-        self.storage.load_symbols_fastcc(
+        let (param_types, ret_type) = self.storage.load_symbols_for_call(
+            self.env.arena,
             &mut self.code_builder,
             arguments,
             return_sym,
             &return_layout,
+            CallConv::Zig,
         );
 
         let build_result = decode_low_level(
@@ -594,7 +593,7 @@ impl<'a> WasmBackend<'a> {
         match build_result {
             Done => Ok(()),
             BuiltinCall(name) => {
-                self.call_zig_builtin(name, arguments, &return_layout);
+                self.call_zig_builtin(name, param_types, ret_type);
                 Ok(())
             }
             NotImplemented => Err(format!(
@@ -767,7 +766,9 @@ impl<'a> WasmBackend<'a> {
                             );
                         }
                     } else {
-                        return Err(format!("Not supported yet: zero-size struct at {:?}", sym));
+                        // Zero-size struct. No code to emit.
+                        // These values are purely conceptual, they only exist internally in the compiler
+                        return Ok(());
                     }
                 }
                 _ => {
@@ -789,7 +790,15 @@ impl<'a> WasmBackend<'a> {
     /// Generate a call instruction to a Zig builtin function.
     /// And if we haven't seen it before, add an Import and linker data for it.
     /// Zig calls use LLVM's "fast" calling convention rather than our usual C ABI.
-    fn call_zig_builtin(&mut self, name: &'a str, arguments: &[Symbol], ret_layout: &WasmLayout) {
+    fn call_zig_builtin(
+        &mut self,
+        name: &'a str,
+        param_types: Vec<'a, ValueType>,
+        ret_type: Option<ValueType>,
+    ) {
+        let num_wasm_args = param_types.len();
+        let has_return_val = ret_type.is_some();
+
         let (fn_index, linker_symbol_index) = match self.builtin_sym_index_map.get(name) {
             Some(sym_idx) => match &self.linker_symbols[*sym_idx] {
                 SymInfo::Function(WasmObjectSymbol::Imported { index, .. }) => {
@@ -799,51 +808,13 @@ impl<'a> WasmBackend<'a> {
             },
 
             None => {
-                let mut param_types = Vec::with_capacity_in(1 + arguments.len(), self.env.arena);
-
-                let ret_type = if ret_layout.is_stack_memory() {
-                    param_types.push(ValueType::I32);
-                    None
-                } else {
-                    Some(ret_layout.value_type())
-                };
-
-                for arg in arguments {
-                    match self.storage.get(arg) {
-                        StoredValue::StackMemory { size, format, .. } => {
-                            use StackMemoryFormat::*;
-
-                            match format {
-                                Aggregate => {
-                                    // Zig's "fast calling convention" packs structs into CPU registers
-                                    // (stack machine slots) if possible.  If they're small enough they
-                                    // can go into an I32 or I64. If they're big, they're pointers (I32).
-                                    if *size > 4 && *size <= 8 {
-                                        param_types.push(ValueType::I64)
-                                    } else {
-                                        // either
-                                        //
-                                        // - this is a small value, that fits in an i32
-                                        // - this is a big value, we pass a memory address
-                                        param_types.push(ValueType::I32)
-                                    }
-                                }
-                                Int128 | Float128 | Decimal => {
-                                    // these types are passed as 2 i64s
-                                    param_types.push(ValueType::I64);
-                                    param_types.push(ValueType::I64);
-                                }
-                            }
-                        }
-                        stored => param_types.push(stored.value_type()),
-                    }
-                }
-
+                // Wasm function signature
                 let signature_index = self.module.types.insert(Signature {
                     param_types,
                     ret_type,
                 });
 
+                // Declare it as an import since it comes from a different .o file
                 let import_index = self.module.import.entries.len() as u32;
                 let import = Import {
                     module: BUILTINS_IMPORT_MODULE_NAME,
@@ -852,22 +823,22 @@ impl<'a> WasmBackend<'a> {
                 };
                 self.module.import.entries.push(import);
 
+                // Provide symbol information for the linker
                 let sym_idx = self.linker_symbols.len();
                 let sym_info = SymInfo::Function(WasmObjectSymbol::Imported {
                     flags: WASM_SYM_UNDEFINED,
                     index: import_index,
                 });
                 self.linker_symbols.push(sym_info);
+
+                // Remember that we have created all of this data, and don't need to do it again
                 self.builtin_sym_index_map.insert(name, sym_idx);
 
                 (import_index, sym_idx as u32)
             }
         };
-        self.code_builder.call(
-            fn_index,
-            linker_symbol_index,
-            arguments.len(),
-            true, // TODO: handle builtins with no return value
-        );
+
+        self.code_builder
+            .call(fn_index, linker_symbol_index, num_wasm_args, has_return_val);
     }
 }

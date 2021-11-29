@@ -50,6 +50,15 @@ impl BlockType {
     }
 }
 
+impl From<Option<ValueType>> for BlockType {
+    fn from(opt: Option<ValueType>) -> Self {
+        match opt {
+            Some(ty) => BlockType::Value(ty),
+            None => BlockType::NoResult,
+        }
+    }
+}
+
 /// A control block in our model of the VM
 /// Child blocks cannot "see" values from their parent block
 struct VmBlock<'a> {
@@ -429,10 +438,12 @@ impl<'a> CodeBuilder<'a> {
     ) {
         self.build_local_declarations(local_types);
 
-        if let Some(frame_ptr_id) = frame_pointer {
-            let aligned_size = round_up_to_alignment(frame_size, FRAME_ALIGNMENT_BYTES);
-            self.build_stack_frame_push(aligned_size, frame_ptr_id);
-            self.build_stack_frame_pop(aligned_size, frame_ptr_id);
+        if frame_size != 0 {
+            if let Some(frame_ptr_id) = frame_pointer {
+                let aligned_size = round_up_to_alignment(frame_size, FRAME_ALIGNMENT_BYTES);
+                self.build_stack_frame_push(aligned_size, frame_ptr_id);
+                self.build_stack_frame_pop(aligned_size, frame_ptr_id);
+            }
         }
 
         self.code.push(END as u8);

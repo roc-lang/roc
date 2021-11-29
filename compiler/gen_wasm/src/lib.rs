@@ -118,6 +118,9 @@ pub fn copy_memory(code_builder: &mut CodeBuilder, config: CopyMemoryConfig) {
     if config.from_ptr == config.to_ptr && config.from_offset == config.to_offset {
         return;
     }
+    if config.size == 0 {
+        return;
+    }
 
     let alignment = Align::from(config.alignment_bytes);
     let mut i = 0;

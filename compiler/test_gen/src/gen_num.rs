@@ -1171,7 +1171,7 @@ fn gen_order_of_arithmetic_ops_complex_float() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn if_guard_bind_variable_false() {
     assert_evals_to!(
         indoc!(
@@ -1190,7 +1190,7 @@ fn if_guard_bind_variable_false() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn if_guard_bind_variable_true() {
     assert_evals_to!(
         indoc!(
