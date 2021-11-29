@@ -561,6 +561,27 @@ impl<'a> WasmBackend<'a> {
                 Ok(())
             }
 
+            Expr::Array { .. } => Err(format!("Expression is not yet implemented {:?}", 2)),
+
+            Expr::EmptyArray => {
+                if let StoredValue::StackMemory { location, .. } = storage {
+                    let (local_id, offset) =
+                        location.local_and_offset(self.storage.stack_frame_pointer);
+
+                    // This is a minor cheat. We only need the first two 32 bit
+                    // chunks here. We fill both chunks with zeros, so we
+                    // can simplify things to a single group of 64 bit operations instead of
+                    // doing the below twice for 32 bits.
+                    self.code_builder.get_local(local_id);
+                    self.code_builder.i64_const(0);
+                    self.code_builder.i64_store(Align::Bytes4, offset);
+
+                    Ok(())
+                } else {
+                    unreachable!("Unexpected storage for {:?}", sym)
+                }
+            }
+
             x => Err(format!("Expression is not yet implemented {:?}", x)),
         }
     }
