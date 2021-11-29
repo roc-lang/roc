@@ -593,7 +593,7 @@ So calling `List.map [ 1, 2, 3 ] Num.isOdd` returns a new list of `[ True, False
 ### List element type compatibility
 
 If we tried to give `List.map` a function that didn't work on the elements in the list, then we'd get
-an error at compile time. Here's a valid and an invalid example:
+an error at compile time. Here's a valid, and then an invalid example:
 
 ```coffee
 # working example
@@ -732,7 +732,7 @@ The state doesn't have to be a record; it can be anything you want. For example,
 could implement `List.any` using `List.walk`. You could also make the state be a list, and implement `List.map`,
 `List.keepIf`, or `List.dropIf`. There are a lot of things you can do with `List.walk` - it's very flexible!
 
-It can be tricky to remember the argumetn order for `List.walk` at first. A helpful trick is that the arguments
+It can be tricky to remember the argument order for `List.walk` at first. A helpful trick is that the arguments
 follow the same pattern as what we've seen with `List.map`, `List.any`, `List.keepIf`, and `List.dropIf`: the
 first argument is a list, and the last argument is a function. The difference here is that `List.walk` has one
 more argument than those other functions; the only place it could go while preserving that pattern is the middle!
@@ -923,7 +923,7 @@ We can also give type annotations to tag unions:
 
 ```coffee
 colorFromStr : Str -> [ Red, Green, Yellow ]
-colorFromStr : \string ->
+colorFromStr = \string ->
     when string is
         "red" -> Red
         "green" -> Green
