@@ -109,9 +109,9 @@ Create a new file called `Hello.roc` and put this inside it:
 
 ```coffee
 app "hello"
-    packages [ pf: "examples/cli/platform" ]
+    packages { pf: "examples/cli/platform" }
     imports [ pf.Stdout ]
-    provides main to pf
+    provides [ main ] to pf
 
 main = Stdout.line "I'm a Roc application!"
 ```
@@ -372,7 +372,7 @@ Finally, destructuring can be used in defs too:
 
 ### Building records from other records
 
-So far we've only constructed records from scratch, by specifiying all of their fields. We can
+So far we've only constructed records from scratch, by specifying all of their fields. We can
 also construct new records by using another record to use as a starting point, and then
 specifying only the fields we want to be different. For example, here are two ways to
 get the same record:
@@ -938,7 +938,7 @@ You can read `List Str` as "a list of strings." Here, `Str` is a *type parameter
 parameter; there's no way to give something a type of `List` without a type parameter - you have to specify
 what type of list it is, such as `List Str` or `List Bool` or `List { firstName : Str, lastName : Str }`.
 
-There are some functions that work on any list, regardless of its type paramter. For example, `List.isEmpty`
+There are some functions that work on any list, regardless of its type parameter. For example, `List.isEmpty`
 has this type:
 
 ```coffee
