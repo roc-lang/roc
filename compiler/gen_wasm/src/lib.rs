@@ -102,7 +102,7 @@ pub fn build_module_help<'a>(
     }
 
     // Generate IR for refcounting procs
-    let refcount_procs = backend.refcount_proc_gen.generate_refcount_procs(env.arena);
+    let refcount_procs = backend.generate_refcount_procs();
 
     // Generate Wasm for refcounting procs
     for proc in refcount_procs.iter() {
@@ -111,7 +111,7 @@ pub fn build_module_help<'a>(
 
     let module = backend.finalize_module();
 
-    if false {
+    if true {
         for proc in refcount_procs.into_iter() {
             println!("{}", proc.to_pretty(200));
         }

@@ -3,7 +3,7 @@ use bumpalo::Bump;
 use roc_builtins::bitcode::IntWidth;
 use roc_module::ident::Ident;
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::{IdentIds, Interns, ModuleId, Symbol};
+use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 
 use crate::ir::{
     BranchInfo, Call, CallSpecId, CallType, Expr, HostExposedLayouts, Literal, ModifyRc, Proc,
@@ -31,12 +31,11 @@ pub enum RefcountOp {
 pub struct RefcountProcGenerator<'a> {
     arena: &'a Bump,
     home: ModuleId,
-    next_symbol_id: u32,
     ptr_size: u32,
     layout_isize: Layout<'a>,
     /// List of refcounting procs to generate, specialised by Layout and RefCountOp
     /// Order of insertion is preserved, since it is important for Wasm backend
-    pub procs_to_generate: Vec<'a, (Layout<'a>, RefcountOp, Symbol)>,
+    procs_to_generate: Vec<'a, (Layout<'a>, RefcountOp, Symbol)>,
 }
 
 impl<'a> RefcountProcGenerator<'a> {
@@ -44,7 +43,6 @@ impl<'a> RefcountProcGenerator<'a> {
         RefcountProcGenerator {
             arena,
             home,
-            next_symbol_id: 0,
             ptr_size: intwidth_isize.stack_size(),
             layout_isize: Layout::Builtin(Builtin::Int(intwidth_isize)),
             procs_to_generate: Vec::with_capacity_in(16, arena),
@@ -72,7 +70,7 @@ impl<'a> RefcountProcGenerator<'a> {
 
                 // Call helper proc, passing the Roc structure and constant amount
                 let arg_layouts = self.arena.alloc([layout, self.layout_isize]);
-                let call_result_dummy = self.unique_symbol();
+                let call_result_empty = self.create_symbol(ident_ids, "call_result_empty");
                 let call_expr = Expr::Call(Call {
                     call_type: CallType::ByName {
                         name: proc_name,
@@ -82,7 +80,7 @@ impl<'a> RefcountProcGenerator<'a> {
                     },
                     arguments: self.arena.alloc([*structure, amount_sym]),
                 });
-                let call_stmt = Stmt::Let(call_result_dummy, call_expr, LAYOUT_UNIT, following);
+                let call_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
                 let rc_stmt = amount_stmt(self.arena.alloc(call_stmt));
 
                 // Create a linker symbol for the helper proc if this is the first usage
@@ -107,7 +105,7 @@ impl<'a> RefcountProcGenerator<'a> {
 
                 // Call helper proc, passing the Roc structure
                 let arg_layouts = self.arena.alloc([layout, self.layout_isize]);
-                let call_result_dummy = self.unique_symbol();
+                let call_result_empty = self.create_symbol(ident_ids, "call_result_empty");
                 let call_expr = Expr::Call(Call {
                     call_type: CallType::ByName {
                         name: proc_name,
@@ -118,7 +116,7 @@ impl<'a> RefcountProcGenerator<'a> {
                     arguments: self.arena.alloc([*structure]),
                 });
 
-                let rc_stmt = Stmt::Let(call_result_dummy, call_expr, LAYOUT_UNIT, following);
+                let rc_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
 
                 // Create a linker symbol for the helper proc if this is the first usage
                 let new_proc_info = if is_existing {
@@ -140,7 +138,7 @@ impl<'a> RefcountProcGenerator<'a> {
                 // No generated procs for DecRef, just lowlevel calls
 
                 // Get a pointer to the refcount itself
-                let rc_ptr_sym = self.unique_symbol();
+                let rc_ptr_sym = self.create_symbol(ident_ids, "rc_ptr");
                 let rc_ptr_expr = Expr::Call(Call {
                     call_type: CallType::LowLevel {
                         op: LowLevel::RefCountGetPtr,
@@ -151,7 +149,7 @@ impl<'a> RefcountProcGenerator<'a> {
                 let rc_ptr_stmt = |next| Stmt::Let(rc_ptr_sym, rc_ptr_expr, LAYOUT_PTR, next);
 
                 // Pass the refcount pointer to the lowlevel call (see utils.zig)
-                let call_result_dummy = self.unique_symbol();
+                let call_result_empty = self.create_symbol(ident_ids, "call_result_empty");
                 let call_expr = Expr::Call(Call {
                     call_type: CallType::LowLevel {
                         op: LowLevel::RefCountDec,
@@ -159,7 +157,7 @@ impl<'a> RefcountProcGenerator<'a> {
                     },
                     arguments: self.arena.alloc([rc_ptr_sym]),
                 });
-                let call_stmt = Stmt::Let(call_result_dummy, call_expr, LAYOUT_UNIT, following);
+                let call_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
                 let rc_stmt = rc_ptr_stmt(self.arena.alloc(call_stmt));
 
                 (rc_stmt, None)
@@ -170,15 +168,19 @@ impl<'a> RefcountProcGenerator<'a> {
     /// Generate refcounting helper procs, each specialized to a particular Layout.
     /// For example `List (Result { a: Str, b: Int } Str)` would get its own helper
     /// to update the refcounts on the List, the Result and the strings.
-    pub fn generate_refcount_procs(&mut self, arena: &'a Bump) -> Vec<'a, Proc<'a>> {
+    pub fn generate_refcount_procs(
+        &mut self,
+        arena: &'a Bump,
+        ident_ids: &mut IdentIds,
+    ) -> Vec<'a, Proc<'a>> {
         // Move the vector so we can loop over it safely
         let mut procs_to_generate = Vec::with_capacity_in(0, arena);
         std::mem::swap(&mut self.procs_to_generate, &mut procs_to_generate);
 
         let mut procs = Vec::with_capacity_in(procs_to_generate.len(), arena);
-        for (layout, op, symbol) in procs_to_generate.drain(0..) {
+        for (layout, op, proc_symbol) in procs_to_generate.drain(0..) {
             let proc = match layout {
-                Layout::Builtin(Builtin::Str) => self.gen_modify_str(op, symbol),
+                Layout::Builtin(Builtin::Str) => self.gen_modify_str(ident_ids, op, proc_symbol),
                 _ => todo!("Refcounting is not yet implemented for Layout {:?}", layout),
             };
             procs.push(proc);
@@ -212,19 +214,13 @@ impl<'a> RefcountProcGenerator<'a> {
         }
     }
 
-    fn unique_symbol(&mut self) -> Symbol {
-        let id = self.next_symbol_id;
-        self.next_symbol_id += 1;
-        Interns::from_index(self.home, id)
-    }
-
-    fn create_symbol(&mut self, ident_ids: &mut IdentIds, name: &str) -> Symbol {
-        let ident_id = ident_ids.add(Ident::from(name));
+    fn create_symbol(&mut self, ident_ids: &mut IdentIds, debug_name: &str) -> Symbol {
+        let ident_id = ident_ids.add(Ident::from(debug_name));
         Symbol::new(self.home, ident_id)
     }
 
-    fn return_unit(&mut self) -> Stmt<'a> {
-        let unit = self.unique_symbol();
+    fn return_unit(&mut self, ident_ids: &mut IdentIds) -> Stmt<'a> {
+        let unit = self.create_symbol(ident_ids, "unit");
         let ret_stmt = self.arena.alloc(Stmt::Ret(unit));
         Stmt::Let(unit, Expr::Struct(&[]), LAYOUT_UNIT, ret_stmt)
     }
@@ -241,12 +237,17 @@ impl<'a> RefcountProcGenerator<'a> {
     }
 
     /// Generate a procedure to modify the reference count of a Str
-    fn gen_modify_str(&mut self, op: RefcountOp, proc_name: Symbol) -> Proc<'a> {
+    fn gen_modify_str(
+        &mut self,
+        ident_ids: &mut IdentIds,
+        op: RefcountOp,
+        proc_name: Symbol,
+    ) -> Proc<'a> {
         let string = Symbol::ARG_1;
         let layout_isize = self.layout_isize;
 
         // Get the string length as a signed int
-        let len = self.unique_symbol();
+        let len = self.create_symbol(ident_ids, "len");
         let len_expr = Expr::StructAtIndex {
             index: 1,
             field_layouts: self.arena.alloc([LAYOUT_PTR, layout_isize]),
@@ -255,13 +256,13 @@ impl<'a> RefcountProcGenerator<'a> {
         let len_stmt = |next| Stmt::Let(len, len_expr, layout_isize, next);
 
         // Zero
-        let zero = self.unique_symbol();
+        let zero = self.create_symbol(ident_ids, "zero");
         let zero_expr = Expr::Literal(Literal::Int(0));
         let zero_stmt = |next| Stmt::Let(zero, zero_expr, layout_isize, next);
 
         // is_big_str = (len >= 0);
         // Treat len as isize so that the small string flag is the same as the sign bit
-        let is_big_str = self.unique_symbol();
+        let is_big_str = self.create_symbol(ident_ids, "is_big_str");
         let is_big_str_expr = Expr::Call(Call {
             call_type: CallType::LowLevel {
                 op: LowLevel::NumGte,
@@ -272,7 +273,7 @@ impl<'a> RefcountProcGenerator<'a> {
         let is_big_str_stmt = |next| Stmt::Let(is_big_str, is_big_str_expr, LAYOUT_BOOL, next);
 
         // Get the pointer to the string elements
-        let elements = self.unique_symbol();
+        let elements = self.create_symbol(ident_ids, "elements");
         let elements_expr = Expr::StructAtIndex {
             index: 0,
             field_layouts: self.arena.alloc([LAYOUT_PTR, layout_isize]),
@@ -281,7 +282,7 @@ impl<'a> RefcountProcGenerator<'a> {
         let elements_stmt = |next| Stmt::Let(elements, elements_expr, LAYOUT_PTR, next);
 
         // Get a pointer to the refcount value, just below the elements pointer
-        let rc_ptr = self.unique_symbol();
+        let rc_ptr = self.create_symbol(ident_ids, "rc_ptr");
         let rc_ptr_expr = Expr::Call(Call {
             call_type: CallType::LowLevel {
                 op: LowLevel::RefCountGetPtr,
@@ -292,12 +293,12 @@ impl<'a> RefcountProcGenerator<'a> {
         let rc_ptr_stmt = |next| Stmt::Let(rc_ptr, rc_ptr_expr, LAYOUT_PTR, next);
 
         // Alignment constant
-        let alignment = self.unique_symbol();
+        let alignment = self.create_symbol(ident_ids, "alignment");
         let alignment_expr = Expr::Literal(Literal::Int(self.ptr_size as i128));
         let alignment_stmt = |next| Stmt::Let(alignment, alignment_expr, LAYOUT_U32, next);
 
         // Call the relevant Zig lowlevel to actually modify the refcount
-        let zig_call_result = self.unique_symbol();
+        let zig_call_result = self.create_symbol(ident_ids, "zig_call_result");
         let zig_call_expr = match op {
             RefcountOp::Inc => Expr::Call(Call {
                 call_type: CallType::LowLevel {
@@ -334,7 +335,10 @@ impl<'a> RefcountProcGenerator<'a> {
             cond_symbol: is_big_str,
             cond_layout: LAYOUT_BOOL,
             branches: self.arena.alloc([(1, BranchInfo::None, then_branch)]),
-            default_branch: (BranchInfo::None, self.arena.alloc(self.return_unit())),
+            default_branch: (
+                BranchInfo::None,
+                self.arena.alloc(self.return_unit(ident_ids)),
+            ),
             ret_layout: LAYOUT_UNIT,
         };
 

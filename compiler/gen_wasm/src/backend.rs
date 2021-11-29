@@ -156,6 +156,17 @@ impl<'a> WasmBackend<'a> {
         }
     }
 
+    pub fn generate_refcount_procs(&mut self) -> Vec<'a, Proc<'a>> {
+        let ident_ids = self
+            .interns
+            .all_ident_ids
+            .get_mut(&self.env.module_id)
+            .unwrap();
+
+        self.refcount_proc_gen
+            .generate_refcount_procs(self.env.arena, ident_ids)
+    }
+
     pub fn finalize_module(mut self) -> WasmModule<'a> {
         if DEBUG_BUILD {
             let module_id = self.env.module_id;
