@@ -304,7 +304,7 @@ impl<'a> Storage<'a> {
         } = self.get(&arg)
         {
             if *size == 0 {
-                return;
+                // do nothing
             } else if *size > 16 {
                 self.load_symbol_ccc(code_builder, arg);
             } else {

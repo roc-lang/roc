@@ -523,12 +523,8 @@ impl<'a> WasmBackend<'a> {
 
                     let num_wasm_args = param_types.len();
                     let has_return_val = ret_type.is_some();
-                    self.code_builder.call(
-                        func_index,
-                        symbol_index,
-                        num_wasm_args,
-                        has_return_val,
-                    );
+                    self.code_builder
+                        .call(func_index, symbol_index, num_wasm_args, has_return_val);
 
                     Ok(())
                 }
