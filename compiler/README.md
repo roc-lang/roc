@@ -53,14 +53,14 @@ The process of evaluation is basically to transform an `Expr` into the simplest 
 
 For example, let's say we had this code:
 
-    "1 + 2 - 3"
+    "1 + 8 - 3"
 
 The parser will translate this into the following `Expr`:
 
     BinOp(
         Int(1),
         Plus,
-        BinOp(Int(2), Minus, Int(3))
+        BinOp(Int(8), Minus, Int(3))
     )
 
 The `eval` function will take this `Expr` and translate it into this much simpler `Expr`:
