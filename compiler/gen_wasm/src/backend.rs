@@ -179,7 +179,7 @@ impl<'a> WasmBackend<'a> {
     }
 
     #[cfg(not(debug_assertions))]
-    fn register_debug_idents(&self) {}
+    pub fn register_symbol_debug_names(&self) {}
 
     /// Reset function-level data
     fn reset(&mut self) {
