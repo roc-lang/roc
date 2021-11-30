@@ -64,16 +64,18 @@ impl<'a> RefcountProcGenerator<'a> {
     ) -> (Stmt<'a>, Option<(Symbol, ProcLayout<'a>)>) {
         match modify {
             ModifyRc::Inc(structure, amount) => {
+                let layout_isize = self.layout_isize;
+
                 let (is_existing, proc_name) =
                     self.get_proc_symbol(ident_ids, layout, RefcountOp::Inc);
 
                 // Define a constant for the amount to increment
                 let amount_sym = self.create_symbol(ident_ids, "amount");
                 let amount_expr = Expr::Literal(Literal::Int(*amount as i128));
-                let amount_stmt = |next| Stmt::Let(amount_sym, amount_expr, LAYOUT_UNIT, next);
+                let amount_stmt = |next| Stmt::Let(amount_sym, amount_expr, layout_isize, next);
 
                 // Call helper proc, passing the Roc structure and constant amount
-                let arg_layouts = self.arena.alloc([layout, self.layout_isize]);
+                let arg_layouts = self.arena.alloc([layout, layout_isize]);
                 let call_result_empty = self.create_symbol(ident_ids, "call_result_empty");
                 let call_expr = Expr::Call(Call {
                     call_type: CallType::ByName {
