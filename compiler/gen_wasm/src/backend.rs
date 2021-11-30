@@ -280,7 +280,7 @@ impl<'a> WasmBackend<'a> {
             Stmt::Let(_, _, _, _) => {
                 let mut current_stmt = stmt;
                 while let Stmt::Let(sym, expr, layout, following) = current_stmt {
-                    // println!("let {:?} = {}", sym, expr.to_pretty(200)); // ingore `following`! Too confusing otherwise.
+                    // println!("let {:?} = {}", sym, expr.to_pretty(200)); // ignore `following`! Too confusing otherwise.
 
                     let wasm_layout = WasmLayout::new(layout);
 
@@ -516,16 +516,19 @@ impl<'a> WasmBackend<'a> {
                 // If we're creating a new RC procedure, we need to store its symbol data,
                 // so that we can correctly generate calls to it.
                 if let Some((rc_proc_sym, rc_proc_layout)) = new_proc_info {
+                    let wasm_fn_index = self.proc_symbols.len() as u32;
+                    let linker_sym_index = self.linker_symbols.len() as u32;
+
                     let name = self
                         .layout_ids
                         .get_toplevel(rc_proc_sym, &rc_proc_layout)
                         .to_symbol_string(rc_proc_sym, self.interns);
-                    let linker_sym_index = self.proc_symbols.len() as u32;
+
                     self.proc_symbols.push((rc_proc_sym, linker_sym_index));
                     self.linker_symbols
                         .push(SymInfo::Function(WasmObjectSymbol::Defined {
                             flags: 0,
-                            index: linker_sym_index,
+                            index: wasm_fn_index,
                             name,
                         }));
                 }
