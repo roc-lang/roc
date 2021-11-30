@@ -21,6 +21,10 @@ const LAYOUT_UNIT: Layout = Layout::Struct(&[]);
 const LAYOUT_PTR: Layout = Layout::RecursivePointer;
 const LAYOUT_U32: Layout = Layout::Builtin(Builtin::Int(IntWidth::U32));
 
+/// "Infinite" reference count, for static values
+/// Ref counts are encoded as negative numbers where isize::MIN represents 1
+pub const REFCOUNT_MAX: usize = 0;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RefcountOp {
     Inc,
@@ -288,7 +292,7 @@ impl<'a> RefcountProcGenerator<'a> {
                 op: LowLevel::RefCountGetPtr,
                 update_mode: UpdateModeId::BACKEND_DUMMY,
             },
-            arguments: self.arena.alloc([string]),
+            arguments: self.arena.alloc([elements]),
         });
         let rc_ptr_stmt = |next| Stmt::Let(rc_ptr, rc_ptr_expr, LAYOUT_PTR, next);
 

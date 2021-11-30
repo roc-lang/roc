@@ -4,7 +4,7 @@ use code_builder::Align;
 use roc_collections::all::MutMap;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
-use roc_mono::gen_refcount::RefcountProcGenerator;
+use roc_mono::gen_refcount::{RefcountProcGenerator, REFCOUNT_MAX};
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
@@ -799,10 +799,13 @@ impl<'a> WasmBackend<'a> {
             None => {
                 let const_segment_bytes = &mut self.module.data.segments[CONST_SEGMENT_INDEX].init;
 
-                // Store the string in the data section, to be loaded on module instantiation
-                // RocStr `elements` field will point to that constant data, not the heap
-                let segment_offset = const_segment_bytes.len() as u32;
-                let elements_addr = segment_offset + CONST_SEGMENT_BASE_ADDR;
+                // Store the string in the data section
+                // Prefix it with a special refcount value (treated as "infinity")
+                // The string's `elements` field points at the data after the refcount
+                let refcount_max_bytes: [u8; 4] = (REFCOUNT_MAX as i32).to_le_bytes();
+                const_segment_bytes.extend_from_slice(&refcount_max_bytes);
+                let elements_offset = const_segment_bytes.len() as u32;
+                let elements_addr = elements_offset + CONST_SEGMENT_BASE_ADDR;
                 const_segment_bytes.extend_from_slice(string.as_bytes());
 
                 // Generate linker info
@@ -815,7 +818,7 @@ impl<'a> WasmBackend<'a> {
                     flags: 0,
                     name,
                     segment_index: CONST_SEGMENT_INDEX as u32,
-                    segment_offset,
+                    segment_offset: elements_offset,
                     size: string.len() as u32,
                 });
 
