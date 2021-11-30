@@ -8,7 +8,7 @@ use crate::layout::{
     CallConv, ReturnMethod, StackMemoryFormat, WasmLayout, ZigVersion, BUILTINS_ZIG_VERSION,
 };
 use crate::wasm_module::{Align, CodeBuilder, LocalId, ValueType, VmSymbolState};
-use crate::{copy_memory, round_up_to_alignment, CopyMemoryConfig, PTR_SIZE, PTR_TYPE};
+use crate::{copy_memory, round_up_to_alignment, CopyMemoryConfig, PTR_TYPE};
 
 pub enum StoredValueKind {
     Parameter,
@@ -145,18 +145,6 @@ impl<'a> Storage<'a> {
                     size: *size,
                 },
             },
-
-            WasmLayout::HeapMemory => {
-                match kind {
-                    StoredValueKind::Parameter => self.arg_types.push(PTR_TYPE),
-                    _ => self.local_types.push(PTR_TYPE),
-                }
-                StoredValue::Local {
-                    local_id: next_local_id,
-                    value_type: PTR_TYPE,
-                    size: PTR_SIZE,
-                }
-            }
 
             WasmLayout::StackMemory {
                 size,

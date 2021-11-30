@@ -76,7 +76,6 @@ pub fn decode_low_level<'a>(
                 StackMemoryFormat::Float128 => return NotImplemented,
                 StackMemoryFormat::Decimal => return BuiltinCall(bitcode::DEC_ADD_WITH_OVERFLOW),
             },
-            WasmLayout::HeapMemory { .. } => return NotImplemented,
         },
         NumAddWrap => match ret_layout.arg_types(CallConv::Zig)[0] {
             I32 => {
