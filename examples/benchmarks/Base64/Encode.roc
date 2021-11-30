@@ -17,14 +17,14 @@ toBytes = \str ->
 
 encodeChunks : List U8 -> List Encoder
 encodeChunks = \bytes ->
-    List.walk bytes folder { output: [], accum: None }
+    List.walk bytes { output: [], accum: None } folder
         |> encodeResidual
 
 coerce : Nat, a -> a
 coerce = \_, x -> x
 
-# folder : U8, { output : List Encoder, accum : State } -> { output : List Encoder, accum : State }
-folder = \char, { output, accum } ->
+# folder : { output : List Encoder, accum : State }, U8 -> { output : List Encoder, accum : State }
+folder = \{ output, accum }, char ->
     when accum is
         Unreachable n -> coerce n { output, accum: Unreachable n }
         None -> { output, accum: One char }

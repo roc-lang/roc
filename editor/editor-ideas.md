@@ -34,6 +34,11 @@ Nice collection of research on innovative editors, [link](https://futureofcoding
 * [Hazel Livelits](https://hazel.org/papers/livelits-paper.pdf) interactive plugins, see GIF's [here](https://twitter.com/disconcision/status/1408155781120376833).
 * [Thorough review](https://drossbucket.com/2021/06/30/hacker-news-folk-wisdom-on-visual-programming/) of pros and cons of text versus visual programming.
 
+### Good error messages
+
+* [https://twitter.com/firstdrafthell/status/1427364851593224197/photo/1] very clean error message layout
+* If the user explicitly allows it, we can keep record of which errors take a long time to fix. This way we know where to focus our efforts for improving error messages.
+
 ### Debugging
 
 * [VS code debug visualization](https://marketplace.visualstudio.com/items?itemName=hediet.debug-visualizer)
@@ -47,7 +52,10 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * I think it could be possible to create a minimal reproduction of a program / block of code / code used by a single test. So for a failing unit test I would expect it to extract imports, the platform, types and functions that are necessary to run only that unit test and put them in a standalone roc project. This would be useful for sharing bugs with library+application authors and colleagues, for profiling or debugging with all "clutter" removed.
 * Ability to share program state at a breakpoint with someone else.
 * For debugging we should aim for maximal useful observability. For example Rust's enum values can not be easily viewed in the CodeLLDB debugger, you actually need to call a print method that does pattern matching to be able to view useful information.
-* We previuously discussed recording full traces of programs so they do not have to be re-run multiple times in the debugging process. We should encourage roc developers to experiment with creating debugging representations of this AST+"execution trace", it could lead to some cool stuff.  
+* We previuously discussed recording full traces of programs so they do not have to be re-run multiple times in the debugging process. We should encourage roc developers to experiment with creating debugging representations of this AST+"execution trace", it could lead to some cool stuff.
+* We previuously mentioned showing expression values next to the code. I think when debugging it would be valuable to focus more on these valuas/data. A possible way to do this would be to create scrollable view(without need to jump between files) of inputs and outputs of user defined functions. Clicking on a function could then show the code with the expression values side by side. Having a good overview of how the values change could make it easy to find where exactly things go wrong.
+- (Machine learning) algorithms to extract and show useful information from debug values.
+- Ability to mark e.g. a specific record field for tracking(filter out the noise) that is being repeatedly updated throughout the program.
 
 ### Cool regular editors
 
@@ -127,6 +135,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * [Talon voice commands in elm](https://github.com/Gauteab/talon-tree-sitter-service)
 * Mozilla DeepSpeech model runs fast, works pretty well for actions but would need additional training for code input.
     Possible to reuse [Mozilla common voice](https://github.com/common-voice/common-voice) for creating more "spoken code" data.
+* [Voice Attack](https://voiceattack.com/) voice recognition for apps and games.
 
 ### Beginner-focused Features
 
@@ -150,7 +159,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * Show productivity/feature tips on startup. Show link to page with all tips. Allow not seeing tips next time.
 * Search friendly editor docs inside the editor. Offer to send search string to Roc maintainers when no results, or if no results were clicked.
 * File history timeline view. Show timeline with commits that changed this file, the number of lines added and deleted as well as which user made the changes. Arrow navigation should allow you to quickly view different versions of the file.
-* Suggested quick fixes should be directly visible and clickable. Not like in vs code where you put the caret on an error until a lightbulb appears in the margin which you have to click for the fixes to apppear, after which you click to apply the fix you want :( . You should be able to apply suggestions in rapid succession. e.g. if you copy some roc code from the internet you should be able to apply 5 import suggestions quickly. 
+* Suggested quick fixes should be directly visible and clickable. Not like in vs code where you put the caret on an error until a lightbulb appears in the margin which you have to click for the fixes to appear, after which you click to apply the fix you want :( . You should be able to apply suggestions in rapid succession. e.g. if you copy some roc code from the internet you should be able to apply 5 import suggestions quickly. 
 * Regex-like find and substitution based on plain english description and example (replacement). i.e. replace all `[` between double quotes with `{`. [Inspiration](https://alexmoltzau.medium.com/english-to-regex-thanks-to-gpt-3-13f03b68236e).
 * Show productivity tips based on behavior. i.e. if the user is scrolling through the error bar and clicking on the next error several times, show a tip with "go to next error" shortcut.
 * Command to "benchmark this function" or "benchmark this test" with flamegraph and execution time per line.
@@ -167,6 +176,17 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * Detection of multiple people within same company/team working on same code at the same time (opt-in).
 * Autocorrect likely typos for stuff like `-<` when not in string.
 * If multiple functions are available for import, use function were types would match in insetion position.
+* Recommend imports based on imports in other files in same project.
+* Machine Learning model to determine confidence in a possiblte auto import. Automatically add the importt if confidence is very high.
+* Ability to print logs in different color depending on which file they come from.
+* Clicking on a log print should take you to the exact line of code that called the log function
+* When detecting that the user is repeating a transformation such as replacing a string in a text manually, offer to do the replacement for all occurrences in this string/function/file/workspace.
+* Auto remove unused imports? Perhaps save the removed imports on a scratchpad for easy re-enabling.
+* It should be easy to toggle search and replace to apply to the whole project.
+* Taking into account the eye position with eye tracking could make commands very powerful/accurate. e.g.: make `Num *` a `List (Num *)`, use eye position to determine which `Num *`.
+* Feature to automatically minimize visibility(exposing values/functions/...) based on usage in tests. Suggested changes can be shown to the user for fine-grained control.
+* Locally record file/function navigation behavior to offer suggestions where to navigate next. With user permission, this navigation behavior can be shared with their team so that e.g. new members get offered useful suggestions on navigating to the next relevant file.
+ * Intelligent search: "search this folder for <term>", "search all tests for <term>"
 
 #### Autocomplete
 
@@ -177,7 +197,8 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 - Machine Learning:
    * GPT-3 can generate correct python functions based on a comment describing the functionality, video [here](https://www.youtube.com/watch?v=utuz7wBGjKM). It's possible that training a model using ast's may lead to better results than text based models.
 - Current autocomplete lacks flow, moving through suggestions with arrows is slow. Being able to code by weaving together autocomplete suggestions laid out in rows using eye tracking, that could flow.
-- It's possible that with strong static types, pure functions and a good search algorithm we can develop a more reliable autocomplete than one with machine learning. 
+- It's possible that with strong static types, pure functions and a good search algorithm we can develop a more reliable autocomplete than one with machine learning.
+- When ranking autocomplete suggestions, take into account how new a function is. Newly created functions are likely to be used soon. 
 
 #### Productivity Inspiration
 
@@ -189,6 +210,8 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * [MISM](https://arxiv.org/abs/2006.05265) neural network based code similarity scoring.
 * [Inquisitive code editor](https://web.eecs.utk.edu/~azh/blog/inquisitivecodeeditor.html) Interactive bug detection with doc+test generation.
 * [NextJournal](https://nextjournal.com/joe-loco/command-bar?token=DpU6ewNQnLhYtVkwhs9GeX) Discoverable commands and shortcuts.
+* [Code Ribbon](https://web.eecs.utk.edu/~azh/blog/coderibbon.html) fast navigation between files. Feature suggestion: top and down are filled with suggested files, whereas left and right are manually filled.
+* [Automatic data transformation based on examples](https://youtu.be/Ej91F1fpmEw). Feature suggestion: use in combination with voice commands: e.g. "only keep time from list of datetimes".
 
 ### Non-Code Related Inspiration
 
@@ -237,7 +260,11 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * Ability to see module as it would be presented on a package website.
     * Modern editors may guide developers to the source code too easily.
     The API and documentation are meant to interface with humans.
-* [DocC](https://developer.apple.com/videos/play/wwdc2021/10166/) neat documentation approach for swift. 
+* [DocC](https://developer.apple.com/videos/play/wwdc2021/10166/) neat documentation approach for swift.
+* Make it easy to ask for/add examples and suggest improvements to a project's docs.
+* Library should have cheat sheet with most used/important docs summarized.
+* With explicit user permission, anonymously track viewing statistics for documentation. Can be used to show most important documentation, report pain points to library authors.
+* Easy side-by-side docs for multiple versions of library.
 
 ## Tutorials
 
@@ -249,11 +276,13 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 ### Ideas
 
 * Plugin to translate linux commands like curl to Roc code
+* Plugin to view diff between two texts
 
 ### Inspiration
 
 - [Boop](https://github.com/IvanMathy/Boop) scriptable scratchpad for developers. Contains collection of useful conversions: json formatting, url encoding, encode to base64...
 - [processing](processing.org) Interactive editor, dragging left or right with mouse to change values. Instant results.
+- [flowistry](https://github.com/willcrichton/flowistry) easily track all named values in a certain expression throughout your program.
 
 ## High performance
 
@@ -278,6 +307,12 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 - [Duolingo](https://www.duolingo.com) app to learn languages
 - [Khan academy](https://www.khanacademy.org/) free quality education for everyone
 
+## Security
+
+- Remove permissions if plugin has not been used for a long time.
+- Log plugin actions that require a permission.
+- Show plugin that is currently using a permission, e.g. roc-core is reading from folder /gitrepos/hello in status bar and with a scrollable log.
+
 ## General Thoughts/Ideas
 
 Thoughts and ideas possibly taken from above inspirations or separate.
@@ -293,8 +328,8 @@ Thoughts and ideas possibly taken from above inspirations or separate.
       But blind people walk with a tool and they can react much better to sound/space relations than full on visal majority does. They are acute to sound as a spatial hint. And a hand for most of them is a very sensitive tool that can make sounds in space.
       Imagine if everytime for the user doesnt want to rely on shining rendered pixels on the screen for a feedback from machine, we make a acoustic room simulation, where with moving the "stick", either with mouse or with key arrows, we bump into one of the objects and that produces certain contextually appropriate sound (clean)*ding*
       
-      On the each level of abstraction they can make sounds more deeper, so then when you type letters you feel like you are playing with the sand (soft)*shh*. We would need help from some sound engineer about it, but imagine moving down, which can be voice trigered command for motion impaired, you hear (soft)*pup* and the name of the module, and then you have options and commands appropriate for the module, they could map to those  basic 4 buttons that we trained user on, and he would shortcut all the soft talk with click of a button. Think of the satisfaction when you can skip the dialog of the game and get straight into action. (X) Open functions! each function would make a sound and say its name, unless you press search and start searching for a specific function inside module, if you want one you select or move to next.
-      - Related idea: Playing sounds in rapid succession for different expressions in your program might be a high throughput alternative to stepping through your code line by line. I'd bet you quickly learn what your porgram should sound like. The difference in throughput would be even larger for those who need to rely on voice transcription.
+      On the each level of abstraction they can make sounds more deeper, so then when you type letters you feel like you are playing with the sand (soft)*shh*. We would need help from some sound engineer about it, but imagine moving down, which can be voice triggered command for motion impaired, you hear (soft)*pup* and the name of the module, and then you have options and commands appropriate for the module, they could map to those  basic 4 buttons that we trained user on, and he would shortcut all the soft talk with click of a button. Think of the satisfaction when you can skip the dialog of the game and get straight into action. (X) Open functions! each function would make a sound and say its name, unless you press search and start searching for a specific function inside module, if you want one you select or move to next.
+      - Related idea: Playing sounds in rapid succession for different expressions in your program might be a high throughput alternative to stepping through your code line by line. I'd bet you quickly learn what your program should sound like. The difference in throughput would be even larger for those who need to rely on voice transcription.
       
    * Motor impariments
       [rant]BACKS OF CODERS ARE NOT HEALTHY! We need to change that![/neverstop]
@@ -320,3 +355,6 @@ Thoughts and ideas possibly taken from above inspirations or separate.
 * dependency recommendation
 * Command to change the file to put all exposed functions at the top of the file, private functions below. Other alternative; ability to show a "file explorer" that shows exposed functions first, followed by private functions.
 * We could provide a more expansive explanation in errors that can benefit from it. This explanation could be folded(shown on click) by default in the editor.
+* Code coverage visualization: allow to display code in different color when it is covered by test.
+* Make "maximal privacy version" of editor available for download, next to regular version. This version would not be capable of sharing any usage/user data.
+* Live code view with wasm editor. This saves bandwidth when pairing.

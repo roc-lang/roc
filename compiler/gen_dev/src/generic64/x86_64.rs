@@ -3,9 +3,11 @@ use crate::{
     single_register_builtins, single_register_floats, single_register_integers, Relocation,
 };
 use bumpalo::collections::Vec;
+use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
+use roc_reporting::internal_error;
 
 // Not sure exactly how I want to represent registers.
 // If we want max speed, we would likely make them structs that impl the same trait to avoid ifs.
@@ -82,7 +84,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
         X86_64GeneralReg::RAX,
         X86_64GeneralReg::RCX,
         X86_64GeneralReg::RDX,
-        // Don't use stack pionter: X86_64GeneralReg::RSP,
+        // Don't use stack pointer: X86_64GeneralReg::RSP,
         X86_64GeneralReg::RSI,
         X86_64GeneralReg::RDI,
         X86_64GeneralReg::R8,
@@ -151,7 +153,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
         general_saved_regs: &[X86_64GeneralReg],
         requested_stack_size: i32,
         fn_call_stack_size: i32,
-    ) -> Result<i32, String> {
+    ) -> i32 {
         x86_64_generic_setup_stack(
             buf,
             general_saved_regs,
@@ -166,7 +168,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
         general_saved_regs: &[X86_64GeneralReg],
         aligned_stack_size: i32,
         fn_call_stack_size: i32,
-    ) -> Result<(), String> {
+    ) {
         x86_64_generic_cleanup_stack(
             buf,
             general_saved_regs,
@@ -181,11 +183,11 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
         symbol_map: &mut MutMap<Symbol, SymbolStorage<X86_64GeneralReg, X86_64FloatReg>>,
         args: &'a [(Layout<'a>, Symbol)],
         ret_layout: &Layout<'a>,
-    ) -> Result<(), String> {
+    ) {
         let mut base_offset = Self::SHADOW_SPACE_SIZE as i32 + 8; // 8 is the size of the pushed base pointer.
         let mut general_i = 0;
         let mut float_i = 0;
-        if X86_64SystemV::returns_via_arg_pointer(ret_layout)? {
+        if X86_64SystemV::returns_via_arg_pointer(ret_layout) {
             symbol_map.insert(
                 Symbol::RET_POINTER,
                 SymbolStorage::GeneralReg(Self::GENERAL_PARAM_REGS[general_i]),
@@ -250,21 +252,15 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                         );
                         general_i += 2;
                     } else {
-                        return Err(
-                            "loading strings args on the stack is not yet implemented".to_string()
-                        );
+                        unimplemented!("loading strings args on the stack is not yet implemented");
                     }
                 }
                 Layout::Struct(&[]) => {}
                 x => {
-                    return Err(format!(
-                        "Loading args with layout {:?} not yet implementd",
-                        x
-                    ));
+                    unimplemented!("Loading args with layout {:?} not yet implemented", x);
                 }
             }
         }
-        Ok(())
     }
 
     #[inline(always)]
@@ -274,7 +270,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
         args: &'a [Symbol],
         arg_layouts: &[Layout<'a>],
         ret_layout: &Layout<'a>,
-    ) -> Result<u32, String> {
+    ) -> u32 {
         let mut stack_offset = Self::SHADOW_SPACE_SIZE as i32;
         let mut general_i = 0;
         let mut float_i = 0;
@@ -283,22 +279,22 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
         match ret_layout {
             Layout::Builtin(single_register_builtins!() | Builtin::Str) => {}
             x => {
-                return Err(format!(
-                    "receiving return type, {:?}, is not yet implemented",
-                    x
-                ));
+                unimplemented!("receiving return type, {:?}, is not yet implemented", x);
             }
         }
         for (i, layout) in arg_layouts.iter().enumerate() {
             match layout {
                 Layout::Builtin(single_register_integers!()) => {
+                    let storage = match symbol_map.get(&args[i]) {
+                        Some(storage) => storage,
+                        None => {
+                            internal_error!("function argument does not reference any symbol")
+                        }
+                    };
                     if general_i < Self::GENERAL_PARAM_REGS.len() {
                         // Load the value to the param reg.
                         let dst = Self::GENERAL_PARAM_REGS[general_i];
-                        match symbol_map
-                            .get(&args[i])
-                            .ok_or("function argument does not reference any symbol")?
-                        {
+                        match storage {
                             SymbolStorage::GeneralReg(reg)
                             | SymbolStorage::BaseAndGeneralReg { reg, .. } => {
                                 X86_64Assembler::mov_reg64_reg64(buf, dst, *reg);
@@ -307,18 +303,13 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                                 X86_64Assembler::mov_reg64_base32(buf, dst, *offset);
                             }
                             SymbolStorage::FloatReg(_) | SymbolStorage::BaseAndFloatReg { .. } => {
-                                return Err(
-                                    "Cannot load floating point symbol into GeneralReg".to_string()
-                                )
+                                internal_error!("Cannot load floating point symbol into GeneralReg")
                             }
                         }
                         general_i += 1;
                     } else {
                         // Load the value to the stack.
-                        match symbol_map
-                            .get(&args[i])
-                            .ok_or("function argument does not reference any symbol")?
-                        {
+                        match storage {
                             SymbolStorage::GeneralReg(reg)
                             | SymbolStorage::BaseAndGeneralReg { reg, .. } => {
                                 X86_64Assembler::mov_stack32_reg64(buf, stack_offset, *reg);
@@ -337,22 +328,23 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                                 );
                             }
                             SymbolStorage::FloatReg(_) | SymbolStorage::BaseAndFloatReg { .. } => {
-                                return Err(
-                                    "Cannot load floating point symbol into GeneralReg".to_string()
-                                )
+                                internal_error!("Cannot load floating point symbol into GeneralReg")
                             }
                         }
                         stack_offset += 8;
                     }
                 }
                 Layout::Builtin(single_register_floats!()) => {
+                    let storage = match symbol_map.get(&args[i]) {
+                        Some(storage) => storage,
+                        None => {
+                            internal_error!("function argument does not reference any symbol")
+                        }
+                    };
                     if float_i < Self::FLOAT_PARAM_REGS.len() {
                         // Load the value to the param reg.
                         let dst = Self::FLOAT_PARAM_REGS[float_i];
-                        match symbol_map
-                            .get(&args[i])
-                            .ok_or("function argument does not reference any symbol")?
-                        {
+                        match storage {
                             SymbolStorage::FloatReg(reg)
                             | SymbolStorage::BaseAndFloatReg { reg, .. } => {
                                 X86_64Assembler::mov_freg64_freg64(buf, dst, *reg);
@@ -362,16 +354,13 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                             }
                             SymbolStorage::GeneralReg(_)
                             | SymbolStorage::BaseAndGeneralReg { .. } => {
-                                return Err("Cannot load general symbol into FloatReg".to_string())
+                                internal_error!("Cannot load general symbol into FloatReg")
                             }
                         }
                         float_i += 1;
                     } else {
                         // Load the value to the stack.
-                        match symbol_map
-                            .get(&args[i])
-                            .ok_or("function argument does not reference any symbol")?
-                        {
+                        match storage {
                             SymbolStorage::FloatReg(reg)
                             | SymbolStorage::BaseAndFloatReg { reg, .. } => {
                                 X86_64Assembler::mov_stack32_freg64(buf, stack_offset, *reg);
@@ -391,48 +380,48 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                             }
                             SymbolStorage::GeneralReg(_)
                             | SymbolStorage::BaseAndGeneralReg { .. } => {
-                                return Err("Cannot load general symbol into FloatReg".to_string())
+                                internal_error!("Cannot load general symbol into FloatReg")
                             }
                         }
                         stack_offset += 8;
                     }
                 }
                 Layout::Builtin(Builtin::Str) => {
+                    let storage = match symbol_map.get(&args[i]) {
+                        Some(storage) => storage,
+                        None => {
+                            internal_error!("function argument does not reference any symbol")
+                        }
+                    };
                     if general_i + 1 < Self::GENERAL_PARAM_REGS.len() {
                         // Load the value to the param reg.
                         let dst1 = Self::GENERAL_PARAM_REGS[general_i];
                         let dst2 = Self::GENERAL_PARAM_REGS[general_i + 1];
-                        match symbol_map
-                            .get(&args[i])
-                            .ok_or("function argument does not reference any symbol")?
-                        {
+                        match storage {
                             SymbolStorage::Base { offset, .. } => {
                                 X86_64Assembler::mov_reg64_base32(buf, dst1, *offset);
                                 X86_64Assembler::mov_reg64_base32(buf, dst2, *offset + 8);
                             }
                             _ => {
-                                return Err("Strings only support being loaded from base offsets"
-                                    .to_string());
+                                internal_error!(
+                                    "Strings only support being loaded from base offsets"
+                                );
                             }
                         }
                         general_i += 2;
                     } else {
-                        return Err(
+                        unimplemented!(
                             "calling functions with strings on the stack is not yet implemented"
-                                .to_string(),
                         );
                     }
                 }
                 Layout::Struct(&[]) => {}
                 x => {
-                    return Err(format!(
-                        "calling with arg type, {:?}, is not yet implemented",
-                        x
-                    ));
+                    unimplemented!("calling with arg type, {:?}, is not yet implemented", x);
                 }
             }
         }
-        Ok(stack_offset as u32)
+        stack_offset as u32
     }
 
     fn return_struct<'a>(
@@ -441,14 +430,14 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
         _struct_size: u32,
         _field_layouts: &[Layout<'a>],
         _ret_reg: Option<X86_64GeneralReg>,
-    ) -> Result<(), String> {
-        Err("Returning structs not yet implemented for X86_64".to_string())
+    ) {
+        unimplemented!("Returning structs not yet implemented for X86_64");
     }
 
-    fn returns_via_arg_pointer(ret_layout: &Layout) -> Result<bool, String> {
+    fn returns_via_arg_pointer(ret_layout: &Layout) -> bool {
         // TODO: This may need to be more complex/extended to fully support the calling convention.
         // details here: https://github.com/hjl-tools/x86-psABI/wiki/x86-64-psABI-1.0.pdf
-        Ok(ret_layout.stack_size(PTR_SIZE) > 16)
+        ret_layout.stack_size(PTR_SIZE) > 16
     }
 }
 
@@ -464,7 +453,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
         // The regs we want to use first should be at the end of this vec.
         // We will use pop to get which reg to use next
 
-        // Don't use stack pionter: X86_64GeneralReg::RSP,
+        // Don't use stack pointer: X86_64GeneralReg::RSP,
         // Don't use frame pointer: X86_64GeneralReg::RBP,
 
         // Use callee saved regs last.
@@ -550,7 +539,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
         saved_regs: &[X86_64GeneralReg],
         requested_stack_size: i32,
         fn_call_stack_size: i32,
-    ) -> Result<i32, String> {
+    ) -> i32 {
         x86_64_generic_setup_stack(buf, saved_regs, requested_stack_size, fn_call_stack_size)
     }
 
@@ -560,7 +549,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
         saved_regs: &[X86_64GeneralReg],
         aligned_stack_size: i32,
         fn_call_stack_size: i32,
-    ) -> Result<(), String> {
+    ) {
         x86_64_generic_cleanup_stack(buf, saved_regs, aligned_stack_size, fn_call_stack_size)
     }
 
@@ -570,10 +559,10 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
         symbol_map: &mut MutMap<Symbol, SymbolStorage<X86_64GeneralReg, X86_64FloatReg>>,
         args: &'a [(Layout<'a>, Symbol)],
         ret_layout: &Layout<'a>,
-    ) -> Result<(), String> {
+    ) {
         let mut base_offset = Self::SHADOW_SPACE_SIZE as i32 + 8; // 8 is the size of the pushed base pointer.
         let mut i = 0;
-        if X86_64WindowsFastcall::returns_via_arg_pointer(ret_layout)? {
+        if X86_64WindowsFastcall::returns_via_arg_pointer(ret_layout) {
             symbol_map.insert(
                 Symbol::RET_POINTER,
                 SymbolStorage::GeneralReg(Self::GENERAL_PARAM_REGS[i]),
@@ -594,27 +583,20 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                     }
                     Layout::Builtin(Builtin::Str) => {
                         // I think this just needs to be passed on the stack, so not a huge deal.
-                        return Err(
+                        unimplemented!(
                             "Passing str args with Windows fast call not yet implemented."
-                                .to_string(),
                         );
                     }
                     Layout::Struct(&[]) => {}
                     x => {
-                        return Err(format!(
-                            "Loading args with layout {:?} not yet implementd",
-                            x
-                        ));
+                        unimplemented!("Loading args with layout {:?} not yet implemented", x);
                     }
                 }
             } else {
                 base_offset += match layout {
                     Layout::Builtin(single_register_builtins!()) => 8,
                     x => {
-                        return Err(format!(
-                            "Loading args with layout {:?} not yet implemented",
-                            x
-                        ));
+                        unimplemented!("Loading args with layout {:?} not yet implemented", x);
                     }
                 };
                 symbol_map.insert(
@@ -627,7 +609,6 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                 );
             }
         }
-        Ok(())
     }
 
     #[inline(always)]
@@ -637,29 +618,29 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
         args: &'a [Symbol],
         arg_layouts: &[Layout<'a>],
         ret_layout: &Layout<'a>,
-    ) -> Result<u32, String> {
+    ) -> u32 {
         let mut stack_offset = Self::SHADOW_SPACE_SIZE as i32;
         // For most return layouts we will do nothing.
         // In some cases, we need to put the return address as the first arg.
         match ret_layout {
             Layout::Builtin(single_register_builtins!()) => {}
             x => {
-                return Err(format!(
-                    "receiving return type, {:?}, is not yet implemented",
-                    x
-                ));
+                unimplemented!("receiving return type, {:?}, is not yet implemented", x);
             }
         }
         for (i, layout) in arg_layouts.iter().enumerate() {
             match layout {
                 Layout::Builtin(single_register_integers!()) => {
+                    let storage = match symbol_map.get(&args[i]) {
+                        Some(storage) => storage,
+                        None => {
+                            internal_error!("function argument does not reference any symbol")
+                        }
+                    };
                     if i < Self::GENERAL_PARAM_REGS.len() {
                         // Load the value to the param reg.
                         let dst = Self::GENERAL_PARAM_REGS[i];
-                        match symbol_map
-                            .get(&args[i])
-                            .ok_or("function argument does not reference any symbol")?
-                        {
+                        match storage {
                             SymbolStorage::GeneralReg(reg)
                             | SymbolStorage::BaseAndGeneralReg { reg, .. } => {
                                 X86_64Assembler::mov_reg64_reg64(buf, dst, *reg);
@@ -668,17 +649,12 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                                 X86_64Assembler::mov_reg64_base32(buf, dst, *offset);
                             }
                             SymbolStorage::FloatReg(_) | SymbolStorage::BaseAndFloatReg { .. } => {
-                                return Err(
-                                    "Cannot load floating point symbol into GeneralReg".to_string()
-                                )
+                                internal_error!("Cannot load floating point symbol into GeneralReg")
                             }
                         }
                     } else {
                         // Load the value to the stack.
-                        match symbol_map
-                            .get(&args[i])
-                            .ok_or("function argument does not reference any symbol")?
-                        {
+                        match storage {
                             SymbolStorage::GeneralReg(reg)
                             | SymbolStorage::BaseAndGeneralReg { reg, .. } => {
                                 X86_64Assembler::mov_stack32_reg64(buf, stack_offset, *reg);
@@ -697,22 +673,23 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                                 );
                             }
                             SymbolStorage::FloatReg(_) | SymbolStorage::BaseAndFloatReg { .. } => {
-                                return Err(
-                                    "Cannot load floating point symbol into GeneralReg".to_string()
-                                )
+                                internal_error!("Cannot load floating point symbol into GeneralReg")
                             }
                         }
                         stack_offset += 8;
                     }
                 }
                 Layout::Builtin(single_register_floats!()) => {
+                    let storage = match symbol_map.get(&args[i]) {
+                        Some(storage) => storage,
+                        None => {
+                            internal_error!("function argument does not reference any symbol")
+                        }
+                    };
                     if i < Self::FLOAT_PARAM_REGS.len() {
                         // Load the value to the param reg.
                         let dst = Self::FLOAT_PARAM_REGS[i];
-                        match symbol_map
-                            .get(&args[i])
-                            .ok_or("function argument does not reference any symbol")?
-                        {
+                        match storage {
                             SymbolStorage::FloatReg(reg)
                             | SymbolStorage::BaseAndFloatReg { reg, .. } => {
                                 X86_64Assembler::mov_freg64_freg64(buf, dst, *reg);
@@ -722,15 +699,12 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                             }
                             SymbolStorage::GeneralReg(_)
                             | SymbolStorage::BaseAndGeneralReg { .. } => {
-                                return Err("Cannot load general symbol into FloatReg".to_string())
+                                unimplemented!("Cannot load general symbol into FloatReg")
                             }
                         }
                     } else {
                         // Load the value to the stack.
-                        match symbol_map
-                            .get(&args[i])
-                            .ok_or("function argument does not reference any symbol")?
-                        {
+                        match storage {
                             SymbolStorage::FloatReg(reg)
                             | SymbolStorage::BaseAndFloatReg { reg, .. } => {
                                 X86_64Assembler::mov_stack32_freg64(buf, stack_offset, *reg);
@@ -750,7 +724,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                             }
                             SymbolStorage::GeneralReg(_)
                             | SymbolStorage::BaseAndGeneralReg { .. } => {
-                                return Err("Cannot load general symbol into FloatReg".to_string())
+                                unimplemented!("Cannot load general symbol into FloatReg")
                             }
                         }
                         stack_offset += 8;
@@ -758,20 +732,15 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                 }
                 Layout::Builtin(Builtin::Str) => {
                     // I think this just needs to be passed on the stack, so not a huge deal.
-                    return Err(
-                        "Passing str args with Windows fast call not yet implemented.".to_string(),
-                    );
+                    unimplemented!("Passing str args with Windows fast call not yet implemented.");
                 }
                 Layout::Struct(&[]) => {}
                 x => {
-                    return Err(format!(
-                        "calling with arg type, {:?}, is not yet implemented",
-                        x
-                    ));
+                    unimplemented!("calling with arg type, {:?}, is not yet implemented", x);
                 }
             }
         }
-        Ok(stack_offset as u32)
+        stack_offset as u32
     }
 
     fn return_struct<'a>(
@@ -780,14 +749,14 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
         _struct_size: u32,
         _field_layouts: &[Layout<'a>],
         _ret_reg: Option<X86_64GeneralReg>,
-    ) -> Result<(), String> {
-        Err("Returning structs not yet implemented for X86_64WindowsFastCall".to_string())
+    ) {
+        unimplemented!("Returning structs not yet implemented for X86_64WindowsFastCall");
     }
 
-    fn returns_via_arg_pointer(ret_layout: &Layout) -> Result<bool, String> {
+    fn returns_via_arg_pointer(ret_layout: &Layout) -> bool {
         // TODO: This is not fully correct there are some exceptions for "vector" types.
         // details here: https://docs.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-160#return-values
-        Ok(ret_layout.stack_size(PTR_SIZE) > 8)
+        ret_layout.stack_size(PTR_SIZE) > 8
     }
 }
 
@@ -797,15 +766,17 @@ fn x86_64_generic_setup_stack<'a>(
     saved_regs: &[X86_64GeneralReg],
     requested_stack_size: i32,
     fn_call_stack_size: i32,
-) -> Result<i32, String> {
+) -> i32 {
     X86_64Assembler::push_reg64(buf, X86_64GeneralReg::RBP);
     X86_64Assembler::mov_reg64_reg64(buf, X86_64GeneralReg::RBP, X86_64GeneralReg::RSP);
 
-    let full_stack_size = requested_stack_size
+    let full_stack_size = match requested_stack_size
         .checked_add(8 * saved_regs.len() as i32)
-        .ok_or("Ran out of stack space")?
-        .checked_add(fn_call_stack_size)
-        .ok_or("Ran out of stack space")?;
+        .and_then(|size| size.checked_add(fn_call_stack_size))
+    {
+        Some(size) => size,
+        _ => internal_error!("Ran out of stack space"),
+    };
     let alignment = if full_stack_size <= 0 {
         0
     } else {
@@ -831,12 +802,12 @@ fn x86_64_generic_setup_stack<'a>(
                 X86_64Assembler::mov_base32_reg64(buf, -offset, *reg);
                 offset -= 8;
             }
-            Ok(aligned_stack_size)
+            aligned_stack_size
         } else {
-            Ok(0)
+            0
         }
     } else {
-        Err("Ran out of stack space".to_string())
+        internal_error!("Ran out of stack space");
     }
 }
 
@@ -847,7 +818,7 @@ fn x86_64_generic_cleanup_stack<'a>(
     saved_regs: &[X86_64GeneralReg],
     aligned_stack_size: i32,
     fn_call_stack_size: i32,
-) -> Result<(), String> {
+) {
     if aligned_stack_size > 0 {
         let mut offset = aligned_stack_size - fn_call_stack_size;
         for reg in saved_regs {
@@ -863,7 +834,6 @@ fn x86_64_generic_cleanup_stack<'a>(
     }
     //X86_64Assembler::mov_reg64_reg64(buf, X86_64GeneralReg::RSP, X86_64GeneralReg::RBP);
     X86_64Assembler::pop_reg64(buf, X86_64GeneralReg::RBP);
-    Ok(())
 }
 
 impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
@@ -1054,6 +1024,11 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
+    fn neg_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
+        mov_reg64_reg64(buf, dst, src);
+        neg_reg64(buf, dst);
+    }
+    #[inline(always)]
     fn sub_reg64_reg64_imm32(
         buf: &mut Vec<'_, u8>,
         dst: X86_64GeneralReg,
@@ -1089,6 +1064,28 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     ) {
         cmp_reg64_reg64(buf, src1, src2);
         sete_reg64(buf, dst);
+    }
+
+    #[inline(always)]
+    fn neq_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+    ) {
+        cmp_reg64_reg64(buf, src1, src2);
+        setne_reg64(buf, dst);
+    }
+
+    #[inline(always)]
+    fn lt_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+    ) {
+        cmp_reg64_reg64(buf, src1, src2);
+        setl_reg64(buf, dst);
     }
 
     #[inline(always)]
@@ -1257,6 +1254,13 @@ fn cmp_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i32) {
 #[inline(always)]
 fn cmp_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
     binop_reg64_reg64(0x39, buf, dst, src);
+}
+
+/// `TEST r/m64,r64` -> AND r64 with r/m64; set SF, ZF, PF according to result.
+#[allow(dead_code)]
+#[inline(always)]
+fn test_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
+    binop_reg64_reg64(0x85, buf, dst, src);
 }
 
 /// `IMUL r64,r/m64` -> Signed Multiply r/m64 to r64.
@@ -1448,9 +1452,9 @@ fn neg_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     buf.extend(&[rex, 0xF7, 0xD8 + reg_mod]);
 }
 
-/// `SETE r/m64` -> Set Byte on Condition - zero/equal (ZF=1)
+// helper function for `set*` instructions
 #[inline(always)]
-fn sete_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
+fn set_reg64_help(op_code: u8, buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     // XOR needs 3 bytes, actual SETE instruction need 3 or 4 bytes
     buf.reserve(7);
 
@@ -1458,16 +1462,34 @@ fn sete_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     let reg_mod = reg as u8 % 8;
     use X86_64GeneralReg::*;
     match reg {
-        RAX | RCX | RDX | RBX => buf.extend(&[0x0F, 0x94, 0xC0 + reg_mod]),
-        RSP | RBP | RSI | RDI => buf.extend(&[REX, 0x0F, 0x94, 0xC0 + reg_mod]),
+        RAX | RCX | RDX | RBX => buf.extend(&[0x0F, op_code, 0xC0 + reg_mod]),
+        RSP | RBP | RSI | RDI => buf.extend(&[REX, 0x0F, op_code, 0xC0 + reg_mod]),
         R8 | R9 | R10 | R11 | R12 | R13 | R14 | R15 => {
-            buf.extend(&[REX + 1, 0x0F, 0x94, 0xC0 + reg_mod])
+            buf.extend(&[REX + 1, 0x0F, op_code, 0xC0 + reg_mod])
         }
     }
 
     // We and reg with 1 because the SETE instruction only applies
     // to the lower bits of the register
     and_reg64_imm8(buf, reg, 1);
+}
+
+/// `SETE r/m64` -> Set Byte on Condition - zero/equal (ZF=1)
+#[inline(always)]
+fn sete_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
+    set_reg64_help(0x94, buf, reg);
+}
+
+/// `SETNE r/m64` -> Set byte if not equal (ZF=0).
+#[inline(always)]
+fn setne_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
+    set_reg64_help(0x95, buf, reg);
+}
+
+/// `SETL r/m64` -> Set byte if less (SF≠ OF).
+#[inline(always)]
+fn setl_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
+    set_reg64_help(0x9c, buf, reg);
 }
 
 /// `RET` -> Near return to calling procedure.
@@ -1572,6 +1594,34 @@ mod tests {
         ] {
             buf.clear();
             add_reg64_reg64(&mut buf, *dst, *src);
+            assert_eq!(expected, &buf[..]);
+        }
+    }
+
+    #[test]
+    fn test_sub_reg64_reg64() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        for ((dst, src), expected) in &[
+            (
+                (X86_64GeneralReg::RAX, X86_64GeneralReg::RAX),
+                [0x48, 0x29, 0xC0],
+            ),
+            (
+                (X86_64GeneralReg::RAX, X86_64GeneralReg::R15),
+                [0x4C, 0x29, 0xF8],
+            ),
+            (
+                (X86_64GeneralReg::R15, X86_64GeneralReg::RAX),
+                [0x49, 0x29, 0xC7],
+            ),
+            (
+                (X86_64GeneralReg::R15, X86_64GeneralReg::R15),
+                [0x4D, 0x29, 0xFF],
+            ),
+        ] {
+            buf.clear();
+            sub_reg64_reg64(&mut buf, *dst, *src);
             assert_eq!(expected, &buf[..]);
         }
     }
@@ -2026,7 +2076,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sete_reg64() {
+    fn test_set_reg64_help() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
 
@@ -2039,7 +2089,7 @@ mod tests {
             ],
         );
         buf.clear();
-        sete_reg64(&mut buf, reg);
+        set_reg64_help(0x94, &mut buf, reg); // sete_reg64
         assert_eq!(expected, &buf[..]);
 
         // tests for 8 bytes in the output buffer
@@ -2064,7 +2114,7 @@ mod tests {
             ),
         ] {
             buf.clear();
-            sete_reg64(&mut buf, *reg);
+            set_reg64_help(0x94, &mut buf, *reg); // sete_reg64
             assert_eq!(expected, &buf[..]);
         }
     }

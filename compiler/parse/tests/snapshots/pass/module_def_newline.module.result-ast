@@ -1,0 +1,42 @@
+[
+    |L 0-3, C 0-5| SpaceAfter(
+        SpaceBefore(
+            Body(
+                |L 0-0, C 0-4| Identifier(
+                    "main",
+                ),
+                |L 1-3, C 4-5| SpaceBefore(
+                    Defs(
+                        [
+                            |L 1-1, C 4-10| Body(
+                                |L 1-1, C 4-5| Identifier(
+                                    "i",
+                                ),
+                                |L 1-1, C 8-10| Num(
+                                    "64",
+                                ),
+                            ),
+                        ],
+                        |L 3-3, C 4-5| SpaceBefore(
+                            Var {
+                                module_name: "",
+                                ident: "i",
+                            },
+                            [
+                                Newline,
+                                Newline,
+                            ],
+                        ),
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ),
+            [],
+        ),
+        [
+            Newline,
+        ],
+    ),
+]

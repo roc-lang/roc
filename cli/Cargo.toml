@@ -14,26 +14,32 @@ path = "src/main.rs"
 test = false
 bench = false
 
-[features]
-default = ["target-x86", "llvm", "editor"]
-wasm32-cli-run = []
-i386-cli-run = []
+[features] 
+default = ["target-aarch64", "target-x86_64", "target-wasm32", "llvm", "editor"]
+
+wasm32-cli-run = ["target-wasm32", "run-wasm32"]
+i386-cli-run = ["target-x86"]
 
 # This is a separate feature because when we generate docs on Netlify,
 # it doesn't have LLVM installed. (Also, it doesn't need to do code gen.)
 llvm = ["inkwell", "roc_gen_llvm", "roc_build/llvm"]
 editor = ["roc_editor"]
 
-target-x86 = []
+run-wasm32 = ["wasmer", "wasmer-wasi"]
 
-# arm and wasm give linker errors on some platforms
-target-arm = []
-target-webassembly = []
+# Compiling for a different platform than the host can cause linker errors.
+target-arm = ["roc_build/target-arm"]
+target-aarch64 = ["roc_build/target-aarch64"]
+target-x86 = ["roc_build/target-x86"]
+target-x86_64 = ["roc_build/target-x86_64"]
+target-wasm32 = ["roc_build/target-wasm32"]
 
 target-all = [
-    "target-x86",
+    "target-aarch64",
     "target-arm",
-    "target-webassembly"
+    "target-x86",
+    "target-x86_64",
+    "target-wasm32"
 ]
 
 
@@ -55,40 +61,34 @@ roc_load = { path = "../compiler/load" }
 roc_gen_llvm = { path = "../compiler/gen_llvm", optional = true }
 roc_build = { path = "../compiler/build", default-features = false }
 roc_fmt = { path = "../compiler/fmt" }
-roc_reporting = { path = "../compiler/reporting" }
+roc_reporting = { path = "../reporting" }
 roc_editor = { path = "../editor", optional = true }
 roc_linker = { path = "../linker" }
-# TODO switch to clap 3.0.0 once it's out. Tried adding clap = "~3.0.0-beta.1" and cargo wouldn't accept it
-clap = { git = "https://github.com/rtfeldman/clap", branch = "master" }
-const_format = "0.2"
+clap = { version = "= 3.0.0-beta.5", default-features = false, features = ["std", "color", "suggestions"] }
+const_format = "0.2.22"
 rustyline = { git = "https://github.com/rtfeldman/rustyline", tag = "prompt-fix" }
 rustyline-derive = { git = "https://github.com/rtfeldman/rustyline", tag = "prompt-fix" }
-im    = "14" # im and im-rc should always have the same version!
-im-rc = "14" # im and im-rc should always have the same version!
-bumpalo = { version = "3.2", features = ["collections"] }
-libc = "0.2"
-libloading = "0.6"
+bumpalo = { version = "3.8.0", features = ["collections"] }
+libloading = "0.7.1"
 mimalloc = { version = "0.1.26", default-features = false }
 
 inkwell = { path = "../vendor/inkwell", optional = true }
 target-lexicon = "0.12.2"
-tempfile = "3.1.0"
+tempfile = "3.2.0"
 
-wasmer = "2.0.0"
-wasmer-wasi = "2.0.0"
+wasmer = { version = "2.0.0", optional = true, default-features = false, features = ["default-cranelift", "default-universal"] }
+wasmer-wasi = { version = "2.0.0", optional = true }
 
 [dev-dependencies]
-pretty_assertions = "0.5.1"
-maplit = "1.0.1"
-indoc = "0.3.3"
-quickcheck = "0.8"
-quickcheck_macros = "0.8"
-serial_test = "0.5"
-tempfile = "3.1.0"
+wasmer = { version = "2.0.0", default-features = false, features = ["default-cranelift", "default-universal"] }
+wasmer-wasi = "2.0.0"
+pretty_assertions = "1.0.0"
+indoc = "1.0.3"
+serial_test = "0.5.1"
+tempfile = "3.2.0"
 criterion = { git = "https://github.com/Anton-4/criterion.rs"}
-cli_utils = { path = "cli_utils" }
+cli_utils = { path = "../cli_utils" }
 
 [[bench]]
 name = "time_bench"
 harness = false
-

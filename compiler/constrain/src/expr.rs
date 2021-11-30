@@ -7,9 +7,9 @@ use roc_can::def::{Declaration, Def};
 use roc_can::expected::Expected::{self, *};
 use roc_can::expected::PExpected;
 use roc_can::expr::Expr::{self, *};
-use roc_can::expr::{Field, WhenBranch};
+use roc_can::expr::{ClosureData, Field, WhenBranch};
 use roc_can::pattern::Pattern;
-use roc_collections::all::{ImMap, Index, SendMap};
+use roc_collections::all::{ImMap, Index, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Located, Region};
@@ -255,7 +255,7 @@ pub fn constrain_expr(
                 exists(vec![*elem_var], And(constraints))
             }
         }
-        Call(boxed, loc_args, _application_style) => {
+        Call(boxed, loc_args, called_via) => {
             let (fn_var, loc_fn, closure_var, ret_var) = &**boxed;
             // The expression that evaluates to the function being called, e.g. `foo` in
             // (foo) bar baz
@@ -318,7 +318,7 @@ pub fn constrain_expr(
                 region,
             );
 
-            let category = Category::CallResult(opt_symbol);
+            let category = Category::CallResult(opt_symbol, *called_via);
 
             exists(
                 vars,
@@ -334,7 +334,7 @@ pub fn constrain_expr(
             // make lookup constraint to lookup this symbol's type in the environment
             Lookup(*symbol, expected, region)
         }
-        Closure {
+        Closure(ClosureData {
             function_type: fn_var,
             closure_type: closure_var,
             closure_ext_var,
@@ -344,7 +344,7 @@ pub fn constrain_expr(
             captured_symbols,
             name,
             ..
-        } => {
+        }) => {
             // NOTE defs are treated somewhere else!
             let loc_body_expr = &**boxed;
 
@@ -449,7 +449,7 @@ pub fn constrain_expr(
             branch_cons.push(cond_var_is_bool_con);
 
             match expected {
-                FromAnnotation(name, arity, _, tipe) => {
+                FromAnnotation(name, arity, ann_source, tipe) => {
                     let num_branches = branches.len() + 1;
                     for (index, (loc_cond, loc_body)) in branches.iter().enumerate() {
                         let cond_con = constrain_expr(
@@ -469,6 +469,7 @@ pub fn constrain_expr(
                                 AnnotationSource::TypedIfBranch {
                                     index: Index::zero_based(index),
                                     num_branches,
+                                    region: ann_source.region(),
                                 },
                                 tipe.clone(),
                             ),
@@ -488,6 +489,7 @@ pub fn constrain_expr(
                             AnnotationSource::TypedIfBranch {
                                 index: Index::zero_based(branches.len()),
                                 num_branches,
+                                region: ann_source.region(),
                             },
                             tipe.clone(),
                         ),
@@ -578,7 +580,7 @@ pub fn constrain_expr(
             constraints.push(expr_con);
 
             match &expected {
-                FromAnnotation(name, arity, _, _typ) => {
+                FromAnnotation(name, arity, ann_source, _typ) => {
                     // NOTE deviation from elm.
                     //
                     // in elm, `_typ` is used, but because we have this `expr_var` too
@@ -605,6 +607,7 @@ pub fn constrain_expr(
                                 *arity,
                                 TypedWhenBranch {
                                     index: Index::zero_based(index),
+                                    region: ann_source.region(),
                                 },
                                 typ.clone(),
                             ),
@@ -740,11 +743,10 @@ pub fn constrain_expr(
                 region,
             );
 
-            let ext = Type::Variable(*closure_var);
-            let lambda_set = Type::TagUnion(
-                vec![(TagName::Closure(*closure_name), vec![])],
-                Box::new(ext),
-            );
+            let lambda_set = Type::ClosureTag {
+                name: *closure_name,
+                ext: *closure_var,
+            };
 
             let function_type = Type::Function(
                 vec![record_type],
@@ -1204,7 +1206,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
             // instead of the more generic "something is wrong with the body of `f`"
             match (&def.loc_expr.value, &signature) {
                 (
-                    Closure {
+                    Closure(ClosureData {
                         function_type: fn_var,
                         closure_type: closure_var,
                         closure_ext_var,
@@ -1214,7 +1216,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                         loc_body,
                         name,
                         ..
-                    },
+                    }),
                     Type::Function(arg_types, signature_closure_type, ret_type),
                 ) => {
                     // NOTE if we ever have problems with the closure, the ignored `_closure_type`
@@ -1417,11 +1419,19 @@ fn constrain_closure_size(
         ));
     }
 
-    let tag_name = roc_module::ident::TagName::Closure(name);
-    let closure_type = Type::TagUnion(
-        vec![(tag_name, tag_arguments)],
-        Box::new(Type::Variable(closure_ext_var)),
-    );
+    // pick a more efficient representation if we don't actually capture anything
+    let closure_type = if tag_arguments.is_empty() {
+        Type::ClosureTag {
+            name,
+            ext: closure_ext_var,
+        }
+    } else {
+        let tag_name = TagName::Closure(name);
+        Type::TagUnion(
+            vec![(tag_name, tag_arguments)],
+            Box::new(Type::Variable(closure_ext_var)),
+        )
+    };
 
     let finalizer = Eq(
         Type::Variable(closure_var),
@@ -1439,12 +1449,14 @@ fn instantiate_rigids(
     annotation: &Type,
     introduced_vars: &IntroducedVariables,
     new_rigids: &mut Vec<Variable>,
-    ftv: &mut ImMap<Lowercase, Variable>,
+    ftv: &mut ImMap<Lowercase, Variable>, // rigids defined before the current annotation
     loc_pattern: &Located<Pattern>,
     headers: &mut SendMap<Symbol, Located<Type>>,
 ) -> Type {
     let mut annotation = annotation.clone();
     let mut rigid_substitution: ImMap<Variable, Type> = ImMap::default();
+
+    let outside_rigids: MutSet<Variable> = ftv.values().copied().collect();
 
     for (name, var) in introduced_vars.var_by_name.iter() {
         if let Some(existing_rigid) = ftv.get(name) {
@@ -1465,7 +1477,12 @@ fn instantiate_rigids(
         &Located::at(loc_pattern.region, annotation.clone()),
     ) {
         for (symbol, loc_type) in new_headers {
-            new_rigids.extend(loc_type.value.variables());
+            for var in loc_type.value.variables() {
+                // a rigid is only new if this annotation is the first occurrence of this rigid
+                if !outside_rigids.contains(&var) {
+                    new_rigids.push(var);
+                }
+            }
             headers.insert(symbol, loc_type);
         }
     }
@@ -1555,7 +1572,7 @@ pub fn rec_defs_help(
                 // instead of the more generic "something is wrong with the body of `f`"
                 match (&def.loc_expr.value, &signature) {
                     (
-                        Closure {
+                        Closure(ClosureData {
                             function_type: fn_var,
                             closure_type: closure_var,
                             closure_ext_var,
@@ -1565,7 +1582,7 @@ pub fn rec_defs_help(
                             loc_body,
                             name,
                             ..
-                        },
+                        }),
                         Type::Function(arg_types, _closure_type, ret_type),
                     ) => {
                         // NOTE if we ever have trouble with closure type unification, the ignored

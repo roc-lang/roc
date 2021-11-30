@@ -1,13 +1,14 @@
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use libloading::Library;
+use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
+use roc_module::called_via::CalledVia;
 use roc_module::ident::TagName;
-use roc_module::operator::CalledVia;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::ProcLayout;
 use roc_mono::layout::{union_sorted_tags_help, Builtin, Layout, UnionLayout, UnionVariant};
-use roc_parse::ast::{AssignedField, Expr, StrLiteral};
+use roc_parse::ast::{AssignedField, Collection, Expr, StrLiteral};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{Content, FlatType, GetSubsSlice, RecordFields, Subs, UnionTags, Variable};
 
@@ -71,74 +72,66 @@ fn jit_to_ast_help<'a>(
     content: &Content,
 ) -> Result<Expr<'a>, ToAstProblem> {
     match layout {
-        Layout::Builtin(Builtin::Int1) => Ok(run_jit_function!(lib, main_fn_name, bool, |num| {
+        Layout::Builtin(Builtin::Bool) => Ok(run_jit_function!(lib, main_fn_name, bool, |num| {
             bool_to_ast(env, num, content)
         })),
-        Layout::Builtin(Builtin::Int8) => {
-            Ok(
-                // NOTE: this is does not handle 8-bit numbers yet
-                run_jit_function!(lib, main_fn_name, u8, |num| byte_to_ast(env, num, content)),
-            )
-        }
-        Layout::Builtin(Builtin::Usize) => Ok(run_jit_function!(lib, main_fn_name, usize, |num| {
-            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
-        })),
-        Layout::Builtin(Builtin::Int16) => {
-            Ok(run_jit_function!(lib, main_fn_name, i16, |num| num_to_ast(
-                env,
-                number_literal_to_ast(env.arena, num),
-                content
-            )))
-        }
-        Layout::Builtin(Builtin::Int32) => {
-            Ok(run_jit_function!(lib, main_fn_name, i32, |num| num_to_ast(
-                env,
-                number_literal_to_ast(env.arena, num),
-                content
-            )))
-        }
-        Layout::Builtin(Builtin::Int64) => {
-            Ok(run_jit_function!(lib, main_fn_name, i64, |num| num_to_ast(
-                env,
-                number_literal_to_ast(env.arena, num),
-                content
-            )))
-        }
-        Layout::Builtin(Builtin::Int128) => {
-            Ok(run_jit_function!(
-                lib,
-                main_fn_name,
-                i128,
-                |num| num_to_ast(env, number_literal_to_ast(env.arena, num), content)
-            ))
-        }
-        Layout::Builtin(Builtin::Float32) => {
-            Ok(run_jit_function!(lib, main_fn_name, f32, |num| num_to_ast(
-                env,
-                number_literal_to_ast(env.arena, num),
-                content
-            )))
-        }
-        Layout::Builtin(Builtin::Float64) => {
-            Ok(run_jit_function!(lib, main_fn_name, f64, |num| num_to_ast(
-                env,
-                number_literal_to_ast(env.arena, num),
-                content
-            )))
-        }
-        Layout::Builtin(Builtin::Str) | Layout::Builtin(Builtin::EmptyStr) => Ok(
-            run_jit_function!(lib, main_fn_name, &'static str, |string: &'static str| {
-                str_to_ast(env.arena, env.arena.alloc(string))
-            }),
-        ),
-        Layout::Builtin(Builtin::EmptyList) => {
-            Ok(run_jit_function!(lib, main_fn_name, &'static str, |_| {
-                Expr::List {
-                    items: &[],
-                    final_comments: &[],
+        Layout::Builtin(Builtin::Int(int_width)) => {
+            use IntWidth::*;
+
+            macro_rules! helper {
+                ($ty:ty) => {
+                    run_jit_function!(lib, main_fn_name, $ty, |num| num_to_ast(
+                        env,
+                        number_literal_to_ast(env.arena, num),
+                        content
+                    ))
+                };
+            }
+
+            let result = match int_width {
+                U8 | I8 => {
+                    // NOTE: this is does not handle 8-bit numbers yet
+                    run_jit_function!(lib, main_fn_name, u8, |num| byte_to_ast(env, num, content))
                 }
-            }))
+                U16 => helper!(u16),
+                U32 => helper!(u32),
+                U64 => helper!(u64),
+                U128 => helper!(u128),
+                I16 => helper!(i16),
+                I32 => helper!(i32),
+                I64 => helper!(i64),
+                I128 => helper!(i128),
+            };
+
+            Ok(result)
         }
+        Layout::Builtin(Builtin::Float(float_width)) => {
+            use FloatWidth::*;
+
+            macro_rules! helper {
+                ($ty:ty) => {
+                    run_jit_function!(lib, main_fn_name, $ty, |num| num_to_ast(
+                        env,
+                        number_literal_to_ast(env.arena, num),
+                        content
+                    ))
+                };
+            }
+
+            let result = match float_width {
+                F32 => helper!(f32),
+                F64 => helper!(f64),
+                F128 => todo!("F128 not implemented"),
+            };
+
+            Ok(result)
+        }
+        Layout::Builtin(Builtin::Str) => Ok(run_jit_function!(
+            lib,
+            main_fn_name,
+            &'static str,
+            |string: &'static str| { str_to_ast(env.arena, env.arena.alloc(string)) }
+        )),
         Layout::Builtin(Builtin::List(elem_layout)) => Ok(run_jit_function!(
             lib,
             main_fn_name,
@@ -195,7 +188,7 @@ fn jit_to_ast_help<'a>(
                 }
             };
 
-            let fields = [Layout::Builtin(Builtin::Int64), *layout];
+            let fields = [Layout::u64(), *layout];
             let layout = Layout::Struct(&fields);
 
             let result_stack_size = layout.stack_size(env.ptr_bytes);
@@ -251,16 +244,16 @@ fn jit_to_ast_help<'a>(
                                                 .unwrap_or(0);
 
                                             let tag_id = match union_layout.tag_id_builtin() {
-                                                Builtin::Int1 => {
+                                                Builtin::Bool => {
                                                     *(ptr.add(offset as usize) as *const i8) as i64
                                                 }
-                                                Builtin::Int8 => {
+                                                Builtin::Int(IntWidth::U8) => {
                                                     *(ptr.add(offset as usize) as *const i8) as i64
                                                 }
-                                                Builtin::Int16 => {
+                                                Builtin::Int(IntWidth::U16) => {
                                                     *(ptr.add(offset as usize) as *const i16) as i64
                                                 }
-                                                Builtin::Int64 => {
+                                                Builtin::Int(IntWidth::U64) => {
                                                     // used by non-recursive unions at the
                                                     // moment, remove if that is no longer the case
                                                     *(ptr.add(offset as usize) as *const i64) as i64
@@ -383,58 +376,47 @@ fn ptr_to_ast<'a>(
     layout: &Layout<'a>,
     content: &Content,
 ) -> Expr<'a> {
+    macro_rules! helper {
+        ($ty:ty) => {{
+            let num = unsafe { *(ptr as *const $ty) };
+
+            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
+        }};
+    }
+
     match layout {
-        Layout::Builtin(Builtin::Int128) => {
-            let num = unsafe { *(ptr as *const i128) };
-
-            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
-        }
-        Layout::Builtin(Builtin::Int64) => {
-            let num = unsafe { *(ptr as *const i64) };
-
-            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
-        }
-        Layout::Builtin(Builtin::Int32) => {
-            let num = unsafe { *(ptr as *const i32) };
-
-            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
-        }
-        Layout::Builtin(Builtin::Int16) => {
-            let num = unsafe { *(ptr as *const i16) };
-
-            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
-        }
-        Layout::Builtin(Builtin::Int8) => {
-            let num = unsafe { *(ptr as *const i8) };
-
-            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
-        }
-        Layout::Builtin(Builtin::Int1) => {
+        Layout::Builtin(Builtin::Bool) => {
             // TODO: bits are not as expected here.
             // num is always false at the moment.
             let num = unsafe { *(ptr as *const bool) };
 
             bool_to_ast(env, num, content)
         }
-        Layout::Builtin(Builtin::Usize) => {
-            let num = unsafe { *(ptr as *const usize) };
+        Layout::Builtin(Builtin::Int(int_width)) => {
+            use IntWidth::*;
 
-            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
+            match int_width {
+                U8 => helper!(u8),
+                U16 => helper!(u16),
+                U32 => helper!(u32),
+                U64 => helper!(u64),
+                U128 => helper!(u128),
+                I8 => helper!(i8),
+                I16 => helper!(i16),
+                I32 => helper!(i32),
+                I64 => helper!(i64),
+                I128 => helper!(i128),
+            }
         }
-        Layout::Builtin(Builtin::Float64) => {
-            let num = unsafe { *(ptr as *const f64) };
+        Layout::Builtin(Builtin::Float(float_width)) => {
+            use FloatWidth::*;
 
-            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
+            match float_width {
+                F32 => helper!(f32),
+                F64 => helper!(f64),
+                F128 => todo!("F128 not implemented"),
+            }
         }
-        Layout::Builtin(Builtin::Float32) => {
-            let num = unsafe { *(ptr as *const f32) };
-
-            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
-        }
-        Layout::Builtin(Builtin::EmptyList) => Expr::List {
-            items: &[],
-            final_comments: &[],
-        },
         Layout::Builtin(Builtin::List(elem_layout)) => {
             // Turn the (ptr, len) wrapper struct into actual ptr and len values.
             let len = unsafe { *(ptr.offset(env.ptr_bytes as isize) as *const usize) };
@@ -442,7 +424,6 @@ fn ptr_to_ast<'a>(
 
             list_to_ast(env, ptr, len, elem_layout, content)
         }
-        Layout::Builtin(Builtin::EmptyStr) => Expr::Str(StrLiteral::PlainLine("")),
         Layout::Builtin(Builtin::Str) => {
             let arena_str = unsafe { *(ptr as *const &'static str) };
 
@@ -522,10 +503,7 @@ fn list_to_ast<'a>(
 
     let output = output.into_bump_slice();
 
-    Expr::List {
-        items: output,
-        final_comments: &[],
-    }
+    Expr::List(Collection::with_items(output))
 }
 
 fn single_tag_union_to_ast<'a>(
@@ -535,16 +513,21 @@ fn single_tag_union_to_ast<'a>(
     tag_name: &TagName,
     payload_vars: &[Variable],
 ) -> Expr<'a> {
-    debug_assert_eq!(field_layouts.len(), payload_vars.len());
-
     let arena = env.arena;
-
     let tag_expr = tag_name_to_expr(env, tag_name);
 
     let loc_tag_expr = &*arena.alloc(Located::at_zero(tag_expr));
 
-    let it = payload_vars.iter().copied().zip(field_layouts);
-    let output = sequence_of_expr(env, ptr as *const u8, it).into_bump_slice();
+    let output = if field_layouts.len() == payload_vars.len() {
+        let it = payload_vars.iter().copied().zip(field_layouts);
+        sequence_of_expr(env, ptr as *const u8, it).into_bump_slice()
+    } else if field_layouts.is_empty() && !payload_vars.is_empty() {
+        // happens for e.g. `Foo Bar` where unit structures are nested and the inner one is dropped
+        let it = payload_vars.iter().copied().zip([&Layout::Struct(&[])]);
+        sequence_of_expr(env, ptr as *const u8, it).into_bump_slice()
+    } else {
+        unreachable!()
+    };
 
     Expr::Apply(loc_tag_expr, output, CalledVia::Space)
 }
@@ -616,10 +599,7 @@ fn struct_to_ast<'a>(
 
         let output = env.arena.alloc([loc_field]);
 
-        Expr::Record {
-            fields: output,
-            final_comments: &[],
-        }
+        Expr::Record(Collection::with_items(output))
     } else {
         debug_assert_eq!(sorted_fields.len(), field_layouts.len());
 
@@ -653,10 +633,7 @@ fn struct_to_ast<'a>(
 
         let output = output.into_bump_slice();
 
-        Expr::Record {
-            fields: output,
-            final_comments: &[],
-        }
+        Expr::Record(Collection::with_items(output))
     }
 }
 
@@ -664,8 +641,8 @@ fn unpack_single_element_tag_union(subs: &Subs, tags: UnionTags) -> (&TagName, &
     let (tag_name_index, payload_vars_index) = tags.iter_all().next().unwrap();
 
     let tag_name = &subs[tag_name_index];
-    let subs_slice = subs[payload_vars_index].as_subs_slice();
-    let payload_vars = subs.get_subs_slice(*subs_slice);
+    let subs_slice = subs[payload_vars_index];
+    let payload_vars = subs.get_subs_slice(subs_slice);
 
     (tag_name, payload_vars)
 }
@@ -678,14 +655,14 @@ fn unpack_two_element_tag_union(
     let (tag_name_index, payload_vars_index) = it.next().unwrap();
 
     let tag_name1 = &subs[tag_name_index];
-    let subs_slice = subs[payload_vars_index].as_subs_slice();
-    let payload_vars1 = subs.get_subs_slice(*subs_slice);
+    let subs_slice = subs[payload_vars_index];
+    let payload_vars1 = subs.get_subs_slice(subs_slice);
 
     let (tag_name_index, payload_vars_index) = it.next().unwrap();
 
     let tag_name2 = &subs[tag_name_index];
-    let subs_slice = subs[payload_vars_index].as_subs_slice();
-    let payload_vars2 = subs.get_subs_slice(*subs_slice);
+    let subs_slice = subs[payload_vars_index];
+    let payload_vars2 = subs.get_subs_slice(subs_slice);
 
     (tag_name1, payload_vars1, tag_name2, payload_vars2)
 }
@@ -730,10 +707,7 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
                         region: Region::zero(),
                     };
 
-                    Expr::Record {
-                        fields: arena.alloc([loc_assigned_field]),
-                        final_comments: arena.alloc([]),
-                    }
+                    Expr::Record(Collection::with_items(arena.alloc([loc_assigned_field])))
                 }
                 FlatType::TagUnion(tags, _) if tags.len() == 1 => {
                     let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
@@ -845,10 +819,7 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
                         region: Region::zero(),
                     };
 
-                    Expr::Record {
-                        fields: arena.alloc([loc_assigned_field]),
-                        final_comments: &[],
-                    }
+                    Expr::Record(Collection::with_items(arena.alloc([loc_assigned_field])))
                 }
                 FlatType::TagUnion(tags, _) if tags.len() == 1 => {
                     let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
@@ -967,10 +938,7 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
                         region: Region::zero(),
                     };
 
-                    Expr::Record {
-                        fields: arena.alloc([loc_assigned_field]),
-                        final_comments: arena.alloc([]),
-                    }
+                    Expr::Record(Collection::with_items(arena.alloc([loc_assigned_field])))
                 }
                 FlatType::TagUnion(tags, _) => {
                     // This was a single-tag union that got unwrapped at runtime.

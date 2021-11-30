@@ -99,14 +99,16 @@ impl<SliceId: Id, SliceInfo, T> FlatSlices<SliceId, SliceInfo, T> {
             items: &mut self.flat_data[start..end],
         }
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = (SliceId, Slice<SliceInfo, T>)> {
+        self.count().iter().map(move |i| (i.clone(), self.get(i)))
+    }
 }
 
 impl<SliceId: Id + fmt::Debug, SliceInfo: fmt::Debug, T: fmt::Debug> fmt::Debug
     for FlatSlices<SliceId, SliceInfo, T>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_map()
-            .entries(self.count().iter().map(|i| (i.clone(), self.get(i))))
-            .finish()
+        f.debug_map().entries(self.iter()).finish()
     }
 }

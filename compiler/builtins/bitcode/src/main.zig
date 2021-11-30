@@ -1,4 +1,10 @@
 const std = @import("std");
+const math = std.math;
+const utils = @import("utils.zig");
+
+const ROC_BUILTINS = "roc_builtins";
+const NUM = "num";
+const STR = "str";
 
 // Dec Module
 const dec = @import("dec.zig");
@@ -21,6 +27,7 @@ comptime {
     exportListFn(list.listMap, "map");
     exportListFn(list.listMap2, "map2");
     exportListFn(list.listMap3, "map3");
+    exportListFn(list.listMap4, "map4");
     exportListFn(list.listMapWithIndex, "map_with_index");
     exportListFn(list.listKeepIf, "keep_if");
     exportListFn(list.listWalk, "walk");
@@ -38,10 +45,14 @@ comptime {
     exportListFn(list.listReverse, "reverse");
     exportListFn(list.listSortWith, "sort_with");
     exportListFn(list.listConcat, "concat");
-    exportListFn(list.listDrop, "drop");
+    exportListFn(list.listSublist, "sublist");
+    exportListFn(list.listDropAt, "drop_at");
     exportListFn(list.listSet, "set");
     exportListFn(list.listSetInPlace, "set_in_place");
     exportListFn(list.listSwap, "swap");
+    exportListFn(list.listAny, "any");
+    exportListFn(list.listAll, "all");
+    exportListFn(list.listFindUnsafe, "find_unsafe");
 }
 
 // Dict Module
@@ -71,15 +82,28 @@ comptime {
 
 // Num Module
 const num = @import("num.zig");
+
+const INTEGERS = [_]type{ i8, i16, i32, i64, i128, u8, u16, u32, u64, u128 };
+const FLOATS = [_]type{ f32, f64 };
+const NUMBERS = INTEGERS ++ FLOATS;
+
 comptime {
-    exportNumFn(num.atan, "atan");
-    exportNumFn(num.isFinite, "is_finite");
-    exportNumFn(num.powInt, "pow_int");
-    exportNumFn(num.acos, "acos");
-    exportNumFn(num.asin, "asin");
     exportNumFn(num.bytesToU16C, "bytes_to_u16");
     exportNumFn(num.bytesToU32C, "bytes_to_u32");
-    exportNumFn(num.round, "round");
+
+    inline for (INTEGERS) |T| {
+        num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow_int.");
+        num.exportDivCeil(T, ROC_BUILTINS ++ "." ++ NUM ++ ".div_ceil.");
+    }
+
+    inline for (FLOATS) |T| {
+        num.exportAsin(T, ROC_BUILTINS ++ "." ++ NUM ++ ".asin.");
+        num.exportAcos(T, ROC_BUILTINS ++ "." ++ NUM ++ ".acos.");
+        num.exportAtan(T, ROC_BUILTINS ++ "." ++ NUM ++ ".atan.");
+
+        num.exportIsFinite(T, ROC_BUILTINS ++ "." ++ NUM ++ ".is_finite.");
+        num.exportRound(T, ROC_BUILTINS ++ "." ++ NUM ++ ".round.");
+    }
 }
 
 // Str Module
@@ -95,17 +119,23 @@ comptime {
     exportStrFn(str.strConcatC, "concat");
     exportStrFn(str.strJoinWithC, "joinWith");
     exportStrFn(str.strNumberOfBytes, "number_of_bytes");
-    exportStrFn(str.strFromIntC, "from_int");
     exportStrFn(str.strFromFloatC, "from_float");
     exportStrFn(str.strEqual, "equal");
     exportStrFn(str.strToUtf8C, "to_utf8");
     exportStrFn(str.fromUtf8C, "from_utf8");
     exportStrFn(str.fromUtf8RangeC, "from_utf8_range");
     exportStrFn(str.repeat, "repeat");
+    exportStrFn(str.strTrim, "trim");
+    exportStrFn(str.strTrimLeft, "trim_left");
+    exportStrFn(str.strTrimRight, "trim_right");
+
+    inline for (INTEGERS) |T| {
+        str.exportFromInt(T, ROC_BUILTINS ++ "." ++ STR ++ ".from_int.");
+    }
 }
 
 // Utils
-const utils = @import("utils.zig");
+
 comptime {
     exportUtilsFn(utils.test_panic, "test_panic");
     exportUtilsFn(utils.decrefC, "decref");
@@ -140,7 +170,8 @@ fn exportUtilsFn(comptime func: anytype, comptime func_name: []const u8) void {
 
 // Custom panic function, as builtin Zig version errors during LLVM verification
 pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace) noreturn {
-    if (std.builtin.is_test) {
+    const builtin = @import("builtin");
+    if (builtin.is_test) {
         std.debug.print("{s}: {?}", .{ message, stacktrace });
     } else {
         _ = message;
@@ -166,7 +197,7 @@ test "" {
 //
 // Thank you Zig Contributors!
 
-// Export it as weak incase it is alreadly linked in by something else.
+// Export it as weak incase it is already linked in by something else.
 comptime {
     @export(__muloti4, .{ .name = "__muloti4", .linkage = .Weak });
 }

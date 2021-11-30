@@ -10,6 +10,7 @@ use object::{
 use roc_collections::all::MutMap;
 use roc_module::symbol;
 use roc_mono::ir::{Proc, ProcLayout};
+use roc_reporting::internal_error;
 use target_lexicon::{Architecture as TargetArch, BinaryFormat as TargetBF, Triple};
 
 // This is used by some code below which is currently commented out.
@@ -22,19 +23,19 @@ pub fn build_module<'a>(
     env: &'a Env,
     target: &Triple,
     procedures: MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
-) -> Result<Object, String> {
+) -> Object {
     match target {
         Triple {
             architecture: TargetArch::X86_64,
             binary_format: TargetBF::Elf,
             ..
-        } => {
+        } if cfg!(feature = "target-x86_64") => {
             let backend: Backend64Bit<
                 x86_64::X86_64GeneralReg,
                 x86_64::X86_64FloatReg,
                 x86_64::X86_64Assembler,
                 x86_64::X86_64SystemV,
-            > = Backend::new(env)?;
+            > = Backend::new(env);
             build_object(
                 env,
                 procedures,
@@ -46,13 +47,13 @@ pub fn build_module<'a>(
             architecture: TargetArch::X86_64,
             binary_format: TargetBF::Macho,
             ..
-        } => {
+        } if cfg!(feature = "target-x86_64") => {
             let backend: Backend64Bit<
                 x86_64::X86_64GeneralReg,
                 x86_64::X86_64FloatReg,
                 x86_64::X86_64Assembler,
                 x86_64::X86_64SystemV,
-            > = Backend::new(env)?;
+            > = Backend::new(env);
             build_object(
                 env,
                 procedures,
@@ -68,13 +69,13 @@ pub fn build_module<'a>(
             architecture: TargetArch::Aarch64(_),
             binary_format: TargetBF::Elf,
             ..
-        } => {
+        } if cfg!(feature = "target-aarch64") => {
             let backend: Backend64Bit<
                 aarch64::AArch64GeneralReg,
                 aarch64::AArch64FloatReg,
                 aarch64::AArch64Assembler,
                 aarch64::AArch64Call,
-            > = Backend::new(env)?;
+            > = Backend::new(env);
             build_object(
                 env,
                 procedures,
@@ -82,9 +83,29 @@ pub fn build_module<'a>(
                 Object::new(BinaryFormat::Elf, Architecture::Aarch64, Endianness::Little),
             )
         }
-        x => Err(format! {
-        "the target, {:?}, is not yet implemented",
-        x}),
+        Triple {
+            architecture: TargetArch::Aarch64(_),
+            binary_format: TargetBF::Macho,
+            ..
+        } if cfg!(feature = "target-aarch64") => {
+            let backend: Backend64Bit<
+                aarch64::AArch64GeneralReg,
+                aarch64::AArch64FloatReg,
+                aarch64::AArch64Assembler,
+                aarch64::AArch64Call,
+            > = Backend::new(env);
+            build_object(
+                env,
+                procedures,
+                backend,
+                Object::new(
+                    BinaryFormat::MachO,
+                    Architecture::Aarch64,
+                    Endianness::Little,
+                ),
+            )
+        }
+        x => unimplemented!("the target, {:?}, is not yet implemented", x),
     }
 }
 
@@ -93,7 +114,7 @@ fn generate_wrapper<'a, B: Backend<'a>>(
     output: &mut Object,
     wrapper_name: String,
     wraps: String,
-) -> Result<(), String> {
+) {
     let text_section = output.section_id(StandardSection::Text);
     let proc_symbol = Symbol {
         name: wrapper_name.as_bytes().to_vec(),
@@ -106,7 +127,7 @@ fn generate_wrapper<'a, B: Backend<'a>>(
         flags: SymbolFlags::None,
     };
     let proc_id = output.add_symbol(proc_symbol);
-    let (proc_data, offset) = backend.build_wrapped_jmp()?;
+    let (proc_data, offset) = backend.build_wrapped_jmp();
     let proc_offset = output.add_symbol_data(proc_id, text_section, proc_data, 16);
 
     let name = wraps.as_str().as_bytes();
@@ -132,13 +153,12 @@ fn generate_wrapper<'a, B: Backend<'a>>(
             addend: -4,
         };
 
-        output
-            .add_relocation(text_section, reloc)
-            .map_err(|e| format!("{:?}", e))?;
-
-        Ok(())
+        match output.add_relocation(text_section, reloc) {
+            Ok(obj) => obj,
+            Err(e) => internal_error!("{:?}", e),
+        }
     } else {
-        Err(format!("failed to find fn symbol for {:?}", wraps))
+        unimplemented!("failed to find fn symbol for {:?}", wraps);
     }
 }
 
@@ -147,7 +167,7 @@ fn build_object<'a, B: Backend<'a>>(
     procedures: MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
     mut backend: B,
     mut output: Object,
-) -> Result<Object, String> {
+) -> Object {
     let data_section = output.section_id(StandardSection::Data);
 
     /*
@@ -166,25 +186,25 @@ fn build_object<'a, B: Backend<'a>>(
             &mut output,
             "roc_alloc".into(),
             "malloc".into(),
-        )?;
+        );
         generate_wrapper(
             &mut backend,
             &mut output,
             "roc_realloc".into(),
             "realloc".into(),
-        )?;
+        );
         generate_wrapper(
             &mut backend,
             &mut output,
             "roc_dealloc".into(),
             "free".into(),
-        )?;
+        );
         generate_wrapper(
             &mut backend,
             &mut output,
             "roc_panic".into(),
             "roc_builtins.utils.test_panic".into(),
-        )?;
+        );
     }
 
     // Setup layout_ids for procedure calls.
@@ -231,7 +251,7 @@ fn build_object<'a, B: Backend<'a>>(
     let mut relocations = bumpalo::vec![in env.arena];
     for (fn_name, section_id, proc_id, proc) in procs {
         let mut local_data_index = 0;
-        let (proc_data, relocs) = backend.build_proc(proc)?;
+        let (proc_data, relocs) = backend.build_proc(proc);
         let proc_offset = output.add_symbol_data(proc_id, section_id, proc_data, 16);
         for reloc in relocs {
             let elfreloc = match reloc {
@@ -271,7 +291,7 @@ fn build_object<'a, B: Backend<'a>>(
                             addend: -4,
                         }
                     } else {
-                        return Err(format!("failed to find data symbol for {:?}", name));
+                        internal_error!("failed to find data symbol for {:?}", name);
                     }
                 }
                 Relocation::LinkedFunction { offset, name } => {
@@ -301,7 +321,7 @@ fn build_object<'a, B: Backend<'a>>(
                             addend: -4,
                         }
                     } else {
-                        return Err(format!("failed to find fn symbol for {:?}", name));
+                        internal_error!("failed to find fn symbol for {:?}", name);
                     }
                 }
                 Relocation::JmpToReturn { .. } => unreachable!(),
@@ -310,9 +330,10 @@ fn build_object<'a, B: Backend<'a>>(
         }
     }
     for (section_id, reloc) in relocations {
-        output
-            .add_relocation(section_id, reloc)
-            .map_err(|e| format!("{:?}", e))?;
+        match output.add_relocation(section_id, reloc) {
+            Ok(obj) => obj,
+            Err(e) => internal_error!("{:?}", e),
+        }
     }
-    Ok(output)
+    output
 }

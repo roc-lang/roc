@@ -10,9 +10,9 @@ use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
 use roc_collections::all::{ImSet, MutMap, MutSet, SendMap};
+use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
-use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{self, EscapedChar, StrLiteral};
 use roc_parse::pattern::PatternType::*;
@@ -103,17 +103,7 @@ pub enum Expr {
         ret_var: Variable,
     },
 
-    Closure {
-        function_type: Variable,
-        closure_type: Variable,
-        closure_ext_var: Variable,
-        return_type: Variable,
-        name: Symbol,
-        captured_symbols: Vec<(Symbol, Variable)>,
-        recursive: Recursive,
-        arguments: Vec<(Variable, Located<Pattern>)>,
-        loc_body: Box<Located<Expr>>,
-    },
+    Closure(ClosureData),
 
     // Product Types
     Record {
@@ -174,6 +164,18 @@ pub enum Expr {
     // Compiles, but will crash if reached
     RuntimeError(RuntimeError),
 }
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClosureData {
+    pub function_type: Variable,
+    pub closure_type: Variable,
+    pub closure_ext_var: Variable,
+    pub return_type: Variable,
+    pub name: Symbol,
+    pub captured_symbols: Vec<(Symbol, Variable)>,
+    pub recursive: Recursive,
+    pub arguments: Vec<(Variable, Located<Pattern>)>,
+    pub loc_body: Box<Located<Expr>>,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Field {
@@ -227,14 +229,11 @@ pub fn canonicalize_expr<'a>(
 
             (answer, Output::default())
         }
-        ast::Expr::Record {
-            fields,
-            final_comments: _,
-        } => {
+        ast::Expr::Record(fields) => {
             if fields.is_empty() {
                 (EmptyRecord, Output::default())
             } else {
-                match canonicalize_fields(env, var_store, scope, region, fields) {
+                match canonicalize_fields(env, var_store, scope, region, fields.items) {
                     Ok((can_fields, output)) => (
                         Record {
                             record_var: var_store.fresh(),
@@ -260,12 +259,11 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::RecordUpdate {
             fields,
             update: loc_update,
-            final_comments: _,
         } => {
             let (can_update, update_out) =
                 canonicalize_expr(env, var_store, scope, loc_update.region, &loc_update.value);
             if let Var(symbol) = &can_update.value {
-                match canonicalize_fields(env, var_store, scope, region, fields) {
+                match canonicalize_fields(env, var_store, scope, region, fields.items) {
                     Ok((can_fields, mut output)) => {
                         output.references = output.references.union(update_out.references);
 
@@ -306,6 +304,7 @@ pub fn canonicalize_expr<'a>(
             }
         }
         ast::Expr::Str(literal) => flatten_str_literal(env, var_store, scope, literal),
+
         ast::Expr::SingleQuote(string) => {
             let mut it = string.chars().peekable();
             if let Some(char) = it.next() {
@@ -326,9 +325,8 @@ pub fn canonicalize_expr<'a>(
                 (answer, Output::default())
             }
         }
-        ast::Expr::List {
-            items: loc_elems, ..
-        } => {
+
+        ast::Expr::List(loc_elems) => {
             if loc_elems.is_empty() {
                 (
                     List {
@@ -571,7 +569,7 @@ pub fn canonicalize_expr<'a>(
 
                     // We shouldn't ultimately count arguments as referenced locals. Otherwise,
                     // we end up with weird conclusions like the expression (\x -> x + 1)
-                    // references the (nonexistant) local variable x!
+                    // references the (nonexistent) local variable x!
                     output.references.lookups.remove(sub_symbol);
                 }
             }
@@ -593,7 +591,7 @@ pub fn canonicalize_expr<'a>(
             }
 
             (
-                Closure {
+                Closure(ClosureData {
                     function_type: var_store.fresh(),
                     closure_type: var_store.fresh(),
                     closure_ext_var: var_store.fresh(),
@@ -603,7 +601,7 @@ pub fn canonicalize_expr<'a>(
                     recursive: Recursive::NotRecursive,
                     arguments: can_args,
                     loc_body: Box::new(loc_body_expr),
-                },
+                }),
                 output,
             )
         }
@@ -971,7 +969,7 @@ pub fn local_successors<'a>(
     references: &'a References,
     closures: &'a MutMap<Symbol, References>,
 ) -> ImSet<Symbol> {
-    let mut answer = im_rc::hashset::HashSet::clone(&references.lookups);
+    let mut answer = references.lookups.clone();
 
     for call_symbol in references.calls.iter() {
         answer = answer.union(call_successors(*call_symbol, closures));
@@ -981,7 +979,7 @@ pub fn local_successors<'a>(
 }
 
 fn call_successors(call_symbol: Symbol, closures: &MutMap<Symbol, References>) -> ImSet<Symbol> {
-    let mut answer = im_rc::hashset::HashSet::default();
+    let mut answer = ImSet::default();
     let mut seen = MutSet::default();
     let mut queue = vec![call_symbol];
 
@@ -1425,7 +1423,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             LetNonRec(Box::new(def), Box::new(loc_expr), var)
         }
 
-        Closure {
+        Closure(ClosureData {
             function_type,
             closure_type,
             closure_ext_var,
@@ -1435,14 +1433,14 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             captured_symbols,
             arguments,
             loc_body,
-        } => {
+        }) => {
             let loc_expr = *loc_body;
             let loc_expr = Located {
                 value: inline_calls(var_store, scope, loc_expr.value),
                 region: loc_expr.region,
             };
 
-            Closure {
+            Closure(ClosureData {
                 function_type,
                 closure_type,
                 closure_ext_var,
@@ -1452,7 +1450,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 captured_symbols,
                 arguments,
                 loc_body: Box::new(loc_expr),
-            }
+            })
         }
 
         Record { record_var, fields } => {
@@ -1514,12 +1512,12 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                         loc_expr:
                             Located {
                                 value:
-                                    Closure {
+                                    Closure(ClosureData {
                                         recursive,
                                         arguments: params,
                                         loc_body: boxed_body,
                                         ..
-                                    },
+                                    }),
                                 ..
                             },
                         ..
@@ -1703,7 +1701,7 @@ fn flatten_str_lines<'a>(
     (desugar_str_segments(var_store, segments), output)
 }
 
-/// Resolve stirng interpolations by desugaring a sequence of StrSegments
+/// Resolve string interpolations by desugaring a sequence of StrSegments
 /// into nested calls to Str.concat
 fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> Expr {
     use StrSegment::*;
@@ -1737,7 +1735,7 @@ fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> 
                 (var_store.fresh(), loc_new_expr),
                 (var_store.fresh(), loc_expr),
             ],
-            CalledVia::Space,
+            CalledVia::StringInterpolation,
         );
 
         loc_expr = Located::new(0, 0, 0, 0, expr);

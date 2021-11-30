@@ -235,16 +235,12 @@ fn generate_entry_doc<'a>(
 
 fn type_to_docs(in_func_type_ann: bool, type_annotation: ast::TypeAnnotation) -> TypeAnnotation {
     match type_annotation {
-        ast::TypeAnnotation::TagUnion {
-            tags,
-            ext,
-            final_comments: _,
-        } => {
+        ast::TypeAnnotation::TagUnion { tags, ext } => {
             let mut tags_to_render: Vec<Tag> = Vec::new();
 
             let mut any_tags_are_private = false;
 
-            for tag in tags {
+            for tag in tags.iter() {
                 match tag_to_doc(in_func_type_ann, tag.value) {
                     None => {
                         any_tags_are_private = true;
@@ -293,16 +289,12 @@ fn type_to_docs(in_func_type_ann: bool, type_annotation: ast::TypeAnnotation) ->
 
             Apply { name, parts }
         }
-        ast::TypeAnnotation::Record {
-            fields,
-            ext,
-            final_comments: _,
-        } => {
+        ast::TypeAnnotation::Record { fields, ext } => {
             let mut doc_fields = Vec::new();
 
             let mut any_fields_include_private_tags = false;
 
-            for field in fields {
+            for field in fields.items {
                 match record_field_to_doc(in_func_type_ann, field.value) {
                     None => {
                         any_fields_include_private_tags = true;

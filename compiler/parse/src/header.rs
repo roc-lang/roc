@@ -1,4 +1,4 @@
-use crate::ast::{CommentOrNewline, Spaceable, StrLiteral, TypeAnnotation};
+use crate::ast::{Collection, CommentOrNewline, Spaceable, StrLiteral, TypeAnnotation};
 use crate::blankspace::space0_e;
 use crate::ident::lowercase_ident;
 use crate::parser::Progress::{self, *};
@@ -9,13 +9,13 @@ use crate::string_literal;
 use bumpalo::collections::Vec;
 use roc_region::all::Loc;
 
-#[derive(Clone, PartialEq, Eq, Debug, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 pub struct PackageName<'a> {
     pub account: &'a str,
     pub pkg: &'a str,
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 pub enum Version<'a> {
     Exact(&'a str),
     Range {
@@ -32,13 +32,13 @@ pub enum VersionComparison {
     DisallowsEqual,
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Copy, Clone, PartialEq, Debug)]
 pub enum PackageOrPath<'a> {
     Package(PackageName<'a>, Version<'a>),
     Path(StrLiteral<'a>),
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 pub struct ModuleName<'a>(&'a str);
 
 impl<'a> From<ModuleName<'a>> for &'a str {
@@ -60,8 +60,8 @@ impl<'a> ModuleName<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct InterfaceHeader<'a> {
     pub name: Loc<ModuleName<'a>>,
-    pub exposes: Vec<'a, Loc<ExposesEntry<'a, &'a str>>>,
-    pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
+    pub exposes: Collection<'a, Loc<ExposesEntry<'a, &'a str>>>,
+    pub imports: Collection<'a, Loc<ImportsEntry<'a>>>,
 
     // Potential comments and newlines - these will typically all be empty.
     pub before_header: &'a [CommentOrNewline<'a>],
@@ -72,7 +72,7 @@ pub struct InterfaceHeader<'a> {
     pub after_imports: &'a [CommentOrNewline<'a>],
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum To<'a> {
     ExistingPackage(&'a str),
     NewPackage(PackageOrPath<'a>),
@@ -81,9 +81,9 @@ pub enum To<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AppHeader<'a> {
     pub name: Loc<StrLiteral<'a>>,
-    pub packages: Vec<'a, Loc<PackageEntry<'a>>>,
-    pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
-    pub provides: Vec<'a, Loc<ExposesEntry<'a, &'a str>>>,
+    pub packages: Collection<'a, Loc<PackageEntry<'a>>>,
+    pub imports: Collection<'a, Loc<ImportsEntry<'a>>>,
+    pub provides: Collection<'a, Loc<ExposesEntry<'a, &'a str>>>,
     pub to: Loc<To<'a>>,
 
     // Potential comments and newlines - these will typically all be empty.
@@ -117,7 +117,7 @@ pub struct PackageHeader<'a> {
     pub after_imports: &'a [CommentOrNewline<'a>],
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum PlatformRigid<'a> {
     Entry { rigid: &'a str, alias: &'a str },
 
@@ -137,7 +137,7 @@ impl<'a> Spaceable<'a> for PlatformRigid<'a> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlatformRequires<'a> {
-    pub rigids: Vec<'a, Loc<PlatformRigid<'a>>>,
+    pub rigids: Collection<'a, Loc<PlatformRigid<'a>>>,
     pub signature: Loc<TypedIdent<'a>>,
 }
 
@@ -145,10 +145,10 @@ pub struct PlatformRequires<'a> {
 pub struct PlatformHeader<'a> {
     pub name: Loc<PackageName<'a>>,
     pub requires: PlatformRequires<'a>,
-    pub exposes: Vec<'a, Loc<ExposesEntry<'a, ModuleName<'a>>>>,
-    pub packages: Vec<'a, Loc<PackageEntry<'a>>>,
-    pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
-    pub provides: Vec<'a, Loc<ExposesEntry<'a, &'a str>>>,
+    pub exposes: Collection<'a, Loc<ExposesEntry<'a, ModuleName<'a>>>>,
+    pub packages: Collection<'a, Loc<PackageEntry<'a>>>,
+    pub imports: Collection<'a, Loc<ImportsEntry<'a>>>,
+    pub provides: Collection<'a, Loc<ExposesEntry<'a, &'a str>>>,
     pub effects: Effects<'a>,
 
     // Potential comments and newlines - these will typically all be empty.
@@ -174,10 +174,10 @@ pub struct Effects<'a> {
     pub spaces_after_type_name: &'a [CommentOrNewline<'a>],
     pub effect_shortname: &'a str,
     pub effect_type_name: &'a str,
-    pub entries: &'a [Loc<TypedIdent<'a>>],
+    pub entries: Collection<'a, Loc<TypedIdent<'a>>>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum ExposesEntry<'a, T> {
     /// e.g. `Task`
     Exposed(T),
@@ -196,16 +196,19 @@ impl<'a, T> Spaceable<'a> for ExposesEntry<'a, T> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum ImportsEntry<'a> {
     /// e.g. `Task` or `Task.{ Task, after }`
-    Module(ModuleName<'a>, Vec<'a, Loc<ExposesEntry<'a, &'a str>>>),
+    Module(
+        ModuleName<'a>,
+        Collection<'a, Loc<ExposesEntry<'a, &'a str>>>,
+    ),
 
     /// e.g. `base.Task` or `base.Task.{ after }` or `base.{ Task.{ Task, after } }`
     Package(
         &'a str,
         ModuleName<'a>,
-        Vec<'a, Loc<ExposesEntry<'a, &'a str>>>,
+        Collection<'a, Loc<ExposesEntry<'a, &'a str>>>,
     ),
 
     // Spaces
@@ -224,7 +227,7 @@ impl<'a> ExposesEntry<'a, &'a str> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum TypedIdent<'a> {
     /// e.g.
     ///
@@ -240,7 +243,7 @@ pub enum TypedIdent<'a> {
     SpaceAfter(&'a TypedIdent<'a>, &'a [CommentOrNewline<'a>]),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum PackageEntry<'a> {
     Entry {
         shorthand: &'a str,

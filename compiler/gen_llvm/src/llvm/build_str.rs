@@ -1,16 +1,19 @@
 use crate::llvm::bitcode::{call_bitcode_fn, call_void_bitcode_fn};
 use crate::llvm::build::{complex_bitcast, Env, Scope};
-use crate::llvm::build_list::{allocate_list, call_bitcode_fn_returns_list, store_list};
+use crate::llvm::build_list::{
+    allocate_list, call_bitcode_fn_returns_list, pass_update_mode, store_list,
+};
 use inkwell::builder::Builder;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::AddressSpace;
-use roc_builtins::bitcode;
+use morphic_lib::UpdateMode;
+use roc_builtins::bitcode::{self, IntWidth};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
 
 use super::build::load_symbol;
 
-pub static CHAR_LAYOUT: Layout = Layout::Builtin(Builtin::Int8);
+pub static CHAR_LAYOUT: Layout = Layout::u8();
 
 /// Str.repeat : Str, Nat -> Str
 pub fn str_repeat<'a, 'ctx, 'env>(
@@ -246,15 +249,43 @@ pub fn str_count_graphemes<'a, 'ctx, 'env>(
     )
 }
 
+/// Str.trim : Str -> Str
+pub fn str_trim<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    str_symbol: Symbol,
+) -> BasicValueEnum<'ctx> {
+    let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
+    call_bitcode_fn(env, &[str_i128.into()], bitcode::STR_TRIM)
+}
+
+/// Str.trimLeft : Str -> Str
+pub fn str_trim_left<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    str_symbol: Symbol,
+) -> BasicValueEnum<'ctx> {
+    let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
+    call_bitcode_fn(env, &[str_i128.into()], bitcode::STR_TRIM_LEFT)
+}
+
+/// Str.trimRight : Str -> Str
+pub fn str_trim_right<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    str_symbol: Symbol,
+) -> BasicValueEnum<'ctx> {
+    let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
+    call_bitcode_fn(env, &[str_i128.into()], bitcode::STR_TRIM_RIGHT)
+}
+
 /// Str.fromInt : Int -> Str
 pub fn str_from_int<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'a, 'ctx>,
-    int_symbol: Symbol,
+    value: IntValue<'ctx>,
+    int_width: IntWidth,
 ) -> BasicValueEnum<'ctx> {
-    let int = load_symbol(scope, &int_symbol);
-
-    call_bitcode_fn(env, &[int], bitcode::STR_FROM_INT)
+    call_bitcode_fn(env, &[value.into()], &bitcode::STR_FROM_INT[int_width])
 }
 
 /// Str.toUtf8 : Str -> List U8
@@ -350,6 +381,7 @@ pub fn str_from_utf8<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     _parent: FunctionValue<'ctx>,
     original_wrapper: StructValue<'ctx>,
+    update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
@@ -365,6 +397,7 @@ pub fn str_from_utf8<'a, 'ctx, 'env>(
                 env.str_list_c_abi().into(),
                 "to_i128",
             ),
+            pass_update_mode(env, update_mode),
             result_ptr.into(),
         ],
         bitcode::STR_FROM_UTF8,

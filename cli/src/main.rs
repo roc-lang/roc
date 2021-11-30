@@ -1,25 +1,22 @@
 use roc_cli::build::check_file;
 use roc_cli::{
-    build_app, docs, repl, BuildConfig, CMD_BUILD, CMD_CHECK, CMD_DOCS, CMD_EDIT, CMD_REPL,
-    CMD_RUN, DIRECTORY_OR_FILES, FLAG_TIME, ROC_FILE,
+    build_app, docs, format, repl, BuildConfig, CMD_BUILD, CMD_CHECK, CMD_DOCS, CMD_EDIT,
+    CMD_FORMAT, CMD_REPL, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_TIME, ROC_FILE,
 };
 use roc_load::file::LoadingProblem;
 use std::fs::{self, FileType};
 use std::io;
 use std::path::{Path, PathBuf};
 
+#[macro_use]
+extern crate const_format;
+
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use std::ffi::{OsStr, OsString};
 
-#[cfg(feature = "llvm")]
 use roc_cli::build;
-
-#[cfg(not(feature = "llvm"))]
-fn build(_matches: &clap::ArgMatches, _config: BuildConfig) -> io::Result<i32> {
-    panic!("Building without LLVM is not currently supported.");
-}
 
 fn main() -> io::Result<()> {
     let matches = build_app().get_matches();
@@ -34,7 +31,7 @@ fn main() -> io::Result<()> {
                 }
 
                 None => {
-                    launch_editor(&[])?;
+                    launch_editor(None)?;
 
                     Ok(0)
                 }
@@ -44,17 +41,6 @@ fn main() -> io::Result<()> {
             matches.subcommand_matches(CMD_BUILD).unwrap(),
             BuildConfig::BuildOnly,
         )?),
-        Some(CMD_RUN) => {
-            // TODO remove CMD_RUN altogether if it is currently September 2021 or later.
-            println!(
-                r#"`roc run` is deprecated!
-If you're using a prebuilt binary, you no longer need the `run` - just do `roc [FILE]` instead of `roc run [FILE]`.
-If you're building the compiler from source you'll want to do `cargo run [FILE]` instead of `cargo run run [FILE]`.
-"#
-            );
-
-            Ok(1)
-        }
         Some(CMD_CHECK) => {
             let arena = bumpalo::Bump::new();
 
@@ -91,16 +77,13 @@ If you're building the compiler from source you'll want to do `cargo run [FILE]`
                 .subcommand_matches(CMD_EDIT)
                 .unwrap()
                 .values_of_os(DIRECTORY_OR_FILES)
+                .map(|mut values| values.next())
             {
-                None => {
-                    launch_editor(&[])?;
+                Some(Some(os_str)) => {
+                    launch_editor(Some(Path::new(os_str)))?;
                 }
-                Some(values) => {
-                    let paths = values
-                        .map(|os_str| Path::new(os_str))
-                        .collect::<Vec<&Path>>();
-
-                    launch_editor(&paths)?;
+                _ => {
+                    launch_editor(None)?;
                 }
             }
 
@@ -118,7 +101,10 @@ If you're building the compiler from source you'll want to do `cargo run [FILE]`
             match maybe_values {
                 None => {
                     let mut os_string_values: Vec<OsString> = Vec::new();
-                    read_all_roc_files(&OsStr::new("./").to_os_string(), &mut os_string_values)?;
+                    read_all_roc_files(
+                        &std::env::current_dir()?.as_os_str().to_os_string(),
+                        &mut os_string_values,
+                    )?;
                     for os_string in os_string_values {
                         values.push(os_string);
                     }
@@ -139,6 +125,49 @@ If you're building the compiler from source you'll want to do `cargo run [FILE]`
             }
 
             docs(roc_files);
+
+            Ok(0)
+        }
+        Some(CMD_FORMAT) => {
+            let maybe_values = matches
+                .subcommand_matches(CMD_FORMAT)
+                .unwrap()
+                .values_of_os(DIRECTORY_OR_FILES);
+
+            let mut values: Vec<OsString> = Vec::new();
+
+            match maybe_values {
+                None => {
+                    let mut os_string_values: Vec<OsString> = Vec::new();
+                    read_all_roc_files(
+                        &std::env::current_dir()?.as_os_str().to_os_string(),
+                        &mut os_string_values,
+                    )?;
+                    for os_string in os_string_values {
+                        values.push(os_string);
+                    }
+                }
+                Some(os_values) => {
+                    for os_str in os_values {
+                        values.push(os_str.to_os_string());
+                    }
+                }
+            }
+
+            let mut roc_files = Vec::new();
+
+            // Populate roc_files
+            for os_str in values {
+                let metadata = fs::metadata(os_str.clone())?;
+                roc_files_recursive(os_str.as_os_str(), metadata.file_type(), &mut roc_files)?;
+            }
+
+            format(roc_files);
+
+            Ok(0)
+        }
+        Some(CMD_VERSION) => {
+            println!("roc {}", concatcp!(include_str!("../../version.txt"), "\n"));
 
             Ok(0)
         }
@@ -187,11 +216,11 @@ fn roc_files_recursive<P: AsRef<Path>>(
 }
 
 #[cfg(feature = "editor")]
-fn launch_editor(filepaths: &[&Path]) -> io::Result<()> {
-    roc_editor::launch(filepaths)
+fn launch_editor(project_dir_path: Option<&Path>) -> io::Result<()> {
+    roc_editor::launch(project_dir_path)
 }
 
 #[cfg(not(feature = "editor"))]
-fn launch_editor(_filepaths: &[&Path]) -> io::Result<()> {
+fn launch_editor(_project_dir_path: Option<&Path>) -> io::Result<()> {
     panic!("Cannot launch the editor because this build of roc did not include `feature = \"editor\"`!");
 }

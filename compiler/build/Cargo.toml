@@ -20,32 +20,27 @@ roc_solve = { path = "../solve" }
 roc_mono = { path = "../mono" }
 roc_load = { path = "../load" }
 roc_gen_llvm = { path = "../gen_llvm", optional = true }
-roc_gen_wasm = { path = "../gen_wasm" }
-roc_gen_dev = { path = "../gen_dev" }
-roc_reporting = { path = "../reporting" }
+roc_gen_wasm = { path = "../gen_wasm", optional = true }
+roc_gen_dev = { path = "../gen_dev", default-features = false }
+roc_reporting = { path = "../../reporting" }
 roc_std = { path = "../../roc_std" }
-im    = "14" # im and im-rc should always have the same version!
-im-rc = "14" # im and im-rc should always have the same version!
-bumpalo = { version = "3.6.1", features = ["collections"] }
-inlinable_string = "0.1.0"
-libloading = "0.6"
-tempfile = "3.1.0"
-serde_json = "1.0"
+bumpalo = { version = "3.8.0", features = ["collections"] }
+libloading = "0.7.1"
+tempfile = "3.2.0"
 inkwell = { path = "../../vendor/inkwell", optional = true }
 target-lexicon = "0.12.2"
 
-[dev-dependencies]
-pretty_assertions = "0.5.1"
-maplit = "1.0.1"
-indoc = "0.3.3"
-quickcheck = "0.8"
-quickcheck_macros = "0.8"
+[target.'cfg(target_os = "macos")'.dependencies]
+serde_json = "1.0.69"
 
 [features]
-default = ["llvm", "target-webassembly"]
+default = ["llvm", "target-aarch64", "target-x86_64", "target-wasm32"]
 target-arm = []
-target-aarch64 = []
-target-webassembly = []
+target-aarch64 = ["roc_gen_dev/target-aarch64"]
+target-x86 = []
+target-x86_64 = ["roc_gen_dev/target-x86_64"]
+target-wasm32 = ["roc_gen_wasm"]
+
 # This is a separate feature because when we generate docs on Netlify,
 # it doesn't have LLVM installed. (Also, it doesn't need to do code gen.)
 llvm = ["inkwell", "roc_gen_llvm"]

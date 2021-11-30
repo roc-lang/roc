@@ -9,11 +9,13 @@ edition = "2018"
 roc_collections = { path = "../collections" }
 roc_region = { path = "../region" }
 roc_module = { path = "../module" }
-bumpalo = { version = "3.6.1", features = ["collections"] }
-encode_unicode = "0.3"
+bumpalo = { version = "3.8.0", features = ["collections"] }
+encode_unicode = "0.3.6"
 
 [dev-dependencies]
-pretty_assertions = "0.5.1"
-indoc = "0.3.3"
-quickcheck = "0.8"
-quickcheck_macros = "0.8"
+pretty_assertions = "1.0.0"
+indoc = "1.0.3"
+quickcheck = "1.0.3"
+quickcheck_macros = "1.0.0"
+diff = "0.1.12"
+ansi_term = "0.12.1"

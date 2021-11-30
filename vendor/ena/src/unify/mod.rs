@@ -186,6 +186,7 @@ impl<K: UnifyKey> VarValue<K> {
         self.value = value;
     }
 
+    #[inline(always)]
     fn parent(&self, self_key: K) -> Option<K> {
         self.if_not_self(self.parent, self_key)
     }
@@ -194,6 +195,7 @@ impl<K: UnifyKey> VarValue<K> {
         self.parent
     }
 
+    #[inline(always)]
     fn if_not_self(&self, key: K, self_key: K) -> Option<K> {
         if key == self_key {
             None
@@ -284,6 +286,12 @@ impl<S: UnificationStore> UnificationTable<S> {
         &self.values[key.index() as usize]
     }
 
+    /// Obtains the current value for a particular key.
+    /// Not for end-users; they can use `probe_value`.
+    pub fn value_mut(&mut self, key: S::Key) -> &mut VarValue<S::Key> {
+        &mut self.values[key.index() as usize]
+    }
+
     /// Find the root node for `vid`. This uses the standard
     /// union-find algorithm with path compression:
     /// <http://en.wikipedia.org/wiki/Disjoint-set_data_structure>.
@@ -305,11 +313,12 @@ impl<S: UnificationStore> UnificationTable<S> {
         }
     }
 
-    pub fn get_root_key_without_compacting(&self, vid: S::Key) -> S::Key {
-        match self.value(vid).parent(vid) {
-            None => vid,
-            Some(redirect) => self.get_root_key_without_compacting(redirect),
+    pub fn get_root_key_without_compacting(&self, mut vid: S::Key) -> S::Key {
+        while let Some(redirect) = self.value(vid).parent(vid) {
+            vid = redirect;
         }
+
+        vid
     }
 
     pub fn is_redirect(&self, vid: S::Key) -> bool {
@@ -431,6 +440,7 @@ where
 
     /// Returns the current value for the given key. If the key has
     /// been union'd, this will give the value from the current root.
+    #[inline(always)]
     pub fn probe_value<K1>(&mut self, id: K1) -> V
     where
         K1: Into<K>,
@@ -442,6 +452,7 @@ where
 
     /// Returns the current value for the given key. If the key has
     /// been union'd, this will give the value from the current root.
+    #[inline(always)]
     pub fn probe_value_ref<K1>(&self, id: K1) -> &VarValue<K>
     where
         K1: Into<K>,
@@ -451,7 +462,20 @@ where
         self.value(id)
     }
 
+    /// Returns the current value for the given key. If the key has
+    /// been union'd, this will give the value from the current root.
+    #[inline(always)]
+    pub fn probe_value_ref_mut<K1>(&mut self, id: K1) -> &mut VarValue<K>
+    where
+        K1: Into<K>,
+    {
+        let id = id.into();
+        let id = self.get_root_key_without_compacting(id);
+        self.value_mut(id)
+    }
+
     /// This is for a debug_assert! in solve() only. Do not use it elsewhere!
+    #[inline(always)]
     pub fn probe_value_without_compacting<K1>(&self, id: K1) -> V
     where
         K1: Into<K>,

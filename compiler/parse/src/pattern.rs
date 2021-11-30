@@ -328,7 +328,7 @@ fn lowercase_ident_pattern<'a>(
 #[inline(always)]
 fn record_pattern_help<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>, PRecord<'a>> {
     move |arena, state| {
-        let (_, (fields, final_comments), state) = collection_trailing_sep_e!(
+        let (_, fields, state) = collection_trailing_sep_e!(
             // word1_check_indent!(b'{', PRecord::Open, min_indent, PRecord::IndentOpen),
             word1(b'{', PRecord::Open),
             record_pattern_field(min_indent),
@@ -338,14 +338,12 @@ fn record_pattern_help<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>, PRec
             min_indent,
             PRecord::Open,
             PRecord::Space,
-            PRecord::IndentEnd
+            PRecord::IndentEnd,
+            Pattern::SpaceBefore
         )
         .parse(arena, state)?;
 
-        // TODO
-        let _unused = final_comments;
-
-        let result = Pattern::RecordDestructure(fields.into_bump_slice());
+        let result = Pattern::RecordDestructure(fields);
 
         Ok((MadeProgress, result, state))
     }

@@ -1,4 +1,4 @@
-app "hello-world"
+app "hello-rust"
     packages { base: "platform" }
     imports []
     provides [ main ] to base

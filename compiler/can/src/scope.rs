@@ -63,11 +63,11 @@ impl Scope {
         }
     }
 
-    pub fn idents(&self) -> impl Iterator<Item = &(Ident, (Symbol, Region))> {
+    pub fn idents(&self) -> impl Iterator<Item = (&Ident, &(Symbol, Region))> {
         self.idents.iter()
     }
 
-    pub fn symbols(&self) -> impl Iterator<Item = &(Symbol, Region)> {
+    pub fn symbols(&self) -> impl Iterator<Item = (&Symbol, &Region)> {
         self.symbols.iter()
     }
 
@@ -83,7 +83,7 @@ impl Scope {
         self.idents.len()
     }
 
-    pub fn lookup(&mut self, ident: &Ident, region: Region) -> Result<Symbol, RuntimeError> {
+    pub fn lookup(&self, ident: &Ident, region: Region) -> Result<Symbol, RuntimeError> {
         match self.idents.get(ident) {
             Some((symbol, _)) => Ok(*symbol),
             None => Err(RuntimeError::LookupNotInScope(

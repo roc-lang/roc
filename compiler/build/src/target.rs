@@ -32,6 +32,11 @@ pub fn target_triple_str(target: &Triple) -> &'static str {
             ..
         } => "aarch64-unknown-linux-gnu",
         Triple {
+            architecture: Architecture::Aarch64(_),
+            operating_system: OperatingSystem::Darwin,
+            ..
+        } => "aarch64-apple-darwin",
+        Triple {
             architecture: Architecture::X86_64,
             operating_system: OperatingSystem::Darwin,
             ..
@@ -43,7 +48,9 @@ pub fn target_triple_str(target: &Triple) -> &'static str {
 #[cfg(feature = "llvm")]
 pub fn init_arch(target: &Triple) {
     match target.architecture {
-        Architecture::X86_64 | Architecture::X86_32(_) => {
+        Architecture::X86_64 | Architecture::X86_32(_)
+            if cfg!(any(feature = "target-x86", feature = "target-x86_64")) =>
+        {
             Target::initialize_x86(&InitializationConfig::default());
         }
         Architecture::Aarch64(_) if cfg!(feature = "target-aarch64") => {
@@ -52,7 +59,7 @@ pub fn init_arch(target: &Triple) {
         Architecture::Arm(_) if cfg!(feature = "target-arm") => {
             Target::initialize_arm(&InitializationConfig::default());
         }
-        Architecture::Wasm32 if cfg!(feature = "target-webassembly") => {
+        Architecture::Wasm32 if cfg!(feature = "target-wasm32") => {
             Target::initialize_webassembly(&InitializationConfig::default());
         }
         _ => panic!(
@@ -70,8 +77,8 @@ pub fn arch_str(target: &Triple) -> &'static str {
     //
     // https://stackoverflow.com/questions/15036909/clang-how-to-list-supported-target-architectures
     match target.architecture {
-        Architecture::X86_64 => "x86-64",
-        Architecture::X86_32(_) => "x86",
+        Architecture::X86_64 if cfg!(feature = "target-x86_64") => "x86-64",
+        Architecture::X86_32(_) if cfg!(feature = "target-x86") => "x86",
         Architecture::Aarch64(_) if cfg!(feature = "target-aarch64") => "aarch64",
         Architecture::Arm(_) if cfg!(feature = "target-arm") => "arm",
         Architecture::Wasm32 if cfg!(feature = "target-webassembly") => "wasm32",

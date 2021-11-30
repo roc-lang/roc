@@ -1,22 +1,23 @@
 use std::ffi::CString;
+use std::mem::MaybeUninit;
 use std::os::raw::c_char;
-use RocCallResult::*;
 
 /// This must have the same size as the repr() of RocCallResult!
 pub const ROC_CALL_RESULT_DISCRIMINANT_SIZE: usize = std::mem::size_of::<u64>();
 
-#[repr(u64)]
-pub enum RocCallResult<T> {
-    Success(T),
-    Failure(*mut c_char),
+#[repr(C)]
+pub struct RocCallResult<T> {
+    tag: u64,
+    error_msg: *mut c_char,
+    value: MaybeUninit<T>,
 }
 
 impl<T: Sized> From<RocCallResult<T>> for Result<T, String> {
     fn from(call_result: RocCallResult<T>) -> Self {
-        match call_result {
-            Success(value) => Ok(value),
-            Failure(failure) => Err({
-                let raw = unsafe { CString::from_raw(failure) };
+        match call_result.tag {
+            0 => Ok(unsafe { call_result.value.assume_init() }),
+            _ => Err({
+                let raw = unsafe { CString::from_raw(call_result.error_msg) };
 
                 let result = format!("{:?}", raw);
 
@@ -86,7 +87,7 @@ macro_rules! run_jit_function_dynamic_type {
                 .ok_or(format!("Unable to JIT compile `{}`", $main_fn_name))
                 .expect("errored");
 
-            let size = roc_gen_llvm::run_roc::ROC_CALL_RESULT_DISCRIMINANT_SIZE + $bytes;
+            let size = std::mem::size_of::<RocCallResult<()>>() + $bytes;
             let layout = std::alloc::Layout::array::<u8>(size).unwrap();
             let result = std::alloc::alloc(layout);
             main(result);
@@ -94,7 +95,7 @@ macro_rules! run_jit_function_dynamic_type {
             let flag = *result;
 
             if flag == 0 {
-                $transform(result.offset(8) as *const u8)
+                $transform(result.add(std::mem::size_of::<RocCallResult<()>>()) as *const u8)
             } else {
                 use std::ffi::CString;
                 use std::os::raw::c_char;

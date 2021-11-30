@@ -4,7 +4,7 @@ use std::fmt;
 
 /// This could be uppercase or lowercase, qualified or unqualified.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Ident(IdentStr);
+pub struct Ident(pub IdentStr);
 
 impl Ident {
     pub fn as_inline_str(&self) -> &IdentStr {
@@ -29,11 +29,11 @@ impl std::ops::Deref for ModuleName {
 }
 
 /// An uncapitalized identifier, such as a field name or local variable
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Lowercase(IdentStr);
 
 /// A capitalized identifier, such as a tag name or module name
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Uppercase(IdentStr);
 
 /// A string representing a foreign (linked-in) symbol

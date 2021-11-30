@@ -13,14 +13,12 @@ use crate::ui::text::{
 use crate::ui::ui_error::UIResult;
 use crate::ui::util::is_newline;
 use crate::window::keyboard_input::Modifiers;
-use bumpalo::collections::String as BumpString;
-use bumpalo::Bump;
 use std::cmp::max;
 use std::cmp::min;
 use winit::event::VirtualKeyCode;
 
 pub trait Lines {
-    fn get_line(&self, line_nr: usize) -> UIResult<&str>;
+    fn get_line_ref(&self, line_nr: usize) -> UIResult<&str>;
 
     fn line_len(&self, line_nr: usize) -> UIResult<usize>;
 
@@ -28,7 +26,7 @@ pub trait Lines {
 
     fn nr_of_chars(&self) -> usize;
 
-    fn all_lines<'a>(&self, arena: &'a Bump) -> BumpString<'a>;
+    fn all_lines_as_string(&self) -> String;
 
     fn is_last_line(&self, line_nr: usize) -> bool;
 
@@ -83,7 +81,7 @@ pub trait MutSelectableLines {
 
     fn insert_str(&mut self, new_str: &str) -> UIResult<()>;
 
-    fn pop_char(&mut self) -> UIResult<()>;
+    fn backspace(&mut self) -> UIResult<()>;
 
     fn del_selection(&mut self) -> UIResult<()>;
 }
@@ -114,7 +112,7 @@ pub fn move_caret_left<T: Lines>(
         } else {
             let curr_line_len = lines.line_len(old_line_nr - 1)?;
 
-            (old_line_nr - 1, curr_line_len - 1)
+            (old_line_nr - 1, curr_line_len)
         }
     } else {
         (old_line_nr, old_col_nr - 1)
@@ -185,7 +183,7 @@ pub fn move_caret_right<T: Lines>(
         let is_last_line = lines.is_last_line(old_line_nr);
 
         if !is_last_line {
-            if old_col_nr + 1 > curr_line_len - 1 {
+            if old_col_nr + 1 > curr_line_len {
                 (old_line_nr + 1, 0)
             } else {
                 (old_line_nr, old_col_nr + 1)
@@ -263,7 +261,9 @@ pub fn move_caret_up<T: Lines>(
         let prev_line_len = lines.line_len(old_line_nr - 1)?;
 
         if prev_line_len <= old_col_nr {
-            (old_line_nr - 1, prev_line_len - 1)
+            let new_column = if prev_line_len > 0 { prev_line_len } else { 0 };
+
+            (old_line_nr - 1, new_column)
         } else {
             (old_line_nr - 1, old_col_nr)
         }
@@ -331,7 +331,9 @@ pub fn move_caret_down<T: Lines>(
 
         if next_line_len <= old_col_nr {
             if !is_last_line {
-                (old_line_nr + 1, next_line_len - 1)
+                let new_column = if next_line_len > 0 { next_line_len } else { 0 };
+
+                (old_line_nr + 1, new_column)
             } else {
                 (old_line_nr + 1, next_line_len)
             }
@@ -382,7 +384,7 @@ pub fn move_caret_home<T: Lines>(
     let curr_line_nr = caret_w_select.caret_pos.line;
     let old_col_nr = caret_w_select.caret_pos.column;
 
-    let curr_line_str = lines.get_line(curr_line_nr)?;
+    let curr_line_str = lines.get_line_ref(curr_line_nr)?;
     let line_char_iter = curr_line_str.chars();
 
     let mut first_no_space_char_col = 0;

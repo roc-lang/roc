@@ -1,0 +1,73 @@
+When(
+    |L 0-0, C 5-6| Var {
+        module_name: "",
+        ident: "x",
+    },
+    [
+        WhenBranch {
+            patterns: [
+                |L 1-1, C 4-5| SpaceBefore(
+                    Underscore(
+                        "",
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ],
+            value: |L 2-2, C 8-9| SpaceBefore(
+                Num(
+                    "1",
+                ),
+                [
+                    Newline,
+                ],
+            ),
+            guard: None,
+        },
+        WhenBranch {
+            patterns: [
+                |L 4-4, C 4-5| SpaceBefore(
+                    Underscore(
+                        "",
+                    ),
+                    [
+                        Newline,
+                        Newline,
+                    ],
+                ),
+            ],
+            value: |L 5-5, C 8-9| SpaceBefore(
+                Num(
+                    "2",
+                ),
+                [
+                    Newline,
+                ],
+            ),
+            guard: None,
+        },
+        WhenBranch {
+            patterns: [
+                |L 7-7, C 4-6| SpaceBefore(
+                    GlobalTag(
+                        "Ok",
+                    ),
+                    [
+                        Newline,
+                        Newline,
+                    ],
+                ),
+            ],
+            value: |L 8-8, C 8-9| SpaceBefore(
+                Num(
+                    "3",
+                ),
+                [
+                    Newline,
+                ],
+            ),
+            guard: None,
+        },
+    ],
+)

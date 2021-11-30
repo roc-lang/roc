@@ -1,13 +1,13 @@
 # Building the Roc compiler from source
 
 
-## Installing LLVM, Zig, valgrind, and Python 2.7
+## Installing LLVM, Zig, valgrind, and Python
 
 To build the compiler, you need these installed:
 
-* Python 2.7 (Windows only), `python-is-python3` (Ubuntu)
 * [Zig](https://ziglang.org/), see below for version
 * `libxkbcommon` - macOS seems to have it already; on Ubuntu or Debian you can get it with `apt-get install libxkbcommon-dev`
+* On Debian/Ubuntu `sudo apt-get install pkg-config`
 * LLVM, see below for version
 
 To run the test suite (via `cargo test`), you additionally need to install:
@@ -49,16 +49,23 @@ If you want to install it manually, you can also download Zig directly [here](ht
 **version: 12.0.x**
 
 For macOS, you can install LLVM 12 using `brew install llvm@12` and then adding
-`/usr/local/opt/llvm/bin` to your `PATH`. You can confirm this worked by
+`/usr/local/opt/llvm@12/bin` to your `PATH`. You can confirm this worked by
 running `llc --version` - it should mention "LLVM version 12.0.0" at the top.
-
-For Ubuntu and Debian, you can use the `Automatic installation script` at [apt.llvm.org](https://apt.llvm.org):
+You may also need to manually specify a prefix env var like so:
 ```
-sudo bash -c "$(wget -O - https://apt.llvm.org/llvm.sh)"
+export LLVM_SYS_120_PREFIX=/usr/local/opt/llvm@12
+```
+
+For Ubuntu and Debian:
+```
+sudo apt -y install lsb-release software-properties-common gnupg
+wget https://apt.llvm.org/llvm.sh
+chmod +x llvm.sh
+./llvm.sh 12
 ```
 
 If you use this script, you'll need to add `clang` and `llvm-as` to your `PATH`.
-By default, the script installs them as `llvm-as-12` and `clang-12`,
+By default, the script installs them as `clang-12` and `llvm-as-12`,
 respectively. You can address this with symlinks like so:
 
 ```
@@ -74,29 +81,23 @@ There are also alternative installation options at http://releases.llvm.org/down
 
 ## Using Nix
 
-:exclamation: **Our Nix setup is currently broken, you'll have to install manually for now** :exclamation:
-
 ### Install
 
 Using [nix](https://nixos.org/download.html) is a quick way to get an environment bootstrapped with a single command.
 
 Anyone having trouble installing the proper version of LLVM themselves might also prefer this method.
 
-First, install nix:
+If you are running ArchLinux or a derivative like Manjaro, you'll need to run `sudo sysctl -w kernel.unprivileged_userns_clone=1` before installing nix.
+
+Install nix:
 
 `curl -L https://nixos.org/nix/install | sh`
 
-If MacOS and using a version >= 10.15:
-
-`sh <(curl -L https://nixos.org/nix/install) --darwin-use-unencrypted-nix-store-volume`
-
-You may prefer to setup up the volume manually by following nix documentation.
-
-> You may need to restart your terminal
+You will need to start a fresh terminal session to use nix.
 
 ### Usage
 
-Now with nix installed you just need to run one command:
+Now with nix installed, you just need to run one command:
 
 `nix-shell`
 
@@ -112,33 +113,50 @@ You should be in a repl now. Have fun!
 
 ### Extra tips
 
-If you plan on using `nix-shell` regularly, check out [direnv](https://direnv.net/) and [lorri](https://github.com/target/lorri). Whenever you `cd` into `roc/`, they will automatically load the Nix dependecies into your current shell, so you never have to run nix-shell directly!
+If you plan on using `nix-shell` regularly, check out [direnv](https://direnv.net/) and [lorri](https://github.com/nix-community/lorri). Whenever you `cd` into `roc/`, they will automatically load the Nix dependencies into your current shell, so you never have to run nix-shell directly!
 
 ### Editor
 
-When you want to run the editor from Ubuntu inside nix you need to install [nixGL](https://github.com/guibou/nixGL) as well:
+The editor is a WIP and not ready yet to replace your favorite editor, although if you want to try it out on nix, read on.
+`cargo run edit` should work from NixOS, if you use a nix-shell from inside another OS, follow the instructions below.
+
+#### Nvidia GPU
+
+Outside of a nix shell, execute the following:
+```
+nix-channel --add https://github.com/guibou/nixGL/archive/main.tar.gz nixgl && nix-channel --update
+nix-env -iA nixgl.auto.nixVulkanNvidia
+```
+Running the editor does not work with `nix-shell --pure`.
+```
+nix-shell
+```
+460.91.03 may be different for you, type nixVulkanNvidia and press tab to autocomplete for your version.
+```
+nixVulkanNvidia-460.91.03 cargo run edit
+```
+
+#### Integrated Intel Graphics
+
+:exclamation: ** Our Nix setup currently cannot run the editor with integrated intel graphics, see #1856 ** :exclamation:
+
+Outside of a nix shell, run:
 
 ```bash
-nix-shell
 git clone https://github.com/guibou/nixGL
 cd nixGL
-```
-
-If you have an Nvidia graphics card, run:
-```
-nix-env -f ./ -iA nixVulkanNvidia
-```
-If you have integrated Intel graphics, run:
-```
 nix-env -f ./ -iA nixVulkanIntel
 ```
-Check the [nixGL repo](https://github.com/guibou/nixGL) for other configurations.
 
-Now you should be able to run the editor:
-```bash
-cd roc
-nixVulkanNvidia cargo run edit `# replace Nvidia with the config you chose in the previous step`
+cd to the roc repo, and run (without --pure):
 ```
+nix-shell
+nixVulkanIntel cargo run edit
+```
+
+#### Other configs
+
+Check the [nixGL repo](https://github.com/guibou/nixGL) for other graphics configurations.
 
 ## Troubleshooting
 
@@ -188,6 +206,11 @@ on Windows. After lots of help from [**@IanMacKenzie**](https://github.com/IanMa
 
 
 Once all that was done, `cargo` ran successfully for Roc!
+
+### Build speed on WSL/WSL2
+
+If your Roc project folder is in the Windows filesystem but you're compiling from Linux, rebuilds may be as much as 20x slower than they should be!
+Disk access during linking seems to be the bottleneck. It's recommended to move your folder to the Linux filesystem.
 
 ## Use LLD for the linker
 

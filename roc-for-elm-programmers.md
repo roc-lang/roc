@@ -432,7 +432,7 @@ when error is
 
     # File.ReadErr possibilities
     FileNotFound -> ...
-    ReadAcessDenied -> ...
+    ReadAccessDenied -> ...
     FileCorrupted -> ...
 
     # File.WriteErr possibilities
@@ -509,7 +509,7 @@ Elm's custom types) instead of product types (such as records).
 > algebraic data types, and they have the usual support for pattern matching,
 > exhaustiveness checking, and so on.
 
-You don't need to declare tag unions them before using them. Instead, you can
+You don't need to declare tag unions before using them. Instead, you can
 just write a *tag* (essentially a variant) anywhere you like, and Roc will infer
 the type of the union it goes in.
 
@@ -819,7 +819,7 @@ Dict.fromList [ KV "Sam" True, KV "Ali" False KV firstName False
 
 This works, but is not nearly as nice to read.
 
-Additionally, map literals can compile directly to efficient initialization code
+Additionally, `Dict` literals can compile directly to efficient initialization code
 without needing to (hopefully be able to) optimize away the intermediate
 `List` involved in  `fromList`.
 
@@ -847,7 +847,7 @@ error. However, the `/` operator in Roc is infix syntax sugar for `Num.div`,
 which is a normal function you can pass to anything you like.
 
 Elm has one unary operator, namely `-`. (In Elm, `-x` means
-"apply unary `negate` to `x`.") Roc has that one, and also unary `!`.
+"apply unary `negate` to `x`.") Roc has that one too, and also unary `!`.
 The expression `!foo` desugars to `Bool.not foo`, and `!foo bar` desugars
 to `Bool.not (foo bar)`.
 
@@ -1235,7 +1235,7 @@ target (for example, WebAssembly) at runtime it will be the same as `U32` instea
 For example:
 
 * `List.len : List * -> Nat`
-* `List.get : List elem, Nat -> List elem`
+* `List.get : List elem, Nat -> Result elem [ OutOfBounds ]*`
 * `List.set : List elem, Nat, elem -> List elem`
 
 As with floats, which integer type to use depends on the values you want to support

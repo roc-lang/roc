@@ -6,7 +6,6 @@ interface List
             get,
             set,
             append,
-            map,
             len,
             walkBackwards,
             concat,
@@ -23,14 +22,20 @@ interface List
             last,
             keepOks,
             keepErrs,
-            mapWithIndex,
+            map,
             map2,
             map3,
+            map4,
+            mapWithIndex,
+            mapOrDrop,
+            mapJoin,
             product,
             walkUntil,
             range,
             sortWith,
             drop,
+            dropAt,
+            dropLast,
             swap
         ]
     imports []
@@ -250,6 +255,26 @@ sortDesc : List elem, (elem -> Num *) -> List elem
 ## See for example `Set.map`, `Dict.map`, and [Result.map].
 map : List before, (before -> after) -> List after
 
+## Run a transformation function on the first element of each list,
+## and use that as the first element in the returned list.
+## Repeat until a list runs out of elements.
+##
+## Some languages have a function named `zip`, which does something similar to
+## calling [List.map2] passing two lists and `Pair`:
+##
+## >>> zipped = List.map2 [ "a", "b", "c" ] [ 1, 2, 3 ] Pair
+map2 : List a, List b, (a, b -> c) -> List c
+
+## Run a transformation function on the first element of each list,
+## and use that as the first element in the returned list.
+## Repeat until a list runs out of elements.
+map3 : List a, List b, List c, (a, b, c -> d) -> List d
+
+## Run a transformation function on the first element of each list,
+## and use that as the first element in the returned list.
+## Repeat until a list runs out of elements.
+map4 : List a, List b, List c, List d, (a, b, c, d -> e) -> List e
+
 ## This works like [List.map], except it also passes the index
 ## of the element to the conversion function.
 mapWithIndex : List before, (before, Nat -> after) -> List after
@@ -257,6 +282,18 @@ mapWithIndex : List before, (before, Nat -> after) -> List after
 ## This works like [List.map], except at any time you can return `Err` to
 ## cancel the entire operation immediately, and return that #Err.
 mapOrCancel : List before, (before -> Result after err) -> Result (List after) err
+
+## Like [List.map], except the transformation function specifies whether to
+## `Keep` or `Drop` each element from the final [List].
+##
+## You may know a similar function named `filterMap` in other languages.
+mapOrDrop : List before, (before -> [ Keep after, Drop ]) -> List after
+
+## Like [List.map], except the transformation function wraps the return value
+## in a list. At the end, all the lists get joined together into one list.
+##
+## You may know a similar function named `concatMap` in other languages.
+mapJoin : List before, (before -> List after) -> List after
 
 ## This works like [List.map], except only the transformed values that are
 ## wrapped in `Ok` are kept. Any that are wrapped in `Err` are dropped.
@@ -322,10 +359,6 @@ concat : List elem, List elem -> List elem
 ## >>> List.join []
 join : List (List elem) -> List elem
 
-## Like [List.map], except the transformation function wraps the return value
-## in a list. At the end, all the lists get joined together into one list.
-joinMap : List before, (before -> List after) -> List after
-
 ## Like [List.join], but only keeps elements tagged with `Ok`. Elements
 ## tagged with `Err` are dropped.
 ##
@@ -341,28 +374,6 @@ joinMap : List before, (before -> List after) -> List after
 ## so we're sticking with `Result` for now.
 oks : List (Result elem *) -> List elem
 
-## Iterates over the shortest of the given lists and returns a list of `Pair`
-## tags, each wrapping one of the elements in that list, along with the elements
-## in the same index in # the other lists.
-##
-## >>> List.zip [ "a1", "b1" "c1" ] [ "a2", "b2" ] [ "a3", "b3", "c3" ]
-##
-## Accepts up to 8 lists.
-##
-## > For a generalized version that returns whatever you like, instead of a `Pair`,
-## > see `zipMap`.
-zip : List a, List b -> List [ Pair a b ]*
-
-## Like `zip` but you can specify what to do with each element.
-##
-## More specifically, [repeat what zip's docs say here]
-##
-## >>> List.zipMap [ 1, 2, 3 ] [ 0, 5, 4 ] [ 2, 1 ] \num1 num2 num3 -> num1 + num2 - num3
-##
-## Accepts up to 8 lists.
-zipMap : List a, List b, (a, b -> c) -> List c
-
-
 ## Filter
 
 ## Run the given function on each element of a list, and return all the
@@ -373,7 +384,7 @@ zipMap : List a, List b, (a, b -> c) -> List c
 ## ## Performance Details
 ##
 ## [List.keepIf] always returns a list that takes up exactly the same amount
-## of memory as the original, even if its length decreases. This is becase it
+## of memory as the original, even if its length decreases. This is because it
 ## can't know in advance exactly how much space it will need, and if it guesses a
 ## length that's too low, it would have to re-allocate.
 ##
@@ -422,15 +433,21 @@ min : List (Num a) -> Result (Num a) [ ListWasEmpty ]*
 ## If the given index is outside the bounds of the list, returns the original
 ## list unmodified.
 ##
-## To drop the element at a given index, instead of replacing it, see [List.drop].
+## To drop the element at a given index, instead of replacing it, see [List.dropAt].
 set : List elem, Nat, elem -> List elem
+
+## Drops n elements from the beginning of the list.
+drop : List elem, Nat -> List elem
 
 ## Drops the element at the given index from the list.
 ##
 ## This has no effect if the given index is outside the bounds of the list.
 ##
 ## To replace the element at a given index, instead of dropping it, see [List.set].
-drop : List elem, Nat -> List elem
+dropAt : List elem, Nat -> List elem
+
+## Drops the last element in a List.
+dropLast : List elem -> List elem
 
 ## Adds a new element to the end of the list.
 ##
@@ -629,11 +646,11 @@ sublist : List elem, { start : Nat, len : Nat } -> List elem
 ##
 ## Note that in other languages, `walk` is sometimes called `reduce`,
 ## `fold`, `foldLeft`, or `foldl`.
-walk : List elem, { start : state, step : (state, elem -> state) } -> state
+walk : List elem, state, (state, elem -> state) -> state
 
 ## Note that in other languages, `walkBackwards` is sometimes called `reduceRight`,
 ## `fold`, `foldRight`, or `foldr`.
-walkBackwards : List elem, { start : state, step : (state, elem -> state) } -> state
+walkBackwards : List elem, state, (state, elem -> state) -> state
 
 ## Same as [List.walk], except you can stop walking early.
 ##
@@ -646,10 +663,10 @@ walkBackwards : List elem, { start : state, step : (state, elem -> state) } -> s
 ##
 ## As such, it is typically better for performance to use this over [List.walk]
 ## if returning `Done` earlier than the last element is expected to be common.
-walkUntil : List elem, { start : state, step : (state, elem -> [ Continue state, Done state ]) } -> state
+walkUntil : List elem, state, (state, elem -> [ Continue state, Done state ]) -> state
 
 # Same as [List.walk]Backwards, except you can stop walking early.
-walkBackwardsUntil : List elem, { start : state, step : (state, elem -> [ Continue state, Done state ]) } -> state
+walkBackwardsUntil : List elem, state, (state, elem -> [ Continue state, Done state ]) -> state
 
 ## Check
 
@@ -670,4 +687,14 @@ endsWith : List elem, List elem -> Bool
 
 all : List elem, (elem -> Bool) -> Bool
 
+## Run the given predicate on each element of the list, returning `True` if
+## any of the elements satisfy it.
 any : List elem, (elem -> Bool) -> Bool
+
+## Run the given predicate on each element of the list, returning `True` if
+## all of the elements satisfy it.
+all : List elem, (elem -> Bool) -> Bool
+
+## Returns the first element of the list satisfying a predicate function.
+## If no satisfying element is found, an `Err NotFound` is returned.
+find : List elem, (elem -> Bool) -> Result elem [ NotFound ]*

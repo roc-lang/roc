@@ -4,7 +4,6 @@ use roc_collections::all::{ImMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
-use std::hash::{Hash, Hasher};
 
 /// A marker that a given Subs has been solved.
 /// The only way to obtain a Solved<Subs> is by running the solver on it.
@@ -25,153 +24,11 @@ impl<T> Solved<T> {
     }
 }
 
-/// A custom hash instance, that treats flex vars specially, so that
-///
-/// `Foo 100 200 100` hashes to the same as `Foo 300 100 300`
-///
-/// i.e., we can rename the flex variables, so long as it happens consistently.
-/// this is important so we don't generate the same PartialProc twice.
-impl Hash for SolvedType {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        hash_solved_type_help(self, &mut Vec::new(), state);
-    }
-}
-
-impl PartialEq for SolvedType {
-    fn eq(&self, other: &Self) -> bool {
-        use std::collections::hash_map::DefaultHasher;
-
-        let mut state = DefaultHasher::new();
-        hash_solved_type_help(self, &mut Vec::new(), &mut state);
-        let hash1 = state.finish();
-
-        let mut state = DefaultHasher::new();
-        hash_solved_type_help(other, &mut Vec::new(), &mut state);
-        let hash2 = state.finish();
-
-        hash1 == hash2
-    }
-}
-
-fn hash_solved_type_help<H: Hasher>(
-    solved_type: &SolvedType,
-    flex_vars: &mut Vec<VarId>,
-    state: &mut H,
-) {
-    use SolvedType::*;
-
-    match solved_type {
-        Flex(var_id) => {
-            var_id_hash_help(*var_id, flex_vars, state);
-        }
-        Wildcard => "wildcard".hash(state),
-        EmptyRecord => "empty_record".hash(state),
-        EmptyTagUnion => "empty_tag_union".hash(state),
-        Error => "error".hash(state),
-        Func(arguments, closure, result) => {
-            for x in arguments {
-                hash_solved_type_help(x, flex_vars, state);
-            }
-
-            hash_solved_type_help(closure, flex_vars, state);
-            hash_solved_type_help(result, flex_vars, state);
-        }
-        Apply(name, arguments) => {
-            name.hash(state);
-            for x in arguments {
-                hash_solved_type_help(x, flex_vars, state);
-            }
-        }
-        Rigid(name) => name.hash(state),
-        Erroneous(problem) => problem.hash(state),
-
-        Record { fields, ext } => {
-            for (name, x) in fields {
-                name.hash(state);
-                "record_field".hash(state);
-                hash_solved_type_help(x.as_inner(), flex_vars, state);
-            }
-            hash_solved_type_help(ext, flex_vars, state);
-        }
-
-        TagUnion(tags, ext) => {
-            for (name, arguments) in tags {
-                name.hash(state);
-                for x in arguments {
-                    hash_solved_type_help(x, flex_vars, state);
-                }
-            }
-            hash_solved_type_help(ext, flex_vars, state);
-        }
-
-        FunctionOrTagUnion(_, _, ext) => {
-            hash_solved_type_help(ext, flex_vars, state);
-        }
-
-        RecursiveTagUnion(rec, tags, ext) => {
-            var_id_hash_help(*rec, flex_vars, state);
-            for (name, arguments) in tags {
-                name.hash(state);
-                for x in arguments {
-                    hash_solved_type_help(x, flex_vars, state);
-                }
-            }
-            hash_solved_type_help(ext, flex_vars, state);
-        }
-
-        Alias(name, arguments, solved_lambda_sets, actual) => {
-            name.hash(state);
-            for (name, x) in arguments {
-                name.hash(state);
-                hash_solved_type_help(x, flex_vars, state);
-            }
-
-            for set in solved_lambda_sets {
-                hash_solved_type_help(&set.0, flex_vars, state);
-            }
-
-            hash_solved_type_help(actual, flex_vars, state);
-        }
-
-        HostExposedAlias {
-            name,
-            arguments,
-            lambda_set_variables: solved_lambda_sets,
-            actual,
-            actual_var,
-        } => {
-            name.hash(state);
-            for (name, x) in arguments {
-                name.hash(state);
-                hash_solved_type_help(x, flex_vars, state);
-            }
-
-            for set in solved_lambda_sets {
-                hash_solved_type_help(&set.0, flex_vars, state);
-            }
-
-            hash_solved_type_help(actual, flex_vars, state);
-            var_id_hash_help(*actual_var, flex_vars, state);
-        }
-    }
-}
-
-fn var_id_hash_help<H: Hasher>(var_id: VarId, flex_vars: &mut Vec<VarId>, state: &mut H) {
-    let opt_index = flex_vars.iter().position(|x| *x == var_id);
-    match opt_index {
-        Some(index) => index.hash(state),
-        None => {
-            flex_vars.len().hash(state);
-            flex_vars.push(var_id);
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct SolvedLambdaSet(pub SolvedType);
 
 /// This is a fully solved type, with no Variables remaining in it.
-#[derive(Debug, Clone, Eq)]
+#[derive(Debug, Clone)]
 pub enum SolvedType {
     /// A function. The types of its arguments, then the type of its return value.
     Func(Vec<SolvedType>, Box<SolvedType>, Box<SolvedType>),
@@ -273,6 +130,11 @@ impl SolvedType {
                     ext: Box::new(solved_ext),
                 }
             }
+            ClosureTag { name, ext } => {
+                let solved_ext = Self::from_type(solved_subs, &Type::Variable(*ext));
+                let solved_tags = vec![(TagName::Closure(*name), vec![])];
+                SolvedType::TagUnion(solved_tags, Box::new(solved_ext))
+            }
             TagUnion(tags, box_ext) => {
                 let solved_ext = Self::from_type(solved_subs, box_ext);
                 let mut solved_tags = Vec::with_capacity(tags.len());
@@ -372,7 +234,7 @@ impl SolvedType {
         }
     }
 
-    pub fn from_var(subs: &Subs, var: Variable) -> Self {
+    fn from_var(subs: &Subs, var: Variable) -> Self {
         let mut seen = RecursionVars::default();
         Self::from_var_help(subs, &mut seen, var)
     }
@@ -397,16 +259,17 @@ impl SolvedType {
             Alias(symbol, args, actual_var) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
-                for (name_index, var_index) in args.named_type_arguments() {
+                for var_index in args.named_type_arguments() {
                     let arg_var = subs[var_index];
 
-                    new_args.push((
-                        subs[name_index].clone(),
-                        Self::from_var_help(subs, recursion_vars, arg_var),
-                    ));
+                    let node = Self::from_var_help(subs, recursion_vars, arg_var);
+
+                    // NOTE we fake the lowercase here: the user will never get to see it anyway
+                    new_args.push((Lowercase::default(), node));
                 }
 
                 let mut solved_lambda_sets = Vec::with_capacity(0);
+
                 for var_index in args.unnamed_type_arguments() {
                     let var = subs[var_index];
 
@@ -436,7 +299,7 @@ impl SolvedType {
             Apply(symbol, args) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
-                for var in subs.get_subs_slice(*args.as_subs_slice()) {
+                for var in subs.get_subs_slice(*args) {
                     new_args.push(Self::from_var_help(subs, recursion_vars, *var));
                 }
 
@@ -445,7 +308,7 @@ impl SolvedType {
             Func(args, closure, ret) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
-                for var in subs.get_subs_slice(*args.as_subs_slice()) {
+                for var in subs.get_subs_slice(*args) {
                     new_args.push(Self::from_var_help(subs, recursion_vars, *var));
                 }
 
@@ -533,7 +396,7 @@ impl SolvedType {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct BuiltinAlias {
     pub region: Region,
     pub vars: Vec<Located<Lowercase>>,

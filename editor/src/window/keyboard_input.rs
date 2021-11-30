@@ -27,6 +27,17 @@ impl Modifiers {
 
         active
     }
+
+    // returns true if modifiers are active that can be active when the user wants to insert a new char; e.g.: shift+a to make A
+    pub fn new_char_modifiers(&self) -> bool {
+        self.no_modifiers()
+        || (self.shift && !self.ctrl && !self.alt && !self.logo) // e.g.: shift+a to make A 
+        || (self.cmd_or_ctrl() && self.alt) // e.g.: ctrl+alt+2 to make @ on azerty keyboard
+    }
+
+    fn no_modifiers(&self) -> bool {
+        !self.shift && !self.ctrl && !self.alt && !self.logo
+    }
 }
 
 pub fn no_mods() -> Modifiers {

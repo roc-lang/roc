@@ -22,17 +22,7 @@ pub struct ConstrainedModule {
     pub constraint: Constraint,
 }
 
-pub fn constrain_module(
-    aliases: &MutMap<Symbol, Alias>,
-    declarations: &[Declaration],
-    home: ModuleId,
-) -> Constraint {
-    let mut send_aliases = SendMap::default();
-
-    for (symbol, alias) in aliases.iter() {
-        send_aliases.insert(*symbol, alias.clone());
-    }
-
+pub fn constrain_module(declarations: &[Declaration], home: ModuleId) -> Constraint {
     constrain_decls(home, declarations)
 }
 

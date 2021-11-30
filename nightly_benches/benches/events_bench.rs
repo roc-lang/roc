@@ -1,6 +1,6 @@
 // Keep this benchmark. It's commented because it requires nightly rust.
 use cli_utils::bench_utils::{
-    bench_cfold, bench_deriv, bench_nqueens, bench_rbtree_ck, bench_rbtree_delete, bench_quicksort
+    bench_cfold, bench_deriv, bench_nqueens, bench_quicksort, bench_rbtree_ck, bench_rbtree_delete,
 };
 use criterion_perf_events::Perf;
 use perfcnt::linux::HardwareEventType as Hardware;
@@ -18,7 +18,7 @@ fn bench_group(c: &mut Criterion<Perf>, hw_event_str: &str) {
         bench_cfold,
         bench_deriv,
         bench_rbtree_ck,
-        bench_rbtree_delete,
+        // bench_rbtree_delete,
         bench_quicksort,
     ];
 

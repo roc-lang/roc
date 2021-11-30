@@ -1,0 +1,23 @@
+[package]
+name = "cli_utils"
+version = "0.1.0"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+repository = "https://github.com/rtfeldman/roc"
+edition = "2018"
+description = "Shared code for cli tests and benchmarks"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+roc_cli = { path = "../cli" }
+roc_collections = { path = "../compiler/collections" }
+roc_load = { path = "../compiler/load" }
+roc_module = { path = "../compiler/module" }
+bumpalo = { version = "3.8.0", features = ["collections"] }
+criterion = { git = "https://github.com/Anton-4/criterion.rs"}
+serde = { version = "1.0.130", features = ["derive"] }
+serde-xml-rs = "0.5.1"
+strip-ansi-escapes = "0.1.1"
+tempfile = "3.2.0"
+rlimit = "0.6.2"

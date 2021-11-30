@@ -1,11 +1,22 @@
-#![cfg(test)]
+#![cfg(not(feature = "gen-wasm"))]
 
-use crate::assert_evals_to;
-use crate::assert_llvm_evals_to;
+#[cfg(feature = "gen-llvm")]
+use crate::helpers::llvm::assert_evals_to;
+#[cfg(feature = "gen-llvm")]
+use crate::helpers::llvm::assert_llvm_evals_to;
+
+#[cfg(feature = "gen-dev")]
+use crate::helpers::dev::assert_evals_to;
+#[cfg(feature = "gen-dev")]
+use crate::helpers::dev::assert_evals_to as assert_llvm_evals_to;
+
+#[allow(unused_imports)]
 use indoc::indoc;
+#[allow(unused_imports)]
 use roc_std::{RocList, RocStr};
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_split_bigger_delimiter_small_str() {
     assert_evals_to!(
         indoc!(
@@ -35,6 +46,7 @@ fn str_split_bigger_delimiter_small_str() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_split_str_concat_repeated() {
     assert_evals_to!(
         indoc!(
@@ -58,6 +70,7 @@ fn str_split_str_concat_repeated() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_split_small_str_bigger_delimiter() {
     assert_evals_to!(
         indoc!(
@@ -76,6 +89,7 @@ fn str_split_small_str_bigger_delimiter() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_split_big_str_small_delimiter() {
     assert_evals_to!(
         indoc!(
@@ -105,6 +119,7 @@ fn str_split_big_str_small_delimiter() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_split_small_str_small_delimiter() {
     assert_evals_to!(
         indoc!(
@@ -122,6 +137,7 @@ fn str_split_small_str_small_delimiter() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_split_bigger_delimiter_big_strs() {
     assert_evals_to!(
         indoc!(
@@ -137,6 +153,7 @@ fn str_split_bigger_delimiter_big_strs() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_split_empty_strs() {
     assert_evals_to!(
         indoc!(
@@ -150,6 +167,7 @@ fn str_split_empty_strs() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_split_minimal_example() {
     assert_evals_to!(
         indoc!(
@@ -163,6 +181,7 @@ fn str_split_minimal_example() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_split_small_str_big_delimiter() {
     assert_evals_to!(
         indoc!(
@@ -195,6 +214,7 @@ fn str_split_small_str_big_delimiter() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_split_small_str_20_char_delimiter() {
     assert_evals_to!(
         indoc!(
@@ -214,6 +234,7 @@ fn str_split_small_str_20_char_delimiter() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_concat_big_to_big() {
     assert_evals_to!(
             indoc!(
@@ -229,6 +250,7 @@ fn str_concat_big_to_big() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn small_str_literal() {
     assert_llvm_evals_to!(
         "\"JJJJJJJJJJJJJJJ\"",
@@ -255,6 +277,7 @@ fn small_str_literal() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn small_str_zeroed_literal() {
     // Verifies that we zero out unused bytes in the string.
     // This is important so that string equality tests don't randomly
@@ -284,6 +307,7 @@ fn small_str_zeroed_literal() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn small_str_concat_empty_first_arg() {
     assert_llvm_evals_to!(
         r#"Str.concat "" "JJJJJJJJJJJJJJJ""#,
@@ -310,6 +334,7 @@ fn small_str_concat_empty_first_arg() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn small_str_concat_empty_second_arg() {
     assert_llvm_evals_to!(
         r#"Str.concat "JJJJJJJJJJJJJJJ" """#,
@@ -336,6 +361,7 @@ fn small_str_concat_empty_second_arg() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn small_str_concat_small_to_big() {
     assert_evals_to!(
         r#"Str.concat "abc" " this is longer than 15 chars""#,
@@ -345,6 +371,7 @@ fn small_str_concat_small_to_big() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn small_str_concat_small_to_small_staying_small() {
     assert_llvm_evals_to!(
         r#"Str.concat "J" "JJJJJJJJJJJJJJ""#,
@@ -371,6 +398,7 @@ fn small_str_concat_small_to_small_staying_small() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn small_str_concat_small_to_small_overflow_to_big() {
     assert_evals_to!(
         r#"Str.concat "abcdefghijklm" "nopqrstuvwxyz""#,
@@ -380,16 +408,19 @@ fn small_str_concat_small_to_small_overflow_to_big() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_concat_empty() {
     assert_evals_to!(r#"Str.concat "" """#, RocStr::default(), RocStr);
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn small_str_is_empty() {
     assert_evals_to!(r#"Str.isEmpty "abc""#, false, bool);
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn big_str_is_empty() {
     assert_evals_to!(
         r#"Str.isEmpty "this is more than 15 chars long""#,
@@ -399,11 +430,13 @@ fn big_str_is_empty() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn empty_str_is_empty() {
     assert_evals_to!(r#"Str.isEmpty """#, true, bool);
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_starts_with() {
     assert_evals_to!(r#"Str.startsWith "hello world" "hell""#, true, bool);
     assert_evals_to!(r#"Str.startsWith "hello world" """#, true, bool);
@@ -413,6 +446,7 @@ fn str_starts_with() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_starts_with_code_point() {
     assert_evals_to!(
         &format!(r#"Str.startsWithCodePt "foobar" {}"#, 'f' as u32),
@@ -427,6 +461,7 @@ fn str_starts_with_code_point() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_ends_with() {
     assert_evals_to!(r#"Str.endsWith "hello world" "world""#, true, bool);
     assert_evals_to!(r#"Str.endsWith "nope" "hello world""#, false, bool);
@@ -434,16 +469,19 @@ fn str_ends_with() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_count_graphemes_small_str() {
     assert_evals_to!(r#"Str.countGraphemes "å🤔""#, 2, usize);
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_count_graphemes_three_js() {
     assert_evals_to!(r#"Str.countGraphemes "JJJ""#, 3, usize);
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_count_graphemes_big_str() {
     assert_evals_to!(
         r#"Str.countGraphemes "6🤔å🤔e¥🤔çppkd🙃1jdal🦯asdfa∆ltråø˚waia8918.,🏅jjc""#,
@@ -453,6 +491,7 @@ fn str_count_graphemes_big_str() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_starts_with_same_big_str() {
     assert_evals_to!(
         r#"Str.startsWith "123456789123456789" "123456789123456789""#,
@@ -462,6 +501,7 @@ fn str_starts_with_same_big_str() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_starts_with_different_big_str() {
     assert_evals_to!(
         r#"Str.startsWith "12345678912345678910" "123456789123456789""#,
@@ -471,20 +511,24 @@ fn str_starts_with_different_big_str() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_starts_with_same_small_str() {
     assert_evals_to!(r#"Str.startsWith "1234" "1234""#, true, bool);
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_starts_with_different_small_str() {
     assert_evals_to!(r#"Str.startsWith "1234" "12""#, true, bool);
 }
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_starts_with_false_small_str() {
     assert_evals_to!(r#"Str.startsWith "1234" "23""#, false, bool);
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_from_int() {
     assert_evals_to!(
         r#"Str.fromInt 1234"#,
@@ -518,6 +562,7 @@ fn str_from_int() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_from_utf8_pass_single_ascii() {
     assert_evals_to!(
         indoc!(
@@ -533,6 +578,7 @@ fn str_from_utf8_pass_single_ascii() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_from_utf8_pass_many_ascii() {
     assert_evals_to!(
         indoc!(
@@ -548,6 +594,7 @@ fn str_from_utf8_pass_many_ascii() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_from_utf8_pass_single_unicode() {
     assert_evals_to!(
         indoc!(
@@ -563,6 +610,7 @@ fn str_from_utf8_pass_single_unicode() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_from_utf8_pass_many_unicode() {
     assert_evals_to!(
         indoc!(
@@ -578,6 +626,7 @@ fn str_from_utf8_pass_many_unicode() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_from_utf8_pass_single_grapheme() {
     assert_evals_to!(
         indoc!(
@@ -593,6 +642,7 @@ fn str_from_utf8_pass_single_grapheme() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_from_utf8_pass_many_grapheme() {
     assert_evals_to!(
         indoc!(
@@ -608,6 +658,7 @@ fn str_from_utf8_pass_many_grapheme() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_from_utf8_pass_all() {
     assert_evals_to!(
         indoc!(
@@ -623,6 +674,7 @@ fn str_from_utf8_pass_all() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_from_utf8_fail_invalid_start_byte() {
     assert_evals_to!(
         indoc!(
@@ -642,6 +694,7 @@ fn str_from_utf8_fail_invalid_start_byte() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_from_utf8_fail_unexpected_end_of_sequence() {
     assert_evals_to!(
         indoc!(
@@ -661,6 +714,7 @@ fn str_from_utf8_fail_unexpected_end_of_sequence() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_from_utf8_fail_expected_continuation() {
     assert_evals_to!(
         indoc!(
@@ -680,6 +734,7 @@ fn str_from_utf8_fail_expected_continuation() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_from_utf8_fail_overlong_encoding() {
     assert_evals_to!(
         indoc!(
@@ -699,6 +754,7 @@ fn str_from_utf8_fail_overlong_encoding() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_from_utf8_fail_codepoint_too_large() {
     assert_evals_to!(
         indoc!(
@@ -718,6 +774,7 @@ fn str_from_utf8_fail_codepoint_too_large() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_from_utf8_fail_surrogate_half() {
     assert_evals_to!(
         indoc!(
@@ -737,6 +794,7 @@ fn str_from_utf8_fail_surrogate_half() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_equality() {
     assert_evals_to!(r#""a" == "a""#, true, bool);
     assert_evals_to!(
@@ -761,6 +819,7 @@ fn str_clone() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn nested_recursive_literal() {
     assert_evals_to!(
         indoc!(
@@ -791,6 +850,7 @@ fn nested_recursive_literal() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_join_comma_small() {
     assert_evals_to!(
         r#"Str.joinWith ["1", "2"] ", " "#,
@@ -800,6 +860,7 @@ fn str_join_comma_small() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_join_comma_big() {
     assert_evals_to!(
         r#"Str.joinWith ["10000000", "2000000", "30000000"] ", " "#,
@@ -809,16 +870,19 @@ fn str_join_comma_big() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_join_comma_single() {
     assert_evals_to!(r#"Str.joinWith ["1"] ", " "#, RocStr::from("1"), RocStr);
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_from_float() {
     assert_evals_to!(r#"Str.fromFloat 3.14"#, RocStr::from("3.14"), RocStr);
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_to_utf8() {
     assert_evals_to!(
         r#"Str.toUtf8 "hello""#,
@@ -836,6 +900,7 @@ fn str_to_utf8() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_from_utf8_range() {
     assert_evals_to!(
         indoc!(
@@ -852,6 +917,7 @@ fn str_from_utf8_range() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_from_utf8_range_slice() {
     assert_evals_to!(
         indoc!(
@@ -868,6 +934,7 @@ fn str_from_utf8_range_slice() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_from_utf8_range_slice_not_end() {
     assert_evals_to!(
         indoc!(
@@ -884,6 +951,7 @@ fn str_from_utf8_range_slice_not_end() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_from_utf8_range_order_does_not_matter() {
     assert_evals_to!(
         indoc!(
@@ -900,6 +968,7 @@ fn str_from_utf8_range_order_does_not_matter() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_from_utf8_range_out_of_bounds_start_value() {
     assert_evals_to!(
         indoc!(
@@ -917,6 +986,7 @@ fn str_from_utf8_range_out_of_bounds_start_value() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_from_utf8_range_count_too_high() {
     assert_evals_to!(
         indoc!(
@@ -934,6 +1004,7 @@ fn str_from_utf8_range_count_too_high() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_from_utf8_range_count_too_high_for_start() {
     assert_evals_to!(
         indoc!(
@@ -951,6 +1022,7 @@ fn str_from_utf8_range_count_too_high_for_start() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_repeat_small() {
     assert_evals_to!(
         indoc!(r#"Str.repeat "Roc" 3"#),
@@ -960,6 +1032,7 @@ fn str_repeat_small() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_repeat_big() {
     assert_evals_to!(
         indoc!(r#"Str.repeat "more than 16 characters" 2"#),
@@ -969,11 +1042,298 @@ fn str_repeat_big() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_repeat_empty_string() {
     assert_evals_to!(indoc!(r#"Str.repeat "" 3"#), RocStr::from(""), RocStr);
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_repeat_zero_times() {
     assert_evals_to!(indoc!(r#"Str.repeat "Roc" 0"#), RocStr::from(""), RocStr);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_empty_string() {
+    assert_evals_to!(indoc!(r#"Str.trim """#), RocStr::from(""), RocStr);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_small_blank_string() {
+    assert_evals_to!(indoc!(r#"Str.trim " ""#), RocStr::from(""), RocStr);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_small_to_small() {
+    assert_evals_to!(
+        indoc!(r#"Str.trim "  hello world  ""#),
+        RocStr::from("hello world"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_large_to_large_unique() {
+    assert_evals_to!(
+        indoc!(r#"Str.trim (Str.concat "  " "hello world from a large string ")"#),
+        RocStr::from("hello world from a large string"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_large_to_small_unique() {
+    assert_evals_to!(
+        indoc!(r#"Str.trim (Str.concat "  " "hello world        ")"#),
+        RocStr::from("hello world"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_large_to_large_shared() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+               original : Str
+               original = " hello world world "
+
+               { trimmed: Str.trim original, original: original }
+               "#
+        ),
+        (
+            RocStr::from(" hello world world "),
+            RocStr::from("hello world world"),
+        ),
+        (RocStr, RocStr)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_large_to_small_shared() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+               original : Str
+               original = " hello world             "
+
+               { trimmed: Str.trim original, original: original }
+               "#
+        ),
+        (
+            RocStr::from(" hello world             "),
+            RocStr::from("hello world"),
+        ),
+        (RocStr, RocStr)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_small_to_small_shared() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+               original : Str
+               original = " hello world "
+
+               { trimmed: Str.trim original, original: original }
+               "#
+        ),
+        (RocStr::from(" hello world "), RocStr::from("hello world"),),
+        (RocStr, RocStr)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_left_small_blank_string() {
+    assert_evals_to!(indoc!(r#"Str.trimLeft " ""#), RocStr::from(""), RocStr);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_left_small_to_small() {
+    assert_evals_to!(
+        indoc!(r#"Str.trimLeft "  hello world  ""#),
+        RocStr::from("hello world  "),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_left_large_to_large_unique() {
+    assert_evals_to!(
+        indoc!(r#"Str.trimLeft (Str.concat "    " "hello world from a large string ")"#),
+        RocStr::from("hello world from a large string "),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_left_large_to_small_unique() {
+    assert_evals_to!(
+        indoc!(r#"Str.trimLeft (Str.concat "  " "hello world        ")"#),
+        RocStr::from("hello world        "),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_left_large_to_large_shared() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+               original : Str
+               original = " hello world world "
+
+               { trimmed: Str.trimLeft original, original: original }
+               "#
+        ),
+        (
+            RocStr::from(" hello world world "),
+            RocStr::from("hello world world "),
+        ),
+        (RocStr, RocStr)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_left_large_to_small_shared() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+               original : Str
+               original = " hello world             "
+
+               { trimmed: Str.trimLeft original, original: original }
+               "#
+        ),
+        (
+            RocStr::from(" hello world             "),
+            RocStr::from("hello world             "),
+        ),
+        (RocStr, RocStr)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_left_small_to_small_shared() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+               original : Str
+               original = " hello world "
+
+               { trimmed: Str.trimLeft original, original: original }
+               "#
+        ),
+        (RocStr::from(" hello world "), RocStr::from("hello world "),),
+        (RocStr, RocStr)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_right_small_blank_string() {
+    assert_evals_to!(indoc!(r#"Str.trimRight " ""#), RocStr::from(""), RocStr);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_right_small_to_small() {
+    assert_evals_to!(
+        indoc!(r#"Str.trimRight "  hello world  ""#),
+        RocStr::from("  hello world"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_right_large_to_large_unique() {
+    assert_evals_to!(
+        indoc!(r#"Str.trimRight (Str.concat " hello world from a large string" "    ")"#),
+        RocStr::from(" hello world from a large string"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_right_large_to_small_unique() {
+    assert_evals_to!(
+        indoc!(r#"Str.trimRight (Str.concat "        hello world" "  ")"#),
+        RocStr::from("        hello world"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_right_large_to_large_shared() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+               original : Str
+               original = " hello world world "
+
+               { trimmed: Str.trimRight original, original: original }
+               "#
+        ),
+        (
+            RocStr::from(" hello world world "),
+            RocStr::from(" hello world world"),
+        ),
+        (RocStr, RocStr)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_right_large_to_small_shared() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+               original : Str
+               original = "             hello world "
+
+               { trimmed: Str.trimRight original, original: original }
+               "#
+        ),
+        (
+            RocStr::from("             hello world "),
+            RocStr::from("             hello world"),
+        ),
+        (RocStr, RocStr)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_trim_right_small_to_small_shared() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+               original : Str
+               original = " hello world "
+
+               { trimmed: Str.trimRight original, original: original }
+               "#
+        ),
+        (RocStr::from(" hello world "), RocStr::from(" hello world"),),
+        (RocStr, RocStr)
+    );
 }

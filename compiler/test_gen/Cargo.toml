@@ -5,8 +5,14 @@ authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2018"
 
-[dependencies]
+[[test]]
+name = "test_gen"
+path = "src/tests.rs"
+
+[dev-dependencies]
 roc_gen_llvm = { path = "../gen_llvm" }
+roc_gen_dev = { path = "../gen_dev" }
+roc_gen_wasm = { path = "../gen_wasm" }
 roc_collections = { path = "../collections" }
 roc_region = { path = "../region" }
 roc_module = { path = "../module" }
@@ -17,33 +23,26 @@ roc_constrain = { path = "../constrain" }
 roc_unify = { path = "../unify" }
 roc_solve = { path = "../solve" }
 roc_mono = { path = "../mono" }
-roc_reporting = { path = "../reporting" }
+roc_reporting = { path = "../../reporting" }
 roc_load = { path = "../load" }
 roc_can = { path = "../can" }
 roc_parse = { path = "../parse" }
 roc_build = { path = "../build" }
 roc_std = { path = "../../roc_std" }
-roc_gen_wasm = { path = "../gen_wasm" }
-im    = "14" # im and im-rc should always have the same version!
-im-rc = "14" # im and im-rc should always have the same version!
-bumpalo = { version = "3.6.1", features = ["collections"] }
+bumpalo = { version = "3.8.0", features = ["collections"] }
 either = "1.6.1"
-indoc = "0.3.3"
-libc = "0.2"
+libc = "0.2.106"
 inkwell = { path = "../../vendor/inkwell" }
 target-lexicon = "0.12.2"
-libloading = "0.6"
-wasmer = "2.0.0"
+libloading = "0.7.1"
+wasmer = { version = "2.0.0", default-features = false, features = ["default-cranelift", "default-universal"] }
 wasmer-wasi = "2.0.0"
-tempfile = "3.1.0"
-
-[dev-dependencies]
-maplit = "1.0.1"
-quickcheck = "0.8"
-quickcheck_macros = "0.8"
-tokio = { version = "0.2", features = ["blocking", "fs", "sync", "rt-threaded"] }
-bumpalo = { version = "3.6.1", features = ["collections"] }
+tempfile = "3.2.0"
+indoc = "1.0.3"
 
 [features]
-default = []
+default = ["gen-llvm"]
+gen-llvm = []
+gen-dev = []
+gen-wasm = []
 wasm-cli-run = []

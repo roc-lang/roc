@@ -3,6 +3,7 @@ use crate::subs::{
     GetSubsSlice, RecordFields, Subs, UnionTags, VarStore, Variable, VariableSubsSlice,
 };
 use roc_collections::all::{ImMap, ImSet, Index, MutSet, SendMap};
+use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -168,6 +169,11 @@ pub enum Type {
     Record(SendMap<Lowercase, RecordField<Type>>, Box<Type>),
     TagUnion(Vec<(TagName, Vec<Type>)>, Box<Type>),
     FunctionOrTagUnion(TagName, Symbol, Box<Type>),
+    /// A function name that is used in our defunctionalization algorithm
+    ClosureTag {
+        name: Symbol,
+        ext: Variable,
+    },
     Alias {
         symbol: Symbol,
         type_arguments: Vec<(Lowercase, Type)>,
@@ -377,6 +383,15 @@ impl fmt::Debug for Type {
                     }
                 }
             }
+            Type::ClosureTag { name, ext } => {
+                write!(f, "ClosureTag(")?;
+
+                name.fmt(f)?;
+                write!(f, ", ")?;
+                ext.fmt(f)?;
+
+                write!(f, ")")
+            }
             Type::RecursiveTagUnion(rec, tags, ext) => {
                 write!(f, "[")?;
 
@@ -435,6 +450,14 @@ impl Type {
         matches!(self, Type::RecursiveTagUnion(_, _, _))
     }
 
+    pub fn is_empty_tag_union(&self) -> bool {
+        matches!(self, Type::EmptyTagUnion)
+    }
+
+    pub fn is_empty_record(&self) -> bool {
+        matches!(self, Type::EmptyRec)
+    }
+
     pub fn variables(&self) -> ImSet<Variable> {
         let mut result = ImSet::default();
         variables_help(self, &mut result);
@@ -453,7 +476,7 @@ impl Type {
         use Type::*;
 
         match self {
-            Variable(v) => {
+            ClosureTag { ext: v, .. } | Variable(v) => {
                 if let Some(replacement) = substitutions.get(v) {
                     *self = replacement.clone();
                 }
@@ -485,7 +508,7 @@ impl Type {
                 ext.substitute(substitutions);
             }
             Record(fields, ext) => {
-                for x in fields.iter_mut() {
+                for (_, x) in fields.iter_mut() {
                     x.substitute(substitutions);
                 }
                 ext.substitute(substitutions);
@@ -550,7 +573,7 @@ impl Type {
                 ext.substitute_alias(rep_symbol, actual);
             }
             Record(fields, ext) => {
-                for x in fields.iter_mut() {
+                for (_, x) in fields.iter_mut() {
                     x.substitute_alias(rep_symbol, actual);
                 }
                 ext.substitute_alias(rep_symbol, actual);
@@ -581,7 +604,7 @@ impl Type {
                     arg.substitute_alias(rep_symbol, actual);
                 }
             }
-            EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) => {}
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
         }
     }
 
@@ -618,7 +641,7 @@ impl Type {
             }
             Apply(symbol, _) if *symbol == rep_symbol => true,
             Apply(_, args) => args.iter().any(|arg| arg.contains_symbol(rep_symbol)),
-            EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) => false,
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => false,
         }
     }
 
@@ -626,7 +649,7 @@ impl Type {
         use Type::*;
 
         match self {
-            Variable(v) => *v == rep_variable,
+            ClosureTag { ext: v, .. } | Variable(v) => *v == rep_variable,
             Function(args, closure, ret) => {
                 ret.contains_variable(rep_variable)
                     || closure.contains_variable(rep_variable)
@@ -702,7 +725,7 @@ impl Type {
                 ext.instantiate_aliases(region, aliases, var_store, introduced);
             }
             Record(fields, ext) => {
-                for x in fields.iter_mut() {
+                for (_, x) in fields.iter_mut() {
                     x.instantiate_aliases(region, aliases, var_store, introduced);
                 }
                 ext.instantiate_aliases(region, aliases, var_store, introduced);
@@ -810,7 +833,7 @@ impl Type {
                     }
                 }
             }
-            EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) => {}
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
         }
     }
 }
@@ -863,7 +886,7 @@ fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
             accum.insert(*symbol);
             args.iter().for_each(|arg| symbols_help(arg, accum));
         }
-        EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) => {}
+        EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
     }
 }
 
@@ -873,7 +896,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
     match tipe {
         EmptyRec | EmptyTagUnion | Erroneous(_) => (),
 
-        Variable(v) => {
+        ClosureTag { ext: v, .. } | Variable(v) => {
             accum.insert(*v);
         }
 
@@ -970,7 +993,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
     match tipe {
         EmptyRec | EmptyTagUnion | Erroneous(_) => (),
 
-        Variable(v) => {
+        ClosureTag { ext: v, .. } | Variable(v) => {
             accum.type_variables.insert(*v);
         }
 
@@ -1086,9 +1109,28 @@ pub enum PReason {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnnotationSource {
-    TypedIfBranch { index: Index, num_branches: usize },
-    TypedWhenBranch { index: Index },
-    TypedBody { region: Region },
+    TypedIfBranch {
+        index: Index,
+        num_branches: usize,
+        region: Region,
+    },
+    TypedWhenBranch {
+        index: Index,
+        region: Region,
+    },
+    TypedBody {
+        region: Region,
+    },
+}
+
+impl AnnotationSource {
+    pub fn region(&self) -> Region {
+        match self {
+            &Self::TypedIfBranch { region, .. }
+            | &Self::TypedWhenBranch { region, .. }
+            | &Self::TypedBody { region, .. } => region,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1134,7 +1176,7 @@ pub enum Reason {
 #[derive(PartialEq, Debug, Clone)]
 pub enum Category {
     Lookup(Symbol),
-    CallResult(Option<Symbol>),
+    CallResult(Option<Symbol>, CalledVia),
     LowLevelOpResult(LowLevel),
     ForeignCall,
     TagApply {
@@ -1234,7 +1276,7 @@ pub enum ErrorType {
     TagUnion(SendMap<TagName, Vec<ErrorType>>, TypeExt),
     RecursiveTagUnion(Box<ErrorType>, SendMap<TagName, Vec<ErrorType>>, TypeExt),
     Function(Vec<ErrorType>, Box<ErrorType>, Box<ErrorType>),
-    Alias(Symbol, Vec<(Lowercase, ErrorType)>, Box<ErrorType>),
+    Alias(Symbol, Vec<ErrorType>, Box<ErrorType>),
     Error,
 }
 
@@ -1250,6 +1292,50 @@ impl ErrorType {
         match self {
             ErrorType::Alias(_, _, real) => real.unwrap_alias(),
             real => real,
+        }
+    }
+
+    /// Adds all named type variables used in the type to a set.
+    pub fn add_names(&self, taken: &mut MutSet<Lowercase>) {
+        use ErrorType::*;
+        match self {
+            Infinite => {}
+            Type(_, ts) => ts.iter().for_each(|t| t.add_names(taken)),
+            FlexVar(v) => {
+                taken.insert(v.clone());
+            }
+            RigidVar(v) => {
+                taken.insert(v.clone());
+            }
+            Record(fields, ext) => {
+                fields
+                    .iter()
+                    .for_each(|(_, t)| t.as_inner().add_names(taken));
+                ext.add_names(taken);
+            }
+            TagUnion(tags, ext) => {
+                tags.iter()
+                    .for_each(|(_, ts)| ts.iter().for_each(|t| t.add_names(taken)));
+                ext.add_names(taken);
+            }
+            RecursiveTagUnion(t, tags, ext) => {
+                t.add_names(taken);
+                tags.iter()
+                    .for_each(|(_, ts)| ts.iter().for_each(|t| t.add_names(taken)));
+                ext.add_names(taken);
+            }
+            Function(args, capt, ret) => {
+                args.iter().for_each(|t| t.add_names(taken));
+                capt.add_names(taken);
+                ret.add_names(taken);
+            }
+            Alias(_, ts, t) => {
+                ts.iter().for_each(|t| {
+                    t.add_names(taken);
+                });
+                t.add_names(taken);
+            }
+            Error => {}
         }
     }
 }
@@ -1296,7 +1382,7 @@ fn write_error_type_help(
         Alias(Symbol::NUM_NUM, mut arguments, _actual) => {
             debug_assert!(arguments.len() == 1);
 
-            let argument = arguments.remove(0).1;
+            let argument = arguments.remove(0);
 
             match argument {
                 Type(Symbol::NUM_INTEGER, _) => {
@@ -1414,7 +1500,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
         Alias(Symbol::NUM_NUM, mut arguments, _actual) => {
             debug_assert!(arguments.len() == 1);
 
-            let argument = arguments.remove(0).1;
+            let argument = arguments.remove(0);
 
             match argument {
                 Type(Symbol::NUM_INTEGER, _) => {
@@ -1449,7 +1535,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
             for arg in arguments {
                 buf.push(' ');
 
-                write_debug_error_type_help(arg.1, buf, Parens::InTypeParam);
+                write_debug_error_type_help(arg, buf, Parens::InTypeParam);
             }
 
             // useful for debugging
@@ -1568,6 +1654,18 @@ pub enum TypeExt {
     Closed,
     FlexOpen(Lowercase),
     RigidOpen(Lowercase),
+}
+
+impl TypeExt {
+    pub fn add_names(&self, taken: &mut MutSet<Lowercase>) {
+        use TypeExt::*;
+        match self {
+            Closed => {}
+            FlexOpen(n) | RigidOpen(n) => {
+                taken.insert(n.clone());
+            }
+        }
+    }
 }
 
 fn write_type_ext(ext: TypeExt, buf: &mut String) {
@@ -1744,7 +1842,7 @@ pub fn gather_tags_slices(
     let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, var);
 
     let mut result: Vec<_> = it
-        .map(|(ref_label, field)| (ref_label.clone(), field))
+        .map(|(ref_label, field): (_, VariableSubsSlice)| (ref_label.clone(), field))
         .collect();
 
     result.sort_by(|(a, _), (b, _)| a.cmp(b));
@@ -1756,11 +1854,8 @@ pub fn gather_tags(subs: &Subs, other_fields: UnionTags, var: Variable) -> TagUn
     let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, var);
 
     let mut result: Vec<_> = it
-        .map(|(ref_label, field)| {
-            (
-                ref_label.clone(),
-                subs.get_subs_slice(*field.as_subs_slice()),
-            )
+        .map(|(ref_label, field): (_, VariableSubsSlice)| {
+            (ref_label.clone(), subs.get_subs_slice(field))
         })
         .collect();
 

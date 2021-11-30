@@ -1,9 +1,9 @@
 use crate::exhaustive::{Ctor, RenderAs, TagId, Union};
 use crate::ir::{
-    BranchInfo, DestructType, Env, Expr, FloatPrecision, IntPrecision, JoinPointId, Literal, Param,
-    Pattern, Procs, Stmt,
+    BranchInfo, DestructType, Env, Expr, JoinPointId, Literal, Param, Pattern, Procs, Stmt,
 };
-use crate::layout::{Builtin, Layout, LayoutCache, UnionLayout};
+use crate::layout::{Builtin, Layout, LayoutCache, TagIdIntType, UnionLayout};
+use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
@@ -81,18 +81,18 @@ enum GuardedTest<'a> {
 #[allow(clippy::enum_variant_names)]
 enum Test<'a> {
     IsCtor {
-        tag_id: u8,
+        tag_id: TagIdIntType,
         tag_name: TagName,
         union: crate::exhaustive::Union,
         arguments: Vec<(Pattern<'a>, Layout<'a>)>,
     },
-    IsInt(i128, IntPrecision),
-    IsFloat(u64, FloatPrecision),
+    IsInt(i128, IntWidth),
+    IsFloat(u64, FloatWidth),
     IsDecimal(RocDec),
     IsStr(Box<str>),
     IsBit(bool),
     IsByte {
-        tag_id: u8,
+        tag_id: TagIdIntType,
         num_alts: usize,
     },
 }
@@ -419,10 +419,9 @@ fn gather_edges<'a>(
 
     let check = guarded_tests_are_complete(&relevant_tests);
 
-    // TODO remove clone
     let all_edges = relevant_tests
         .into_iter()
-        .map(|t| edges_for(path, branches.clone(), t))
+        .map(|t| edges_for(path, &branches, t))
         .collect();
 
     let fallbacks = if check {
@@ -562,7 +561,7 @@ fn test_at_path<'a>(
                 },
                 BitLiteral { value, .. } => IsBit(*value),
                 EnumLiteral { tag_id, union, .. } => IsByte {
-                    tag_id: *tag_id,
+                    tag_id: *tag_id as _,
                     num_alts: union.alternatives.len(),
                 },
                 IntLiteral(v, precision) => IsInt(*v, *precision),
@@ -583,7 +582,7 @@ fn test_at_path<'a>(
 // understanding: if the test is successful, where could we go?
 fn edges_for<'a>(
     path: &[PathInstruction],
-    branches: Vec<Branch<'a>>,
+    branches: &[Branch<'a>],
     test: GuardedTest<'a>,
 ) -> (GuardedTest<'a>, Vec<Branch<'a>>) {
     let mut new_branches = Vec::new();
@@ -864,7 +863,7 @@ fn to_relevant_branch_help<'a>(
         EnumLiteral { tag_id, .. } => match test {
             IsByte {
                 tag_id: test_id, ..
-            } if tag_id == *test_id => {
+            } if tag_id == *test_id as _ => {
                 start.extend(end);
                 Some(Branch {
                     goal: branch.goal,
@@ -1055,9 +1054,19 @@ fn small_defaults(branches: &[Branch], path: &[PathInstruction]) -> usize {
 }
 
 fn small_branching_factor(branches: &[Branch], path: &[PathInstruction]) -> usize {
-    let (edges, fallback) = gather_edges(branches.to_vec(), path);
+    // a specialized version of gather_edges that just counts the number of options
 
-    edges.len() + (if fallback.is_empty() { 0 } else { 1 })
+    let relevant_tests = tests_at_path(path, branches);
+
+    let check = guarded_tests_are_complete(&relevant_tests);
+
+    let fallbacks = if check {
+        false
+    } else {
+        branches.iter().any(|b| is_irrelevant_to(path, b))
+    };
+
+    relevant_tests.len() + (if !fallbacks { 0 } else { 1 })
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1171,7 +1180,7 @@ pub fn optimize_when<'a>(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PathInstruction {
     index: u64,
-    tag_id: u8,
+    tag_id: TagIdIntType,
 }
 
 fn path_to_expr_help<'a>(
@@ -1198,7 +1207,7 @@ fn path_to_expr_help<'a>(
                     union_layout: *union_layout,
                 };
 
-                let inner_layout = union_layout.layout_at(*tag_id as u8, index as usize);
+                let inner_layout = union_layout.layout_at(*tag_id as TagIdIntType, index as usize);
 
                 symbol = env.unique_symbol();
                 stores.push((symbol, inner_layout, inner_expr));
@@ -1291,7 +1300,7 @@ fn test_to_equality<'a>(
             debug_assert!(test_int <= i64::MAX as i128);
             let lhs = Expr::Literal(Literal::Int(test_int as i128));
             let lhs_symbol = env.unique_symbol();
-            stores.push((lhs_symbol, precision.as_layout(), lhs));
+            stores.push((lhs_symbol, Layout::int_width(precision), lhs));
 
             (stores, lhs_symbol, rhs_symbol, None)
         }
@@ -1301,7 +1310,7 @@ fn test_to_equality<'a>(
             let test_float = f64::from_bits(test_int as u64);
             let lhs = Expr::Literal(Literal::Float(test_float));
             let lhs_symbol = env.unique_symbol();
-            stores.push((lhs_symbol, precision.as_layout(), lhs));
+            stores.push((lhs_symbol, Layout::float_width(precision), lhs));
 
             (stores, lhs_symbol, rhs_symbol, None)
         }
@@ -1317,9 +1326,11 @@ fn test_to_equality<'a>(
         Test::IsByte {
             tag_id: test_byte, ..
         } => {
-            let lhs = Expr::Literal(Literal::Byte(test_byte));
+            debug_assert!(test_byte <= (u8::MAX as u16));
+
+            let lhs = Expr::Literal(Literal::Byte(test_byte as u8));
             let lhs_symbol = env.unique_symbol();
-            stores.push((lhs_symbol, Layout::Builtin(Builtin::Int8), lhs));
+            stores.push((lhs_symbol, Layout::u8(), lhs));
 
             (stores, lhs_symbol, rhs_symbol, None)
         }
@@ -1327,7 +1338,7 @@ fn test_to_equality<'a>(
         Test::IsBit(test_bit) => {
             let lhs = Expr::Literal(Literal::Bool(test_bit));
             let lhs_symbol = env.unique_symbol();
-            stores.push((lhs_symbol, Layout::Builtin(Builtin::Int1), lhs));
+            stores.push((lhs_symbol, Layout::Builtin(Builtin::Bool), lhs));
 
             (stores, lhs_symbol, rhs_symbol, None)
         }
@@ -1448,7 +1459,7 @@ fn compile_test_help<'a>(
 
     cond = Stmt::Switch {
         cond_symbol: test_symbol,
-        cond_layout: Layout::Builtin(Builtin::Int1),
+        cond_layout: Layout::Builtin(Builtin::Bool),
         ret_layout,
         branches,
         default_branch,
@@ -1467,7 +1478,7 @@ fn compile_test_help<'a>(
     cond = Stmt::Let(
         test_symbol,
         test,
-        Layout::Builtin(Builtin::Int1),
+        Layout::Builtin(Builtin::Bool),
         arena.alloc(cond),
     );
 
@@ -1504,13 +1515,13 @@ enum ConstructorKnown<'a> {
     Both {
         scrutinee: Symbol,
         layout: Layout<'a>,
-        pass: u8,
-        fail: u8,
+        pass: TagIdIntType,
+        fail: TagIdIntType,
     },
     OnlyPass {
         scrutinee: Symbol,
         layout: Layout<'a>,
-        tag_id: u8,
+        tag_id: TagIdIntType,
     },
     Neither,
 }
@@ -1530,7 +1541,7 @@ impl<'a> ConstructorKnown<'a> {
                             layout: *cond_layout,
                             scrutinee: cond_symbol,
                             pass: *tag_id,
-                            fail: (*tag_id == 0) as u8,
+                            fail: (*tag_id == 0) as _,
                         }
                     } else {
                         ConstructorKnown::OnlyPass {
@@ -1611,7 +1622,7 @@ fn decide_to_branching<'a>(
             let decide = crate::ir::cond(
                 env,
                 test_symbol,
-                Layout::Builtin(Builtin::Int1),
+                Layout::Builtin(Builtin::Bool),
                 pass_expr,
                 fail_expr,
                 ret_layout,
@@ -1620,7 +1631,7 @@ fn decide_to_branching<'a>(
             // calculate the guard value
             let param = Param {
                 symbol: test_symbol,
-                layout: Layout::Builtin(Builtin::Int1),
+                layout: Layout::Builtin(Builtin::Bool),
                 borrow: false,
             };
 
@@ -1774,7 +1785,7 @@ fn decide_to_branching<'a>(
                 BranchInfo::Constructor {
                     scrutinee: inner_cond_symbol,
                     layout: inner_cond_layout,
-                    tag_id: tag_id_sum as u8,
+                    tag_id: tag_id_sum as u8 as _,
                 }
             } else {
                 BranchInfo::None

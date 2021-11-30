@@ -1,36 +1,34 @@
 mod backend;
-pub mod from_wasm32_memory;
 mod layout;
+mod low_level;
 mod storage;
+pub mod wasm_module;
 
-use bumpalo::Bump;
-use parity_wasm::builder;
-use parity_wasm::elements::{Instruction, Instruction::*, Internal, ValueType};
+use bumpalo::{self, collections::Vec, Bump};
 
 use roc_collections::all::{MutMap, MutSet};
+use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::LayoutIds;
 
 use crate::backend::WasmBackend;
+use crate::wasm_module::{
+    Align, CodeBuilder, Export, ExportType, LinkingSubSection, LocalId, SymInfo, ValueType,
+    WasmModule,
+};
 
 const PTR_SIZE: u32 = 4;
 const PTR_TYPE: ValueType = ValueType::I32;
 
-// All usages of these alignment constants take u32, so an enum wouldn't add any safety.
-pub const ALIGN_1: u32 = 0;
-pub const ALIGN_2: u32 = 1;
-pub const ALIGN_4: u32 = 2;
-pub const ALIGN_8: u32 = 3;
-
 pub const STACK_POINTER_GLOBAL_ID: u32 = 0;
-pub const STACK_ALIGNMENT_BYTES: i32 = 16;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LocalId(pub u32);
+pub const FRAME_ALIGNMENT_BYTES: i32 = 16;
+pub const MEMORY_NAME: &str = "memory";
+pub const BUILTINS_IMPORT_MODULE_NAME: &str = "builtins";
+pub const STACK_POINTER_NAME: &str = "__stack_pointer";
 
 pub struct Env<'a> {
-    pub arena: &'a Bump, // not really using this much, parity_wasm works with std::vec a lot
+    pub arena: &'a Bump,
     pub interns: Interns,
     pub exposed_to_host: MutSet<Symbol>,
 }
@@ -38,155 +36,134 @@ pub struct Env<'a> {
 pub fn build_module<'a>(
     env: &'a Env,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-) -> Result<Vec<u8>, String> {
-    let (builder, _) = build_module_help(env, procedures)?;
-    let module = builder.build();
-    module
-        .to_bytes()
-        .map_err(|e| -> String { format!("Error serialising Wasm module {:?}", e) })
+) -> Result<std::vec::Vec<u8>, String> {
+    let (mut wasm_module, _) = build_module_help(env, procedures)?;
+    let mut buffer = std::vec::Vec::with_capacity(4096);
+    wasm_module.serialize_mut(&mut buffer);
+    Ok(buffer)
 }
 
 pub fn build_module_help<'a>(
     env: &'a Env,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-) -> Result<(builder::ModuleBuilder, u32), String> {
-    let mut backend = WasmBackend::new();
+) -> Result<(WasmModule<'a>, u32), String> {
     let mut layout_ids = LayoutIds::default();
+    let mut generated_procs = Vec::with_capacity_in(procedures.len(), env.arena);
+    let mut generated_symbols = Vec::with_capacity_in(procedures.len(), env.arena);
+    let mut linker_symbols = Vec::with_capacity_in(procedures.len() * 2, env.arena);
+    let mut exports = Vec::with_capacity_in(4, env.arena);
+    let mut main_fn_index = None;
 
-    // Sort procedures by occurrence order
-    //
-    // We sort by the "name", but those are interned strings, and the name that is
-    // interned first will have a lower number.
-    //
-    // But, the name that occurs first is always `main` because it is in the (implicit)
-    // file header. Therefore sorting high to low will put other functions before main
-    //
-    // This means that for now other functions in the file have to be ordered "in reverse": if A
-    // uses B, then the name of A must first occur after the first occurrence of the name of B
-    let mut procedures: std::vec::Vec<_> = procedures.into_iter().collect();
-    procedures.sort_by(|a, b| b.0 .0.cmp(&a.0 .0));
-
-    let mut function_index: u32 = 0;
-    for ((sym, layout), proc) in procedures {
-        function_index = backend.build_proc(proc, sym)?;
-        if env.exposed_to_host.contains(&sym) {
-            let fn_name = layout_ids
-                .get_toplevel(sym, &layout)
-                .to_symbol_string(sym, &env.interns);
-
-            let export = builder::export()
-                .field(fn_name.as_str())
-                .with_internal(Internal::Function(function_index))
-                .build();
-
-            backend.builder.push_export(export);
+    // Collect the symbols & names for the procedures,
+    // and filter out procs we're going to inline
+    let mut fn_index: u32 = 0;
+    for ((sym, layout), proc) in procedures.into_iter() {
+        if LowLevel::from_inlined_wrapper(sym).is_some() {
+            continue;
         }
+        generated_procs.push(proc);
+        generated_symbols.push(sym);
+
+        let fn_name = layout_ids
+            .get_toplevel(sym, &layout)
+            .to_symbol_string(sym, &env.interns);
+
+        if env.exposed_to_host.contains(&sym) {
+            main_fn_index = Some(fn_index);
+            exports.push(Export {
+                name: fn_name.clone(),
+                ty: ExportType::Func,
+                index: fn_index,
+            });
+        }
+
+        let linker_sym = SymInfo::for_function(fn_index, fn_name);
+        linker_symbols.push(linker_sym);
+
+        fn_index += 1;
     }
 
-    // Because of the sorting above, we know the last function in the `for` is the main function.
-    // Here we grab its index and return it, so that the test_wrapper is able to call it.
-    // This is a workaround until we implement object files with symbols and relocations.
-    let main_function_index = function_index;
+    // Build the Wasm module
+    let (mut module, linker_symbols) = {
+        let mut backend = WasmBackend::new(
+            env,
+            layout_ids,
+            generated_symbols.clone(),
+            linker_symbols,
+            exports,
+        );
 
-    const MIN_MEMORY_SIZE_KB: u32 = 1024;
-    const PAGE_SIZE_KB: u32 = 64;
+        for (proc, sym) in generated_procs.into_iter().zip(generated_symbols) {
+            backend.build_proc(proc, sym)?;
+        }
+        (backend.module, backend.linker_symbols)
+    };
 
-    let memory = builder::MemoryBuilder::new()
-        .with_min(MIN_MEMORY_SIZE_KB / PAGE_SIZE_KB)
-        .build();
-    backend.builder.push_memory(memory);
-    let memory_export = builder::export()
-        .field("memory")
-        .with_internal(Internal::Memory(0))
-        .build();
-    backend.builder.push_export(memory_export);
+    let symbol_table = LinkingSubSection::SymbolTable(linker_symbols);
+    module.linking.subsections.push(symbol_table);
 
-    let stack_pointer_global = builder::global()
-        .with_type(PTR_TYPE)
-        .mutable()
-        .init_expr(Instruction::I32Const((MIN_MEMORY_SIZE_KB * 1024) as i32))
-        .build();
-    backend.builder.push_global(stack_pointer_global);
-
-    Ok((backend.builder, main_function_index))
+    Ok((module, main_fn_index.unwrap()))
 }
 
-fn encode_alignment(bytes: u32) -> u32 {
-    match bytes {
-        1 => ALIGN_1,
-        2 => ALIGN_2,
-        4 => ALIGN_4,
-        8 => ALIGN_8,
-        _ => panic!("{:?}-byte alignment is not supported", bytes),
-    }
-}
-
-fn copy_memory(
-    instructions: &mut Vec<Instruction>,
+pub struct CopyMemoryConfig {
     from_ptr: LocalId,
+    from_offset: u32,
     to_ptr: LocalId,
+    to_offset: u32,
     size: u32,
     alignment_bytes: u32,
-    offset: u32,
-) {
-    let alignment_flag = encode_alignment(alignment_bytes);
-    let mut current_offset = offset;
-    while size - current_offset >= 8 {
-        instructions.push(GetLocal(to_ptr.0));
-        instructions.push(GetLocal(from_ptr.0));
-        instructions.push(I64Load(alignment_flag, current_offset));
-        instructions.push(I64Store(alignment_flag, current_offset));
-        current_offset += 8;
+}
+
+pub fn copy_memory(code_builder: &mut CodeBuilder, config: CopyMemoryConfig) {
+    if config.from_ptr == config.to_ptr && config.from_offset == config.to_offset {
+        return;
     }
-    if size - current_offset >= 4 {
-        instructions.push(GetLocal(to_ptr.0));
-        instructions.push(GetLocal(from_ptr.0));
-        instructions.push(I32Load(alignment_flag, current_offset));
-        instructions.push(I32Store(alignment_flag, current_offset));
-        current_offset += 4;
+    if config.size == 0 {
+        return;
     }
-    while size - current_offset > 0 {
-        instructions.push(GetLocal(to_ptr.0));
-        instructions.push(GetLocal(from_ptr.0));
-        instructions.push(I32Load8U(alignment_flag, current_offset));
-        instructions.push(I32Store8(alignment_flag, current_offset));
-        current_offset += 1;
+
+    let alignment = Align::from(config.alignment_bytes);
+    let mut i = 0;
+    while config.size - i >= 8 {
+        code_builder.get_local(config.to_ptr);
+        code_builder.get_local(config.from_ptr);
+        code_builder.i64_load(alignment, i + config.from_offset);
+        code_builder.i64_store(alignment, i + config.to_offset);
+        i += 8;
+    }
+    if config.size - i >= 4 {
+        code_builder.get_local(config.to_ptr);
+        code_builder.get_local(config.from_ptr);
+        code_builder.i32_load(alignment, i + config.from_offset);
+        code_builder.i32_store(alignment, i + config.to_offset);
+        i += 4;
+    }
+    while config.size - i > 0 {
+        code_builder.get_local(config.to_ptr);
+        code_builder.get_local(config.from_ptr);
+        code_builder.i32_load8_u(alignment, i + config.from_offset);
+        code_builder.i32_store8(alignment, i + config.to_offset);
+        i += 1;
     }
 }
 
-/// Round up to alignment_bytes (assumed to be a power of 2)
+/// Round up to alignment_bytes (which must be a power of 2)
 pub fn round_up_to_alignment(unaligned: i32, alignment_bytes: i32) -> i32 {
+    if alignment_bytes <= 1 {
+        return unaligned;
+    }
+    if alignment_bytes.count_ones() != 1 {
+        panic!(
+            "Cannot align to {} bytes. Not a power of 2.",
+            alignment_bytes
+        );
+    }
     let mut aligned = unaligned;
     aligned += alignment_bytes - 1; // if lower bits are non-zero, push it over the next boundary
     aligned &= -alignment_bytes; // mask with a flag that has upper bits 1, lower bits 0
     aligned
 }
 
-pub fn push_stack_frame(
-    instructions: &mut Vec<Instruction>,
-    size: i32,
-    local_frame_pointer: LocalId,
-) {
-    let aligned_size = round_up_to_alignment(size, STACK_ALIGNMENT_BYTES);
-    instructions.extend([
-        GetGlobal(STACK_POINTER_GLOBAL_ID),
-        I32Const(aligned_size),
-        I32Sub,
-        TeeLocal(local_frame_pointer.0),
-        SetGlobal(STACK_POINTER_GLOBAL_ID),
-    ]);
-}
-
-pub fn pop_stack_frame(
-    instructions: &mut Vec<Instruction>,
-    size: i32,
-    local_frame_pointer: LocalId,
-) {
-    let aligned_size = round_up_to_alignment(size, STACK_ALIGNMENT_BYTES);
-    instructions.extend([
-        GetLocal(local_frame_pointer.0),
-        I32Const(aligned_size),
-        I32Add,
-        SetGlobal(STACK_POINTER_GLOBAL_ID),
-    ]);
+pub fn debug_panic<E: std::fmt::Debug>(error: E) {
+    panic!("{:?}", error);
 }

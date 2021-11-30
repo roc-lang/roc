@@ -1,8 +1,8 @@
 use super::app_model::AppModel;
 use super::ed_update;
-use crate::editor::ed_error::EdResult;
 use crate::window::keyboard_input::Modifiers;
-use winit::event::VirtualKeyCode;
+use crate::{editor::ed_error::EdResult, window::keyboard_input::from_winit};
+use winit::event::{ModifiersState, VirtualKeyCode};
 
 pub fn handle_copy(app_model: &mut AppModel) -> EdResult<()> {
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
@@ -41,7 +41,11 @@ pub fn pass_keydown_to_focused(
 ) -> EdResult<()> {
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
         if ed_model.has_focus {
-            ed_model.ed_handle_key_down(modifiers, virtual_keycode)?;
+            ed_model.ed_handle_key_down(
+                modifiers,
+                virtual_keycode,
+                &mut app_model.sound_thread_pool,
+            )?;
         }
     }
 
@@ -51,16 +55,26 @@ pub fn pass_keydown_to_focused(
 pub enum InputOutcome {
     Accepted,
     Ignored,
+    SilentIgnored,
 }
 
-pub fn handle_new_char(received_char: &char, app_model: &mut AppModel) -> EdResult<InputOutcome> {
+pub fn handle_new_char(
+    received_char: &char,
+    app_model: &mut AppModel,
+    modifiers_winit: ModifiersState,
+) -> EdResult<InputOutcome> {
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
         if ed_model.has_focus {
-            return ed_update::handle_new_char(received_char, ed_model);
+            let modifiers = from_winit(&modifiers_winit);
+
+            if modifiers.new_char_modifiers() {
+                // shortcuts with modifiers are handled by ed_handle_key_down
+                return ed_update::handle_new_char(received_char, ed_model);
+            }
         }
     }
 
-    Ok(InputOutcome::Ignored)
+    Ok(InputOutcome::SilentIgnored)
 }
 
 /*

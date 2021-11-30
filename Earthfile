@@ -1,4 +1,4 @@
-FROM rust:1.54-slim-bullseye
+FROM rust:1.56.1-slim-bullseye
 WORKDIR /earthbuild
 
 prep-debian:
@@ -8,6 +8,7 @@ install-other-libs:
     FROM +prep-debian
     RUN apt -y install wget git
     RUN apt -y install libxcb-shape0-dev libxcb-xfixes0-dev # for editor clipboard
+    RUN apt -y install libasound2-dev # for editor sounds
     RUN apt -y install libunwind-dev pkg-config libx11-dev zlib1g-dev
 
 install-zig-llvm-valgrind-clippy-rustfmt:
@@ -34,7 +35,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN rustup component add rustfmt
     # criterion
     RUN cargo install cargo-criterion
-    # wasm
+    # editor
     RUN apt -y install libxkbcommon-dev
     # sccache
     RUN apt -y install libssl-dev
@@ -46,7 +47,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
 
 copy-dirs:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
-    COPY --dir cli compiler docs editor roc_std vendor examples linker Cargo.toml Cargo.lock ./
+    COPY --dir cli cli_utils compiler docs editor ast code_markup utils reporting roc_std vendor examples linker Cargo.toml Cargo.lock version.txt ./
 
 test-zig:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
@@ -65,22 +66,30 @@ check-rustfmt:
     RUN cargo fmt --all -- --check
 
 check-typos:
-    RUN cargo install --version 1.0.11 typos-cli
-    COPY --dir .github ci cli compiler docs editor examples linker nightly_benches packages roc_std www *.md LEGAL_DETAILS shell.nix ./
+    RUN cargo install typos-cli --version 1.0.11 # version set to prevent confusion if the version is updated automatically
+    COPY --dir .github ci cli cli_utils compiler docs editor examples ast code_markup utils linker nightly_benches packages roc_std www *.md LEGAL_DETAILS shell.nix version.txt ./
     RUN typos
 
 test-rust:
     FROM +copy-dirs
     ENV RUST_BACKTRACE=1
+    # for race condition problem with cli test
+    ENV ROC_NUM_WORKERS=1
     # run one of the benchmarks to make sure the host is compiled
     # not pre-compiling the host can cause race conditions
     RUN echo "4" | cargo run --release examples/benchmarks/NQueens.roc
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test --release && sccache --show-stats
-    # run i386 (32-bit linux) cli tests
-    RUN echo "4" | cargo run --release -- --backend=x86_32 examples/benchmarks/NQueens.roc
+        cargo test --locked --release --features with_sound --workspace && sccache --show-stats
+    # test the dev and wasm backend: they require an explicit feature flag.
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test --release --test cli_run i386 --features="i386-cli-run" && sccache --show-stats
+        cargo test --locked --release --package test_gen --no-default-features --features gen-dev && sccache --show-stats
+    # gen-wasm has some multithreading problems to do with the wasmer runtime. Run it single-threaded as a separate job
+    RUN --mount=type=cache,target=$SCCACHE_DIR \
+        cargo test --locked --release --package test_gen --no-default-features --features gen-wasm -- --test-threads=1 && sccache --show-stats
+    # run i386 (32-bit linux) cli tests
+    RUN echo "4" | cargo run --locked --release --features="target-x86" -- --backend=x86_32 examples/benchmarks/NQueens.roc
+    RUN --mount=type=cache,target=$SCCACHE_DIR \
+        cargo test --locked --release --features with_sound --test cli_run i386 --features="i386-cli-run" && sccache --show-stats
 
 verify-no-git-changes:
     FROM +test-rust
@@ -97,11 +106,22 @@ test-all:
     BUILD +test-zig
     BUILD +check-rustfmt
     BUILD +check-clippy
-    BUILD +check-typos
     BUILD +test-rust
     BUILD +verify-no-git-changes
 
-# compile everything needed for benchmarks and output a self-contained folder
+build-nightly-release:
+    FROM +test-rust
+    COPY --dir .git LICENSE LEGAL_DETAILS ./
+    # version.txt is used by the CLI: roc --version
+    RUN printf "nightly pre-release, built from commit " > version.txt
+    RUN git log --pretty=format:'%h' -n 1 >> version.txt
+    RUN printf " on: " >> version.txt
+    RUN date >> version.txt
+    RUN cargo build --features with_sound --release
+    RUN cd ./target/release && tar -czvf roc_linux_x86_64.tar.gz ./roc ../../LICENSE ../../LEGAL_DETAILS ../../examples/hello-world ../../examples/hello-rust ../../examples/hello-zig ../../compiler/builtins/bitcode/src/ ../../roc_std
+    SAVE ARTIFACT ./target/release/roc_linux_x86_64.tar.gz AS LOCAL roc_linux_x86_64.tar.gz
+
+# compile everything needed for benchmarks and output a self-contained dir from which benchmarks can be run.
 prep-bench-folder:
     FROM +copy-dirs
     ARG BENCH_SUFFIX=branch

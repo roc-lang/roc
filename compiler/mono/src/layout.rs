@@ -1,6 +1,7 @@
 use crate::ir::Parens;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{default_hasher, MutMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
@@ -8,14 +9,21 @@ use roc_types::subs::{
     Content, FlatType, RecordFields, Subs, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::{gather_fields_unsorted_iter, RecordField};
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use ven_pretty::{DocAllocator, DocBuilder};
 
-pub const MAX_ENUM_SIZE: usize = (std::mem::size_of::<u8>() * 8) as usize;
-const GENERATE_NULLABLE: bool = true;
+// if your changes cause this number to go down, great!
+// please change it to the lower number.
+// if it went up, maybe check that the change is really required
+static_assertions::assert_eq_size!([u8; 3 * 8], Builtin);
+static_assertions::assert_eq_size!([u8; 4 * 8], Layout);
+static_assertions::assert_eq_size!([u8; 3 * 8], UnionLayout);
+static_assertions::assert_eq_size!([u8; 3 * 8], LambdaSet);
 
-/// If a (Num *) gets translated to a Layout, this is the numeric type it defaults to.
-const DEFAULT_NUM_BUILTIN: Builtin<'_> = Builtin::Int64;
+pub type TagIdIntType = u16;
+pub const MAX_ENUM_SIZE: usize = (std::mem::size_of::<TagIdIntType>() * 8) as usize;
+const GENERATE_NULLABLE: bool = true;
 
 #[derive(Debug, Clone)]
 pub enum LayoutProblem {
@@ -51,60 +59,61 @@ impl<'a> RawFunctionLayout<'a> {
             // Ints
             Alias(Symbol::NUM_I128, args, _) => {
                 debug_assert!(args.is_empty());
-                Ok(Self::ZeroArgumentThunk(Layout::Builtin(Builtin::Int128)))
+                Ok(Self::ZeroArgumentThunk(Layout::i128()))
             }
             Alias(Symbol::NUM_I64, args, _) => {
                 debug_assert!(args.is_empty());
-                Ok(Self::ZeroArgumentThunk(Layout::Builtin(Builtin::Int64)))
+                Ok(Self::ZeroArgumentThunk(Layout::i64()))
             }
             Alias(Symbol::NUM_I32, args, _) => {
                 debug_assert!(args.is_empty());
-                Ok(Self::ZeroArgumentThunk(Layout::Builtin(Builtin::Int32)))
+                Ok(Self::ZeroArgumentThunk(Layout::i32()))
             }
             Alias(Symbol::NUM_I16, args, _) => {
                 debug_assert!(args.is_empty());
-                Ok(Self::ZeroArgumentThunk(Layout::Builtin(Builtin::Int16)))
+                Ok(Self::ZeroArgumentThunk(Layout::i16()))
             }
             Alias(Symbol::NUM_I8, args, _) => {
                 debug_assert!(args.is_empty());
-                Ok(Self::ZeroArgumentThunk(Layout::Builtin(Builtin::Int8)))
+                Ok(Self::ZeroArgumentThunk(Layout::i8()))
             }
 
             // I think unsigned and signed use the same layout
             Alias(Symbol::NUM_U128, args, _) => {
                 debug_assert!(args.is_empty());
-                Ok(Self::ZeroArgumentThunk(Layout::Builtin(Builtin::Int128)))
+                Ok(Self::ZeroArgumentThunk(Layout::u128()))
             }
             Alias(Symbol::NUM_U64, args, _) => {
                 debug_assert!(args.is_empty());
-                Ok(Self::ZeroArgumentThunk(Layout::Builtin(Builtin::Int64)))
+                Ok(Self::ZeroArgumentThunk(Layout::u64()))
             }
             Alias(Symbol::NUM_U32, args, _) => {
                 debug_assert!(args.is_empty());
-                Ok(Self::ZeroArgumentThunk(Layout::Builtin(Builtin::Int32)))
+                Ok(Self::ZeroArgumentThunk(Layout::u32()))
             }
             Alias(Symbol::NUM_U16, args, _) => {
                 debug_assert!(args.is_empty());
-                Ok(Self::ZeroArgumentThunk(Layout::Builtin(Builtin::Int16)))
+                Ok(Self::ZeroArgumentThunk(Layout::u16()))
             }
             Alias(Symbol::NUM_U8, args, _) => {
                 debug_assert!(args.is_empty());
-                Ok(Self::ZeroArgumentThunk(Layout::Builtin(Builtin::Int8)))
-            }
-
-            Alias(Symbol::NUM_NAT, args, _) => {
-                debug_assert!(args.is_empty());
-                Ok(Self::ZeroArgumentThunk(Layout::Builtin(Builtin::Usize)))
+                Ok(Self::ZeroArgumentThunk(Layout::u8()))
             }
 
             // Floats
             Alias(Symbol::NUM_F64, args, _) => {
                 debug_assert!(args.is_empty());
-                Ok(Self::ZeroArgumentThunk(Layout::Builtin(Builtin::Float64)))
+                Ok(Self::ZeroArgumentThunk(Layout::f64()))
             }
             Alias(Symbol::NUM_F32, args, _) => {
                 debug_assert!(args.is_empty());
-                Ok(Self::ZeroArgumentThunk(Layout::Builtin(Builtin::Float32)))
+                Ok(Self::ZeroArgumentThunk(Layout::f32()))
+            }
+
+            // Nat
+            Alias(Symbol::NUM_NAT, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Self::ZeroArgumentThunk(Layout::usize(env.ptr_bytes)))
             }
 
             Alias(symbol, _, _) if symbol.is_builtin() => Ok(Self::ZeroArgumentThunk(
@@ -208,7 +217,7 @@ pub enum UnionLayout<'a> {
     /// e.g. `FingerTree a : [ Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a) ]`
     /// see also: https://youtu.be/ip92VMpf_-A?t=164
     NullableWrapped {
-        nullable_id: i64,
+        nullable_id: u16,
         other_tags: &'a [&'a [Layout<'a>]],
     },
     /// A recursive tag union where the non-nullable variant does NOT store the tag id
@@ -246,7 +255,7 @@ impl<'a> UnionLayout<'a> {
         }
     }
 
-    pub fn layout_at(self, tag_id: u8, index: usize) -> Layout<'a> {
+    pub fn layout_at(self, tag_id: TagIdIntType, index: usize) -> Layout<'a> {
         let result = match self {
             UnionLayout::NonRecursive(tag_layouts) => {
                 let field_layouts = tag_layouts[tag_id as usize];
@@ -264,9 +273,9 @@ impl<'a> UnionLayout<'a> {
                 nullable_id,
                 other_tags,
             } => {
-                debug_assert_ne!(nullable_id, tag_id as i64);
+                debug_assert_ne!(nullable_id, tag_id);
 
-                let tag_index = if (tag_id as i64) < nullable_id {
+                let tag_index = if tag_id < nullable_id {
                     tag_id
                 } else {
                     tag_id - 1
@@ -305,9 +314,9 @@ impl<'a> UnionLayout<'a> {
 
     fn tag_id_builtin_help(union_size: usize) -> Builtin<'a> {
         if union_size <= u8::MAX as usize {
-            Builtin::Int8
+            Builtin::Int(IntWidth::U8)
         } else if union_size <= u16::MAX as usize {
-            Builtin::Int16
+            Builtin::Int(IntWidth::U16)
         } else {
             panic!("tag union is too big")
         }
@@ -322,7 +331,7 @@ impl<'a> UnionLayout<'a> {
                 // The quicksort-benchmarks version of Quicksort.roc segfaults when
                 // this number is not I64. There must be some dependence on that fact
                 // somewhere in the code, I have not found where that is yet...
-                Builtin::Int64
+                Builtin::Int(IntWidth::U64)
             }
             UnionLayout::Recursive(tags) => {
                 let union_size = tags.len();
@@ -333,8 +342,8 @@ impl<'a> UnionLayout<'a> {
             UnionLayout::NullableWrapped { other_tags, .. } => {
                 Self::tag_id_builtin_help(other_tags.len() + 1)
             }
-            UnionLayout::NonNullableUnwrapped(_) => Builtin::Int1,
-            UnionLayout::NullableUnwrapped { .. } => Builtin::Int1,
+            UnionLayout::NonNullableUnwrapped(_) => Builtin::Bool,
+            UnionLayout::NullableUnwrapped { .. } => Builtin::Bool,
         }
     }
 
@@ -369,12 +378,12 @@ impl<'a> UnionLayout<'a> {
         }
     }
 
-    pub fn tag_is_null(&self, tag_id: u8) -> bool {
+    pub fn tag_is_null(&self, tag_id: TagIdIntType) -> bool {
         match self {
             UnionLayout::NonRecursive(_)
             | UnionLayout::NonNullableUnwrapped(_)
             | UnionLayout::Recursive(_) => false,
-            UnionLayout::NullableWrapped { nullable_id, .. } => *nullable_id == tag_id as i64,
+            UnionLayout::NullableWrapped { nullable_id, .. } => *nullable_id == tag_id,
             UnionLayout::NullableUnwrapped { nullable_id, .. } => *nullable_id == (tag_id != 0),
         }
     }
@@ -430,7 +439,7 @@ pub enum ClosureRepresentation<'a> {
     Union {
         alphabetic_order_fields: &'a [Layout<'a>],
         tag_name: TagName,
-        tag_id: u8,
+        tag_id: TagIdIntType,
         union_layout: UnionLayout<'a>,
     },
     /// The closure is represented as a struct. The layouts are sorted
@@ -488,7 +497,7 @@ impl<'a> LambdaSet<'a> {
                             .unwrap();
 
                         ClosureRepresentation::Union {
-                            tag_id: index as u8,
+                            tag_id: index as TagIdIntType,
                             alphabetic_order_fields: fields,
                             tag_name: TagName::Closure(function_symbol),
                             union_layout: *union,
@@ -536,7 +545,8 @@ impl<'a> LambdaSet<'a> {
                     // singleton, so we pass no extra argument
                     argument_layouts
                 }
-                Layout::Builtin(Builtin::Int1) | Layout::Builtin(Builtin::Int8) => {
+                Layout::Builtin(Builtin::Bool)
+                | Layout::Builtin(Builtin::Int(IntWidth::I8 | IntWidth::U8)) => {
                     // we don't pass this along either
                     argument_layouts
                 }
@@ -599,7 +609,7 @@ impl<'a> LambdaSet<'a> {
                 // this can happen when there is a type error somewhere
                 Ok(LambdaSet {
                     set: &[],
-                    representation: arena.alloc(Layout::Struct(&[])),
+                    representation: arena.alloc(Layout::UNIT),
                 })
             }
             _ => panic!("called LambdaSet.from_var on invalid input"),
@@ -617,12 +627,12 @@ impl<'a> LambdaSet<'a> {
 
         use UnionVariant::*;
         match variant {
-            Never => Layout::Union(UnionLayout::NonRecursive(&[])),
-            BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
-            ByteUnion { .. } => Layout::Builtin(Builtin::Int8),
+            Never => Layout::VOID,
+            BoolUnion { .. } => Layout::bool(),
+            ByteUnion { .. } => Layout::u8(),
             Unit | UnitWithArguments => {
                 // no useful information to store
-                Layout::Struct(&[])
+                Layout::UNIT
             }
             Newtype {
                 arguments: layouts, ..
@@ -670,25 +680,14 @@ impl<'a> LambdaSet<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Builtin<'a> {
-    Int128,
-    Int64,
-    Int32,
-    Int16,
-    Int8,
-    Int1,
-    Usize,
+    Int(IntWidth),
+    Float(FloatWidth),
+    Bool,
     Decimal,
-    Float128,
-    Float64,
-    Float32,
     Str,
     Dict(&'a Layout<'a>, &'a Layout<'a>),
     Set(&'a Layout<'a>),
     List(&'a Layout<'a>),
-    EmptyStr,
-    EmptyList,
-    EmptyDict,
-    EmptySet,
 }
 
 pub struct Env<'a, 'b> {
@@ -723,7 +722,18 @@ impl<'a, 'b> Env<'a, 'b> {
     }
 }
 
+const fn round_up_to_alignment(width: u32, alignment: u32) -> u32 {
+    if alignment != 0 && width % alignment > 0 {
+        width + alignment - (width % alignment)
+    } else {
+        width
+    }
+}
+
 impl<'a> Layout<'a> {
+    pub const VOID: Self = Layout::Union(UnionLayout::NonRecursive(&[]));
+    pub const UNIT: Self = Layout::Struct(&[]);
+
     fn new_help<'b>(
         env: &mut Env<'a, 'b>,
         var: Variable,
@@ -738,67 +748,28 @@ impl<'a> Layout<'a> {
             }
             Structure(flat_type) => layout_from_flat_type(env, flat_type),
 
-            // Ints
-            Alias(Symbol::NUM_I128, args, _) => {
-                debug_assert!(args.is_empty());
-                Ok(Layout::Builtin(Builtin::Int128))
-            }
-            Alias(Symbol::NUM_I64, args, _) => {
-                debug_assert!(args.is_empty());
-                Ok(Layout::Builtin(Builtin::Int64))
-            }
-            Alias(Symbol::NUM_I32, args, _) => {
-                debug_assert!(args.is_empty());
-                Ok(Layout::Builtin(Builtin::Int32))
-            }
-            Alias(Symbol::NUM_I16, args, _) => {
-                debug_assert!(args.is_empty());
-                Ok(Layout::Builtin(Builtin::Int16))
-            }
-            Alias(Symbol::NUM_I8, args, _) => {
-                debug_assert!(args.is_empty());
-                Ok(Layout::Builtin(Builtin::Int8))
+            Alias(symbol, _args, actual_var) => {
+                if let Some(int_width) = IntWidth::try_from_symbol(symbol) {
+                    return Ok(Layout::Builtin(Builtin::Int(int_width)));
+                }
+
+                if let Some(float_width) = FloatWidth::try_from_symbol(symbol) {
+                    return Ok(Layout::Builtin(Builtin::Float(float_width)));
+                }
+
+                match symbol {
+                    Symbol::NUM_DECIMAL | Symbol::NUM_AT_DECIMAL => {
+                        return Ok(Layout::Builtin(Builtin::Decimal))
+                    }
+
+                    Symbol::NUM_NAT | Symbol::NUM_NATURAL | Symbol::NUM_AT_NATURAL => {
+                        return Ok(Layout::usize(env.ptr_bytes))
+                    }
+
+                    _ => Self::from_var(env, actual_var),
+                }
             }
 
-            // I think unsigned and signed use the same layout
-            Alias(Symbol::NUM_U128, args, _) => {
-                debug_assert!(args.is_empty());
-                Ok(Layout::Builtin(Builtin::Int128))
-            }
-            Alias(Symbol::NUM_U64, args, _) => {
-                debug_assert!(args.is_empty());
-                Ok(Layout::Builtin(Builtin::Int64))
-            }
-            Alias(Symbol::NUM_U32, args, _) => {
-                debug_assert!(args.is_empty());
-                Ok(Layout::Builtin(Builtin::Int32))
-            }
-            Alias(Symbol::NUM_U16, args, _) => {
-                debug_assert!(args.is_empty());
-                Ok(Layout::Builtin(Builtin::Int16))
-            }
-            Alias(Symbol::NUM_U8, args, _) => {
-                debug_assert!(args.is_empty());
-                Ok(Layout::Builtin(Builtin::Int8))
-            }
-
-            // Floats
-            Alias(Symbol::NUM_F64, args, _) => {
-                debug_assert!(args.is_empty());
-                Ok(Layout::Builtin(Builtin::Float64))
-            }
-            Alias(Symbol::NUM_F32, args, _) => {
-                debug_assert!(args.is_empty());
-                Ok(Layout::Builtin(Builtin::Float32))
-            }
-
-            // Nat
-            Alias(Symbol::NUM_NAT, args, _) => {
-                debug_assert!(args.is_empty());
-                Ok(Layout::Builtin(Builtin::Usize))
-            }
-
-            Alias(_, _, var) => Self::from_var(env, var),
             Error => Err(LayoutProblem::Erroneous),
         }
     }
@@ -854,15 +825,21 @@ impl<'a> Layout<'a> {
         false
     }
 
+    pub fn is_passed_by_reference(&self) -> bool {
+        match self {
+            Layout::Union(UnionLayout::NonRecursive(_)) => true,
+            Layout::LambdaSet(lambda_set) => {
+                lambda_set.runtime_representation().is_passed_by_reference()
+            }
+            _ => false,
+        }
+    }
+
     pub fn stack_size(&self, pointer_size: u32) -> u32 {
         let width = self.stack_size_without_alignment(pointer_size);
         let alignment = self.alignment_bytes(pointer_size);
 
-        if alignment != 0 && width % alignment > 0 {
-            width + alignment - (width % alignment)
-        } else {
-            width
-        }
+        round_up_to_alignment(width, alignment)
     }
 
     fn stack_size_without_alignment(&self, pointer_size: u32) -> u32 {
@@ -884,6 +861,8 @@ impl<'a> Layout<'a> {
 
                 match variant {
                     NonRecursive(fields) => {
+                        let tag_id_builtin = variant.tag_id_builtin();
+
                         fields
                             .iter()
                             .map(|tag_layout| {
@@ -893,9 +872,10 @@ impl<'a> Layout<'a> {
                                     .sum::<u32>()
                             })
                             .max()
+                            .map(|w| round_up_to_alignment(w, tag_id_builtin.alignment_bytes(pointer_size)))
                             .unwrap_or_default()
                             // the size of the tag_id
-                            + variant.tag_id_builtin().stack_size(pointer_size)
+                            + tag_id_builtin.stack_size(pointer_size)
                     }
 
                     Recursive(_)
@@ -923,13 +903,28 @@ impl<'a> Layout<'a> {
                 use UnionLayout::*;
 
                 match variant {
-                    NonRecursive(tags) => tags
-                        .iter()
-                        .map(|x| x.iter())
-                        .flatten()
-                        .map(|x| x.alignment_bytes(pointer_size))
-                        .max()
-                        .unwrap_or(0),
+                    NonRecursive(tags) => {
+                        let max_alignment = tags
+                            .iter()
+                            .flat_map(|layouts| {
+                                layouts
+                                    .iter()
+                                    .map(|layout| layout.alignment_bytes(pointer_size))
+                            })
+                            .max();
+
+                        let tag_id_builtin = variant.tag_id_builtin();
+                        match max_alignment {
+                            Some(align) => round_up_to_alignment(
+                                align.max(tag_id_builtin.alignment_bytes(pointer_size)),
+                                tag_id_builtin.alignment_bytes(pointer_size),
+                            ),
+                            None => {
+                                // none of the tags had any payload, but the tag id still contains information
+                                tag_id_builtin.alignment_bytes(pointer_size)
+                            }
+                        }
+                    }
                     Recursive(_)
                     | NullableWrapped { .. }
                     | NullableUnwrapped { .. }
@@ -1093,7 +1088,6 @@ impl<'a> LayoutCache<'a> {
             seen: Vec::new_in(arena),
             ptr_bytes: self.ptr_bytes,
         };
-
         RawFunctionLayout::from_var(&mut env, var)
     }
 
@@ -1107,17 +1101,87 @@ impl<'a> LayoutCache<'a> {
 // placeholder for the type ven_ena::unify::Snapshot<ven_ena::unify::InPlace<CachedVariable<'a>>>
 pub struct SnapshotKeyPlaceholder;
 
+impl<'a> Layout<'a> {
+    pub fn int_width(width: IntWidth) -> Layout<'a> {
+        Layout::Builtin(Builtin::Int(width))
+    }
+
+    pub fn float_width(width: FloatWidth) -> Layout<'a> {
+        Layout::Builtin(Builtin::Float(width))
+    }
+
+    pub fn f64() -> Layout<'a> {
+        Layout::Builtin(Builtin::Float(FloatWidth::F64))
+    }
+
+    pub fn f32() -> Layout<'a> {
+        Layout::Builtin(Builtin::Float(FloatWidth::F32))
+    }
+
+    pub fn usize(ptr_bytes: u32) -> Layout<'a> {
+        match ptr_bytes {
+            4 => Self::u32(),
+            8 => Self::u64(),
+            _ => panic!("width of usize {} not supported", ptr_bytes),
+        }
+    }
+
+    pub fn bool() -> Layout<'a> {
+        Layout::Builtin(Builtin::Bool)
+    }
+
+    pub const fn u8() -> Layout<'a> {
+        Layout::Builtin(Builtin::Int(IntWidth::U8))
+    }
+
+    pub fn u16() -> Layout<'a> {
+        Layout::Builtin(Builtin::Int(IntWidth::U16))
+    }
+
+    pub fn u32() -> Layout<'a> {
+        Layout::Builtin(Builtin::Int(IntWidth::U32))
+    }
+
+    pub fn u64() -> Layout<'a> {
+        Layout::Builtin(Builtin::Int(IntWidth::U64))
+    }
+
+    pub fn u128() -> Layout<'a> {
+        Layout::Builtin(Builtin::Int(IntWidth::U128))
+    }
+
+    pub fn i8() -> Layout<'a> {
+        Layout::Builtin(Builtin::Int(IntWidth::I8))
+    }
+
+    pub fn i16() -> Layout<'a> {
+        Layout::Builtin(Builtin::Int(IntWidth::I16))
+    }
+
+    pub fn i32() -> Layout<'a> {
+        Layout::Builtin(Builtin::Int(IntWidth::I32))
+    }
+
+    pub fn i64() -> Layout<'a> {
+        Layout::Builtin(Builtin::Int(IntWidth::I64))
+    }
+
+    pub fn i128() -> Layout<'a> {
+        Layout::Builtin(Builtin::Int(IntWidth::I128))
+    }
+
+    pub fn default_integer() -> Layout<'a> {
+        Layout::i64()
+    }
+
+    pub fn default_float() -> Layout<'a> {
+        Layout::f64()
+    }
+}
+
 impl<'a> Builtin<'a> {
-    const I128_SIZE: u32 = std::mem::size_of::<i128>() as u32;
-    const I64_SIZE: u32 = std::mem::size_of::<i64>() as u32;
-    const I32_SIZE: u32 = std::mem::size_of::<i32>() as u32;
-    const I16_SIZE: u32 = std::mem::size_of::<i16>() as u32;
-    const I8_SIZE: u32 = std::mem::size_of::<i8>() as u32;
     const I1_SIZE: u32 = std::mem::size_of::<bool>() as u32;
     const DECIMAL_SIZE: u32 = std::mem::size_of::<i128>() as u32;
-    const F128_SIZE: u32 = 16;
-    const F64_SIZE: u32 = std::mem::size_of::<f64>() as u32;
-    const F32_SIZE: u32 = std::mem::size_of::<f32>() as u32;
 
     /// Number of machine words in an empty one of these
     pub const STR_WORDS: u32 = 2;
@@ -1136,21 +1200,14 @@ impl<'a> Builtin<'a> {
         use Builtin::*;
 
         match self {
-            Int128 => Builtin::I128_SIZE,
-            Int64 => Builtin::I64_SIZE,
-            Int32 => Builtin::I32_SIZE,
-            Int16 => Builtin::I16_SIZE,
-            Int8 => Builtin::I8_SIZE,
-            Int1 => Builtin::I1_SIZE,
-            Usize => pointer_size,
+            Int(int) => int.stack_size(),
+            Float(float) => float.stack_size(),
+            Bool => Builtin::I1_SIZE,
             Decimal => Builtin::DECIMAL_SIZE,
-            Float128 => Builtin::F128_SIZE,
-            Float64 => Builtin::F64_SIZE,
-            Float32 => Builtin::F32_SIZE,
-            Str | EmptyStr => Builtin::STR_WORDS * pointer_size,
-            Dict(_, _) | EmptyDict => Builtin::DICT_WORDS * pointer_size,
-            Set(_) | EmptySet => Builtin::SET_WORDS * pointer_size,
-            List(_) | EmptyList => Builtin::LIST_WORDS * pointer_size,
+            Str => Builtin::STR_WORDS * pointer_size,
+            Dict(_, _) => Builtin::DICT_WORDS * pointer_size,
+            Set(_) => Builtin::SET_WORDS * pointer_size,
+            List(_) => Builtin::LIST_WORDS * pointer_size,
         }
     }
 
@@ -1162,26 +1219,19 @@ impl<'a> Builtin<'a> {
         // since both of those are one pointer size, the alignment of that structure is a pointer
         // size
         match self {
-            Int128 => align_of::<i128>() as u32,
-            Int64 => align_of::<i64>() as u32,
-            Int32 => align_of::<i32>() as u32,
-            Int16 => align_of::<i16>() as u32,
-            Int8 => align_of::<i8>() as u32,
-            Int1 => align_of::<bool>() as u32,
-            Usize => pointer_size,
+            Int(int_width) => int_width.alignment_bytes(),
+            Float(float_width) => float_width.alignment_bytes(),
+            Bool => align_of::<bool>() as u32,
             Decimal => align_of::<i128>() as u32,
-            Float128 => align_of::<i128>() as u32,
-            Float64 => align_of::<f64>() as u32,
-            Float32 => align_of::<f32>() as u32,
-            Dict(_, _) | EmptyDict => pointer_size,
-            Set(_) | EmptySet => pointer_size,
+            Dict(_, _) => pointer_size,
+            Set(_) => pointer_size,
             // we often treat these as i128 (64-bit systems)
             // or i64 (32-bit systems).
             //
             // In webassembly, For that to be safe
             // they must be aligned to allow such access
-            List(_) | EmptyList => pointer_size,
-            Str | EmptyStr => pointer_size,
+            List(_) => pointer_size,
+            Str => pointer_size,
         }
     }
 
@@ -1189,8 +1239,8 @@ impl<'a> Builtin<'a> {
         use Builtin::*;
 
         match self {
-            Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Usize | Decimal | Float128 | Float64
-            | Float32 | EmptyStr | EmptyDict | EmptyList | EmptySet => true,
+            Int(_) | Float(_) | Bool | Decimal => true,
+
             Str | Dict(_, _) | Set(_) | List(_) => false,
         }
     }
@@ -1200,8 +1250,7 @@ impl<'a> Builtin<'a> {
         use Builtin::*;
 
         match self {
-            Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Usize | Decimal | Float128 | Float64
-            | Float32 | EmptyStr | EmptyDict | EmptyList | EmptySet => false,
+            Int(_) | Float(_) | Bool | Decimal => false,
             List(_) => true,
 
             Str | Dict(_, _) | Set(_) => true,
@@ -1217,22 +1266,35 @@ impl<'a> Builtin<'a> {
         use Builtin::*;
 
         match self {
-            Int128 => alloc.text("Int128"),
-            Int64 => alloc.text("Int64"),
-            Int32 => alloc.text("Int32"),
-            Int16 => alloc.text("Int16"),
-            Int8 => alloc.text("Int8"),
-            Int1 => alloc.text("Int1"),
-            Usize => alloc.text("Usize"),
-            Decimal => alloc.text("Decimal"),
-            Float128 => alloc.text("Float128"),
-            Float64 => alloc.text("Float64"),
-            Float32 => alloc.text("Float32"),
+            Int(int_width) => {
+                use IntWidth::*;
 
-            EmptyStr => alloc.text("EmptyStr"),
-            EmptyList => alloc.text("EmptyList"),
-            EmptyDict => alloc.text("EmptyDict"),
-            EmptySet => alloc.text("EmptySet"),
+                match int_width {
+                    I128 => alloc.text("I128"),
+                    I64 => alloc.text("I64"),
+                    I32 => alloc.text("I32"),
+                    I16 => alloc.text("I16"),
+                    I8 => alloc.text("I8"),
+                    U128 => alloc.text("U128"),
+                    U64 => alloc.text("U64"),
+                    U32 => alloc.text("U32"),
+                    U16 => alloc.text("U16"),
+                    U8 => alloc.text("U8"),
+                }
+            }
+
+            Float(float_width) => {
+                use FloatWidth::*;
+
+                match float_width {
+                    F128 => alloc.text("Float128"),
+                    F64 => alloc.text("Float64"),
+                    F32 => alloc.text("Float32"),
+                }
+            }
+
+            Bool => alloc.text("Int1"),
+            Decimal => alloc.text("Decimal"),
 
             Str => alloc.text("Str"),
             List(layout) => alloc
@@ -1251,17 +1313,9 @@ impl<'a> Builtin<'a> {
 
     pub fn allocation_alignment_bytes(&self, pointer_size: u32) -> u32 {
         let allocation = match self {
-            Builtin::Int128
-            | Builtin::Int64
-            | Builtin::Int32
-            | Builtin::Int16
-            | Builtin::Int8
-            | Builtin::Int1
-            | Builtin::Usize
-            | Builtin::Decimal
-            | Builtin::Float128
-            | Builtin::Float64
-            | Builtin::Float32 => unreachable!("not heap-allocated"),
+            Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal => {
+                unreachable!("not heap-allocated")
+            }
             Builtin::Str => pointer_size,
             Builtin::Dict(k, v) => k
                 .alignment_bytes(pointer_size)
@@ -1269,9 +1323,6 @@ impl<'a> Builtin<'a> {
                 .max(pointer_size),
             Builtin::Set(k) => k.alignment_bytes(pointer_size).max(pointer_size),
             Builtin::List(e) => e.alignment_bytes(pointer_size).max(pointer_size),
-            Builtin::EmptyStr | Builtin::EmptyList | Builtin::EmptyDict | Builtin::EmptySet => {
-                unreachable!("not heap-allocated")
-            }
         };
 
         allocation.max(pointer_size)
@@ -1296,49 +1347,49 @@ fn layout_from_flat_type<'a>(
                 // Ints
                 Symbol::NUM_NAT => {
                     debug_assert_eq!(args.len(), 0);
-                    Ok(Layout::Builtin(Builtin::Usize))
+                    Ok(Layout::usize(env.ptr_bytes))
                 }
 
                 Symbol::NUM_I128 => {
                     debug_assert_eq!(args.len(), 0);
-                    Ok(Layout::Builtin(Builtin::Int128))
+                    Ok(Layout::i128())
                 }
                 Symbol::NUM_I64 => {
                     debug_assert_eq!(args.len(), 0);
-                    Ok(Layout::Builtin(Builtin::Int64))
+                    Ok(Layout::i64())
                 }
                 Symbol::NUM_I32 => {
                     debug_assert_eq!(args.len(), 0);
-                    Ok(Layout::Builtin(Builtin::Int32))
+                    Ok(Layout::i32())
                 }
                 Symbol::NUM_I16 => {
                     debug_assert_eq!(args.len(), 0);
-                    Ok(Layout::Builtin(Builtin::Int16))
+                    Ok(Layout::i16())
                 }
                 Symbol::NUM_I8 => {
                     debug_assert_eq!(args.len(), 0);
-                    Ok(Layout::Builtin(Builtin::Int8))
+                    Ok(Layout::i8())
                 }
 
                 Symbol::NUM_U128 => {
                     debug_assert_eq!(args.len(), 0);
-                    Ok(Layout::Builtin(Builtin::Int128))
+                    Ok(Layout::u128())
                 }
                 Symbol::NUM_U64 => {
                     debug_assert_eq!(args.len(), 0);
-                    Ok(Layout::Builtin(Builtin::Int64))
+                    Ok(Layout::u64())
                 }
                 Symbol::NUM_U32 => {
                     debug_assert_eq!(args.len(), 0);
-                    Ok(Layout::Builtin(Builtin::Int32))
+                    Ok(Layout::u32())
                 }
                 Symbol::NUM_U16 => {
                     debug_assert_eq!(args.len(), 0);
-                    Ok(Layout::Builtin(Builtin::Int16))
+                    Ok(Layout::u16())
                 }
                 Symbol::NUM_U8 => {
                     debug_assert_eq!(args.len(), 0);
-                    Ok(Layout::Builtin(Builtin::Int8))
+                    Ok(Layout::u8())
                 }
 
                 // Floats
@@ -1348,11 +1399,11 @@ fn layout_from_flat_type<'a>(
                 }
                 Symbol::NUM_F64 => {
                     debug_assert_eq!(args.len(), 0);
-                    Ok(Layout::Builtin(Builtin::Float64))
+                    Ok(Layout::f64())
                 }
                 Symbol::NUM_F32 => {
                     debug_assert_eq!(args.len(), 0);
-                    Ok(Layout::Builtin(Builtin::Float32))
+                    Ok(Layout::f32())
                 }
 
                 Symbol::NUM_NUM | Symbol::NUM_AT_NUM => {
@@ -1453,7 +1504,7 @@ fn layout_from_flat_type<'a>(
             if GENERATE_NULLABLE {
                 for (index, (_name, variables)) in tags_vec.iter().enumerate() {
                     if variables.is_empty() {
-                        nullable = Some(index as i64);
+                        nullable = Some(index as TagIdIntType);
                         break;
                     }
                 }
@@ -1461,7 +1512,7 @@ fn layout_from_flat_type<'a>(
 
             env.insert_seen(rec_var);
             for (index, (_name, variables)) in tags_vec.into_iter().enumerate() {
-                if matches!(nullable, Some(i) if i == index as i64) {
+                if matches!(nullable, Some(i) if i == index as TagIdIntType) {
                     // don't add the nullable case
                     continue;
                 }
@@ -1514,11 +1565,9 @@ fn layout_from_flat_type<'a>(
 
             Ok(Layout::Union(union_layout))
         }
-        EmptyTagUnion => {
-            panic!("TODO make Layout for empty Tag Union");
-        }
+        EmptyTagUnion => Ok(Layout::VOID),
         Erroneous(_) => Err(LayoutProblem::Erroneous),
-        EmptyRecord => Ok(Layout::Struct(&[])),
+        EmptyRecord => Ok(Layout::UNIT),
     }
 }
 
@@ -1611,7 +1660,7 @@ pub enum WrappedVariant<'a> {
         sorted_tag_layouts: Vec<'a, (TagName, &'a [Layout<'a>])>,
     },
     NullableWrapped {
-        nullable_id: i64,
+        nullable_id: TagIdIntType,
         nullable_name: TagName,
         sorted_tag_layouts: Vec<'a, (TagName, &'a [Layout<'a>])>,
     },
@@ -1628,7 +1677,7 @@ pub enum WrappedVariant<'a> {
 }
 
 impl<'a> WrappedVariant<'a> {
-    pub fn tag_name_to_id(&self, tag_name: &TagName) -> (u8, &'a [Layout<'a>]) {
+    pub fn tag_name_to_id(&self, tag_name: &TagName) -> (TagIdIntType, &'a [Layout<'a>]) {
         use WrappedVariant::*;
 
         match self {
@@ -1640,7 +1689,7 @@ impl<'a> WrappedVariant<'a> {
                     .expect("tag name is not in its own type");
 
                 debug_assert!(tag_id < 256);
-                (tag_id as u8, *argument_layouts)
+                (tag_id as TagIdIntType, *argument_layouts)
             }
             NullableWrapped {
                 nullable_id,
@@ -1650,7 +1699,7 @@ impl<'a> WrappedVariant<'a> {
                 // assumption: the nullable_name is not included in sorted_tag_layouts
 
                 if tag_name == nullable_name {
-                    (*nullable_id as u8, &[] as &[_])
+                    (*nullable_id as TagIdIntType, &[] as &[_])
                 } else {
                     let (mut tag_id, (_, argument_layouts)) = sorted_tag_layouts
                         .iter()
@@ -1663,7 +1712,7 @@ impl<'a> WrappedVariant<'a> {
                     }
 
                     debug_assert!(tag_id < 256);
-                    (tag_id as u8, *argument_layouts)
+                    (tag_id as TagIdIntType, *argument_layouts)
                 }
             }
             NullableUnwrapped {
@@ -1673,11 +1722,11 @@ impl<'a> WrappedVariant<'a> {
                 other_fields,
             } => {
                 if tag_name == nullable_name {
-                    (*nullable_id as u8, &[] as &[_])
+                    (*nullable_id as TagIdIntType, &[] as &[_])
                 } else {
                     debug_assert_eq!(other_name, tag_name);
 
-                    (!*nullable_id as u8, *other_fields)
+                    (!*nullable_id as TagIdIntType, *other_fields)
                 }
             }
             NonNullableUnwrapped { fields, .. } => (0, fields),
@@ -1778,31 +1827,25 @@ fn union_sorted_tags_help_new<'a>(
 
             // just one tag in the union (but with arguments) can be a struct
             let mut layouts = Vec::with_capacity_in(tags_vec.len(), arena);
-            let mut contains_zero_sized = false;
 
             // special-case NUM_AT_NUM: if its argument is a FlexVar, make it Int
             match tag_name {
                 TagName::Private(Symbol::NUM_AT_NUM) => {
                     let var = subs[arguments.into_iter().next().unwrap()];
-                    layouts.push(unwrap_num_tag(subs, var).expect("invalid num layout"));
+                    layouts.push(unwrap_num_tag(subs, var, ptr_bytes).expect("invalid num layout"));
                 }
                 _ => {
                     for var_index in arguments {
                         let var = subs[var_index];
                         match Layout::from_var(&mut env, var) {
                             Ok(layout) => {
-                                // Drop any zero-sized arguments like {}
-                                if !layout.is_dropped_because_empty() {
-                                    layouts.push(layout);
-                                } else {
-                                    contains_zero_sized = true;
-                                }
+                                layouts.push(layout);
                             }
                             Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                                 // If we encounter an unbound type var (e.g. `Ok *`)
                                 // then it's zero-sized; In the future we may drop this argument
-                                // completely, but for now we represent it with the empty struct
-                                layouts.push(Layout::Struct(&[]))
+                                // completely, but for now we represent it with the empty tag union
+                                layouts.push(Layout::VOID)
                             }
                             Err(LayoutProblem::Erroneous) => {
                                 // An erroneous type var will code gen to a runtime
@@ -1821,11 +1864,7 @@ fn union_sorted_tags_help_new<'a>(
             });
 
             if layouts.is_empty() {
-                if contains_zero_sized {
-                    UnionVariant::UnitWithArguments
-                } else {
-                    UnionVariant::Unit
-                }
+                UnionVariant::Unit
             } else if opt_rec_var.is_some() {
                 UnionVariant::Wrapped(WrappedVariant::NonNullableUnwrapped {
                     tag_name,
@@ -1843,14 +1882,14 @@ fn union_sorted_tags_help_new<'a>(
             let mut answer = Vec::with_capacity_in(tags_vec.len(), arena);
             let mut has_any_arguments = false;
 
-            let mut nullable: Option<(i64, TagName)> = None;
+            let mut nullable: Option<(TagIdIntType, TagName)> = None;
 
             // only recursive tag unions can be nullable
             let is_recursive = opt_rec_var.is_some();
             if is_recursive && GENERATE_NULLABLE {
                 for (index, (name, variables)) in tags_vec.iter().enumerate() {
                     if variables.is_empty() {
-                        nullable = Some((index as i64, (*name).clone()));
+                        nullable = Some((index as TagIdIntType, (*name).clone()));
                         break;
                     }
                 }
@@ -1886,8 +1925,8 @@ fn union_sorted_tags_help_new<'a>(
                         Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                             // If we encounter an unbound type var (e.g. `Ok *`)
                             // then it's zero-sized; In the future we may drop this argument
-                            // completely, but for now we represent it with the empty struct
-                            arg_layouts.push(Layout::Struct(&[]));
+                            // completely, but for now we represent it with the empty tag union
+                            arg_layouts.push(Layout::VOID);
                         }
                         Err(LayoutProblem::Erroneous) => {
                             // An erroneous type var will code gen to a runtime
@@ -1996,7 +2035,9 @@ pub fn union_sorted_tags_help<'a>(
             // special-case NUM_AT_NUM: if its argument is a FlexVar, make it Int
             match tag_name {
                 TagName::Private(Symbol::NUM_AT_NUM) => {
-                    layouts.push(unwrap_num_tag(subs, arguments[0]).expect("invalid num layout"));
+                    layouts.push(
+                        unwrap_num_tag(subs, arguments[0], ptr_bytes).expect("invalid num layout"),
+                    );
                 }
                 _ => {
                     for var in arguments {
@@ -2012,8 +2053,8 @@ pub fn union_sorted_tags_help<'a>(
                             Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                                 // If we encounter an unbound type var (e.g. `Ok *`)
                                 // then it's zero-sized; In the future we may drop this argument
-                                // completely, but for now we represent it with the empty struct
-                                layouts.push(Layout::Struct(&[]))
+                                // completely, but for now we represent it with the empty tag union
+                                layouts.push(Layout::VOID)
                             }
                             Err(LayoutProblem::Erroneous) => {
                                 // An erroneous type var will code gen to a runtime
@@ -2061,7 +2102,7 @@ pub fn union_sorted_tags_help<'a>(
             if is_recursive && GENERATE_NULLABLE {
                 for (index, (name, variables)) in tags_vec.iter().enumerate() {
                     if variables.is_empty() {
-                        nullable = Some((index as i64, name.clone()));
+                        nullable = Some((index as TagIdIntType, name.clone()));
                         break;
                     }
                 }
@@ -2096,8 +2137,9 @@ pub fn union_sorted_tags_help<'a>(
                         Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                             // If we encounter an unbound type var (e.g. `Ok *`)
                             // then it's zero-sized; In the future we may drop this argument
-                            // completely, but for now we represent it with the empty struct
-                            arg_layouts.push(Layout::Struct(&[]));
+                            // completely, but for now we represent it with the empty struct tag
+                            // union
+                            arg_layouts.push(Layout::VOID);
                         }
                         Err(LayoutProblem::Erroneous) => {
                             // An erroneous type var will code gen to a runtime
@@ -2208,7 +2250,7 @@ fn layout_from_newtype<'a>(
     let tag_name = &subs[tag_name_index];
 
     if tag_name == &TagName::Private(Symbol::NUM_AT_NUM) {
-        unwrap_num_tag(subs, var).expect("invalid Num argument")
+        unwrap_num_tag(subs, var, ptr_bytes).expect("invalid Num argument")
     } else {
         let mut env = Env {
             arena,
@@ -2222,8 +2264,8 @@ fn layout_from_newtype<'a>(
             Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                 // If we encounter an unbound type var (e.g. `Ok *`)
                 // then it's zero-sized; In the future we may drop this argument
-                // completely, but for now we represent it with the empty struct
-                Layout::Struct(&[])
+                // completely, but for now we represent it with the empty tag union
+                Layout::VOID
             }
             Err(LayoutProblem::Erroneous) => {
                 // An erroneous type var will code gen to a runtime
@@ -2255,17 +2297,17 @@ fn layout_from_tag_union<'a>(
             let var_index = arguments.into_iter().next().unwrap();
             let var = subs[var_index];
 
-            unwrap_num_tag(subs, var).expect("invalid Num argument")
+            unwrap_num_tag(subs, var, ptr_bytes).expect("invalid Num argument")
         }
         _ => {
             let opt_rec_var = None;
             let variant = union_sorted_tags_help_new(arena, tags_vec, opt_rec_var, subs, ptr_bytes);
 
             match variant {
-                Never => Layout::Union(UnionLayout::NonRecursive(&[])),
-                Unit | UnitWithArguments => Layout::Struct(&[]),
-                BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
-                ByteUnion(_) => Layout::Builtin(Builtin::Int8),
+                Never => Layout::VOID,
+                Unit | UnitWithArguments => Layout::UNIT,
+                BoolUnion { .. } => Layout::bool(),
+                ByteUnion(_) => Layout::u8(),
                 Newtype {
                     arguments: field_layouts,
                     ..
@@ -2325,7 +2367,7 @@ fn layout_from_tag_union<'a>(
 }
 
 #[cfg(debug_assertions)]
-fn ext_var_is_empty_record(subs: &Subs, ext_var: Variable) -> bool {
+pub fn ext_var_is_empty_record(subs: &Subs, ext_var: Variable) -> bool {
     // the ext_var is empty
     let fields = roc_types::types::gather_fields(subs, RecordFields::empty(), ext_var);
 
@@ -2333,13 +2375,13 @@ fn ext_var_is_empty_record(subs: &Subs, ext_var: Variable) -> bool {
 }
 
 #[cfg(not(debug_assertions))]
-fn ext_var_is_empty_record(_subs: &Subs, _ext_var: Variable) -> bool {
+pub fn ext_var_is_empty_record(_subs: &Subs, _ext_var: Variable) -> bool {
     // This should only ever be used in debug_assert! macros
     unreachable!();
 }
 
 #[cfg(debug_assertions)]
-fn ext_var_is_empty_tag_union(subs: &Subs, ext_var: Variable) -> bool {
+pub fn ext_var_is_empty_tag_union(subs: &Subs, ext_var: Variable) -> bool {
     // the ext_var is empty
     let mut ext_fields = std::vec::Vec::new();
     match roc_types::pretty_print::chase_ext_tag_union(subs, ext_var, &mut ext_fields) {
@@ -2349,7 +2391,7 @@ fn ext_var_is_empty_tag_union(subs: &Subs, ext_var: Variable) -> bool {
 }
 
 #[cfg(not(debug_assertions))]
-fn ext_var_is_empty_tag_union(_: &Subs, _: Variable) -> bool {
+pub fn ext_var_is_empty_tag_union(_: &Subs, _: Variable) -> bool {
     // This should only ever be used in debug_assert! macros
     unreachable!();
 }
@@ -2358,6 +2400,8 @@ fn layout_from_num_content<'a>(content: &Content) -> Result<Layout<'a>, LayoutPr
     use roc_types::subs::Content::*;
     use roc_types::subs::FlatType::*;
 
+    let ptr_bytes = 8;
+
     match content {
         RecursionVar { .. } => panic!("recursion var in num"),
         FlexVar(_) | RigidVar(_) => {
@@ -2365,30 +2409,32 @@ fn layout_from_num_content<'a>(content: &Content) -> Result<Layout<'a>, LayoutPr
             // type variable, then assume it's a 64-bit integer.
             //
             // (e.g. for (5 + 5) assume both 5s are 64-bit integers.)
-            Ok(Layout::Builtin(DEFAULT_NUM_BUILTIN))
+            Ok(Layout::default_integer())
         }
         Structure(Apply(symbol, args)) => match *symbol {
             // Ints
-            Symbol::NUM_NAT => Ok(Layout::Builtin(Builtin::Usize)),
+            Symbol::NUM_NAT => Ok(Layout::usize(ptr_bytes)),
 
-            Symbol::NUM_INTEGER => Ok(Layout::Builtin(Builtin::Int64)),
-            Symbol::NUM_I128 => Ok(Layout::Builtin(Builtin::Int128)),
-            Symbol::NUM_I64 => Ok(Layout::Builtin(Builtin::Int64)),
-            Symbol::NUM_I32 => Ok(Layout::Builtin(Builtin::Int32)),
-            Symbol::NUM_I16 => Ok(Layout::Builtin(Builtin::Int16)),
-            Symbol::NUM_I8 => Ok(Layout::Builtin(Builtin::Int8)),
+            Symbol::NUM_INTEGER => Ok(Layout::i64()),
+            Symbol::NUM_I128 => Ok(Layout::i128()),
+            Symbol::NUM_I64 => Ok(Layout::i64()),
+            Symbol::NUM_I32 => Ok(Layout::i32()),
+            Symbol::NUM_I16 => Ok(Layout::i16()),
+            Symbol::NUM_I8 => Ok(Layout::i8()),
 
-            Symbol::NUM_U128 => Ok(Layout::Builtin(Builtin::Int128)),
-            Symbol::NUM_U64 => Ok(Layout::Builtin(Builtin::Int64)),
-            Symbol::NUM_U32 => Ok(Layout::Builtin(Builtin::Int32)),
-            Symbol::NUM_U16 => Ok(Layout::Builtin(Builtin::Int16)),
-            Symbol::NUM_U8 => Ok(Layout::Builtin(Builtin::Int8)),
+            Symbol::NUM_U128 => Ok(Layout::u128()),
+            Symbol::NUM_U64 => Ok(Layout::u64()),
+            Symbol::NUM_U32 => Ok(Layout::u32()),
+            Symbol::NUM_U16 => Ok(Layout::u16()),
+            Symbol::NUM_U8 => Ok(Layout::u8()),
 
             // Floats
-            Symbol::NUM_FLOATINGPOINT => Ok(Layout::Builtin(Builtin::Float64)),
+            Symbol::NUM_FLOATINGPOINT => Ok(Layout::f64()),
+            Symbol::NUM_F64 => Ok(Layout::f64()),
+            Symbol::NUM_F32 => Ok(Layout::f32()),
+
+            // Dec
             Symbol::NUM_DEC => Ok(Layout::Builtin(Builtin::Decimal)),
-            Symbol::NUM_F64 => Ok(Layout::Builtin(Builtin::Float64)),
-            Symbol::NUM_F32 => Ok(Layout::Builtin(Builtin::Float32)),
 
             _ => {
                 panic!(
@@ -2407,7 +2453,11 @@ fn layout_from_num_content<'a>(content: &Content) -> Result<Layout<'a>, LayoutPr
     }
 }
 
-fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutProblem> {
+fn unwrap_num_tag<'a>(
+    subs: &Subs,
+    var: Variable,
+    ptr_bytes: u32,
+) -> Result<Layout<'a>, LayoutProblem> {
     match subs.get_content_without_compacting(var) {
         Content::Alias(Symbol::NUM_INTEGER, args, _) => {
             debug_assert!(args.len() == 1);
@@ -2420,26 +2470,27 @@ fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutPr
                 Content::Alias(symbol, args, _) => {
                     debug_assert!(args.is_empty());
 
-                    let builtin = match *symbol {
-                        Symbol::NUM_SIGNED128 => Builtin::Int128,
-                        Symbol::NUM_SIGNED64 => Builtin::Int64,
-                        Symbol::NUM_SIGNED32 => Builtin::Int32,
-                        Symbol::NUM_SIGNED16 => Builtin::Int16,
-                        Symbol::NUM_SIGNED8 => Builtin::Int8,
-                        Symbol::NUM_UNSIGNED128 => Builtin::Int128,
-                        Symbol::NUM_UNSIGNED64 => Builtin::Int64,
-                        Symbol::NUM_UNSIGNED32 => Builtin::Int32,
-                        Symbol::NUM_UNSIGNED16 => Builtin::Int16,
-                        Symbol::NUM_UNSIGNED8 => Builtin::Int8,
-                        Symbol::NUM_NATURAL => Builtin::Usize,
+                    let layout = match *symbol {
+                        Symbol::NUM_SIGNED128 => Layout::i128(),
+                        Symbol::NUM_SIGNED64 => Layout::i64(),
+                        Symbol::NUM_SIGNED32 => Layout::i32(),
+                        Symbol::NUM_SIGNED16 => Layout::i16(),
+                        Symbol::NUM_SIGNED8 => Layout::i8(),
+                        Symbol::NUM_UNSIGNED128 => Layout::u128(),
+                        Symbol::NUM_UNSIGNED64 => Layout::u64(),
+                        Symbol::NUM_UNSIGNED32 => Layout::u32(),
+                        Symbol::NUM_UNSIGNED16 => Layout::u16(),
+                        Symbol::NUM_UNSIGNED8 => Layout::u8(),
+                        Symbol::NUM_NATURAL => Layout::usize(ptr_bytes),
+
                         _ => unreachable!("not a valid int variant: {:?} {:?}", symbol, args),
                     };
 
-                    Ok(Layout::Builtin(builtin))
+                    Ok(layout)
                 }
                 Content::FlexVar(_) | Content::RigidVar(_) => {
                     // default to i64
-                    Ok(Layout::Builtin(Builtin::Int64))
+                    Ok(Layout::i64())
                 }
                 _ => unreachable!("not a valid int variant: {:?}", precision),
             }
@@ -2455,12 +2506,12 @@ fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutPr
                 Content::Alias(Symbol::NUM_BINARY32, args, _) => {
                     debug_assert!(args.is_empty());
 
-                    Ok(Layout::Builtin(Builtin::Float32))
+                    Ok(Layout::f32())
                 }
                 Content::Alias(Symbol::NUM_BINARY64, args, _) => {
                     debug_assert!(args.is_empty());
 
-                    Ok(Layout::Builtin(Builtin::Float64))
+                    Ok(Layout::f64())
                 }
                 Content::Alias(Symbol::NUM_DECIMAL, args, _) => {
                     debug_assert!(args.is_empty());
@@ -2469,14 +2520,14 @@ fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutPr
                 }
                 Content::FlexVar(_) | Content::RigidVar(_) => {
                     // default to f64
-                    Ok(Layout::Builtin(Builtin::Float64))
+                    Ok(Layout::f64())
                 }
                 _ => unreachable!("not a valid float variant: {:?}", precision),
             }
         }
         Content::FlexVar(_) | Content::RigidVar(_) => {
             // If this was still a (Num *) then default to compiling it to i64
-            Ok(Layout::Builtin(DEFAULT_NUM_BUILTIN))
+            Ok(Layout::default_integer())
         }
         other => {
             todo!("TODO non structure Num.@Num flat_type {:?}", other);
@@ -2489,40 +2540,54 @@ fn dict_layout_from_key_value<'a>(
     key_var: Variable,
     value_var: Variable,
 ) -> Result<Layout<'a>, LayoutProblem> {
-    match env.subs.get_content_without_compacting(key_var) {
-        Content::FlexVar(_) | Content::RigidVar(_) => {
-            // If this was still a (Dict * *) then it must have been an empty dict
-            Ok(Layout::Builtin(Builtin::EmptyDict))
-        }
-        key_content => {
-            let value_content = env.subs.get_content_without_compacting(value_var);
-            let key_layout = Layout::new_help(env, key_var, key_content.clone())?;
-            let value_layout = Layout::new_help(env, value_var, value_content.clone())?;
+    let is_variable = |content| matches!(content, &Content::FlexVar(_) | &Content::RigidVar(_));
 
-            // This is a normal list.
-            Ok(Layout::Builtin(Builtin::Dict(
-                env.arena.alloc(key_layout),
-                env.arena.alloc(value_layout),
-            )))
-        }
-    }
+    let key_content = env.subs.get_content_without_compacting(key_var);
+    let value_content = env.subs.get_content_without_compacting(value_var);
+
+    let key_layout = if is_variable(key_content) {
+        Layout::VOID
+    } else {
+        // NOTE: cannot re-use Content, because it may be recursive
+        // then some state is not correctly kept, we have to go through from_var
+        Layout::from_var(env, key_var)?
+    };
+
+    let value_layout = if is_variable(value_content) {
+        Layout::VOID
+    } else {
+        // NOTE: cannot re-use Content, because it may be recursive
+        // then some state is not correctly kept, we have to go through from_var
+        Layout::from_var(env, value_var)?
+    };
+
+    // This is a normal list.
+    Ok(Layout::Builtin(Builtin::Dict(
+        env.arena.alloc(key_layout),
+        env.arena.alloc(value_layout),
+    )))
 }
 
 pub fn list_layout_from_elem<'a>(
     env: &mut Env<'a, '_>,
-    elem_var: Variable,
+    element_var: Variable,
 ) -> Result<Layout<'a>, LayoutProblem> {
-    match env.subs.get_content_without_compacting(elem_var) {
-        Content::FlexVar(_) | Content::RigidVar(_) => {
-            // If this was still a (List *) then it must have been an empty list
-            Ok(Layout::Builtin(Builtin::EmptyList))
-        }
-        _ => {
-            let elem_layout = Layout::from_var(env, elem_var)?;
+    let is_variable = |content| matches!(content, &Content::FlexVar(_) | &Content::RigidVar(_));
 
-            Ok(Layout::Builtin(Builtin::List(env.arena.alloc(elem_layout))))
-        }
-    }
+    let element_content = env.subs.get_content_without_compacting(element_var);
+
+    let element_layout = if is_variable(element_content) {
+        // If this was still a (List *) then it must have been an empty list
+        Layout::VOID
+    } else {
+        // NOTE: cannot re-use Content, because it may be recursive
+        // then some state is not correctly kept, we have to go through from_var
+        Layout::from_var(env, element_var)?
+    };
+
+    Ok(Layout::Builtin(Builtin::List(
+        env.arena.alloc(element_layout),
+    )))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2544,6 +2609,64 @@ struct IdsByLayout<'a> {
     next_id: u32,
 }
 
+impl<'a> IdsByLayout<'a> {
+    #[inline(always)]
+    fn insert_layout(&mut self, layout: Layout<'a>) -> LayoutId {
+        match self.by_id.entry(layout) {
+            Entry::Vacant(vacant) => {
+                let answer = self.next_id;
+                vacant.insert(answer);
+                self.next_id += 1;
+
+                LayoutId(answer)
+            }
+            Entry::Occupied(occupied) => LayoutId(*occupied.get()),
+        }
+    }
+
+    #[inline(always)]
+    fn singleton_layout(layout: Layout<'a>) -> (Self, LayoutId) {
+        let mut by_id = HashMap::with_capacity_and_hasher(1, default_hasher());
+        by_id.insert(layout, 1);
+
+        let ids_by_layout = IdsByLayout {
+            by_id,
+            toplevels_by_id: Default::default(),
+            next_id: 2,
+        };
+
+        (ids_by_layout, LayoutId(1))
+    }
+
+    #[inline(always)]
+    fn insert_toplevel(&mut self, layout: crate::ir::ProcLayout<'a>) -> LayoutId {
+        match self.toplevels_by_id.entry(layout) {
+            Entry::Vacant(vacant) => {
+                let answer = self.next_id;
+                vacant.insert(answer);
+                self.next_id += 1;
+
+                LayoutId(answer)
+            }
+            Entry::Occupied(occupied) => LayoutId(*occupied.get()),
+        }
+    }
+
+    #[inline(always)]
+    fn singleton_toplevel(layout: crate::ir::ProcLayout<'a>) -> (Self, LayoutId) {
+        let mut toplevels_by_id = HashMap::with_capacity_and_hasher(1, default_hasher());
+        toplevels_by_id.insert(layout, 1);
+
+        let ids_by_layout = IdsByLayout {
+            by_id: Default::default(),
+            toplevels_by_id,
+            next_id: 2,
+        };
+
+        (ids_by_layout, LayoutId(1))
+    }
+}
+
 #[derive(Default)]
 pub struct LayoutIds<'a> {
     by_symbol: MutMap<Symbol, IdsByLayout<'a>>,
@@ -2552,77 +2675,61 @@ pub struct LayoutIds<'a> {
 impl<'a> LayoutIds<'a> {
     /// Returns a LayoutId which is unique for the given symbol and layout.
     /// If given the same symbol and same layout, returns the same LayoutId.
+    #[inline(always)]
     pub fn get<'b>(&mut self, symbol: Symbol, layout: &'b Layout<'a>) -> LayoutId {
-        // Note: this function does some weird stuff to satisfy the borrow checker.
-        // There's probably a nicer way to write it that still works.
-        let ids = self.by_symbol.entry(symbol).or_insert_with(|| IdsByLayout {
-            by_id: HashMap::with_capacity_and_hasher(1, default_hasher()),
-            toplevels_by_id: Default::default(),
-            next_id: 1,
-        });
+        match self.by_symbol.entry(symbol) {
+            Entry::Vacant(vacant) => {
+                let (ids_by_layout, layout_id) = IdsByLayout::singleton_layout(*layout);
 
-        // Get the id associated with this layout, or default to next_id.
-        let answer = ids.by_id.get(layout).copied().unwrap_or(ids.next_id);
+                vacant.insert(ids_by_layout);
 
-        // If we had to default to next_id, it must not have been found;
-        // store the ID we're going to return and increment next_id.
-        if answer == ids.next_id {
-            ids.by_id.insert(*layout, ids.next_id);
-
-            ids.next_id += 1;
+                layout_id
+            }
+            Entry::Occupied(mut occupied_ids) => occupied_ids.get_mut().insert_layout(*layout),
         }
-
-        LayoutId(answer)
     }
 
     /// Returns a LayoutId which is unique for the given symbol and layout.
     /// If given the same symbol and same layout, returns the same LayoutId.
+    #[inline(always)]
     pub fn get_toplevel<'b>(
         &mut self,
         symbol: Symbol,
         layout: &'b crate::ir::ProcLayout<'a>,
     ) -> LayoutId {
-        // Note: this function does some weird stuff to satisfy the borrow checker.
-        // There's probably a nicer way to write it that still works.
-        let ids = self.by_symbol.entry(symbol).or_insert_with(|| IdsByLayout {
-            by_id: Default::default(),
-            toplevels_by_id: HashMap::with_capacity_and_hasher(1, default_hasher()),
-            next_id: 1,
-        });
+        match self.by_symbol.entry(symbol) {
+            Entry::Vacant(vacant) => {
+                let (ids_by_layout, layout_id) = IdsByLayout::singleton_toplevel(*layout);
 
-        // Get the id associated with this layout, or default to next_id.
-        let answer = ids
-            .toplevels_by_id
-            .get(layout)
-            .copied()
-            .unwrap_or(ids.next_id);
+                vacant.insert(ids_by_layout);
 
-        // If we had to default to next_id, it must not have been found;
-        // store the ID we're going to return and increment next_id.
-        if answer == ids.next_id {
-            ids.toplevels_by_id.insert(*layout, ids.next_id);
-
-            ids.next_id += 1;
+                layout_id
+            }
+            Entry::Occupied(mut occupied_ids) => occupied_ids.get_mut().insert_toplevel(*layout),
         }
-
-        LayoutId(answer)
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ListLayout<'a> {
-    EmptyList,
-    List(&'a Layout<'a>),
-}
+#[cfg(test)]
+mod test {
+    use super::*;
 
-impl<'a> std::convert::TryFrom<&Layout<'a>> for ListLayout<'a> {
-    type Error = ();
+    #[test]
+    fn width_and_alignment_union_empty_struct() {
+        let lambda_set = LambdaSet {
+            set: &[(Symbol::LIST_MAP, &[])],
+            representation: &Layout::UNIT,
+        };
 
-    fn try_from(value: &Layout<'a>) -> Result<Self, Self::Error> {
-        match value {
-            Layout::Builtin(Builtin::EmptyList) => Ok(ListLayout::EmptyList),
-            Layout::Builtin(Builtin::List(element)) => Ok(ListLayout::List(element)),
-            _ => Err(()),
-        }
+        let a = &[Layout::UNIT] as &[_];
+        let b = &[Layout::LambdaSet(lambda_set)] as &[_];
+        let tt = [a, b];
+
+        let layout = Layout::Union(UnionLayout::NonRecursive(&tt));
+
+        // at the moment, the tag id uses an I64, so
+        let ptr_width = 8;
+        assert_eq!(layout.stack_size(ptr_width), 8);
+        assert_eq!(layout.alignment_bytes(ptr_width), 8);
     }
 }

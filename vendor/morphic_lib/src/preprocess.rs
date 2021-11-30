@@ -42,7 +42,7 @@ pub(crate) enum ErrorKind {
     ExpectedTupleType(String),
     #[error("expected union type, found type '{0}'")]
     ExpectedUnionType(String),
-    #[error("expected named type, foudn type '{0}'")]
+    #[error("expected named type, found type '{0}'")]
     ExpectedNamedType(String),
     #[error("tuple field index {0} out of range")]
     TupleFieldOutOfRange(u32),
@@ -265,7 +265,9 @@ struct FuncSig {
     ret_type: TypeId,
 }
 
-pub(crate) fn preprocess(program: &api::Program) -> Result<(), Error> {
+pub(crate) fn preprocess(
+    program: &api::Program,
+) -> Result<(NameCache, TypeCache, ir::Program), Error> {
     let mut nc = NameCache::default();
     let mut tc = TypeCache::default();
 
@@ -348,15 +350,15 @@ pub(crate) fn preprocess(program: &api::Program) -> Result<(), Error> {
         const_sigs: &const_sigs,
     };
 
-    for (func_id, func_def) in &funcs {
+    let preprocessed_funcs = funcs.try_map(|func_id, func_def| {
         preprocess_func_def(&mut tc, ctx, func_def, &func_body_types[func_id])
-            .map_err(Error::annotate_func_def(&nc, func_id))?;
-    }
+            .map_err(Error::annotate_func_def(&nc, func_id))
+    })?;
 
-    for (const_id, const_def) in &consts {
+    let preprocessed_consts = consts.try_map(|const_id, const_def| {
         preprocess_const_def(&mut tc, ctx, const_def, &const_body_types[const_id])
-            .map_err(Error::annotate_const_def(&nc, const_id))?;
-    }
+            .map_err(Error::annotate_const_def(&nc, const_id))
+    })?;
 
     let mut entry_points = IdVec::<EntryPointId, FuncId>::new();
     for (entry_point_name, (mod_, func)) in &program.entry_points {
@@ -383,7 +385,16 @@ pub(crate) fn preprocess(program: &api::Program) -> Result<(), Error> {
         debug_assert_eq!(nc_id, pushed_id);
     }
 
-    Ok(())
+    Ok((
+        nc,
+        tc,
+        ir::Program {
+            named_types: typedef_contents,
+            funcs: preprocessed_funcs,
+            consts: preprocessed_consts,
+            entry_points,
+        },
+    ))
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1165,7 +1176,12 @@ fn preprocess_func_def(
     )?;
     graph_builder.set_jump_targets(final_block, Some(ret_val), smallvec![ir::JumpTarget::Ret]);
     Ok(ir::FuncDef {
-        graph: graph_builder.build(entry_block),
+        graph: graph_builder.build(
+            entry_block,
+            body_types[func_def.ret_type],
+            func_def.builder.expr_builder.update_mode_vars.count(),
+            func_def.builder.expr_builder.callee_spec_vars.count(),
+        ),
     })
 }
 
@@ -1199,6 +1215,11 @@ fn preprocess_const_def(
     )?;
     graph_builder.set_jump_targets(final_block, Some(ret_val), smallvec![ir::JumpTarget::Ret]);
     Ok(ir::ConstDef {
-        graph: graph_builder.build(entry_block),
+        graph: graph_builder.build(
+            entry_block,
+            body_types[const_def.type_],
+            const_def.builder.expr_builder.update_mode_vars.count(),
+            const_def.builder.expr_builder.callee_spec_vars.count(),
+        ),
     })
 }

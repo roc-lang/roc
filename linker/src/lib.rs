@@ -28,6 +28,7 @@ use target_lexicon::Triple;
 use tempfile::Builder;
 
 mod metadata;
+use metadata::VirtualOffset;
 
 pub const CMD_PREPROCESS: &str = "preprocess";
 pub const CMD_SURGERY: &str = "surgery";
@@ -57,37 +58,37 @@ pub fn build_app<'a>() -> App<'a> {
             App::new(CMD_PREPROCESS)
                 .about("Preprocesses a dynamically linked platform to prepare for linking.")
                 .arg(
-                    Arg::with_name(EXEC)
-                        .help("The dynamically linked platform executable")
+                    Arg::new(EXEC)
+                        .about("The dynamically linked platform executable")
                         .required(true),
                 )
                 .arg(
-                    Arg::with_name(METADATA)
-                        .help("Where to save the metadata from preprocessing")
+                    Arg::new(METADATA)
+                        .about("Where to save the metadata from preprocessing")
                         .required(true),
                 )
                 .arg(
-                    Arg::with_name(OUT)
-                        .help("The modified version of the dynamically linked platform executable")
+                    Arg::new(OUT)
+                        .about("The modified version of the dynamically linked platform executable")
                         .required(true),
                 )
                 .arg(
-                    Arg::with_name(SHARED_LIB)
-                        .help("The name of the shared library used in building the platform")
+                    Arg::new(SHARED_LIB)
+                        .about("The name of the shared library used in building the platform")
                         .default_value("libapp.so"),
                 )
                 .arg(
-                    Arg::with_name(FLAG_VERBOSE)
+                    Arg::new(FLAG_VERBOSE)
                         .long(FLAG_VERBOSE)
                         .short('v')
-                        .help("Enable verbose printing")
+                        .about("Enable verbose printing")
                         .required(false),
                 )
                 .arg(
-                    Arg::with_name(FLAG_TIME)
+                    Arg::new(FLAG_TIME)
                         .long(FLAG_TIME)
                         .short('t')
-                        .help("Print timing information")
+                        .about("Print timing information")
                         .required(false),
                 ),
         )
@@ -95,35 +96,35 @@ pub fn build_app<'a>() -> App<'a> {
             App::new(CMD_SURGERY)
                 .about("Links a preprocessed platform with a Roc application.")
                 .arg(
-                    Arg::with_name(APP)
-                        .help("The Roc application object file waiting to be linked")
+                    Arg::new(APP)
+                        .about("The Roc application object file waiting to be linked")
                         .required(true),
                 )
                 .arg(
-                    Arg::with_name(METADATA)
-                        .help("The metadata created by preprocessing the platform")
+                    Arg::new(METADATA)
+                        .about("The metadata created by preprocessing the platform")
                         .required(true),
                 )
                 .arg(
-                    Arg::with_name(OUT)
-                        .help(
+                    Arg::new(OUT)
+                        .about(
                             "The modified version of the dynamically linked platform. \
                                 It will be consumed to make linking faster.",
                         )
                         .required(true),
                 )
                 .arg(
-                    Arg::with_name(FLAG_VERBOSE)
+                    Arg::new(FLAG_VERBOSE)
                         .long(FLAG_VERBOSE)
                         .short('v')
-                        .help("Enable verbose printing")
+                        .about("Enable verbose printing")
                         .required(false),
                 )
                 .arg(
-                    Arg::with_name(FLAG_TIME)
+                    Arg::new(FLAG_TIME)
                         .long(FLAG_TIME)
                         .short('t')
-                        .help("Print timing information")
+                        .about("Print timing information")
                         .required(false),
                 ),
         )
@@ -141,10 +142,17 @@ pub fn build_and_preprocess_host(
     target: &Triple,
     host_input_path: &Path,
     exposed_to_host: Vec<String>,
+    target_valgrind: bool,
 ) -> io::Result<()> {
     let dummy_lib = host_input_path.with_file_name("libapp.so");
     generate_dynamic_lib(target, exposed_to_host, &dummy_lib)?;
-    rebuild_host(opt_level, target, host_input_path, Some(&dummy_lib));
+    rebuild_host(
+        opt_level,
+        target,
+        host_input_path,
+        Some(&dummy_lib),
+        target_valgrind,
+    );
     let dynhost = host_input_path.with_file_name("dynhost");
     let metadata = host_input_path.with_file_name("metadata");
     let prehost = host_input_path.with_file_name("preprocessedhost");
@@ -196,9 +204,9 @@ fn generate_dynamic_lib(
 
     let text_section = out_object.section_id(write::StandardSection::Text);
     for sym in exposed_to_host {
-        // TODO properly generate this list.
         for name in &[
             format!("roc__{}_1_exposed", sym),
+            format!("roc__{}_1_exposed_generic", sym),
             format!("roc__{}_1_Fx_caller", sym),
             format!("roc__{}_1_Fx_size", sym),
             format!("roc__{}_1_Fx_result_size", sym),
@@ -316,7 +324,9 @@ fn preprocess_impl(
     for sym in exec_obj.symbols().filter(|sym| {
         sym.is_definition() && sym.name().is_ok() && sym.name().unwrap().starts_with("roc_")
     }) {
-        let name = sym.name().unwrap().to_string();
+        // remove potentially trailing "@version".
+        let name = sym.name().unwrap().split('@').next().unwrap().to_string();
+
         // special exceptions for memcpy and memset.
         if &name == "roc_memcpy" {
             md.roc_symbol_vaddresses
@@ -367,9 +377,6 @@ fn preprocess_impl(
         println!("PLT File Offset: {:+x}", plt_offset);
     }
 
-    // TODO: it looks like we may need to support global data host relocations.
-    // Rust host look to be using them by default instead of the plt.
-    // I think this is due to first linking into a static lib and then linking to the c wrapper.
     let plt_relocs = (match exec_obj.dynamic_relocations() {
         Some(relocs) => relocs,
         None => {
@@ -379,7 +386,7 @@ fn preprocess_impl(
         }
     })
     .map(|(_, reloc)| reloc)
-    .filter(|reloc| reloc.kind() == RelocationKind::Elf(7));
+    .filter(|reloc| matches!(reloc.kind(), RelocationKind::Elf(7)));
 
     let app_syms: Vec<Symbol> = exec_obj
         .dynamic_symbols()
@@ -387,6 +394,28 @@ fn preprocess_impl(
             sym.is_undefined() && sym.name().is_ok() && sym.name().unwrap().starts_with("roc_")
         })
         .collect();
+
+    let got_app_syms: Vec<(String, usize)> = (match exec_obj.dynamic_relocations() {
+        Some(relocs) => relocs,
+        None => {
+            println!("Executable never calls any application functions.");
+            println!("No work to do. Probably an invalid input.");
+            return Ok(-1);
+        }
+    })
+    .map(|(_, reloc)| reloc)
+    .filter(|reloc| matches!(reloc.kind(), RelocationKind::Elf(6)))
+    .map(|reloc| {
+        for symbol in app_syms.iter() {
+            if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
+                return Some((symbol.name().unwrap().to_string(), symbol.index().0));
+            }
+        }
+        None
+    })
+    .flatten()
+    .collect();
+
     for sym in app_syms.iter() {
         let name = sym.name().unwrap().to_string();
         md.app_functions.push(name.clone());
@@ -536,7 +565,7 @@ fn preprocess_impl(
                             .unwrap()
                             .push(metadata::SurgeryEntry {
                                 file_offset: offset,
-                                virtual_offset: inst.next_ip(),
+                                virtual_offset: VirtualOffset::Relative(inst.next_ip()),
                                 size: op_size,
                             });
                     }
@@ -878,7 +907,7 @@ fn preprocess_impl(
             sec_offset as usize + md.added_byte_count as usize,
             sec_size as usize / mem::size_of::<elf::Rela64<LittleEndian>>(),
         );
-        for rel in relocations.iter_mut() {
+        for (i, rel) in relocations.iter_mut().enumerate() {
             let r_offset = rel.r_offset.get(NativeEndian);
             if virtual_shift_start <= r_offset {
                 rel.r_offset = endian::U64::new(LittleEndian, r_offset + md.added_byte_count);
@@ -888,6 +917,28 @@ fn preprocess_impl(
                     let r_addend = rel.r_addend.get(LittleEndian);
                     rel.r_addend
                         .set(LittleEndian, r_addend + md.added_byte_count as i64);
+                }
+            }
+            // If the relocation goes to a roc function, we need to surgically link it and change it to relative.
+            let r_type = rel.r_type(NativeEndian, false);
+            if r_type == elf::R_X86_64_GLOB_DAT {
+                let r_sym = rel.r_sym(NativeEndian, false);
+                for (name, index) in got_app_syms.iter() {
+                    if *index as u32 == r_sym {
+                        rel.set_r_info(LittleEndian, false, 0, elf::R_X86_64_RELATIVE);
+                        let addend_addr = sec_offset as usize
+                            + i * mem::size_of::<elf::Rela64<LittleEndian>>()
+                            // This 16 skips the first 2 fields and gets to the addend field.
+                            + 16;
+                        md.surgeries
+                            .get_mut(name)
+                            .unwrap()
+                            .push(metadata::SurgeryEntry {
+                                file_offset: addend_addr as u64,
+                                virtual_offset: VirtualOffset::Absolute,
+                                size: 8,
+                            });
+                    }
                 }
             }
         }
@@ -1461,7 +1512,7 @@ fn surgery_impl(
     let dynsym_offset = md.dynamic_symbol_table_section_offset + md.added_byte_count;
 
     for func_name in md.app_functions {
-        let virt_offset = match app_func_vaddr_map.get(&func_name) {
+        let func_virt_offset = match app_func_vaddr_map.get(&func_name) {
             Some(offset) => *offset as u64,
             None => {
                 println!("Function, {}, was not defined by the app", &func_name);
@@ -1471,7 +1522,7 @@ fn surgery_impl(
         if verbose {
             println!(
                 "Updating calls to {} to the address: {:+x}",
-                &func_name, virt_offset
+                &func_name, func_virt_offset
             );
         }
 
@@ -1479,17 +1530,29 @@ fn surgery_impl(
             if verbose {
                 println!("\tPerforming surgery: {:+x?}", s);
             }
+            let surgery_virt_offset = match s.virtual_offset {
+                VirtualOffset::Relative(vs) => (vs + md.added_byte_count) as i64,
+                VirtualOffset::Absolute => 0,
+            };
             match s.size {
                 4 => {
-                    let target = (virt_offset as i64
-                        - (s.virtual_offset + md.added_byte_count) as i64)
-                        as i32;
+                    let target = (func_virt_offset as i64 - surgery_virt_offset) as i32;
                     if verbose {
                         println!("\tTarget Jump: {:+x}", target);
                     }
                     let data = target.to_le_bytes();
                     exec_mmap[(s.file_offset + md.added_byte_count) as usize
                         ..(s.file_offset + md.added_byte_count) as usize + 4]
+                        .copy_from_slice(&data);
+                }
+                8 => {
+                    let target = func_virt_offset as i64 - surgery_virt_offset;
+                    if verbose {
+                        println!("\tTarget Jump: {:+x}", target);
+                    }
+                    let data = target.to_le_bytes();
+                    exec_mmap[(s.file_offset + md.added_byte_count) as usize
+                        ..(s.file_offset + md.added_byte_count) as usize + 8]
                         .copy_from_slice(&data);
                 }
                 x => {
@@ -1505,7 +1568,8 @@ fn surgery_impl(
             let plt_off = (*plt_off + md.added_byte_count) as usize;
             let plt_vaddr = *plt_vaddr + md.added_byte_count;
             let jmp_inst_len = 5;
-            let target = (virt_offset as i64 - (plt_vaddr as i64 + jmp_inst_len as i64)) as i32;
+            let target =
+                (func_virt_offset as i64 - (plt_vaddr as i64 + jmp_inst_len as i64)) as i32;
             if verbose {
                 println!("\tPLT: {:+x}, {:+x}", plt_off, plt_vaddr);
                 println!("\tTarget Jump: {:+x}", target);
@@ -1524,7 +1588,7 @@ fn surgery_impl(
                 dynsym_offset as usize + *i as usize * mem::size_of::<elf::Sym64<LittleEndian>>(),
             );
             sym.st_shndx = endian::U16::new(LittleEndian, new_text_section_index as u16);
-            sym.st_value = endian::U64::new(LittleEndian, virt_offset as u64);
+            sym.st_value = endian::U64::new(LittleEndian, func_virt_offset as u64);
             sym.st_size = endian::U64::new(
                 LittleEndian,
                 match app_func_size_map.get(&func_name) {

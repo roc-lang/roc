@@ -6,10 +6,12 @@
 use smallvec::SmallVec;
 
 use crate::api::{CalleeSpecVarId, UpdateModeVarId};
-use crate::name_cache::{ConstId, FuncId};
+use crate::name_cache::{ConstId, EntryPointId, FuncId, NamedTypeId};
 use crate::type_cache::TypeId;
 use crate::util::blocks::Blocks;
-use crate::util::flat_slices::{FlatSlices, Slice};
+use crate::util::flat_slices::FlatSlices;
+use crate::util::id_type::Count;
+use crate::util::id_vec::IdVec;
 use crate::util::op_graph::OpGraph;
 use crate::util::strongly_connected::{strongly_connected, SccKind};
 
@@ -123,6 +125,13 @@ pub(crate) enum JumpTarget {
     Ret,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum Predecessor {
+    Block(BlockId),
+    Entry,
+}
+
+pub(crate) const PREDECESSORS_INLINE_COUNT: usize = 8;
 pub(crate) const JUMP_TARGETS_INLINE_COUNT: usize = 8;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -132,6 +141,8 @@ pub(crate) struct BlockInfo {
     ///
     /// Invariant: If `param` is `Some`, it must point to a `BlockParam` value, not an `Op`.
     pub(crate) param: Option<ValueId>,
+    /// Blocks which jump to this block
+    pub(crate) predecessors: SmallVec<[Predecessor; PREDECESSORS_INLINE_COUNT]>,
     /// List of zero or more jump targets to nondeterministically choose from.
     pub(crate) jump_targets: SmallVec<[JumpTarget; JUMP_TARGETS_INLINE_COUNT]>,
     /// Optional argument which will be passed to the chosen jump target.
@@ -149,6 +160,7 @@ id_type! {
 pub(crate) struct GraphBuilder {
     values: OpGraph<ValueId, ValueInfo>,
     blocks: Blocks<BlockId, ValueId, BlockInfo>,
+    exit_blocks: SmallVec<[BlockId; 1]>,
 }
 
 impl GraphBuilder {
@@ -156,6 +168,7 @@ impl GraphBuilder {
         GraphBuilder {
             values: OpGraph::new(),
             blocks: Blocks::new(),
+            exit_blocks: SmallVec::new(),
         }
     }
 
@@ -182,6 +195,7 @@ impl GraphBuilder {
             self.values.count().0,
             BlockInfo {
                 param: None,
+                predecessors: SmallVec::new(),
                 jump_targets: SmallVec::new(),
                 target_arg: None,
             },
@@ -200,6 +214,7 @@ impl GraphBuilder {
             self.values.count().0,
             BlockInfo {
                 param: Some(param_id),
+                predecessors: SmallVec::new(),
                 jump_targets: SmallVec::new(),
                 target_arg: None,
             },
@@ -213,8 +228,22 @@ impl GraphBuilder {
         target_arg: Option<ValueId>,
         jump_targets: SmallVec<[JumpTarget; JUMP_TARGETS_INLINE_COUNT]>,
     ) {
+        for target in &jump_targets {
+            match target {
+                &JumpTarget::Block(successor) => {
+                    self.blocks
+                        .block_info_mut(successor)
+                        .predecessors
+                        .push(Predecessor::Block(block));
+                }
+                JumpTarget::Ret => {
+                    self.exit_blocks.push(block);
+                }
+            }
+        }
         let info = self.blocks.block_info_mut(block);
         info.target_arg = target_arg;
+        debug_assert!(info.jump_targets.is_empty());
         info.jump_targets = jump_targets;
     }
 
@@ -226,23 +255,37 @@ impl GraphBuilder {
         &self.blocks
     }
 
-    pub(crate) fn build(self, entry_block: BlockId) -> Graph {
+    pub(crate) fn build(
+        mut self,
+        entry_block: BlockId,
+        ret_type: TypeId,
+        update_mode_vars: Count<UpdateModeVarId>,
+        callee_spec_vars: Count<CalleeSpecVarId>,
+    ) -> Graph {
         debug_assert!(entry_block < self.blocks.block_count());
-        let rev_sccs = strongly_connected(self.blocks.block_count(), |block| {
+        self.blocks
+            .block_info_mut(entry_block)
+            .predecessors
+            .push(Predecessor::Entry);
+        let sccs = strongly_connected(self.blocks.block_count(), |block| {
             self.blocks
                 .block_info(block)
-                .jump_targets
+                .predecessors
                 .iter()
-                .filter_map(|&jump_target| match jump_target {
-                    JumpTarget::Ret => None,
-                    JumpTarget::Block(target) => Some(target),
+                .filter_map(|&pred| match pred {
+                    Predecessor::Entry => None,
+                    Predecessor::Block(pred_block) => Some(pred_block),
                 })
         });
         Graph {
             values: self.values,
             blocks: self.blocks,
             entry_block,
-            rev_sccs,
+            exit_blocks: self.exit_blocks,
+            ret_type,
+            sccs,
+            update_mode_vars,
+            callee_spec_vars,
         }
     }
 }
@@ -252,14 +295,15 @@ pub(crate) struct Graph {
     values: OpGraph<ValueId, ValueInfo>,
     blocks: Blocks<BlockId, ValueId, BlockInfo>,
     entry_block: BlockId,
-
-    // Invariant: `rev_sccs` must be stored in *reverse* topological order.  If an SCC 'A' can jump
-    // to an SCC 'B', then 'A' must appear *after* 'B' in `rev_sccs`.
-    //
-    // We don't store the SCCs in topological order because control flow graph edges point from
-    // *source block* to *target block*, so running Tarjan's algorithm on the control flow graph
-    // gives us a reverse topological sort rather than a topological sort.
-    rev_sccs: FlatSlices<SccId, SccKind, BlockId>,
+    // We use an inline capacity of 1 here because, in the current implementation of `preprocess`,
+    // there is always exactly one exit block per function. However, this is no fundamental reason
+    // this must be so.
+    exit_blocks: SmallVec<[BlockId; 1]>,
+    ret_type: TypeId,
+    // Invariant: `sccs` is stored in topological order.
+    sccs: FlatSlices<SccId, SccKind, BlockId>,
+    update_mode_vars: Count<UpdateModeVarId>,
+    callee_spec_vars: Count<CalleeSpecVarId>,
 }
 
 impl Graph {
@@ -275,20 +319,24 @@ impl Graph {
         self.entry_block
     }
 
-    pub(crate) fn rev_sccs(&self) -> &FlatSlices<SccId, SccKind, BlockId> {
-        &self.rev_sccs
+    pub(crate) fn exit_blocks(&self) -> &[BlockId] {
+        &self.exit_blocks
     }
 
-    /// Iterate over sccs in topological order.
-    ///
-    /// IF an SCC 'A' can jump to an SCC 'B', then 'A' is guaranteed to appear *before* 'B' in the
-    /// returned iterator.
-    pub(crate) fn iter_sccs(&self) -> impl Iterator<Item = Slice<'_, SccKind, BlockId>> + '_ {
-        self.rev_sccs
-            .count()
-            .iter()
-            .rev()
-            .map(move |scc_id| self.rev_sccs.get(scc_id))
+    pub(crate) fn ret_type(&self) -> TypeId {
+        self.ret_type
+    }
+
+    pub(crate) fn sccs(&self) -> &FlatSlices<SccId, SccKind, BlockId> {
+        &self.sccs
+    }
+
+    pub(crate) fn update_mode_vars(&self) -> Count<UpdateModeVarId> {
+        self.update_mode_vars
+    }
+
+    pub(crate) fn callee_spec_vars(&self) -> Count<CalleeSpecVarId> {
+        self.callee_spec_vars
     }
 }
 
@@ -300,4 +348,12 @@ pub(crate) struct FuncDef {
 #[derive(Clone, Debug)]
 pub(crate) struct ConstDef {
     pub(crate) graph: Graph,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct Program {
+    pub(crate) named_types: IdVec<NamedTypeId, TypeId>,
+    pub(crate) funcs: IdVec<FuncId, FuncDef>,
+    pub(crate) consts: IdVec<ConstId, ConstDef>,
+    pub(crate) entry_points: IdVec<EntryPointId, FuncId>,
 }

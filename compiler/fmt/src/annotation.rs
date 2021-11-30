@@ -18,7 +18,7 @@ use roc_region::all::Located;
 ///     Just (Just a)
 ///     List (List a)
 ///     reverse (reverse l)
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Parens {
     NotNeeded,
     InFunctionType,
@@ -55,6 +55,30 @@ pub trait Formattable<'a> {
     }
 }
 
+/// A reference to a formattable value is also formattable
+impl<'a, T> Formattable<'a> for &'a T
+where
+    T: Formattable<'a>,
+{
+    fn is_multiline(&self) -> bool {
+        (*self).is_multiline()
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut String<'a>,
+        parens: Parens,
+        newlines: Newlines,
+        indent: u16,
+    ) {
+        (*self).format_with_options(buf, parens, newlines, indent)
+    }
+
+    fn format(&self, buf: &mut String<'a>, indent: u16) {
+        (*self).format(buf, indent)
+    }
+}
+
 /// A Located formattable value is also formattable
 impl<'a, T> Formattable<'a> for Located<T>
 where
@@ -81,9 +105,9 @@ where
 }
 
 macro_rules! format_sequence {
-    ($buf: expr, $indent:expr, $start:expr, $end:expr, $items:expr, $final_comments:expr, $newline:expr, $t:ident) => {
-        let is_multiline =
-            $items.iter().any(|item| item.value.is_multiline()) || !$final_comments.is_empty();
+    ($buf: expr, $indent:expr, $start:expr, $end:expr, $items:expr, $newline:expr, $t:ident) => {
+        let is_multiline = $items.iter().any(|item| item.value.is_multiline())
+            || !$items.final_comments().is_empty();
 
         if is_multiline {
             let braces_indent = $indent + INDENT;
@@ -138,7 +162,12 @@ macro_rules! format_sequence {
                     }
                 }
             }
-            fmt_comments_only($buf, $final_comments.iter(), NewlineAt::Top, item_indent);
+            fmt_comments_only(
+                $buf,
+                $items.final_comments().iter(),
+                NewlineAt::Top,
+                item_indent,
+            );
             newline($buf, braces_indent);
             $buf.push($end);
         } else {
@@ -175,7 +204,7 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
                 true
             }
 
-            Wildcard | BoundVariable(_) | Malformed(_) => false,
+            Wildcard | Inferred | BoundVariable(_) | Malformed(_) => false,
             Function(args, result) => {
                 (&result.value).is_multiline()
                     || args.iter().any(|loc_arg| (&loc_arg.value).is_multiline())
@@ -183,24 +212,16 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
             Apply(_, _, args) => args.iter().any(|loc_arg| loc_arg.value.is_multiline()),
             As(lhs, _, rhs) => lhs.value.is_multiline() || rhs.value.is_multiline(),
 
-            Record {
-                fields,
-                ext,
-                final_comments: _,
-            } => {
+            Record { fields, ext } => {
                 match ext {
                     Some(ann) if ann.value.is_multiline() => return true,
                     _ => {}
                 }
 
-                fields.iter().any(|field| field.value.is_multiline())
+                fields.items.iter().any(|field| field.value.is_multiline())
             }
 
-            TagUnion {
-                tags,
-                ext,
-                final_comments: _,
-            } => {
+            TagUnion { tags, ext } => {
                 match ext {
                     Some(ann) if ann.value.is_multiline() => return true,
                     _ => {}
@@ -256,12 +277,17 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
                     buf.push(')')
                 }
             }
-            Apply(_, name, arguments) => {
+            Apply(pkg, name, arguments) => {
                 // NOTE apply is never multiline
                 let write_parens = parens == Parens::InApply && !arguments.is_empty();
 
                 if write_parens {
                     buf.push('(')
+                }
+
+                if !pkg.is_empty() {
+                    buf.push_str(pkg);
+                    buf.push('.');
                 }
 
                 buf.push_str(name);
@@ -282,34 +308,18 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
             }
             BoundVariable(v) => buf.push_str(v),
             Wildcard => buf.push('*'),
+            Inferred => buf.push('_'),
 
-            TagUnion {
-                tags,
-                ext,
-                final_comments,
-            } => {
-                format_sequence!(buf, indent, '[', ']', tags, final_comments, newlines, Tag);
+            TagUnion { tags, ext } => {
+                format_sequence!(buf, indent, '[', ']', tags, newlines, Tag);
 
                 if let Some(loc_ext_ann) = *ext {
                     loc_ext_ann.value.format(buf, indent);
                 }
             }
 
-            Record {
-                fields,
-                ext,
-                final_comments,
-            } => {
-                format_sequence!(
-                    buf,
-                    indent,
-                    '{',
-                    '}',
-                    fields,
-                    final_comments,
-                    newlines,
-                    AssignedField
-                );
+            Record { fields, ext } => {
+                format_sequence!(buf, indent, '{', '}', fields, newlines, AssignedField);
 
                 if let Some(loc_ext_ann) = *ext {
                     loc_ext_ann.value.format(buf, indent);
@@ -513,7 +523,7 @@ impl<'a> Formattable<'a> for Tag<'a> {
                 }
             }
             Tag::Private { name, args } => {
-                buf.push('@');
+                debug_assert!(name.value.starts_with('@'));
                 buf.push_str(name.value);
                 if is_multiline {
                     let arg_indent = indent + INDENT;

@@ -7,19 +7,6 @@ extern crate indoc;
 #[cfg(test)]
 mod repl_eval {
     use cli_utils::helpers;
-    use roc_gen_llvm::run_roc::RocCallResult;
-
-    #[test]
-    fn check_discriminant_size() {
-        // tells us if the size of the discriminant has changed. Lots of other code
-        // relies on this size
-        let value: i64 = 1234;
-        assert_eq!(
-            std::mem::size_of_val(&RocCallResult::Success(value)),
-            roc_gen_llvm::run_roc::ROC_CALL_RESULT_DISCRIMINANT_SIZE
-                + std::mem::size_of_val(&value)
-        )
-    }
 
     const ERROR_MESSAGE_START: char = '─';
 
@@ -104,6 +91,24 @@ mod repl_eval {
     }
 
     #[test]
+    fn num_floor_division_success() {
+        expect_success("Num.divFloor 4 3", "Ok 1 : Result (Int *) [ DivByZero ]*");
+    }
+
+    #[test]
+    fn num_floor_division_divby_zero() {
+        expect_success(
+            "Num.divFloor 4 0",
+            "Err DivByZero : Result (Int *) [ DivByZero ]*",
+        );
+    }
+
+    #[test]
+    fn num_ceil_division_success() {
+        expect_success("Num.divCeil 4 3", "Ok 2 : Result (Int *) [ DivByZero ]*")
+    }
+
+    #[test]
     fn bool_in_record() {
         expect_success("{ x: 1 == 1 }", "{ x: True } : { x : Bool }");
         expect_success(
@@ -165,6 +170,11 @@ mod repl_eval {
     fn single_element_tag_union() {
         expect_success("True 1", "True 1 : [ True (Num *) ]*");
         expect_success("Foo 1 3.14", "Foo 1 3.14 : [ Foo (Num *) (Float *) ]*");
+    }
+
+    #[test]
+    fn newtype_of_unit() {
+        expect_success("Foo Bar", "Foo Bar : [ Foo [ Bar ]* ]*");
     }
 
     #[test]
@@ -307,7 +317,7 @@ mod repl_eval {
         expect_success("Num.addChecked 1 1", "Ok 2 : Result (Num *) [ Overflow ]*");
         expect_success(
             "Num.addChecked Num.maxInt 1",
-            "Err (Overflow) : Result I64 [ Overflow ]*",
+            "Err Overflow : Result I64 [ Overflow ]*",
         );
     }
 
@@ -316,7 +326,7 @@ mod repl_eval {
         expect_success("Num.subChecked 1 1", "Ok 0 : Result (Num *) [ Overflow ]*");
         expect_success(
             "Num.subChecked Num.minInt 1",
-            "Err (Overflow) : Result I64 [ Overflow ]*",
+            "Err Overflow : Result I64 [ Overflow ]*",
         );
     }
 
@@ -328,7 +338,7 @@ mod repl_eval {
         );
         expect_success(
             "Num.mulChecked Num.maxInt 2",
-            "Err (Overflow) : Result I64 [ Overflow ]*",
+            "Err Overflow : Result I64 [ Overflow ]*",
         );
     }
 
@@ -362,7 +372,7 @@ mod repl_eval {
         );
         expect_success(
             "List.first []",
-            "Err (ListWasEmpty) : Result * [ ListWasEmpty ]*",
+            "Err ListWasEmpty : Result * [ ListWasEmpty ]*",
         );
     }
 
@@ -375,7 +385,7 @@ mod repl_eval {
 
         expect_success(
             "List.last []",
-            "Err (ListWasEmpty) : Result * [ ListWasEmpty ]*",
+            "Err ListWasEmpty : Result * [ ListWasEmpty ]*",
         );
     }
 
@@ -500,6 +510,11 @@ mod repl_eval {
     #[test]
     fn identity_lambda() {
         expect_success("\\x -> x", "<function> : a -> a");
+    }
+
+    #[test]
+    fn sum_lambda() {
+        expect_success("\\x, y -> x + y", "<function> : Num a, Num a -> Num a");
     }
 
     #[test]

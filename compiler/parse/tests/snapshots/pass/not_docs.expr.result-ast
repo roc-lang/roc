@@ -1,0 +1,37 @@
+SpaceBefore(
+    Defs(
+        [
+            |L 4-4, C 0-5| Body(
+                |L 4-4, C 0-1| Identifier(
+                    "x",
+                ),
+                |L 4-4, C 4-5| Num(
+                    "5",
+                ),
+            ),
+        ],
+        |L 6-6, C 0-2| SpaceBefore(
+            Num(
+                "42",
+            ),
+            [
+                Newline,
+                Newline,
+            ],
+        ),
+    ),
+    [
+        LineComment(
+            "######",
+        ),
+        LineComment(
+            "## not docs!",
+        ),
+        LineComment(
+            "#still not docs",
+        ),
+        LineComment(
+            "#####",
+        ),
+    ],
+)

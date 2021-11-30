@@ -1,0 +1,40 @@
+When(
+    |L 0-0, C 5-6| Var {
+        module_name: "",
+        ident: "x",
+    },
+    [
+        WhenBranch {
+            patterns: [
+                |L 1-1, C 4-11| SpaceBefore(
+                    Malformed(
+                        "Foo.and",
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ],
+            value: |L 1-1, C 15-16| Num(
+                "1",
+            ),
+            guard: None,
+        },
+        WhenBranch {
+            patterns: [
+                |L 2-2, C 4-5| SpaceBefore(
+                    Underscore(
+                        "",
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ],
+            value: |L 2-2, C 9-10| Num(
+                "4",
+            ),
+            guard: None,
+        },
+    ],
+)

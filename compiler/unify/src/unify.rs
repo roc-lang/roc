@@ -133,12 +133,14 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
         //        println!("\n --- \n");
         //        dbg!(ctx.second, type2);
         //        println!("\n --------------- \n");
+        let content_1 = subs.get(ctx.first).content;
+        let content_2 = subs.get(ctx.second).content;
         println!(
             "{:?} {:?} ~ {:?} {:?}",
             ctx.first,
-            subs.get(ctx.first).content,
+            roc_types::subs::SubsFmtContent(&content_1, subs),
             ctx.second,
-            subs.get(ctx.second).content
+            roc_types::subs::SubsFmtContent(&content_2, subs),
         );
     }
     match &ctx.first_desc.content {
@@ -207,7 +209,8 @@ fn unify_alias(
 
                     problems
                 } else {
-                    mismatch!("{}", symbol)
+                    dbg!(args.len(), other_args.len());
+                    mismatch!("{:?}", symbol)
                 }
             } else {
                 unify_pool(subs, pool, real_var, *other_real_var)
@@ -839,7 +842,7 @@ fn unify_shared_tags_new(
                 all_fields = merge_sorted(
                     all_fields,
                     other1.into_iter().map(|(field_name, subs_slice)| {
-                        let vec = subs.get_subs_slice(*subs_slice.as_subs_slice()).to_vec();
+                        let vec = subs.get_subs_slice(subs_slice).to_vec();
 
                         (field_name, vec)
                     }),
@@ -848,7 +851,7 @@ fn unify_shared_tags_new(
                 all_fields = merge_sorted(
                     all_fields,
                     other2.into_iter().map(|(field_name, subs_slice)| {
-                        let vec = subs.get_subs_slice(*subs_slice.as_subs_slice()).to_vec();
+                        let vec = subs.get_subs_slice(subs_slice).to_vec();
 
                         (field_name, vec)
                     }),
@@ -966,8 +969,7 @@ fn unify_flat_type(
         }
 
         (Apply(l_symbol, l_args), Apply(r_symbol, r_args)) if l_symbol == r_symbol => {
-            let problems =
-                unify_zip_slices(subs, pool, *l_args.as_subs_slice(), *r_args.as_subs_slice());
+            let problems = unify_zip_slices(subs, pool, *l_args, *r_args);
 
             if problems.is_empty() {
                 merge(subs, ctx, Structure(Apply(*r_symbol, *r_args)))
@@ -978,8 +980,7 @@ fn unify_flat_type(
         (Func(l_args, l_closure, l_ret), Func(r_args, r_closure, r_ret))
             if l_args.len() == r_args.len() =>
         {
-            let arg_problems =
-                unify_zip_slices(subs, pool, *l_args.as_subs_slice(), *r_args.as_subs_slice());
+            let arg_problems = unify_zip_slices(subs, pool, *l_args, *r_args);
             let ret_problems = unify_pool(subs, pool, *l_ret, *r_ret);
             let closure_problems = unify_pool(subs, pool, *l_closure, *r_closure);
 

@@ -1,6 +1,6 @@
 use roc_collections::all::MutSet;
+use roc_module::called_via::BinOp;
 use roc_module::ident::{Ident, Lowercase, ModuleName, TagName};
-use roc_module::operator::BinOp;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_parse::ast::Base;
 use roc_parse::pattern::PatternType;
@@ -139,6 +139,7 @@ pub enum RuntimeError {
         module_name: ModuleName,
         ident: Ident,
         region: Region,
+        exposed_values: Vec<Lowercase>,
     },
     ModuleNotImported {
         module_name: ModuleName,

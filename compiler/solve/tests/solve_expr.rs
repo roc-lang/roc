@@ -3306,6 +3306,18 @@ mod solve_expr {
     }
 
     #[test]
+    fn div_ceil() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.divCeil
+                "#
+            ),
+            "Int a, Int a -> Result (Int a) [ DivByZero ]*",
+        );
+    }
+
+    #[test]
     fn pow_int() {
         infer_eq_without_problem(
             indoc!(
@@ -3396,7 +3408,7 @@ mod solve_expr {
                 cheapestOpen : Model position -> Result position [ KeyNotFound ]*
                 cheapestOpen = \model ->
 
-                    folder = \position, resSmallestSoFar ->
+                    folder = \resSmallestSoFar, position ->
                                     when resSmallestSoFar is
                                         Err _ -> resSmallestSoFar
                                         Ok smallestSoFar ->
@@ -3405,7 +3417,7 @@ mod solve_expr {
                                             else
                                                 Ok { position, cost: 0.0 }
 
-                    Set.walk model.openSet folder (Ok { position: boom {}, cost: 0.0 })
+                    Set.walk model.openSet (Ok { position: boom {}, cost: 0.0 }) folder
                         |> Result.map (\x -> x.position)
 
                 astar : Model position -> Result position [ KeyNotFound ]*
@@ -3689,7 +3701,7 @@ mod solve_expr {
                 List.walkBackwards
                 "#
             ),
-            "List a, (a, b -> b), b -> b",
+            "List a, b, (b, a -> b) -> b",
         );
     }
 
@@ -3702,13 +3714,116 @@ mod solve_expr {
                 empty =
                     []
 
-                List.walkBackwards empty (\a, b -> a + b) 0
+                List.walkBackwards empty 0 (\a, b -> a + b)
                 "#
             ),
             "I64",
         );
     }
 
+    #[test]
+    fn list_drop_at() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                List.dropAt
+                "#
+            ),
+            "List a, Nat -> List a",
+        );
+    }
+
+    #[test]
+    fn str_trim() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Str.trim
+                "#
+            ),
+            "Str -> Str",
+        );
+    }
+
+    #[test]
+    fn str_trim_left() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Str.trimLeft
+                "#
+            ),
+            "Str -> Str",
+        );
+    }
+
+    #[test]
+    fn list_take_first() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                List.takeFirst
+                "#
+            ),
+            "List a, Nat -> List a",
+        );
+    }
+
+    #[test]
+    fn list_take_last() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                List.takeLast
+                "#
+            ),
+            "List a, Nat -> List a",
+        );
+    }
+
+    #[test]
+    fn list_sublist() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                List.sublist
+                "#
+            ),
+            "List a, { len : Nat, start : Nat } -> List a",
+        );
+    }
+
+    #[test]
+    fn list_split() {
+        infer_eq_without_problem(
+            indoc!("List.split"),
+            "List a, Nat -> { before : List a, others : List a }",
+        );
+    }
+
+    #[test]
+    fn list_drop_last() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                List.dropLast
+                "#
+            ),
+            "List a -> List a",
+        );
+    }
+
+    #[test]
+    fn list_intersperse() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                List.intersperse
+                "#
+            ),
+            "List a, a -> List a",
+        );
+    }
     #[test]
     fn function_that_captures_nothing_is_not_captured() {
         // we should make sure that a function that doesn't capture anything it not itself captured
@@ -4488,5 +4603,118 @@ mod solve_expr {
             ),
             "RBTree {}",
         );
+    }
+
+    #[test]
+    fn inference_var_inside_arrow() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                id : _ -> _
+                id = \x -> x
+                id
+                "#
+            ),
+            "a -> a",
+        )
+    }
+
+    #[test]
+    fn inference_var_inside_ctor() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                canIGo : _ -> Result _ _
+                canIGo = \color ->
+                    when color is
+                        "green" -> Ok "go!"
+                        "yellow" -> Err (SlowIt "whoa, let's slow down!")
+                        "red" -> Err (StopIt "absolutely not")
+                        _ -> Err (UnknownColor "this is a weird stoplight")
+                canIGo
+                "#
+            ),
+            "Str -> Result Str [ SlowIt Str, StopIt Str, UnknownColor Str ]*",
+        )
+    }
+
+    #[test]
+    fn inference_var_inside_ctor_linked() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                swapRcd: {x: _, y: _} -> {x: _, y: _}
+                swapRcd = \{x, y} -> {x: y, y: x}
+                swapRcd
+                "#
+            ),
+            "{ x : a, y : b } -> { x : b, y : a }",
+        )
+    }
+
+    #[test]
+    fn inference_var_link_with_rigid() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                swapRcd: {x: tx, y: ty} -> {x: _, y: _}
+                swapRcd = \{x, y} -> {x: y, y: x}
+                swapRcd
+                "#
+            ),
+            "{ x : tx, y : ty } -> { x : ty, y : tx }",
+        )
+    }
+
+    #[test]
+    fn inference_var_inside_tag_ctor() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                badComics: Bool -> [ CowTools _, Thagomizer _ ]
+                badComics = \c ->
+                    when c is
+                        True -> CowTools "The Far Side"
+                        False ->  Thagomizer "The Far Side"
+                badComics
+                "#
+            ),
+            "Bool -> [ CowTools Str, Thagomizer Str ]",
+        )
+    }
+
+    #[test]
+    fn inference_var_tag_union_ext() {
+        // TODO: we should really be inferring [ Blue, Orange ]a -> [ Lavender, Peach ]a here.
+        // See https://github.com/rtfeldman/roc/issues/2053
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                pastelize: _ -> [ Lavender, Peach ]_
+                pastelize = \color ->
+                    when color is
+                        Blue -> Lavender
+                        Orange -> Peach
+                        col -> col
+                pastelize
+                "#
+            ),
+            "[ Blue, Lavender, Orange, Peach ]a -> [ Blue, Lavender, Orange, Peach ]a",
+        )
+    }
+
+    #[test]
+    fn inference_var_rcd_union_ext() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                setRocEmail : _ -> { name: Str, email: Str }_
+                setRocEmail = \person ->
+                    { person & email: "\(person.name)@roclang.com" }
+                setRocEmail
+                "#
+            ),
+            "{ email : Str, name : Str }a -> { email : Str, name : Str }a",
+        )
     }
 }

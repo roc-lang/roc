@@ -14,8 +14,20 @@ use inkwell::types::{BasicType, BasicTypeEnum, PointerType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
 use morphic_lib::UpdateMode;
-use roc_builtins::bitcode;
+use roc_builtins::bitcode::{self, IntWidth};
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
+
+use super::build::{load_roc_value, store_roc_value};
+
+pub fn pass_update_mode<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    update_mode: UpdateMode,
+) -> BasicValueEnum<'ctx> {
+    match update_mode {
+        UpdateMode::Immutable => env.context.i8_type().const_zero().into(),
+        UpdateMode::InPlace => env.context.i8_type().const_int(1, false).into(),
+    }
+}
 
 fn list_returned_from_zig<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -43,9 +55,13 @@ pub fn call_bitcode_fn_returns_list<'a, 'ctx, 'env>(
 fn pass_element_as_opaque<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     element: BasicValueEnum<'ctx>,
+    layout: Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let element_ptr = env.builder.build_alloca(element.get_type(), "element");
-    env.builder.build_store(element_ptr, element);
+    let element_type = basic_type_from_layout(env, &layout);
+    let element_ptr = env
+        .builder
+        .build_alloca(element_type, "element_to_pass_as_opaque");
+    store_roc_value(env, layout, element_ptr, element);
 
     env.builder.build_bitcast(
         element_ptr,
@@ -96,7 +112,7 @@ pub fn list_single<'a, 'ctx, 'env>(
         env,
         &[
             env.alignment_intvalue(element_layout),
-            pass_element_as_opaque(env, element),
+            pass_element_as_opaque(env, element, *element_layout),
             layout_width(env, element_layout),
         ],
         bitcode::LIST_SINGLE,
@@ -118,7 +134,7 @@ pub fn list_repeat<'a, 'ctx, 'env>(
         &[
             list_len.into(),
             env.alignment_intvalue(element_layout),
-            pass_element_as_opaque(env, element),
+            pass_element_as_opaque(env, element, *element_layout),
             layout_width(env, element_layout),
             inc_element_fn.as_global_value().as_pointer_value().into(),
         ],
@@ -134,12 +150,6 @@ pub fn list_join<'a, 'ctx, 'env>(
     outer_list_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
     match outer_list_layout {
-        Layout::Builtin(Builtin::EmptyList)
-        | Layout::Builtin(Builtin::List(Layout::Builtin(Builtin::EmptyList))) => {
-            // If the input list is empty, or if it is a list of empty lists
-            // then simply return an empty list
-            empty_list(env)
-        }
         Layout::Builtin(Builtin::List(Layout::Builtin(Builtin::List(element_layout)))) => {
             call_bitcode_fn_returns_list(
                 env,
@@ -162,13 +172,9 @@ pub fn list_reverse<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     list: BasicValueEnum<'ctx>,
     list_layout: &Layout<'a>,
+    update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
     let element_layout = match *list_layout {
-        Layout::Builtin(Builtin::EmptyList) => {
-            // this pointer will never actually be dereferenced
-            Layout::Builtin(Builtin::Int64)
-        }
-
         Layout::Builtin(Builtin::List(elem_layout)) => *elem_layout,
 
         _ => unreachable!("Invalid layout {:?} in List.reverse", list_layout),
@@ -180,6 +186,7 @@ pub fn list_reverse<'a, 'ctx, 'env>(
             pass_list_cc(env, list),
             env.alignment_intvalue(&element_layout),
             layout_width(env, &element_layout),
+            pass_update_mode(env, update_mode),
         ],
         bitcode::LIST_REVERSE,
     )
@@ -204,10 +211,11 @@ pub fn list_get_unsafe<'a, 'ctx, 'env>(
 
             // Assume the bounds have already been checked earlier
             // (e.g. by List.get or List.first, which wrap List.#getUnsafe)
-            let elem_ptr =
-                unsafe { builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "elem") };
+            let elem_ptr = unsafe {
+                builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "list_get_element")
+            };
 
-            let result = builder.build_load(elem_ptr, "List.get");
+            let result = load_roc_value(env, **elem_layout, elem_ptr, "list_get_load_element");
 
             increment_refcount_layout(env, parent, layout_ids, 1, result, elem_layout);
 
@@ -228,14 +236,16 @@ pub fn list_append<'a, 'ctx, 'env>(
     original_wrapper: StructValue<'ctx>,
     element: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
+    update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
     call_bitcode_fn_returns_list(
         env,
         &[
             pass_list_cc(env, original_wrapper.into()),
             env.alignment_intvalue(element_layout),
-            pass_element_as_opaque(env, element),
+            pass_element_as_opaque(env, element, *element_layout),
             layout_width(env, element_layout),
+            pass_update_mode(env, update_mode),
         ],
         bitcode::LIST_APPEND,
     )
@@ -253,7 +263,7 @@ pub fn list_prepend<'a, 'ctx, 'env>(
         &[
             pass_list_cc(env, original_wrapper.into()),
             env.alignment_intvalue(element_layout),
-            pass_element_as_opaque(env, element),
+            pass_element_as_opaque(env, element, *element_layout),
             layout_width(env, element_layout),
         ],
         bitcode::LIST_PREPEND,
@@ -267,6 +277,7 @@ pub fn list_swap<'a, 'ctx, 'env>(
     index_1: IntValue<'ctx>,
     index_2: IntValue<'ctx>,
     element_layout: &Layout<'a>,
+    update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
     call_bitcode_fn_returns_list(
         env,
@@ -276,13 +287,38 @@ pub fn list_swap<'a, 'ctx, 'env>(
             layout_width(env, element_layout),
             index_1.into(),
             index_2.into(),
+            pass_update_mode(env, update_mode),
         ],
         bitcode::LIST_SWAP,
     )
 }
 
-/// List.drop : List elem, Nat, Nat -> List elem
-pub fn list_drop<'a, 'ctx, 'env>(
+/// List.sublist : List elem, { start : Nat, len : Nat } -> List elem
+pub fn list_sublist<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    original_wrapper: StructValue<'ctx>,
+    start: IntValue<'ctx>,
+    len: IntValue<'ctx>,
+    element_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
+    call_bitcode_fn_returns_list(
+        env,
+        &[
+            pass_list_cc(env, original_wrapper.into()),
+            env.alignment_intvalue(element_layout),
+            layout_width(env, element_layout),
+            start.into(),
+            len.into(),
+            dec_element_fn.as_global_value().as_pointer_value().into(),
+        ],
+        bitcode::LIST_SUBLIST,
+    )
+}
+
+/// List.dropAt : List elem, Nat -> List elem
+pub fn list_drop_at<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     original_wrapper: StructValue<'ctx>,
@@ -299,7 +335,7 @@ pub fn list_drop<'a, 'ctx, 'env>(
             count.into(),
             dec_element_fn.as_global_value().as_pointer_value().into(),
         ],
-        bitcode::LIST_DROP,
+        bitcode::LIST_DROP_AT,
     )
 }
 
@@ -327,7 +363,7 @@ pub fn list_set<'a, 'ctx, 'env>(
             &[
                 bytes.into(),
                 index.into(),
-                pass_element_as_opaque(env, element),
+                pass_element_as_opaque(env, element, *element_layout),
                 layout_width(env, element_layout),
                 dec_element_fn.as_global_value().as_pointer_value().into(),
             ],
@@ -340,7 +376,7 @@ pub fn list_set<'a, 'ctx, 'env>(
                 length.into(),
                 env.alignment_intvalue(element_layout),
                 index.into(),
-                pass_element_as_opaque(env, element),
+                pass_element_as_opaque(env, element, *element_layout),
                 layout_width(env, element_layout),
                 dec_element_fn.as_global_value().as_pointer_value().into(),
             ],
@@ -464,42 +500,10 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
     env.builder.build_load(result_ptr, "load_result")
 }
 
-#[allow(dead_code)]
-#[repr(u8)]
-enum IntWidth {
-    U8,
-    U16,
-    U32,
-    U64,
-    U128,
-    I8,
-    I16,
-    I32,
-    I64,
-    I128,
-    Usize,
-}
-
-impl From<roc_mono::layout::Builtin<'_>> for IntWidth {
-    fn from(builtin: Builtin) -> Self {
-        use IntWidth::*;
-
-        match builtin {
-            Builtin::Int128 => I128,
-            Builtin::Int64 => I64,
-            Builtin::Int32 => I32,
-            Builtin::Int16 => I16,
-            Builtin::Int8 => I8,
-            Builtin::Usize => Usize,
-            _ => unreachable!(),
-        }
-    }
-}
-
 /// List.range : Int a, Int a -> List (Int a)
 pub fn list_range<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    builtin: Builtin<'a>,
+    int_width: IntWidth,
     low: IntValue<'ctx>,
     high: IntValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
@@ -514,7 +518,7 @@ pub fn list_range<'a, 'ctx, 'env>(
     let int_width = env
         .context
         .i8_type()
-        .const_int(IntWidth::from(builtin) as u64, false)
+        .const_int(int_width as u64, false)
         .into();
 
     call_bitcode_fn(
@@ -545,7 +549,7 @@ pub fn list_contains<'a, 'ctx, 'env>(
         env,
         &[
             pass_list_cc(env, list),
-            pass_element_as_opaque(env, element),
+            pass_element_as_opaque(env, element, *element_layout),
             layout_width(env, element_layout),
             eq_fn,
         ],
@@ -581,6 +585,14 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
     )
 }
 
+fn empty_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
+    let struct_type = super::convert::zig_list_type(env);
+
+    // The pointer should be null (aka zero) and the length should be zero,
+    // so the whole struct should be a const_zero
+    BasicValueEnum::StructValue(struct_type.const_zero())
+}
+
 /// List.keepOks : List before, (before -> Result after *) -> List after
 pub fn list_keep_oks<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -603,6 +615,10 @@ pub fn list_keep_oks<'a, 'ctx, 'env>(
 
     let has_tag_id = match result_layout {
         Layout::Union(union_layout) => build_has_tag_id(env, function, *union_layout),
+        Layout::Builtin(Builtin::Bool) => {
+            // a `Result [] whatever`, so there is nothing to keep
+            return empty_list(env);
+        }
         _ => unreachable!(),
     };
 
@@ -647,6 +663,10 @@ pub fn list_keep_errs<'a, 'ctx, 'env>(
 
     let has_tag_id = match result_layout {
         Layout::Union(union_layout) => build_has_tag_id(env, function, *union_layout),
+        Layout::Builtin(Builtin::Bool) => {
+            // a `Result whatever []`, so there is nothing to keep
+            return empty_list(env);
+        }
         _ => unreachable!(),
     };
 
@@ -812,6 +832,51 @@ pub fn list_map3<'a, 'ctx, 'env>(
     )
 }
 
+pub fn list_map4<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    roc_function_call: RocFunctionCall<'ctx>,
+    list1: BasicValueEnum<'ctx>,
+    list2: BasicValueEnum<'ctx>,
+    list3: BasicValueEnum<'ctx>,
+    list4: BasicValueEnum<'ctx>,
+    element1_layout: &Layout<'a>,
+    element2_layout: &Layout<'a>,
+    element3_layout: &Layout<'a>,
+    element4_layout: &Layout<'a>,
+    result_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let dec_a = build_dec_wrapper(env, layout_ids, element1_layout);
+    let dec_b = build_dec_wrapper(env, layout_ids, element2_layout);
+    let dec_c = build_dec_wrapper(env, layout_ids, element3_layout);
+    let dec_d = build_dec_wrapper(env, layout_ids, element4_layout);
+
+    call_bitcode_fn_returns_list(
+        env,
+        &[
+            pass_list_cc(env, list1),
+            pass_list_cc(env, list2),
+            pass_list_cc(env, list3),
+            pass_list_cc(env, list4),
+            roc_function_call.caller.into(),
+            pass_as_opaque(env, roc_function_call.data),
+            roc_function_call.inc_n_data.into(),
+            roc_function_call.data_is_owned.into(),
+            env.alignment_intvalue(result_layout),
+            layout_width(env, element1_layout),
+            layout_width(env, element2_layout),
+            layout_width(env, element3_layout),
+            layout_width(env, element4_layout),
+            layout_width(env, result_layout),
+            dec_a.as_global_value().as_pointer_value().into(),
+            dec_b.as_global_value().as_pointer_value().into(),
+            dec_c.as_global_value().as_pointer_value().into(),
+            dec_d.as_global_value().as_pointer_value().into(),
+        ],
+        bitcode::LIST_MAP4,
+    )
+}
+
 /// List.concat : List elem, List elem -> List elem
 pub fn list_concat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -821,11 +886,6 @@ pub fn list_concat<'a, 'ctx, 'env>(
     list_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
     match list_layout {
-        Layout::Builtin(Builtin::EmptyList) => {
-            // If the input list is empty, or if it is a list of empty lists
-            // then simply return an empty list
-            empty_list(env)
-        }
         Layout::Builtin(Builtin::List(elem_layout)) => call_bitcode_fn_returns_list(
             env,
             &[
@@ -840,6 +900,142 @@ pub fn list_concat<'a, 'ctx, 'env>(
             unreachable!("Invalid List layout for List.concat {:?}", list_layout);
         }
     }
+}
+
+/// List.any : List elem, \(elem -> Bool) -> Bool
+pub fn list_any<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    roc_function_call: RocFunctionCall<'ctx>,
+    list: BasicValueEnum<'ctx>,
+    element_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    call_bitcode_fn(
+        env,
+        &[
+            pass_list_cc(env, list),
+            roc_function_call.caller.into(),
+            pass_as_opaque(env, roc_function_call.data),
+            roc_function_call.inc_n_data.into(),
+            roc_function_call.data_is_owned.into(),
+            layout_width(env, element_layout),
+        ],
+        bitcode::LIST_ANY,
+    )
+}
+
+/// List.all : List elem, \(elem -> Bool) -> Bool
+pub fn list_all<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    roc_function_call: RocFunctionCall<'ctx>,
+    list: BasicValueEnum<'ctx>,
+    element_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    call_bitcode_fn(
+        env,
+        &[
+            pass_list_cc(env, list),
+            roc_function_call.caller.into(),
+            pass_as_opaque(env, roc_function_call.data),
+            roc_function_call.inc_n_data.into(),
+            roc_function_call.data_is_owned.into(),
+            layout_width(env, element_layout),
+        ],
+        bitcode::LIST_ALL,
+    )
+}
+
+/// List.findUnsafe : List elem, (elem -> Bool) -> { value: elem, found: bool }
+pub fn list_find_unsafe<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    roc_function_call: RocFunctionCall<'ctx>,
+    list: BasicValueEnum<'ctx>,
+    element_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let inc_element_fn = build_inc_wrapper(env, layout_ids, element_layout);
+    let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
+
+    // { value: *const u8, found: bool }
+    let result = call_bitcode_fn(
+        env,
+        &[
+            pass_list_cc(env, list),
+            roc_function_call.caller.into(),
+            pass_as_opaque(env, roc_function_call.data),
+            roc_function_call.inc_n_data.into(),
+            roc_function_call.data_is_owned.into(),
+            env.alignment_intvalue(element_layout),
+            layout_width(env, element_layout),
+            inc_element_fn.as_global_value().as_pointer_value().into(),
+            dec_element_fn.as_global_value().as_pointer_value().into(),
+        ],
+        bitcode::LIST_FIND_UNSAFE,
+    )
+    .into_struct_value();
+
+    // We promised the caller we'd give them back a struct containing the element
+    // loaded on the stack, so we do that now. The element can't be loaded directly
+    // in the Zig definition called above, because we don't know the size of the
+    // element until user compile time, which is later than the compile time of bitcode defs.
+
+    let value_u8_ptr = env
+        .builder
+        .build_extract_value(result, 0, "get_value_ptr")
+        .unwrap()
+        .into_pointer_value();
+
+    let found = env
+        .builder
+        .build_extract_value(result, 1, "get_found")
+        .unwrap()
+        .into_int_value();
+
+    let start_block = env.builder.get_insert_block().unwrap();
+    let parent = start_block.get_parent().unwrap();
+
+    let if_not_null = env.context.append_basic_block(parent, "if_not_null");
+    let done_block = env.context.append_basic_block(parent, "done");
+
+    let value_bt = basic_type_from_layout(env, element_layout);
+    let default = value_bt.const_zero();
+
+    env.builder
+        .build_conditional_branch(found, if_not_null, done_block);
+
+    env.builder.position_at_end(if_not_null);
+    let value_ptr = env
+        .builder
+        .build_bitcast(
+            value_u8_ptr,
+            value_bt.ptr_type(AddressSpace::Generic),
+            "from_opaque",
+        )
+        .into_pointer_value();
+    let loaded = env.builder.build_load(value_ptr, "load_value");
+    env.builder.build_unconditional_branch(done_block);
+
+    env.builder.position_at_end(done_block);
+    let result_phi = env.builder.build_phi(value_bt, "result");
+
+    result_phi.add_incoming(&[(&default, start_block), (&loaded, if_not_null)]);
+
+    let value = result_phi.as_basic_value();
+
+    let result = env
+        .context
+        .struct_type(&[value_bt, env.context.bool_type().into()], false)
+        .const_zero();
+
+    let result = env
+        .builder
+        .build_insert_value(result, value, 0, "insert_value")
+        .unwrap();
+
+    env.builder
+        .build_insert_value(result, found, 1, "insert_found")
+        .unwrap()
+        .into_struct_value()
+        .into()
 }
 
 pub fn decrementing_elem_loop<'ctx, LoopFn>(
@@ -921,6 +1117,7 @@ where
 pub fn incrementing_elem_loop<'a, 'ctx, 'env, LoopFn>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
+    element_layout: Layout<'a>,
     ptr: PointerValue<'ctx>,
     len: IntValue<'ctx>,
     index_name: &str,
@@ -933,9 +1130,14 @@ where
 
     incrementing_index_loop(env, parent, len, index_name, |index| {
         // The pointer to the element in the list
-        let elem_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index], "load_index") };
+        let element_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index], "load_index") };
 
-        let elem = builder.build_load(elem_ptr, "get_elem");
+        let elem = load_roc_value(
+            env,
+            element_layout,
+            element_ptr,
+            "incrementing_element_loop_load",
+        );
 
         loop_fn(index, elem);
     })
@@ -956,6 +1158,8 @@ where
     let ctx = env.context;
     let builder = env.builder;
 
+    let entry = env.builder.get_insert_block().unwrap();
+
     // constant 1i64
     let one = env.ptr_int().const_int(1, false);
 
@@ -967,15 +1171,15 @@ where
     builder.build_unconditional_branch(loop_bb);
     builder.position_at_end(loop_bb);
 
-    let curr_index = builder
-        .build_load(index_alloca, index_name)
-        .into_int_value();
-    let next_index = builder.build_int_add(curr_index, one, "nextindex");
+    let current_index_phi = env.builder.build_phi(env.ptr_int(), "current_index");
+    let current_index = current_index_phi.as_basic_value().into_int_value();
 
-    builder.build_store(index_alloca, next_index);
+    let next_index = builder.build_int_add(current_index, one, "next_index");
+
+    current_index_phi.add_incoming(&[(&next_index, loop_bb), (&env.ptr_int().const_zero(), entry)]);
 
     // The body of the loop
-    loop_fn(curr_index);
+    loop_fn(current_index);
 
     // #index < end
     let loop_end_cond = bounds_check_comparison(builder, next_index, end);
@@ -1035,15 +1239,6 @@ where
 }
 
 pub fn empty_polymorphic_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
-    let struct_type = super::convert::zig_list_type(env);
-
-    // The pointer should be null (aka zero) and the length should be zero,
-    // so the whole struct should be a const_zero
-    BasicValueEnum::StructValue(struct_type.const_zero())
-}
-
-// TODO investigate: does this cause problems when the layout is known? this value is now not refcounted!
-pub fn empty_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
     let struct_type = super::convert::zig_list_type(env);
 
     // The pointer should be null (aka zero) and the length should be zero,

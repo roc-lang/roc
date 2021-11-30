@@ -1,7 +1,9 @@
 use crate::ident::{Ident, ModuleName};
+use crate::module_err::{IdentIdNotFound, ModuleIdNotFound, ModuleResult};
 use roc_collections::all::{default_hasher, MutMap, SendMap};
 use roc_ident::IdentStr;
 use roc_region::all::Region;
+use snafu::OptionExt;
 use std::collections::HashMap;
 use std::{fmt, u32};
 
@@ -251,6 +253,30 @@ impl Interns {
     pub fn from_index(module_id: ModuleId, ident_id: u32) -> Symbol {
         Symbol::new(module_id, IdentId(ident_id))
     }
+}
+
+pub fn get_module_ident_ids<'a>(
+    all_ident_ids: &'a MutMap<ModuleId, IdentIds>,
+    module_id: &ModuleId,
+) -> ModuleResult<&'a IdentIds> {
+    all_ident_ids
+        .get(module_id)
+        .with_context(|| ModuleIdNotFound {
+            module_id: format!("{:?}", module_id),
+            all_ident_ids: format!("{:?}", all_ident_ids),
+        })
+}
+
+pub fn get_module_ident_ids_mut<'a>(
+    all_ident_ids: &'a mut MutMap<ModuleId, IdentIds>,
+    module_id: &ModuleId,
+) -> ModuleResult<&'a mut IdentIds> {
+    all_ident_ids
+        .get_mut(module_id)
+        .with_context(|| ModuleIdNotFound {
+            module_id: format!("{:?}", module_id),
+            all_ident_ids: "I could not return all_ident_ids here because of borrowing issues.",
+        })
 }
 
 #[cfg(debug_assertions)]
@@ -536,22 +562,70 @@ impl IdentIds {
     }
 
     pub fn get_or_insert(&mut self, name: &Ident) -> IdentId {
-        match self.by_ident.get(name) {
-            Some(id) => *id,
-            None => {
+        use std::collections::hash_map::Entry;
+
+        match self.by_ident.entry(name.clone()) {
+            Entry::Occupied(occupied) => *occupied.get(),
+            Entry::Vacant(vacant) => {
                 let by_id = &mut self.by_id;
                 let ident_id = IdentId(by_id.len() as u32);
 
                 by_id.push(name.clone());
 
-                self.by_ident.insert(name.clone(), ident_id);
+                vacant.insert(ident_id);
 
                 ident_id
             }
         }
     }
 
-    /// Generates a unique, new name that's just a stringified integer
+    // necessary when the name of a value is changed in the editor
+    pub fn update_key(
+        &mut self,
+        old_ident_name: &str,
+        new_ident_name: &str,
+    ) -> Result<IdentId, String> {
+        let old_ident: Ident = old_ident_name.into();
+
+        let ident_id_ref_opt = self.by_ident.get(&old_ident);
+
+        match ident_id_ref_opt {
+            Some(ident_id_ref) => {
+                let ident_id = *ident_id_ref;
+
+                self.by_ident.remove(&old_ident);
+                self.by_ident.insert(new_ident_name.into(), ident_id);
+
+                let by_id = &mut self.by_id;
+                let key_index_opt = by_id.iter().position(|x| *x == old_ident);
+
+                if let Some(key_index) = key_index_opt {
+                    if let Some(vec_elt) = by_id.get_mut(key_index) {
+                        *vec_elt = new_ident_name.into();
+                    } else {
+                        // we get the index from by_id
+                        unreachable!()
+                    }
+
+                    Ok(ident_id)
+                } else {
+                    Err(
+                        format!(
+                            "Tried to find position of key {:?} in IdentIds.by_id but I could not find the key. IdentIds.by_id: {:?}",
+                            old_ident_name,
+                            self.by_id
+                        )
+                    )
+                }
+            }
+            None => Err(format!(
+                "Tried to update key in IdentIds ({:?}) but I could not find the key ({}).",
+                self.by_ident, old_ident_name
+            )),
+        }
+    }
+
+    /// Generates a unique, new name that's just a strigified integer
     /// (e.g. "1" or "5"), using an internal counter. Since valid Roc variable
     /// names cannot begin with a number, this has no chance of colliding
     /// with actual user-defined variables.
@@ -574,6 +648,17 @@ impl IdentIds {
 
     pub fn get_name(&self, id: IdentId) -> Option<&Ident> {
         self.by_id.get(id.0 as usize)
+    }
+
+    pub fn get_name_str_res(&self, ident_id: IdentId) -> ModuleResult<&str> {
+        Ok(self
+            .get_name(ident_id)
+            .with_context(|| IdentIdNotFound {
+                ident_id,
+                ident_ids_str: format!("{:?}", self),
+            })?
+            .as_inline_str()
+            .as_str())
     }
 }
 
@@ -789,6 +874,15 @@ define_builtins! {
 
         // used by the dev backend to store the pointer to where to store large return types
         23 RET_POINTER: "#ret_pointer"
+
+        // used in wasm dev backend to mark temporary values in the VM stack
+        24 WASM_TMP: "#wasm_tmp"
+
+        // the _ used in mono when a specialized symbol is deleted
+        25 REMOVED_SPECIALIZATION: "#removed_specialization"
+
+        // used in dev backend
+        26 DEV_TMP: "#dev_tmp"
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
@@ -897,15 +991,20 @@ define_builtins! {
         103 NUM_BYTES_TO_U16: "bytesToU16"
         104 NUM_BYTES_TO_U32: "bytesToU32"
         105 NUM_CAST_TO_NAT: "#castToNat"
+        106 NUM_DIV_CEIL: "divCeil"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
-        1 BOOL_AND: "and"
-        2 BOOL_OR: "or"
-        3 BOOL_NOT: "not"
-        4 BOOL_XOR: "xor"
-        5 BOOL_EQ: "isEq"
-        6 BOOL_NEQ: "isNotEq"
+        1 BOOL_FALSE: "False" imported // Bool.Bool = [ False, True ]
+                                       // NB: not strictly needed; used for finding global tag names in error suggestions
+        2 BOOL_TRUE: "True" imported // Bool.Bool = [ False, True ]
+                                     // NB: not strictly needed; used for finding global tag names in error suggestions
+        3 BOOL_AND: "and"
+        4 BOOL_OR: "or"
+        5 BOOL_NOT: "not"
+        6 BOOL_XOR: "xor"
+        7 BOOL_EQ: "isEq"
+        8 BOOL_NEQ: "isNotEq"
     }
     3 STR: "Str" => {
         0 STR_STR: "Str" imported // the Str.Str type alias
@@ -928,6 +1027,9 @@ define_builtins! {
         17 STR_ALIAS_ANALYSIS_STATIC: "#aliasAnalysisStatic" // string with the static lifetime
         18 STR_FROM_UTF8_RANGE: "fromUtf8Range"
         19 STR_REPEAT: "repeat"
+        20 STR_TRIM: "trim"
+        21 STR_TRIM_LEFT: "trimLeft"
+        22 STR_TRIM_RIGHT: "trimRight"
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
@@ -964,13 +1066,40 @@ define_builtins! {
         31 LIST_SORT_WITH: "sortWith"
         32 LIST_DROP: "drop"
         33 LIST_SWAP: "swap"
+        34 LIST_DROP_AT: "dropAt"
+        35 LIST_DROP_LAST: "dropLast"
+        36 LIST_MIN: "min"
+        37 LIST_MIN_LT: "#minlt"
+        38 LIST_MAX: "max"
+        39 LIST_MAX_GT: "#maxGt"
+        40 LIST_MAP4: "map4"
+        41 LIST_DROP_FIRST: "dropFirst"
+        42 LIST_JOIN_MAP: "joinMap"
+        43 LIST_JOIN_MAP_CONCAT: "#joinMapConcat"
+        44 LIST_ANY: "any"
+        45 LIST_TAKE_FIRST: "takeFirst"
+        46 LIST_TAKE_LAST: "takeLast"
+        47 LIST_FIND: "find"
+        48 LIST_FIND_RESULT: "#find_result" // symbol used in the definition of List.find
+        49 LIST_SUBLIST: "sublist"
+        50 LIST_INTERSPERSE: "intersperse"
+        51 LIST_INTERSPERSE_CLOS: "#intersperseClos"
+        52 LIST_SPLIT: "split"
+        53 LIST_SPLIT_CLOS: "#splitClos"
+        54 LIST_ALL: "all"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias
-        1 RESULT_MAP: "map"
-        2 RESULT_MAP_ERR: "mapErr"
-        3 RESULT_WITH_DEFAULT: "withDefault"
-        4 RESULT_AFTER: "after"
+        1 RESULT_OK: "Ok" imported // Result.Result a e = [ Ok a, Err e ]
+                                   // NB: not strictly needed; used for finding global tag names in error suggestions
+        2 RESULT_ERR: "Err" imported // Result.Result a e = [ Ok a, Err e ]
+                                     // NB: not strictly needed; used for finding global tag names in error suggestions
+        3 RESULT_MAP: "map"
+        4 RESULT_MAP_ERR: "mapErr"
+        5 RESULT_WITH_DEFAULT: "withDefault"
+        6 RESULT_AFTER: "after"
+        7 RESULT_IS_OK: "isOk"
+        8 RESULT_IS_ERR: "isErr"
     }
     6 DICT: "Dict" => {
         0 DICT_DICT: "Dict" imported // the Dict.Dict type alias
@@ -983,18 +1112,14 @@ define_builtins! {
         7 DICT_INSERT: "insert"
         8 DICT_LEN: "len"
 
-        // This should not be exposed to users, its for testing the
-        // hash function ONLY
-        9 DICT_TEST_HASH: "hashTestOnly"
+        9 DICT_REMOVE: "remove"
+        10 DICT_CONTAINS: "contains"
+        11 DICT_KEYS: "keys"
+        12 DICT_VALUES: "values"
 
-        10 DICT_REMOVE: "remove"
-        11 DICT_CONTAINS: "contains"
-        12 DICT_KEYS: "keys"
-        13 DICT_VALUES: "values"
-
-        14 DICT_UNION: "union"
-        15 DICT_INTERSECTION: "intersection"
-        16 DICT_DIFFERENCE: "difference"
+        13 DICT_UNION: "union"
+        14 DICT_INTERSECTION: "intersection"
+        15 DICT_DIFFERENCE: "difference"
     }
     7 SET: "Set" => {
         0 SET_SET: "Set" imported // the Set.Set type alias

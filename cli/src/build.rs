@@ -3,7 +3,6 @@ use roc_build::{
     link::{link, rebuild_host, LinkType},
     program,
 };
-#[cfg(feature = "llvm")]
 use roc_builtins::bitcode;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
@@ -12,7 +11,6 @@ use roc_mono::ir::OptLevel;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 use target_lexicon::Triple;
-#[cfg(feature = "llvm")]
 use tempfile::Builder;
 
 fn report_timing(buf: &mut String, label: &str, duration: Duration) {
@@ -45,7 +43,6 @@ pub struct BuiltFile {
     pub total_time: Duration,
 }
 
-#[cfg(feature = "llvm")]
 #[allow(clippy::too_many_arguments)]
 pub fn build_file<'a>(
     arena: &'a Bump,
@@ -58,6 +55,7 @@ pub fn build_file<'a>(
     link_type: LinkType,
     surgically_link: bool,
     precompiled: bool,
+    target_valgrind: bool,
 ) -> Result<BuiltFile, LoadingProblem<'a>> {
     let compilation_start = SystemTime::now();
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
@@ -119,6 +117,7 @@ pub fn build_file<'a>(
             .keys()
             .map(|x| x.as_str(&loaded.interns).to_string())
             .collect(),
+        target_valgrind,
     );
 
     // TODO try to move as much of this linking as possible to the precompiled
@@ -176,23 +175,18 @@ pub fn build_file<'a>(
     // This only needs to be mutable for report_problems. This can't be done
     // inside a nested scope without causing a borrow error!
     let mut loaded = loaded;
-    program::report_problems(&mut loaded);
+    program::report_problems_monomorphized(&mut loaded);
     let loaded = loaded;
 
-    let code_gen_timing = match opt_level {
-        OptLevel::Normal | OptLevel::Optimize => program::gen_from_mono_module_llvm(
-            arena,
-            loaded,
-            &roc_file_path,
-            target,
-            app_o_file,
-            opt_level,
-            emit_debug_info,
-        ),
-        OptLevel::Development => {
-            program::gen_from_mono_module_dev(arena, loaded, target, app_o_file)
-        }
-    };
+    let code_gen_timing = program::gen_from_mono_module(
+        arena,
+        loaded,
+        &roc_file_path,
+        target,
+        app_o_file,
+        opt_level,
+        emit_debug_info,
+    );
 
     buf.push('\n');
     buf.push_str("    ");
@@ -248,14 +242,14 @@ pub fn build_file<'a>(
             app_o_file.to_str().unwrap(),
         ];
         if matches!(opt_level, OptLevel::Development) {
-            inputs.push(bitcode::OBJ_PATH);
+            inputs.push(bitcode::BUILTINS_HOST_OBJ_PATH);
         }
 
         let (mut child, _) =  // TODO use lld
             link(
                 target,
                 binary_path.clone(),
-            &inputs,
+                &inputs,
                 link_type
             )
             .map_err(|_| {
@@ -288,6 +282,7 @@ pub fn build_file<'a>(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_rebuild_thread(
     opt_level: OptLevel,
     surgically_link: bool,
@@ -296,9 +291,12 @@ fn spawn_rebuild_thread(
     binary_path: PathBuf,
     target: &Triple,
     exported_symbols: Vec<String>,
+    target_valgrind: bool,
 ) -> std::thread::JoinHandle<u128> {
     let thread_local_target = target.clone();
     std::thread::spawn(move || {
+        print!("🔨 Rebuilding host... ");
+
         let rebuild_host_start = SystemTime::now();
         if !precompiled {
             if surgically_link {
@@ -307,6 +305,7 @@ fn spawn_rebuild_thread(
                     &thread_local_target,
                     host_input_path.as_path(),
                     exported_symbols,
+                    target_valgrind,
                 )
                 .unwrap();
             } else {
@@ -315,6 +314,7 @@ fn spawn_rebuild_thread(
                     &thread_local_target,
                     host_input_path.as_path(),
                     None,
+                    target_valgrind,
                 );
             }
         }
@@ -324,6 +324,9 @@ fn spawn_rebuild_thread(
             std::fs::copy(prehost, binary_path.as_path()).unwrap();
         }
         let rebuild_host_end = rebuild_host_start.elapsed().unwrap();
+
+        println!("Done!");
+
         rebuild_host_end.as_millis()
     })
 }
@@ -347,7 +350,7 @@ pub fn check_file(
     // Release builds use uniqueness optimizations
     let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
 
-    let mut loaded = roc_load::file::load_and_monomorphize(
+    let mut loaded = roc_load::file::load_and_typecheck(
         arena,
         roc_file_path,
         stdlib,
@@ -410,5 +413,5 @@ pub fn check_file(
         println!("Finished checking in {} ms\n", compilation_end.as_millis(),);
     }
 
-    Ok(program::report_problems(&mut loaded))
+    Ok(program::report_problems_typechecked(&mut loaded))
 }
