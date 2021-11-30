@@ -280,6 +280,8 @@ impl<'a> WasmBackend<'a> {
             Stmt::Let(_, _, _, _) => {
                 let mut current_stmt = stmt;
                 while let Stmt::Let(sym, expr, layout, following) = current_stmt {
+                    // println!("let {:?} = {}", sym, expr.to_pretty(200)); // ingore `following`! Too confusing otherwise.
+
                     let wasm_layout = WasmLayout::new(layout);
 
                     let kind = match following {

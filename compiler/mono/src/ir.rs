@@ -1595,6 +1595,17 @@ impl<'a> Expr<'a> {
                 .append(symbol_to_doc(alloc, *structure)),
         }
     }
+
+    pub fn to_pretty(&self, width: usize) -> String {
+        let allocator = BoxAllocator;
+        let mut w = std::vec::Vec::new();
+        self.to_doc::<_, ()>(&allocator)
+            .1
+            .render(width, &mut w)
+            .unwrap();
+        w.push(b'\n');
+        String::from_utf8(w).unwrap()
+    }
 }
 
 impl<'a> Stmt<'a> {
