@@ -1,6 +1,8 @@
 # Tutorial
 
-This is a tutorial for how to build Roc applications.
+This is a tutorial for how to build Roc applications. It covers the REPL, basic
+types (strings, lists, tags, and functions), syntax (`when`, `if then else`)
+and more!
 
 Enjoy!
 
@@ -21,12 +23,12 @@ The rockin’ roc repl
 
 Try typing this in and pressing enter:
 
-```
+```coffee
 >> "Hello, World!"
 "Hello, World!" : Str
 ```
 
-Congratulationsl You've just written your first Roc code!
+Congratulations! You've just written your first Roc code!
 
 Specifically, you entered the *expression* `"Hello, World!"` into the REPL,
 and the REPL printed it back out. It also printed `: Str`, which is the
@@ -35,25 +37,25 @@ and whatever comes after it whenever the REPL prints them.
 
 Let's try putting in a more complicated expression:
 
-```
+```coffee
 >> 1 + 1
 2 : Num *
 ```
 
 According to the Roc REPL, one plus one equals two. Checks out!
 
-Roc will respect [order of operations] when using multiple arithmetic operators
+Roc will respect [order of operations](https://en.wikipedia.org/wiki/Order_of_operations) when using multiple arithmetic operators
 like `+` and `-`, but you can use parentheses to specify exactly how they should
 be grouped.
 
-```
+```coffee
 >> 1 + 2 * (3 - 4)
 -1 : Num *
 ```
 
 Let's try calling a function:
 
-```
+```coffee
 >> Str.concat "Hi " "there!"
 "Hi there!" : Str
 ```
@@ -70,17 +72,17 @@ We don't write `Str.concat("Hi ", "there!")` but rather `Str.concat "Hi " "there
 Just like in the arithmetic example above, we can use parentheses to specify
 how nested function calls should work. For example, we could write this:
 
-```
+```coffee
 >> Str.concat "Birds: " (Num.toStr 42)
 "Birds: 42" : Str
 ```
 
-This calls `Num.toStr` on the number `42`, which converts it into the string and
+This calls `Num.toStr` on the number `42`, which converts it into the string
 `"42"`, and then passes that string as the second argument to `Str.concat`.
 The parentheses are important here to specify how the function calls nest!
-Try removing them and seeing what happens:
+Try removing them, and see what happens:
 
-```
+```coffee
 >> Str.concat "Birds: " Num.toStr 42
 <error>
 ```
@@ -158,7 +160,7 @@ There are 5 animals.
 short - namely, `main`, `birds`, `iguanas`, and `total`.
 
 A definition names an expression.
-- The first def assigns the name `main` to the expression `Stdout.line "I have \(numDefs) definitions."`  The `Stdout.line` function takes a string and prints it as a line to [`stdout`] (the terminal's standard output device).
+- The first def assigns the name `main` to the expression `Stdout.line "I have \(numDefs) definitions."`.  The `Stdout.line` function takes a string and prints it as a line to [`stdout`] (the terminal's standard output device).
 - The next two defs assign the names `birds` and `iguanas` to the expressions `3` and `2`.
 - The last def assigns the name `total` to the expression `Num.toStr (birds + iguanas)`.
 
@@ -228,7 +230,7 @@ We did a two things here:
 * We added an `if` / `then` / `else` conditional to return either `""` or `Num.toStr sum` depending on whether `sum == 0`
 
 Of note, we couldn't have done `total = num1 + num2` because that would be
-redefining `total`, and defs can't be redefined. (However, we could use the name
+redefining `total` in the global scope, and defs can't be redefined. (However, we could use the name
 `sum` for a def in a different function, because then they'd be in completely
 different scopes and wouldn't affect each other.)
 
@@ -558,9 +560,9 @@ element using `List.append` like so:
 List.append names "Jess"
 ```
 
-This returns a new list with `"Jess"` after `"Ari"`, and doesn't modify the original list at all.
+This returns a **new** list with `"Jess"` after `"Ari"`, and doesn't modify the original list at all.
 All values in Roc (including lists, but also records, strings, numbers, and so on) are immutable,
-meaning whenever we want to "change" them, we instead pass them a function which returns some
+meaning whenever we want to "change" them, we want to instead pass them a function which returns some
 variation of what was passed in.
 
 ### List.map
@@ -575,29 +577,32 @@ List.map [ 1, 2, 3 ] \num -> num * 2
 This returns `[ 2, 4, 6 ]`. `List.map` takes two arguments:
 
 1. An input list
-2. A function to call on each element of that list
+2. A function that will be called on each element of that list
 
 It then returns a list which it creates by calling the given function on each element in the input
 the list. In this example, `List.map` calls the function `\num -> num * 2` on each element in
 `[ 1, 2, 3 ]` to get a new list of `[ 2, 4, 6 ]`.
 
-We don't have to give `List.map` an anonymous function like this. We can also give it a named function.
+We can also give `List.map` a named function, instead of an anonymous one:
 
 For example, the `Num.isOdd` function returns `True` if it's given an odd number, and `False` otherwise.
-So `Num.isOdd 5` returns `True` and `Num.isOdd 2` returns `False`. We can call `List.map [ 1, 2, 3 ] Num.isOdd`
-to get back a new list of `[ True, False, True ]`.
+So `Num.isOdd 5` returns `True` and `Num.isOdd 2` returns `False`.
+
+So calling `List.map [ 1, 2, 3 ] Num.isOdd` returns a new list of `[ True, False, True ]`.
 
 ### List element type compatibility
 
 If we tried to give `List.map` a function that didn't work on the elements in the list, then we'd get
-an error at compile time. For example:
+an error at compile time. Here's a valid, and then an invalid example:
 
 ```coffee
+# working example
 List.map [ -1, 2, 3, -4 ] Num.isNegative
 # returns [ True, False, False, True ]
 ```
 
 ```coffee
+# invalid example
 List.map [ "A", "B", "C" ] Num.isNegative
 # error: isNegative doesn't work on strings!
 ```
@@ -605,18 +610,19 @@ List.map [ "A", "B", "C" ] Num.isNegative
 Because `Num.isNegative` works on numbers and not strings, calling `List.map` with `Num.isNegative` and a
 list of numbers works, but doing the same with a list of strings doesn't work.
 
-For similar reasons, this wouldn't work either:
+This wouldn't work either:
 
 ```coffee
 List.map [ "A", "B", "C", 1, 2, 3 ] Num.isNegative
 ```
 
-In fact, this wouldn't work for a more fundamental reason: every element in a Roc list has to have the same type.
+In fact, this wouldn't work for a more fundamental reason: every element in a Roc list has to share the same type.
 For example, we can have a list of strings like `[ "Sam", "Lee", "Ari" ]`, or a list of numbers like
 `[ 1, 2, 3, 4, 5 ]` but we can't have a list which mixes strings and numbers like `[ "Sam", 1, "Lee", 2, 3 ]` -
 that would be a compile-time error.
 
-This rule eliminates entire categories of problems. For example, it means that whenever you use `List.append` to
+Ensuring all elements in a list share a type eliminates entire categories of problems.
+For example, it means that whenever you use `List.append` to
 add elements to a list, as long as you don't have any compile-time errors, you won't get any runtime errors
 from calling `List.map` afterwards - no matter what you appended to the list! More generally, it's safe to assume
 that unless you run out of memory, `List.map` will run successfully unless you got a compile-time error about an
@@ -726,7 +732,7 @@ The state doesn't have to be a record; it can be anything you want. For example,
 could implement `List.any` using `List.walk`. You could also make the state be a list, and implement `List.map`,
 `List.keepIf`, or `List.dropIf`. There are a lot of things you can do with `List.walk` - it's very flexible!
 
-It can be tricky to remember the argumetn order for `List.walk` at first. A helpful trick is that the arguments
+It can be tricky to remember the argument order for `List.walk` at first. A helpful trick is that the arguments
 follow the same pattern as what we've seen with `List.map`, `List.any`, `List.keepIf`, and `List.dropIf`: the
 first argument is a list, and the last argument is a function. The difference here is that `List.walk` has one
 more argument than those other functions; the only place it could go while preserving that pattern is the middle!
@@ -917,7 +923,7 @@ We can also give type annotations to tag unions:
 
 ```coffee
 colorFromStr : Str -> [ Red, Green, Yellow ]
-colorFromStr : \string ->
+colorFromStr = \string ->
     when string is
         "red" -> Red
         "green" -> Green
