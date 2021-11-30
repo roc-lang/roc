@@ -595,20 +595,17 @@ impl<'a> BorrowInfState<'a> {
 
             HigherOrder(HigherOrderLowLevel {
                 op,
-                arg_layouts,
-                ret_layout,
-                function_name,
-                function_env,
+                passed_function,
                 ..
             }) => {
                 use crate::low_level::HigherOrder::*;
 
                 let closure_layout = ProcLayout {
-                    arguments: arg_layouts,
-                    result: *ret_layout,
+                    arguments: passed_function.argument_layouts,
+                    result: passed_function.return_layout,
                 };
 
-                let function_ps = match param_map.get_symbol(*function_name, closure_layout) {
+                let function_ps = match param_map.get_symbol(passed_function.name, closure_layout) {
                     Some(function_ps) => function_ps,
                     None => unreachable!(),
                 };
@@ -692,7 +689,7 @@ impl<'a> BorrowInfState<'a> {
                 // own the closure environment if the function needs to own it
                 let function_env_position = op.function_arity();
                 if let Some(false) = function_ps.get(function_env_position).map(|p| p.borrow) {
-                    self.own_var(*function_env);
+                    self.own_var(passed_function.captured_environment);
                 }
             }
 
