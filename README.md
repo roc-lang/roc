@@ -11,7 +11,7 @@ There's also a folder of [examples](https://github.com/rtfeldman/roc/tree/trunk/
 ## State of Roc
 
 Roc is not ready for production yet. You are likely to encounter bugs. Publishing packages or documentation is not yet supported.
-Many programs can however be compiled correctly. Check out [examples](examples) and [examples/benchmarks](examples/benchmarks). There are minimal platforms for Rust, Zig, C, Swift and an HTTP server. We are hard at work to make programming in Roc a delightful experience!
+Many programs can however be compiled correctly. Check out [examples](examples) and [examples/benchmarks](examples/benchmarks). There are minimal platforms for Rust, Zig, C, Swift and a HTTP server. We are hard at work to make programming in Roc a delightful experience!
 
 ## Getting started
 
