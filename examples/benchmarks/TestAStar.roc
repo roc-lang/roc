@@ -13,7 +13,7 @@ main =
 #                 Task.putLine (showBool test1)
 # 
 #             _ -> 
-#                 ns = Str.fromInt n
+#                 ns = Num.toStr n
 #                 Task.putLine "No test \(ns)"
 
 showBool : Bool -> Str

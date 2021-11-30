@@ -115,9 +115,9 @@ deriv : I64, Expr -> IO Expr
 deriv = \i, f ->
     fprime = d "x" f
     line =
-        Str.fromInt (i + 1)
+        Num.toStr (i + 1)
             |> Str.concat " count: "
-            |> Str.concat (Str.fromInt (count fprime))
+            |> Str.concat (Num.toStr (count fprime))
 
     Task.putLine line
         |> Task.after \_ -> Task.succeed fprime
