@@ -228,10 +228,10 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Str.fromInt
+                Num.toStr
                 "#
             ),
-            "Int * -> Str",
+            "Num * -> Str",
         );
     }
 
@@ -4543,8 +4543,8 @@ mod solve_expr {
                                 |> Str.concat ") ("
                                 |> Str.concat (printExpr b)
                                 |> Str.concat ")"
-                        Val v -> Str.fromInt v
-                        Var v -> "Var " |> Str.concat (Str.fromInt v)
+                        Val v -> Num.toStr v
+                        Var v -> "Var " |> Str.concat (Num.toStr v)
 
                 main : Str
                 main = printExpr (Var 3)
