@@ -91,15 +91,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "arraystring"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d517c467117e1d8ca795bc8cc90857ff7f79790cca0e26f6e9462694ece0185"
-dependencies = [
- "typenum",
-]
-
-[[package]]
 name = "arrayvec"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2421,7 +2412,7 @@ dependencies = [
 name = "roc_ast"
 version = "0.1.0"
 dependencies = [
- "arraystring",
+ "arrayvec 0.7.2",
  "bumpalo",
  "libc",
  "page_size",
@@ -2591,7 +2582,7 @@ dependencies = [
 name = "roc_editor"
 version = "0.1.0"
 dependencies = [
- "arraystring",
+ "arrayvec 0.7.2",
  "bumpalo",
  "bytemuck",
  "cgmath",
@@ -2656,6 +2647,7 @@ dependencies = [
  "roc_mono",
  "roc_problem",
  "roc_region",
+ "roc_reporting",
  "roc_solve",
  "roc_types",
  "roc_unify",
@@ -2818,6 +2810,7 @@ dependencies = [
 name = "roc_solve"
 version = "0.1.0"
 dependencies = [
+ "arrayvec 0.7.2",
  "bumpalo",
  "roc_can",
  "roc_collections",

@@ -181,23 +181,15 @@ pub fn update_str_expr(
     enum Either {
         MyString(String),
         MyPoolStr(PoolStr),
-        Done,
     }
 
     let insert_either = match str_expr {
         Expr2::SmallStr(arr_string) => {
-            // TODO make sure this works for unicode "characters"
-            let insert_res = arr_string.try_insert(insert_index as u8, new_char);
+            let mut new_string = arr_string.as_str().to_owned();
 
-            match insert_res {
-                Ok(_) => Either::Done,
-                _ => {
-                    let mut new_string = arr_string.as_str().to_string();
-                    new_string.insert(insert_index, new_char);
+            new_string.insert(insert_index, new_char);
 
-                    Either::MyString(new_string)
-                }
-            }
+            Either::MyString(new_string)
         }
         Expr2::Str(old_pool_str) => Either::MyPoolStr(*old_pool_str),
         other => UnexpectedASTNode {
@@ -222,7 +214,6 @@ pub fn update_str_expr(
 
             pool.set(node_id, Expr2::Str(new_pool_str))
         }
-        Either::Done => (),
     }
 
     Ok(())
