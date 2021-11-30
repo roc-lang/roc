@@ -41,13 +41,13 @@ pub struct WasmBackend<'a> {
     interns: &'a mut Interns,
 
     // Module-level data
-    pub module: WasmModule<'a>,
+    module: WasmModule<'a>,
     layout_ids: LayoutIds<'a>,
     constant_sym_index_map: MutMap<&'a str, usize>,
     builtin_sym_index_map: MutMap<&'a str, usize>,
     proc_symbols: Vec<'a, (Symbol, u32)>,
-    pub linker_symbols: Vec<'a, SymInfo>,
-    pub refcount_proc_gen: RefcountProcGenerator<'a>,
+    linker_symbols: Vec<'a, SymInfo>,
+    refcount_proc_gen: RefcountProcGenerator<'a>,
 
     // Function-level data
     code_builder: CodeBuilder<'a>,
@@ -748,6 +748,8 @@ impl<'a> WasmBackend<'a> {
                         stack_mem_bytes[7] = 0x80 | (len as u8);
                         let str_as_int = i64::from_le_bytes(stack_mem_bytes);
 
+                        // Write all 8 bytes at once using an i64
+                        // Str is normally two i32's, but in this special case, we can get away with fewer instructions
                         self.code_builder.get_local(local_id);
                         self.code_builder.i64_const(str_as_int);
                         self.code_builder.i64_store(Align::Bytes4, offset);
