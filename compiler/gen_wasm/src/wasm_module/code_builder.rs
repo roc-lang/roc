@@ -234,7 +234,9 @@ impl<'a> CodeBuilder<'a> {
     pub fn set_top_symbol(&mut self, sym: Symbol) -> VmSymbolState {
         let current_stack = &mut self.vm_block_stack.last_mut().unwrap().value_stack;
         let pushed_at = self.code.len();
-        let top_symbol: &mut Symbol = current_stack.last_mut().unwrap();
+        let top_symbol: &mut Symbol = current_stack
+            .last_mut()
+            .unwrap_or_else(|| unreachable!("Empty stack when trying to set Symbol {:?}", sym));
         *top_symbol = sym;
 
         VmSymbolState::Pushed { pushed_at }

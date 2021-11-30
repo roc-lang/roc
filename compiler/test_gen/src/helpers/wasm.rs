@@ -167,33 +167,42 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
         // write the module to a file so the linker can access it
         std::fs::write(&app_o_file, &module_bytes).unwrap();
 
-        let _linker_output = std::process::Command::new("zig")
-            .args(&[
-                "wasm-ld",
-                // input files
-                app_o_file.to_str().unwrap(),
-                bitcode::BUILTINS_WASM32_OBJ_PATH,
-                libc_a_file,
-                // output
-                "-o",
-                final_wasm_file.to_str().unwrap(),
-                // we don't define `_start`
-                "--no-entry",
-                // If you only specify test_wrapper, it will stop at the call to UserApp_main_1
-                // But if you specify both exports, you get all the dependencies.
-                //
-                // It seems that it will not write out an export you didn't explicitly specify,
-                // even if it's a dependency of another export!
-                // In our case we always export main and test_wrapper so that's OK.
-                "--export",
-                "test_wrapper",
-                "--export",
-                "#UserApp_main_1",
-            ])
+        let args = &[
+            "wasm-ld",
+            // input files
+            app_o_file.to_str().unwrap(),
+            bitcode::BUILTINS_WASM32_OBJ_PATH,
+            libc_a_file,
+            // output
+            "-o",
+            final_wasm_file.to_str().unwrap(),
+            // we don't define `_start`
+            "--no-entry",
+            // If you only specify test_wrapper, it will stop at the call to UserApp_main_1
+            // But if you specify both exports, you get all the dependencies.
+            //
+            // It seems that it will not write out an export you didn't explicitly specify,
+            // even if it's a dependency of another export!
+            // In our case we always export main and test_wrapper so that's OK.
+            "--export",
+            "test_wrapper",
+            "--export",
+            "#UserApp_main_1",
+        ];
+
+        let linker_output = std::process::Command::new("zig")
+            .args(args)
             .output()
             .unwrap();
 
-        // dbg!(_linker_output);
+        if !linker_output.status.success() {
+            print!("\nLINKER FAILED\n");
+            for arg in args {
+                print!("{} ", arg);
+            }
+            println!("\n{}", std::str::from_utf8(&linker_output.stdout).unwrap());
+            println!("{}", std::str::from_utf8(&linker_output.stderr).unwrap());
+        }
 
         Module::from_file(&store, &final_wasm_file).unwrap()
     };

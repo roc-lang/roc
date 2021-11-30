@@ -79,6 +79,7 @@ impl StoredValue {
 
 /// Helper structure for WasmBackend, to keep track of how values are stored,
 /// including the VM stack, local variables, and linear memory
+#[derive(Debug)]
 pub struct Storage<'a> {
     pub arg_types: Vec<'a, ValueType>,
     pub local_types: Vec<'a, ValueType>,

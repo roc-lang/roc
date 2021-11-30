@@ -36,11 +36,6 @@ const CONST_SEGMENT_BASE_ADDR: u32 = 1024;
 /// Index of the data segment where we store constants
 const CONST_SEGMENT_INDEX: usize = 0;
 
-#[cfg(debug_assertions)]
-const DEBUG_BUILD: bool = true;
-#[cfg(not(debug_assertions))]
-const DEBUG_BUILD: bool = false;
-
 pub struct WasmBackend<'a> {
     env: &'a Env<'a>,
     interns: &'a mut Interns,
@@ -168,15 +163,23 @@ impl<'a> WasmBackend<'a> {
     }
 
     pub fn finalize_module(mut self) -> WasmModule<'a> {
-        if DEBUG_BUILD {
-            let module_id = self.env.module_id;
-            let ident_ids = self.interns.all_ident_ids.get(&module_id).unwrap();
-            self.env.module_id.register_debug_idents(ident_ids);
-        }
         let symbol_table = LinkingSubSection::SymbolTable(self.linker_symbols);
         self.module.linking.subsections.push(symbol_table);
         self.module
     }
+
+    /// Register the debug names of Symbols in a global lookup table
+    /// so that they have meaningful names when you print them.
+    /// Particularly useful after generating IR for refcount procedures
+    #[cfg(debug_assertions)]
+    pub fn register_symbol_debug_names(&self) {
+        let module_id = self.env.module_id;
+        let ident_ids = self.interns.all_ident_ids.get(&module_id).unwrap();
+        self.env.module_id.register_debug_idents(ident_ids);
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn register_debug_idents(&self) {}
 
     /// Reset function-level data
     fn reset(&mut self) {

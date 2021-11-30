@@ -104,18 +104,21 @@ pub fn build_module_help<'a>(
     // Generate IR for refcounting procs
     let refcount_procs = backend.generate_refcount_procs();
 
+    backend.register_symbol_debug_names();
+
+    if false {
+        for proc in refcount_procs.iter() {
+            println!("{}", proc.to_pretty(200));
+            println!("{:#?}", proc);
+        }
+    }
+
     // Generate Wasm for refcounting procs
     for proc in refcount_procs.iter() {
         backend.build_proc(proc)?;
     }
 
     let module = backend.finalize_module();
-
-    if true {
-        for proc in refcount_procs.into_iter() {
-            println!("{}", proc.to_pretty(200));
-        }
-    }
 
     Ok((module, main_fn_index.unwrap()))
 }
