@@ -516,6 +516,11 @@ impl<'a> WasmBackend<'a> {
                     .refcount_proc_gen
                     .expand_refcount_stmt(ident_ids, *layout, modify, *following);
 
+                if false {
+                    self.register_symbol_debug_names();
+                    println!("## rc_stmt:\n{}\n{:?}", rc_stmt.to_pretty(200), rc_stmt);
+                }
+
                 // If we're creating a new RC procedure, we need to store its symbol data,
                 // so that we can correctly generate calls to it.
                 if let Some((rc_proc_sym, rc_proc_layout)) = new_proc_info {
@@ -704,7 +709,7 @@ impl<'a> WasmBackend<'a> {
         sym: Symbol,
         layout: &Layout<'a>,
     ) -> Result<(), String> {
-        let not_supported_error = || Err(format!("Literal value {:?} is not yet implemented", lit));
+        let not_supported_error = || panic!("Literal value {:?} is not yet implemented", lit);
 
         match storage {
             StoredValue::VirtualMachineStack { value_type, .. } => {

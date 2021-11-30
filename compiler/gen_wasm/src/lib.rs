@@ -96,6 +96,14 @@ pub fn build_module_help<'a>(
         RefcountProcGenerator::new(env.arena, IntWidth::I32, env.module_id),
     );
 
+    if false {
+        println!("## procs");
+        for proc in procs.iter() {
+            println!("{}", proc.to_pretty(200));
+            println!("{:#?}", proc);
+        }
+    }
+
     // Generate procs from user code
     for proc in procs.iter() {
         backend.build_proc(proc)?;
@@ -107,6 +115,7 @@ pub fn build_module_help<'a>(
     backend.register_symbol_debug_names();
 
     if false {
+        println!("## refcount_procs");
         for proc in refcount_procs.iter() {
             println!("{}", proc.to_pretty(200));
             println!("{:#?}", proc);
