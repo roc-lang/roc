@@ -11,11 +11,6 @@ use crate::ir::{
 };
 use crate::layout::{Builtin, Layout};
 
-/*
-    Generate specialized refcounting procedures in IR format,
-    which can then be lowered by any of the backends
-*/
-
 const LAYOUT_BOOL: Layout = Layout::Builtin(Builtin::Bool);
 const LAYOUT_UNIT: Layout = Layout::Struct(&[]);
 const LAYOUT_PTR: Layout = Layout::RecursivePointer;
@@ -32,6 +27,27 @@ pub enum RefcountOp {
     DecRef,
 }
 
+/// Generate specialized refcounting code in mono IR format
+/// -------------------------------------------------------
+///
+/// Any backend that wants to use this, needs a field of type `RefcountProcGenerator`.
+///
+/// Whenever the backend sees a `Stmt::Refcounting`, it calls
+/// `RefcountProcGenerator::expand_refcount_stmt()`, which returns IR statements
+/// to call a refcounting procedure. The backend can then generate target code
+/// for those IR statements instead of the original `Refcounting` statement.
+///
+/// Essentially we are expanding the `Refcounting` statement into a more detailed
+/// form that's more suitable for code generation.
+///
+/// But so far, we've only mentioned _calls_ to the refcounting procedures.
+/// The procedures themselves don't exist yet!
+///
+/// So when the backend has finished with all the `Proc`s from user code,
+/// it's time to call `RefcountProcGenerator::generate_refcount_procs()`,
+/// which generates the `Procs` for refcounting helpers. The backend can
+/// simply generate target code for these `Proc`s just like any other Proc.
+///
 pub struct RefcountProcGenerator<'a> {
     arena: &'a Bump,
     home: ModuleId,
