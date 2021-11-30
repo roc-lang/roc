@@ -1098,6 +1098,7 @@ fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
                     BinOp::Pizza | BinOp::Assignment | BinOp::HasType | BinOp::Backpassing => false,
                 })
         }
+        Expr::If(_, _) => true,
         _ => false,
     }
 }
