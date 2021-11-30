@@ -2,12 +2,9 @@ use roc_builtins::bitcode::{self, FloatWidth};
 use roc_module::low_level::{LowLevel, LowLevel::*};
 use roc_module::symbol::Symbol;
 
-use crate::layout::{CallConv, StackMemoryFormat, WasmLayout};
-use crate::storage::Storage;
-use crate::wasm_module::{
-    CodeBuilder,
-    ValueType::{self, *},
-};
+use crate::layout::{StackMemoryFormat::*, WasmLayout};
+use crate::storage::{Storage, StoredValue};
+use crate::wasm_module::{CodeBuilder, ValueType::*};
 
 pub enum LowlevelBuildResult {
     Done,
@@ -71,209 +68,302 @@ pub fn decode_low_level<'a>(
                 F64 => code_builder.f64_add(),
             },
             WasmLayout::StackMemory { format, .. } => match format {
-                StackMemoryFormat::DataStructure => return NotImplemented,
-                StackMemoryFormat::Int128 => return NotImplemented,
-                StackMemoryFormat::Float128 => return NotImplemented,
-                StackMemoryFormat::Decimal => return BuiltinCall(bitcode::DEC_ADD_WITH_OVERFLOW),
+                DataStructure => return NotImplemented,
+                Int128 => return NotImplemented,
+                Float128 => return NotImplemented,
+                Decimal => return BuiltinCall(bitcode::DEC_ADD_WITH_OVERFLOW),
             },
         },
-        NumAddWrap => match ret_layout.arg_types(CallConv::Zig)[0] {
-            I32 => {
-                code_builder.i32_add();
-                wrap_i32(code_builder, ret_layout.size());
-            }
-            I64 => code_builder.i64_add(),
-            F32 => code_builder.f32_add(),
-            F64 => code_builder.f64_add(),
+        NumAddWrap => match ret_layout {
+            WasmLayout::Primitive(value_type, size) => match value_type {
+                I32 => {
+                    code_builder.i32_add();
+                    // TODO: is *deliberate* wrapping really in the spirit of things?
+                    // The point of choosing NumAddWrap is to go fast by skipping checks, but we're making it slower.
+                    wrap_i32(code_builder, *size);
+                }
+                I64 => code_builder.i64_add(),
+                F32 => code_builder.f32_add(),
+                F64 => code_builder.f64_add(),
+            },
+            WasmLayout::StackMemory { format, .. } => match format {
+                DataStructure => return NotImplemented,
+                Int128 => return NotImplemented,
+                Float128 => return NotImplemented,
+                Decimal => return BuiltinCall(bitcode::DEC_ADD_WITH_OVERFLOW),
+            },
         },
         NumToStr => return NotImplemented,
         NumAddChecked => return NotImplemented,
-        NumSub => match ret_layout.arg_types(CallConv::Zig)[0] {
-            I32 => code_builder.i32_sub(),
-            I64 => code_builder.i64_sub(),
-            F32 => code_builder.f32_sub(),
-            F64 => code_builder.f64_sub(),
+        NumSub => match ret_layout {
+            WasmLayout::Primitive(value_type, _) => match value_type {
+                I32 => code_builder.i32_sub(),
+                I64 => code_builder.i64_sub(),
+                F32 => code_builder.f32_sub(),
+                F64 => code_builder.f64_sub(),
+            },
+            WasmLayout::StackMemory { format, .. } => match format {
+                DataStructure => return NotImplemented,
+                Int128 => return NotImplemented,
+                Float128 => return NotImplemented,
+                Decimal => return BuiltinCall(bitcode::DEC_SUB_WITH_OVERFLOW),
+            },
         },
-        NumSubWrap => match ret_layout.arg_types(CallConv::Zig)[0] {
-            I32 => {
-                code_builder.i32_sub();
-                wrap_i32(code_builder, ret_layout.size());
-            }
-            I64 => code_builder.i64_sub(),
-            F32 => code_builder.f32_sub(),
-            F64 => code_builder.f64_sub(),
+        NumSubWrap => match ret_layout {
+            WasmLayout::Primitive(value_type, size) => match value_type {
+                I32 => {
+                    code_builder.i32_sub();
+                    wrap_i32(code_builder, *size);
+                }
+                I64 => code_builder.i64_sub(),
+                F32 => code_builder.f32_sub(),
+                F64 => code_builder.f64_sub(),
+            },
+            WasmLayout::StackMemory { format, .. } => match format {
+                DataStructure => return NotImplemented,
+                Int128 => return NotImplemented,
+                Float128 => return NotImplemented,
+                Decimal => return BuiltinCall(bitcode::DEC_SUB_WITH_OVERFLOW),
+            },
         },
         NumSubChecked => return NotImplemented,
-        NumMul => match ret_layout.arg_types(CallConv::Zig)[0] {
-            I32 => code_builder.i32_mul(),
-            I64 => code_builder.i64_mul(),
-            F32 => code_builder.f32_mul(),
-            F64 => code_builder.f64_mul(),
+        NumMul => match ret_layout {
+            WasmLayout::Primitive(value_type, _) => match value_type {
+                I32 => code_builder.i32_mul(),
+                I64 => code_builder.i64_mul(),
+                F32 => code_builder.f32_mul(),
+                F64 => code_builder.f64_mul(),
+            },
+            WasmLayout::StackMemory { format, .. } => match format {
+                DataStructure => return NotImplemented,
+                Int128 => return NotImplemented,
+                Float128 => return NotImplemented,
+                Decimal => return BuiltinCall(bitcode::DEC_MUL_WITH_OVERFLOW),
+            },
         },
-        NumMulWrap => match ret_layout.arg_types(CallConv::Zig)[0] {
-            I32 => {
-                code_builder.i32_mul();
-                wrap_i32(code_builder, ret_layout.size());
-            }
-            I64 => code_builder.i64_mul(),
-            F32 => code_builder.f32_mul(),
-            F64 => code_builder.f64_mul(),
+        NumMulWrap => match ret_layout {
+            WasmLayout::Primitive(value_type, size) => match value_type {
+                I32 => {
+                    code_builder.i32_mul();
+                    wrap_i32(code_builder, *size);
+                }
+                I64 => code_builder.i64_mul(),
+                F32 => code_builder.f32_mul(),
+                F64 => code_builder.f64_mul(),
+            },
+            WasmLayout::StackMemory { format, .. } => match format {
+                DataStructure => return NotImplemented,
+                Int128 => return NotImplemented,
+                Float128 => return NotImplemented,
+                Decimal => return BuiltinCall(bitcode::DEC_MUL_WITH_OVERFLOW),
+            },
         },
         NumMulChecked => return NotImplemented,
-        NumGt => match storage.get(&args[0]).arg_types(CallConv::Zig)[0] {
-            I32 => code_builder.i32_gt_s(),
-            I64 => code_builder.i64_gt_s(),
-            F32 => code_builder.f32_gt(),
-            F64 => code_builder.f64_gt(),
+        NumGt => match storage.get(&args[0]) {
+            StoredValue::VirtualMachineStack { value_type, .. }
+            | StoredValue::Local { value_type, .. } => match value_type {
+                I32 => code_builder.i32_gt_s(),
+                I64 => code_builder.i64_gt_s(),
+                F32 => code_builder.f32_gt(),
+                F64 => code_builder.f64_gt(),
+            },
+            StoredValue::StackMemory { .. } => return NotImplemented,
         },
-        NumGte => match storage.get(&args[0]).arg_types(CallConv::Zig)[0] {
-            I32 => code_builder.i32_ge_s(),
-            I64 => code_builder.i64_ge_s(),
-            F32 => code_builder.f32_ge(),
-            F64 => code_builder.f64_ge(),
+        NumGte => match storage.get(&args[0]) {
+            StoredValue::VirtualMachineStack { value_type, .. }
+            | StoredValue::Local { value_type, .. } => match value_type {
+                I32 => code_builder.i32_ge_s(),
+                I64 => code_builder.i64_ge_s(),
+                F32 => code_builder.f32_ge(),
+                F64 => code_builder.f64_ge(),
+            },
+            StoredValue::StackMemory { .. } => return NotImplemented,
         },
-        NumLt => match storage.get(&args[0]).arg_types(CallConv::Zig)[0] {
-            I32 => code_builder.i32_lt_s(),
-            I64 => code_builder.i64_lt_s(),
-            F32 => code_builder.f32_lt(),
-            F64 => code_builder.f64_lt(),
+        NumLt => match storage.get(&args[0]) {
+            StoredValue::VirtualMachineStack { value_type, .. }
+            | StoredValue::Local { value_type, .. } => match value_type {
+                I32 => code_builder.i32_lt_s(),
+                I64 => code_builder.i64_lt_s(),
+                F32 => code_builder.f32_lt(),
+                F64 => code_builder.f64_lt(),
+            },
+            StoredValue::StackMemory { .. } => return NotImplemented,
         },
-        NumLte => match storage.get(&args[0]).arg_types(CallConv::Zig)[0] {
-            I32 => code_builder.i32_le_s(),
-            I64 => code_builder.i64_le_s(),
-            F32 => code_builder.f32_le(),
-            F64 => code_builder.f64_le(),
+        NumLte => match storage.get(&args[0]) {
+            StoredValue::VirtualMachineStack { value_type, .. }
+            | StoredValue::Local { value_type, .. } => match value_type {
+                I32 => code_builder.i32_le_s(),
+                I64 => code_builder.i64_le_s(),
+                F32 => code_builder.f32_le(),
+                F64 => code_builder.f64_le(),
+            },
+            StoredValue::StackMemory { .. } => return NotImplemented,
         },
         NumCompare => return NotImplemented,
-        NumDivUnchecked => match ret_layout.arg_types(CallConv::Zig)[0] {
-            I32 => code_builder.i32_div_s(),
-            I64 => code_builder.i64_div_s(),
-            F32 => code_builder.f32_div(),
-            F64 => code_builder.f64_div(),
+        NumDivUnchecked => match storage.get(&args[0]) {
+            StoredValue::VirtualMachineStack { value_type, .. }
+            | StoredValue::Local { value_type, .. } => match value_type {
+                I32 => code_builder.i32_div_s(),
+                I64 => code_builder.i64_div_s(),
+                F32 => code_builder.f32_div(),
+                F64 => code_builder.f64_div(),
+            },
+            StoredValue::StackMemory { format, .. } => match format {
+                DataStructure => return NotImplemented,
+                Int128 => return NotImplemented,
+                Float128 => return NotImplemented,
+                Decimal => return BuiltinCall(bitcode::DEC_DIV),
+            },
         },
         NumDivCeilUnchecked => return NotImplemented,
-        NumRemUnchecked => match ret_layout.arg_types(CallConv::Zig)[0] {
-            I32 => code_builder.i32_rem_s(),
-            I64 => code_builder.i64_rem_s(),
-            F32 => return NotImplemented,
-            F64 => return NotImplemented,
+        NumRemUnchecked => match storage.get(&args[0]) {
+            StoredValue::VirtualMachineStack { value_type, .. }
+            | StoredValue::Local { value_type, .. } => match value_type {
+                I32 => code_builder.i32_rem_s(),
+                I64 => code_builder.i64_rem_s(),
+                F32 => return NotImplemented,
+                F64 => return NotImplemented,
+            },
+            StoredValue::StackMemory { .. } => return NotImplemented,
         },
         NumIsMultipleOf => return NotImplemented,
-        NumAbs => match ret_layout.arg_types(CallConv::Zig)[0] {
-            I32 => {
-                let arg_storage = storage.get(&args[0]).to_owned();
-                storage.ensure_value_has_local(code_builder, args[0], arg_storage);
-                storage.load_symbols(code_builder, args);
-                code_builder.i32_const(0);
-                storage.load_symbols(code_builder, args);
-                code_builder.i32_sub();
-                storage.load_symbols(code_builder, args);
-                code_builder.i32_const(0);
-                code_builder.i32_ge_s();
-                code_builder.select();
-            }
-            I64 => {
-                let arg_storage = storage.get(&args[0]).to_owned();
-                storage.ensure_value_has_local(code_builder, args[0], arg_storage);
-                storage.load_symbols(code_builder, args);
-                code_builder.i64_const(0);
-                storage.load_symbols(code_builder, args);
-                code_builder.i64_sub();
-                storage.load_symbols(code_builder, args);
-                code_builder.i64_const(0);
-                code_builder.i64_ge_s();
-                code_builder.select();
-            }
-            F32 => code_builder.f32_abs(),
-            F64 => code_builder.f64_abs(),
-        },
-        NumNeg => {
-            match ret_layout.arg_types(CallConv::Zig)[0] {
+        NumAbs => match storage.get(&args[0]) {
+            StoredValue::VirtualMachineStack { value_type, .. }
+            | StoredValue::Local { value_type, .. } => match value_type {
                 I32 => {
-                    // Unfortunate local.set/local.get
+                    let arg_storage = storage.get(&args[0]).to_owned();
+                    storage.ensure_value_has_local(code_builder, args[0], arg_storage);
+                    storage.load_symbols(code_builder, args);
+                    code_builder.i32_const(0);
+                    storage.load_symbols(code_builder, args);
+                    code_builder.i32_sub();
+                    storage.load_symbols(code_builder, args);
+                    code_builder.i32_const(0);
+                    code_builder.i32_ge_s();
+                    code_builder.select();
+                }
+                I64 => {
+                    let arg_storage = storage.get(&args[0]).to_owned();
+                    storage.ensure_value_has_local(code_builder, args[0], arg_storage);
+                    storage.load_symbols(code_builder, args);
+                    code_builder.i64_const(0);
+                    storage.load_symbols(code_builder, args);
+                    code_builder.i64_sub();
+                    storage.load_symbols(code_builder, args);
+                    code_builder.i64_const(0);
+                    code_builder.i64_ge_s();
+                    code_builder.select();
+                }
+                F32 => code_builder.f32_abs(),
+                F64 => code_builder.f64_abs(),
+            },
+            StoredValue::StackMemory { .. } => return NotImplemented,
+        },
+        NumNeg => match ret_layout {
+            WasmLayout::Primitive(value_type, _) => match value_type {
+                I32 => {
                     code_builder.i32_const(0);
                     storage.load_symbols(code_builder, args);
                     code_builder.i32_sub();
                 }
                 I64 => {
-                    // Unfortunate local.set/local.get
                     code_builder.i64_const(0);
                     storage.load_symbols(code_builder, args);
                     code_builder.i64_sub();
                 }
                 F32 => code_builder.f32_neg(),
                 F64 => code_builder.f64_neg(),
-            }
-        }
+            },
+            WasmLayout::StackMemory { .. } => return NotImplemented,
+        },
         NumSin => return NotImplemented,
         NumCos => return NotImplemented,
         NumSqrtUnchecked => return NotImplemented,
         NumLogUnchecked => return NotImplemented,
-        NumRound => {
-            // FIXME
-            // thread 'gen_num::f64_round' panicked at 'called `Result::unwrap()` on an `Err` value:
-            // Io(Os { code: 2, kind: NotFound, message: "No such file or directory" })',
-            // compiler/test_gen/src/helpers/wasm.rs:185:53
-            // Note: Wasm has a `nearest` op, but it does round-to-even when fraction is exactly 0.5
-            // which fails tests. Will this do? Or is specific behaviour important?
-            let width = float_width_from_layout(ret_layout);
-            return BuiltinCall(&bitcode::NUM_ROUND[width]);
-        }
-        NumToFloat => match (
-            ret_layout.arg_types(CallConv::Zig)[0],
-            storage.get(&args[0]).arg_types(CallConv::Zig)[0],
-        ) {
-            (F32, I32) => code_builder.f32_convert_s_i32(),
-            (F32, I64) => code_builder.f32_convert_s_i64(),
-            (F32, F32) => {}
-            (F32, F64) => code_builder.f32_demote_f64(),
-            (F64, I32) => code_builder.f64_convert_s_i32(),
-            (F64, I64) => code_builder.f64_convert_s_i64(),
-            (F64, F32) => code_builder.f64_promote_f32(),
-            (F64, F64) => {}
-            _ => panic_ret_type(),
+        NumRound => match storage.get(&args[0]) {
+            StoredValue::VirtualMachineStack { value_type, .. }
+            | StoredValue::Local { value_type, .. } => match value_type {
+                F32 => return BuiltinCall(&bitcode::NUM_ROUND[FloatWidth::F32]),
+                F64 => return BuiltinCall(&bitcode::NUM_ROUND[FloatWidth::F64]),
+                _ => return NotImplemented,
+            },
+            StoredValue::StackMemory { .. } => return NotImplemented,
         },
+        NumToFloat => {
+            use StoredValue::*;
+            let stored = storage.get(&args[0]);
+            match ret_layout {
+                WasmLayout::Primitive(ret_type, _) => match stored {
+                    VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
+                        match (ret_type, value_type) {
+                            (F32, I32) => code_builder.f32_convert_s_i32(),
+                            (F32, I64) => code_builder.f32_convert_s_i64(),
+                            (F32, F32) => {}
+                            (F32, F64) => code_builder.f32_demote_f64(),
+
+                            (F64, I32) => code_builder.f64_convert_s_i32(),
+                            (F64, I64) => code_builder.f64_convert_s_i64(),
+                            (F64, F32) => code_builder.f64_promote_f32(),
+                            (F64, F64) => {}
+
+                            _ => panic_ret_type(),
+                        }
+                    }
+                    StackMemory { .. } => return NotImplemented,
+                },
+                WasmLayout::StackMemory { .. } => return NotImplemented,
+            }
+        }
         NumPow => return NotImplemented,
-        NumCeiling => match ret_layout.arg_types(CallConv::Zig)[0] {
-            I32 => {
-                code_builder.f32_ceil();
-                code_builder.i32_trunc_s_f32()
-            }
-            I64 => {
-                code_builder.f64_ceil();
-                code_builder.i64_trunc_s_f64()
-            }
-            _ => panic_ret_type(),
+        NumCeiling => match ret_layout {
+            WasmLayout::Primitive(value_type, _) => match value_type {
+                I32 => {
+                    code_builder.f32_ceil();
+                    code_builder.i32_trunc_s_f32()
+                }
+                I64 => {
+                    code_builder.f64_ceil();
+                    code_builder.i64_trunc_s_f64()
+                }
+                _ => panic_ret_type(),
+            },
+            WasmLayout::StackMemory { .. } => return NotImplemented,
         },
         NumPowInt => return NotImplemented,
-        NumFloor => match ret_layout.arg_types(CallConv::Zig)[0] {
-            I32 => {
-                code_builder.f32_floor();
-                code_builder.i32_trunc_s_f32()
-            }
-            I64 => {
-                code_builder.f64_floor();
-                code_builder.i64_trunc_s_f64()
-            }
-            _ => panic_ret_type(),
+        NumFloor => match ret_layout {
+            WasmLayout::Primitive(value_type, _) => match value_type {
+                I32 => {
+                    code_builder.f32_floor();
+                    code_builder.i32_trunc_s_f32()
+                }
+                I64 => {
+                    code_builder.f64_floor();
+                    code_builder.i64_trunc_s_f64()
+                }
+                _ => panic_ret_type(),
+            },
+            WasmLayout::StackMemory { .. } => return NotImplemented,
         },
-        NumIsFinite => match ret_layout.arg_types(CallConv::Zig)[0] {
-            I32 => code_builder.i32_const(1),
-            I64 => code_builder.i32_const(1),
-            F32 => {
-                code_builder.i32_reinterpret_f32();
-                code_builder.i32_const(0x7f800000);
-                code_builder.i32_and();
-                code_builder.i32_const(0x7f800000);
-                code_builder.i32_ne();
-            }
-            F64 => {
-                code_builder.i64_reinterpret_f64();
-                code_builder.i64_const(0x7ff0000000000000);
-                code_builder.i64_and();
-                code_builder.i64_const(0x7ff0000000000000);
-                code_builder.i64_ne();
-            }
+        NumIsFinite => match ret_layout {
+            WasmLayout::Primitive(value_type, _) => match value_type {
+                I32 => code_builder.i32_const(1),
+                I64 => code_builder.i32_const(1),
+                F32 => {
+                    code_builder.i32_reinterpret_f32();
+                    code_builder.i32_const(0x7f800000);
+                    code_builder.i32_and();
+                    code_builder.i32_const(0x7f800000);
+                    code_builder.i32_ne();
+                }
+                F64 => {
+                    code_builder.i64_reinterpret_f64();
+                    code_builder.i64_const(0x7ff0000000000000);
+                    code_builder.i64_and();
+                    code_builder.i64_const(0x7ff0000000000000);
+                    code_builder.i64_ne();
+                }
+            },
+            WasmLayout::StackMemory { .. } => return NotImplemented,
         },
         NumAtan => {
             let width = float_width_from_layout(ret_layout);
@@ -289,82 +379,112 @@ pub fn decode_low_level<'a>(
         }
         NumBytesToU16 => return NotImplemented,
         NumBytesToU32 => return NotImplemented,
-        NumBitwiseAnd => match ret_layout.arg_types(CallConv::Zig)[0] {
-            I32 => code_builder.i32_and(),
-            I64 => code_builder.i64_and(),
-            _ => panic_ret_type(),
+        NumBitwiseAnd => match ret_layout {
+            WasmLayout::Primitive(value_type, _) => match value_type {
+                I32 => code_builder.i32_and(),
+                I64 => code_builder.i64_and(),
+                _ => panic_ret_type(),
+            },
+            WasmLayout::StackMemory { .. } => return NotImplemented,
         },
-        NumBitwiseXor => match ret_layout.arg_types(CallConv::Zig)[0] {
-            I32 => code_builder.i32_xor(),
-            I64 => code_builder.i64_xor(),
-            _ => panic_ret_type(),
+        NumBitwiseXor => match ret_layout {
+            WasmLayout::Primitive(value_type, _) => match value_type {
+                I32 => code_builder.i32_xor(),
+                I64 => code_builder.i64_xor(),
+                _ => panic_ret_type(),
+            },
+            WasmLayout::StackMemory { .. } => return NotImplemented,
         },
-        NumBitwiseOr => match ret_layout.arg_types(CallConv::Zig)[0] {
-            I32 => code_builder.i32_or(),
-            I64 => code_builder.i64_or(),
-            _ => panic_ret_type(),
+        NumBitwiseOr => match ret_layout {
+            WasmLayout::Primitive(value_type, _) => match value_type {
+                I32 => code_builder.i32_or(),
+                I64 => code_builder.i64_or(),
+                _ => panic_ret_type(),
+            },
+            WasmLayout::StackMemory { .. } => return NotImplemented,
         },
         NumShiftLeftBy => {
-            // Unfortunate local.set/local.get
+            // Swap order of arguments
             storage.load_symbols(code_builder, &[args[1], args[0]]);
-            match ret_layout.arg_types(CallConv::Zig)[0] {
-                I32 => code_builder.i32_shl(),
-                I64 => code_builder.i64_shl(),
-                _ => panic_ret_type(),
+            match ret_layout {
+                WasmLayout::Primitive(value_type, _) => match value_type {
+                    I32 => code_builder.i32_shl(),
+                    I64 => code_builder.i64_shl(),
+                    _ => panic_ret_type(),
+                },
+                WasmLayout::StackMemory { .. } => return NotImplemented,
             }
         }
-        NumShiftRightBy => match ret_layout.arg_types(CallConv::Zig)[0] {
-            I32 => code_builder.i32_shr_s(),
-            I64 => code_builder.i64_shr_s(),
-            _ => panic_ret_type(),
+        NumShiftRightBy => match ret_layout {
+            WasmLayout::Primitive(value_type, _) => match value_type {
+                I32 => code_builder.i32_shr_s(),
+                I64 => code_builder.i64_shr_s(),
+                _ => panic_ret_type(),
+            },
+            WasmLayout::StackMemory { .. } => return NotImplemented,
         },
-        NumShiftRightZfBy => match ret_layout.arg_types(CallConv::Zig)[0] {
-            I32 => code_builder.i32_shr_u(),
-            I64 => code_builder.i64_shr_u(),
-            _ => panic_ret_type(),
+        NumShiftRightZfBy => match ret_layout {
+            WasmLayout::Primitive(value_type, _) => match value_type {
+                I32 => code_builder.i32_shr_u(),
+                I64 => code_builder.i64_shr_u(),
+                _ => panic_ret_type(),
+            },
+            WasmLayout::StackMemory { .. } => return NotImplemented,
         },
-        NumIntCast => match (
-            ret_layout.arg_types(CallConv::Zig)[0],
-            storage.get(&args[0]).arg_types(CallConv::Zig)[0],
-        ) {
-            (I32, I32) => {}
-            (I32, I64) => code_builder.i32_wrap_i64(),
-            (I32, F32) => code_builder.i32_trunc_s_f32(),
-            (I32, F64) => code_builder.i32_trunc_s_f64(),
+        NumIntCast => {
+            use StoredValue::*;
+            let stored = storage.get(&args[0]);
+            match ret_layout {
+                WasmLayout::Primitive(ret_type, _) => match stored {
+                    VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
+                        match (ret_type, value_type) {
+                            (I32, I32) => {}
+                            (I32, I64) => code_builder.i32_wrap_i64(),
+                            (I32, F32) => code_builder.i32_trunc_s_f32(),
+                            (I32, F64) => code_builder.i32_trunc_s_f64(),
 
-            (I64, I32) => code_builder.i64_extend_s_i32(),
-            (I64, I64) => {}
-            (I64, F32) => code_builder.i64_trunc_s_f32(),
-            (I64, F64) => code_builder.i64_trunc_s_f64(),
+                            (I64, I32) => code_builder.i64_extend_s_i32(),
+                            (I64, I64) => {}
+                            (I64, F32) => code_builder.i64_trunc_s_f32(),
+                            (I64, F64) => code_builder.i64_trunc_s_f64(),
 
-            (F32, I32) => code_builder.f32_convert_s_i32(),
-            (F32, I64) => code_builder.f32_convert_s_i64(),
-            (F32, F32) => {}
-            (F32, F64) => code_builder.f32_demote_f64(),
+                            (F32, I32) => code_builder.f32_convert_s_i32(),
+                            (F32, I64) => code_builder.f32_convert_s_i64(),
+                            (F32, F32) => {}
+                            (F32, F64) => code_builder.f32_demote_f64(),
 
-            (F64, I32) => code_builder.f64_convert_s_i32(),
-            (F64, I64) => code_builder.f64_convert_s_i64(),
-            (F64, F32) => code_builder.f64_promote_f32(),
-            (F64, F64) => {}
-        },
-        Eq => {
-            // TODO: For non-number types, this will implement pointer equality, which is wrong
-            match storage.get(&args[0]).arg_types(CallConv::Zig)[0] {
+                            (F64, I32) => code_builder.f64_convert_s_i32(),
+                            (F64, I64) => code_builder.f64_convert_s_i64(),
+                            (F64, F32) => code_builder.f64_promote_f32(),
+                            (F64, F64) => {}
+                        }
+                    }
+
+                    StackMemory { .. } => return NotImplemented,
+                },
+                WasmLayout::StackMemory { .. } => return NotImplemented,
+            }
+        }
+        Eq => match storage.get(&args[0]) {
+            StoredValue::VirtualMachineStack { value_type, .. }
+            | StoredValue::Local { value_type, .. } => match value_type {
                 I32 => code_builder.i32_eq(),
                 I64 => code_builder.i64_eq(),
                 F32 => code_builder.f32_eq(),
                 F64 => code_builder.f64_eq(),
-            }
-        }
-        NotEq => {
-            // TODO: For non-number types, this will implement pointer inequality, which is wrong
-            match storage.get(&args[0]).arg_types(CallConv::Zig)[0] {
+            },
+            StoredValue::StackMemory { .. } => return NotImplemented,
+        },
+        NotEq => match storage.get(&args[0]) {
+            StoredValue::VirtualMachineStack { value_type, .. }
+            | StoredValue::Local { value_type, .. } => match value_type {
                 I32 => code_builder.i32_ne(),
                 I64 => code_builder.i64_ne(),
                 F32 => code_builder.f32_ne(),
                 F64 => code_builder.f64_ne(),
-            }
-        }
+            },
+            StoredValue::StackMemory { .. } => return NotImplemented,
+        },
         And => code_builder.i32_and(),
         Or => code_builder.i32_or(),
         Not => code_builder.i32_eqz(),
@@ -402,9 +522,9 @@ fn wrap_i32(code_builder: &mut CodeBuilder, size: u32) {
 }
 
 fn float_width_from_layout(wasm_layout: &WasmLayout) -> FloatWidth {
-    if wasm_layout.arg_types(CallConv::Zig)[0] == ValueType::F32 {
-        FloatWidth::F32
-    } else {
-        FloatWidth::F64
+    match wasm_layout {
+        WasmLayout::Primitive(F32, _) => FloatWidth::F32,
+        WasmLayout::Primitive(F64, _) => FloatWidth::F64,
+        _ => panic!("{:?} does not have a FloatWidth", wasm_layout),
     }
 }

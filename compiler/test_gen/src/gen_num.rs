@@ -520,7 +520,7 @@ fn f64_log_negative() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn f64_round() {
     assert_evals_to!("Num.round 3.6", 4, i64);
     assert_evals_to!("Num.round 3.4", 3, i64);
@@ -813,7 +813,7 @@ fn gen_add_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_sub_dec() {
     assert_evals_to!(
         indoc!(
