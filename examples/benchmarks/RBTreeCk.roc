@@ -55,7 +55,7 @@ main =
             Cons head _ ->
                 val = fold (\_, v, r -> if v then r + 1 else r) head 0
                 val
-                    |> Str.fromInt
+                    |> Num.toStr
                     |> Task.putLine
 
             Nil ->

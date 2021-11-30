@@ -385,6 +385,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // maxI128 : I128
     add_type!(Symbol::NUM_MAX_I128, i128_type());
 
+    // toStr : Num a -> Str
+    add_top_level_function_type!(
+        Symbol::NUM_TO_STR,
+        vec![num_type(flex(TVAR1))],
+        Box::new(str_type())
+    );
+
     // Float module
 
     // div : Float a, Float a -> Float a
@@ -618,13 +625,6 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(nat_type())
     );
 
-    // fromInt : Int a -> Str
-    add_top_level_function_type!(
-        Symbol::STR_FROM_INT,
-        vec![int_type(flex(TVAR1))],
-        Box::new(str_type())
-    );
-
     // repeat : Str, Nat -> Str
     add_top_level_function_type!(
         Symbol::STR_REPEAT,
@@ -700,13 +700,6 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Symbol::STR_TO_UTF8,
         vec![str_type()],
         Box::new(list_type(u8_type()))
-    );
-
-    // fromFloat : Float a -> Str
-    add_top_level_function_type!(
-        Symbol::STR_FROM_FLOAT,
-        vec![float_type(flex(TVAR1))],
-        Box::new(str_type())
     );
 
     // List module

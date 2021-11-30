@@ -61,6 +61,7 @@ interface Num
             addChecked,
             atan,
             acos,
+            toStr,
             Signed128,
             Signed64,
             Signed32,

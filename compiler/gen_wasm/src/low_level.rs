@@ -87,6 +87,7 @@ pub fn decode_low_level<'a>(
             F32 => code_builder.f32_add(),
             F64 => code_builder.f64_add(),
         },
+        NumToStr => return NotImplemented,
         NumAddChecked => return NotImplemented,
         NumSub => match ret_layout.arg_types(CallConv::Zig)[0] {
             I32 => code_builder.i32_sub(),

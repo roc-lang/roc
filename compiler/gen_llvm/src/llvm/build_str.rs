@@ -406,7 +406,7 @@ pub fn str_from_utf8<'a, 'ctx, 'env>(
     decode_from_utf8_result(env, result_ptr).into()
 }
 
-/// Str.fromInt : Int -> Str
+/// Str.fromFloat : Int -> Str
 pub fn str_from_float<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,

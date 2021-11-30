@@ -33,7 +33,7 @@ toStrData: Data -> Str
 toStrData = \data ->
     when data is
         Lambda _ -> "[]"
-        Number n -> Str.fromInt (Num.intCast n)
+        Number n -> Num.toStr (Num.intCast n)
         Var v -> Variable.toStr v
 
 toStrState: State -> Str
@@ -49,7 +49,7 @@ toStrState = \state ->
 
 toStr: Context -> Str
 toStr = \{scopes, stack, state, vars} ->
-    depth = Str.fromInt (List.len scopes)
+    depth = Num.toStr (List.len scopes)
     stateStr = toStrState state
     stackStr = Str.joinWith (List.map stack toStrData) " "
     varsStr = Str.joinWith (List.map vars toStrData) " "
