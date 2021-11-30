@@ -5522,6 +5522,24 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             list_join(env, parent, list, outer_list_layout)
         }
+        NumToStr => {
+            // Num.toStr : Num a -> Str
+            debug_assert_eq!(args.len(), 1);
+
+            let (num, num_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            match num_layout {
+                Layout::Builtin(Builtin::Int(int_width)) => {
+                    let int = num.into_int_value();
+
+                    str_from_int(env, int, *int_width)
+                }
+                Layout::Builtin(Builtin::Float(_float_width)) => {
+                    str_from_float(env, scope, args[0])
+                }
+                _ => unreachable!(),
+            }
+        }
         NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumLogUnchecked | NumSin | NumCos
         | NumCeiling | NumFloor | NumToFloat | NumIsFinite | NumAtan | NumAcos | NumAsin => {
             debug_assert_eq!(args.len(), 1);

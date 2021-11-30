@@ -992,6 +992,7 @@ define_builtins! {
         104 NUM_BYTES_TO_U32: "bytesToU32"
         105 NUM_CAST_TO_NAT: "#castToNat"
         106 NUM_DIV_CEIL: "divCeil"
+        107 NUM_TO_STR: "toStr"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
@@ -1017,19 +1018,17 @@ define_builtins! {
         7 STR_COUNT_GRAPHEMES: "countGraphemes"
         8 STR_STARTS_WITH: "startsWith"
         9 STR_ENDS_WITH: "endsWith"
-        10 STR_FROM_INT: "fromInt"
-        11 STR_FROM_FLOAT: "fromFloat"
-        12 STR_FROM_UTF8: "fromUtf8"
-        13 STR_UT8_PROBLEM: "Utf8Problem" // the Utf8Problem type alias
-        14 STR_UT8_BYTE_PROBLEM: "Utf8ByteProblem" // the Utf8ByteProblem type alias
-        15 STR_TO_UTF8: "toUtf8"
-        16 STR_STARTS_WITH_CODE_PT: "startsWithCodePt"
-        17 STR_ALIAS_ANALYSIS_STATIC: "#aliasAnalysisStatic" // string with the static lifetime
-        18 STR_FROM_UTF8_RANGE: "fromUtf8Range"
-        19 STR_REPEAT: "repeat"
-        20 STR_TRIM: "trim"
-        21 STR_TRIM_LEFT: "trimLeft"
-        22 STR_TRIM_RIGHT: "trimRight"
+        10 STR_FROM_UTF8: "fromUtf8"
+        11 STR_UT8_PROBLEM: "Utf8Problem" // the Utf8Problem type alias
+        12 STR_UT8_BYTE_PROBLEM: "Utf8ByteProblem" // the Utf8ByteProblem type alias
+        13 STR_TO_UTF8: "toUtf8"
+        14 STR_STARTS_WITH_CODE_PT: "startsWithCodePt"
+        15 STR_ALIAS_ANALYSIS_STATIC: "#aliasAnalysisStatic" // string with the static lifetime
+        16 STR_FROM_UTF8_RANGE: "fromUtf8Range"
+        17 STR_REPEAT: "repeat"
+        18 STR_TRIM: "trim"
+        19 STR_TRIM_LEFT: "trimLeft"
+        20 STR_TRIM_RIGHT: "trimRight"
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
