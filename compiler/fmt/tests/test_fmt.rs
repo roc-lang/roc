@@ -2111,6 +2111,31 @@ mod test_fmt {
     }
 
     #[test]
+    fn inner_def_with_triple_newline_before() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                \x ->
+
+
+                    m1 = insert m n powerOf10
+
+                    42
+                "#
+            ),
+            indoc!(
+                r#"
+                \x ->
+
+                    m1 = insert m n powerOf10
+
+                    42
+                "#
+            ),
+        );
+    }
+
+    #[test]
     fn when_guard() {
         expr_formats_same(indoc!(
             r#"

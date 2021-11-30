@@ -46,7 +46,7 @@ where
         match space {
             Newline => {
                 if !encountered_comment && (consecutive_newlines < 2) {
-                    if iter.peek() == Some(&&Newline) {
+                    if iter.peek() == Some(&&Newline) && consecutive_newlines < 1 {
                         buf.push('\n');
                     } else {
                         newline(buf, indent);
