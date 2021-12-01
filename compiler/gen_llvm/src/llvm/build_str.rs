@@ -441,3 +441,13 @@ pub fn empty_str<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'c
     // so the whole struct should be a const_zero
     BasicValueEnum::StructValue(struct_type.const_zero())
 }
+
+/// Str.toNum : Str -> Result (Num a) [ ExpectedNum a ]*
+pub fn str_to_num<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    str_symbol: Symbol,
+) -> BasicValueEnum<'ctx> {
+    let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
+    call_bitcode_fn(env, &[str_i128.into()], bitcode::STR_TRIM_RIGHT)
+}

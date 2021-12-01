@@ -1029,6 +1029,7 @@ define_builtins! {
         18 STR_TRIM: "trim"
         19 STR_TRIM_LEFT: "trimLeft"
         20 STR_TRIM_RIGHT: "trimRight"
+        21 STR_TO_NUM: "toNum"
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias

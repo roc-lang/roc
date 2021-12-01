@@ -702,6 +702,9 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(list_type(u8_type()))
     );
 
+    // toNum : Str -> Result (Num a) [ ExpectedNum a ]*
+    todo!();
+
     // List module
 
     // get : List elem, Nat -> Result elem [ OutOfBounds ]*

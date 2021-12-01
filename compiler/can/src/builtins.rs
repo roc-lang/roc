@@ -68,6 +68,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_TRIM => str_trim,
         STR_TRIM_LEFT => str_trim_left,
         STR_TRIM_RIGHT => str_trim_right,
+        STR_TO_NUM => str_to_num,
         LIST_LEN => list_len,
         LIST_GET => list_get,
         LIST_SET => list_set,
@@ -1321,6 +1322,11 @@ fn str_trim_left(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Str.trimRight : Str -> Str
 fn str_trim_right(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::StrTrimRight, var_store)
+}
+
+/// Str.toNum : Str -> Result (Num a) [ ExpectedNum a ]*
+fn str_to_num(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::StrToNum, var_store)
 }
 
 /// Str.repeat : Str, Nat -> Str
