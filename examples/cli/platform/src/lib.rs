@@ -9,6 +9,7 @@ use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::io::{self, Read, BufReader};
 use std::fs::File;
+use std::mem::ManuallyDrop;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed"]
@@ -121,13 +122,11 @@ pub extern "C" fn roc_fx_getLine() -> RocStr {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_putLine(line: RocStr) -> () {
+pub extern "C" fn roc_fx_putLine(line: ManuallyDrop<RocStr>) -> () {
     let bytes = line.as_slice();
     let string = unsafe { std::str::from_utf8_unchecked(bytes) };
-    println!("{}", string);
 
-    // don't mess with the refcount!
-    core::mem::forget(line);
+    println!("{}", string);
 
     ()
 }
