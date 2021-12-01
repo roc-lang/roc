@@ -48,6 +48,12 @@ impl<T: Clone> Clone for RocList<T> {
     }
 }
 
+impl<T: Clone> From<&[T]> for RocList<T> {
+    fn from(slice: &[T]) -> RocList<T> {
+        Self::from_slice(slice)
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum Storage {
     ReadOnly,
