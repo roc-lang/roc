@@ -5274,17 +5274,21 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (string, _string_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            // match on the return layout to figure out which zig builtin we need
-            let intrinsic = match layout {
-                Layout::Builtin(Builtin::Int(int_width)) => &bitcode::STR_TO_INT[*int_width],
-                Layout::Builtin(Builtin::Float(float_width)) => {
-                    &bitcode::STR_TO_FLOAT[*float_width]
-                }
-                Layout::Builtin(Builtin::Decimal) => bitcode::STR_TO_DECIMAL,
-                _ => unreachable!(),
-            };
+            if let Layout::Union(UnionLayout::NonRecursive(union_layout)) = layout {
+                // match on the return layout to figure out which zig builtin we need
+                let intrinsic = match union_layout[1][0] {
+                    Layout::Builtin(Builtin::Int(int_width)) => &bitcode::STR_TO_INT[int_width],
+                    Layout::Builtin(Builtin::Float(float_width)) => {
+                        &bitcode::STR_TO_FLOAT[float_width]
+                    }
+                    Layout::Builtin(Builtin::Decimal) => bitcode::STR_TO_DECIMAL,
+                    _ => unreachable!(),
+                };
 
-            call_bitcode_fn(env, &[string], intrinsic)
+                call_bitcode_fn(env, &[string], intrinsic)
+            } else {
+                unreachable!()
+            }
         }
         StrFromInt => {
             // Str.fromInt : Int -> Str
