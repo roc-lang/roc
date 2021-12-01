@@ -32,8 +32,12 @@ pub fn exportParseInt(comptime T: type, comptime name: []const u8) void {
 
 pub fn exportParseFloat(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
-        fn func(input: T, buf: []const u8) callconv(.C) bool {
-            return std.fmt.parseFloat(T, buf);
+        fn func(input: T, buf: RocStr) callconv(.C) NumParseResult(T) {
+            if (std.fmt.parseFloat(T, buf.asSlice())) |success| {
+                return .{ .errorcode = 0, .value = success };
+            } else |err| {
+                return .{ .errorcode = 1, .value = 0 };
+            }
         }
     }.func;
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
