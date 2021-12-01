@@ -1346,31 +1346,35 @@ pub enum CallType<'a> {
     HigherOrder(&'a HigherOrderLowLevel<'a>),
 }
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct PassedFunction<'a> {
+    /// name of the top-level function that is passed as an argument
+    /// e.g. in `List.map xs Num.abs` this would be `Num.abs`
+    pub name: Symbol,
+
+    pub argument_layouts: &'a [Layout<'a>],
+    pub return_layout: Layout<'a>,
+
+    pub specialization_id: CallSpecId,
+
+    /// Symbol of the environment captured by the function argument
+    pub captured_environment: Symbol,
+
+    pub owns_captured_environment: bool,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct HigherOrderLowLevel<'a> {
     pub op: crate::low_level::HigherOrder,
+
+    /// TODO I _think_  we can get rid of this, perhaps only keeping track of
     /// the layout of the closure argument, if any
     pub closure_env_layout: Option<Layout<'a>>,
-
-    /// name of the top-level function that is passed as an argument
-    /// e.g. in `List.map xs Num.abs` this would be `Num.abs`
-    pub function_name: Symbol,
-
-    /// Symbol of the environment captured by the function argument
-    pub function_env: Symbol,
-
-    /// does the function argument need to own the closure data
-    pub function_owns_closure_data: bool,
-
-    /// specialization id of the function argument, used for name generation
-    pub specialization_id: CallSpecId,
 
     /// update mode of the higher order lowlevel itself
     pub update_mode: UpdateModeId,
 
-    /// function layout, used for name generation
-    pub arg_layouts: &'a [Layout<'a>],
-    pub ret_layout: Layout<'a>,
+    pub passed_function: PassedFunction<'a>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -4193,16 +4197,21 @@ pub fn with_hole<'a>(
                                 op,
                                 closure_data_symbol,
                                 |(top_level_function, closure_data, closure_env_layout,  specialization_id, update_mode)| {
+                                    let passed_function = PassedFunction {
+                                        name: top_level_function,
+                                        captured_environment: closure_data_symbol,
+                                        owns_captured_environment: false,
+                                        specialization_id,
+                                        argument_layouts: arg_layouts,
+                                        return_layout: ret_layout,
+                                    };
+
+
                                     let higher_order = HigherOrderLowLevel {
                                         op: crate::low_level::HigherOrder::$ho { $($x,)* },
                                         closure_env_layout,
-                                        specialization_id,
                                         update_mode,
-                                        function_owns_closure_data: false,
-                                        function_env: closure_data_symbol,
-                                        function_name: top_level_function,
-                                        arg_layouts,
-                                        ret_layout,
+                                        passed_function,
                                     };
 
                                     self::Call {

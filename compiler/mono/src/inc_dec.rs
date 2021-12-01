@@ -468,12 +468,8 @@ impl<'a> Context<'a> {
             HigherOrder(HigherOrderLowLevel {
                 op,
                 closure_env_layout,
-                specialization_id,
                 update_mode,
-                arg_layouts,
-                ret_layout,
-                function_name,
-                function_env,
+                passed_function,
                 ..
             }) => {
                 // setup
@@ -483,16 +479,14 @@ impl<'a> Context<'a> {
                     ($borrows:expr) => {
                         Expr::Call(crate::ir::Call {
                             call_type: if let Some(OWNED) = $borrows.map(|p| p.borrow) {
+                                let mut passed_function = *passed_function;
+                                passed_function.owns_captured_environment = true;
+
                                 let higher_order = HigherOrderLowLevel {
                                     op: *op,
                                     closure_env_layout: *closure_env_layout,
-                                    function_owns_closure_data: true,
-                                    specialization_id: *specialization_id,
                                     update_mode: *update_mode,
-                                    function_name: *function_name,
-                                    function_env: *function_env,
-                                    arg_layouts,
-                                    ret_layout: *ret_layout,
+                                    passed_function,
                                 };
 
                                 CallType::HigherOrder(self.arena.alloc(higher_order))
@@ -521,11 +515,14 @@ impl<'a> Context<'a> {
                 const CLOSURE_DATA: bool = BORROWED;
 
                 let function_layout = ProcLayout {
-                    arguments: arg_layouts,
-                    result: *ret_layout,
+                    arguments: passed_function.argument_layouts,
+                    result: passed_function.return_layout,
                 };
 
-                let function_ps = match self.param_map.get_symbol(*function_name, function_layout) {
+                let function_ps = match self
+                    .param_map
+                    .get_symbol(passed_function.name, function_layout)
+                {
                     Some(function_ps) => function_ps,
                     None => unreachable!(),
                 };
