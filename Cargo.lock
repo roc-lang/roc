@@ -3594,6 +3594,9 @@ version = "0.1.0"
 [[package]]
 name = "roc_test_utils"
 version = "0.1.0"
+dependencies = [
+ "pretty_assertions",
+]
 
 [[package]]
 name = "roc_types"
