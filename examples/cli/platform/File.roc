@@ -1,5 +1,5 @@
 interface File
-    exposes [ Path, readUtf8, writeUtf8 ]
+    exposes [ Path, FileOpenErr, FileReadErr, FileWriteErr, DirReadErr, readBytes, readUtf8, writeUtf8 ]
     imports [ fx.Effect, Task.{ Task } ]
 
 ## A file path. This is an alias for an ordinary string; it isn't guaranteed to be
@@ -26,7 +26,7 @@ FileOpenErr a :
         SymLinkLoop Path,
         TooManyOpenFiles Path,
         IoError Path,
-        UnknownError I64 Path,
+        UnknownError I32 Path,
     ]a
 
 ## Errors when attempting to read a non-directory file.
@@ -57,19 +57,19 @@ FileWriteErr a :
 ## Read a file's bytes and interpret them as UTF-8 encoded text.
 readUtf8 : Path -> Task.Task Str (FileReadErr [ BadUtf8 Str.Utf8ByteProblem Nat ]*)
 readUtf8 = \path ->
-    Task.await (readBytes path) \answer ->
-        when Str.fromUtf8 answer.bytes is
+    Task.await (readBytes path) \bytes ->
+        when Str.fromUtf8 bytes is
             Ok str -> Task.succeed str
             Err (BadUtf8 problem index) -> Task.fail (BadUtf8 problem index)
 
 
-readBytes : Path -> Task.Task Str (FileReadErr *)
+readBytes : Path -> Task.Task (List U8) (FileReadErr *)
 readBytes = \path ->
     Effect.map (Effect.readAllUtf8 path) \answer ->
         # errno values - see
         # https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/errno.h.html
         when answer.errno is
-            0 -> Ok str
+            0 -> Ok answer.bytes
             1 -> Err (PermissionDenied path)
             2 -> Err (FileNotFound path)
             19 -> Err (FileWasDir path)
@@ -80,7 +80,6 @@ readBytes = \path ->
 writeUtf8 : Path, Str -> Task.Task {} (FileWriteErr [ BadThing ]*)
 writeUtf8 = \path, data ->
     path
-        |> Path.toStr
         |> Effect.writeAllUtf8 data
         |> Effect.map \res ->
             when res.errno is
