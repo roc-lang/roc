@@ -5363,12 +5363,6 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             str_trim_right(env, scope, args[0])
         }
-        StrToNum => {
-            // Str.toNum : Str -> Result (Num a) [ ExpectedNum a ]*
-            debug_assert_eq!(args.len(), 1);
-
-            str_to_num(env, scope, args[0])
-        }
         ListLen => {
             // List.len : List * -> Int
             debug_assert_eq!(args.len(), 1);
