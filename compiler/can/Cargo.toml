@@ -15,6 +15,7 @@ roc_types = { path = "../types" }
 roc_builtins = { path = "../builtins" }
 ven_graph = { path = "../../vendor/pathfinding" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
+static_assertions = "1.1.0"
 
 [dev-dependencies]
 pretty_assertions = "1.0.0"

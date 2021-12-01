@@ -4,6 +4,7 @@
 pub mod annotation;
 pub mod builtins;
 pub mod constraint;
+pub mod constraint_soa;
 pub mod def;
 pub mod env;
 pub mod expected;
