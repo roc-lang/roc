@@ -711,7 +711,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_top_level_function_type!(
         Symbol::STR_TO_NUM,
         vec![str_type()],
-        Box::new(result_type(flex(TVAR1), invalid_str))
+        Box::new(result_type(num_type(flex(TVAR1)), invalid_str))
     );
 
     // List module
