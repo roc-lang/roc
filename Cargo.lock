@@ -3383,6 +3383,7 @@ dependencies = [
  "roc_module",
  "roc_parse",
  "roc_region",
+ "roc_test_utils",
 ]
 
 [[package]]
@@ -3525,9 +3526,7 @@ dependencies = [
 name = "roc_parse"
 version = "0.1.0"
 dependencies = [
- "ansi_term",
  "bumpalo",
- "diff",
  "encode_unicode",
  "indoc",
  "pretty_assertions",
@@ -3536,6 +3535,7 @@ dependencies = [
  "roc_collections",
  "roc_module",
  "roc_region",
+ "roc_test_utils",
 ]
 
 [[package]]
@@ -3598,6 +3598,10 @@ dependencies = [
 
 [[package]]
 name = "roc_std"
+version = "0.1.0"
+
+[[package]]
+name = "roc_test_utils"
 version = "0.1.0"
 
 [[package]]
