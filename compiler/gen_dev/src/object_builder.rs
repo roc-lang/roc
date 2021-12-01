@@ -1,7 +1,7 @@
 use crate::generic64::{aarch64, x86_64, Backend64Bit};
 use crate::{Backend, Env, Relocation};
 use bumpalo::collections::Vec;
-use object::write;
+use object::write::{self, SectionId, SymbolId};
 use object::write::{Object, StandardSection, StandardSegment, Symbol, SymbolSection};
 use object::{
     Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationKind, SectionKind,
@@ -10,6 +10,7 @@ use object::{
 use roc_collections::all::MutMap;
 use roc_module::symbol;
 use roc_mono::ir::{Proc, ProcLayout};
+use roc_mono::layout::LayoutIds;
 use roc_reporting::internal_error;
 use target_lexicon::{Architecture as TargetArch, BinaryFormat as TargetBF, Triple};
 
@@ -208,126 +209,34 @@ fn build_object<'a, B: Backend<'a>>(
     }
 
     // Setup layout_ids for procedure calls.
-    let mut layout_ids = roc_mono::layout::LayoutIds::default();
+    let mut layout_ids = LayoutIds::default();
     let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
+
     for ((sym, layout), proc) in procedures {
-        let base_name = layout_ids
-            .get_toplevel(sym, &layout)
-            .to_symbol_string(sym, &env.interns);
-
-        let fn_name = if env.exposed_to_host.contains(&sym) {
-            format!("roc_{}_exposed", base_name)
-        } else {
-            base_name
-        };
-
-        let section_id = output.add_section(
-            output.segment_name(StandardSegment::Text).to_vec(),
-            format!(".text.{:x}", sym.as_u64()).as_bytes().to_vec(),
-            SectionKind::Text,
-        );
-
-        let proc_symbol = Symbol {
-            name: fn_name.as_bytes().to_vec(),
-            value: 0,
-            size: 0,
-            kind: SymbolKind::Text,
-            // TODO: Depending on whether we are building a static or dynamic lib, this should change.
-            // We should use Dynamic -> anyone, Linkage -> static link, Compilation -> this module only.
-            scope: if env.exposed_to_host.contains(&sym) {
-                SymbolScope::Dynamic
-            } else {
-                SymbolScope::Linkage
-            },
-            weak: false,
-            section: SymbolSection::Section(section_id),
-            flags: SymbolFlags::None,
-        };
-        let proc_id = output.add_symbol(proc_symbol);
-        procs.push((fn_name, section_id, proc_id, proc));
+        build_proc_symbol(
+            &mut output,
+            &mut layout_ids,
+            &mut procs,
+            env,
+            sym,
+            layout,
+            proc,
+        )
     }
 
     // Build procedures.
     let mut relocations = bumpalo::vec![in env.arena];
     for (fn_name, section_id, proc_id, proc) in procs {
-        let mut local_data_index = 0;
-        let (proc_data, relocs) = backend.build_proc(proc);
-        let proc_offset = output.add_symbol_data(proc_id, section_id, proc_data, 16);
-        for reloc in relocs {
-            let elfreloc = match reloc {
-                Relocation::LocalData { offset, data } => {
-                    let data_symbol = write::Symbol {
-                        name: format!("{}.data{}", fn_name, local_data_index)
-                            .as_bytes()
-                            .to_vec(),
-                        value: 0,
-                        size: 0,
-                        kind: SymbolKind::Data,
-                        scope: SymbolScope::Compilation,
-                        weak: false,
-                        section: SymbolSection::Section(data_section),
-                        flags: SymbolFlags::None,
-                    };
-                    local_data_index += 1;
-                    let data_id = output.add_symbol(data_symbol);
-                    output.add_symbol_data(data_id, data_section, data, 4);
-                    write::Relocation {
-                        offset: offset + proc_offset,
-                        size: 32,
-                        kind: RelocationKind::Relative,
-                        encoding: RelocationEncoding::Generic,
-                        symbol: data_id,
-                        addend: -4,
-                    }
-                }
-                Relocation::LinkedData { offset, name } => {
-                    if let Some(sym_id) = output.symbol_id(name.as_bytes()) {
-                        write::Relocation {
-                            offset: offset + proc_offset,
-                            size: 32,
-                            kind: RelocationKind::GotRelative,
-                            encoding: RelocationEncoding::Generic,
-                            symbol: sym_id,
-                            addend: -4,
-                        }
-                    } else {
-                        internal_error!("failed to find data symbol for {:?}", name);
-                    }
-                }
-                Relocation::LinkedFunction { offset, name } => {
-                    // If the symbol is an undefined zig builtin, we need to add it here.
-                    if output.symbol_id(name.as_bytes()) == None
-                        && name.starts_with("roc_builtins.")
-                    {
-                        let builtin_symbol = Symbol {
-                            name: name.as_bytes().to_vec(),
-                            value: 0,
-                            size: 0,
-                            kind: SymbolKind::Text,
-                            scope: SymbolScope::Linkage,
-                            weak: false,
-                            section: SymbolSection::Undefined,
-                            flags: SymbolFlags::None,
-                        };
-                        output.add_symbol(builtin_symbol);
-                    }
-                    if let Some(sym_id) = output.symbol_id(name.as_bytes()) {
-                        write::Relocation {
-                            offset: offset + proc_offset,
-                            size: 32,
-                            kind: RelocationKind::PltRelative,
-                            encoding: RelocationEncoding::X86Branch,
-                            symbol: sym_id,
-                            addend: -4,
-                        }
-                    } else {
-                        internal_error!("failed to find fn symbol for {:?}", name);
-                    }
-                }
-                Relocation::JmpToReturn { .. } => unreachable!(),
-            };
-            relocations.push((section_id, elfreloc));
-        }
+        build_proc(
+            &mut output,
+            &mut backend,
+            &mut relocations,
+            data_section,
+            fn_name,
+            section_id,
+            proc_id,
+            proc,
+        )
     }
     for (section_id, reloc) in relocations {
         match output.add_relocation(section_id, reloc) {
@@ -336,4 +245,137 @@ fn build_object<'a, B: Backend<'a>>(
         }
     }
     output
+}
+
+fn build_proc_symbol<'a>(
+    output: &mut Object,
+    layout_ids: &mut LayoutIds<'a>,
+    procs: &mut Vec<'a, (String, SectionId, SymbolId, Proc<'a>)>,
+    env: &'a Env,
+    sym: roc_module::symbol::Symbol,
+    layout: ProcLayout<'a>,
+    proc: Proc<'a>,
+) {
+    let base_name = layout_ids
+        .get_toplevel(sym, &layout)
+        .to_symbol_string(sym, &env.interns);
+
+    let fn_name = if env.exposed_to_host.contains(&sym) {
+        format!("roc_{}_exposed", base_name)
+    } else {
+        base_name
+    };
+
+    let section_id = output.add_section(
+        output.segment_name(StandardSegment::Text).to_vec(),
+        format!(".text.{:x}", sym.as_u64()).as_bytes().to_vec(),
+        SectionKind::Text,
+    );
+
+    let proc_symbol = Symbol {
+        name: fn_name.as_bytes().to_vec(),
+        value: 0,
+        size: 0,
+        kind: SymbolKind::Text,
+        // TODO: Depending on whether we are building a static or dynamic lib, this should change.
+        // We should use Dynamic -> anyone, Linkage -> static link, Compilation -> this module only.
+        scope: if env.exposed_to_host.contains(&sym) {
+            SymbolScope::Dynamic
+        } else {
+            SymbolScope::Linkage
+        },
+        weak: false,
+        section: SymbolSection::Section(section_id),
+        flags: SymbolFlags::None,
+    };
+    let proc_id = output.add_symbol(proc_symbol);
+    procs.push((fn_name, section_id, proc_id, proc));
+}
+
+fn build_proc<'a, B: Backend<'a>>(
+    output: &mut Object,
+    backend: &mut B,
+    relocations: &mut Vec<'a, (SectionId, object::write::Relocation)>,
+    data_section: SectionId,
+    fn_name: String,
+    section_id: SectionId,
+    proc_id: SymbolId,
+    proc: Proc<'a>,
+) {
+    let mut local_data_index = 0;
+    let (proc_data, relocs) = backend.build_proc(proc);
+    let proc_offset = output.add_symbol_data(proc_id, section_id, proc_data, 16);
+    for reloc in relocs {
+        let elfreloc = match reloc {
+            Relocation::LocalData { offset, data } => {
+                let data_symbol = write::Symbol {
+                    name: format!("{}.data{}", fn_name, local_data_index)
+                        .as_bytes()
+                        .to_vec(),
+                    value: 0,
+                    size: 0,
+                    kind: SymbolKind::Data,
+                    scope: SymbolScope::Compilation,
+                    weak: false,
+                    section: SymbolSection::Section(data_section),
+                    flags: SymbolFlags::None,
+                };
+                local_data_index += 1;
+                let data_id = output.add_symbol(data_symbol);
+                output.add_symbol_data(data_id, data_section, data, 4);
+                write::Relocation {
+                    offset: offset + proc_offset,
+                    size: 32,
+                    kind: RelocationKind::Relative,
+                    encoding: RelocationEncoding::Generic,
+                    symbol: data_id,
+                    addend: -4,
+                }
+            }
+            Relocation::LinkedData { offset, name } => {
+                if let Some(sym_id) = output.symbol_id(name.as_bytes()) {
+                    write::Relocation {
+                        offset: offset + proc_offset,
+                        size: 32,
+                        kind: RelocationKind::GotRelative,
+                        encoding: RelocationEncoding::Generic,
+                        symbol: sym_id,
+                        addend: -4,
+                    }
+                } else {
+                    internal_error!("failed to find data symbol for {:?}", name);
+                }
+            }
+            Relocation::LinkedFunction { offset, name } => {
+                // If the symbol is an undefined zig builtin, we need to add it here.
+                if output.symbol_id(name.as_bytes()) == None && name.starts_with("roc_builtins.") {
+                    let builtin_symbol = Symbol {
+                        name: name.as_bytes().to_vec(),
+                        value: 0,
+                        size: 0,
+                        kind: SymbolKind::Text,
+                        scope: SymbolScope::Linkage,
+                        weak: false,
+                        section: SymbolSection::Undefined,
+                        flags: SymbolFlags::None,
+                    };
+                    output.add_symbol(builtin_symbol);
+                }
+                if let Some(sym_id) = output.symbol_id(name.as_bytes()) {
+                    write::Relocation {
+                        offset: offset + proc_offset,
+                        size: 32,
+                        kind: RelocationKind::PltRelative,
+                        encoding: RelocationEncoding::X86Branch,
+                        symbol: sym_id,
+                        addend: -4,
+                    }
+                } else {
+                    internal_error!("failed to find fn symbol for {:?}", name);
+                }
+            }
+            Relocation::JmpToReturn { .. } => unreachable!(),
+        };
+        relocations.push((section_id, elfreloc));
+    }
 }
