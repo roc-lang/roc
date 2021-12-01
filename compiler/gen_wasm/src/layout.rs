@@ -39,9 +39,6 @@ pub enum WasmLayout {
         alignment_bytes: u32,
         format: StackMemoryFormat,
     },
-
-    // Local pointer to heap memory
-    HeapMemory,
 }
 
 impl WasmLayout {
@@ -105,7 +102,7 @@ impl WasmLayout {
                 | NullableWrapped { .. }
                 | NullableUnwrapped { .. },
             )
-            | Layout::RecursivePointer => Self::HeapMemory,
+            | Layout::RecursivePointer => Self::Primitive(PTR_TYPE, PTR_SIZE),
         }
     }
 
@@ -120,7 +117,6 @@ impl WasmLayout {
             Self::Primitive(I64, _) => &[I64],
             Self::Primitive(F32, _) => &[F32],
             Self::Primitive(F64, _) => &[F64],
-            Self::HeapMemory => &[I32],
 
             // 1 Roc argument => 0-2 Wasm arguments (depending on size and calling convention)
             Self::StackMemory { size, format, .. } => conv.stack_memory_arg_types(*size, *format),
@@ -130,7 +126,6 @@ impl WasmLayout {
     pub fn return_method(&self) -> ReturnMethod {
         match self {
             Self::Primitive(ty, _) => ReturnMethod::Primitive(*ty),
-            Self::HeapMemory => ReturnMethod::Primitive(PTR_TYPE),
             Self::StackMemory { size, .. } => {
                 if *size == 0 {
                     ReturnMethod::NoReturnValue
@@ -145,7 +140,6 @@ impl WasmLayout {
         match self {
             Self::Primitive(_, size) => *size,
             Self::StackMemory { size, .. } => *size,
-            Self::HeapMemory => PTR_SIZE,
         }
     }
 }

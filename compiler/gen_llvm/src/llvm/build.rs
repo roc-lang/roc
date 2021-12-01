@@ -6038,6 +6038,10 @@ fn run_low_level<'a, 'ctx, 'env>(
         | ListAny | ListAll | ListFindUnsafe | DictWalk => {
             unreachable!("these are higher order, and are handled elsewhere")
         }
+
+        RefCountGetPtr | RefCountInc | RefCountDec => {
+            unreachable!("LLVM backend does not use lowlevels for refcounting");
+        }
     }
 }
 

@@ -116,6 +116,9 @@ pub enum LowLevel {
     Not,
     Hash,
     ExpectTrue,
+    RefCountGetPtr,
+    RefCountInc,
+    RefCountDec,
 }
 
 macro_rules! higher_order {

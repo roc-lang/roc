@@ -1289,6 +1289,10 @@ impl CallSpecId {
     pub fn to_bytes(self) -> [u8; 4] {
         self.id.to_ne_bytes()
     }
+
+    /// Dummy value for generating refcount helper procs in the backends
+    /// This happens *after* specialization so it's safe
+    pub const BACKEND_DUMMY: Self = Self { id: 0 };
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1300,6 +1304,10 @@ impl UpdateModeId {
     pub fn to_bytes(self) -> [u8; 4] {
         self.id.to_ne_bytes()
     }
+
+    /// Dummy value for generating refcount helper procs in the backends
+    /// This happens *after* alias analysis so it's safe
+    pub const BACKEND_DUMMY: Self = Self { id: 0 };
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1586,6 +1594,17 @@ impl<'a> Expr<'a> {
                 .text(format!("UnionAtIndex (Id {}) (Index {}) ", tag_id, index))
                 .append(symbol_to_doc(alloc, *structure)),
         }
+    }
+
+    pub fn to_pretty(&self, width: usize) -> String {
+        let allocator = BoxAllocator;
+        let mut w = std::vec::Vec::new();
+        self.to_doc::<_, ()>(&allocator)
+            .1
+            .render(width, &mut w)
+            .unwrap();
+        w.push(b'\n');
+        String::from_utf8(w).unwrap()
     }
 }
 

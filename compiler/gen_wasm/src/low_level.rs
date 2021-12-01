@@ -76,7 +76,6 @@ pub fn decode_low_level<'a>(
                 StackMemoryFormat::Float128 => return NotImplemented,
                 StackMemoryFormat::Decimal => return BuiltinCall(bitcode::DEC_ADD_WITH_OVERFLOW),
             },
-            WasmLayout::HeapMemory { .. } => return NotImplemented,
         },
         NumAddWrap => match ret_layout.arg_types(CallConv::Zig)[0] {
             I32 => {
@@ -371,6 +370,12 @@ pub fn decode_low_level<'a>(
         Not => code_builder.i32_eqz(),
         Hash => return NotImplemented,
         ExpectTrue => return NotImplemented,
+        RefCountGetPtr => {
+            code_builder.i32_const(4);
+            code_builder.i32_sub();
+        }
+        RefCountInc => return BuiltinCall(bitcode::UTILS_INCREF),
+        RefCountDec => return BuiltinCall(bitcode::UTILS_DECREF),
     }
     Done
 }
