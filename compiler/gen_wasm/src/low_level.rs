@@ -38,6 +38,7 @@ pub fn decode_low_level<'a>(
         StrEndsWith => return BuiltinCall(bitcode::STR_ENDS_WITH),
         StrSplit => return NotImplemented,          // needs Array
         StrCountGraphemes => return NotImplemented, // test needs Array
+        StrToNum => return NotImplemented,          // choose builtin based on storage size
         StrFromInt => return NotImplemented,        // choose builtin based on storage size
         StrFromUtf8 => return NotImplemented,       // needs Array
         StrTrimLeft => return BuiltinCall(bitcode::STR_TRIM_LEFT),

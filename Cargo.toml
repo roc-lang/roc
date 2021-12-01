@@ -32,6 +32,7 @@ members = [
     "code_markup",
     "reporting",
     "roc_std",
+    "test_utils",
     "utils",
     "docs",
     "linker",
