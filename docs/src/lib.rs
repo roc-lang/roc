@@ -143,6 +143,7 @@ pub fn syntax_highlight_top_level_defs<'a>(
 
     match roc_parse::test_helpers::parse_defs_with(arena, trimmed_code_str) {
         Ok(vec_loc_def) => {
+            dbg!(&vec_loc_def);
             let vec_def = vec_loc_def.iter().map(|loc| loc.value).collect();
 
             defs_to_html(buf, vec_def, env_module_id, interns)?;

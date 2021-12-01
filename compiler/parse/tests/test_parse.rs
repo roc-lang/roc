@@ -98,6 +98,7 @@ mod test_parse {
         };
     }
 
+    // see tests/snapshots/pass to see test input(.roc) and expected output(.result-ast)
     snapshot_tests! {
         expr => {
             add_var_with_spaces,
@@ -232,6 +233,7 @@ mod test_parse {
             nonempty_platform_header
         }
         module => {
+            comment_after_def,
             standalone_module_defs,
             module_def_newline,
             nested_def_annotation

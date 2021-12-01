@@ -1,0 +1,20 @@
+[
+    |L 0-0, C 0-7| SpaceAfter(
+        SpaceBefore(
+            Body(
+                |L 0-0, C 0-3| Identifier(
+                    "foo",
+                ),
+                |L 0-0, C 6-7| Num(
+                    "1",
+                ),
+            ),
+            [],
+        ),
+        [
+            LineComment(
+                " comment after",
+            ),
+        ],
+    ),
+]

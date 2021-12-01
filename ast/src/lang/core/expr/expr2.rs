@@ -161,13 +161,6 @@ pub enum Expr2 {
     },
     Blank, // Rendered as empty box in editor
 
-    Comment(PoolStr),
-    WithComment {
-        expr_id: ExprId,
-        comment_id: ExprId
-    },
-    Comments(PoolVec<ExprId>),
-
     // Compiles, but will crash if reached
     RuntimeError(/* TODO make a version of RuntimeError that fits in 15B */),
 }

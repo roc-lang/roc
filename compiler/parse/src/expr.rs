@@ -1580,7 +1580,7 @@ pub fn defs<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located<Def<'a>>>, E
                         .alloc(def.value)
                         .with_spaces_after(final_space, def.region)
                 }
-
+                dbg!(def);
                 output.push(def);
             }
         }

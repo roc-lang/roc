@@ -1147,7 +1147,10 @@ macro_rules! skip_second {
 
             match $p1.parse(arena, state) {
                 Ok((p1, out1, state)) => match $p2.parse(arena, state) {
-                    Ok((p2, _, state)) => Ok((p1.or(p2), out1, state)),
+                    Ok((p2, _, state)) => {
+                        dbg!(&out1);
+                        Ok((p1.or(p2), out1, state))
+                    },
                     Err((p2, fail, _)) => Err((p1.or(p2), fail, original_state)),
                 },
                 Err((progress, fail, _)) => Err((progress, fail, original_state)),

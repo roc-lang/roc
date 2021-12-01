@@ -30,9 +30,51 @@ pub fn def_to_def2<'a>(
 ) -> Def2 {
     use roc_parse::ast::Def::*;
 
+    dbg!(parsed_def);
+
     match parsed_def {
-        SpaceBefore(inner_def, _) => def_to_def2(arena, env, scope, inner_def, region),
-        SpaceAfter(inner_def, _) => def_to_def2(arena, env, scope, inner_def, region),
+        SpaceBefore(inner_def, comments) => {
+            if comments.len() > 0 {
+                let inner_def = def_to_def2(arena, env, scope, inner_def, region);
+
+                let inner_def_id = env.pool.add(inner_def);
+                let mut all_comments_str = String::new();
+
+                for comment in comments.iter() {
+                    all_comments_str.push_str(&comment.to_string());
+                }
+
+                all_comments_str = all_comments_str.trim().to_string();
+
+                Def2::CommentsBefore {
+                    comments: all_comments_str,
+                    def_id: inner_def_id,
+                }
+            } else {
+                def_to_def2(arena, env, scope, inner_def, region)
+            }
+        },
+        SpaceAfter(inner_def, comments) => {
+            if comments.len() > 0 {
+                let inner_def = def_to_def2(arena, env, scope, inner_def, region);
+
+                let inner_def_id = env.pool.add(inner_def);
+                let mut all_comments_str = String::new();
+
+                for comment in comments.iter() {
+                    all_comments_str.push_str(&comment.to_string());
+                }
+
+                all_comments_str = all_comments_str.trim().to_string();
+
+                Def2::CommentsAfter {
+                    def_id: inner_def_id,
+                    comments: all_comments_str,
+                }
+            } else {
+                def_to_def2(arena, env, scope, inner_def, region)
+            }
+        },
         Body(&loc_pattern, &loc_expr) => {
             let expr2 = loc_expr_to_expr2(arena, loc_expr, env, scope, region).0;
             let expr_id = env.pool.add(expr2);

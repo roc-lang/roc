@@ -34,7 +34,10 @@ pub fn parse_defs_with<'a>(
     let state = State::new(input.trim().as_bytes());
 
     match module_defs().parse(arena, state) {
-        Ok(tuple) => Ok(tuple.1),
+        Ok(tuple) => {
+            dbg!(&tuple);
+            Ok(tuple.1)
+        },
         Err(tuple) => Err(tuple.1),
     }
 }

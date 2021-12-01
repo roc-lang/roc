@@ -1,4 +1,4 @@
-use roc_ast::lang::core::{ast::ASTNodeId, expr::expr2::ExprId};
+use roc_ast::{lang::core::{ast::ASTNodeId, expr::expr2::ExprId}};
 
 use crate::{slow_pool::MarkNodeId, syntax_highlight::HighlightStyle};
 
@@ -142,6 +142,17 @@ pub fn new_arrow_mn(ast_node_id: ASTNodeId, newlines_at_end: usize) -> MarkupNod
         content: nodes::ARROW.to_owned(),
         ast_node_id,
         syn_high_style: HighlightStyle::Operator,
+        attributes: Attributes::default(),
+        parent_id_opt: None,
+        newlines_at_end,
+    }
+}
+
+pub fn new_comments_mn(comments: String, ast_node_id: ASTNodeId, newlines_at_end: usize) -> MarkupNode {
+    MarkupNode::Text {
+        content: comments,
+        ast_node_id,
+        syn_high_style: HighlightStyle::Comment,
         attributes: Attributes::default(),
         parent_id_opt: None,
         newlines_at_end,

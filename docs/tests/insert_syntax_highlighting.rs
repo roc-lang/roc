@@ -1,5 +1,7 @@
 #[macro_use]
 extern crate pretty_assertions;
+#[macro_use]
+extern crate indoc;
 
 #[cfg(test)]
 mod insert_doc_syntax_highlighting {
@@ -190,10 +192,27 @@ main = "Hello, world!"
     }
 
     #[test]
-    fn tld_with_comment() {
+    fn tld_with_comment_before() {
         expect_html_def(
-            r#"myVal = "Hello, World!" # COMMENT"#,
-            "<span class=\"syntax-value\">myVal</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-string\">\"Hello, World!\"</span><span class=\"syntax-comment\"> # COMMENT</span>\n\n",
+            indoc!(
+                r#"
+                # COMMENT
+                myVal = "Hello, World!"
+                "#,
+            ),
+            "<span class=\"syntax-comment\"># COMMENT</span>\n<span class=\"syntax-value\">myVal</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-string\">\"Hello, World!\"</span>\n\n\n\n",
+        );
+    }
+
+    #[test]
+    fn tld_with_comment_after() {
+        expect_html_def(
+            indoc!(
+                r#"
+                myVal = "Hello, World!" # COMMENT
+                "#,
+            ),
+            "<span class=\"syntax-value\">myVal</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-string\">\"Hello, World!\"</span><span class=\"syntax-comment\"># COMMENT</span>\n\n\n\n",
         );
     }
 }
