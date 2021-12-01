@@ -1054,19 +1054,6 @@ fn format_category<'b>(
             ]),
             alloc.text(" produces:"),
         ),
-
-<<<<<<< HEAD:compiler/reporting/src/error/type.rs
-        List => alloc.concat(vec![this_is, alloc.text(" a list of type:")]),
-        Num => alloc.concat(vec![this_is, alloc.text(" a number of type:")]),
-        Int => alloc.concat(vec![this_is, alloc.text(" an integer of type:")]),
-        Float => alloc.concat(vec![this_is, alloc.text(" a float of type:")]),
-        Str => alloc.concat(vec![this_is, alloc.text(" a string of type:")]),
-        StrInterpolation => alloc.concat(vec![
-            this_is,
-            alloc.text(" a value in a string interpolation, which was of type:"),
-        ]),
-        Character => alloc.concat(vec![this_is, alloc.text(" a character of type:")]),
-=======
         List => (
             alloc.concat(vec![this_is, alloc.text(" a list")]),
             alloc.text(" of type:"),
@@ -1094,18 +1081,19 @@ fn format_category<'b>(
             ]),
             alloc.text(" which was of type:"),
         ),
->>>>>>> trunk:reporting/src/error/type.rs
-
+        Character => (
+            alloc.concat(vec![this_is, alloc.text(" a character")
+            ]),
+            alloc.text(" of type:")
+        ),
         Lambda => (
             alloc.concat(vec![this_is, alloc.text(" an anonymous function")]),
             alloc.text(" of type:"),
         ),
-
         ClosureSize => (
             alloc.concat(vec![this_is, alloc.text(" the closure size of a function")]),
             alloc.text(" of type:"),
         ),
-
         TagApply {
             tag_name: TagName::Global(name),
             args_count: 0,

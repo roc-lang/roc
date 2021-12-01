@@ -3039,7 +3039,7 @@ pub fn with_hole<'a>(
         SingleQuote(character) => Stmt::Let(
             assigned,
             Expr::Literal(Literal::Int(character as _)),
-            Layout::Builtin(Builtin::Int32),
+            Layout::int_width(IntWidth::I32),
             hole,
         ),
 
@@ -7327,7 +7327,7 @@ fn from_can_pattern_help<'a>(
             }
         }
         StrLiteral(v) => Ok(Pattern::StrLiteral(v.clone())),
-        SingleQuote(c) => Ok(Pattern::IntLiteral(*c as _, IntPrecision::I32)),
+        SingleQuote(c) => Ok(Pattern::IntLiteral(*c as _, IntWidth::I32)),
         Shadowed(region, ident) => Err(RuntimeError::Shadowing {
             original_region: *region,
             shadow: ident.clone(),
