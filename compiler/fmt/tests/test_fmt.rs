@@ -2310,6 +2310,15 @@ mod test_fmt {
         ));
     }
 
+    #[test]
+    fn binop_if() {
+        expr_formats_same(indoc!(
+            r#"
+            5 * (if x > 0 then 1 else 2)
+            "#
+        ));
+    }
+
     // UNARY OP
 
     #[test]
