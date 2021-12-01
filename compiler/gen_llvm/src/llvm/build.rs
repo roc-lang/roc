@@ -5269,6 +5269,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             str_ends_with(env, scope, args[0], args[1])
         }
         StrToNum => {
+            // Str.toNum : Str -> Result (Num *) {}
             debug_assert_eq!(args.len(), 1);
 
             let (string, _string_layout) = load_symbol_and_layout(scope, &args[0]);

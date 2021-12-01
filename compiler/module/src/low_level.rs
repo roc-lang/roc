@@ -13,7 +13,6 @@ pub enum LowLevel {
     StrEndsWith,
     StrSplit,
     StrCountGraphemes,
-    StrToNum,
     StrFromInt,
     StrFromUtf8,
     StrFromUtf8Range,

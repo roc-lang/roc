@@ -446,7 +446,8 @@ toDec : Str -> Result Dec [ InvalidDec ]*
 ##
 ## This never accepts numbers with underscores or commas in them. For more
 ## advanced options, see [parseNum].
-toNum : Str -> Result (Num a) [ ExpectedNum a ]*
+## TODO use `InvalidStr` or `ExpectedNum a` error
+toNum : Str -> Result (Num a) {}
 
 ## If the string begins with an [Int] or a [finite](Num.isFinite) [Frac], return
 ## that number along with the rest of the string after it.

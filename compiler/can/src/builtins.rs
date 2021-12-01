@@ -1324,7 +1324,7 @@ fn str_trim_right(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::StrTrimRight, var_store)
 }
 
-/// Str.toNum : Str -> Result (Num a) [ ExpectedNum a ]*
+/// Str.toNum : Str -> Result (Num a) {}
 fn str_to_num(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::StrToNum, var_store)
 }
