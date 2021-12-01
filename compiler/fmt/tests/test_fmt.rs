@@ -1,6 +1,4 @@
 #[macro_use]
-extern crate pretty_assertions;
-#[macro_use]
 extern crate indoc;
 extern crate bumpalo;
 extern crate roc_fmt;
@@ -14,6 +12,7 @@ mod test_fmt {
     use roc_fmt::module::fmt_module;
     use roc_parse::module::{self, module_defs};
     use roc_parse::parser::{Parser, State};
+    use roc_test_utils::assert_multiline_str_eq;
 
     fn expr_formats_to(input: &str, expected: &str) {
         let arena = Bump::new();
@@ -26,7 +25,7 @@ mod test_fmt {
 
                 actual.format_with_options(&mut buf, Parens::NotNeeded, Newlines::Yes, 0);
 
-                assert_eq!(buf, expected)
+                assert_multiline_str_eq!(expected, buf.as_str())
             }
             Err(error) => panic!("Unexpected parse failure when parsing this for formatting:\n\n{}\n\nParse error was:\n\n{:?}\n\n", input, error)
         };
@@ -56,7 +55,7 @@ mod test_fmt {
                     Err(error) => panic!("Unexpected parse failure when parsing this for defs formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, error)
                 }
 
-                assert_eq!(buf, expected)
+                assert_multiline_str_eq!(expected, buf.as_str())
             }
             Err(error) => panic!("Unexpected parse failure when parsing this for module header formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, error)
         };
