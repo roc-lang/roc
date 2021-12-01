@@ -3,7 +3,11 @@ use roc_parse::ast::StrLiteral;
 
 use crate::{
     ast_error::{ASTResult, UnexpectedASTNode},
-    lang::{core::expr::expr_to_expr2::expr_to_expr2, env::Env, scope::Scope},
+    lang::{
+        core::expr::{expr2::ArrString, expr_to_expr2::expr_to_expr2},
+        env::Env,
+        scope::Scope,
+    },
     mem_pool::{pool::Pool, pool_str::PoolStr, pool_vec::PoolVec},
 };
 
@@ -179,7 +183,7 @@ pub fn update_str_expr(
     let str_expr = pool.get_mut(node_id);
 
     enum Either {
-        MyString(String),
+        MyArrString(ArrString),
         MyPoolStr(PoolStr),
     }
 
@@ -189,7 +193,13 @@ pub fn update_str_expr(
 
             new_string.insert(insert_index, new_char);
 
-            Either::MyString(new_string)
+            if new_string.len() <= arr_string.capacity() {
+                // safe unwrap because we checked the capacity
+                Either::MyArrString(ArrString::from(&new_string).unwrap())
+            } else {
+                let new_pool_str = PoolStr::new(&new_string, pool);
+                Either::MyPoolStr(new_pool_str)
+            }
         }
         Expr2::Str(old_pool_str) => Either::MyPoolStr(*old_pool_str),
         other => UnexpectedASTNode {
@@ -200,10 +210,8 @@ pub fn update_str_expr(
     };
 
     match insert_either {
-        Either::MyString(new_string) => {
-            let new_pool_str = PoolStr::new(&new_string, pool);
-
-            pool.set(node_id, Expr2::Str(new_pool_str))
+        Either::MyArrString(arr_string) => {
+            pool.set(node_id, Expr2::SmallStr(arr_string));
         }
         Either::MyPoolStr(old_pool_str) => {
             let mut new_string = old_pool_str.as_str(pool).to_owned();
