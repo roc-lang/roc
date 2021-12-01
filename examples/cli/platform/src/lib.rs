@@ -4,9 +4,11 @@ use core::alloc::Layout;
 use core::ffi::c_void;
 use core::mem::MaybeUninit;
 use libc;
-use roc_std::RocStr;
+use roc_std::{RocStr, RocList};
 use std::ffi::CStr;
 use std::os::raw::c_char;
+use std::io::{self, Read, BufReader};
+use std::fs::File;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed"]
@@ -110,7 +112,7 @@ unsafe extern "C" fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
 
 #[no_mangle]
 pub extern "C" fn roc_fx_getLine() -> RocStr {
-    use std::io::{self, BufRead};
+    use std::io::BufRead;
 
     let stdin = io::stdin();
     let line1 = stdin.lock().lines().next().unwrap().unwrap();
@@ -128,4 +130,35 @@ pub extern "C" fn roc_fx_putLine(line: RocStr) -> () {
     core::mem::forget(line);
 
     ()
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_readAllBytes(path: ManuallyDrop<RocStr>) -> (RocList<u8>, i32) {
+    let result = read_bytes(path.as_str());
+
+    match result {
+        Ok(list) => {
+            println!("Read this list of bytes: {:?}", list);
+
+            (list, 0)
+        },
+        Err(err) => {
+            println!("Error reading file: {:?}", err);
+
+            // TODO give a more helpful error
+            (RocList::default(), -1)
+        }
+    }
+}
+
+fn read_bytes(path: &str) -> io::Result<RocList<u8>> {
+    let file = File::open(path)?;
+    let mut reader = BufReader::new(file);
+
+    // TODO use a RocList as the buffer directly
+    let mut buf = Vec::new();
+
+    reader.read_to_end(&mut buf)?;
+
+    Ok(buf.as_slice().into())
 }

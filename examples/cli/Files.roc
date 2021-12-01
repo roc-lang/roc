@@ -9,9 +9,7 @@ main : Task {} []
 main =
     task =
         {} <- await (Stdout.line "What file should I read?")
-
         filename <- await Stdin.line
-
         File.readUtf8 filename
 
     Task.attempt task \result ->

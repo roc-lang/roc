@@ -65,7 +65,7 @@ readUtf8 = \path ->
 
 readBytes : Path -> Task.Task (List U8) (FileReadErr *)
 readBytes = \path ->
-    Effect.map (Effect.readAllUtf8 path) \answer ->
+    Effect.map (Effect.readAllBytes path) \answer ->
         # errno values - see
         # https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/errno.h.html
         when answer.errno is
