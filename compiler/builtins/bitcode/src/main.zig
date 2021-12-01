@@ -94,6 +94,7 @@ comptime {
     inline for (INTEGERS) |T| {
         num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow_int.");
         num.exportDivCeil(T, ROC_BUILTINS ++ "." ++ NUM ++ ".div_ceil.");
+        num.exportParseInt(T, ROC_BUILTINS ++ "." ++ NUM ++ ".to_int.");
     }
 
     inline for (FLOATS) |T| {
