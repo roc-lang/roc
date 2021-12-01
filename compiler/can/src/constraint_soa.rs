@@ -85,6 +85,28 @@ impl Constraints {
         Slice::new(start as _, length as _)
     }
 
+    pub fn exists<I>(&mut self, flex_vars: I, defs_constraint: Constraint) -> Constraint
+    where
+        I: IntoIterator<Item = Variable>,
+    {
+        let defs_and_ret_constraint = Index::new(self.constraints.len() as _);
+
+        self.constraints.push(defs_constraint);
+        self.constraints.push(Constraint::True);
+
+        let let_contraint = LetConstraint {
+            rigid_vars: Slice::default(),
+            flex_vars: self.variable_slice(flex_vars),
+            def_types: Slice::default(),
+            defs_and_ret_constraint,
+        };
+
+        let let_index = Index::new(self.let_constraints.len() as _);
+        self.let_constraints.push(let_contraint);
+
+        Constraint::Let(let_index)
+    }
+
     pub fn let_contraint<I1, I2, I3>(
         &mut self,
         rigid_vars: I1,
@@ -165,6 +187,12 @@ pub struct Slice<T> {
     start: u32,
     length: u16,
     _marker: std::marker::PhantomData<T>,
+}
+
+impl<T> Default for Slice<T> {
+    fn default() -> Self {
+        Self::new(0, 0)
+    }
 }
 
 impl<T> Slice<T> {
