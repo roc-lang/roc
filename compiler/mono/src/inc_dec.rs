@@ -479,11 +479,14 @@ impl<'a> Context<'a> {
                     ($borrows:expr) => {
                         Expr::Call(crate::ir::Call {
                             call_type: if let Some(OWNED) = $borrows.map(|p| p.borrow) {
+                                let mut passed_function = *passed_function;
+                                passed_function.owns_captured_environment = true;
+
                                 let higher_order = HigherOrderLowLevel {
                                     op: *op,
                                     closure_env_layout: *closure_env_layout,
                                     update_mode: *update_mode,
-                                    passed_function: *passed_function,
+                                    passed_function,
                                 };
 
                                 CallType::HigherOrder(self.arena.alloc(higher_order))
