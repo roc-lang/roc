@@ -703,7 +703,16 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     );
 
     // toNum : Str -> Result (Num a) {}
-    // TODO
+    let invalid_str = SolvedType::TagUnion(
+        vec![(TagName::Global("InvalidNumStr".into()), vec![])],
+        Box::new(SolvedType::Wildcard),
+    );
+
+    add_top_level_function_type!(
+        Symbol::STR_TO_NUM,
+        vec![str_type()],
+        Box::new(result_type(flex(TVAR1), invalid_str))
+    );
 
     // List module
 
