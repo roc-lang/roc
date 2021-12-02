@@ -61,7 +61,7 @@ Let's try calling a function:
 ```
 
 In this expression, we're calling the `Str.concat` function
-passing two arguments: the string `"Hi "` and the string `" there!"`. The
+passing two arguments: the string `"Hi "` and the string `"there!"`. The
 `Str.concat` function *concatenates* two strings together (that is, it puts
 one after the other) and returns the resulting combined string of
 `"Hi there!"`.
@@ -225,9 +225,9 @@ addAndStringify = \num1, num2 ->
         Num.toStr sum
 ```
 
-We did a two things here:
+We did two things here:
 * We introduced a local def named `sum`, and set it equal to `num1 + num2`. Because we defined `sum` inside `addAndStringify`, it will not be accessible outside that function.
-* We added an `if` / `then` / `else` conditional to return either `""` or `Num.toStr sum` depending on whether `sum == 0`
+* We added an `if` / `then` / `else` conditional to return either `""` or `Num.toStr sum` depending on whether `sum == 0`.
 
 Of note, we couldn't have done `total = num1 + num2` because that would be
 redefining `total` in the global scope, and defs can't be redefined. (However, we could use the name
@@ -290,7 +290,7 @@ Records are not objects; they don't have methods or inheritance, they just store
 
 We create the record when we write `{ birds: 5, iguanas: 7 }`. This defines
 a record with two *fields* - namely, the `birds` field and the `iguanas` field -
-and then gives assigns the number `5` to the `birds` field and the number `7` to the
+and then assigns the number `5` to the `birds` field and the number `7` to the
 `iguanas` field.
 
 When we write `counts.birds`, it accesses the `birds` field of the `counts` record,
@@ -352,7 +352,7 @@ addAndStringify = \{ birds, iguanas: lizards } ->
     Num.toStr (birds + lizards)
 ```
 
-In this version, we created a `lizards` def that's assigned to the record's `iguanas`field.
+In this version, we created a `lizards` def that's assigned to the record's `iguanas` field.
 (We could also do something similar with the `birds` field if we like.)
 
 It's possible to destructure a record while still naming it. Here's an example where we
@@ -448,7 +448,7 @@ stoplightStr =
         Yellow -> "yellow"
 ```
 
-This results in in the same value for `stoplightStr`. In both the `when` version and the `if` version, we
+This results in the same value for `stoplightStr`. In both the `when` version and the `if` version, we
 have three conditional branches, and each of them evaluates to a string. The difference is how the
 conditions are specified; here, we specify between `when` and `is` that we're making comparisons against
 `stoplightColor`, and then we specify the different things we're comparing it to: `Red`, `Green`, and `Yellow`.
@@ -579,8 +579,8 @@ This returns `[ 2, 4, 6 ]`. `List.map` takes two arguments:
 1. An input list
 2. A function that will be called on each element of that list
 
-It then returns a list which it creates by calling the given function on each element in the input
-the list. In this example, `List.map` calls the function `\num -> num * 2` on each element in
+It then returns a list which it creates by calling the given function on each element in the input list.
+In this example, `List.map` calls the function `\num -> num * 2` on each element in
 `[ 1, 2, 3 ]` to get a new list of `[ 2, 4, 6 ]`.
 
 We can also give `List.map` a named function, instead of an anonymous one:
@@ -633,7 +633,7 @@ incompatibility (like `Num.negate` on a list of strings).
 We can use tags with payloads to make a list that contains a mixture of different types. For example:
 
 ```coffee
-List.map [ StrElem "A", StrElem "b", NumElem 1, StrElem "c", NumElem, -3 ] \elem ->
+List.map [ StrElem "A", StrElem "b", NumElem 1, StrElem "c", NumElem -3 ] \elem ->
     when elem is
         NumElem num -> Num.isNegative num
         StrElem str -> Str.isCapitalized str
@@ -807,8 +807,8 @@ List.get [ "a", "b", "c" ] 1
 ```
 
 The `|>` operator takes the value that comes before the `|>` and passes it as the first argument to whatever
-comes after the `|>` - so in example above, the `|>` takes `List.get [ "a", "b", "c" ] 1` and passes that value
-as the first argument to `Result.withDefault` - making `""` the second argument to `Result.withDefault`.
+comes after the `|>` - so in the example above, the `|>` takes `List.get [ "a", "b", "c" ] 1` and passes that
+value as the first argument to `Result.withDefault` - making `""` the second argument to `Result.withDefault`.
 
 We can take this a step further like so:
 
@@ -994,7 +994,7 @@ Any of these will work, because `elem`, `value`, and `a` are all *type variables
 two or more types in the same annotation. So you can read `List elem -> List elem` as "takes a list and returns
 a list that has the same element type." Just like `List.reverse` does!
 
-You can choose any name you like for a type variable, but it has to be lowercase. (You may heve noticed all the
+You can choose any name you like for a type variable, but it has to be lowercase. (You may have noticed all the
 types we've used until now are uppercase; that is no accident! Lowercase types are always type variables, so
 all other named types have to be uppercase.) All three of the above type annotations are equivalent;
 the only difference is that we chose different names (`elem`, `value`, and `a`) for their type variables.
