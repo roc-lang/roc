@@ -492,7 +492,7 @@ mod test_parse {
         // causing them to no longer be parsed as fractional numbers by Roc.
         // Using `Debug` instead of `Display` ensures they always have a decimal point.
         let float_string = format!("{:?}", num);
-        
+
         assert_parses_to(float_string.as_str(), Float(float_string.as_str()));
     }
 
