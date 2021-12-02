@@ -1,10 +1,14 @@
 use roc_module::{called_via::CalledVia, symbol::Symbol};
 use roc_parse::ast::StrLiteral;
+use roc_reporting::internal_error;
 
 use crate::{
     ast_error::{ASTResult, UnexpectedASTNode},
     lang::{
-        core::expr::{expr2::ArrString, expr_to_expr2::expr_to_expr2},
+        core::expr::{
+            expr2::{ArrString, ARR_STRING_CAPACITY},
+            expr_to_expr2::expr_to_expr2,
+        },
         env::Env,
         scope::Scope,
     },
@@ -189,14 +193,32 @@ pub fn update_str_expr(
 
     let insert_either = match str_expr {
         Expr2::SmallStr(arr_string) => {
-            let mut new_string = arr_string.as_str().to_owned();
+            if arr_string.len() + 1 <= arr_string.capacity() {
+                let mut new_bytes: [u8; ARR_STRING_CAPACITY] = Default::default();
+                let arr_bytes = arr_string.as_str().as_bytes();
+                new_bytes[..insert_index].copy_from_slice(&arr_bytes[..insert_index]);
+                new_bytes[insert_index] = new_char as u8;
+                new_bytes[insert_index + 1..arr_bytes.len() + 1]
+                    .copy_from_slice(&arr_bytes[insert_index..]);
 
-            new_string.insert(insert_index, new_char);
+                let new_str = match std::str::from_utf8(&new_bytes[..arr_bytes.len() + 1]) {
+                    Ok(new_str) => new_str,
+                    Err(e) => {
+                        internal_error!("Failed to build valid str from bytes: {:?}", e)
+                    }
+                };
 
-            if new_string.len() <= arr_string.capacity() {
-                // safe unwrap because we checked the capacity
-                Either::MyArrString(ArrString::from(&new_string).unwrap())
+                let new_arr_string = match ArrString::from(new_str) {
+                    Ok(arr_string) => arr_string,
+                    Err(e) => {
+                        internal_error!("Failed to build valid ArrayString from str: {:?}", e)
+                    }
+                };
+
+                Either::MyArrString(new_arr_string)
             } else {
+                let mut new_string = arr_string.as_str().to_owned();
+                new_string.insert(insert_index, new_char);
                 let new_pool_str = PoolStr::new(&new_string, pool);
                 Either::MyPoolStr(new_pool_str)
             }
