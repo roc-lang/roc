@@ -2656,6 +2656,7 @@ dependencies = [
  "roc_mono",
  "roc_problem",
  "roc_region",
+ "roc_reporting",
  "roc_solve",
  "roc_types",
  "roc_unify",
@@ -2818,6 +2819,7 @@ dependencies = [
 name = "roc_solve"
 version = "0.1.0"
 dependencies = [
+ "arrayvec 0.7.2",
  "bumpalo",
  "roc_can",
  "roc_collections",
