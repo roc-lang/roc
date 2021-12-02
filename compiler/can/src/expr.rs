@@ -313,14 +313,14 @@ pub fn canonicalize_expr<'a>(
                 } else {
                     // multiple chars is found
                     let error = roc_problem::can::RuntimeError::MultipleCharsInSingleQuote(region);
-                    let answer = Expr::RuntimeError(error.clone());
+                    let answer = Expr::RuntimeError(error);
 
                     (answer, Output::default())
                 }
             } else {
                 // no characters found
                 let error = roc_problem::can::RuntimeError::EmptySingleQuote(region);
-                let answer = Expr::RuntimeError(error.clone());
+                let answer = Expr::RuntimeError(error);
 
                 (answer, Output::default())
             }

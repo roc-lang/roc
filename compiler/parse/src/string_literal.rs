@@ -66,8 +66,7 @@ pub fn parse_single_quote<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
                 match state.bytes.first() {
                     Some(&ch) => {
                         state = advance_state!(state, 1)?;
-                        if ch == b'n' || ch == b'r' || ch == b't' || ch == b'\'' || ch == b'\\' {
-                            if state.bytes.first() == Some(&b'\'') {
+                        if (ch == b'n' || ch == b'r' || ch == b't' || ch == b'\'' || ch == b'\\') && (state.bytes.first() == Some(&b'\'')) {
                                 state = advance_state!(state, 1)?;
                                 // since we checked the current char between the single quotes we
                                 // know they are valid UTF-8, allowing us to use 'from_u32_unchecked'
@@ -78,7 +77,6 @@ pub fn parse_single_quote<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
                                     &*arena.alloc_str(&test.to_string()),
                                     state,
                                 ));
-                            }
                         }
                         // invalid error, backslah escaping something we do not recognize
                         return Err((
@@ -145,7 +143,7 @@ pub fn parse_single_quote<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
         state = advance_state!(state, end_index)?;
         match std::str::from_utf8(raw_bytes) {
             Ok(string) => {
-                return Ok((MadeProgress, string, state));
+                Ok((MadeProgress, string, state))
             }
             Err(_) => {
                 // invalid UTF-8
