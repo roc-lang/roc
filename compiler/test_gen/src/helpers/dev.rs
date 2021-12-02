@@ -3,6 +3,7 @@ use roc_build::link::{link, LinkType};
 use roc_builtins::bitcode;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
+use roc_module::symbol::get_module_ident_ids;
 use tempfile::tempdir;
 
 #[allow(unused_imports)]
@@ -64,17 +65,12 @@ pub fn helper(
 
     use roc_load::file::MonomorphizedModule;
     let MonomorphizedModule {
-        procedures: top_procedures,
+        module_id,
+        procedures,
         interns,
         exposed_to_host,
         ..
     } = loaded;
-
-    let mut procedures = MutMap::default();
-
-    for (key, proc) in top_procedures {
-        procedures.insert(key, proc);
-    }
 
     // You can comment and uncomment this block out to get more useful information
     // while you're working on the dev backend!
@@ -179,8 +175,13 @@ pub fn helper(
         assert_eq!(0, 1, "Mistakes were made");
     }
 
+    let mut ident_ids = get_module_ident_ids(&interns.all_ident_ids, &module_id)
+        .unwrap()
+        .clone();
+
     let env = roc_gen_dev::Env {
         arena,
+        module_id,
         interns,
         exposed_to_host: exposed_to_host.keys().copied().collect(),
         lazy_literals,
@@ -188,7 +189,7 @@ pub fn helper(
     };
 
     let target = target_lexicon::Triple::host();
-    let module_object = roc_gen_dev::build_module(&env, &target, procedures);
+    let module_object = roc_gen_dev::build_module(&env, &mut ident_ids, &target, procedures);
 
     let module_out = module_object
         .write()

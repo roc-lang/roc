@@ -7,7 +7,8 @@ use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{ModuleName, TagName};
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::{Interns, Symbol};
+use roc_module::symbol::{IdentIds, Interns, ModuleId, Symbol};
+use roc_mono::gen_refcount::RefcountProcGenerator;
 use roc_mono::ir::{
     BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, Param, Proc,
     SelfRecursive, Stmt,
@@ -22,6 +23,7 @@ mod run_roc;
 
 pub struct Env<'a> {
     pub arena: &'a Bump,
+    pub module_id: ModuleId,
     pub interns: Interns,
     pub exposed_to_host: MutSet<Symbol>,
     pub lazy_literals: bool,
@@ -63,6 +65,8 @@ where
 
     fn env(&self) -> &'a Env<'a>;
 
+    fn refcount_proc_gen_mut(&mut self) -> &mut RefcountProcGenerator<'a>;
+
     /// reset resets any registers or other values that may be occupied at the end of a procedure.
     /// It also passes basic procedure information to the builder for setup of the next function.
     fn reset(&mut self, name: String, is_self_recursive: SelfRecursive);
@@ -81,7 +85,11 @@ where
     fn build_wrapped_jmp(&mut self) -> (&'a [u8], u64);
 
     /// build_proc creates a procedure and outputs it to the wrapped object writer.
-    fn build_proc(&mut self, proc: Proc<'a>) -> (&'a [u8], &[Relocation]) {
+    fn build_proc(
+        &mut self,
+        ident_ids: &mut IdentIds,
+        proc: Proc<'a>,
+    ) -> (&'a [u8], &[Relocation]) {
         let proc_name = LayoutIds::default()
             .get(proc.name, &proc.ret_layout)
             .to_symbol_string(proc.name, &self.env().interns);
@@ -92,27 +100,37 @@ where
         }
         self.scan_ast(&proc.body);
         self.create_free_map();
-        self.build_stmt(&proc.body, &proc.ret_layout);
+        self.build_stmt(ident_ids, &proc.body, &proc.ret_layout);
         self.finalize()
     }
 
     /// build_stmt builds a statement and outputs at the end of the buffer.
-    fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) {
+    fn build_stmt(&mut self, ident_ids: &mut IdentIds, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) {
         match stmt {
             Stmt::Let(sym, expr, layout, following) => {
                 self.build_expr(sym, expr, layout);
                 self.set_layout_map(*sym, layout);
                 self.free_symbols(stmt);
-                self.build_stmt(following, ret_layout);
+                self.build_stmt(ident_ids, following, ret_layout);
             }
             Stmt::Ret(sym) => {
                 self.load_literal_symbols(&[*sym]);
                 self.return_symbol(sym, ret_layout);
                 self.free_symbols(stmt);
             }
-            Stmt::Refcounting(_modify, following) => {
-                // TODO: actually deal with refcounting. For hello world, we just skipped it.
-                self.build_stmt(following, ret_layout);
+            Stmt::Refcounting(modify, following) => {
+                let sym = modify.get_symbol();
+                let layout = self.layout_map().get(&sym).unwrap().clone();
+
+                // Expand the Refcounting statement into more detailed IR with a function call
+                // If this layout requires a new RC proc, we get enough info to create a linker symbol
+                // for it. Here we don't create linker symbols at this time, but in Wasm backend, we do.
+                let (_rc_stmt, _new_proc_info) = self
+                    .refcount_proc_gen_mut()
+                    .expand_refcount_stmt(ident_ids, layout, modify, *following);
+
+                // TODO: actually use the rc_stmt!! For now just trying to satisfy the borrow checker
+                self.build_stmt(ident_ids, *following, ret_layout)
             }
             Stmt::Switch {
                 cond_symbol,
@@ -123,6 +141,7 @@ where
             } => {
                 self.load_literal_symbols(&[*cond_symbol]);
                 self.build_switch(
+                    ident_ids,
                     cond_symbol,
                     cond_layout,
                     branches,
@@ -140,7 +159,7 @@ where
                 for param in parameters.iter() {
                     self.set_layout_map(param.symbol, &param.layout);
                 }
-                self.build_join(id, parameters, body, remainder, ret_layout);
+                self.build_join(ident_ids, id, parameters, body, remainder, ret_layout);
                 self.free_symbols(stmt);
             }
             Stmt::Jump(id, args) => {
@@ -164,6 +183,7 @@ where
     // build_switch generates a instructions for a switch statement.
     fn build_switch(
         &mut self,
+        ident_ids: &mut IdentIds,
         cond_symbol: &Symbol,
         cond_layout: &Layout<'a>,
         branches: &'a [(u64, BranchInfo<'a>, Stmt<'a>)],
@@ -174,6 +194,7 @@ where
     // build_join generates a instructions for a join statement.
     fn build_join(
         &mut self,
+        ident_ids: &mut IdentIds,
         id: &JoinPointId,
         parameters: &'a [Param<'a>],
         body: &'a Stmt<'a>,

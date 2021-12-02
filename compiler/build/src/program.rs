@@ -3,7 +3,7 @@ use roc_gen_llvm::llvm::build::module_from_builtins;
 #[cfg(feature = "llvm")]
 pub use roc_gen_llvm::llvm::build::FunctionIterator;
 use roc_load::file::{LoadedModule, MonomorphizedModule};
-use roc_module::symbol::{Interns, ModuleId};
+use roc_module::symbol::{get_module_ident_ids, Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -526,15 +526,26 @@ fn gen_from_mono_module_dev_assembly(
     let lazy_literals = true;
     let generate_allocators = false; // provided by the platform
 
+    let MonomorphizedModule {
+        module_id,
+        procedures,
+        interns,
+        exposed_to_host,
+        ..
+    } = loaded;
+
+    let mut ident_ids = get_module_ident_ids(&interns.all_ident_ids, &module_id).unwrap().clone();
+
     let env = roc_gen_dev::Env {
         arena,
-        interns: loaded.interns,
-        exposed_to_host: loaded.exposed_to_host.keys().copied().collect(),
+        module_id,
+        interns,
+        exposed_to_host: exposed_to_host.keys().copied().collect(),
         lazy_literals,
         generate_allocators,
     };
 
-    let module_object = roc_gen_dev::build_module(&env, target, loaded.procedures);
+    let module_object = roc_gen_dev::build_module(&env, &mut ident_ids, target, procedures);
 
     let module_out = module_object
         .write()
