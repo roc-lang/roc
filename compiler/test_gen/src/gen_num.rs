@@ -351,30 +351,30 @@ fn u8_hex_int_alias() {
 
                     f
                 "#
-            ),
-            0xA,
-            u8
-        );
-    }
-
-#[test]
-fn character_literal() {
-    assert_evals_to!(
-            indoc!(
-                r#"
-                    x = 'A'
-
-                    x
-                "#
-            ),
-            65,
-            u32
+        ),
+        0xA,
+        u8
     );
 }
 
 #[test]
-    fn dec_float_alias() {
-        assert_evals_to!(
+fn character_literal() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    x = 'A'
+
+                    x
+                "#
+        ),
+        65,
+        u32
+    );
+}
+
+#[test]
+fn dec_float_alias() {
+    assert_evals_to!(
         indoc!(
             r#"
                     x : Dec

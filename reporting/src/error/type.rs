@@ -1082,9 +1082,8 @@ fn format_category<'b>(
             alloc.text(" which was of type:"),
         ),
         Character => (
-            alloc.concat(vec![this_is, alloc.text(" a character")
-            ]),
-            alloc.text(" of type:")
+            alloc.concat(vec![this_is, alloc.text(" a character")]),
+            alloc.text(" of type:"),
         ),
         Lambda => (
             alloc.concat(vec![this_is, alloc.text(" an anonymous function")]),
