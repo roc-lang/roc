@@ -499,60 +499,6 @@ mod test_parse {
 
     // RECORD LITERALS
 
-    #[test]
-    fn empty_record() {
-        let arena = Bump::new();
-        let expected = Record {
-            fields: &[],
-            final_comments: &[],
-        };
-        let actual = parse_expr_with(&arena, "{}");
-
-        assert_eq!(Ok(expected), actual);
-    }
-
-    #[test]
-    fn record_update() {
-        let arena = Bump::new();
-        let label1 = RequiredValue(
-            Located::new(0, 0, 16, 17, "x"),
-            &[],
-            arena.alloc(Located::new(0, 0, 19, 20, Num("5"))),
-        );
-        let label2 = RequiredValue(
-            Located::new(0, 0, 22, 23, "y"),
-            &[],
-            arena.alloc(Located::new(0, 0, 25, 26, Num("0"))),
-        );
-        let fields: &[_] = &[
-            Located::new(0, 0, 16, 20, label1),
-            Located::new(0, 0, 22, 26, label2),
-        ];
-        let var = Var {
-            module_name: "Foo.Bar",
-            ident: "baz",
-        };
-        let update_target = Located::new(0, 0, 2, 13, var);
-        let expected = RecordUpdate {
-            update: &*arena.alloc(update_target),
-            fields,
-            final_comments: &(&[] as &[_]),
-        };
-
-        let actual = parse_expr_with(&arena, "{ Foo.Bar.baz & x: 5, y: 0 }");
-        assert_eq!(Ok(expected), actual);
-        let string = num.to_string();
-        if string.contains('.') {
-            assert_parses_to(&string, Float(&string));
-        } else if num.is_nan() {
-            assert_parses_to(&string, Expr::GlobalTag(&string));
-        } else if num.is_finite() {
-            // These are whole numbers. Add the `.0` back to make float.
-            let float_string = format!("{}.0", string);
-            assert_parses_to(&float_string, Float(&float_string));
-        }
-    }
-
     // #[test]
     // fn type_signature_def() {
     //     let arena = Bump::new();
