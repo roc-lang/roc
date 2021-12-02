@@ -708,6 +708,29 @@ impl Variable {
     pub const fn index(&self) -> u32 {
         self.0
     }
+
+    pub const fn get_reserved(symbol: Symbol) -> Option<Variable> {
+        // Must be careful here: the variables must in fact be in Subs
+        match symbol {
+            Symbol::NUM_I128 => Some(Variable::I128),
+            Symbol::NUM_I64 => Some(Variable::I64),
+            Symbol::NUM_I32 => Some(Variable::I32),
+            Symbol::NUM_I16 => Some(Variable::I16),
+            Symbol::NUM_I8 => Some(Variable::I8),
+
+            Symbol::NUM_U128 => Some(Variable::U128),
+            Symbol::NUM_U64 => Some(Variable::U64),
+            Symbol::NUM_U32 => Some(Variable::U32),
+            Symbol::NUM_U16 => Some(Variable::U16),
+            Symbol::NUM_U8 => Some(Variable::U8),
+
+            Symbol::NUM_NAT => Some(Variable::NAT),
+
+            Symbol::BOOL_BOOL => Some(Variable::BOOL),
+
+            _ => None,
+        }
+    }
 }
 
 impl From<Variable> for OptVariable {
@@ -1012,6 +1035,8 @@ fn define_integer_types(subs: &mut Subs) {
 }
 
 impl Subs {
+    pub const RESULT_TAG_NAMES: SubsSlice<TagName> = SubsSlice::new(0, 2);
+
     pub fn new() -> Self {
         Self::with_capacity(0)
     }
@@ -1019,10 +1044,15 @@ impl Subs {
     pub fn with_capacity(capacity: usize) -> Self {
         let capacity = capacity.max(Variable::NUM_RESERVED_VARS);
 
+        let mut tag_names = Vec::with_capacity(32);
+
+        tag_names.push(TagName::Global("Err".into()));
+        tag_names.push(TagName::Global("Ok".into()));
+
         let mut subs = Subs {
             utable: UnificationTable::default(),
             variables: Default::default(),
-            tag_names: Default::default(),
+            tag_names,
             field_names: Default::default(),
             record_fields: Default::default(),
             // store an empty slice at the first position
