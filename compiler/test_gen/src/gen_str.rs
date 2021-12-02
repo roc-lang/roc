@@ -1314,3 +1314,20 @@ fn str_to_num() {
         i64
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_to_num_float() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Str.toNum "1.0" is
+                Ok n -> n + 2.0
+                Err _ -> 0
+
+            "#
+        ),
+        3.0,
+        f64
+    );
+}
