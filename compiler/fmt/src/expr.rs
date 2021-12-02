@@ -596,8 +596,7 @@ fn fmt_when<'a>(
         );
         for when_pattern in rest {
             if is_multiline {
-                buf.push_str("\n");
-                add_spaces(buf, indent + INDENT);
+                newline(buf, indent + INDENT);
                 buf.push_str("| ");
             } else {
                 buf.push_str(" | ");
@@ -610,9 +609,9 @@ fn fmt_when<'a>(
             guard_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent + INDENT);
         }
 
-        buf.push_str(" ->\n");
+        buf.push_str(" ->");
+        newline(buf, indent + INDENT * 2);
 
-        add_spaces(buf, indent + (INDENT * 2));
         match expr.value {
             Expr::SpaceBefore(nested, spaces) => {
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent + (INDENT * 2));

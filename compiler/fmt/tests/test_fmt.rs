@@ -2111,6 +2111,35 @@ mod test_fmt {
     }
 
     #[test]
+    fn inner_def_with_triple_newline_before() {
+        // The triple newline used to cause the code in add_spaces to not indent the next line,
+        // which of course is not the same tree (and nor does it parse)
+        expr_formats_to(
+            indoc!(
+                r#"
+                \x ->
+                    m = 2
+
+
+                    m1 = insert m n powerOf10
+
+                    42
+                "#
+            ),
+            indoc!(
+                r#"
+                \x ->
+                    m = 2
+
+                    m1 = insert m n powerOf10
+
+                    42
+                "#
+            ),
+        );
+    }
+
+    #[test]
     fn when_guard() {
         expr_formats_same(indoc!(
             r#"
