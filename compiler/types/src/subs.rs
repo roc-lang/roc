@@ -710,7 +710,7 @@ impl Variable {
     }
 
     pub const fn get_reserved(symbol: Symbol) -> Option<Variable> {
-        // Must be carefule here: the variables must in fact be in Subs
+        // Must be careful here: the variables must in fact be in Subs
         match symbol {
             Symbol::NUM_I128 => Some(Variable::I128),
             Symbol::NUM_I64 => Some(Variable::I64),
