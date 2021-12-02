@@ -1326,7 +1326,94 @@ fn str_trim_right(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Str.toNum : Str -> Result (Num *) [ InvalidNumStr ]*
 fn str_to_num(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    lowlevel_1(symbol, LowLevel::StrToNum, var_store)
+    let bool_var = var_store.fresh();
+    let str_var = var_store.fresh();
+    let num_var = var_store.fresh();
+    let ret_var = var_store.fresh();
+    let record_var = var_store.fresh();
+
+    let errorcode_var = var_store.fresh();
+
+    // let arg_2 = RunLowLevel StrToNum arg_1
+    //
+    // if arg_2.errorcode then
+    //  Err InvalidNumStr
+    // else
+    //  Ok arg_2.value
+
+    let cont = If {
+        branch_var: ret_var,
+        cond_var: bool_var,
+        branches: vec![(
+            // if-condition
+            no_region(RunLowLevel {
+                op: LowLevel::NumGt,
+                args: vec![
+                    (
+                        errorcode_var,
+                        // arg_3.b
+                        Access {
+                            record_var,
+                            ext_var: var_store.fresh(),
+                            field: "errorcode".into(),
+                            field_var: errorcode_var,
+                            loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                        },
+                    ),
+                    (errorcode_var, int(errorcode_var, Variable::NATURAL, 0)),
+                ],
+                ret_var: bool_var,
+            }),
+            // overflow!
+            no_region(tag(
+                "Err",
+                vec![tag("InvalidNumStr", Vec::new(), var_store)],
+                var_store,
+            )),
+        )],
+        final_else: Box::new(
+            // all is well
+            no_region(
+                // Ok arg_2.value
+                tag(
+                    "Ok",
+                    vec![
+                        // arg_3.a
+                        Access {
+                            record_var,
+                            ext_var: var_store.fresh(),
+                            field: "value".into(),
+                            field_var: num_var,
+                            loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                        },
+                    ],
+                    var_store,
+                ),
+            ),
+        ),
+    };
+
+    let def = crate::def::Def {
+        loc_pattern: no_region(Pattern::Identifier(Symbol::ARG_2)),
+        loc_expr: no_region(RunLowLevel {
+            op: LowLevel::StrToNum,
+            args: vec![(str_var, Var(Symbol::ARG_1))],
+            ret_var: record_var,
+        }),
+        expr_var: record_var,
+        pattern_vars: SendMap::default(),
+        annotation: None,
+    };
+
+    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
+
+    defn(
+        symbol,
+        vec![(str_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        ret_var,
+    )
 }
 
 /// Str.repeat : Str, Nat -> Str

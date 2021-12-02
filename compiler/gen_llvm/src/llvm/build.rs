@@ -5274,9 +5274,9 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (string, _string_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            if let Layout::Union(UnionLayout::NonRecursive(union_layout)) = layout {
+            if let Layout::Struct(struct_layout) = layout {
                 // match on the return layout to figure out which zig builtin we need
-                let intrinsic = match union_layout[1][0] {
+                let intrinsic = match struct_layout[0] {
                     Layout::Builtin(Builtin::Int(int_width)) => &bitcode::STR_TO_INT[int_width],
                     Layout::Builtin(Builtin::Float(float_width)) => {
                         &bitcode::STR_TO_FLOAT[float_width]
