@@ -5,15 +5,17 @@ const RocList = @import("list.zig").RocList;
 const RocStr = @import("str.zig").RocStr;
 
 pub fn NumParseResult(comptime T: type) type {
+    // on the roc side we sort by alignment; putting the errorcode last
+    // always works out (no number with smaller alignment than 1)
     return extern struct {
-        errorcode: u8, // 0 indicates success
         value: T,
+        errorcode: u8, // 0 indicates success
     };
 }
 
 pub fn exportParseInt(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
-        fn func(input: T, buf: RocStr) callconv(.C) NumParseResult(T) {
+        fn func(buf: RocStr) callconv(.C) NumParseResult(T) {
             // a radix of 0 will make zig determine the radix from the frefix:
             //  * A prefix of "0b" implies radix=2,
             //  * A prefix of "0o" implies radix=8,

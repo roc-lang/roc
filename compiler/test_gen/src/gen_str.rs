@@ -1297,3 +1297,20 @@ fn str_trim_right_small_to_small_shared() {
         (RocStr, RocStr)
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_to_num() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Str.toNum "1" is
+                Ok n -> n
+                Err _ -> 0
+
+               "#
+        ),
+        1,
+        i64
+    );
+}

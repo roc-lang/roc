@@ -5285,6 +5285,9 @@ fn run_low_level<'a, 'ctx, 'env>(
                     _ => unreachable!(),
                 };
 
+                let string =
+                    complex_bitcast(env.builder, string, env.str_list_c_abi().into(), "to_utf8");
+
                 call_bitcode_fn(env, &[string], intrinsic)
             } else {
                 unreachable!()

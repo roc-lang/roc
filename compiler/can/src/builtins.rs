@@ -1355,12 +1355,12 @@ fn str_to_num(symbol: Symbol, var_store: &mut VarStore) -> Def {
                         Access {
                             record_var,
                             ext_var: var_store.fresh(),
-                            field: "errorcode".into(),
+                            field: "b_errorcode".into(),
                             field_var: errorcode_var,
                             loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
                         },
                     ),
-                    (errorcode_var, int(errorcode_var, Variable::NATURAL, 0)),
+                    (errorcode_var, int(errorcode_var, Variable::UNSIGNED8, 0)),
                 ],
                 ret_var: bool_var,
             }),
@@ -1382,7 +1382,7 @@ fn str_to_num(symbol: Symbol, var_store: &mut VarStore) -> Def {
                         Access {
                             record_var,
                             ext_var: var_store.fresh(),
-                            field: "value".into(),
+                            field: "a_value".into(),
                             field_var: num_var,
                             loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
                         },
