@@ -488,7 +488,12 @@ mod test_parse {
 
     #[quickcheck]
     fn all_f64_values_parse(num: f64) {
-        assert_parses_to(num.to_string().as_str(), Float(num.to_string().as_str()));
+        // These can potentially be whole numbers. `Display` omits the decimal point for those,
+        // causing them to no longer be parsed as fractional numbers by Roc.
+        // Using `Debug` instead of `Display` ensures they always have a decimal point.
+        let float_string = format!("{:?}", num);
+        
+        assert_parses_to(float_string.as_str(), Float(float_string.as_str()));
     }
 
     // SINGLE QUOTE LITERAL
