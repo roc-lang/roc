@@ -11,7 +11,7 @@ use roc_module::symbol::{IdentIds, Interns, ModuleId, Symbol};
 use roc_mono::gen_refcount::RefcountProcGenerator;
 use roc_mono::ir::{
     BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, Param, Proc,
-    SelfRecursive, Stmt,
+    SelfRecursive, Stmt, ProcLayout,
 };
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 use roc_reporting::internal_error;
@@ -66,6 +66,8 @@ where
     fn env(&self) -> &'a Env<'a>;
 
     fn refcount_proc_gen_mut(&mut self) -> &mut RefcountProcGenerator<'a>;
+
+    fn refcount_proc_symbols_mut(&mut self) -> &mut Vec<'a, (Symbol, ProcLayout<'a>)>;
 
     /// reset resets any registers or other values that may be occupied at the end of a procedure.
     /// It also passes basic procedure information to the builder for setup of the next function.
@@ -125,12 +127,15 @@ where
                 // Expand the Refcounting statement into more detailed IR with a function call
                 // If this layout requires a new RC proc, we get enough info to create a linker symbol
                 // for it. Here we don't create linker symbols at this time, but in Wasm backend, we do.
-                let (_rc_stmt, _new_proc_info) = self
+                let (rc_stmt, new_proc_info) = self
                     .refcount_proc_gen_mut()
                     .expand_refcount_stmt(ident_ids, layout, modify, *following);
 
-                // TODO: actually use the rc_stmt!! For now just trying to satisfy the borrow checker
-                self.build_stmt(ident_ids, *following, ret_layout)
+                if let Some((rc_proc_symbol, rc_proc_layout)) = new_proc_info {
+                    self.refcount_proc_symbols_mut().push((rc_proc_symbol, rc_proc_layout));
+                }
+
+                self.build_stmt(ident_ids, &rc_stmt, ret_layout)
             }
             Stmt::Switch {
                 cond_symbol,

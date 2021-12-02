@@ -534,7 +534,9 @@ fn gen_from_mono_module_dev_assembly(
         ..
     } = loaded;
 
-    let mut ident_ids = get_module_ident_ids(&interns.all_ident_ids, &module_id).unwrap().clone();
+    let mut ident_ids = get_module_ident_ids(&interns.all_ident_ids, &module_id)
+        .unwrap()
+        .clone();
 
     let env = roc_gen_dev::Env {
         arena,

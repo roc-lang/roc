@@ -218,6 +218,7 @@ fn build_object<'a, B: Backend<'a>>(
     let mut layout_ids = LayoutIds::default();
     let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
 
+    // Names and linker data for user procedures
     for ((sym, layout), proc) in procedures {
         build_proc_symbol(
             &mut output,
@@ -230,7 +231,7 @@ fn build_object<'a, B: Backend<'a>>(
         )
     }
 
-    // Build procedures.
+    // Build procedures from user code
     let mut relocations = bumpalo::vec![in env.arena];
     for (fn_name, section_id, proc_id, proc) in procs {
         build_proc(
@@ -245,6 +246,43 @@ fn build_object<'a, B: Backend<'a>>(
             proc,
         )
     }
+
+    // Generate IR for refcounting procedures
+    let rc_proc_gen = backend.refcount_proc_gen_mut();
+    let rc_procs = rc_proc_gen.generate_refcount_procs(env.arena, ident_ids);
+    let rc_symbols_and_layouts = backend.refcount_proc_symbols_mut();
+    let mut rc_names_symbols_procs = Vec::with_capacity_in(rc_procs.len(), env.arena);
+    env.module_id.register_debug_idents(ident_ids);
+
+    // Names and linker data for refcounting procedures
+    for ((sym, layout), proc) in rc_symbols_and_layouts.into_iter().zip(rc_procs) {
+        build_proc_symbol(
+            &mut output,
+            &mut layout_ids,
+            &mut rc_names_symbols_procs,
+            env,
+            *sym,
+            *layout,
+            proc,
+        )
+    }
+
+    // Build refcounting procedures
+    for (fn_name, section_id, proc_id, proc) in rc_names_symbols_procs {
+        build_proc(
+            &mut output,
+            &mut backend,
+            &mut relocations,
+            ident_ids,
+            data_section,
+            fn_name,
+            section_id,
+            proc_id,
+            proc,
+        )
+    }
+
+    // Relocations for all procedures (user code & refcounting)
     for (section_id, reloc) in relocations {
         match output.add_relocation(section_id, reloc) {
             Ok(obj) => obj,

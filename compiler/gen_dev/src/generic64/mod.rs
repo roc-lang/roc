@@ -4,7 +4,7 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::{IdentIds, Symbol};
 use roc_mono::gen_refcount::RefcountProcGenerator;
-use roc_mono::ir::{BranchInfo, JoinPointId, Literal, Param, SelfRecursive, Stmt};
+use roc_mono::ir::{BranchInfo, JoinPointId, Literal, Param, ProcLayout, SelfRecursive, Stmt};
 use roc_mono::layout::{Builtin, Layout};
 use roc_reporting::internal_error;
 use std::marker::PhantomData;
@@ -228,6 +228,7 @@ pub struct Backend64Bit<
     phantom_cc: PhantomData<CC>,
     env: &'a Env<'a>,
     refcount_proc_gen: RefcountProcGenerator<'a>,
+    refcount_proc_symbols: Vec<'a, (Symbol, ProcLayout<'a>)>,
     buf: Vec<'a, u8>,
     relocs: Vec<'a, Relocation>,
     proc_name: Option<String>,
@@ -276,6 +277,7 @@ impl<
             phantom_cc: PhantomData,
             env,
             refcount_proc_gen: RefcountProcGenerator::new(env.arena, IntWidth::I64, env.module_id),
+            refcount_proc_symbols: bumpalo::vec![in env.arena],
             proc_name: None,
             is_self_recursive: None,
             buf: bumpalo::vec![in env.arena],
@@ -303,6 +305,9 @@ impl<
     }
     fn refcount_proc_gen_mut(&mut self) -> &mut RefcountProcGenerator<'a> {
         &mut self.refcount_proc_gen
+    }
+    fn refcount_proc_symbols_mut(&mut self) -> &mut Vec<'a, (Symbol, ProcLayout<'a>)> {
+        &mut self.refcount_proc_symbols
     }
 
     fn reset(&mut self, name: String, is_self_recursive: SelfRecursive) {
