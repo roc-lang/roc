@@ -312,7 +312,7 @@ pub fn canonicalize_expr<'a>(
                     (Expr::SingleQuote(char), Output::default())
                 } else {
                     // multiple chars is found
-                    let error = roc_problem::can::RuntimeError::MulitpleCharsInSingleQuote(region);
+                    let error = roc_problem::can::RuntimeError::MultipleCharsInSingleQuote(region);
                     let answer = Expr::RuntimeError(error.clone());
 
                     (answer, Output::default())

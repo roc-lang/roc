@@ -246,7 +246,7 @@ pub fn canonicalize_pattern<'a>(
                     Pattern::SingleQuote(char)
                 } else {
                     // multiple chars is found
-                    let problem = MalformedPatternProblem::MulitpleCharsInSingleQuote;
+                    let problem = MalformedPatternProblem::MultipleCharsInSingleQuote;
                     malformed_pattern(env, problem, region)
                 }
             } else {

@@ -845,14 +845,14 @@ fn pretty_runtime_error<'b>(
                 Unknown => " ",
                 QualifiedIdentifier => " qualified ",
                 EmptySingleQuote => " empty character literal ",
-                MulitpleCharsInSingleQuote => " overfull literal ",
+                MultipleCharsInSingleQuote => " overfull literal ",
             };
 
             let tip = match problem {
                 MalformedInt | MalformedFloat | MalformedBase(_) => alloc
                     .tip()
                     .append(alloc.reflow("Learn more about number literals at TODO")),
-                EmptySingleQuote | MulitpleCharsInSingleQuote | Unknown | BadIdent(_) => {
+                EmptySingleQuote | MultipleCharsInSingleQuote | Unknown | BadIdent(_) => {
                     alloc.nil()
                 }
                 QualifiedIdentifier => alloc.tip().append(
@@ -1160,7 +1160,7 @@ fn pretty_runtime_error<'b>(
 
             title = SYNTAX_PROBLEM;
         }
-        RuntimeError::MulitpleCharsInSingleQuote(region) => {
+        RuntimeError::MultipleCharsInSingleQuote(region) => {
             let tip = alloc
                 .tip()
                 .append(alloc.reflow("Learn more about character literals at TODO"));

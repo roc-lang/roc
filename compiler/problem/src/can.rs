@@ -177,7 +177,7 @@ pub enum RuntimeError {
     /// where ''
     EmptySingleQuote(Region),
     /// where 'aa'
-    MulitpleCharsInSingleQuote(Region),
+    MultipleCharsInSingleQuote(Region),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -189,5 +189,5 @@ pub enum MalformedPatternProblem {
     QualifiedIdentifier,
     BadIdent(roc_parse::ident::BadIdent),
     EmptySingleQuote,
-    MulitpleCharsInSingleQuote,
+    MultipleCharsInSingleQuote,
 }

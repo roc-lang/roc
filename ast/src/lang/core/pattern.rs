@@ -234,7 +234,7 @@ pub fn to_pattern2<'a>(
                         Pattern2::CharacterLiteral(char)
                     } else {
                         // multiple chars is found
-                        let problem = MalformedPatternProblem::MulitpleCharsInSingleQuote;
+                        let problem = MalformedPatternProblem::MultipleCharsInSingleQuote;
                         malformed_pattern(env, problem, region)
                     }
                 } else {
