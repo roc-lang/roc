@@ -139,7 +139,12 @@ impl<'a> Formattable<'a> for Expr<'a> {
                     sub_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
                 } else {
                     buf.push('(');
-                    sub_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
+                    sub_expr.format_with_options(
+                        buf,
+                        Parens::NotNeeded,
+                        Newlines::Yes,
+                        indent + INDENT,
+                    );
                     buf.push(')');
                 }
             }

@@ -2768,6 +2768,21 @@ mod test_fmt {
     }
 
     #[test]
+    fn backpassing_parens_body() {
+        expr_formats_same(indoc!(
+            r#"
+            Task.fromResult
+                (a, b <- binaryOp ctx
+                    if a == b then
+                        -1
+                    else
+                        0
+                    )
+            "#
+        ));
+    }
+
+    #[test]
     fn backpassing_body_on_newline() {
         expr_formats_same(indoc!(
             r#"
