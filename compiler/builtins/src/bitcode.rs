@@ -302,6 +302,7 @@ pub const LIST_ANY: &str = "roc_builtins.list.any";
 pub const LIST_ALL: &str = "roc_builtins.list.all";
 pub const LIST_FIND_UNSAFE: &str = "roc_builtins.list.find_unsafe";
 
+pub const DEC_FROM_STR: &str = "roc_builtins.dec.from_str";
 pub const DEC_FROM_F64: &str = "roc_builtins.dec.from_f64";
 pub const DEC_EQ: &str = "roc_builtins.dec.eq";
 pub const DEC_NEQ: &str = "roc_builtins.dec.neq";

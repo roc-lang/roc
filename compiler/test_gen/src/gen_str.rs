@@ -1331,3 +1331,25 @@ fn str_to_num_float() {
         f64
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_to_num_dec() {
+    use roc_std::RocDec;
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : Dec
+            x = 2.0
+
+            when Str.toNum "1.0" is
+                Ok n -> n + x
+                Err _ -> 0
+
+            "#
+        ),
+        RocDec::from_str("3.0").unwrap(),
+        RocDec
+    );
+}

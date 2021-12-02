@@ -5281,7 +5281,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                     Layout::Builtin(Builtin::Float(float_width)) => {
                         &bitcode::STR_TO_FLOAT[float_width]
                     }
-                    Layout::Builtin(Builtin::Decimal) => bitcode::STR_TO_DECIMAL,
+                    Layout::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
                     _ => unreachable!(),
                 };
 
