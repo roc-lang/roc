@@ -45,16 +45,16 @@ pub fn format(files: std::vec::Vec<PathBuf>) {
                 e
             );
         }));
-
-        let ast = ast.remove_spaces(&arena);
-        let reparsed_ast = reparsed_ast.remove_spaces(&arena);
+        
+        let ast_normalized = ast.remove_spaces(&arena);
+        let reparsed_ast_normalized = reparsed_ast.remove_spaces(&arena);
 
         // HACK!
         // We compare the debug format strings of the ASTs, because I'm finding in practice that _somewhere_ deep inside the ast,
         // the PartialEq implementation is returning `false` even when the Debug-formatted impl is exactly the same.
         // I don't have the patience to debug this right now, so let's leave it for another day...
         // TODO: fix PartialEq impl on ast types
-        if format!("{:?}", ast) != format!("{:?}", reparsed_ast) {
+        if format!("{:?}", ast_normalized) != format!("{:?}", reparsed_ast_normalized) {
             let mut fail_file = file.clone();
             fail_file.set_extension("roc-format-failed");
             std::fs::write(&fail_file, &buf).unwrap();
@@ -76,6 +76,27 @@ pub fn format(files: std::vec::Vec<PathBuf>) {
                 after_file.display());
         }
 
+        // Now verify that the resultant formatting is _stable_ - i.e. that it doesn't change again if re-formatted
+        let mut reformatted_buf = String::new_in(&arena);
+        fmt_all(&arena, &mut reformatted_buf, reparsed_ast);
+        if buf.as_str() != reformatted_buf.as_str() {
+            let mut unstable_1_file = file.clone();
+            unstable_1_file.set_extension("roc-format-unstable-1");
+            std::fs::write(&unstable_1_file, &buf).unwrap();
+
+            let mut unstable_2_file = file.clone();
+            unstable_2_file.set_extension("roc-format-unstable-2");
+            std::fs::write(&unstable_2_file, &reformatted_buf).unwrap();
+
+            internal_error!(
+                "Formatting bug; formatting is not stable. Reformatting the formatted file changed it again.\n\n\
+                I wrote the result of formatting to this file for debugging purposes:\n{}\n\n\
+                I wrote the result of double-formatting here:\n{}\n\n",
+                unstable_1_file.display(),
+                unstable_2_file.display());
+        }
+
+        // If all the checks above passed, actually write out the new file.
         std::fs::write(&file, &buf).unwrap();
     }
 }
