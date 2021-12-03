@@ -3,7 +3,6 @@ use roc_build::link::{link, LinkType};
 use roc_builtins::bitcode;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
-use roc_module::symbol::get_module_ident_ids;
 use tempfile::tempdir;
 
 #[allow(unused_imports)]
@@ -175,21 +174,17 @@ pub fn helper(
         assert_eq!(0, 1, "Mistakes were made");
     }
 
-    let mut ident_ids = get_module_ident_ids(&interns.all_ident_ids, &module_id)
-        .unwrap()
-        .clone();
-
     let env = roc_gen_dev::Env {
         arena,
         module_id,
-        interns,
+        interns: std::cell::Cell::new(interns),
         exposed_to_host: exposed_to_host.keys().copied().collect(),
         lazy_literals,
         generate_allocators: true, // Needed for testing, since we don't have a platform
     };
 
     let target = target_lexicon::Triple::host();
-    let module_object = roc_gen_dev::build_module(&env, &mut ident_ids, &target, procedures);
+    let module_object = roc_gen_dev::build_module(&env, &target, procedures);
 
     let module_out = module_object
         .write()

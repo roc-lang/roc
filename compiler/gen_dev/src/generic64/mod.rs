@@ -2,7 +2,7 @@ use crate::{Backend, Env, Relocation};
 use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
-use roc_module::symbol::{IdentIds, Symbol};
+use roc_module::symbol::Symbol;
 use roc_mono::gen_refcount::RefcountProcGenerator;
 use roc_mono::ir::{BranchInfo, JoinPointId, Literal, Param, ProcLayout, SelfRecursive, Stmt};
 use roc_mono::layout::{Builtin, Layout};
@@ -543,7 +543,6 @@ impl<
 
     fn build_switch(
         &mut self,
-        ident_ids: &mut IdentIds,
         cond_symbol: &Symbol,
         _cond_layout: &Layout<'a>, // cond_layout must be a integer due to potential jump table optimizations.
         branches: &'a [(u64, BranchInfo<'a>, Stmt<'a>)],
@@ -566,7 +565,7 @@ impl<
                 let start_offset = ASM::jne_reg64_imm64_imm32(&mut self.buf, cond_reg, *val, 0);
 
                 // Build all statements in this branch.
-                self.build_stmt(ident_ids, stmt, ret_layout);
+                self.build_stmt(stmt, ret_layout);
 
                 // Build unconditional jump to the end of this switch.
                 // Since we don't know the offset yet, set it to 0 and overwrite later.
@@ -590,7 +589,7 @@ impl<
         }
         let (branch_info, stmt) = default_branch;
         if let BranchInfo::None = branch_info {
-            self.build_stmt(ident_ids, stmt, ret_layout);
+            self.build_stmt(stmt, ret_layout);
 
             // Update all return jumps to jump past the default case.
             let ret_offset = self.buf.len();
@@ -612,7 +611,6 @@ impl<
 
     fn build_join(
         &mut self,
-        ident_ids: &mut IdentIds,
         id: &JoinPointId,
         parameters: &'a [Param<'a>],
         body: &'a Stmt<'a>,
@@ -651,7 +649,7 @@ impl<
         sub_backend.load_args(args.into_bump_slice(), ret_layout);
 
         // Build all statements in body.
-        sub_backend.build_stmt(ident_ids, body, ret_layout);
+        sub_backend.build_stmt(body, ret_layout);
 
         // Merge the "sub function" into the main function.
         let sub_func_offset = self.buf.len() as u64;
@@ -695,7 +693,7 @@ impl<
         );
 
         // Build remainder of function.
-        self.build_stmt(ident_ids, remainder, ret_layout)
+        self.build_stmt(remainder, ret_layout)
     }
 
     fn build_jump(

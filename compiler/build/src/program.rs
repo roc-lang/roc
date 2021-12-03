@@ -3,7 +3,7 @@ use roc_gen_llvm::llvm::build::module_from_builtins;
 #[cfg(feature = "llvm")]
 pub use roc_gen_llvm::llvm::build::FunctionIterator;
 use roc_load::file::{LoadedModule, MonomorphizedModule};
-use roc_module::symbol::{get_module_ident_ids, Interns, ModuleId};
+use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -534,10 +534,6 @@ fn gen_from_mono_module_dev_assembly(
         ..
     } = loaded;
 
-    let mut ident_ids = get_module_ident_ids(&interns.all_ident_ids, &module_id)
-        .unwrap()
-        .clone();
-
     let env = roc_gen_dev::Env {
         arena,
         module_id,
@@ -547,7 +543,7 @@ fn gen_from_mono_module_dev_assembly(
         generate_allocators,
     };
 
-    let module_object = roc_gen_dev::build_module(&env, &mut ident_ids, target, procedures);
+    let module_object = roc_gen_dev::build_module(&env, target, procedures);
 
     let module_out = module_object
         .write()

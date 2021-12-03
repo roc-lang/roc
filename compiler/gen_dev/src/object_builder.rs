@@ -8,7 +8,7 @@ use object::{
     SymbolFlags, SymbolKind, SymbolScope,
 };
 use roc_collections::all::MutMap;
-use roc_module::symbol::{self, IdentIds};
+use roc_module::symbol;
 use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::LayoutIds;
 use roc_reporting::internal_error;
@@ -22,7 +22,6 @@ use target_lexicon::{Architecture as TargetArch, BinaryFormat as TargetBF, Tripl
 /// It takes the request to build a module and output the object file for the module.
 pub fn build_module<'a>(
     env: &'a Env,
-    ident_ids: &'a mut IdentIds,
     target: &Triple,
     procedures: MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Object {
@@ -39,8 +38,6 @@ pub fn build_module<'a>(
                 x86_64::X86_64SystemV,
             > = Backend::new(env);
             build_object(
-                env,
-                ident_ids,
                 procedures,
                 backend,
                 Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little),
@@ -58,8 +55,6 @@ pub fn build_module<'a>(
                 x86_64::X86_64SystemV,
             > = Backend::new(env);
             build_object(
-                env,
-                ident_ids,
                 procedures,
                 backend,
                 Object::new(
@@ -81,8 +76,6 @@ pub fn build_module<'a>(
                 aarch64::AArch64Call,
             > = Backend::new(env);
             build_object(
-                env,
-                ident_ids,
                 procedures,
                 backend,
                 Object::new(BinaryFormat::Elf, Architecture::Aarch64, Endianness::Little),
@@ -100,8 +93,6 @@ pub fn build_module<'a>(
                 aarch64::AArch64Call,
             > = Backend::new(env);
             build_object(
-                env,
-                ident_ids,
                 procedures,
                 backend,
                 Object::new(
@@ -169,8 +160,6 @@ fn generate_wrapper<'a, B: Backend<'a>>(
 }
 
 fn build_object<'a, B: Backend<'a>>(
-    _env: &'a Env,
-    ident_ids: &'a mut IdentIds,
     procedures: MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
     mut backend: B,
     mut output: Object,
@@ -240,7 +229,6 @@ fn build_object<'a, B: Backend<'a>>(
             &mut output,
             &mut backend,
             &mut relocations,
-            ident_ids,
             data_section,
             fn_name,
             section_id,
@@ -249,10 +237,22 @@ fn build_object<'a, B: Backend<'a>>(
         )
     }
 
-    // Generate IR for refcounting procedures
-    let rc_proc_gen = backend.refcount_proc_gen_mut();
-    let rc_procs = rc_proc_gen.generate_refcount_procs(arena, ident_ids);
-    backend.env().module_id.register_debug_idents(ident_ids);
+    let rc_procs = {
+        let module_id = backend.env().module_id;
+
+        let mut interns = backend.env().interns.take();
+
+        // Generate IR for refcounting procedures
+        let rc_proc_gen = backend.refcount_proc_gen_mut();
+
+        let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
+        let rc_procs = rc_proc_gen.generate_refcount_procs(arena, ident_ids);
+        backend.env().module_id.register_debug_idents(ident_ids);
+
+        backend.env().interns.set(interns);
+
+        rc_procs
+    };
 
     let empty = bumpalo::collections::Vec::new_in(arena);
     let rc_symbols_and_layouts = std::mem::replace(backend.refcount_proc_symbols_mut(), empty);
@@ -277,7 +277,6 @@ fn build_object<'a, B: Backend<'a>>(
             &mut output,
             &mut backend,
             &mut relocations,
-            ident_ids,
             data_section,
             fn_name,
             section_id,
@@ -344,7 +343,6 @@ fn build_proc<'a, B: Backend<'a>>(
     output: &mut Object,
     backend: &mut B,
     relocations: &mut Vec<'a, (SectionId, object::write::Relocation)>,
-    ident_ids: &mut IdentIds,
     data_section: SectionId,
     fn_name: String,
     section_id: SectionId,
@@ -352,7 +350,7 @@ fn build_proc<'a, B: Backend<'a>>(
     proc: Proc<'a>,
 ) {
     let mut local_data_index = 0;
-    let (proc_data, relocs) = backend.build_proc(ident_ids, proc);
+    let (proc_data, relocs) = backend.build_proc(proc);
     let proc_offset = output.add_symbol_data(proc_id, section_id, proc_data, 16);
     for reloc in relocs {
         let elfreloc = match reloc {
