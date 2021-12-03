@@ -49,7 +49,9 @@ main : Task.Task {} []
 main =
     Task.after Task.getInt \n ->
         ms : ConsList Map
-        ms = makeMap 5 n # original koka n = 4_200_000
+
+        # original koka n = 4_200_000
+        ms = makeMap 5 n
 
         when ms is
             Cons head _ ->
