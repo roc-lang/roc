@@ -541,7 +541,7 @@ fn gen_from_mono_module_dev_assembly(
     let env = roc_gen_dev::Env {
         arena,
         module_id,
-        interns,
+        interns: std::cell::Cell::new(interns),
         exposed_to_host: exposed_to_host.keys().copied().collect(),
         lazy_literals,
         generate_allocators,

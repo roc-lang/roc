@@ -250,9 +250,10 @@ fn build_object<'a, B: Backend<'a>>(
     // Generate IR for refcounting procedures
     let rc_proc_gen = backend.refcount_proc_gen_mut();
     let rc_procs = rc_proc_gen.generate_refcount_procs(env.arena, ident_ids);
+    env.module_id.register_debug_idents(ident_ids);
+
     let rc_symbols_and_layouts = backend.refcount_proc_symbols_mut();
     let mut rc_names_symbols_procs = Vec::with_capacity_in(rc_procs.len(), env.arena);
-    env.module_id.register_debug_idents(ident_ids);
 
     // Names and linker data for refcounting procedures
     for ((sym, layout), proc) in rc_symbols_and_layouts.into_iter().zip(rc_procs) {
@@ -301,9 +302,8 @@ fn build_proc_symbol<'a>(
     layout: ProcLayout<'a>,
     proc: Proc<'a>,
 ) {
-    let base_name = layout_ids
-        .get_toplevel(sym, &layout)
-        .to_symbol_string(sym, &env.interns);
+    let layout_id = layout_ids.get_toplevel(sym, &layout);
+    let base_name = env.symbol_to_string(sym, layout_id);
 
     let fn_name = if env.exposed_to_host.contains(&sym) {
         format!("roc_{}_exposed", base_name)

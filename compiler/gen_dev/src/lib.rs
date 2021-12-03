@@ -10,11 +10,12 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, Symbol};
 use roc_mono::gen_refcount::RefcountProcGenerator;
 use roc_mono::ir::{
-    BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, Param, Proc,
-    SelfRecursive, Stmt, ProcLayout,
+    BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, Param, Proc, ProcLayout,
+    SelfRecursive, Stmt,
 };
-use roc_mono::layout::{Builtin, Layout, LayoutIds};
+use roc_mono::layout::{Builtin, Layout, LayoutId, LayoutIds};
 use roc_reporting::internal_error;
+use std::cell::Cell;
 
 mod generic64;
 mod object_builder;
@@ -24,10 +25,33 @@ mod run_roc;
 pub struct Env<'a> {
     pub arena: &'a Bump,
     pub module_id: ModuleId,
-    pub interns: Interns,
+    // it's compilicated
+    pub interns: Cell<Interns>,
     pub exposed_to_host: MutSet<Symbol>,
     pub lazy_literals: bool,
     pub generate_allocators: bool,
+}
+
+impl<'a> Env<'a> {
+    pub fn symbol_to_string(&self, symbol: Symbol, layout_id: LayoutId) -> String {
+        let interns = self.interns.take();
+
+        let result = layout_id.to_symbol_string(symbol, &interns);
+
+        self.interns.set(interns);
+
+        result
+    }
+
+    fn defined_in_app_module(&self, symbol: Symbol) -> bool {
+        let interns = self.interns.take();
+
+        let result = symbol.module_string(&interns).starts_with(ModuleName::APP);
+
+        self.interns.set(interns);
+
+        result
+    }
 }
 
 // These relocations likely will need a length.
@@ -92,9 +116,8 @@ where
         ident_ids: &mut IdentIds,
         proc: Proc<'a>,
     ) -> (&'a [u8], &[Relocation]) {
-        let proc_name = LayoutIds::default()
-            .get(proc.name, &proc.ret_layout)
-            .to_symbol_string(proc.name, &self.env().interns);
+        let layout_id = LayoutIds::default().get(proc.name, &proc.ret_layout);
+        let proc_name = self.env().symbol_to_string(proc.name, layout_id);
         self.reset(proc_name, proc.is_self_recursive);
         self.load_args(proc.args, &proc.ret_layout);
         for (layout, sym) in proc.args {
@@ -132,7 +155,8 @@ where
                     .expand_refcount_stmt(ident_ids, layout, modify, *following);
 
                 if let Some((rc_proc_symbol, rc_proc_layout)) = new_proc_info {
-                    self.refcount_proc_symbols_mut().push((rc_proc_symbol, rc_proc_layout));
+                    self.refcount_proc_symbols_mut()
+                        .push((rc_proc_symbol, rc_proc_layout));
                 }
 
                 self.build_stmt(ident_ids, &rc_stmt, ret_layout)
@@ -247,13 +271,9 @@ where
                                 arg_layouts,
                                 ret_layout,
                             )
-                        } else if func_sym
-                            .module_string(&self.env().interns)
-                            .starts_with(ModuleName::APP)
-                        {
-                            let fn_name = LayoutIds::default()
-                                .get(*func_sym, layout)
-                                .to_symbol_string(*func_sym, &self.env().interns);
+                        } else if self.env().defined_in_app_module(*func_sym) {
+                            let layout_id = LayoutIds::default().get(*func_sym, layout);
+                            let fn_name = self.env().symbol_to_string(*func_sym, layout_id);
                             // Now that the arguments are needed, load them if they are literals.
                             self.load_literal_symbols(arguments);
                             self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
