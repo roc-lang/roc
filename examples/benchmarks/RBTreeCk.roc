@@ -48,9 +48,8 @@ resultWithDefault = \res, default ->
 main : Task.Task {} []
 main =
     Task.after Task.getInt \n ->
-        ms : ConsList Map
-
         # original koka n = 4_200_000
+        ms : ConsList Map
         ms = makeMap 5 n
 
         when ms is
