@@ -1,5 +1,5 @@
 interface File
-    exposes [ Path, FileOpenErr, FileReadErr, FileWriteErr, DirReadErr, readBytes, readUtf8, writeUtf8 ]
+    exposes [ Path, FileOpenErr, FileReadErr, FileWriteErr, DirReadErr, readBytes, readUtf8, writeBytes, writeUtf8 ]
     imports [ fx.Effect, Task.{ Task } ]
 
 ## A file path. This is an alias for an ordinary string; it isn't guaranteed to be
@@ -66,25 +66,26 @@ readUtf8 = \path ->
 readBytes : Path -> Task.Task (List U8) (FileReadErr *)
 readBytes = \path ->
     Effect.map (Effect.readAllBytes path) \answer ->
-        # errno values - see
-        # https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/errno.h.html
-        when answer.errno is
-            0 -> Ok answer.bytes
+        when answer.error is
+            A -> Ok answer.bytes
+            err -> Err err
+
+
+writeUtf8 : Path, Str -> Task.Task {} (FileWriteErr *)
+writeUtf8 = \path, str ->
+    writeBytes path (Str.toUtf8 str)
+
+
+writeBytes : Path, List U8 -> Task.Task {} (FileWriteErr *)
+writeBytes = \path, data ->
+    Effect.map (Effect.writeAllBytes path data) \errno ->
+        when errno is
+            0 -> Ok {}
             1 -> Err (PermissionDenied path)
             2 -> Err (FileNotFound path)
             19 -> Err (FileWasDir path)
             # TODO handle other errno scenarios that could come up
-            _ -> Err (UnknownError answer.errno path)
-
-
-writeUtf8 : Path, Str -> Task.Task {} (FileWriteErr [ BadThing ]*)
-writeUtf8 = \path, data ->
-    path
-        |> Effect.writeAllUtf8 data
-        |> Effect.map \res ->
-            when res.errno is
-                0 -> Ok {}
-                _ -> Err BadThing
+            _ -> Err (UnknownError errno path)
 
 
 ## Read a file's bytes, one chunk at a time, and use it to build up a state.

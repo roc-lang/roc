@@ -6,10 +6,10 @@ platform examples/cli
     provides [ mainForHost ]
     effects fx.Effect
         {
-            readAllBytes : Str -> Effect { bytes : List U8, errno : I32 },
+            readAllBytes : Str -> Effect { bytes : List U8, error: FileReadErr [ A ] },
             # TODO FIXME moving this to the end of the list (even after removing trailing comma)
             # gives a parse error on the `Str, Str` arguments
-            writeAllUtf8 : Str, Str -> Effect { errno: I32 },
+            writeAllBytes : Str, List U8 -> Effect I32,
             putLine : Str -> Effect {},
             getLine : Effect Str
         }
