@@ -169,13 +169,15 @@ fn generate_wrapper<'a, B: Backend<'a>>(
 }
 
 fn build_object<'a, B: Backend<'a>>(
-    env: &'a Env,
+    _env: &'a Env,
     ident_ids: &'a mut IdentIds,
     procedures: MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
     mut backend: B,
     mut output: Object,
 ) -> Object {
     let data_section = output.section_id(StandardSection::Data);
+
+    let arena = backend.env().arena;
 
     /*
     // Commented out because we couldn't figure out how to get it to work on mac - see https://github.com/rtfeldman/roc/pull/1323
@@ -187,7 +189,7 @@ fn build_object<'a, B: Backend<'a>>(
     );
     */
 
-    if env.generate_allocators {
+    if backend.env().generate_allocators {
         generate_wrapper(
             &mut backend,
             &mut output,
@@ -216,7 +218,7 @@ fn build_object<'a, B: Backend<'a>>(
 
     // Setup layout_ids for procedure calls.
     let mut layout_ids = LayoutIds::default();
-    let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
+    let mut procs = Vec::with_capacity_in(procedures.len(), arena);
 
     // Names and linker data for user procedures
     for ((sym, layout), proc) in procedures {
@@ -224,7 +226,7 @@ fn build_object<'a, B: Backend<'a>>(
             &mut output,
             &mut layout_ids,
             &mut procs,
-            env,
+            backend.env(),
             sym,
             layout,
             proc,
@@ -232,7 +234,7 @@ fn build_object<'a, B: Backend<'a>>(
     }
 
     // Build procedures from user code
-    let mut relocations = bumpalo::vec![in env.arena];
+    let mut relocations = bumpalo::vec![in arena];
     for (fn_name, section_id, proc_id, proc) in procs {
         build_proc(
             &mut output,
@@ -249,11 +251,12 @@ fn build_object<'a, B: Backend<'a>>(
 
     // Generate IR for refcounting procedures
     let rc_proc_gen = backend.refcount_proc_gen_mut();
-    let rc_procs = rc_proc_gen.generate_refcount_procs(env.arena, ident_ids);
-    env.module_id.register_debug_idents(ident_ids);
+    let rc_procs = rc_proc_gen.generate_refcount_procs(arena, ident_ids);
+    backend.env().module_id.register_debug_idents(ident_ids);
 
-    let rc_symbols_and_layouts = backend.refcount_proc_symbols_mut();
-    let mut rc_names_symbols_procs = Vec::with_capacity_in(rc_procs.len(), env.arena);
+    let empty = bumpalo::collections::Vec::new_in(arena);
+    let rc_symbols_and_layouts = std::mem::replace(backend.refcount_proc_symbols_mut(), empty);
+    let mut rc_names_symbols_procs = Vec::with_capacity_in(rc_procs.len(), arena);
 
     // Names and linker data for refcounting procedures
     for ((sym, layout), proc) in rc_symbols_and_layouts.into_iter().zip(rc_procs) {
@@ -261,9 +264,9 @@ fn build_object<'a, B: Backend<'a>>(
             &mut output,
             &mut layout_ids,
             &mut rc_names_symbols_procs,
-            env,
-            *sym,
-            *layout,
+            backend.env(),
+            sym,
+            layout,
             proc,
         )
     }
