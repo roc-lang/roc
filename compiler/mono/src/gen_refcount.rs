@@ -78,6 +78,8 @@ impl<'a> RefcountProcGenerator<'a> {
         modify: &ModifyRc,
         following: &'a Stmt<'a>,
     ) -> (Stmt<'a>, Option<(Symbol, ProcLayout<'a>)>) {
+        let arena = self.arena;
+
         match modify {
             ModifyRc::Inc(structure, amount) => {
                 let layout_isize = self.layout_isize;
@@ -91,7 +93,7 @@ impl<'a> RefcountProcGenerator<'a> {
                 let amount_stmt = |next| Stmt::Let(amount_sym, amount_expr, layout_isize, next);
 
                 // Call helper proc, passing the Roc structure and constant amount
-                let arg_layouts = self.arena.alloc([layout, layout_isize]);
+                let arg_layouts = arena.alloc([layout, layout_isize]);
                 let call_result_empty = self.create_symbol(ident_ids, "call_result_empty");
                 let call_expr = Expr::Call(Call {
                     call_type: CallType::ByName {
@@ -100,10 +102,10 @@ impl<'a> RefcountProcGenerator<'a> {
                         arg_layouts,
                         specialization_id: CallSpecId::BACKEND_DUMMY,
                     },
-                    arguments: self.arena.alloc([*structure, amount_sym]),
+                    arguments: arena.alloc([*structure, amount_sym]),
                 });
                 let call_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
-                let rc_stmt = amount_stmt(self.arena.alloc(call_stmt));
+                let rc_stmt = amount_stmt(arena.alloc(call_stmt));
 
                 // Create a linker symbol for the helper proc if this is the first usage
                 let new_proc_info = if is_existing {
@@ -126,16 +128,16 @@ impl<'a> RefcountProcGenerator<'a> {
                     self.get_proc_symbol(ident_ids, layout, RefcountOp::Dec);
 
                 // Call helper proc, passing the Roc structure
-                let arg_layouts = self.arena.alloc([layout, self.layout_isize]);
+                let arg_layouts = arena.alloc([layout, self.layout_isize]);
                 let call_result_empty = self.create_symbol(ident_ids, "call_result_empty");
                 let call_expr = Expr::Call(Call {
                     call_type: CallType::ByName {
                         name: proc_name,
                         ret_layout: &LAYOUT_UNIT,
-                        arg_layouts: self.arena.alloc([layout]),
+                        arg_layouts: arena.alloc([layout]),
                         specialization_id: CallSpecId::BACKEND_DUMMY,
                     },
-                    arguments: self.arena.alloc([*structure]),
+                    arguments: arena.alloc([*structure]),
                 });
 
                 let rc_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
@@ -166,7 +168,7 @@ impl<'a> RefcountProcGenerator<'a> {
                         op: LowLevel::RefCountGetPtr,
                         update_mode: UpdateModeId::BACKEND_DUMMY,
                     },
-                    arguments: self.arena.alloc([*structure]),
+                    arguments: arena.alloc([*structure]),
                 });
                 let rc_ptr_stmt = |next| Stmt::Let(rc_ptr_sym, rc_ptr_expr, LAYOUT_PTR, next);
 
@@ -177,10 +179,10 @@ impl<'a> RefcountProcGenerator<'a> {
                         op: LowLevel::RefCountDec,
                         update_mode: UpdateModeId::BACKEND_DUMMY,
                     },
-                    arguments: self.arena.alloc([rc_ptr_sym]),
+                    arguments: arena.alloc([rc_ptr_sym]),
                 });
                 let call_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
-                let rc_stmt = rc_ptr_stmt(self.arena.alloc(call_stmt));
+                let rc_stmt = rc_ptr_stmt(arena.alloc(call_stmt));
 
                 (rc_stmt, None)
             }
@@ -236,18 +238,18 @@ impl<'a> RefcountProcGenerator<'a> {
         }
     }
 
-    fn create_symbol(&mut self, ident_ids: &mut IdentIds, debug_name: &str) -> Symbol {
+    fn create_symbol(&self, ident_ids: &mut IdentIds, debug_name: &str) -> Symbol {
         let ident_id = ident_ids.add(Ident::from(debug_name));
         Symbol::new(self.home, ident_id)
     }
 
-    fn return_unit(&mut self, ident_ids: &mut IdentIds) -> Stmt<'a> {
+    fn return_unit(&self, ident_ids: &mut IdentIds) -> Stmt<'a> {
         let unit = self.create_symbol(ident_ids, "unit");
         let ret_stmt = self.arena.alloc(Stmt::Ret(unit));
         Stmt::Let(unit, Expr::Struct(&[]), LAYOUT_UNIT, ret_stmt)
     }
 
-    fn gen_args(&mut self, op: RefcountOp, layout: Layout<'a>) -> &'a [(Layout<'a>, Symbol)] {
+    fn gen_args(&self, op: RefcountOp, layout: Layout<'a>) -> &'a [(Layout<'a>, Symbol)] {
         let roc_value = (layout, Symbol::ARG_1);
         match op {
             RefcountOp::Inc => {
