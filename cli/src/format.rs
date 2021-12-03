@@ -45,7 +45,7 @@ pub fn format(files: std::vec::Vec<PathBuf>) {
                 e
             );
         }));
-        
+
         let ast_normalized = ast.remove_spaces(&arena);
         let reparsed_ast_normalized = reparsed_ast.remove_spaces(&arena);
 
