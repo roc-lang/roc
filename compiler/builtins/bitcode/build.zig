@@ -2,6 +2,7 @@ const std = @import("std");
 const mem = std.mem;
 const Builder = std.build.Builder;
 const CrossTarget = std.zig.CrossTarget;
+const Arch = std.Target.Cpu.Arch;
 
 pub fn build(b: *Builder) void {
     // b.setPreferredReleaseMode(builtin.Mode.Debug
@@ -21,7 +22,13 @@ pub fn build(b: *Builder) void {
     test_step.dependOn(&main_tests.step);
 
     // Targets
-    const host_target = b.standardTargetOptions(.{});
+    const host_target = b.standardTargetOptions(.{
+        .default_target = CrossTarget{
+            .cpu_arch = Arch.x86_64,
+            .cpu_model = .{ .explicit = &std.Target.x86.cpu.x86_64_v2 }, // x86_64_v2 is in sync with Earthfile > RUSTFLAGS="-C target-cpu=x86-64-v2"
+            // TODO allow for native target for maximum speed
+        }
+    });
     const i386_target = makeI386Target();
     const wasm32_target = makeWasm32Target();
 
