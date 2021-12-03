@@ -188,12 +188,13 @@ pub fn update_str_expr(
 
     enum Either {
         MyArrString(ArrString),
-        MyPoolStr(PoolStr),
+        OldPoolStr(PoolStr),
+        NewPoolStr(PoolStr),
     }
 
     let insert_either = match str_expr {
         Expr2::SmallStr(arr_string) => {
-            if arr_string.len() + 1 <= arr_string.capacity() {
+            if arr_string.len() < arr_string.capacity() {
                 let mut new_bytes: [u8; ARR_STRING_CAPACITY] = Default::default();
                 let arr_bytes = arr_string.as_str().as_bytes();
                 new_bytes[..insert_index].copy_from_slice(&arr_bytes[..insert_index]);
@@ -201,11 +202,9 @@ pub fn update_str_expr(
                 new_bytes[insert_index + 1..arr_bytes.len() + 1]
                     .copy_from_slice(&arr_bytes[insert_index..]);
 
-                let new_str = match std::str::from_utf8(&new_bytes[..arr_bytes.len() + 1]) {
-                    Ok(new_str) => new_str,
-                    Err(e) => {
-                        internal_error!("Failed to build valid str from bytes: {:?}", e)
-                    }
+                let new_str = unsafe {
+                    // all old characters have been checked on file load, new_char has been checked inside editor/src/editor/mvc/ed_update.rs
+                    std::str::from_utf8_unchecked(&new_bytes[..arr_bytes.len() + 1])
                 };
 
                 let new_arr_string = match ArrString::from(new_str) {
@@ -218,12 +217,14 @@ pub fn update_str_expr(
                 Either::MyArrString(new_arr_string)
             } else {
                 let mut new_string = arr_string.as_str().to_owned();
+
                 new_string.insert(insert_index, new_char);
+
                 let new_pool_str = PoolStr::new(&new_string, pool);
-                Either::MyPoolStr(new_pool_str)
+                Either::NewPoolStr(new_pool_str)
             }
         }
-        Expr2::Str(old_pool_str) => Either::MyPoolStr(*old_pool_str),
+        Expr2::Str(old_pool_str) => Either::OldPoolStr(*old_pool_str),
         other => UnexpectedASTNode {
             required_node_type: "SmallStr or Str",
             encountered_node_type: format!("{:?}", other),
@@ -235,7 +236,7 @@ pub fn update_str_expr(
         Either::MyArrString(arr_string) => {
             pool.set(node_id, Expr2::SmallStr(arr_string));
         }
-        Either::MyPoolStr(old_pool_str) => {
+        Either::OldPoolStr(old_pool_str) => {
             let mut new_string = old_pool_str.as_str(pool).to_owned();
 
             new_string.insert(insert_index, new_char);
@@ -244,6 +245,7 @@ pub fn update_str_expr(
 
             pool.set(node_id, Expr2::Str(new_pool_str))
         }
+        Either::NewPoolStr(new_pool_str) => pool.set(node_id, Expr2::Str(new_pool_str)),
     }
 
     Ok(())
