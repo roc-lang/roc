@@ -581,8 +581,10 @@ fn fmt_when<'a>(
     while let Some(branch) = it.next() {
         let patterns = &branch.patterns;
         let expr = &branch.value;
-        add_spaces(buf, indent + INDENT);
         let (first_pattern, rest) = patterns.split_first().unwrap();
+        if !has_newline_before(&first_pattern.value) {
+            add_spaces(buf, indent + INDENT);
+        }
         let is_multiline = match rest.last() {
             None => false,
             Some(last_pattern) => first_pattern.region.start_line != last_pattern.region.end_line,
@@ -597,10 +599,8 @@ fn fmt_when<'a>(
         for when_pattern in rest {
             if is_multiline {
                 newline(buf, indent + INDENT);
-                buf.push_str("| ");
-            } else {
-                buf.push_str(" | ");
             }
+            buf.push_str(" | ");
             fmt_pattern(buf, &when_pattern.value, indent + INDENT, Parens::NotNeeded);
         }
 
@@ -636,6 +636,16 @@ fn fmt_when<'a>(
             buf.push('\n');
             buf.push('\n');
         }
+    }
+}
+
+fn has_newline_before(value: &Pattern) -> bool {
+    match value {
+        Pattern::SpaceAfter(v, _) => has_newline_before(v),
+        Pattern::SpaceBefore(v, spaces) => {
+            v.is_multiline() && spaces.last().map(|s| s.is_newline()).unwrap_or(false)
+        }
+        _ => false,
     }
 }
 

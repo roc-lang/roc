@@ -1919,9 +1919,6 @@ mod test_fmt {
     }
 
     #[test]
-    #[ignore]
-    // This test is actually invalid, since the result of the formatter doesn't parse.
-    // TODO(joshuawarner32): fix either the formatter or parser to allow this
     fn when_with_alternatives_4() {
         expr_formats_to(
             indoc!(
@@ -1951,15 +1948,15 @@ mod test_fmt {
                 r#"
             when b is
                 1
-                | 2
-                | 3 ->
+                 | 2
+                 | 3 ->
                     4
 
                 5 | 6 | 7 ->
                     8
 
                 9
-                | 10 ->
+                 | 10 ->
                     11
 
                 12 | 13 ->
@@ -1968,12 +1965,36 @@ mod test_fmt {
                             16
 
                         17
-                        | 18 ->
+                         | 18 ->
                             19
 
                 20 ->
                     21
                 "#
+            ),
+        );
+    }
+
+    #[test]
+    fn with_multiline_pattern_indentation() {
+        expr_formats_to(
+            indoc!(
+                r#"
+            when b is   3->4
+                        9
+                         |8->9
+            "#
+            ),
+            indoc!(
+                r#"
+            when b is
+                3 ->
+                    4
+
+                9
+                 | 8 ->
+                    9
+            "#
             ),
         );
     }
