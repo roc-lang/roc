@@ -24,8 +24,7 @@ pub fn build(b: *Builder) void {
     // Targets
     const host_target = b.standardTargetOptions(.{
         .default_target = CrossTarget{
-            .cpu_arch = Arch.x86_64,
-            .cpu_model = .{ .explicit = &std.Target.x86.cpu.x86_64_v2 }, // x86_64_v2 is in sync with Earthfile > RUSTFLAGS="-C target-cpu=x86-64-v2"
+            .cpu_model = .baseline,
             // TODO allow for native target for maximum speed
         }
     });
