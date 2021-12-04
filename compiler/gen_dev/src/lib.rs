@@ -56,7 +56,7 @@ impl<'a> Env<'a> {
 
 // These relocations likely will need a length.
 // They may even need more definition, but this should be at least good enough for how we will use elf.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub enum Relocation {
     LocalData {
@@ -93,6 +93,8 @@ where
 
     fn refcount_proc_symbols_mut(&mut self) -> &mut Vec<'a, (Symbol, ProcLayout<'a>)>;
 
+    fn refcount_proc_symbols(&self) -> &Vec<'a, (Symbol, ProcLayout<'a>)>;
+
     /// reset resets any registers or other values that may be occupied at the end of a procedure.
     /// It also passes basic procedure information to the builder for setup of the next function.
     fn reset(&mut self, name: String, is_self_recursive: SelfRecursive);
@@ -101,7 +103,7 @@ where
     /// finalize does setup because things like stack size and jump locations are not know until the function is written.
     /// For example, this can store the frame pointer and setup stack space.
     /// finalize is run at the end of build_proc when all internal code is finalized.
-    fn finalize(&mut self) -> (&'a [u8], &[Relocation]);
+    fn finalize(&mut self) -> (Vec<u8>, Vec<Relocation>);
 
     // load_args is used to let the backend know what the args are.
     // The backend should track these args so it can use them as needed.
@@ -111,7 +113,7 @@ where
     fn build_wrapped_jmp(&mut self) -> (&'a [u8], u64);
 
     /// build_proc creates a procedure and outputs it to the wrapped object writer.
-    fn build_proc(&mut self, proc: Proc<'a>) -> (&'a [u8], &[Relocation]) {
+    fn build_proc(&mut self, proc: Proc<'a>) -> (Vec<u8>, Vec<Relocation>) {
         let layout_id = LayoutIds::default().get(proc.name, &proc.ret_layout);
         let proc_name = self.env().symbol_to_string(proc.name, layout_id);
         self.reset(proc_name, proc.is_self_recursive);
@@ -278,16 +280,8 @@ where
                             let layout_id = LayoutIds::default().get(*func_sym, layout);
                             let fn_name = self.env().symbol_to_string(*func_sym, layout_id);
                             // Now that the arguments are needed, load them if they are literals.
-                            if fn_name == "#UserApp_#rcDec_str_0_1"
-                                || fn_name == "#UserApp_#rcDec_str_1_1"
-                                || fn_name == "#UserApp_#rcInc_str_0_1"
-                            {
-                                // Skip calling the function. For some reason it is currently being inlined.
-                                return;
-                            } else {
-                                self.load_literal_symbols(arguments);
-                                self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
-                            }
+                            self.load_literal_symbols(arguments);
+                            self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
                         } else {
                             self.build_inline_builtin(
                                 sym,

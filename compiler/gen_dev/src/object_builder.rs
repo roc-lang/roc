@@ -229,6 +229,7 @@ fn build_object<'a, B: Backend<'a>>(
             &mut output,
             &mut backend,
             &mut relocations,
+            &mut layout_ids,
             data_section,
             fn_name,
             section_id,
@@ -260,15 +261,15 @@ fn build_object<'a, B: Backend<'a>>(
 
     // Names and linker data for refcounting procedures
     for ((sym, layout), proc) in rc_symbols_and_layouts.into_iter().zip(rc_procs) {
-        build_proc_symbol(
-            &mut output,
-            &mut layout_ids,
-            &mut rc_names_symbols_procs,
-            backend.env(),
-            sym,
-            layout,
-            proc,
-        )
+        let layout_id = layout_ids.get_toplevel(sym, &layout);
+        let fn_name = backend.env().symbol_to_string(sym, layout_id);
+        if let Some(proc_id) = output.symbol_id(fn_name.as_bytes()) {
+            if let SymbolSection::Section(section_id) = output.symbol(proc_id).section {
+                rc_names_symbols_procs.push((fn_name, section_id, proc_id, proc));
+                continue;
+            }
+        }
+        internal_error!("failed to create rc fn for symbol {:?}", sym);
     }
 
     // Build refcounting procedures
@@ -277,6 +278,7 @@ fn build_object<'a, B: Backend<'a>>(
             &mut output,
             &mut backend,
             &mut relocations,
+            &mut layout_ids,
             data_section,
             fn_name,
             section_id,
@@ -344,6 +346,7 @@ fn build_proc<'a, B: Backend<'a>>(
     output: &mut Object,
     backend: &mut B,
     relocations: &mut Vec<'a, (SectionId, object::write::Relocation)>,
+    layout_ids: &mut LayoutIds<'a>,
     data_section: SectionId,
     fn_name: String,
     section_id: SectionId,
@@ -352,8 +355,12 @@ fn build_proc<'a, B: Backend<'a>>(
 ) {
     let mut local_data_index = 0;
     let (proc_data, relocs) = backend.build_proc(proc);
-    let proc_offset = output.add_symbol_data(proc_id, section_id, proc_data, 16);
-    for reloc in relocs {
+    let proc_offset = output.add_symbol_data(proc_id, section_id, &proc_data, 16);
+    // TODO: figure out the borrowing here and fix this hack.
+    let relocs2 = relocs.to_vec();
+    std::mem::drop(proc_data);
+    std::mem::drop(relocs);
+    for reloc in relocs2.iter() {
         let elfreloc = match reloc {
             Relocation::LocalData { offset, data } => {
                 let data_symbol = write::Symbol {
@@ -408,6 +415,32 @@ fn build_proc<'a, B: Backend<'a>>(
                         flags: SymbolFlags::None,
                     };
                     output.add_symbol(builtin_symbol);
+                }
+                // If the symbol is an undefined reference counting procedure, we need to add it here.
+                if output.symbol_id(name.as_bytes()) == None {
+                    for (sym, layout) in backend.refcount_proc_symbols().iter() {
+                        let layout_id = layout_ids.get_toplevel(*sym, layout);
+                        let rc_name = backend.env().symbol_to_string(*sym, layout_id);
+                        if name == &rc_name {
+                            let section_id = output.add_section(
+                                output.segment_name(StandardSegment::Text).to_vec(),
+                                format!(".text.{:x}", sym.as_u64()).as_bytes().to_vec(),
+                                SectionKind::Text,
+                            );
+
+                            let rc_symbol = Symbol {
+                                name: name.as_bytes().to_vec(),
+                                value: 0,
+                                size: 0,
+                                kind: SymbolKind::Text,
+                                scope: SymbolScope::Linkage,
+                                weak: false,
+                                section: SymbolSection::Section(section_id),
+                                flags: SymbolFlags::None,
+                            };
+                            output.add_symbol(rc_symbol);
+                        }
+                    }
                 }
                 if let Some(sym_id) = output.symbol_id(name.as_bytes()) {
                     write::Relocation {

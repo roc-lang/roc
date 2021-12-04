@@ -15,6 +15,9 @@ pub mod x86_64;
 const PTR_SIZE: u32 = 8;
 
 pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait> {
+    const BASE_PTR_REG: GeneralReg;
+    const STACK_PTR_REG: GeneralReg;
+
     const GENERAL_PARAM_REGS: &'static [GeneralReg];
     const GENERAL_RETURN_REGS: &'static [GeneralReg];
     const GENERAL_DEFAULT_FREE_REGS: &'static [GeneralReg];
@@ -50,13 +53,15 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait> {
     );
 
     // load_args updates the symbol map to know where every arg is stored.
+    // It returns the total stack space after loading the args.
     fn load_args<'a>(
         buf: &mut Vec<'a, u8>,
         symbol_map: &mut MutMap<Symbol, SymbolStorage<GeneralReg, FloatReg>>,
         args: &'a [(Layout<'a>, Symbol)],
         // ret_layout is needed because if it is a complex type, we pass a pointer as the first arg.
         ret_layout: &Layout<'a>,
-    );
+        stack_size: u32,
+    ) -> u32;
 
     // store_args stores the args in registers and on the stack for function calling.
     // It returns the amount of stack space needed to temporarily store the args.
@@ -316,6 +321,9 @@ impl<
     fn refcount_proc_symbols_mut(&mut self) -> &mut Vec<'a, (Symbol, ProcLayout<'a>)> {
         &mut self.refcount_proc_symbols
     }
+    fn refcount_proc_symbols(&self) -> &Vec<'a, (Symbol, ProcLayout<'a>)> {
+        &self.refcount_proc_symbols
+    }
 
     fn reset(&mut self, name: String, is_self_recursive: SelfRecursive) {
         self.proc_name = Some(name);
@@ -361,7 +369,7 @@ impl<
         &mut self.free_map
     }
 
-    fn finalize(&mut self) -> (&'a [u8], &[Relocation]) {
+    fn finalize(&mut self) -> (Vec<u8>, Vec<Relocation>) {
         let mut out = bumpalo::vec![in self.env.arena];
 
         // Setup stack.
@@ -450,15 +458,16 @@ impl<
                     Relocation::JmpToReturn { .. } => unreachable!(),
                 }),
         );
-        (out.into_bump_slice(), out_relocs.into_bump_slice())
+        (out, out_relocs)
     }
 
     fn load_args(&mut self, args: &'a [(Layout<'a>, Symbol)], ret_layout: &Layout<'a>) {
-        CC::load_args(
+        self.stack_size = CC::load_args(
             &mut self.buf,
             &mut self.symbol_storage_map,
             args,
             ret_layout,
+            self.stack_size,
         );
         // Update used and free regs.
         for (sym, storage) in &self.symbol_storage_map {

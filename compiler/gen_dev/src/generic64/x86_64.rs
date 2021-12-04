@@ -60,6 +60,9 @@ pub struct X86_64SystemV {}
 const STACK_ALIGNMENT: u8 = 16;
 
 impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
+    const BASE_PTR_REG: X86_64GeneralReg = X86_64GeneralReg::RBP;
+    const STACK_PTR_REG: X86_64GeneralReg = X86_64GeneralReg::RSP;
+
     const GENERAL_PARAM_REGS: &'static [X86_64GeneralReg] = &[
         X86_64GeneralReg::RDI,
         X86_64GeneralReg::RSI,
@@ -183,8 +186,9 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
         symbol_map: &mut MutMap<Symbol, SymbolStorage<X86_64GeneralReg, X86_64FloatReg>>,
         args: &'a [(Layout<'a>, Symbol)],
         ret_layout: &Layout<'a>,
-    ) {
-        let mut base_offset = Self::SHADOW_SPACE_SIZE as i32 + 8; // 8 is the size of the pushed base pointer.
+        mut stack_size: u32,
+    ) -> u32 {
+        let mut arg_offset = Self::SHADOW_SPACE_SIZE as i32 + 8; // 8 is the size of the pushed base pointer.
         let mut general_i = 0;
         let mut float_i = 0;
         if X86_64SystemV::returns_via_arg_pointer(ret_layout) {
@@ -204,11 +208,11 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                         );
                         general_i += 1;
                     } else {
-                        base_offset += 8;
+                        arg_offset += 8;
                         symbol_map.insert(
                             *sym,
                             SymbolStorage::Base {
-                                offset: base_offset,
+                                offset: arg_offset,
                                 size: 8,
                                 owned: true,
                             },
@@ -223,11 +227,11 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                         );
                         float_i += 1;
                     } else {
-                        base_offset += 8;
+                        arg_offset += 8;
                         symbol_map.insert(
                             *sym,
                             SymbolStorage::Base {
-                                offset: base_offset,
+                                offset: arg_offset,
                                 size: 8,
                                 owned: true,
                             },
@@ -236,16 +240,17 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                 }
                 Layout::Builtin(Builtin::Str) => {
                     if general_i + 1 < Self::GENERAL_PARAM_REGS.len() {
-                        // Load the value to the param reg.
-                        let dst1 = Self::GENERAL_PARAM_REGS[general_i];
-                        let dst2 = Self::GENERAL_PARAM_REGS[general_i + 1];
-                        base_offset += 16;
-                        X86_64Assembler::mov_reg64_base32(buf, dst1, base_offset - 8);
-                        X86_64Assembler::mov_reg64_base32(buf, dst2, base_offset);
+                        // Load the value from the param reg into a useable base offset.
+                        let src1 = Self::GENERAL_PARAM_REGS[general_i];
+                        let src2 = Self::GENERAL_PARAM_REGS[general_i + 1];
+                        stack_size += 16;
+                        let offset = -(stack_size as i32);
+                        X86_64Assembler::mov_base32_reg64(buf, offset, src1);
+                        X86_64Assembler::mov_base32_reg64(buf, offset + 8, src2);
                         symbol_map.insert(
                             *sym,
                             SymbolStorage::Base {
-                                offset: base_offset,
+                                offset,
                                 size: 16,
                                 owned: true,
                             },
@@ -261,6 +266,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                 }
             }
         }
+        stack_size
     }
 
     #[inline(always)]
@@ -444,6 +450,9 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
 }
 
 impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
+    const BASE_PTR_REG: X86_64GeneralReg = X86_64GeneralReg::RBP;
+    const STACK_PTR_REG: X86_64GeneralReg = X86_64GeneralReg::RSP;
+
     const GENERAL_PARAM_REGS: &'static [X86_64GeneralReg] = &[
         X86_64GeneralReg::RCX,
         X86_64GeneralReg::RDX,
@@ -561,8 +570,9 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
         symbol_map: &mut MutMap<Symbol, SymbolStorage<X86_64GeneralReg, X86_64FloatReg>>,
         args: &'a [(Layout<'a>, Symbol)],
         ret_layout: &Layout<'a>,
-    ) {
-        let mut base_offset = Self::SHADOW_SPACE_SIZE as i32 + 8; // 8 is the size of the pushed base pointer.
+        stack_size: u32,
+    ) -> u32 {
+        let mut arg_offset = Self::SHADOW_SPACE_SIZE as i32 + 8; // 8 is the size of the pushed base pointer.
         let mut i = 0;
         if X86_64WindowsFastcall::returns_via_arg_pointer(ret_layout) {
             symbol_map.insert(
@@ -595,7 +605,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                     }
                 }
             } else {
-                base_offset += match layout {
+                arg_offset += match layout {
                     single_register_builtins!() => 8,
                     x => {
                         unimplemented!("Loading args with layout {:?} not yet implemented", x);
@@ -604,13 +614,14 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                 symbol_map.insert(
                     *sym,
                     SymbolStorage::Base {
-                        offset: base_offset,
+                        offset: arg_offset,
                         size: 8,
                         owned: true,
                     },
                 );
             }
         }
+        stack_size
     }
 
     #[inline(always)]
