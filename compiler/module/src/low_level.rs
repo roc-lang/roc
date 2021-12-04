@@ -108,6 +108,7 @@ pub enum LowLevel {
     NumShiftRightBy,
     NumShiftRightZfBy,
     NumIntCast,
+    NumToStr,
     Eq,
     NotEq,
     And,
@@ -115,6 +116,9 @@ pub enum LowLevel {
     Not,
     Hash,
     ExpectTrue,
+    RefCountGetPtr,
+    RefCountInc,
+    RefCountDec,
 }
 
 macro_rules! higher_order {
@@ -186,12 +190,10 @@ impl LowLevel {
             Symbol::STR_ENDS_WITH => Some(StrEndsWith),
             Symbol::STR_SPLIT => Some(StrSplit),
             Symbol::STR_COUNT_GRAPHEMES => Some(StrCountGraphemes),
-            Symbol::STR_FROM_INT => Some(StrFromInt),
             Symbol::STR_FROM_UTF8 => None,
             Symbol::STR_FROM_UTF8_RANGE => None,
             Symbol::STR_TO_UTF8 => Some(StrToUtf8),
             Symbol::STR_REPEAT => Some(StrRepeat),
-            Symbol::STR_FROM_FLOAT => Some(StrFromFloat),
             Symbol::STR_TRIM => Some(StrTrim),
             Symbol::STR_TRIM_LEFT => Some(StrTrimLeft),
             Symbol::STR_TRIM_RIGHT => Some(StrTrimRight),
@@ -268,6 +270,7 @@ impl LowLevel {
             Symbol::NUM_CEILING => Some(NumCeiling),
             Symbol::NUM_POW_INT => Some(NumPowInt),
             Symbol::NUM_FLOOR => Some(NumFloor),
+            Symbol::NUM_TO_STR => Some(NumToStr),
             // => Some(NumIsFinite),
             Symbol::NUM_ATAN => Some(NumAtan),
             Symbol::NUM_ACOS => Some(NumAcos),

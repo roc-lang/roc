@@ -16,9 +16,22 @@ pub fn add_spaces(buf: &mut String<'_>, spaces: u16) {
     }
 }
 
-pub fn fmt_spaces<'a, I>(buf: &mut String<'a>, spaces: I, indent: u16)
+pub fn fmt_default_spaces<'a>(
+    buf: &mut String<'a>,
+    spaces: &[CommentOrNewline<'a>],
+    default: &str,
+    indent: u16,
+) {
+    if spaces.is_empty() {
+        buf.push_str(default);
+    } else {
+        fmt_spaces(buf, spaces.iter(), indent);
+    }
+}
+
+pub fn fmt_spaces<'a, 'b, I>(buf: &mut String<'a>, spaces: I, indent: u16)
 where
-    I: Iterator<Item = &'a CommentOrNewline<'a>>,
+    I: Iterator<Item = &'b CommentOrNewline<'b>>,
 {
     use self::CommentOrNewline::*;
 
@@ -33,7 +46,7 @@ where
         match space {
             Newline => {
                 if !encountered_comment && (consecutive_newlines < 2) {
-                    if iter.peek() == Some(&&Newline) {
+                    if iter.peek() == Some(&&Newline) && consecutive_newlines < 1 {
                         buf.push('\n');
                     } else {
                         newline(buf, indent);
@@ -72,13 +85,13 @@ pub enum NewlineAt {
 /// The `new_line_at` argument describes how new lines should be inserted
 /// at the beginning or at the end of the block
 /// in the case of there is some comment in the `spaces` argument.
-pub fn fmt_comments_only<'a, I>(
+pub fn fmt_comments_only<'a, 'b, I>(
     buf: &mut String<'a>,
     spaces: I,
     new_line_at: NewlineAt,
     indent: u16,
 ) where
-    I: Iterator<Item = &'a CommentOrNewline<'a>>,
+    I: Iterator<Item = &'b CommentOrNewline<'b>>,
 {
     use self::CommentOrNewline::*;
     use NewlineAt::*;
@@ -109,7 +122,7 @@ pub fn fmt_comments_only<'a, I>(
     }
 }
 
-fn fmt_comment<'a>(buf: &mut String<'a>, comment: &'a str) {
+fn fmt_comment<'a>(buf: &mut String<'a>, comment: &str) {
     buf.push('#');
     if !comment.starts_with(' ') {
         buf.push(' ');
@@ -117,7 +130,7 @@ fn fmt_comment<'a>(buf: &mut String<'a>, comment: &'a str) {
     buf.push_str(comment);
 }
 
-fn fmt_docs<'a>(buf: &mut String<'a>, docs: &'a str) {
+fn fmt_docs<'a>(buf: &mut String<'a>, docs: &str) {
     buf.push_str("##");
     if !docs.starts_with(' ') {
         buf.push(' ');

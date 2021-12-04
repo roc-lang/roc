@@ -50,6 +50,15 @@ impl BlockType {
     }
 }
 
+impl From<Option<ValueType>> for BlockType {
+    fn from(opt: Option<ValueType>) -> Self {
+        match opt {
+            Some(ty) => BlockType::Value(ty),
+            None => BlockType::NoResult,
+        }
+    }
+}
+
 /// A control block in our model of the VM
 /// Child blocks cannot "see" values from their parent block
 struct VmBlock<'a> {
@@ -225,7 +234,9 @@ impl<'a> CodeBuilder<'a> {
     pub fn set_top_symbol(&mut self, sym: Symbol) -> VmSymbolState {
         let current_stack = &mut self.vm_block_stack.last_mut().unwrap().value_stack;
         let pushed_at = self.code.len();
-        let top_symbol: &mut Symbol = current_stack.last_mut().unwrap();
+        let top_symbol: &mut Symbol = current_stack
+            .last_mut()
+            .unwrap_or_else(|| unreachable!("Empty stack when trying to set Symbol {:?}", sym));
         *top_symbol = sym;
 
         VmSymbolState::Pushed { pushed_at }
@@ -429,10 +440,12 @@ impl<'a> CodeBuilder<'a> {
     ) {
         self.build_local_declarations(local_types);
 
-        if let Some(frame_ptr_id) = frame_pointer {
-            let aligned_size = round_up_to_alignment(frame_size, FRAME_ALIGNMENT_BYTES);
-            self.build_stack_frame_push(aligned_size, frame_ptr_id);
-            self.build_stack_frame_pop(aligned_size, frame_ptr_id);
+        if frame_size != 0 {
+            if let Some(frame_ptr_id) = frame_pointer {
+                let aligned_size = round_up_to_alignment(frame_size, FRAME_ALIGNMENT_BYTES);
+                self.build_stack_frame_push(aligned_size, frame_ptr_id);
+                self.build_stack_frame_pop(aligned_size, frame_ptr_id);
+            }
         }
 
         self.code.push(END as u8);

@@ -23,6 +23,7 @@ mod test_parse {
     use roc_parse::parser::{Parser, State, SyntaxError};
     use roc_parse::test_helpers::parse_expr_with;
     use roc_region::all::{Located, Region};
+    use roc_test_utils::assert_multiline_str_eq;
     use std::{f64, i64};
 
     macro_rules! snapshot_tests {
@@ -256,10 +257,7 @@ mod test_parse {
         } else {
             let expected_result = std::fs::read_to_string(&result_path).unwrap();
 
-            // TODO: do a diff over the "real" content of these strings, rather than
-            // the debug-formatted content. As is, we get an ugly single-line diff
-            // from pretty_assertions
-            assert_eq!(expected_result, actual_result);
+            assert_multiline_str_eq!(expected_result, actual_result);
         }
     }
 

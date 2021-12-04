@@ -61,11 +61,9 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_STARTS_WITH_CODE_PT => str_starts_with_code_point,
         STR_ENDS_WITH => str_ends_with,
         STR_COUNT_GRAPHEMES => str_count_graphemes,
-        STR_FROM_INT => str_from_int,
         STR_FROM_UTF8 => str_from_utf8,
         STR_FROM_UTF8_RANGE => str_from_utf8_range,
         STR_TO_UTF8 => str_to_utf8,
-        STR_FROM_FLOAT=> str_from_float,
         STR_REPEAT => str_repeat,
         STR_TRIM => str_trim,
         STR_TRIM_LEFT => str_trim_left,
@@ -192,6 +190,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_SHIFT_RIGHT_ZERO_FILL => num_shift_right_zf_by,
         NUM_INT_CAST=> num_int_cast,
         NUM_MAX_I128=> num_max_i128,
+        NUM_TO_STR => num_to_str,
         RESULT_MAP => result_map,
         RESULT_MAP_ERR => result_map_err,
         RESULT_AFTER => result_after,
@@ -367,6 +366,26 @@ fn num_min_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
         loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
         pattern_vars: SendMap::default(),
     }
+}
+
+// Num.toStr : Num a -> Str
+fn num_to_str(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let num_var = var_store.fresh();
+    let str_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::NumToStr,
+        args: vec![(num_var, Var(Symbol::ARG_1))],
+        ret_var: str_var,
+    };
+
+    defn(
+        symbol,
+        vec![(num_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        str_var,
+    )
 }
 
 /// Bool.isEq : val, val -> Bool
@@ -1436,26 +1455,6 @@ fn str_count_graphemes(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Str.fromInt : Int * -> Str
-fn str_from_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let int_var = var_store.fresh();
-    let str_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::StrFromInt,
-        args: vec![(int_var, Var(Symbol::ARG_1))],
-        ret_var: str_var,
-    };
-
-    defn(
-        symbol,
-        vec![(int_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        str_var,
-    )
-}
-
 /// Str.fromUtf8 : List U8 -> Result Str [ BadUtf8 { byteIndex : Nat, problem : Utf8Problem  } } ]*
 fn str_from_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bytes_var = var_store.fresh();
@@ -1736,26 +1735,6 @@ fn str_from_utf8_range(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Str.toUtf8 : Str -> List U8
 fn str_to_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::StrToUtf8, var_store)
-}
-
-/// Str.fromFloat : Float * -> Str
-fn str_from_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let float_var = var_store.fresh();
-    let str_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::StrFromFloat,
-        args: vec![(float_var, Var(Symbol::ARG_1))],
-        ret_var: str_var,
-    };
-
-    defn(
-        symbol,
-        vec![(float_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        str_var,
-    )
 }
 
 /// List.concat : List elem, List elem -> List elem

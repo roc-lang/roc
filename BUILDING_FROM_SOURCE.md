@@ -1,11 +1,10 @@
 # Building the Roc compiler from source
 
 
-## Installing LLVM, Zig, valgrind, and Python 2.7
+## Installing LLVM, Zig, valgrind, and Python
 
 To build the compiler, you need these installed:
 
-* Python 2.7 (Windows only), `python-is-python3` (Ubuntu)
 * [Zig](https://ziglang.org/), see below for version
 * `libxkbcommon` - macOS seems to have it already; on Ubuntu or Debian you can get it with `apt-get install libxkbcommon-dev`
 * On Debian/Ubuntu `sudo apt-get install pkg-config`
@@ -50,7 +49,7 @@ If you want to install it manually, you can also download Zig directly [here](ht
 **version: 12.0.x**
 
 For macOS, you can install LLVM 12 using `brew install llvm@12` and then adding
-`/usr/local/opt/llvm@12/bin` to your `PATH`. You can confirm this worked by
+`$(brew --prefix llvm@12)/bin` to your `PATH`. You can confirm this worked by
 running `llc --version` - it should mention "LLVM version 12.0.0" at the top.
 You may also need to manually specify a prefix env var like so:
 ```

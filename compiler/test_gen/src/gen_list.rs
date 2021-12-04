@@ -1,4 +1,5 @@
 #![cfg(feature = "gen-llvm")]
+#![cfg(feature = "gen-wasm")]
 
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
@@ -6,8 +7,8 @@ use crate::helpers::llvm::assert_evals_to;
 // #[cfg(feature = "gen-dev")]
 // use crate::helpers::dev::assert_evals_to;
 
-// #[cfg(feature = "gen-wasm")]
-// use crate::helpers::wasm::assert_evals_to;
+#[cfg(feature = "gen-wasm")]
+use crate::helpers::wasm::assert_evals_to;
 
 use crate::helpers::with_larger_debug_stack;
 //use crate::assert_wasm_evals_to as assert_evals_to;
@@ -22,7 +23,7 @@ fn roc_list_construction() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn empty_list_literal() {
     assert_evals_to!("[]", RocList::from_slice(&[]), RocList<i64>);
 }
@@ -34,6 +35,7 @@ fn list_literal_empty_record() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn int_singleton_list_literal() {
     assert_evals_to!("[1, 2]", RocList::from_slice(&[1, 2]), RocList<i64>);
 }
@@ -2289,7 +2291,16 @@ fn list_product() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn list_keep_oks() {
-    assert_evals_to!("List.keepOks [] (\\x -> x)", 0, i64);
+    assert_evals_to!(
+        "List.keepOks [] (\\x -> x)",
+        RocList::from_slice(&[]),
+        RocList<()>
+    );
+    assert_evals_to!(
+        "List.keepOks [Ok {}, Ok {}] (\\x -> x)",
+        RocList::from_slice(&[(), ()]),
+        RocList<()>
+    );
     assert_evals_to!(
         "List.keepOks [1,2] (\\x -> Ok x)",
         RocList::from_slice(&[1, 2]),
@@ -2310,7 +2321,16 @@ fn list_keep_oks() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn list_keep_errs() {
-    assert_evals_to!("List.keepErrs [] (\\x -> x)", 0, i64);
+    assert_evals_to!(
+        "List.keepErrs [] (\\x -> x)",
+        RocList::from_slice(&[]),
+        RocList<()>
+    );
+    assert_evals_to!(
+        "List.keepErrs [Err {}, Err {}] (\\x -> x)",
+        RocList::from_slice(&[(), ()]),
+        RocList<()>
+    );
     assert_evals_to!(
         "List.keepErrs [1,2] (\\x -> Err x)",
         RocList::from_slice(&[1, 2]),

@@ -595,20 +595,17 @@ impl<'a> BorrowInfState<'a> {
 
             HigherOrder(HigherOrderLowLevel {
                 op,
-                arg_layouts,
-                ret_layout,
-                function_name,
-                function_env,
+                passed_function,
                 ..
             }) => {
                 use crate::low_level::HigherOrder::*;
 
                 let closure_layout = ProcLayout {
-                    arguments: arg_layouts,
-                    result: *ret_layout,
+                    arguments: passed_function.argument_layouts,
+                    result: passed_function.return_layout,
                 };
 
-                let function_ps = match param_map.get_symbol(*function_name, closure_layout) {
+                let function_ps = match param_map.get_symbol(passed_function.name, closure_layout) {
                     Some(function_ps) => function_ps,
                     None => unreachable!(),
                 };
@@ -692,7 +689,7 @@ impl<'a> BorrowInfState<'a> {
                 // own the closure environment if the function needs to own it
                 let function_env_position = op.function_arity();
                 if let Some(false) = function_ps.get(function_env_position).map(|p| p.borrow) {
-                    self.own_var(*function_env);
+                    self.own_var(passed_function.captured_environment);
                 }
             }
 
@@ -726,7 +723,7 @@ impl<'a> BorrowInfState<'a> {
                 // the function must take it as an owned parameter
                 self.own_args_if_param(xs);
             }
-            Reset(x) => {
+            Reset { symbol: x, .. } => {
                 self.own_var(z);
                 self.own_var(*x);
             }
@@ -980,9 +977,9 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         | NumPowInt | NumBitwiseAnd | NumBitwiseXor | NumBitwiseOr | NumShiftLeftBy
         | NumShiftRightBy | NumShiftRightZfBy => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
 
-        NumAbs | NumNeg | NumSin | NumCos | NumSqrtUnchecked | NumLogUnchecked | NumRound
-        | NumCeiling | NumFloor | NumToFloat | Not | NumIsFinite | NumAtan | NumAcos | NumAsin
-        | NumIntCast => arena.alloc_slice_copy(&[irrelevant]),
+        NumToStr | NumAbs | NumNeg | NumSin | NumCos | NumSqrtUnchecked | NumLogUnchecked
+        | NumRound | NumCeiling | NumFloor | NumToFloat | Not | NumIsFinite | NumAtan | NumAcos
+        | NumAsin | NumIntCast => arena.alloc_slice_copy(&[irrelevant]),
         NumBytesToU16 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         NumBytesToU32 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrStartsWith | StrEndsWith => arena.alloc_slice_copy(&[owned, borrowed]),
@@ -1008,6 +1005,10 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         SetFromList => arena.alloc_slice_copy(&[owned]),
 
         ExpectTrue => arena.alloc_slice_copy(&[irrelevant]),
+
+        RefCountGetPtr | RefCountInc | RefCountDec => {
+            unreachable!("Refcounting lowlevel calls are inserted *after* borrow checking");
+        }
     }
 }
 

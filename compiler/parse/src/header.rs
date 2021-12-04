@@ -72,7 +72,7 @@ pub struct InterfaceHeader<'a> {
     pub after_imports: &'a [CommentOrNewline<'a>],
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum To<'a> {
     ExistingPackage(&'a str),
     NewPackage(PackageOrPath<'a>),
@@ -174,7 +174,7 @@ pub struct Effects<'a> {
     pub spaces_after_type_name: &'a [CommentOrNewline<'a>],
     pub effect_shortname: &'a str,
     pub effect_type_name: &'a str,
-    pub entries: &'a [Loc<TypedIdent<'a>>],
+    pub entries: Collection<'a, Loc<TypedIdent<'a>>>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]

@@ -30,7 +30,7 @@ export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
     return malloc(size);
 }
 
-export fn roc_realloc(c_ptr: *c_void, old_size: usize, new_size: usize, alignment: u32) callconv(.C) ?*c_void {
+export fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*c_void {
     _ = old_size;
     _ = alignment;
 

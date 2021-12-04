@@ -19,45 +19,58 @@ comptime {
     }
 }
 
-const Align = extern struct { a: usize, b: usize };
-extern fn malloc(size: usize) callconv(.C) ?*align(@alignOf(Align)) c_void;
-extern fn realloc(c_ptr: [*]align(@alignOf(Align)) u8, size: usize) callconv(.C) ?*c_void;
-extern fn free(c_ptr: [*]align(@alignOf(Align)) u8) callconv(.C) void;
+const Align = 2 * @alignOf(usize);
+extern fn malloc(size: usize) callconv(.C) ?*align(Align) c_void;
+extern fn realloc(c_ptr: [*]align(Align) u8, size: usize) callconv(.C) ?*c_void;
+extern fn free(c_ptr: [*]align(Align) u8) callconv(.C) void;
 extern fn memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
 extern fn memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void;
 
-export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
-    _ = alignment;
+const DEBUG: bool = false;
 
-    return malloc(size);
+export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
+    if (DEBUG) {
+        var ptr = malloc(size);
+        const stdout = std.io.getStdOut().writer();
+        stdout.print("alloc:   {d} (alignment {d}, size {d})\n", .{ ptr, alignment, size }) catch unreachable;
+        return ptr;
+    } else {
+        return malloc(size);
+    }
 }
 
-export fn roc_realloc(c_ptr: *c_void, old_size: usize, new_size: usize, alignment: u32) callconv(.C) ?*c_void {
-    _ = old_size;
-    _ = alignment;
+export fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*c_void {
+    if (DEBUG) {
+        const stdout = std.io.getStdOut().writer();
+        stdout.print("realloc: {d} (alignment {d}, old_size {d})\n", .{ c_ptr, alignment, old_size }) catch unreachable;
+    }
 
-    return realloc(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)), new_size);
+    return realloc(@alignCast(Align, @ptrCast([*]u8, c_ptr)), new_size);
 }
 
 export fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
-    _ = alignment;
+    if (DEBUG) {
+        const stdout = std.io.getStdOut().writer();
+        stdout.print("dealloc: {d} (alignment {d})\n", .{ c_ptr, alignment }) catch unreachable;
+    }
 
-    free(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)));
+    free(@alignCast(Align, @ptrCast([*]u8, c_ptr)));
 }
 
 export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
     _ = tag_id;
+
     const stderr = std.io.getStdErr().writer();
     const msg = @ptrCast([*:0]const u8, c_ptr);
     stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
     std.process.exit(0);
 }
 
-export fn roc_memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void{
+export fn roc_memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void {
     return memcpy(dst, src, size);
 }
 
-export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void{
+export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void {
     return memset(dst, value, size);
 }
 

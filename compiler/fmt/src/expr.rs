@@ -4,10 +4,10 @@ use crate::pattern::fmt_pattern;
 use crate::spaces::{add_spaces, fmt_comments_only, fmt_spaces, newline, NewlineAt, INDENT};
 use bumpalo::collections::String;
 use roc_module::called_via::{self, BinOp};
-use roc_parse::ast::StrSegment;
 use roc_parse::ast::{
     AssignedField, Base, Collection, CommentOrNewline, Expr, Pattern, WhenBranch,
 };
+use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_region::all::Located;
 
 impl<'a> Formattable<'a> for Expr<'a> {
@@ -139,58 +139,17 @@ impl<'a> Formattable<'a> for Expr<'a> {
                     sub_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
                 } else {
                     buf.push('(');
-                    sub_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
+                    sub_expr.format_with_options(
+                        buf,
+                        Parens::NotNeeded,
+                        Newlines::Yes,
+                        indent + INDENT,
+                    );
                     buf.push(')');
                 }
             }
             Str(literal) => {
-                use roc_parse::ast::StrLiteral::*;
-
-                buf.push('"');
-                match literal {
-                    PlainLine(string) => {
-                        buf.push_str(string);
-                    }
-                    Line(segments) => {
-                        for seg in segments.iter() {
-                            format_str_segment(seg, buf, 0)
-                        }
-                    }
-                    Block(lines) => {
-                        buf.push_str("\"\"");
-
-                        if lines.len() > 1 {
-                            // Since we have multiple lines, format this with
-                            // the `"""` symbols on their own lines, and the
-                            newline(buf, indent);
-
-                            for segments in lines.iter() {
-                                for seg in segments.iter() {
-                                    format_str_segment(seg, buf, indent);
-                                }
-
-                                newline(buf, indent);
-                            }
-                        } else {
-                            // This is a single-line block string, for example:
-                            //
-                            //     """Whee, "quotes" inside quotes!"""
-
-                            // This loop will run either 0 or 1 times.
-                            for segments in lines.iter() {
-                                for seg in segments.iter() {
-                                    format_str_segment(seg, buf, indent);
-                                }
-
-                                // Don't print a newline here, because we either
-                                // just printed 1 or 0 lines.
-                            }
-                        }
-
-                        buf.push_str("\"\"");
-                    }
-                }
-                buf.push('"');
+                fmt_str_literal(buf, *literal, indent);
             }
             Var { module_name, ident } => {
                 if !module_name.is_empty() {
@@ -304,7 +263,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
                     }
                 }
 
-                sub_expr.format_with_options(buf, parens, newlines, indent);
+                sub_expr.format_with_options(buf, Parens::InApply, newlines, indent);
             }
             AccessorFunction(key) => {
                 buf.push('.');
@@ -375,6 +334,56 @@ fn push_op(buf: &mut String, op: BinOp) {
         called_via::BinOp::HasType => unreachable!(),
         called_via::BinOp::Backpassing => unreachable!(),
     }
+}
+
+pub fn fmt_str_literal<'a>(buf: &mut String<'a>, literal: StrLiteral<'a>, indent: u16) {
+    use roc_parse::ast::StrLiteral::*;
+
+    buf.push('"');
+    match literal {
+        PlainLine(string) => {
+            buf.push_str(string);
+        }
+        Line(segments) => {
+            for seg in segments.iter() {
+                format_str_segment(seg, buf, 0)
+            }
+        }
+        Block(lines) => {
+            buf.push_str("\"\"");
+
+            if lines.len() > 1 {
+                // Since we have multiple lines, format this with
+                // the `"""` symbols on their own lines, and the
+                newline(buf, indent);
+
+                for segments in lines.iter() {
+                    for seg in segments.iter() {
+                        format_str_segment(seg, buf, indent);
+                    }
+
+                    newline(buf, indent);
+                }
+            } else {
+                // This is a single-line block string, for example:
+                //
+                //     """Whee, "quotes" inside quotes!"""
+
+                // This loop will run either 0 or 1 times.
+                for segments in lines.iter() {
+                    for seg in segments.iter() {
+                        format_str_segment(seg, buf, indent);
+                    }
+
+                    // Don't print a newline here, because we either
+                    // just printed 1 or 0 lines.
+                }
+            }
+
+            buf.push_str("\"\"");
+        }
+    }
+    buf.push('"');
 }
 
 fn fmt_bin_ops<'a>(
@@ -572,8 +581,10 @@ fn fmt_when<'a>(
     while let Some(branch) = it.next() {
         let patterns = &branch.patterns;
         let expr = &branch.value;
-        add_spaces(buf, indent + INDENT);
         let (first_pattern, rest) = patterns.split_first().unwrap();
+        if !has_newline_before(&first_pattern.value) {
+            add_spaces(buf, indent + INDENT);
+        }
         let is_multiline = match rest.last() {
             None => false,
             Some(last_pattern) => first_pattern.region.start_line != last_pattern.region.end_line,
@@ -587,12 +598,9 @@ fn fmt_when<'a>(
         );
         for when_pattern in rest {
             if is_multiline {
-                buf.push_str("\n");
-                add_spaces(buf, indent + INDENT);
-                buf.push_str("| ");
-            } else {
-                buf.push_str(" | ");
+                newline(buf, indent + INDENT);
             }
+            buf.push_str(" | ");
             fmt_pattern(buf, &when_pattern.value, indent + INDENT, Parens::NotNeeded);
         }
 
@@ -601,9 +609,9 @@ fn fmt_when<'a>(
             guard_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent + INDENT);
         }
 
-        buf.push_str(" ->\n");
+        buf.push_str(" ->");
+        newline(buf, indent + INDENT * 2);
 
-        add_spaces(buf, indent + (INDENT * 2));
         match expr.value {
             Expr::SpaceBefore(nested, spaces) => {
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent + (INDENT * 2));
@@ -628,6 +636,16 @@ fn fmt_when<'a>(
             buf.push('\n');
             buf.push('\n');
         }
+    }
+}
+
+fn has_newline_before(value: &Pattern) -> bool {
+    match value {
+        Pattern::SpaceAfter(v, _) => has_newline_before(v),
+        Pattern::SpaceBefore(v, spaces) => {
+            v.is_multiline() && spaces.last().map(|s| s.is_newline()).unwrap_or(false)
+        }
+        _ => false,
     }
 }
 
@@ -668,8 +686,12 @@ fn fmt_if<'a>(
         indent
     };
 
-    for (loc_condition, loc_then) in branches.iter() {
+    for (i, (loc_condition, loc_then)) in branches.iter().enumerate() {
         let is_multiline_condition = loc_condition.is_multiline();
+
+        if i > 0 {
+            buf.push_str("else ");
+        }
 
         buf.push_str("if");
 
@@ -853,6 +875,14 @@ fn fmt_backpassing<'a>(
         indent
     };
 
+    let pattern_needs_parens = loc_patterns
+        .iter()
+        .any(|p| pattern_needs_parens_when_backpassing(&p.value));
+
+    if pattern_needs_parens {
+        buf.push('(');
+    }
+
     let mut it = loc_patterns.iter().peekable();
 
     while let Some(loc_pattern) = it.next() {
@@ -866,6 +896,10 @@ fn fmt_backpassing<'a>(
                 buf.push_str(", ");
             }
         }
+    }
+
+    if pattern_needs_parens {
+        buf.push(')');
     }
 
     if arguments_are_multiline {
@@ -888,7 +922,7 @@ fn fmt_backpassing<'a>(
     // the body of the Backpass can be on the same line, or
     // on a new line. If it's on the same line, insert a space.
 
-    match &loc_ret.value {
+    match &loc_body.value {
         SpaceBefore(_, _) => {
             // the body starts with (first comment and then) a newline
             // do nothing
@@ -901,6 +935,16 @@ fn fmt_backpassing<'a>(
 
     loc_body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, body_indent);
     loc_ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
+}
+
+fn pattern_needs_parens_when_backpassing(pat: &Pattern) -> bool {
+    match pat {
+        Pattern::Apply(_, _) => true,
+        Pattern::SpaceBefore(a, _) | Pattern::SpaceAfter(a, _) => {
+            pattern_needs_parens_when_backpassing(a)
+        }
+        _ => false,
+    }
 }
 
 fn fmt_record<'a>(
@@ -1068,6 +1112,7 @@ fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
                     BinOp::Pizza | BinOp::Assignment | BinOp::HasType | BinOp::Backpassing => false,
                 })
         }
+        Expr::If(_, _) => true,
         _ => false,
     }
 }

@@ -188,8 +188,7 @@ pub fn helper(
     };
 
     let target = target_lexicon::Triple::host();
-    let module_object =
-        roc_gen_dev::build_module(&env, &target, procedures).expect("failed to compile module");
+    let module_object = roc_gen_dev::build_module(&env, &target, procedures);
 
     let module_out = module_object
         .write()

@@ -386,7 +386,7 @@ fn can_annotation_help(
             }
         },
 
-        Record { fields, ext, .. } => {
+        Record { fields, ext } => {
             let ext_type = match ext {
                 Some(loc_ann) => can_annotation_help(
                     env,
@@ -454,7 +454,7 @@ fn can_annotation_help(
                     None => Type::EmptyTagUnion,
                 }
             } else {
-                let tag_types = can_tags(
+                let mut tag_types = can_tags(
                     env,
                     tags.items,
                     region,
@@ -464,6 +464,11 @@ fn can_annotation_help(
                     local_aliases,
                     references,
                 );
+
+                // sort here; we later instantiate type aliases, so this type might get duplicated
+                // many times. Then, when inserting into the subs, the tags are sorted.
+                // in theory we save a lot of time by sorting once here
+                insertion_sort_by(&mut tag_types, |a, b| a.0.cmp(&b.0));
 
                 Type::TagUnion(tag_types, Box::new(ext_type))
             }
@@ -499,6 +504,24 @@ fn can_annotation_help(
             introduced_variables.insert_wildcard(var);
 
             Type::Variable(var)
+        }
+    }
+}
+
+fn insertion_sort_by<T, F>(arr: &mut [T], mut compare: F)
+where
+    F: FnMut(&T, &T) -> std::cmp::Ordering,
+{
+    for i in 1..arr.len() {
+        let val = &arr[i];
+        let mut j = i;
+        let pos = arr[..i]
+            .binary_search_by(|x| compare(x, val))
+            .unwrap_or_else(|pos| pos);
+        // Swap all elements until specific position.
+        while j > pos {
+            arr.swap(j - 1, j);
+            j -= 1;
         }
     }
 }

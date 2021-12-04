@@ -7,7 +7,7 @@
 
 void* roc_alloc(size_t size, unsigned int alignment) { return malloc(size); }
 
-void* roc_realloc(void* ptr, size_t old_size, size_t new_size,
+void* roc_realloc(void* ptr, size_t new_size, size_t old_size,
                   unsigned int alignment) {
   return realloc(ptr, new_size);
 }

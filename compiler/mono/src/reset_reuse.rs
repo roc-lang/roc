@@ -1,5 +1,7 @@
 use crate::inc_dec::{collect_stmt, occurring_variables_expr, JPLiveVarMap, LiveVarSet};
-use crate::ir::{BranchInfo, Call, Expr, ListLiteralElement, Proc, Stmt};
+use crate::ir::{
+    BranchInfo, Call, Expr, ListLiteralElement, Proc, Stmt, UpdateModeId, UpdateModeIds,
+};
 use crate::layout::{Layout, TagIdIntType, UnionLayout};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -10,12 +12,14 @@ pub fn insert_reset_reuse<'a, 'i>(
     arena: &'a Bump,
     home: ModuleId,
     ident_ids: &'i mut IdentIds,
+    update_mode_ids: &'i mut UpdateModeIds,
     mut proc: Proc<'a>,
 ) -> Proc<'a> {
     let mut env = Env {
         arena,
         home,
         ident_ids,
+        update_mode_ids,
         jp_live_vars: Default::default(),
     };
 
@@ -50,6 +54,7 @@ struct Env<'a, 'i> {
     /// required for creating new `Symbol`s
     home: ModuleId,
     ident_ids: &'i mut IdentIds,
+    update_mode_ids: &'i mut UpdateModeIds,
 
     jp_live_vars: JPLiveVarMap,
 }
@@ -64,7 +69,7 @@ impl<'a, 'i> Env<'a, 'i> {
 
 fn function_s<'a, 'i>(
     env: &mut Env<'a, 'i>,
-    w: Symbol,
+    w: Opportunity,
     c: &CtorInfo<'a>,
     stmt: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
@@ -84,7 +89,8 @@ fn function_s<'a, 'i>(
                 let update_tag_id = true;
 
                 let new_expr = Expr::Reuse {
-                    symbol: w,
+                    symbol: w.symbol,
+                    update_mode: w.update_mode,
                     update_tag_id,
                     tag_layout: *tag_layout,
                     tag_id: *tag_id,
@@ -175,13 +181,22 @@ fn function_s<'a, 'i>(
     }
 }
 
+#[derive(Clone, Copy)]
+struct Opportunity {
+    symbol: Symbol,
+    update_mode: UpdateModeId,
+}
+
 fn try_function_s<'a, 'i>(
     env: &mut Env<'a, 'i>,
     x: Symbol,
     c: &CtorInfo<'a>,
     stmt: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
-    let w = env.unique_symbol();
+    let w = Opportunity {
+        symbol: env.unique_symbol(),
+        update_mode: env.update_mode_ids.next_id(),
+    };
 
     let new_stmt = function_s(env, w, c, stmt);
 
@@ -194,7 +209,7 @@ fn try_function_s<'a, 'i>(
 
 fn insert_reset<'a>(
     env: &mut Env<'a, '_>,
-    w: Symbol,
+    w: Opportunity,
     x: Symbol,
     union_layout: UnionLayout<'a>,
     mut stmt: &'a Stmt<'a>,
@@ -216,16 +231,21 @@ fn insert_reset<'a>(
             | Array { .. }
             | EmptyArray
             | Reuse { .. }
-            | Reset(_)
+            | Reset { .. }
             | RuntimeErrorFunction(_) => break,
         }
     }
 
-    let reset_expr = Expr::Reset(x);
+    let reset_expr = Expr::Reset {
+        symbol: x,
+        update_mode: w.update_mode,
+    };
 
     let layout = Layout::Union(union_layout);
 
-    stmt = env.arena.alloc(Stmt::Let(w, reset_expr, layout, stmt));
+    stmt = env
+        .arena
+        .alloc(Stmt::Let(w.symbol, reset_expr, layout, stmt));
 
     for (symbol, expr, expr_layout) in stack.into_iter().rev() {
         stmt = env
@@ -584,7 +604,7 @@ fn has_live_var_expr<'a>(expr: &'a Expr<'a>, needle: Symbol) -> bool {
         Expr::Reuse {
             symbol, arguments, ..
         } => needle == *symbol || arguments.iter().any(|s| *s == needle),
-        Expr::Reset(symbol) => needle == *symbol,
+        Expr::Reset { symbol, .. } => needle == *symbol,
         Expr::RuntimeErrorFunction(_) => false,
     }
 }

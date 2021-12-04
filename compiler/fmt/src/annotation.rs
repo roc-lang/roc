@@ -55,6 +55,30 @@ pub trait Formattable<'a> {
     }
 }
 
+/// A reference to a formattable value is also formattable
+impl<'a, T> Formattable<'a> for &'a T
+where
+    T: Formattable<'a>,
+{
+    fn is_multiline(&self) -> bool {
+        (*self).is_multiline()
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut String<'a>,
+        parens: Parens,
+        newlines: Newlines,
+        indent: u16,
+    ) {
+        (*self).format_with_options(buf, parens, newlines, indent)
+    }
+
+    fn format(&self, buf: &mut String<'a>, indent: u16) {
+        (*self).format(buf, indent)
+    }
+}
+
 /// A Located formattable value is also formattable
 impl<'a, T> Formattable<'a> for Located<T>
 where
@@ -253,12 +277,17 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
                     buf.push(')')
                 }
             }
-            Apply(_, name, arguments) => {
+            Apply(pkg, name, arguments) => {
                 // NOTE apply is never multiline
                 let write_parens = parens == Parens::InApply && !arguments.is_empty();
 
                 if write_parens {
                     buf.push('(')
+                }
+
+                if !pkg.is_empty() {
+                    buf.push_str(pkg);
+                    buf.push('.');
                 }
 
                 buf.push_str(name);
@@ -494,7 +523,7 @@ impl<'a> Formattable<'a> for Tag<'a> {
                 }
             }
             Tag::Private { name, args } => {
-                buf.push('@');
+                debug_assert!(name.value.starts_with('@'));
                 buf.push_str(name.value);
                 if is_multiline {
                     let arg_indent = indent + INDENT;

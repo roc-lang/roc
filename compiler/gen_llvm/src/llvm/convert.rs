@@ -150,10 +150,10 @@ pub fn basic_type_from_builtin<'a, 'ctx, 'env>(
         Float(float_width) => float_type_from_float_width(env, *float_width).as_basic_type_enum(),
         Bool => context.bool_type().as_basic_type_enum(),
         Decimal => context.i128_type().as_basic_type_enum(),
-        Dict(_, _) | EmptyDict => zig_dict_type(env).into(),
-        Set(_) | EmptySet => zig_dict_type(env).into(),
-        List(_) | EmptyList => zig_list_type(env).into(),
-        Str | EmptyStr => zig_str_type(env).into(),
+        Dict(_, _) => zig_dict_type(env).into(),
+        Set(_) => zig_dict_type(env).into(),
+        List(_) => zig_list_type(env).into(),
+        Str => zig_str_type(env).into(),
     }
 }
 

@@ -19,6 +19,8 @@ use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 
+/// "Infinite" reference count, for static values
+/// Ref counts are encoded as negative numbers where isize::MIN represents 1
 pub const REFCOUNT_MAX: usize = 0_usize;
 
 pub fn refcount_1(ctx: &Context, ptr_bytes: u32) -> IntValue<'_> {
@@ -442,8 +444,8 @@ fn modify_refcount_builtin<'a, 'ctx, 'env>(
             Some(function)
         }
         Set(element_layout) => {
-            let key_layout = &Layout::Struct(&[]);
-            let value_layout = element_layout;
+            let key_layout = element_layout;
+            let value_layout = &Layout::Struct(&[]);
 
             let function = modify_refcount_dict(
                 env,
@@ -593,21 +595,31 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
         Union(variant) => {
             use UnionLayout::*;
 
-            if let NonRecursive(tags) = variant {
-                let function = modify_refcount_union(env, layout_ids, mode, when_recursive, tags);
+            match variant {
+                NonRecursive(&[]) => {
+                    // void type, nothing to refcount here
+                    None
+                }
 
-                return Some(function);
+                NonRecursive(tags) => {
+                    let function =
+                        modify_refcount_union(env, layout_ids, mode, when_recursive, tags);
+
+                    Some(function)
+                }
+
+                _ => {
+                    let function = build_rec_union(
+                        env,
+                        layout_ids,
+                        mode,
+                        &WhenRecursive::Loop(*variant),
+                        *variant,
+                    );
+
+                    Some(function)
+                }
             }
-
-            let function = build_rec_union(
-                env,
-                layout_ids,
-                mode,
-                &WhenRecursive::Loop(*variant),
-                *variant,
-            );
-
-            Some(function)
         }
 
         Struct(layouts) => {

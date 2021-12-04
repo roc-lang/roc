@@ -7,7 +7,7 @@ show = \list ->
     else
         content = 
             list
-                |> List.map Str.fromInt
+                |> List.map Num.toStr
                 |> Str.joinWith ", " 
 
         "[ \(content) ]"

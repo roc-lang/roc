@@ -138,6 +138,7 @@ comptime {
 
 comptime {
     exportUtilsFn(utils.test_panic, "test_panic");
+    exportUtilsFn(utils.increfC, "incref");
     exportUtilsFn(utils.decrefC, "decref");
     exportUtilsFn(utils.decrefCheckNullC, "decref_check_null");
 

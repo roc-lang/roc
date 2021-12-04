@@ -13,7 +13,7 @@ mod test_reporting {
     use crate::helpers::{can_expr, infer_expr, CanExprOut, ParseErrOut};
     use bumpalo::Bump;
     use roc_module::symbol::{Interns, ModuleId};
-    use roc_mono::ir::{Procs, Stmt};
+    use roc_mono::ir::{Procs, Stmt, UpdateModeIds};
     use roc_mono::layout::LayoutCache;
     use roc_reporting::report::{
         can_problem, mono_problem, parse_problem, type_problem, Report, Severity, BLUE_CODE,
@@ -91,6 +91,7 @@ mod test_reporting {
             // Compile and add all the Procs before adding main
             let mut procs = Procs::new_in(&arena);
             let mut ident_ids = interns.all_ident_ids.remove(&home).unwrap();
+            let mut update_mode_ids = UpdateModeIds::new();
 
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
             let ptr_bytes = 8;
@@ -101,8 +102,8 @@ mod test_reporting {
                 problems: &mut mono_problems,
                 home,
                 ident_ids: &mut ident_ids,
+                update_mode_ids: &mut update_mode_ids,
                 ptr_bytes,
-                update_mode_counter: 0,
                 // call_specialization_counter=0 is reserved
                 call_specialization_counter: 1,
             };
@@ -1245,6 +1246,7 @@ mod test_reporting {
 
                 Something is off with the `then` branch of this `if` expression:
 
+                1│  x : Int *
                 2│  x = if True then 3.14 else 4
                                      ^^^^
 
@@ -1864,6 +1866,7 @@ mod test_reporting {
 
                 Something is off with the `else` branch of this `if` expression:
 
+                1│  f : a, b -> a
                 2│  f = \x, y -> if True then x else y
                                                      ^
 
@@ -1877,8 +1880,8 @@ mod test_reporting {
 
                 Tip: Your type annotation uses `b` and `a` as separate type variables.
                 Your code seems to be saying they are the same though. Maybe they
-                should be the same your type annotation? Maybe your code uses them in
-                a weird way?
+                should be the same in your type annotation? Maybe your code uses them
+                in a weird way?
                 "#
             ),
         )
@@ -6759,8 +6762,123 @@ I need all branches in an `if` to have the same type!
 
                 Tip: Your type annotation uses `a` and `b` as separate type variables.
                 Your code seems to be saying they are the same though. Maybe they
-                should be the same your type annotation? Maybe your code uses them in
-                a weird way?
+                should be the same in your type annotation? Maybe your code uses them
+                in a weird way?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn error_wildcards_are_related() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : * -> *
+                f = \x -> x
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with the body of the `f` definition:
+
+                1│  f : * -> *
+                2│  f = \x -> x
+                              ^
+
+                The type annotation on `f` says this `x` value should have the type:
+
+                    *
+
+                However, the type of this `x` value is connected to another type in a
+                way that isn't reflected in this annotation.
+
+                Tip: Any connection between types must use a named type variable, not
+                a `*`! Maybe the annotation  on `f` should have a named type variable in
+                place of the `*`?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn error_nested_wildcards_are_related() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : a, b, * -> {x: a, y: b, z: *}
+                f = \x, y, z -> {x, y, z}
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with the body of the `f` definition:
+
+                1│  f : a, b, * -> {x: a, y: b, z: *}
+                2│  f = \x, y, z -> {x, y, z}
+                                    ^^^^^^^^^
+
+                The type annotation on `f` says the body is a record should have the
+                type:
+
+                    { x : a, y : b, z : * }
+
+                However, the type of the body is a record is connected to another type
+                in a way that isn't reflected in this annotation.
+
+                Tip: Any connection between types must use a named type variable, not
+                a `*`! Maybe the annotation  on `f` should have a named type variable in
+                place of the `*`?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn error_wildcards_are_related_in_nested_defs() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : a, b, * -> *
+                f = \_, _, x2 ->
+                    inner : * -> *
+                    inner = \y -> y
+                    inner x2
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with the body of the `f` definition:
+
+                1│  f : a, b, * -> *
+                2│  f = \_, _, x2 ->
+                3│      inner : * -> *
+                4│      inner = \y -> y
+                5│      inner x2
+                        ^^^^^^^^
+
+                The type annotation on `f` says this `inner` call should have the type:
+
+                    *
+
+                However, the type of this `inner` call is connected to another type in a
+                way that isn't reflected in this annotation.
+
+                Tip: Any connection between types must use a named type variable, not
+                a `*`! Maybe the annotation  on `f` should have a named type variable in
+                place of the `*`?
                 "#
             ),
         )

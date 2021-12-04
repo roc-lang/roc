@@ -126,16 +126,12 @@ fn jit_to_ast_help<'a>(
 
             Ok(result)
         }
-        Layout::Builtin(Builtin::Str) | Layout::Builtin(Builtin::EmptyStr) => Ok(
-            run_jit_function!(lib, main_fn_name, &'static str, |string: &'static str| {
-                str_to_ast(env.arena, env.arena.alloc(string))
-            }),
-        ),
-        Layout::Builtin(Builtin::EmptyList) => {
-            Ok(run_jit_function!(lib, main_fn_name, &'static str, |_| {
-                Expr::List(Collection::empty())
-            }))
-        }
+        Layout::Builtin(Builtin::Str) => Ok(run_jit_function!(
+            lib,
+            main_fn_name,
+            &'static str,
+            |string: &'static str| { str_to_ast(env.arena, env.arena.alloc(string)) }
+        )),
         Layout::Builtin(Builtin::List(elem_layout)) => Ok(run_jit_function!(
             lib,
             main_fn_name,
@@ -421,7 +417,6 @@ fn ptr_to_ast<'a>(
                 F128 => todo!("F128 not implemented"),
             }
         }
-        Layout::Builtin(Builtin::EmptyList) => Expr::List(Collection::empty()),
         Layout::Builtin(Builtin::List(elem_layout)) => {
             // Turn the (ptr, len) wrapper struct into actual ptr and len values.
             let len = unsafe { *(ptr.offset(env.ptr_bytes as isize) as *const usize) };
@@ -429,7 +424,6 @@ fn ptr_to_ast<'a>(
 
             list_to_ast(env, ptr, len, elem_layout, content)
         }
-        Layout::Builtin(Builtin::EmptyStr) => Expr::Str(StrLiteral::PlainLine("")),
         Layout::Builtin(Builtin::Str) => {
             let arena_str = unsafe { *(ptr as *const &'static str) };
 
@@ -647,8 +641,8 @@ fn unpack_single_element_tag_union(subs: &Subs, tags: UnionTags) -> (&TagName, &
     let (tag_name_index, payload_vars_index) = tags.iter_all().next().unwrap();
 
     let tag_name = &subs[tag_name_index];
-    let subs_slice = subs[payload_vars_index].as_subs_slice();
-    let payload_vars = subs.get_subs_slice(*subs_slice);
+    let subs_slice = subs[payload_vars_index];
+    let payload_vars = subs.get_subs_slice(subs_slice);
 
     (tag_name, payload_vars)
 }
@@ -661,14 +655,14 @@ fn unpack_two_element_tag_union(
     let (tag_name_index, payload_vars_index) = it.next().unwrap();
 
     let tag_name1 = &subs[tag_name_index];
-    let subs_slice = subs[payload_vars_index].as_subs_slice();
-    let payload_vars1 = subs.get_subs_slice(*subs_slice);
+    let subs_slice = subs[payload_vars_index];
+    let payload_vars1 = subs.get_subs_slice(subs_slice);
 
     let (tag_name_index, payload_vars_index) = it.next().unwrap();
 
     let tag_name2 = &subs[tag_name_index];
-    let subs_slice = subs[payload_vars_index].as_subs_slice();
-    let payload_vars2 = subs.get_subs_slice(*subs_slice);
+    let subs_slice = subs[payload_vars_index];
+    let payload_vars2 = subs.get_subs_slice(subs_slice);
 
     (tag_name1, payload_vars1, tag_name2, payload_vars2)
 }

@@ -48,14 +48,15 @@ resultWithDefault = \res, default ->
 main : Task.Task {} []
 main =
     Task.after Task.getInt \n ->
+        # original koka n = 4_200_000
         ms : ConsList Map
-        ms = makeMap 5 n # original koka n = 4_200_000
+        ms = makeMap 5 n
 
         when ms is
             Cons head _ ->
                 val = fold (\_, v, r -> if v then r + 1 else r) head 0
                 val
-                    |> Str.fromInt
+                    |> Num.toStr
                     |> Task.putLine
 
             Nil ->

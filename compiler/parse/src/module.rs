@@ -718,7 +718,7 @@ fn effects<'a>() -> impl Parser<'a, Effects<'a>, EEffects<'a>> {
                 spaces_after_type_name,
                 effect_shortname: type_shortname,
                 effect_type_name: type_name,
-                entries: entries.items,
+                entries,
             },
             state,
         ))

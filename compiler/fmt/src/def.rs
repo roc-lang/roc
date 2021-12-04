@@ -89,7 +89,7 @@ impl<'a> Formattable<'a> for Def<'a> {
                     buf.push_str(" # ");
                     buf.push_str(comment_str.trim());
                 }
-                buf.push_str("\n");
+                newline(buf, indent);
                 fmt_body(buf, &body_pattern.value, &body_expr.value, indent);
             }
 
