@@ -30,8 +30,6 @@ pub fn def_to_def2<'a>(
 ) -> Def2 {
     use roc_parse::ast::Def::*;
 
-    dbg!(parsed_def);
-
     match parsed_def {
         SpaceBefore(inner_def, comments) => {
             if comments.len() > 0 {

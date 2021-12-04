@@ -204,7 +204,8 @@ main = "Hello, world!"
         );
     }
 
-    #[test]
+    // TODO see issue #2134
+    /*#[test]
     fn tld_with_comment_after() {
         expect_html_def(
             indoc!(
@@ -214,5 +215,5 @@ main = "Hello, world!"
             ),
             "<span class=\"syntax-value\">myVal</span><span class=\"syntax-operator\"> = </span><span class=\"syntax-string\">\"Hello, World!\"</span><span class=\"syntax-comment\"># COMMENT</span>\n\n\n\n",
         );
-    }
+    }*/
 }
