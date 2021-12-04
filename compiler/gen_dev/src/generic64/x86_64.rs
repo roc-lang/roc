@@ -196,7 +196,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
         }
         for (layout, sym) in args.iter() {
             match layout {
-                Layout::Builtin(single_register_integers!()) => {
+                single_register_integers!() => {
                     if general_i < Self::GENERAL_PARAM_REGS.len() {
                         symbol_map.insert(
                             *sym,
@@ -215,7 +215,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                         );
                     }
                 }
-                Layout::Builtin(single_register_floats!()) => {
+                single_register_floats!() => {
                     if float_i < Self::FLOAT_PARAM_REGS.len() {
                         symbol_map.insert(
                             *sym,
@@ -277,7 +277,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
         // For most return layouts we will do nothing.
         // In some cases, we need to put the return address as the first arg.
         match ret_layout {
-            Layout::Builtin(single_register_builtins!() | Builtin::Str) | Layout::Struct([]) => {
+            single_register_builtins!() | Layout::Builtin(Builtin::Str) | Layout::Struct([]) => {
                 // Nothing needs to be done for any of these cases.
             }
             x => {
@@ -286,7 +286,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
         }
         for (i, layout) in arg_layouts.iter().enumerate() {
             match layout {
-                Layout::Builtin(single_register_integers!()) => {
+                single_register_integers!() => {
                     let storage = match symbol_map.get(&args[i]) {
                         Some(storage) => storage,
                         None => {
@@ -336,7 +336,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                         stack_offset += 8;
                     }
                 }
-                Layout::Builtin(single_register_floats!()) => {
+                single_register_floats!() => {
                     let storage = match symbol_map.get(&args[i]) {
                         Some(storage) => storage,
                         None => {
@@ -574,12 +574,12 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
         for (layout, sym) in args.iter() {
             if i < Self::GENERAL_PARAM_REGS.len() {
                 match layout {
-                    Layout::Builtin(single_register_integers!()) => {
+                    single_register_integers!() => {
                         symbol_map
                             .insert(*sym, SymbolStorage::GeneralReg(Self::GENERAL_PARAM_REGS[i]));
                         i += 1;
                     }
-                    Layout::Builtin(single_register_floats!()) => {
+                    single_register_floats!() => {
                         symbol_map.insert(*sym, SymbolStorage::FloatReg(Self::FLOAT_PARAM_REGS[i]));
                         i += 1;
                     }
@@ -596,7 +596,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                 }
             } else {
                 base_offset += match layout {
-                    Layout::Builtin(single_register_builtins!()) => 8,
+                    single_register_builtins!() => 8,
                     x => {
                         unimplemented!("Loading args with layout {:?} not yet implemented", x);
                     }
@@ -625,7 +625,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
         // For most return layouts we will do nothing.
         // In some cases, we need to put the return address as the first arg.
         match ret_layout {
-            Layout::Builtin(single_register_builtins!()) | Layout::Struct([]) => {
+            single_register_builtins!() | Layout::Struct([]) => {
                 // Nothing needs to be done for any of these cases.
             }
             x => {
@@ -634,7 +634,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
         }
         for (i, layout) in arg_layouts.iter().enumerate() {
             match layout {
-                Layout::Builtin(single_register_integers!()) => {
+                single_register_integers!() => {
                     let storage = match symbol_map.get(&args[i]) {
                         Some(storage) => storage,
                         None => {
@@ -683,7 +683,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                         stack_offset += 8;
                     }
                 }
-                Layout::Builtin(single_register_floats!()) => {
+                single_register_floats!() => {
                     let storage = match symbol_map.get(&args[i]) {
                         Some(storage) => storage,
                         None => {

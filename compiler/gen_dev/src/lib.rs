@@ -278,8 +278,16 @@ where
                             let layout_id = LayoutIds::default().get(*func_sym, layout);
                             let fn_name = self.env().symbol_to_string(*func_sym, layout_id);
                             // Now that the arguments are needed, load them if they are literals.
-                            self.load_literal_symbols(arguments);
-                            self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
+                            if fn_name == "#UserApp_#rcDec_str_0_1"
+                                || fn_name == "#UserApp_#rcDec_str_1_1"
+                                || fn_name == "#UserApp_#rcInc_str_0_1"
+                            {
+                                // Skip calling the function. For some reason it is currently being inlined.
+                                return;
+                            } else {
+                                self.load_literal_symbols(arguments);
+                                self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
+                            }
                         } else {
                             self.build_inline_builtin(
                                 sym,
@@ -520,6 +528,28 @@ where
                 arg_layouts,
                 ret_layout,
             ),
+            LowLevel::RefCountGetPtr => {
+                debug_assert_eq!(
+                    1,
+                    args.len(),
+                    "RefCountGetPtr: expected to have exactly two argument"
+                );
+                self.build_refcount_getptr(sym, &args[0])
+            }
+            LowLevel::RefCountDec => self.build_fn_call(
+                sym,
+                bitcode::UTILS_DECREF.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::RefCountInc => self.build_fn_call(
+                sym,
+                bitcode::UTILS_INCREF.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
             x => unimplemented!("low level, {:?}. is not yet implemented", x),
         }
     }
@@ -598,6 +628,9 @@ where
         src2: &Symbol,
         arg_layout: &Layout<'a>,
     );
+
+    /// build_refcount_getptr loads the pointer to the reference count of src into dst.
+    fn build_refcount_getptr(&mut self, dst: &Symbol, src: &Symbol);
 
     /// literal_map gets the map from symbol to literal, used for lazy loading and literal folding.
     fn literal_map(&mut self) -> &mut MutMap<Symbol, Literal<'a>>;

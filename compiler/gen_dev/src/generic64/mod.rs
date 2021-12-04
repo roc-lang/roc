@@ -872,6 +872,13 @@ impl<
         }
     }
 
+    fn build_refcount_getptr(&mut self, dst: &Symbol, src: &Symbol) {
+        let dst_reg = self.claim_general_reg(dst);
+        let src_reg = self.load_to_general_reg(src);
+        // The refcount pointer is the value before the pointer.
+        ASM::sub_reg64_reg64_imm32(&mut self.buf, dst_reg, src_reg, PTR_SIZE as i32);
+    }
+
     fn create_struct(&mut self, sym: &Symbol, layout: &Layout<'a>, fields: &'a [Symbol]) {
         let struct_size = layout.stack_size(PTR_SIZE);
 
@@ -1134,8 +1141,11 @@ impl<
                 ),
             },
             Some(x) => unimplemented!("returning symbol storage, {:?}, is not yet implemented", x),
+            None if layout == &Layout::Struct(&[]) => {
+                // Empty struct is not defined and does nothing.
+            }
             None => {
-                internal_error!("Unknown return symbol: {}", sym);
+                internal_error!("Unknown return symbol: {:?}", sym);
             }
         }
         let inst_loc = self.buf.len() as u64;
@@ -1514,24 +1524,26 @@ impl<
 #[macro_export]
 macro_rules! single_register_integers {
     () => {
-        Builtin::Bool
-            | Builtin::Int(
-                IntWidth::I8
-                    | IntWidth::I16
-                    | IntWidth::I32
-                    | IntWidth::I64
-                    | IntWidth::U8
-                    | IntWidth::U16
-                    | IntWidth::U32
-                    | IntWidth::U64,
-            )
+        Layout::Builtin(
+            Builtin::Bool
+                | Builtin::Int(
+                    IntWidth::I8
+                        | IntWidth::I16
+                        | IntWidth::I32
+                        | IntWidth::I64
+                        | IntWidth::U8
+                        | IntWidth::U16
+                        | IntWidth::U32
+                        | IntWidth::U64,
+                ),
+        ) | Layout::RecursivePointer
     };
 }
 
 #[macro_export]
 macro_rules! single_register_floats {
     () => {
-        Builtin::Float(FloatWidth::F32 | FloatWidth::F64)
+        Layout::Builtin(Builtin::Float(FloatWidth::F32 | FloatWidth::F64))
     };
 }
 
