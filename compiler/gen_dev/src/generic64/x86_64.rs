@@ -1093,6 +1093,17 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
+    fn gte_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+    ) {
+        cmp_reg64_reg64(buf, src1, src2);
+        setge_reg64(buf, dst);
+    }
+
+    #[inline(always)]
     fn ret(buf: &mut Vec<'_, u8>) {
         ret(buf);
     }
@@ -1494,6 +1505,12 @@ fn setne_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
 #[inline(always)]
 fn setl_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     set_reg64_help(0x9c, buf, reg);
+}
+
+/// `SETGE r/m64` -> Set byte if greater or equal (SF=OF).
+#[inline(always)]
+fn setge_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
+    set_reg64_help(0x9d, buf, reg);
 }
 
 /// `RET` -> Near return to calling procedure.

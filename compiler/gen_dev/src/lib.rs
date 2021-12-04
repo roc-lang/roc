@@ -489,6 +489,23 @@ where
                 );
                 self.build_num_lt(sym, &args[0], &args[1], &arg_layouts[0])
             }
+            LowLevel::NumGte => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "NumGte: expected to have exactly two argument"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], arg_layouts[1],
+                    "NumGte: expected all arguments of to have the same layout"
+                );
+                debug_assert_eq!(
+                    Layout::Builtin(Builtin::Bool),
+                    *ret_layout,
+                    "NumGte: expected to have return layout of type Bool"
+                );
+                self.build_num_gte(sym, &args[0], &args[1], &arg_layouts[0])
+            }
             LowLevel::NumRound => self.build_fn_call(
                 sym,
                 bitcode::NUM_ROUND[FloatWidth::F64].to_string(),
@@ -572,6 +589,15 @@ where
 
     /// build_num_lt stores the result of `src1 < src2` into dst.
     fn build_num_lt(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &Layout<'a>);
+
+    /// build_num_gte stores the result of `src1 >= src2` into dst.
+    fn build_num_gte(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        arg_layout: &Layout<'a>,
+    );
 
     /// literal_map gets the map from symbol to literal, used for lazy loading and literal folding.
     fn literal_map(&mut self) -> &mut MutMap<Symbol, Literal<'a>>;
