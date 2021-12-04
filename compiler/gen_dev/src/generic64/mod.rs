@@ -534,6 +534,9 @@ impl<
                     ASM::mov_base32_reg64(&mut self.buf, offset + 8, CC::GENERAL_RETURN_REGS[1]);
                 }
             }
+            Layout::Struct([]) => {
+                // Nothing needs to be done to load a returned empty struct.
+            }
             x => unimplemented!(
                 "FnCall: receiving return type, {:?}, is not yet implemented",
                 x
