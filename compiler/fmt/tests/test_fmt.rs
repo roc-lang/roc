@@ -14,21 +14,31 @@ mod test_fmt {
     use roc_parse::parser::{Parser, State};
     use roc_test_utils::assert_multiline_str_eq;
 
-    fn expr_formats_to(input: &str, expected: &str) {
+    // Not intended to be used directly in tests; please use expr_formats_to or expr_formats_same
+    fn expect_format_helper(input: &str, expected: &str) {
         let arena = Bump::new();
-        let input = input.trim_end();
-        let expected = expected.trim_end();
-
         match roc_parse::test_helpers::parse_expr_with(&arena, input.trim()) {
             Ok(actual) => {
                 let mut buf = String::new_in(&arena);
 
                 actual.format_with_options(&mut buf, Parens::NotNeeded, Newlines::Yes, 0);
 
-                assert_multiline_str_eq!(expected, buf.as_str())
+                assert_multiline_str_eq!(expected, buf.as_str());
             }
             Err(error) => panic!("Unexpected parse failure when parsing this for formatting:\n\n{}\n\nParse error was:\n\n{:?}\n\n", input, error)
         };
+    }
+
+    fn expr_formats_to(input: &str, expected: &str) {
+        let input = input.trim_end();
+        let expected = expected.trim_end();
+
+        // First check that input formats to the expected version
+        expect_format_helper(input, expected);
+
+        // Parse the expected result format it, asserting that it doesn't change
+        // It's important that formatting be stable / idempotent
+        expect_format_helper(expected, expected);
     }
 
     fn expr_formats_same(input: &str) {
@@ -86,6 +96,32 @@ mod test_fmt {
             a
             "#
         ));
+    }
+
+    #[test]
+    #[ignore]
+    fn def_with_comment_on_same_line() {
+        // TODO(joshuawarner32): make trailing comments format stabily
+        // This test currently fails because the comment ends up as SpaceBefore for the following `a`
+        // This works fine when formatted _once_ - but if you format again, the formatter wants to
+        // insert a newline between `a = "Hello"` and the comment, further muddying the waters.
+        // Clearly the formatter shouldn't be allowed to migrate a comment around like that.
+        expr_formats_to(
+            indoc!(
+                r#"
+                a = "Hello" # This variable is for greeting
+
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                a = "Hello"
+                # This variable is for greeting
+                a
+                "#
+            ),
+        );
     }
 
     #[test]
@@ -1834,7 +1870,7 @@ mod test_fmt {
     }
 
     #[test]
-    fn when_with_alternatives() {
+    fn when_with_alternatives_1() {
         expr_formats_same(indoc!(
             r#"
             when b is
@@ -1847,6 +1883,10 @@ mod test_fmt {
                     5
         "#
         ));
+    }
+
+    #[test]
+    fn when_with_alternatives_2() {
         expr_formats_same(indoc!(
             r#"
             when b is
@@ -1856,6 +1896,10 @@ mod test_fmt {
                     1
         "#
         ));
+    }
+
+    #[test]
+    fn when_with_alternatives_3() {
         expr_formats_to(
             indoc!(
                 r#"
@@ -1873,6 +1917,10 @@ mod test_fmt {
                 "#
             ),
         );
+    }
+
+    #[test]
+    fn when_with_alternatives_4() {
         expr_formats_to(
             indoc!(
                 r#"
@@ -1901,15 +1949,15 @@ mod test_fmt {
                 r#"
             when b is
                 1
-                | 2
-                | 3 ->
+                 | 2
+                 | 3 ->
                     4
 
                 5 | 6 | 7 ->
                     8
 
                 9
-                | 10 ->
+                 | 10 ->
                     11
 
                 12 | 13 ->
@@ -1918,12 +1966,36 @@ mod test_fmt {
                             16
 
                         17
-                        | 18 ->
+                         | 18 ->
                             19
 
                 20 ->
                     21
                 "#
+            ),
+        );
+    }
+
+    #[test]
+    fn with_multiline_pattern_indentation() {
+        expr_formats_to(
+            indoc!(
+                r#"
+            when b is   3->4
+                        9
+                         |8->9
+            "#
+            ),
+            indoc!(
+                r#"
+            when b is
+                3 ->
+                    4
+
+                9
+                 | 8 ->
+                    9
+            "#
             ),
         );
     }
