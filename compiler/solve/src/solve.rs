@@ -1,4 +1,5 @@
 use roc_can::constraint::Constraint::{self, *};
+use roc_can::constraint::PresenceConstraint;
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::MutMap;
 use roc_module::ident::TagName;
@@ -11,7 +12,7 @@ use roc_types::subs::{
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{gather_fields_unsorted_iter, Alias, Category, ErrorType, PatternCategory};
-use roc_unify::unify::{unify, Unified::*};
+use roc_unify::unify::{unify, unify_present, Unified::*};
 use std::collections::hash_map::Entry;
 
 // Type checking system adapted from Elm by Evan Czaplicki, BSD-3-Clause Licensed
@@ -195,6 +196,63 @@ fn solve(
 
             copy
         }
+        TagPresent(typ, constr) => {
+            let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
+            match constr {
+                PresenceConstraint::IsOpen => {
+                    let mut new_desc = subs.get(actual);
+                    match new_desc.content {
+                        Content::Structure(FlatType::TagUnion(tags, _)) => {
+                            let new_ext = subs.fresh_unnamed_flex_var();
+                            let new_union = Content::Structure(FlatType::TagUnion(tags, new_ext));
+                            new_desc.content = new_union;
+                            subs.set(actual, new_desc);
+                            state
+                        }
+                        _ => {
+                            /* dont know how to handle this */
+                            state
+                        }
+                    }
+                }
+                PresenceConstraint::IncludesTag(tag_name, tys) => {
+                    let tag_ty = Type::TagUnion(
+                        vec![(tag_name.clone(), tys.clone())],
+                        Box::new(Type::EmptyTagUnion),
+                    );
+                    let includes = type_to_var(subs, rank, pools, cached_aliases, &tag_ty);
+
+                    match unify_present(subs, actual, includes) {
+                        Success(vars) => {
+                            introduce(subs, rank, pools, &vars);
+
+                            state
+                        }
+                        Failure(vars, actual_type, expected_type) => {
+                            introduce(subs, rank, pools, &vars);
+
+                            let problem = TypeError::BadExpr(
+                                Region::zero(),
+                                Category::When,
+                                actual_type,
+                                Expected::NoExpectation(expected_type),
+                            );
+
+                            problems.push(problem);
+
+                            state
+                        }
+                        BadType(vars, problem) => {
+                            introduce(subs, rank, pools, &vars);
+
+                            problems.push(TypeError::BadType(problem));
+
+                            state
+                        }
+                    }
+                }
+            }
+        }
         Eq(typ, expectation, category, region) => {
             let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
             let expected = type_to_var(
@@ -265,6 +323,7 @@ fn solve(
         Lookup(symbol, expectation, region) => {
             match env.vars_by_symbol.get(symbol) {
                 Some(var) => {
+                    // dbg!("lookup", var);
                     // Deep copy the vars associated with this symbol before unifying them.
                     // Otherwise, suppose we have this:
                     //
@@ -294,6 +353,7 @@ fn solve(
                         cached_aliases,
                         expectation.get_type_ref(),
                     );
+                    // dbg!(&actual, &expected, rank);
                     match unify(subs, actual, expected) {
                         Success(vars) => {
                             introduce(subs, rank, pools, &vars);

@@ -77,6 +77,7 @@ fn constrain_untyped_args(
             loc_pattern.region,
             pattern_expected,
             &mut pattern_state,
+            false,
         );
 
         vars.push(*pattern_var);
@@ -646,6 +647,8 @@ pub fn constrain_expr(
                             ),
                         );
 
+                        // dbg!(&branch_con);
+
                         branch_cons.push(branch_con);
                     }
 
@@ -845,6 +848,7 @@ pub fn constrain_expr(
                 Type::TagUnion(
                     vec![(name.clone(), types)],
                     Box::new(Type::Variable(*ext_var)),
+                    // Box::new(Type::EmptyTagUnion),
                 ),
                 expected.clone(),
                 Category::TagApply {
@@ -1039,6 +1043,7 @@ fn constrain_when_branch(
             loc_pattern.region,
             pattern_expected.clone(),
             &mut state,
+            true,
         );
     }
 
@@ -1146,6 +1151,7 @@ fn constrain_def_pattern(
         loc_pattern.region,
         pattern_expected,
         &mut state,
+        false,
     );
 
     state
@@ -1266,6 +1272,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                                 loc_pattern.region,
                                 pattern_expected,
                                 &mut state,
+                                false,
                             );
                         }
 
@@ -1633,6 +1640,7 @@ pub fn rec_defs_help(
                                     loc_pattern.region,
                                     pattern_expected,
                                     &mut state,
+                                    false,
                                 );
                             }
 

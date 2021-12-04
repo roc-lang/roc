@@ -1,9 +1,16 @@
 use crate::expected::{Expected, PExpected};
 use roc_collections::all::{MutSet, SendMap};
+use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::types::{Category, PatternCategory, Type};
 use roc_types::{subs::Variable, types::VariableDetail};
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PresenceConstraint {
+    IncludesTag(TagName, Vec<Type>),
+    IsOpen,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Constraint {
@@ -15,6 +22,7 @@ pub enum Constraint {
     SaveTheEnvironment,
     Let(Box<LetConstraint>),
     And(Vec<Constraint>),
+    TagPresent(Type, PresenceConstraint),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -74,6 +82,7 @@ impl Constraint {
                     || boxed.defs_constraint.contains_save_the_environment()
             }
             Constraint::And(cs) => cs.iter().any(|c| c.contains_save_the_environment()),
+            &Constraint::TagPresent(_, _) => false,
         }
     }
 }
@@ -141,6 +150,17 @@ fn validate_help(constraint: &Constraint, declared: &Declared, accum: &mut Varia
         Constraint::And(inner) => {
             for c in inner {
                 validate_help(c, declared, accum);
+            }
+        }
+        Constraint::TagPresent(typ, constr) => {
+            subtract(declared, &typ.variables_detail(), accum);
+            match &constr {
+                &PresenceConstraint::IncludesTag(_, tys) => {
+                    for ty in tys {
+                        subtract(declared, &ty.variables_detail(), accum);
+                    }
+                }
+                &PresenceConstraint::IsOpen => {}
             }
         }
     }

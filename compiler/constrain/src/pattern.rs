@@ -1,6 +1,6 @@
 use crate::builtins;
 use crate::expr::{constrain_expr, Env};
-use roc_can::constraint::Constraint;
+use roc_can::constraint::{Constraint, PresenceConstraint};
 use roc_can::expected::{Expected, PExpected};
 use roc_can::pattern::Pattern::{self, *};
 use roc_can::pattern::{DestructType, RecordDestruct};
@@ -127,8 +127,16 @@ pub fn constrain_pattern(
     region: Region,
     expected: PExpected<Type>,
     state: &mut PatternState,
+    destruct_position: bool,
 ) {
     match pattern {
+        // TODO: explain
+        Underscore if destruct_position => {
+            state.constraints.push(Constraint::TagPresent(
+                expected.get_type(),
+                PresenceConstraint::IsOpen,
+            ));
+        }
         Underscore | UnsupportedPattern(_) | MalformedPattern(_, _) | Shadowed(_, _) => {
             // Neither the _ pattern nor erroneous ones add any constraints.
         }
@@ -226,7 +234,14 @@ pub fn constrain_pattern(
                         ));
                         state.vars.push(*guard_var);
 
-                        constrain_pattern(env, &loc_guard.value, loc_guard.region, expected, state);
+                        constrain_pattern(
+                            env,
+                            &loc_guard.value,
+                            loc_guard.region,
+                            expected,
+                            state,
+                            true,
+                        );
 
                         RecordField::Demanded(pat_type)
                     }
@@ -292,6 +307,9 @@ pub fn constrain_pattern(
             tag_name,
             arguments,
         } => {
+            if destruct_position {
+                // dbg!("destruct_position", at);
+            }
             let mut argument_types = Vec::with_capacity(arguments.len());
             for (index, (pattern_var, loc_pattern)) in arguments.iter().enumerate() {
                 state.vars.push(*pattern_var);
@@ -307,25 +325,42 @@ pub fn constrain_pattern(
                     pattern_type,
                     region,
                 );
-                constrain_pattern(env, &loc_pattern.value, loc_pattern.region, expected, state);
+                constrain_pattern(
+                    env,
+                    &loc_pattern.value,
+                    loc_pattern.region,
+                    expected,
+                    state,
+                    destruct_position,
+                );
             }
 
             let whole_con = Constraint::Eq(
                 Type::Variable(*whole_var),
                 Expected::NoExpectation(Type::TagUnion(
-                    vec![(tag_name.clone(), argument_types)],
+                    vec![(tag_name.clone(), argument_types.clone())],
                     Box::new(Type::Variable(*ext_var)),
                 )),
                 Category::Storage(std::file!(), std::line!()),
                 region,
             );
 
-            let tag_con = Constraint::Pattern(
-                region,
-                PatternCategory::Ctor(tag_name.clone()),
-                Type::Variable(*whole_var),
-                expected,
-            );
+            let tag_con = if destruct_position {
+                Constraint::TagPresent(
+                    expected.get_type(),
+                    PresenceConstraint::IncludesTag(tag_name.clone(), argument_types),
+                )
+            } else {
+                Constraint::Pattern(
+                    region,
+                    PatternCategory::Ctor(tag_name.clone()),
+                    Type::Variable(*whole_var),
+                    expected,
+                )
+            };
+            if destruct_position {
+                // dbg!(&tag_con);
+            }
 
             state.vars.push(*whole_var);
             state.vars.push(*ext_var);
