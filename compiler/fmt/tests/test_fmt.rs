@@ -14,7 +14,8 @@ mod test_fmt {
     use roc_parse::parser::{Parser, State};
     use roc_test_utils::assert_multiline_str_eq;
 
-    fn _expect_format_helper(input: &str, expected: &str) {
+    // Not intended to be used directly in tests; please use expr_formats_to or expr_formats_same
+    fn expect_format_helper(input: &str, expected: &str) {
         let arena = Bump::new();
         match roc_parse::test_helpers::parse_expr_with(&arena, input.trim()) {
             Ok(actual) => {
@@ -33,11 +34,11 @@ mod test_fmt {
         let expected = expected.trim_end();
 
         // First check that input formats to the expected version
-        _expect_format_helper(input, expected);
+        expect_format_helper(input, expected);
 
         // Parse the expected result format it, asserting that it doesn't change
         // It's important that formatting be stable / idempotent
-        _expect_format_helper(expected, expected);
+        expect_format_helper(expected, expected);
     }
 
     fn expr_formats_same(input: &str) {
