@@ -339,6 +339,7 @@ fn build_proc_symbol<'a>(
     procs.push((fn_name, section_id, proc_id, proc));
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_proc<'a, B: Backend<'a>>(
     output: &mut Object,
     backend: &mut B,
