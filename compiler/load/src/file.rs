@@ -764,12 +764,6 @@ impl<'a> MonomorphizedModule<'a> {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct VariablySizedLayouts<'a> {
-    rigids: MutMap<Lowercase, Layout<'a>>,
-    aliases: MutMap<Symbol, Layout<'a>>,
-}
-
 #[derive(Debug)]
 struct ParsedModule<'a> {
     module_id: ModuleId,
@@ -907,18 +901,6 @@ struct State<'a> {
     // since the unioning process could potentially take longer than the savings.
     // (Granted, this has not been attempted or measured!)
     pub layout_caches: std::vec::Vec<LayoutCache<'a>>,
-}
-
-#[derive(Debug)]
-struct UnsolvedModule<'a> {
-    module: Module,
-    src: &'a str,
-    imported_modules: MutSet<ModuleId>,
-    ident_ids: IdentIds,
-    constraint: Constraint,
-    var_store: VarStore,
-    module_timing: ModuleTiming,
-    declarations: Vec<Declaration>,
 }
 
 #[derive(Debug)]
