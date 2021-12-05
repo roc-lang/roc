@@ -1499,7 +1499,7 @@ fn set_reg64_help(op_code: u8, buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
 fn cvt_help(buf: &mut Vec<'_, u8>, op_code1: u8, op_code2: u8, reg1: u8, reg2: u8) {
     let rex = add_rm_extension(reg2, REX_W);
     let rex = add_reg_extension(reg1, rex);
-    let mod1 = reg1 % 8 << 3;
+    let mod1 = (reg1 % 8) << 3;
     let mod2 = reg2 % 8;
 
     buf.extend(&[op_code1, rex, 0x0F, op_code2, 0xC0 + mod1 + mod2])
