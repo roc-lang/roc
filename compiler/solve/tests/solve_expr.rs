@@ -88,7 +88,7 @@ mod solve_expr {
         let mut can_problems = can_problems.remove(&home).unwrap_or_default();
         let type_problems = type_problems.remove(&home).unwrap_or_default();
 
-        let mut subs = solved.inner_mut();
+        let subs = solved.inner_mut();
 
         //        assert!(can_problems.is_empty());
         //        assert!(type_problems.is_empty());
