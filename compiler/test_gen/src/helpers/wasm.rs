@@ -79,8 +79,9 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
 
     use roc_load::file::MonomorphizedModule;
     let MonomorphizedModule {
+        module_id,
         procedures,
-        interns,
+        mut interns,
         exposed_to_host,
         ..
     } = loaded;
@@ -114,12 +115,12 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
 
     let env = roc_gen_wasm::Env {
         arena,
-        interns,
+        module_id,
         exposed_to_host,
     };
 
     let (mut wasm_module, main_fn_index) =
-        roc_gen_wasm::build_module_help(&env, procedures).unwrap();
+        roc_gen_wasm::build_module_help(&env, &mut interns, procedures).unwrap();
 
     T::insert_test_wrapper(arena, &mut wasm_module, TEST_WRAPPER_NAME, main_fn_index);
 
@@ -136,7 +137,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     let store = Store::default();
 
     // Keep the final .wasm file for debugging with wasm-objdump or wasm2wat
-    const DEBUG_WASM_FILE: bool = true;
+    const DEBUG_WASM_FILE: bool = false;
 
     let wasmer_module = {
         let tmp_dir: TempDir; // directory for normal test runs, deleted when dropped
@@ -166,33 +167,42 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
         // write the module to a file so the linker can access it
         std::fs::write(&app_o_file, &module_bytes).unwrap();
 
-        let _linker_output = std::process::Command::new("zig")
-            .args(&[
-                "wasm-ld",
-                // input files
-                app_o_file.to_str().unwrap(),
-                bitcode::BUILTINS_WASM32_OBJ_PATH,
-                libc_a_file,
-                // output
-                "-o",
-                final_wasm_file.to_str().unwrap(),
-                // we don't define `_start`
-                "--no-entry",
-                // If you only specify test_wrapper, it will stop at the call to UserApp_main_1
-                // But if you specify both exports, you get all the dependencies.
-                //
-                // It seems that it will not write out an export you didn't explicitly specify,
-                // even if it's a dependency of another export!
-                // In our case we always export main and test_wrapper so that's OK.
-                "--export",
-                "test_wrapper",
-                "--export",
-                "#UserApp_main_1",
-            ])
+        let args = &[
+            "wasm-ld",
+            // input files
+            app_o_file.to_str().unwrap(),
+            bitcode::BUILTINS_WASM32_OBJ_PATH,
+            libc_a_file,
+            // output
+            "-o",
+            final_wasm_file.to_str().unwrap(),
+            // we don't define `_start`
+            "--no-entry",
+            // If you only specify test_wrapper, it will stop at the call to UserApp_main_1
+            // But if you specify both exports, you get all the dependencies.
+            //
+            // It seems that it will not write out an export you didn't explicitly specify,
+            // even if it's a dependency of another export!
+            // In our case we always export main and test_wrapper so that's OK.
+            "--export",
+            "test_wrapper",
+            "--export",
+            "#UserApp_main_1",
+        ];
+
+        let linker_output = std::process::Command::new("zig")
+            .args(args)
             .output()
             .unwrap();
 
-        // dbg!(_linker_output);
+        if !linker_output.status.success() {
+            print!("\nLINKER FAILED\n");
+            for arg in args {
+                print!("{} ", arg);
+            }
+            println!("\n{}", std::str::from_utf8(&linker_output.stdout).unwrap());
+            println!("{}", std::str::from_utf8(&linker_output.stderr).unwrap());
+        }
 
         Module::from_file(&store, &final_wasm_file).unwrap()
     };

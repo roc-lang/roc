@@ -37,8 +37,8 @@ static_assertions::assert_eq_size!([u8; 19 * 8], Stmt);
 #[cfg(target_arch = "aarch64")]
 static_assertions::assert_eq_size!([u8; 20 * 8], Stmt);
 static_assertions::assert_eq_size!([u8; 6 * 8], ProcLayout);
-static_assertions::assert_eq_size!([u8; 8 * 8], Call);
-static_assertions::assert_eq_size!([u8; 6 * 8], CallType);
+static_assertions::assert_eq_size!([u8; 7 * 8], Call);
+static_assertions::assert_eq_size!([u8; 5 * 8], CallType);
 
 macro_rules! return_on_layout_error {
     ($env:expr, $layout_result:expr) => {
@@ -318,11 +318,17 @@ impl<'a> Proc<'a> {
         arena: &'a Bump,
         home: ModuleId,
         ident_ids: &'i mut IdentIds,
+        update_mode_ids: &'i mut UpdateModeIds,
         procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
     ) {
         for (_, proc) in procs.iter_mut() {
-            let new_proc =
-                crate::reset_reuse::insert_reset_reuse(arena, home, ident_ids, proc.clone());
+            let new_proc = crate::reset_reuse::insert_reset_reuse(
+                arena,
+                home,
+                ident_ids,
+                update_mode_ids,
+                proc.clone(),
+            );
             *proc = new_proc;
         }
     }
@@ -988,8 +994,8 @@ pub struct Env<'a, 'i> {
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
     pub ptr_bytes: u32,
-    pub update_mode_counter: u64,
-    pub call_specialization_counter: u64,
+    pub update_mode_ids: &'i mut UpdateModeIds,
+    pub call_specialization_counter: u32,
 }
 
 impl<'a, 'i> Env<'a, 'i> {
@@ -1000,13 +1006,7 @@ impl<'a, 'i> Env<'a, 'i> {
     }
 
     pub fn next_update_mode_id(&mut self) -> UpdateModeId {
-        let id = UpdateModeId {
-            id: self.update_mode_counter,
-        };
-
-        self.update_mode_counter += 1;
-
-        id
+        self.update_mode_ids.next_id()
     }
 
     pub fn next_call_specialization_id(&mut self) -> CallSpecId {
@@ -1282,23 +1282,48 @@ impl<'a> Call<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CallSpecId {
-    id: u64,
+    id: u32,
 }
 
 impl CallSpecId {
-    pub fn to_bytes(self) -> [u8; 8] {
+    pub fn to_bytes(self) -> [u8; 4] {
         self.id.to_ne_bytes()
     }
+
+    /// Dummy value for generating refcount helper procs in the backends
+    /// This happens *after* specialization so it's safe
+    pub const BACKEND_DUMMY: Self = Self { id: 0 };
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UpdateModeId {
-    id: u64,
+    id: u32,
 }
 
 impl UpdateModeId {
-    pub fn to_bytes(self) -> [u8; 8] {
+    pub fn to_bytes(self) -> [u8; 4] {
         self.id.to_ne_bytes()
+    }
+
+    /// Dummy value for generating refcount helper procs in the backends
+    /// This happens *after* alias analysis so it's safe
+    pub const BACKEND_DUMMY: Self = Self { id: 0 };
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UpdateModeIds {
+    next: u32,
+}
+
+impl UpdateModeIds {
+    pub const fn new() -> Self {
+        Self { next: 0 }
+    }
+
+    pub fn next_id(&mut self) -> UpdateModeId {
+        let id = UpdateModeId { id: self.next };
+        self.next += 1;
+        id
     }
 }
 
@@ -1321,31 +1346,35 @@ pub enum CallType<'a> {
     HigherOrder(&'a HigherOrderLowLevel<'a>),
 }
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct PassedFunction<'a> {
+    /// name of the top-level function that is passed as an argument
+    /// e.g. in `List.map xs Num.abs` this would be `Num.abs`
+    pub name: Symbol,
+
+    pub argument_layouts: &'a [Layout<'a>],
+    pub return_layout: Layout<'a>,
+
+    pub specialization_id: CallSpecId,
+
+    /// Symbol of the environment captured by the function argument
+    pub captured_environment: Symbol,
+
+    pub owns_captured_environment: bool,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct HigherOrderLowLevel<'a> {
     pub op: crate::low_level::HigherOrder,
+
+    /// TODO I _think_  we can get rid of this, perhaps only keeping track of
     /// the layout of the closure argument, if any
     pub closure_env_layout: Option<Layout<'a>>,
-
-    /// name of the top-level function that is passed as an argument
-    /// e.g. in `List.map xs Num.abs` this would be `Num.abs`
-    pub function_name: Symbol,
-
-    /// Symbol of the environment captured by the function argument
-    pub function_env: Symbol,
-
-    /// does the function argument need to own the closure data
-    pub function_owns_closure_data: bool,
-
-    /// specialization id of the function argument, used for name generation
-    pub specialization_id: CallSpecId,
 
     /// update mode of the higher order lowlevel itself
     pub update_mode: UpdateModeId,
 
-    /// function layout, used for name generation
-    pub arg_layouts: &'a [Layout<'a>],
-    pub ret_layout: Layout<'a>,
+    pub passed_function: PassedFunction<'a>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1390,13 +1419,17 @@ pub enum Expr<'a> {
     Reuse {
         symbol: Symbol,
         update_tag_id: bool,
+        update_mode: UpdateModeId,
         // normal Tag fields
         tag_layout: UnionLayout<'a>,
         tag_name: TagName,
         tag_id: TagIdIntType,
         arguments: &'a [Symbol],
     },
-    Reset(Symbol),
+    Reset {
+        symbol: Symbol,
+        update_mode: UpdateModeId,
+    },
 
     RuntimeErrorFunction(&'a str),
 }
@@ -1491,6 +1524,7 @@ impl<'a> Expr<'a> {
                 symbol,
                 tag_name,
                 arguments,
+                update_mode,
                 ..
             } => {
                 let doc_tag = match tag_name {
@@ -1508,11 +1542,19 @@ impl<'a> Expr<'a> {
                     .text("Reuse ")
                     .append(symbol_to_doc(alloc, *symbol))
                     .append(alloc.space())
+                    .append(format!("{:?}", update_mode))
+                    .append(alloc.space())
                     .append(doc_tag)
                     .append(alloc.space())
                     .append(alloc.intersperse(it, " "))
             }
-            Reset(symbol) => alloc.text("Reset ").append(symbol_to_doc(alloc, *symbol)),
+            Reset {
+                symbol,
+                update_mode,
+            } => alloc.text(format!(
+                "Reset {{ symbol: {:?}, id: {} }}",
+                symbol, update_mode.id
+            )),
 
             Struct(args) => {
                 let it = args.iter().map(|s| symbol_to_doc(alloc, *s));
@@ -1556,6 +1598,17 @@ impl<'a> Expr<'a> {
                 .text(format!("UnionAtIndex (Id {}) (Index {}) ", tag_id, index))
                 .append(symbol_to_doc(alloc, *structure)),
         }
+    }
+
+    pub fn to_pretty(&self, width: usize) -> String {
+        let allocator = BoxAllocator;
+        let mut w = std::vec::Vec::new();
+        self.to_doc::<_, ()>(&allocator)
+            .1
+            .render(width, &mut w)
+            .unwrap();
+        w.push(b'\n');
+        String::from_utf8(w).unwrap()
     }
 }
 
@@ -4144,16 +4197,21 @@ pub fn with_hole<'a>(
                                 op,
                                 closure_data_symbol,
                                 |(top_level_function, closure_data, closure_env_layout,  specialization_id, update_mode)| {
+                                    let passed_function = PassedFunction {
+                                        name: top_level_function,
+                                        captured_environment: closure_data_symbol,
+                                        owns_captured_environment: false,
+                                        specialization_id,
+                                        argument_layouts: arg_layouts,
+                                        return_layout: ret_layout,
+                                    };
+
+
                                     let higher_order = HigherOrderLowLevel {
                                         op: crate::low_level::HigherOrder::$ho { $($x,)* },
                                         closure_env_layout,
-                                        specialization_id,
                                         update_mode,
-                                        function_owns_closure_data: false,
-                                        function_env: closure_data_symbol,
-                                        function_name: top_level_function,
-                                        arg_layouts,
-                                        ret_layout,
+                                        passed_function,
                                     };
 
                                     self::Call {
@@ -5715,7 +5773,7 @@ fn substitute_in_expr<'a>(
             }
         }
 
-        Reuse { .. } | Reset(_) => unreachable!("reset/reuse have not been introduced yet"),
+        Reuse { .. } | Reset { .. } => unreachable!("reset/reuse have not been introduced yet"),
 
         Struct(args) => {
             let mut did_change = false;

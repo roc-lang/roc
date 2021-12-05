@@ -139,7 +139,12 @@ impl<'a> Formattable<'a> for Expr<'a> {
                     sub_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
                 } else {
                     buf.push('(');
-                    sub_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
+                    sub_expr.format_with_options(
+                        buf,
+                        Parens::NotNeeded,
+                        Newlines::Yes,
+                        indent + INDENT,
+                    );
                     buf.push(')');
                 }
             }
@@ -576,8 +581,10 @@ fn fmt_when<'a>(
     while let Some(branch) = it.next() {
         let patterns = &branch.patterns;
         let expr = &branch.value;
-        add_spaces(buf, indent + INDENT);
         let (first_pattern, rest) = patterns.split_first().unwrap();
+        if !has_newline_before(&first_pattern.value) {
+            add_spaces(buf, indent + INDENT);
+        }
         let is_multiline = match rest.last() {
             None => false,
             Some(last_pattern) => first_pattern.region.start_line != last_pattern.region.end_line,
@@ -591,12 +598,9 @@ fn fmt_when<'a>(
         );
         for when_pattern in rest {
             if is_multiline {
-                buf.push_str("\n");
-                add_spaces(buf, indent + INDENT);
-                buf.push_str("| ");
-            } else {
-                buf.push_str(" | ");
+                newline(buf, indent + INDENT);
             }
+            buf.push_str(" | ");
             fmt_pattern(buf, &when_pattern.value, indent + INDENT, Parens::NotNeeded);
         }
 
@@ -605,9 +609,9 @@ fn fmt_when<'a>(
             guard_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent + INDENT);
         }
 
-        buf.push_str(" ->\n");
+        buf.push_str(" ->");
+        newline(buf, indent + INDENT * 2);
 
-        add_spaces(buf, indent + (INDENT * 2));
         match expr.value {
             Expr::SpaceBefore(nested, spaces) => {
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent + (INDENT * 2));
@@ -632,6 +636,16 @@ fn fmt_when<'a>(
             buf.push('\n');
             buf.push('\n');
         }
+    }
+}
+
+fn has_newline_before(value: &Pattern) -> bool {
+    match value {
+        Pattern::SpaceAfter(v, _) => has_newline_before(v),
+        Pattern::SpaceBefore(v, spaces) => {
+            v.is_multiline() && spaces.last().map(|s| s.is_newline()).unwrap_or(false)
+        }
+        _ => false,
     }
 }
 
@@ -1098,6 +1112,7 @@ fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
                     BinOp::Pizza | BinOp::Assignment | BinOp::HasType | BinOp::Backpassing => false,
                 })
         }
+        Expr::If(_, _) => true,
         _ => false,
     }
 }

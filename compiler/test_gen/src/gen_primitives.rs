@@ -996,7 +996,7 @@ fn annotation_without_body() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn simple_closure() {
     assert_evals_to!(
         indoc!(
@@ -2602,7 +2602,7 @@ fn hit_unresolved_type_variable() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn pattern_match_empty_record() {
     assert_evals_to!(
         indoc!(

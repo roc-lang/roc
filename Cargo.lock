@@ -126,15 +126,6 @@ name = "arena-pool"
 version = "0.1.0"
 
 [[package]]
-name = "arraystring"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d517c467117e1d8ca795bc8cc90857ff7f79790cca0e26f6e9462694ece0185"
-dependencies = [
- "typenum",
-]
-
-[[package]]
 name = "arrayvec"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3144,7 +3135,7 @@ dependencies = [
 name = "roc_ast"
 version = "0.1.0"
 dependencies = [
- "arraystring",
+ "arrayvec 0.7.2",
  "bumpalo",
  "indoc",
  "libc",
@@ -3327,7 +3318,7 @@ dependencies = [
 name = "roc_editor"
 version = "0.1.0"
 dependencies = [
- "arraystring",
+ "arrayvec 0.7.2",
  "bumpalo",
  "bytemuck",
  "cgmath",
@@ -3383,6 +3374,7 @@ dependencies = [
  "roc_module",
  "roc_parse",
  "roc_region",
+ "roc_test_utils",
 ]
 
 [[package]]
@@ -3400,6 +3392,7 @@ dependencies = [
  "roc_parse",
  "roc_problem",
  "roc_region",
+ "roc_reporting",
  "roc_solve",
  "roc_std",
  "roc_types",
@@ -3524,9 +3517,7 @@ dependencies = [
 name = "roc_parse"
 version = "0.1.0"
 dependencies = [
- "ansi_term",
  "bumpalo",
- "diff",
  "encode_unicode",
  "indoc",
  "pretty_assertions",
@@ -3535,6 +3526,7 @@ dependencies = [
  "roc_collections",
  "roc_module",
  "roc_region",
+ "roc_test_utils",
 ]
 
 [[package]]
@@ -3598,6 +3590,13 @@ dependencies = [
 [[package]]
 name = "roc_std"
 version = "0.1.0"
+
+[[package]]
+name = "roc_test_utils"
+version = "0.1.0"
+dependencies = [
+ "pretty_assertions",
+]
 
 [[package]]
 name = "roc_types"

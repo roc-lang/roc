@@ -3,11 +3,12 @@ use bumpalo::{self, collections::Vec};
 use code_builder::Align;
 use roc_collections::all::MutMap;
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{Interns, Symbol};
+use roc_mono::gen_refcount::{RefcountProcGenerator, REFCOUNT_MAX};
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
-use crate::layout::{StackMemoryFormat, WasmLayout};
+use crate::layout::{CallConv, ReturnMethod, WasmLayout};
 use crate::low_level::{decode_low_level, LowlevelBuildResult};
 use crate::storage::{Storage, StoredValue, StoredValueKind};
 use crate::wasm_module::linking::{
@@ -20,7 +21,7 @@ use crate::wasm_module::sections::{
 };
 use crate::wasm_module::{
     code_builder, BlockType, CodeBuilder, ConstExpr, Export, ExportType, Global, GlobalType,
-    LocalId, Signature, SymInfo, ValueType,
+    LinkingSubSection, LocalId, Signature, SymInfo, ValueType,
 };
 use crate::{
     copy_memory, CopyMemoryConfig, Env, BUILTINS_IMPORT_MODULE_NAME, MEMORY_NAME, PTR_SIZE,
@@ -37,18 +38,21 @@ const CONST_SEGMENT_INDEX: usize = 0;
 
 pub struct WasmBackend<'a> {
     env: &'a Env<'a>,
+    interns: &'a mut Interns,
 
     // Module-level data
-    pub module: WasmModule<'a>,
+    module: WasmModule<'a>,
     layout_ids: LayoutIds<'a>,
     constant_sym_index_map: MutMap<&'a str, usize>,
     builtin_sym_index_map: MutMap<&'a str, usize>,
-    proc_symbols: Vec<'a, Symbol>,
-    pub linker_symbols: Vec<'a, SymInfo>,
+    proc_symbols: Vec<'a, (Symbol, u32)>,
+    linker_symbols: Vec<'a, SymInfo>,
+    refcount_proc_gen: RefcountProcGenerator<'a>,
 
     // Function-level data
     code_builder: CodeBuilder<'a>,
     storage: Storage<'a>,
+    symbol_layouts: MutMap<Symbol, Layout<'a>>,
 
     /// how many blocks deep are we (used for jumps)
     block_depth: u32,
@@ -58,10 +62,12 @@ pub struct WasmBackend<'a> {
 impl<'a> WasmBackend<'a> {
     pub fn new(
         env: &'a Env<'a>,
+        interns: &'a mut Interns,
         layout_ids: LayoutIds<'a>,
-        proc_symbols: Vec<'a, Symbol>,
+        proc_symbols: Vec<'a, (Symbol, u32)>,
         mut linker_symbols: Vec<'a, SymInfo>,
         mut exports: Vec<'a, Export>,
+        refcount_proc_gen: RefcountProcGenerator<'a>,
     ) -> Self {
         const MEMORY_INIT_SIZE: u32 = 1024 * 1024;
         let arena = env.arena;
@@ -124,6 +130,7 @@ impl<'a> WasmBackend<'a> {
 
         WasmBackend {
             env,
+            interns,
 
             // Module-level data
             module,
@@ -133,14 +140,46 @@ impl<'a> WasmBackend<'a> {
             builtin_sym_index_map: MutMap::default(),
             proc_symbols,
             linker_symbols,
+            refcount_proc_gen,
 
             // Function-level data
             block_depth: 0,
             joinpoint_label_map: MutMap::default(),
             code_builder: CodeBuilder::new(arena),
             storage: Storage::new(arena),
+            symbol_layouts: MutMap::default(),
         }
     }
+
+    pub fn generate_refcount_procs(&mut self) -> Vec<'a, Proc<'a>> {
+        let ident_ids = self
+            .interns
+            .all_ident_ids
+            .get_mut(&self.env.module_id)
+            .unwrap();
+
+        self.refcount_proc_gen
+            .generate_refcount_procs(self.env.arena, ident_ids)
+    }
+
+    pub fn finalize_module(mut self) -> WasmModule<'a> {
+        let symbol_table = LinkingSubSection::SymbolTable(self.linker_symbols);
+        self.module.linking.subsections.push(symbol_table);
+        self.module
+    }
+
+    /// Register the debug names of Symbols in a global lookup table
+    /// so that they have meaningful names when you print them.
+    /// Particularly useful after generating IR for refcount procedures
+    #[cfg(debug_assertions)]
+    pub fn register_symbol_debug_names(&self) {
+        let module_id = self.env.module_id;
+        let ident_ids = self.interns.all_ident_ids.get(&module_id).unwrap();
+        self.env.module_id.register_debug_idents(ident_ids);
+    }
+
+    #[cfg(not(debug_assertions))]
+    pub fn register_symbol_debug_names(&self) {}
 
     /// Reset function-level data
     fn reset(&mut self) {
@@ -151,6 +190,7 @@ impl<'a> WasmBackend<'a> {
 
         self.storage.clear();
         self.joinpoint_label_map.clear();
+        self.symbol_layouts.clear();
         assert_eq!(self.block_depth, 0);
     }
 
@@ -160,32 +200,36 @@ impl<'a> WasmBackend<'a> {
 
     ***********************************************************/
 
-    pub fn build_proc(&mut self, proc: Proc<'a>, _sym: Symbol) -> Result<(), String> {
-        // println!("\ngenerating procedure {:?}\n", _sym);
+    pub fn build_proc(&mut self, proc: &Proc<'a>) -> Result<(), String> {
+        // println!("\ngenerating procedure {:?}\n", proc.name);
 
-        self.start_proc(&proc);
+        self.start_proc(proc);
 
         self.build_stmt(&proc.body, &proc.ret_layout)?;
 
         self.finalize_proc()?;
         self.reset();
 
-        // println!("\nfinished generating {:?}\n", _sym);
+        // println!("\nfinished generating {:?}\n", proc.name);
 
         Ok(())
     }
 
     fn start_proc(&mut self, proc: &Proc<'a>) {
         let ret_layout = WasmLayout::new(&proc.ret_layout);
-        let ret_type = if ret_layout.is_stack_memory() {
-            self.storage.arg_types.push(PTR_TYPE);
-            self.start_block(BlockType::NoResult); // block to ensure all paths pop stack memory (if any)
-            None
-        } else {
-            let ty = ret_layout.value_type();
-            self.start_block(BlockType::Value(ty)); // block to ensure all paths pop stack memory (if any)
-            Some(ty)
+
+        let ret_type = match ret_layout.return_method() {
+            ReturnMethod::Primitive(ty) => Some(ty),
+            ReturnMethod::NoReturnValue => None,
+            ReturnMethod::WriteToPointerArg => {
+                self.storage.arg_types.push(PTR_TYPE);
+                None
+            }
         };
+
+        // Create a block so we can exit the function without skipping stack frame "pop" code.
+        // We never use the `return` instruction. Instead, we break from this block.
+        self.start_block(BlockType::from(ret_type));
 
         for (layout, symbol) in proc.args {
             let arg_layout = WasmLayout::new(layout);
@@ -219,10 +263,9 @@ impl<'a> WasmBackend<'a> {
 
     ***********************************************************/
 
-    /// start a loop that leaves a value on the stack
-    fn start_loop_with_return(&mut self, value_type: ValueType) {
+    fn start_loop(&mut self, block_type: BlockType) {
         self.block_depth += 1;
-        self.code_builder.loop_(BlockType::Value(value_type));
+        self.code_builder.loop_(block_type);
     }
 
     fn start_block(&mut self, block_type: BlockType) {
@@ -240,6 +283,8 @@ impl<'a> WasmBackend<'a> {
             Stmt::Let(_, _, _, _) => {
                 let mut current_stmt = stmt;
                 while let Stmt::Let(sym, expr, layout, following) = current_stmt {
+                    // println!("let {:?} = {}", sym, expr.to_pretty(200)); // ignore `following`! Too confusing otherwise.
+
                     let wasm_layout = WasmLayout::new(layout);
 
                     let kind = match following {
@@ -264,6 +309,8 @@ impl<'a> WasmBackend<'a> {
                             },
                         );
                     }
+
+                    self.symbol_layouts.insert(*sym, *layout);
 
                     current_stmt = *following;
                 }
@@ -335,7 +382,7 @@ impl<'a> WasmBackend<'a> {
                 }
 
                 let is_bool = matches!(cond_layout, Layout::Builtin(Builtin::Bool));
-                let cond_type = WasmLayout::new(cond_layout).value_type();
+                let cond_type = WasmLayout::new(cond_layout).arg_types(CallConv::C)[0];
 
                 // then, we jump whenever the value under scrutiny is equal to the value of a branch
                 for (i, (value, _, _)) in branches.iter().enumerate() {
@@ -419,10 +466,14 @@ impl<'a> WasmBackend<'a> {
 
                 self.end_block();
 
-                // A `return` inside of a `loop` seems to make it so that the `loop` itself
-                // also "returns" (so, leaves on the stack) a value of the return type.
-                let return_wasm_layout = WasmLayout::new(ret_layout);
-                self.start_loop_with_return(return_wasm_layout.value_type());
+                // A loop (or any block) needs to declare the type of the value it leaves on the stack on exit.
+                // The runtime needs this to statically validate the program before running it.
+                let loop_block_type = match WasmLayout::new(ret_layout).return_method() {
+                    ReturnMethod::Primitive(ty) => BlockType::Value(ty),
+                    ReturnMethod::WriteToPointerArg => BlockType::NoResult,
+                    ReturnMethod::NoReturnValue => BlockType::NoResult,
+                };
+                self.start_loop(loop_block_type);
 
                 self.build_stmt(body, ret_layout)?;
 
@@ -451,9 +502,46 @@ impl<'a> WasmBackend<'a> {
                 Ok(())
             }
 
-            Stmt::Refcounting(_modify, following) => {
-                // TODO: actually deal with refcounting. For hello world, we just skipped it.
-                self.build_stmt(following, ret_layout)?;
+            Stmt::Refcounting(modify, following) => {
+                let value = modify.get_symbol();
+                let layout = self.symbol_layouts.get(&value).unwrap();
+
+                let ident_ids = self
+                    .interns
+                    .all_ident_ids
+                    .get_mut(&self.env.module_id)
+                    .unwrap();
+
+                let (rc_stmt, new_proc_info) = self
+                    .refcount_proc_gen
+                    .expand_refcount_stmt(ident_ids, *layout, modify, *following);
+
+                if false {
+                    self.register_symbol_debug_names();
+                    println!("## rc_stmt:\n{}\n{:?}", rc_stmt.to_pretty(200), rc_stmt);
+                }
+
+                // If we're creating a new RC procedure, we need to store its symbol data,
+                // so that we can correctly generate calls to it.
+                if let Some((rc_proc_sym, rc_proc_layout)) = new_proc_info {
+                    let wasm_fn_index = self.proc_symbols.len() as u32;
+                    let linker_sym_index = self.linker_symbols.len() as u32;
+
+                    let name = self
+                        .layout_ids
+                        .get_toplevel(rc_proc_sym, &rc_proc_layout)
+                        .to_symbol_string(rc_proc_sym, self.interns);
+
+                    self.proc_symbols.push((rc_proc_sym, linker_sym_index));
+                    self.linker_symbols
+                        .push(SymInfo::Function(WasmObjectSymbol::Defined {
+                            flags: 0,
+                            index: wasm_fn_index,
+                            name,
+                        }));
+                }
+
+                self.build_stmt(&rc_stmt, ret_layout)?;
                 Ok(())
             }
 
@@ -488,45 +576,35 @@ impl<'a> WasmBackend<'a> {
                         return self.build_low_level(lowlevel, arguments, *sym, wasm_layout);
                     }
 
-                    let mut wasm_args_tmp: Vec<Symbol>;
-                    let (wasm_args, has_return_val) = match wasm_layout {
-                        WasmLayout::StackMemory { .. } => {
-                            wasm_args_tmp =
-                                Vec::with_capacity_in(arguments.len() + 1, self.env.arena);
-                            wasm_args_tmp.push(*sym);
-                            wasm_args_tmp.extend_from_slice(*arguments);
-                            (wasm_args_tmp.as_slice(), false)
-                        }
-                        _ => (*arguments, true),
-                    };
-
-                    self.storage.load_symbols(&mut self.code_builder, wasm_args);
-
-                    // Index of the called function in the code section. Assumes all functions end up in the binary.
-                    // (We may decide to keep all procs even if calls are inlined, in case platform calls them)
-                    let func_index = match self.proc_symbols.iter().position(|s| s == func_sym) {
-                        Some(i) => i as u32,
-                        None => {
-                            // TODO: actually useful linking! Push a relocation for it.
-                            return Err(format!(
-                                "Not yet supported: calling foreign function {:?}",
-                                func_sym
-                            ));
-                        }
-                    };
-
-                    // Index of the function's name in the symbol table
-                    // Same as the function index since those are the first symbols we add
-                    let symbol_index = func_index;
-
-                    self.code_builder.call(
-                        func_index,
-                        symbol_index,
-                        wasm_args.len(),
-                        has_return_val,
+                    let (param_types, ret_type) = self.storage.load_symbols_for_call(
+                        self.env.arena,
+                        &mut self.code_builder,
+                        arguments,
+                        *sym,
+                        &wasm_layout,
+                        CallConv::C,
                     );
 
-                    Ok(())
+                    for (func_index, (ir_sym, linker_sym_index)) in
+                        self.proc_symbols.iter().enumerate()
+                    {
+                        if ir_sym == func_sym {
+                            let num_wasm_args = param_types.len();
+                            let has_return_val = ret_type.is_some();
+                            self.code_builder.call(
+                                func_index as u32,
+                                *linker_sym_index,
+                                num_wasm_args,
+                                has_return_val,
+                            );
+                            return Ok(());
+                        }
+                    }
+
+                    unreachable!(
+                        "Could not find procedure {:?}\nKnown procedures: {:?}",
+                        func_sym, self.proc_symbols
+                    );
                 }
 
                 CallType::LowLevel { op: lowlevel, .. } => {
@@ -561,6 +639,27 @@ impl<'a> WasmBackend<'a> {
                 Ok(())
             }
 
+            Expr::Array { .. } => Err(format!("Expression is not yet implemented {:?}", 2)),
+
+            Expr::EmptyArray => {
+                if let StoredValue::StackMemory { location, .. } = storage {
+                    let (local_id, offset) =
+                        location.local_and_offset(self.storage.stack_frame_pointer);
+
+                    // This is a minor cheat. We only need the first two 32 bit
+                    // chunks here. We fill both chunks with zeros, so we
+                    // can simplify things to a single group of 64 bit operations instead of
+                    // doing the below twice for 32 bits.
+                    self.code_builder.get_local(local_id);
+                    self.code_builder.i64_const(0);
+                    self.code_builder.i64_store(Align::Bytes4, offset);
+
+                    Ok(())
+                } else {
+                    unreachable!("Unexpected storage for {:?}", sym)
+                }
+            }
+
             x => Err(format!("Expression is not yet implemented {:?}", x)),
         }
     }
@@ -572,14 +671,13 @@ impl<'a> WasmBackend<'a> {
         return_sym: Symbol,
         return_layout: WasmLayout,
     ) -> Result<(), String> {
-        // Load symbols using the "fast calling convention" that Zig uses instead of the C ABI we normally use.
-        // It's only different from the C ABI for small structs, and we are using Zig for all of those cases.
-        // This is a workaround for a bug in Zig. If later versions fix it, we can change to the C ABI.
-        self.storage.load_symbols_fastcc(
+        let (param_types, ret_type) = self.storage.load_symbols_for_call(
+            self.env.arena,
             &mut self.code_builder,
             arguments,
             return_sym,
             &return_layout,
+            CallConv::Zig,
         );
 
         let build_result = decode_low_level(
@@ -594,7 +692,7 @@ impl<'a> WasmBackend<'a> {
         match build_result {
             Done => Ok(()),
             BuiltinCall(name) => {
-                self.call_zig_builtin(name, arguments, &return_layout);
+                self.call_zig_builtin(name, param_types, ret_type);
                 Ok(())
             }
             NotImplemented => Err(format!(
@@ -611,7 +709,7 @@ impl<'a> WasmBackend<'a> {
         sym: Symbol,
         layout: &Layout<'a>,
     ) -> Result<(), String> {
-        let not_supported_error = || Err(format!("Literal value {:?} is not yet implemented", lit));
+        let not_supported_error = || panic!("Literal value {:?} is not yet implemented", lit);
 
         match storage {
             StoredValue::VirtualMachineStack { value_type, .. } => {
@@ -655,6 +753,8 @@ impl<'a> WasmBackend<'a> {
                         stack_mem_bytes[7] = 0x80 | (len as u8);
                         let str_as_int = i64::from_le_bytes(stack_mem_bytes);
 
+                        // Write all 8 bytes at once using an i64
+                        // Str is normally two i32's, but in this special case, we can get away with fewer instructions
                         self.code_builder.get_local(local_id);
                         self.code_builder.i64_const(str_as_int);
                         self.code_builder.i64_store(Align::Bytes4, offset);
@@ -712,10 +812,13 @@ impl<'a> WasmBackend<'a> {
             None => {
                 let const_segment_bytes = &mut self.module.data.segments[CONST_SEGMENT_INDEX].init;
 
-                // Store the string in the data section, to be loaded on module instantiation
-                // RocStr `elements` field will point to that constant data, not the heap
-                let segment_offset = const_segment_bytes.len() as u32;
-                let elements_addr = segment_offset + CONST_SEGMENT_BASE_ADDR;
+                // Store the string in the data section
+                // Prefix it with a special refcount value (treated as "infinity")
+                // The string's `elements` field points at the data after the refcount
+                let refcount_max_bytes: [u8; 4] = (REFCOUNT_MAX as i32).to_le_bytes();
+                const_segment_bytes.extend_from_slice(&refcount_max_bytes);
+                let elements_offset = const_segment_bytes.len() as u32;
+                let elements_addr = elements_offset + CONST_SEGMENT_BASE_ADDR;
                 const_segment_bytes.extend_from_slice(string.as_bytes());
 
                 // Generate linker info
@@ -723,12 +826,12 @@ impl<'a> WasmBackend<'a> {
                 let name = self
                     .layout_ids
                     .get(sym, layout)
-                    .to_symbol_string(sym, &self.env.interns);
+                    .to_symbol_string(sym, self.interns);
                 let linker_symbol = SymInfo::Data(DataSymbol::Defined {
                     flags: 0,
                     name,
                     segment_index: CONST_SEGMENT_INDEX as u32,
-                    segment_offset,
+                    segment_offset: elements_offset,
                     size: string.len() as u32,
                 });
 
@@ -767,7 +870,9 @@ impl<'a> WasmBackend<'a> {
                             );
                         }
                     } else {
-                        return Err(format!("Not supported yet: zero-size struct at {:?}", sym));
+                        // Zero-size struct. No code to emit.
+                        // These values are purely conceptual, they only exist internally in the compiler
+                        return Ok(());
                     }
                 }
                 _ => {
@@ -789,7 +894,15 @@ impl<'a> WasmBackend<'a> {
     /// Generate a call instruction to a Zig builtin function.
     /// And if we haven't seen it before, add an Import and linker data for it.
     /// Zig calls use LLVM's "fast" calling convention rather than our usual C ABI.
-    fn call_zig_builtin(&mut self, name: &'a str, arguments: &[Symbol], ret_layout: &WasmLayout) {
+    fn call_zig_builtin(
+        &mut self,
+        name: &'a str,
+        param_types: Vec<'a, ValueType>,
+        ret_type: Option<ValueType>,
+    ) {
+        let num_wasm_args = param_types.len();
+        let has_return_val = ret_type.is_some();
+
         let (fn_index, linker_symbol_index) = match self.builtin_sym_index_map.get(name) {
             Some(sym_idx) => match &self.linker_symbols[*sym_idx] {
                 SymInfo::Function(WasmObjectSymbol::Imported { index, .. }) => {
@@ -799,51 +912,14 @@ impl<'a> WasmBackend<'a> {
             },
 
             None => {
-                let mut param_types = Vec::with_capacity_in(1 + arguments.len(), self.env.arena);
-
-                let ret_type = if ret_layout.is_stack_memory() {
-                    param_types.push(ValueType::I32);
-                    None
-                } else {
-                    Some(ret_layout.value_type())
-                };
-
-                for arg in arguments {
-                    match self.storage.get(arg) {
-                        StoredValue::StackMemory { size, format, .. } => {
-                            use StackMemoryFormat::*;
-
-                            match format {
-                                Aggregate => {
-                                    // Zig's "fast calling convention" packs structs into CPU registers
-                                    // (stack machine slots) if possible.  If they're small enough they
-                                    // can go into an I32 or I64. If they're big, they're pointers (I32).
-                                    if *size > 4 && *size <= 8 {
-                                        param_types.push(ValueType::I64)
-                                    } else {
-                                        // either
-                                        //
-                                        // - this is a small value, that fits in an i32
-                                        // - this is a big value, we pass a memory address
-                                        param_types.push(ValueType::I32)
-                                    }
-                                }
-                                Int128 | Float128 | Decimal => {
-                                    // these types are passed as 2 i64s
-                                    param_types.push(ValueType::I64);
-                                    param_types.push(ValueType::I64);
-                                }
-                            }
-                        }
-                        stored => param_types.push(stored.value_type()),
-                    }
-                }
-
-                let signature_index = self.module.types.insert(Signature {
+                // Wasm function signature
+                let signature = Signature {
                     param_types,
                     ret_type,
-                });
+                };
+                let signature_index = self.module.types.insert(signature);
 
+                // Declare it as an import since it comes from a different .o file
                 let import_index = self.module.import.entries.len() as u32;
                 let import = Import {
                     module: BUILTINS_IMPORT_MODULE_NAME,
@@ -852,22 +928,22 @@ impl<'a> WasmBackend<'a> {
                 };
                 self.module.import.entries.push(import);
 
+                // Provide symbol information for the linker
                 let sym_idx = self.linker_symbols.len();
                 let sym_info = SymInfo::Function(WasmObjectSymbol::Imported {
                     flags: WASM_SYM_UNDEFINED,
                     index: import_index,
                 });
                 self.linker_symbols.push(sym_info);
+
+                // Remember that we have created all of this data, and don't need to do it again
                 self.builtin_sym_index_map.insert(name, sym_idx);
 
                 (import_index, sym_idx as u32)
             }
         };
-        self.code_builder.call(
-            fn_index,
-            linker_symbol_index,
-            arguments.len(),
-            true, // TODO: handle builtins with no return value
-        );
+
+        self.code_builder
+            .call(fn_index, linker_symbol_index, num_wasm_args, has_return_val);
     }
 }

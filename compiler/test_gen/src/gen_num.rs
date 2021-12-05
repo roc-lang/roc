@@ -520,7 +520,7 @@ fn f64_log_negative() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn f64_round() {
     assert_evals_to!("Num.round 3.6", 4, i64);
     assert_evals_to!("Num.round 3.4", 3, i64);
@@ -813,7 +813,7 @@ fn gen_add_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_sub_dec() {
     assert_evals_to!(
         indoc!(
@@ -1171,7 +1171,7 @@ fn gen_order_of_arithmetic_ops_complex_float() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn if_guard_bind_variable_false() {
     assert_evals_to!(
         indoc!(
@@ -1190,7 +1190,7 @@ fn if_guard_bind_variable_false() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn if_guard_bind_variable_true() {
     assert_evals_to!(
         indoc!(
@@ -1988,5 +1988,37 @@ fn when_on_i16() {
         ),
         42,
         i16
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn num_to_str() {
+    use roc_std::RocStr;
+
+    assert_evals_to!(
+        r#"Num.toStr 1234"#,
+        RocStr::from_slice("1234".as_bytes()),
+        RocStr
+    );
+    assert_evals_to!(r#"Num.toStr 0"#, RocStr::from_slice("0".as_bytes()), RocStr);
+    assert_evals_to!(
+        r#"Num.toStr -1"#,
+        RocStr::from_slice("-1".as_bytes()),
+        RocStr
+    );
+
+    let max = format!("{}", i64::MAX);
+    assert_evals_to!(
+        r#"Num.toStr Num.maxInt"#,
+        RocStr::from_slice(max.as_bytes()),
+        RocStr
+    );
+
+    let min = format!("{}", i64::MIN);
+    assert_evals_to!(
+        r#"Num.toStr Num.minInt"#,
+        RocStr::from_slice(min.as_bytes()),
+        RocStr
     );
 }

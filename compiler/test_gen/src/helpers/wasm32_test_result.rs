@@ -141,6 +141,16 @@ where
     }
 }
 
+impl Wasm32TestResult for () {
+    fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
+        // Main's symbol index is the same as its function index, since the first symbols we created were for procs
+        let main_symbol_index = main_function_index;
+        code_builder.call(main_function_index, main_symbol_index, 0, false);
+        code_builder.get_global(0);
+        code_builder.build_fn_header(&[], 0, None);
+    }
+}
+
 impl<T, U> Wasm32TestResult for (T, U)
 where
     T: Wasm32TestResult + FromWasm32Memory,

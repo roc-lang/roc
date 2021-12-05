@@ -7,7 +7,7 @@ main : Task.Task {} []
 main =
     Task.after Task.getInt \n ->
         queens n # original koka 13
-            |> Str.fromInt
+            |> Num.toStr
             |> Task.putLine
 
 ConsList a : [ Nil, Cons a (ConsList a) ]

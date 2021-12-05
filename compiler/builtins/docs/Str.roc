@@ -10,8 +10,6 @@ interface Str
             countGraphemes,
             startsWith,
             endsWith,
-            fromInt,
-            fromFloat,
             fromUtf8,
             Utf8Problem,
             Utf8ByteProblem,

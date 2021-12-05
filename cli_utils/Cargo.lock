@@ -91,15 +91,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "arraystring"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d517c467117e1d8ca795bc8cc90857ff7f79790cca0e26f6e9462694ece0185"
-dependencies = [
- "typenum",
-]
-
-[[package]]
 name = "arrayvec"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -189,6 +180,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "031043d04099746d8db04daf1fa424b2bc8bd69d92b25962dcde24da39ab64a2"
 dependencies = [
  "typenum",
+]
+
+[[package]]
+name = "bitvec"
+version = "0.22.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5237f00a8c86130a0cc317830e558b966dd7850d48a953d998c813f01a41b527"
+dependencies = [
+ "funty",
+ "radium",
+ "tap",
+ "wyz",
 ]
 
 [[package]]
@@ -967,6 +970,12 @@ name = "fs_extra"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2022715d62ab30faffd124d40b76f4134a550a87792276512b18d63272333394"
+
+[[package]]
+name = "funty"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1847abb9cb65d566acd5942e94aea9c8f547ad02c98e1649326fc0e8910b8b1e"
 
 [[package]]
 name = "futures"
@@ -1920,6 +1929,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "packed_struct"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c48e482b9a59ad6c2cdb06f7725e7bd33fe3525baaf4699fde7bfea6a5b77b1"
+dependencies = [
+ "bitvec",
+ "packed_struct_codegen",
+ "serde",
+]
+
+[[package]]
+name = "packed_struct_codegen"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56e3692b867ec1d48ccb441e951637a2cc3130d0912c0059e48319e1c83e44bc"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "page_size"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2211,6 +2242,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "radium"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "643f8f41a8ebc4c5dc4515c82bb8abd397b527fc20fd681b7c011c2aee5d44fb"
+
+[[package]]
 name = "rand"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2375,7 +2412,7 @@ dependencies = [
 name = "roc_ast"
 version = "0.1.0"
 dependencies = [
- "arraystring",
+ "arrayvec 0.7.2",
  "bumpalo",
  "libc",
  "page_size",
@@ -2545,7 +2582,7 @@ dependencies = [
 name = "roc_editor"
 version = "0.1.0"
 dependencies = [
- "arraystring",
+ "arrayvec 0.7.2",
  "bumpalo",
  "bytemuck",
  "cgmath",
@@ -2603,12 +2640,14 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "object 0.26.2",
+ "packed_struct",
  "roc_builtins",
  "roc_collections",
  "roc_module",
  "roc_mono",
  "roc_problem",
  "roc_region",
+ "roc_reporting",
  "roc_solve",
  "roc_types",
  "roc_unify",
@@ -2771,6 +2810,8 @@ dependencies = [
 name = "roc_solve"
 version = "0.1.0"
 dependencies = [
+ "arrayvec 0.7.2",
+ "bumpalo",
  "roc_can",
  "roc_collections",
  "roc_module",
@@ -2787,6 +2828,7 @@ version = "0.1.0"
 name = "roc_types"
 version = "0.1.0"
 dependencies = [
+ "bumpalo",
  "roc_collections",
  "roc_module",
  "roc_region",
@@ -3162,6 +3204,12 @@ dependencies = [
  "quote",
  "unicode-xid",
 ]
+
+[[package]]
+name = "tap"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
 
 [[package]]
 name = "target-lexicon"
@@ -3805,6 +3853,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf6e163c25e3fac820b4b453185ea2dea3b6a3e0a721d4d23d75bd33734c295"
 dependencies = [
  "rand_core 0.6.3",
+]
+
+[[package]]
+name = "wyz"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "129e027ad65ce1453680623c3fb5163cbf7107bfe1aa32257e7d0e63f9ced188"
+dependencies = [
+ "tap",
 ]
 
 [[package]]

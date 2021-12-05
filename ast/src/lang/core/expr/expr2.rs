@@ -1,4 +1,4 @@
-use arraystring::{typenum::U30, ArrayString};
+use arrayvec::ArrayString;
 use roc_types::subs::Variable;
 
 use crate::{
@@ -12,7 +12,7 @@ use roc_module::symbol::Symbol;
 
 use super::record_field::RecordField;
 
-pub type ArrString = ArrayString<U30>;
+pub type ArrString = ArrayString<24>;
 
 // TODO make the inner types private?
 pub type ExprId = NodeId<Expr2>;

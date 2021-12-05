@@ -19,6 +19,8 @@ use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 
+/// "Infinite" reference count, for static values
+/// Ref counts are encoded as negative numbers where isize::MIN represents 1
 pub const REFCOUNT_MAX: usize = 0_usize;
 
 pub fn refcount_1(ctx: &Context, ptr_bytes: u32) -> IntValue<'_> {

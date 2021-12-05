@@ -20,6 +20,7 @@ use roc_module::symbol::{
 };
 use roc_mono::ir::{
     CapturedSymbols, EntryPoint, ExternalSpecializations, PartialProc, Proc, ProcLayout, Procs,
+    UpdateModeIds,
 };
 use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
 use roc_parse::ast::{self, StrLiteral, TypeAnnotation};
@@ -835,6 +836,7 @@ enum Msg<'a> {
         external_specializations_requested: BumpMap<ModuleId, ExternalSpecializations>,
         procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
         problems: Vec<roc_mono::ir::MonoProblem>,
+        update_mode_ids: UpdateModeIds,
         module_timing: ModuleTiming,
         subs: Subs,
     },
@@ -2098,6 +2100,7 @@ fn update<'a>(
         MadeSpecializations {
             module_id,
             mut ident_ids,
+            mut update_mode_ids,
             subs,
             procedures,
             external_specializations_requested,
@@ -2124,6 +2127,7 @@ fn update<'a>(
                     arena,
                     module_id,
                     &mut ident_ids,
+                    &mut update_mode_ids,
                     &mut state.procedures,
                 );
 
@@ -3922,6 +3926,7 @@ fn make_specializations<'a>(
 ) -> Msg<'a> {
     let make_specializations_start = SystemTime::now();
     let mut mono_problems = Vec::new();
+    let mut update_mode_ids = UpdateModeIds::new();
     // do the thing
     let mut mono_env = roc_mono::ir::Env {
         arena,
@@ -3930,7 +3935,7 @@ fn make_specializations<'a>(
         home,
         ident_ids: &mut ident_ids,
         ptr_bytes,
-        update_mode_counter: 0,
+        update_mode_ids: &mut update_mode_ids,
         // call_specialization_counter=0 is reserved
         call_specialization_counter: 1,
     };
@@ -3973,6 +3978,7 @@ fn make_specializations<'a>(
         layout_cache,
         procedures,
         problems: mono_problems,
+        update_mode_ids,
         subs,
         external_specializations_requested,
         module_timing,
@@ -4016,6 +4022,7 @@ fn build_pending_specializations<'a>(
     };
 
     let mut mono_problems = std::vec::Vec::new();
+    let mut update_mode_ids = UpdateModeIds::new();
     let mut subs = solved_subs.into_inner();
     let mut mono_env = roc_mono::ir::Env {
         arena,
@@ -4024,7 +4031,7 @@ fn build_pending_specializations<'a>(
         home,
         ident_ids: &mut ident_ids,
         ptr_bytes,
-        update_mode_counter: 0,
+        update_mode_ids: &mut update_mode_ids,
         // call_specialization_counter=0 is reserved
         call_specialization_counter: 1,
     };

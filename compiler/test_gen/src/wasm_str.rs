@@ -447,39 +447,6 @@ fn str_starts_with_false_small_str() {
 }
 
 // #[test]
-// fn str_from_int() {
-//     assert_evals_to!(
-//         r#"Str.fromInt 1234"#,
-//         roc_std::RocStr::from_slice("1234".as_bytes()),
-//         roc_std::RocStr
-//     );
-//     assert_evals_to!(
-//         r#"Str.fromInt 0"#,
-//         roc_std::RocStr::from_slice("0".as_bytes()),
-//         roc_std::RocStr
-//     );
-//     assert_evals_to!(
-//         r#"Str.fromInt -1"#,
-//         roc_std::RocStr::from_slice("-1".as_bytes()),
-//         roc_std::RocStr
-//     );
-
-//     let max = format!("{}", i64::MAX);
-//     assert_evals_to!(
-//         r#"Str.fromInt Num.maxInt"#,
-//         RocStr::from_slice(max.as_bytes()),
-//         RocStr
-//     );
-
-//     let min = format!("{}", i64::MIN);
-//     assert_evals_to!(
-//         r#"Str.fromInt Num.minInt"#,
-//         RocStr::from_slice(min.as_bytes()),
-//         RocStr
-//     );
-// }
-
-// #[test]
 // fn str_from_utf8_pass_single_ascii() {
 //     assert_evals_to!(
 //         indoc!(
@@ -729,8 +696,8 @@ fn str_starts_with_false_small_str() {
 //                                 |> Str.concat ") ("
 //                                 |> Str.concat (printExpr b)
 //                                 |> Str.concat ")"
-//                         Val v -> "Val " |> Str.concat (Str.fromInt v)
-//                         Var v -> "Var " |> Str.concat (Str.fromInt v)
+//                         Val v -> "Val " |> Str.concat (Num.toStr v)
+//                         Var v -> "Var " |> Str.concat (Num.toStr v)
 
 //                 printExpr expr
 //                 "#
@@ -761,11 +728,6 @@ fn str_starts_with_false_small_str() {
 // #[test]
 // fn str_join_comma_single() {
 //     assert_evals_to!(r#"Str.joinWith ["1"] ", " "#, RocStr::from("1"), RocStr);
-// }
-
-// #[test]
-// fn str_from_float() {
-//     assert_evals_to!(r#"Str.fromFloat 3.14"#, RocStr::from("3.14"), RocStr);
 // }
 
 // #[test]
@@ -903,8 +865,8 @@ fn str_starts_with_false_small_str() {
 #[test]
 fn str_repeat_small() {
     assert_evals_to!(
-        indoc!(r#"Str.repeat "Roc" 3"#),
-        RocStr::from("RocRocRoc"),
+        indoc!(r#"Str.repeat "Roc" 2"#),
+        RocStr::from("RocRoc"),
         RocStr
     );
 }
@@ -941,8 +903,8 @@ fn str_trim_small_blank_string() {
 #[test]
 fn str_trim_small_to_small() {
     assert_evals_to!(
-        indoc!(r#"Str.trim "  hello world  ""#),
-        RocStr::from("hello world"),
+        indoc!(r#"Str.trim " hello ""#),
+        RocStr::from("hello"),
         RocStr
     );
 }
@@ -959,8 +921,8 @@ fn str_trim_large_to_large_unique() {
 #[test]
 fn str_trim_large_to_small_unique() {
     assert_evals_to!(
-        indoc!(r#"Str.trim (Str.concat "  " "hello world        ")"#),
-        RocStr::from("hello world"),
+        indoc!(r#"Str.trim (Str.concat "  " "hello        ")"#),
+        RocStr::from("hello"),
         RocStr
     );
 }
@@ -990,15 +952,12 @@ fn str_trim_large_to_small_shared() {
         indoc!(
             r#"
                original : Str
-               original = " hello world             "
+               original = " hello             "
 
                { trimmed: Str.trim original, original: original }
                "#
         ),
-        (
-            RocStr::from(" hello world             "),
-            RocStr::from("hello world"),
-        ),
+        (RocStr::from(" hello             "), RocStr::from("hello"),),
         (RocStr, RocStr)
     );
 }
@@ -1009,12 +968,12 @@ fn str_trim_small_to_small_shared() {
         indoc!(
             r#"
                original : Str
-               original = " hello world "
+               original = " hello "
 
                { trimmed: Str.trim original, original: original }
                "#
         ),
-        (RocStr::from(" hello world "), RocStr::from("hello world"),),
+        (RocStr::from(" hello "), RocStr::from("hello"),),
         (RocStr, RocStr)
     );
 }
@@ -1027,8 +986,8 @@ fn str_trim_left_small_blank_string() {
 #[test]
 fn str_trim_left_small_to_small() {
     assert_evals_to!(
-        indoc!(r#"Str.trimLeft "  hello world  ""#),
-        RocStr::from("hello world  "),
+        indoc!(r#"Str.trimLeft "  hello  ""#),
+        RocStr::from("hello  "),
         RocStr
     );
 }
@@ -1045,8 +1004,8 @@ fn str_trim_left_large_to_large_unique() {
 #[test]
 fn str_trim_left_large_to_small_unique() {
     assert_evals_to!(
-        indoc!(r#"Str.trimLeft (Str.concat "  " "hello world        ")"#),
-        RocStr::from("hello world        "),
+        indoc!(r#"Str.trimLeft (Str.concat "  " "hello  ")"#),
+        RocStr::from("hello  "),
         RocStr
     );
 }
@@ -1059,8 +1018,8 @@ fn str_trim_right_small_blank_string() {
 #[test]
 fn str_trim_right_small_to_small() {
     assert_evals_to!(
-        indoc!(r#"Str.trimRight "  hello world  ""#),
-        RocStr::from("  hello world"),
+        indoc!(r#"Str.trimRight " hello ""#),
+        RocStr::from(" hello"),
         RocStr
     );
 }
@@ -1077,8 +1036,8 @@ fn str_trim_right_large_to_large_unique() {
 #[test]
 fn str_trim_right_large_to_small_unique() {
     assert_evals_to!(
-        indoc!(r#"Str.trimRight (Str.concat "        hello world" "  ")"#),
-        RocStr::from("        hello world"),
+        indoc!(r#"Str.trimRight (Str.concat "  hello" "  ")"#),
+        RocStr::from("  hello"),
         RocStr
     );
 }
@@ -1108,15 +1067,12 @@ fn str_trim_right_large_to_small_shared() {
         indoc!(
             r#"
                original : Str
-               original = "             hello world "
+               original = "  hello "
 
                { trimmed: Str.trimRight original, original: original }
                "#
         ),
-        (
-            RocStr::from("             hello world "),
-            RocStr::from("             hello world"),
-        ),
+        (RocStr::from("  hello "), RocStr::from("  hello"),),
         (RocStr, RocStr)
     );
 }
@@ -1127,12 +1083,12 @@ fn str_trim_right_small_to_small_shared() {
         indoc!(
             r#"
                original : Str
-               original = " hello world "
+               original = " hello "
 
                { trimmed: Str.trimRight original, original: original }
                "#
         ),
-        (RocStr::from(" hello world "), RocStr::from(" hello world"),),
+        (RocStr::from(" hello "), RocStr::from(" hello"),),
         (RocStr, RocStr)
     );
 }

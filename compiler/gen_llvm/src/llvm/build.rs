@@ -955,7 +955,7 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
         }
 
         CallType::HigherOrder(higher_order) => {
-            let bytes = higher_order.specialization_id.to_bytes();
+            let bytes = higher_order.passed_function.specialization_id.to_bytes();
             let callee_var = CalleeSpecVar(&bytes);
             let func_spec = func_spec_solutions.callee_spec(callee_var).unwrap();
 
@@ -1108,7 +1108,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             ..
         } => build_tag(env, scope, union_layout, *tag_id, arguments, None, parent),
 
-        Reset(symbol) => {
+        Reset { symbol, .. } => {
             let (tag_ptr, layout) = load_symbol_and_layout(scope, symbol);
             let tag_ptr = tag_ptr.into_pointer_value();
 
@@ -4686,20 +4686,23 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
     func_spec: FuncSpec,
     higher_order: &HigherOrderLowLevel<'a>,
 ) -> BasicValueEnum<'ctx> {
+    use roc_mono::ir::PassedFunction;
     use roc_mono::low_level::HigherOrder::*;
 
     let HigherOrderLowLevel {
         op,
-        arg_layouts: argument_layouts,
-        ret_layout: result_layout,
-        function_owns_closure_data,
-        function_name,
-        function_env,
+        passed_function,
         ..
     } = higher_order;
 
-    let function_owns_closure_data = *function_owns_closure_data;
-    let function_name = *function_name;
+    let PassedFunction {
+        argument_layouts,
+        return_layout: result_layout,
+        owns_captured_environment: function_owns_closure_data,
+        name: function_name,
+        captured_environment,
+        ..
+    } = *passed_function;
 
     // macros because functions cause lifetime issues related to the `env` or `layout_ids`
     macro_rules! function_details {
@@ -4712,7 +4715,8 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 return_layout,
             );
 
-            let (closure, closure_layout) = load_symbol_and_lambda_set(scope, function_env);
+            let (closure, closure_layout) =
+                load_symbol_and_lambda_set(scope, &captured_environment);
 
             (function, closure, closure_layout)
         }};
@@ -4737,14 +4741,14 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
-                        *result_layout,
+                        result_layout,
                     );
 
                     crate::llvm::build_list::list_walk_generic(
                         env,
                         layout_ids,
                         roc_function_call,
-                        result_layout,
+                        &result_layout,
                         list,
                         element_layout,
                         default,
@@ -4974,7 +4978,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
-                        *result_layout,
+                        result_layout,
                     );
 
                     list_keep_if(env, layout_ids, roc_function_call, list, element_layout)
@@ -5003,14 +5007,14 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
-                        *result_layout,
+                        result_layout,
                     );
 
                     list_keep_oks(
                         env,
                         layout_ids,
                         roc_function_call,
-                        result_layout,
+                        &result_layout,
                         list,
                         before_layout,
                         after_layout,
@@ -5042,14 +5046,14 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
-                        *result_layout,
+                        result_layout,
                     );
 
                     list_keep_errs(
                         env,
                         layout_ids,
                         roc_function_call,
-                        result_layout,
+                        &result_layout,
                         list,
                         before_layout,
                         after_layout,
@@ -5094,7 +5098,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
-                        *result_layout,
+                        result_layout,
                     );
 
                     list_sort_with(
@@ -5197,7 +5201,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
-                        *result_layout,
+                        result_layout,
                     );
 
                     dict_walk(
@@ -5521,6 +5525,24 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (list, outer_list_layout) = load_symbol_and_layout(scope, &args[0]);
 
             list_join(env, parent, list, outer_list_layout)
+        }
+        NumToStr => {
+            // Num.toStr : Num a -> Str
+            debug_assert_eq!(args.len(), 1);
+
+            let (num, num_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            match num_layout {
+                Layout::Builtin(Builtin::Int(int_width)) => {
+                    let int = num.into_int_value();
+
+                    str_from_int(env, int, *int_width)
+                }
+                Layout::Builtin(Builtin::Float(_float_width)) => {
+                    str_from_float(env, scope, args[0])
+                }
+                _ => unreachable!(),
+            }
         }
         NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumLogUnchecked | NumSin | NumCos
         | NumCeiling | NumFloor | NumToFloat | NumIsFinite | NumAtan | NumAcos | NumAsin => {
@@ -6019,6 +6041,10 @@ fn run_low_level<'a, 'ctx, 'env>(
         | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith
         | ListAny | ListAll | ListFindUnsafe | DictWalk => {
             unreachable!("these are higher order, and are handled elsewhere")
+        }
+
+        RefCountGetPtr | RefCountInc | RefCountDec => {
+            unreachable!("LLVM backend does not use lowlevels for refcounting");
         }
     }
 }
