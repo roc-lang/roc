@@ -880,8 +880,6 @@ struct State<'a> {
     pub platform_path: PlatformPath<'a>,
     pub ptr_bytes: u32,
 
-    pub headers_parsed: MutSet<ModuleId>,
-
     pub module_cache: ModuleCache<'a>,
     pub dependencies: Dependencies<'a>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
@@ -1417,11 +1415,6 @@ where
             // reference to each worker. (Slices are Sync, but bumpalo Vecs are not.)
             let stealers = stealers.into_bump_slice();
 
-            let mut headers_parsed = MutSet::default();
-
-            // We've already parsed the root's header. (But only its header, so far.)
-            headers_parsed.insert(root_id);
-
             let mut loading_started = MutSet::default();
 
             // If the root module we're still processing happens to be an interface,
@@ -1529,7 +1522,6 @@ where
                 procedures: MutMap::default(),
                 exposed_to_host: MutMap::default(),
                 exposed_types,
-                headers_parsed,
                 loading_started,
                 arc_modules,
                 arc_shorthands,
