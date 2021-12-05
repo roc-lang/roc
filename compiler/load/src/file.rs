@@ -2054,10 +2054,13 @@ fn update<'a>(
             solved_subs,
             ident_ids,
             layout_cache,
-            problems: _,
+            problems,
             module_timing,
         } => {
             log!("found specializations for {:?}", module_id);
+
+            debug_assert!(problems.is_empty());
+
             let subs = solved_subs.into_inner();
 
             state
@@ -2098,9 +2101,13 @@ fn update<'a>(
             external_specializations_requested,
             problems,
             module_timing,
+            layout_cache,
             ..
         } => {
             log!("made specializations for {:?}", module_id);
+
+            // in the future, layouts will be in SoA form and we'll want to hold on to this data
+            let _ = layout_cache;
 
             state.module_cache.mono_problems.insert(module_id, problems);
 
