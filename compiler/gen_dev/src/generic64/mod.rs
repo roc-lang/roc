@@ -187,6 +187,14 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait> {
         src2: GeneralReg,
     );
 
+    fn to_float_freg32_reg64(buf: &mut Vec<'_, u8>, dst: FloatReg, src: GeneralReg);
+
+    fn to_float_freg64_reg64(buf: &mut Vec<'_, u8>, dst: FloatReg, src: GeneralReg);
+
+    fn to_float_freg32_freg64(buf: &mut Vec<'_, u8>, dst: FloatReg, src: FloatReg);
+
+    fn to_float_freg64_freg32(buf: &mut Vec<'_, u8>, dst: FloatReg, src: FloatReg);
+
     fn ret(buf: &mut Vec<'_, u8>);
 }
 
@@ -892,6 +900,75 @@ impl<
                 Ok(())
             }
             x => Err(format!("NumLt: layout, {:?}, not implemented yet", x)),
+        }
+    }
+
+    fn build_num_to_float(
+        &mut self,
+        dst: &Symbol,
+        src: &Symbol,
+        arg_layout: &Layout<'a>,
+        ret_layout: &Layout<'a>,
+    ) -> Result<(), String> {
+        match (arg_layout, ret_layout) {
+            (
+                Layout::Builtin(Builtin::Int(IntWidth::I32 | IntWidth::I64)),
+                Layout::Builtin(Builtin::Float(FloatWidth::F64)),
+            ) => {
+                let dst_reg = self.claim_float_reg(dst)?;
+                let src_reg = self.load_to_general_reg(src)?;
+                ASM::to_float_freg64_reg64(&mut self.buf, dst_reg, src_reg);
+                Ok(())
+            }
+            (
+                Layout::Builtin(Builtin::Int(IntWidth::I32 | IntWidth::I64)),
+                Layout::Builtin(Builtin::Float(FloatWidth::F32)),
+            ) => {
+                let dst_reg = self.claim_float_reg(dst)?;
+                let src_reg = self.load_to_general_reg(src)?;
+                ASM::to_float_freg32_reg64(&mut self.buf, dst_reg, src_reg);
+                Ok(())
+            }
+            (
+                Layout::Builtin(Builtin::Float(FloatWidth::F64)),
+                Layout::Builtin(Builtin::Float(FloatWidth::F32)),
+            ) => {
+                let dst_reg = self.claim_float_reg(dst)?;
+                let src_reg = self.load_to_float_reg(src)?;
+                ASM::to_float_freg32_freg64(&mut self.buf, dst_reg, src_reg);
+                Ok(())
+            }
+            (
+                Layout::Builtin(Builtin::Float(FloatWidth::F32)),
+                Layout::Builtin(Builtin::Float(FloatWidth::F64)),
+            ) => {
+                let dst_reg = self.claim_float_reg(dst)?;
+                let src_reg = self.load_to_float_reg(src)?;
+                ASM::to_float_freg64_freg32(&mut self.buf, dst_reg, src_reg);
+                Ok(())
+            }
+            (
+                Layout::Builtin(Builtin::Float(FloatWidth::F64)),
+                Layout::Builtin(Builtin::Float(FloatWidth::F64)),
+            ) => {
+                let dst_reg = self.claim_float_reg(dst)?;
+                let src_reg = self.load_to_float_reg(src)?;
+                ASM::mov_freg64_freg64(&mut self.buf, dst_reg, src_reg);
+                Ok(())
+            }
+            (
+                Layout::Builtin(Builtin::Float(FloatWidth::F32)),
+                Layout::Builtin(Builtin::Float(FloatWidth::F32)),
+            ) => {
+                let dst_reg = self.claim_float_reg(dst)?;
+                let src_reg = self.load_to_float_reg(src)?;
+                ASM::mov_freg64_freg64(&mut self.buf, dst_reg, src_reg);
+                Ok(())
+            }
+            (a, r) => Err(format!(
+                "NumToFloat: layout, arg {:?}, ret {:?}, not implemented yet",
+                a, r
+            )),
         }
     }
 

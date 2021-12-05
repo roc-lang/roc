@@ -1297,19 +1297,19 @@ fn gen_basic_fn() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn int_to_float() {
     assert_evals_to!("Num.toFloat 0x9", 9.0, f64);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn num_to_float() {
     assert_evals_to!("Num.toFloat 9", 9.0, f64);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn float_to_float() {
     assert_evals_to!("Num.toFloat 0.5", 0.5, f64);
 }

@@ -453,6 +453,19 @@ where
                 );
                 self.build_num_lt(sym, &args[0], &args[1], &arg_layouts[0])
             }
+            LowLevel::NumToFloat => {
+                debug_assert_eq!(
+                    1,
+                    args.len(),
+                    "NumToFloat: expected to have exactly one argument"
+                );
+                // debug_assert_eq!(
+                //     Layout::Builtin(Builtin::Float(FloatWidth::F32 | FloatWidth::F64)),
+                //     *ret_layout,
+                //     "NumToFloat: expected to have return layout of type Float64"
+                // );
+                self.build_num_to_float(sym, &args[0], &arg_layouts[0], ret_layout)
+            }
             LowLevel::NumRound => self.build_fn_call(
                 sym,
                 bitcode::NUM_ROUND[FloatWidth::F64].to_string(),
@@ -584,6 +597,15 @@ where
         src1: &Symbol,
         src2: &Symbol,
         arg_layout: &Layout<'a>,
+    ) -> Result<(), String>;
+
+    /// build_num_to_float convert Number to Float
+    fn build_num_to_float(
+        &mut self,
+        dst: &Symbol,
+        src: &Symbol,
+        arg_layout: &Layout<'a>,
+        ret_layout: &Layout<'a>,
     ) -> Result<(), String>;
 
     /// literal_map gets the map from symbol to literal, used for lazy loading and literal folding.

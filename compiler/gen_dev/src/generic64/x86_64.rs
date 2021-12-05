@@ -1059,6 +1059,7 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         mov_reg64_reg64(buf, dst, src);
         neg_reg64(buf, dst);
     }
+
     #[inline(always)]
     fn sub_reg64_reg64_imm32(
         buf: &mut Vec<'_, u8>,
@@ -1120,6 +1121,26 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
+    fn to_float_freg32_reg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64GeneralReg) {
+        cvtsi2ss_freg64_reg64(buf, dst, src);
+    }
+
+    #[inline(always)]
+    fn to_float_freg32_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+        cvtsd2ss_freg32_freg64(buf, dst, src);
+    }
+
+    #[inline(always)]
+    fn to_float_freg64_freg32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+        cvtss2sd_freg64_freg32(buf, dst, src);
+    }
+
+    #[inline(always)]
+    fn to_float_freg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64GeneralReg) {
+        cvtsi2sd_freg64_reg64(buf, dst, src);
+    }
+
+    #[inline(always)]
     fn ret(buf: &mut Vec<'_, u8>) {
         ret(buf);
     }
@@ -1140,8 +1161,8 @@ const REX: u8 = 0x40;
 const REX_W: u8 = REX + 0x8;
 
 #[inline(always)]
-const fn add_rm_extension(reg: X86_64GeneralReg, byte: u8) -> u8 {
-    if reg as u8 > 7 {
+const fn add_rm_extension(reg: u8, byte: u8) -> u8 {
+    if reg > 7 {
         byte + 1
     } else {
         byte
@@ -1150,12 +1171,12 @@ const fn add_rm_extension(reg: X86_64GeneralReg, byte: u8) -> u8 {
 
 #[inline(always)]
 const fn add_opcode_extension(reg: X86_64GeneralReg, byte: u8) -> u8 {
-    add_rm_extension(reg, byte)
+    add_rm_extension(reg as u8, byte)
 }
 
 #[inline(always)]
-const fn add_reg_extension(reg: X86_64GeneralReg, byte: u8) -> u8 {
-    if reg as u8 > 7 {
+const fn add_reg_extension(reg: u8, byte: u8) -> u8 {
+    if reg > 7 {
         byte + 4
     } else {
         byte
@@ -1169,8 +1190,8 @@ fn binop_reg64_reg64(
     dst: X86_64GeneralReg,
     src: X86_64GeneralReg,
 ) {
-    let rex = add_rm_extension(dst, REX_W);
-    let rex = add_reg_extension(src, rex);
+    let rex = add_rm_extension(dst as u8, REX_W);
+    let rex = add_reg_extension(src as u8, rex);
     let dst_mod = dst as u8 % 8;
     let src_mod = (src as u8 % 8) << 3;
     buf.extend(&[rex, op_code, 0xC0 + dst_mod + src_mod]);
@@ -1184,8 +1205,8 @@ fn extended_binop_reg64_reg64(
     dst: X86_64GeneralReg,
     src: X86_64GeneralReg,
 ) {
-    let rex = add_rm_extension(dst, REX_W);
-    let rex = add_reg_extension(src, rex);
+    let rex = add_rm_extension(dst as u8, REX_W);
+    let rex = add_reg_extension(src as u8, rex);
     let dst_mod = dst as u8 % 8;
     let src_mod = (src as u8 % 8) << 3;
     buf.extend(&[rex, op_code1, op_code2, 0xC0 + dst_mod + src_mod]);
@@ -1200,7 +1221,7 @@ fn extended_binop_reg64_reg64(
 #[inline(always)]
 fn add_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i32) {
     // This can be optimized if the immediate is 1 byte.
-    let rex = add_rm_extension(dst, REX_W);
+    let rex = add_rm_extension(dst as u8, REX_W);
     let dst_mod = dst as u8 % 8;
     buf.reserve(7);
     buf.extend(&[rex, 0x81, 0xC0 + dst_mod]);
@@ -1256,7 +1277,7 @@ fn andpd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64Fl
 /// r/m64 AND imm8 (sign-extended).
 #[inline(always)]
 fn and_reg64_imm8(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i8) {
-    let rex = add_rm_extension(dst, REX_W);
+    let rex = add_rm_extension(dst as u8, REX_W);
     let dst_mod = dst as u8 % 8;
     buf.extend(&[rex, 0x83, 0xE0 + dst_mod, imm as u8]);
 }
@@ -1264,8 +1285,8 @@ fn and_reg64_imm8(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i8) {
 /// `CMOVL r64,r/m64` -> Move if less (SF≠ OF).
 #[inline(always)]
 fn cmovl_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
-    let rex = add_reg_extension(dst, REX_W);
-    let rex = add_rm_extension(src, rex);
+    let rex = add_reg_extension(dst as u8, REX_W);
+    let rex = add_rm_extension(src as u8, rex);
     let dst_mod = (dst as u8 % 8) << 3;
     let src_mod = src as u8 % 8;
     buf.extend(&[rex, 0x0F, 0x4C, 0xC0 + dst_mod + src_mod]);
@@ -1274,7 +1295,7 @@ fn cmovl_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64Ge
 /// `CMP r/m64,i32` -> Compare i32 to r/m64.
 #[inline(always)]
 fn cmp_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i32) {
-    let rex = add_rm_extension(dst, REX_W);
+    let rex = add_rm_extension(dst as u8, REX_W);
     let dst_mod = dst as u8 % 8;
     buf.reserve(7);
     buf.extend(&[rex, 0x81, 0xF8 + dst_mod]);
@@ -1322,7 +1343,7 @@ fn jne_imm32(buf: &mut Vec<'_, u8>, imm: i32) {
 /// `MOV r/m64, imm32` -> Move imm32 sign extended to 64-bits to r/m64.
 #[inline(always)]
 fn mov_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i32) {
-    let rex = add_rm_extension(dst, REX_W);
+    let rex = add_rm_extension(dst as u8, REX_W);
     let dst_mod = dst as u8 % 8;
     buf.reserve(7);
     buf.extend(&[rex, 0xC7, 0xC0 + dst_mod]);
@@ -1361,8 +1382,8 @@ fn mov_base64_offset32_reg64(
     offset: i32,
     src: X86_64GeneralReg,
 ) {
-    let rex = add_rm_extension(base, REX_W);
-    let rex = add_reg_extension(src, rex);
+    let rex = add_rm_extension(base as u8, REX_W);
+    let rex = add_reg_extension(src as u8, rex);
     let src_mod = (src as u8 % 8) << 3;
     let base_mod = base as u8 % 8;
     buf.reserve(8);
@@ -1382,8 +1403,8 @@ fn mov_reg64_base64_offset32(
     base: X86_64GeneralReg,
     offset: i32,
 ) {
-    let rex = add_rm_extension(base, REX_W);
-    let rex = add_reg_extension(dst, rex);
+    let rex = add_rm_extension(base as u8, REX_W);
+    let rex = add_reg_extension(dst as u8, rex);
     let dst_mod = (dst as u8 % 8) << 3;
     let base_mod = base as u8 % 8;
     buf.reserve(8);
@@ -1478,7 +1499,7 @@ fn movsd_freg64_base64_offset32(
 /// `NEG r/m64` -> Two's complement negate r/m64.
 #[inline(always)]
 fn neg_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
-    let rex = add_rm_extension(reg, REX_W);
+    let rex = add_rm_extension(reg as u8, REX_W);
     let reg_mod = reg as u8 % 8;
     buf.extend(&[rex, 0xF7, 0xD8 + reg_mod]);
 }
@@ -1505,10 +1526,52 @@ fn set_reg64_help(op_code: u8, buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     and_reg64_imm8(buf, reg, 1);
 }
 
+#[inline(always)]
+fn cvt_help(buf: &mut Vec<'_, u8>, op_code1: u8, op_code2: u8, reg1: u8, reg2: u8) {
+    let rex = add_rm_extension(reg2, REX_W);
+    let rex = add_reg_extension(reg1, rex);
+    let mod1 = reg1 % 8 << 3;
+    let mod2 = reg2 % 8;
+
+    buf.extend(&[op_code1, rex, 0x0F, op_code2, 0xC0 + mod1 + mod2])
+}
+
 /// `SETE r/m64` -> Set Byte on Condition - zero/equal (ZF=1)
 #[inline(always)]
 fn sete_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     set_reg64_help(0x94, buf, reg);
+}
+
+/// `CVTSS2SD xmm` -> Convert one single-precision floating-point value in xmm/m32 to one double-precision floating-point value in xmm.
+#[inline(always)]
+fn cvtss2sd_freg64_freg32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    cvt_help(buf, 0xF3, 0x5A as u8, dst as u8, src as u8)
+}
+
+/// `CVTSD2SS xmm` -> Convert one double-precision floating-point value in xmm to one single-precision floating-point value and merge with high bits.
+#[inline(always)]
+fn cvtsd2ss_freg32_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    cvt_help(buf, 0xF2, 0x5A as u8, dst as u8, src as u8)
+}
+
+/// `CVTSI2SD r/m64` -> Convert one signed quadword integer from r/m64 to one double-precision floating-point value in xmm.
+#[inline(always)]
+fn cvtsi2sd_freg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64GeneralReg) {
+    cvt_help(buf, 0xF2, 0x2A as u8, dst as u8, src as u8)
+}
+
+/// `CVTSI2SS r/m64` -> Convert one signed quadword integer from r/m64 to one single-precision floating-point value in xmm.
+#[allow(dead_code)]
+#[inline(always)]
+fn cvtsi2ss_freg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64GeneralReg) {
+    cvt_help(buf, 0xF3, 0x2A as u8, dst as u8, src as u8)
+}
+
+/// `CVTTSS2SI xmm/m32` -> Convert one single-precision floating-point value from xmm/m32 to one signed quadword integer in r64 using truncation.
+#[allow(dead_code)]
+#[inline(always)]
+fn cvttss2si_reg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64FloatReg) {
+    cvt_help(buf, 0xF3, 0x2C as u8, dst as u8, src as u8)
 }
 
 /// `SETNE r/m64` -> Set byte if not equal (ZF=0).
@@ -1533,7 +1596,7 @@ fn ret(buf: &mut Vec<'_, u8>) {
 #[inline(always)]
 fn sub_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i32) {
     // This can be optimized if the immediate is 1 byte.
-    let rex = add_rm_extension(dst, REX_W);
+    let rex = add_rm_extension(dst as u8, REX_W);
     let dst_mod = dst as u8 % 8;
     buf.reserve(7);
     buf.extend(&[rex, 0x81, 0xE8 + dst_mod]);
@@ -2102,6 +2165,418 @@ mod tests {
         ] {
             buf.clear();
             neg_reg64(&mut buf, *reg);
+            assert_eq!(expected, &buf[..]);
+        }
+    }
+
+    #[test]
+    fn test_cvt_help() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        let cvtsi2ss_code: u8 = 0x2A;
+        let cvttss2si_code: u8 = 0x2C;
+
+        for (op_code, reg1, reg2, expected) in &[
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM0,
+                X86_64GeneralReg::RDI,
+                [0xF3, 0x48, 0x0F, 0x2A, 0xC7],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM1,
+                X86_64GeneralReg::RDI,
+                [0xF3, 0x48, 0x0F, 0x2A, 0xCF],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM2,
+                X86_64GeneralReg::RDI,
+                [0xF3, 0x48, 0x0F, 0x2A, 0xD7],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM3,
+                X86_64GeneralReg::RDI,
+                [0xF3, 0x48, 0x0F, 0x2A, 0xDF],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM4,
+                X86_64GeneralReg::RDI,
+                [0xF3, 0x48, 0x0F, 0x2A, 0xE7],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM5,
+                X86_64GeneralReg::RDI,
+                [0xF3, 0x48, 0x0F, 0x2A, 0xEF],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM6,
+                X86_64GeneralReg::RDI,
+                [0xF3, 0x48, 0x0F, 0x2A, 0xF7],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM7,
+                X86_64GeneralReg::RDI,
+                [0xF3, 0x48, 0x0F, 0x2A, 0xFF],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM8,
+                X86_64GeneralReg::RDI,
+                [0xF3, 0x4C, 0x0F, 0x2A, 0xC7],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM9,
+                X86_64GeneralReg::RDI,
+                [0xF3, 0x4C, 0x0F, 0x2A, 0xCF],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM10,
+                X86_64GeneralReg::RDI,
+                [0xF3, 0x4C, 0x0F, 0x2A, 0xD7],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM11,
+                X86_64GeneralReg::RDI,
+                [0xF3, 0x4C, 0x0F, 0x2A, 0xDF],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM12,
+                X86_64GeneralReg::RDI,
+                [0xF3, 0x4C, 0x0F, 0x2A, 0xE7],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM13,
+                X86_64GeneralReg::RDI,
+                [0xF3, 0x4C, 0x0F, 0x2A, 0xEF],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM14,
+                X86_64GeneralReg::RDI,
+                [0xF3, 0x4C, 0x0F, 0x2A, 0xF7],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM15,
+                X86_64GeneralReg::RDI,
+                [0xF3, 0x4C, 0x0F, 0x2A, 0xFF],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM0,
+                X86_64GeneralReg::RAX,
+                [0xF3, 0x48, 0x0F, 0x2A, 0xC0],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM0,
+                X86_64GeneralReg::RCX,
+                [0xF3, 0x48, 0x0F, 0x2A, 0xC1],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM0,
+                X86_64GeneralReg::RDX,
+                [0xF3, 0x48, 0x0F, 0x2A, 0xC2],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM0,
+                X86_64GeneralReg::RBX,
+                [0xF3, 0x48, 0x0F, 0x2A, 0xC3],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM0,
+                X86_64GeneralReg::RBP,
+                [0xF3, 0x48, 0x0F, 0x2A, 0xC5],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM0,
+                X86_64GeneralReg::RSP,
+                [0xF3, 0x48, 0x0F, 0x2A, 0xC4],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM0,
+                X86_64GeneralReg::RSI,
+                [0xF3, 0x48, 0x0F, 0x2A, 0xC6],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM0,
+                X86_64GeneralReg::RDI,
+                [0xF3, 0x48, 0x0F, 0x2A, 0xC7],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM0,
+                X86_64GeneralReg::R8,
+                [0xF3, 0x49, 0x0F, 0x2A, 0xC0],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM0,
+                X86_64GeneralReg::R9,
+                [0xF3, 0x49, 0x0F, 0x2A, 0xC1],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM0,
+                X86_64GeneralReg::R10,
+                [0xF3, 0x49, 0x0F, 0x2A, 0xC2],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM0,
+                X86_64GeneralReg::R11,
+                [0xF3, 0x49, 0x0F, 0x2A, 0xC3],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM0,
+                X86_64GeneralReg::R12,
+                [0xF3, 0x49, 0x0F, 0x2A, 0xC4],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM0,
+                X86_64GeneralReg::R13,
+                [0xF3, 0x49, 0x0F, 0x2A, 0xC5],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM0,
+                X86_64GeneralReg::R14,
+                [0xF3, 0x49, 0x0F, 0x2A, 0xC6],
+            ),
+            (
+                cvtsi2ss_code,
+                X86_64FloatReg::XMM0,
+                X86_64GeneralReg::R15,
+                [0xF3, 0x49, 0x0F, 0x2A, 0xC7],
+            ),
+        ] {
+            buf.clear();
+            cvt_help(&mut buf, 0xF3, *op_code, *reg1 as u8, *reg2 as u8);
+            assert_eq!(expected, &buf[..]);
+        }
+
+        for (op_code, reg1, reg2, expected) in &[
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::RAX,
+                X86_64FloatReg::XMM0,
+                [0xF3, 0x48, 0x0F, 0x2C, 0xC0],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::RAX,
+                X86_64FloatReg::XMM1,
+                [0xF3, 0x48, 0x0F, 0x2C, 0xC1],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::RAX,
+                X86_64FloatReg::XMM2,
+                [0xF3, 0x48, 0x0F, 0x2C, 0xC2],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::RAX,
+                X86_64FloatReg::XMM3,
+                [0xF3, 0x48, 0x0F, 0x2C, 0xC3],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::RAX,
+                X86_64FloatReg::XMM4,
+                [0xF3, 0x48, 0x0F, 0x2C, 0xC4],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::RAX,
+                X86_64FloatReg::XMM5,
+                [0xF3, 0x48, 0x0F, 0x2C, 0xC5],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::RAX,
+                X86_64FloatReg::XMM6,
+                [0xF3, 0x48, 0x0F, 0x2C, 0xC6],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::RAX,
+                X86_64FloatReg::XMM7,
+                [0xF3, 0x48, 0x0F, 0x2C, 0xC7],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::RAX,
+                X86_64FloatReg::XMM8,
+                [0xF3, 0x49, 0x0F, 0x2C, 0xC0],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::RAX,
+                X86_64FloatReg::XMM9,
+                [0xF3, 0x49, 0x0F, 0x2C, 0xC1],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::RAX,
+                X86_64FloatReg::XMM10,
+                [0xF3, 0x49, 0x0F, 0x2C, 0xC2],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::RAX,
+                X86_64FloatReg::XMM11,
+                [0xF3, 0x49, 0x0F, 0x2C, 0xC3],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::RAX,
+                X86_64FloatReg::XMM12,
+                [0xF3, 0x49, 0x0F, 0x2C, 0xC4],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::RAX,
+                X86_64FloatReg::XMM13,
+                [0xF3, 0x49, 0x0F, 0x2C, 0xC5],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::RAX,
+                X86_64FloatReg::XMM14,
+                [0xF3, 0x49, 0x0F, 0x2C, 0xC6],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::RAX,
+                X86_64FloatReg::XMM15,
+                [0xF3, 0x49, 0x0F, 0x2C, 0xC7],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::RAX,
+                X86_64FloatReg::XMM0,
+                [0xF3, 0x48, 0x0F, 0x2C, 0xC0],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::RCX,
+                X86_64FloatReg::XMM0,
+                [0xF3, 0x48, 0x0F, 0x2C, 0xC8],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::RDX,
+                X86_64FloatReg::XMM0,
+                [0xF3, 0x48, 0x0F, 0x2C, 0xD0],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::RBX,
+                X86_64FloatReg::XMM0,
+                [0xF3, 0x48, 0x0F, 0x2C, 0xD8],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::RBP,
+                X86_64FloatReg::XMM0,
+                [0xF3, 0x48, 0x0F, 0x2C, 0xE8],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::RSP,
+                X86_64FloatReg::XMM0,
+                [0xF3, 0x48, 0x0F, 0x2C, 0xE0],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::RSI,
+                X86_64FloatReg::XMM0,
+                [0xF3, 0x48, 0x0F, 0x2C, 0xF0],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::RDI,
+                X86_64FloatReg::XMM0,
+                [0xF3, 0x48, 0x0F, 0x2C, 0xF8],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::R8,
+                X86_64FloatReg::XMM0,
+                [0xF3, 0x4C, 0x0F, 0x2C, 0xC0],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::R9,
+                X86_64FloatReg::XMM0,
+                [0xF3, 0x4C, 0x0F, 0x2C, 0xC8],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::R10,
+                X86_64FloatReg::XMM0,
+                [0xF3, 0x4C, 0x0F, 0x2C, 0xD0],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::R11,
+                X86_64FloatReg::XMM0,
+                [0xF3, 0x4C, 0x0F, 0x2C, 0xD8],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::R12,
+                X86_64FloatReg::XMM0,
+                [0xF3, 0x4C, 0x0F, 0x2C, 0xE0],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::R13,
+                X86_64FloatReg::XMM0,
+                [0xF3, 0x4C, 0x0F, 0x2C, 0xE8],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::R14,
+                X86_64FloatReg::XMM0,
+                [0xF3, 0x4C, 0x0F, 0x2C, 0xF0],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::R15,
+                X86_64FloatReg::XMM0,
+                [0xF3, 0x4C, 0x0F, 0x2C, 0xF8],
+            ),
+            (
+                cvttss2si_code,
+                X86_64GeneralReg::R11,
+                X86_64FloatReg::XMM11,
+                [0xF3, 0x4D, 0x0F, 0x2C, 0xDB],
+            ),
+        ] {
+            buf.clear();
+            cvt_help(&mut buf, 0xF3, *op_code, *reg1 as u8, *reg2 as u8);
             assert_eq!(expected, &buf[..]);
         }
     }

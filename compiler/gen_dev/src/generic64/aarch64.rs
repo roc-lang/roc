@@ -520,6 +520,42 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
+    fn to_float_freg64_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64FloatReg,
+        _src: AArch64GeneralReg,
+    ) {
+        unimplemented!("registers to float not implemented yet for AArch64");
+    }
+
+    #[inline(always)]
+    fn to_float_freg32_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64FloatReg,
+        _src: AArch64GeneralReg,
+    ) {
+        unimplemented!("registers to float not implemented yet for AArch64");
+    }
+
+    #[inline(always)]
+    fn to_float_freg32_freg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64FloatReg,
+        _src: AArch64FloatReg,
+    ) {
+        unimplemented!("registers to float not implemented yet for AArch64");
+    }
+
+    #[inline(always)]
+    fn to_float_freg64_freg32(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64FloatReg,
+        _src: AArch64FloatReg,
+    ) {
+        unimplemented!("registers to float not implemented yet for AArch64");
+    }
+
+    #[inline(always)]
     fn ret(buf: &mut Vec<'_, u8>) {
         ret_reg64(buf, AArch64GeneralReg::LR)
     }
