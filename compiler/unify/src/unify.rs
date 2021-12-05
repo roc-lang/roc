@@ -72,12 +72,6 @@ pub enum Unified {
     BadType(Pool, roc_types::types::Problem),
 }
 
-#[derive(Debug)]
-struct TagUnionStructure {
-    tags: MutMap<TagName, Vec<Variable>>,
-    ext: Variable,
-}
-
 type Outcome = Vec<Mismatch>;
 
 #[inline(always)]
