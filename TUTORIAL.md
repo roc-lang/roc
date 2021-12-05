@@ -1110,7 +1110,7 @@ tells the Roc compiler that when we call `Stdout.line`, it should look for that
 Tasks are technically not part of the Roc language, but they're very common in
 platforms. Let's use the CLI platform in `examples/cli` as an example!
 
-In the Tutorial platform, we have four operations we can do:
+In the CLI platform, we have four operations we can do:
 
 * Write a string to the console
 * Read a string from user input
