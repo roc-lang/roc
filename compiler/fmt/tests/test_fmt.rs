@@ -5,7 +5,7 @@ extern crate roc_fmt;
 
 #[cfg(test)]
 mod test_fmt {
-    
+
     use bumpalo::Bump;
     use roc_fmt::annotation::{Formattable, Newlines, Parens};
     use roc_fmt::def::fmt_def;
