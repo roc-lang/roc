@@ -895,24 +895,9 @@ struct State<'a> {
 
     pub ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
 
-    /// All the dependent modules we've already begun loading -
-    /// meaning we should never kick off another load_module on them!
-    pub loading_started: MutSet<ModuleId>,
-
     pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
 
     pub exposed_symbols_by_module: MutMap<ModuleId, MutSet<Symbol>>,
-
-    pub unsolved_modules: MutMap<ModuleId, UnsolvedModule<'a>>,
-
-    /// These are the modules which need to add their pending specializations to
-    /// the queue. Adding specializations to the queue can be done completely in
-    /// parallel, and order doesn't matter, so as soon as a module has been solved,
-    /// it gets an entry in here, and then immediately begins working on its
-    /// pending specializations in the same thread.
-    pub needs_specialization: MutSet<ModuleId>,
-
-    pub specializations_in_flight: u32,
 
     pub timings: MutMap<ModuleId, ModuleTiming>,
 
@@ -922,8 +907,6 @@ struct State<'a> {
     // since the unioning process could potentially take longer than the savings.
     // (Granted, this has not been attempted or measured!)
     pub layout_caches: std::vec::Vec<LayoutCache<'a>>,
-
-    pub procs: Procs<'a>,
 }
 
 #[derive(Debug)]
@@ -1415,14 +1398,6 @@ where
             // reference to each worker. (Slices are Sync, but bumpalo Vecs are not.)
             let stealers = stealers.into_bump_slice();
 
-            let mut loading_started = MutSet::default();
-
-            // If the root module we're still processing happens to be an interface,
-            // it's possible that something else will import it. That will
-            // necessarily cause a cyclic import error, but in the meantime
-            // we still shouldn't load it.
-            loading_started.insert(root_id);
-
             let mut worker_listeners =
                 bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
 
@@ -1522,19 +1497,14 @@ where
                 procedures: MutMap::default(),
                 exposed_to_host: MutMap::default(),
                 exposed_types,
-                loading_started,
                 arc_modules,
                 arc_shorthands,
                 constrained_ident_ids: IdentIds::exposed_builtins(0),
                 ident_ids_by_module,
                 declarations_by_id: MutMap::default(),
                 exposed_symbols_by_module: MutMap::default(),
-                unsolved_modules: MutMap::default(),
                 timings: MutMap::default(),
-                needs_specialization: MutSet::default(),
-                specializations_in_flight: 0,
                 layout_caches: std::vec::Vec::with_capacity(num_cpus::get()),
-                procs: Procs::new_in(arena),
             };
 
             // We've now distributed one worker queue to each thread.
