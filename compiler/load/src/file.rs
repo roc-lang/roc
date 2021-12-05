@@ -13,7 +13,7 @@ use roc_constrain::module::{
     constrain_imports, pre_constrain_imports, ConstrainableImports, Import,
 };
 use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
-use roc_module::ident::{Ident, Lowercase, ModuleName, QualifiedModuleName, TagName};
+use roc_module::ident::{Ident, ModuleName, QualifiedModuleName, TagName};
 use roc_module::symbol::{
     IdentIds, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds, PackageQualified,
     Symbol,
@@ -687,6 +687,8 @@ enum HeaderFor<'a> {
         /// usually `base`
         config_shorthand: &'a str,
         /// the type scheme of the main function (required by the platform)
+        /// (currently unused)
+        #[allow(dead_code)]
         platform_main_type: TypedIdent<'a>,
         /// provided symbol to host (commonly `mainForHost`)
         main_for_host: Symbol,
