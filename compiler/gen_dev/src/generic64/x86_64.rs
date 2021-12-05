@@ -1514,33 +1514,33 @@ fn sete_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
 /// `CVTSS2SD xmm` -> Convert one single-precision floating-point value in xmm/m32 to one double-precision floating-point value in xmm.
 #[inline(always)]
 fn cvtss2sd_freg64_freg32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
-    cvt_help(buf, 0xF3, 0x5A as u8, dst as u8, src as u8)
+    cvt_help(buf, 0xF3, 0x5A, dst as u8, src as u8)
 }
 
 /// `CVTSD2SS xmm` -> Convert one double-precision floating-point value in xmm to one single-precision floating-point value and merge with high bits.
 #[inline(always)]
 fn cvtsd2ss_freg32_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
-    cvt_help(buf, 0xF2, 0x5A as u8, dst as u8, src as u8)
+    cvt_help(buf, 0xF2, 0x5A, dst as u8, src as u8)
 }
 
 /// `CVTSI2SD r/m64` -> Convert one signed quadword integer from r/m64 to one double-precision floating-point value in xmm.
 #[inline(always)]
 fn cvtsi2sd_freg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64GeneralReg) {
-    cvt_help(buf, 0xF2, 0x2A as u8, dst as u8, src as u8)
+    cvt_help(buf, 0xF2, 0x2A, dst as u8, src as u8)
 }
 
 /// `CVTSI2SS r/m64` -> Convert one signed quadword integer from r/m64 to one single-precision floating-point value in xmm.
 #[allow(dead_code)]
 #[inline(always)]
 fn cvtsi2ss_freg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64GeneralReg) {
-    cvt_help(buf, 0xF3, 0x2A as u8, dst as u8, src as u8)
+    cvt_help(buf, 0xF3, 0x2A, dst as u8, src as u8)
 }
 
 /// `CVTTSS2SI xmm/m32` -> Convert one single-precision floating-point value from xmm/m32 to one signed quadword integer in r64 using truncation.
 #[allow(dead_code)]
 #[inline(always)]
 fn cvttss2si_reg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64FloatReg) {
-    cvt_help(buf, 0xF3, 0x2C as u8, dst as u8, src as u8)
+    cvt_help(buf, 0xF3, 0x2C, dst as u8, src as u8)
 }
 
 /// `SETNE r/m64` -> Set byte if not equal (ZF=0).
