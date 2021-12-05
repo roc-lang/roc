@@ -1129,8 +1129,25 @@ impl X86_64Assembler {
 const REX: u8 = 0x40;
 const REX_W: u8 = REX + 0x8;
 
+/// alias of add_rm_extension_reg
 #[inline(always)]
-const fn add_rm_extension(reg: u8, byte: u8) -> u8 {
+const fn add_rm_extension(reg: X86_64GeneralReg, byte: u8) -> u8 {
+    add_rm_extension_reg(reg, byte)
+}
+
+#[inline(always)]
+const fn add_rm_extension_reg(reg: X86_64GeneralReg, byte: u8) -> u8 {
+    add_rm_extension_u8(reg as u8, byte)
+}
+
+#[allow(dead_code)]
+#[inline(always)]
+const fn add_rm_extension_freg(freg: X86_64FloatReg, byte: u8) -> u8 {
+    add_rm_extension_u8(freg as u8, byte)
+}
+
+#[inline(always)]
+const fn add_rm_extension_u8(reg: u8, byte: u8) -> u8 {
     if reg > 7 {
         byte + 1
     } else {
@@ -1140,11 +1157,28 @@ const fn add_rm_extension(reg: u8, byte: u8) -> u8 {
 
 #[inline(always)]
 const fn add_opcode_extension(reg: X86_64GeneralReg, byte: u8) -> u8 {
-    add_rm_extension(reg as u8, byte)
+    add_rm_extension_reg(reg, byte)
+}
+
+/// alias of add_reg_extension_reg
+#[inline(always)]
+const fn add_reg_extension(reg: X86_64GeneralReg, byte: u8) -> u8 {
+    add_reg_extension_reg(reg, byte)
 }
 
 #[inline(always)]
-const fn add_reg_extension(reg: u8, byte: u8) -> u8 {
+const fn add_reg_extension_reg(reg: X86_64GeneralReg, byte: u8) -> u8 {
+    add_reg_extension_u8(reg as u8, byte)
+}
+
+#[allow(dead_code)]
+#[inline(always)]
+const fn add_reg_extension_freg(freg: X86_64FloatReg, byte: u8) -> u8 {
+    add_reg_extension_u8(freg as u8, byte)
+}
+
+#[inline(always)]
+const fn add_reg_extension_u8(reg: u8, byte: u8) -> u8 {
     if reg > 7 {
         byte + 4
     } else {
@@ -1159,8 +1193,8 @@ fn binop_reg64_reg64(
     dst: X86_64GeneralReg,
     src: X86_64GeneralReg,
 ) {
-    let rex = add_rm_extension(dst as u8, REX_W);
-    let rex = add_reg_extension(src as u8, rex);
+    let rex = add_rm_extension(dst, REX_W);
+    let rex = add_reg_extension(src, rex);
     let dst_mod = dst as u8 % 8;
     let src_mod = (src as u8 % 8) << 3;
     buf.extend(&[rex, op_code, 0xC0 + dst_mod + src_mod]);
@@ -1174,8 +1208,8 @@ fn extended_binop_reg64_reg64(
     dst: X86_64GeneralReg,
     src: X86_64GeneralReg,
 ) {
-    let rex = add_rm_extension(dst as u8, REX_W);
-    let rex = add_reg_extension(src as u8, rex);
+    let rex = add_rm_extension(dst, REX_W);
+    let rex = add_reg_extension(src, rex);
     let dst_mod = dst as u8 % 8;
     let src_mod = (src as u8 % 8) << 3;
     buf.extend(&[rex, op_code1, op_code2, 0xC0 + dst_mod + src_mod]);
@@ -1190,7 +1224,7 @@ fn extended_binop_reg64_reg64(
 #[inline(always)]
 fn add_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i32) {
     // This can be optimized if the immediate is 1 byte.
-    let rex = add_rm_extension(dst as u8, REX_W);
+    let rex = add_rm_extension(dst, REX_W);
     let dst_mod = dst as u8 % 8;
     buf.reserve(7);
     buf.extend(&[rex, 0x81, 0xC0 + dst_mod]);
@@ -1246,7 +1280,7 @@ fn andpd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64Fl
 /// r/m64 AND imm8 (sign-extended).
 #[inline(always)]
 fn and_reg64_imm8(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i8) {
-    let rex = add_rm_extension(dst as u8, REX_W);
+    let rex = add_rm_extension(dst, REX_W);
     let dst_mod = dst as u8 % 8;
     buf.extend(&[rex, 0x83, 0xE0 + dst_mod, imm as u8]);
 }
@@ -1254,8 +1288,8 @@ fn and_reg64_imm8(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i8) {
 /// `CMOVL r64,r/m64` -> Move if less (SF≠ OF).
 #[inline(always)]
 fn cmovl_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
-    let rex = add_reg_extension(dst as u8, REX_W);
-    let rex = add_rm_extension(src as u8, rex);
+    let rex = add_reg_extension(dst, REX_W);
+    let rex = add_rm_extension(src, rex);
     let dst_mod = (dst as u8 % 8) << 3;
     let src_mod = src as u8 % 8;
     buf.extend(&[rex, 0x0F, 0x4C, 0xC0 + dst_mod + src_mod]);
@@ -1264,7 +1298,7 @@ fn cmovl_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64Ge
 /// `CMP r/m64,i32` -> Compare i32 to r/m64.
 #[inline(always)]
 fn cmp_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i32) {
-    let rex = add_rm_extension(dst as u8, REX_W);
+    let rex = add_rm_extension(dst, REX_W);
     let dst_mod = dst as u8 % 8;
     buf.reserve(7);
     buf.extend(&[rex, 0x81, 0xF8 + dst_mod]);
@@ -1312,7 +1346,7 @@ fn jne_imm32(buf: &mut Vec<'_, u8>, imm: i32) {
 /// `MOV r/m64, imm32` -> Move imm32 sign extended to 64-bits to r/m64.
 #[inline(always)]
 fn mov_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i32) {
-    let rex = add_rm_extension(dst as u8, REX_W);
+    let rex = add_rm_extension(dst, REX_W);
     let dst_mod = dst as u8 % 8;
     buf.reserve(7);
     buf.extend(&[rex, 0xC7, 0xC0 + dst_mod]);
@@ -1351,8 +1385,8 @@ fn mov_base64_offset32_reg64(
     offset: i32,
     src: X86_64GeneralReg,
 ) {
-    let rex = add_rm_extension(base as u8, REX_W);
-    let rex = add_reg_extension(src as u8, rex);
+    let rex = add_rm_extension(base, REX_W);
+    let rex = add_reg_extension(src, rex);
     let src_mod = (src as u8 % 8) << 3;
     let base_mod = base as u8 % 8;
     buf.reserve(8);
@@ -1372,8 +1406,8 @@ fn mov_reg64_base64_offset32(
     base: X86_64GeneralReg,
     offset: i32,
 ) {
-    let rex = add_rm_extension(base as u8, REX_W);
-    let rex = add_reg_extension(dst as u8, rex);
+    let rex = add_rm_extension(base, REX_W);
+    let rex = add_reg_extension(dst, rex);
     let dst_mod = (dst as u8 % 8) << 3;
     let base_mod = base as u8 % 8;
     buf.reserve(8);
@@ -1468,7 +1502,7 @@ fn movsd_freg64_base64_offset32(
 /// `NEG r/m64` -> Two's complement negate r/m64.
 #[inline(always)]
 fn neg_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
-    let rex = add_rm_extension(reg as u8, REX_W);
+    let rex = add_rm_extension(reg, REX_W);
     let reg_mod = reg as u8 % 8;
     buf.extend(&[rex, 0xF7, 0xD8 + reg_mod]);
 }
@@ -1497,8 +1531,8 @@ fn set_reg64_help(op_code: u8, buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
 
 #[inline(always)]
 fn cvt_help(buf: &mut Vec<'_, u8>, op_code1: u8, op_code2: u8, reg1: u8, reg2: u8) {
-    let rex = add_rm_extension(reg2, REX_W);
-    let rex = add_reg_extension(reg1, rex);
+    let rex = add_rm_extension_u8(reg2, REX_W);
+    let rex = add_reg_extension_u8(reg1, rex);
     let mod1 = (reg1 % 8) << 3;
     let mod2 = reg2 % 8;
 
@@ -1565,7 +1599,7 @@ fn ret(buf: &mut Vec<'_, u8>) {
 #[inline(always)]
 fn sub_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i32) {
     // This can be optimized if the immediate is 1 byte.
-    let rex = add_rm_extension(dst as u8, REX_W);
+    let rex = add_rm_extension(dst, REX_W);
     let dst_mod = dst as u8 % 8;
     buf.reserve(7);
     buf.extend(&[rex, 0x81, 0xE8 + dst_mod]);
