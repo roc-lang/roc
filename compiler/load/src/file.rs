@@ -3343,6 +3343,7 @@ fn run_solve<'a>(
         debug_assert!(constraint.validate(), "{:?}", &constraint);
     }
 
+    dbg!(module.module_id);
     let (solved_subs, solved_env, problems) =
         roc_solve::module::run_solve(aliases, rigid_variables, constraint, var_store);
 

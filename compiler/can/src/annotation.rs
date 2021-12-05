@@ -83,6 +83,8 @@ pub fn canonicalize_annotation(
     let mut references = MutSet::default();
     let mut aliases = SendMap::default();
 
+    dbg!(&annotation);
+
     let typ = can_annotation_help(
         env,
         annotation,
@@ -195,6 +197,12 @@ fn can_annotation_help(
                 args.push(arg_ann);
             }
 
+            // Result 100 101 : [ Ok 100, Err 101 ]
+            //
+            // Effect : {} -> Result a b
+            // Effect : {} |101| -> 100
+            // Effect : {} |101| -> Result 100 101
+
             match scope.lookup_alias(symbol) {
                 Some(alias) => {
                     // use a known alias
@@ -212,7 +220,8 @@ fn can_annotation_help(
                         return error;
                     }
 
-                    if false {
+                    if true {
+                        dbg!(ident, &alias.type_variables);
                         let type_arguments = alias
                             .type_variables
                             .iter()
@@ -293,7 +302,6 @@ fn can_annotation_help(
                     let var = var_store.fresh();
 
                     introduced_variables.insert_named(name, var);
-
                     Type::Variable(var)
                 }
             }

@@ -181,22 +181,23 @@ impl Scope {
             recursion_variables,
         } = typ.variables_detail();
 
-        debug_assert!({
-            let mut hidden = type_variables;
-
-            for loc_var in vars.iter() {
-                hidden.remove(&loc_var.value.1);
-            }
-
-            if !hidden.is_empty() {
-                panic!(
-                    "Found unbound type variables {:?} \n in type alias {:?} {:?} : {:?}",
-                    hidden, name, &vars, &typ
-                )
-            }
-
-            true
-        });
+        //        debug_assert!({
+        //            let mut hidden = type_variables;
+        //
+        //            for loc_var in vars.iter() {
+        //                hidden.remove(&loc_var.value.1);
+        //            }
+        //
+        //
+        //            if !hidden.is_empty() {
+        //                panic!(
+        //                    "Found unbound type variables {:?} \n in type alias {:?} {:?} : {:?}",
+        //                    hidden, name, &vars, &typ
+        //                )
+        //            }
+        //
+        //            true
+        //        });
 
         let lambda_set_variables: Vec<_> = lambda_set_variables
             .into_iter()
@@ -210,6 +211,8 @@ impl Scope {
             recursion_variables,
             typ,
         };
+
+        dbg!(&alias);
 
         self.aliases.insert(name, alias);
     }

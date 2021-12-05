@@ -177,9 +177,6 @@ impl SolvedType {
                 lambda_set_variables,
                 actual: box_type,
             } => {
-                dbg!(symbol);
-                panic!();
-
                 let mut actual = box_type.clone();
 
                 let mut substitutions = ImMap::default();

@@ -169,6 +169,23 @@ pub enum Type {
     Record(SendMap<Lowercase, RecordField<Type>>, Box<Type>),
     TagUnion(Vec<(TagName, Vec<Type>)>, Box<Type>),
     FunctionOrTagUnion(TagName, Symbol, Box<Type>),
+
+    /// Given
+    ///
+    /// Effect a : {} -> a
+    ///
+    /// x : Effect Str
+    ///
+    /// type_arguments = vec![ ("a", Str, Var(13)) ]
+    /// type_arguments = vec![ ("a", { x : b }, Var(13)) ]
+    /// lambda_set_variables: vec![ var(12) ]
+    ///
+    /// actual: {} |Var(12)| -> Var(13)
+    ///
+    ///
+    /// copy1: {} |Var(22)| -> Var(23)
+    /// copy2: {} |Var(32)| -> Var(33)
+    ///
     UninstantiatedAlias {
         symbol: Symbol,
         type_arguments: Vec<(Lowercase, Type, Variable)>,

@@ -90,6 +90,8 @@ mod solve_expr {
 
         let mut subs = solved.inner_mut();
 
+        dbg!(&subs);
+
         //        assert!(can_problems.is_empty());
         //        assert!(type_problems.is_empty());
         //        let CanExprOut {
@@ -4715,6 +4717,32 @@ mod solve_expr {
                 "#
             ),
             "{ email : Str, name : Str }a -> { email : Str, name : Str }a",
+        )
+    }
+
+    #[test]
+    fn effect_alias() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Effect a : {} -> a
+
+                always : a -> Effect a
+                always = \x -> (\{} -> x)
+
+                greeting =
+                    x : Effect Str
+                    x = always "foo"
+
+                    when x is
+                        _ -> "foobar"
+
+                main = greeting
+                "#
+            ),
+            "",
         )
     }
 }

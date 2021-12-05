@@ -800,10 +800,18 @@ fn type_to_variable<'a>(
                 instantiate_alias(subs, rank, pools, &mut alias_variables, cached_variable);
 
             // unify type arguments with instantiated variables
+            // debug_assert_eq!(type_arguments.len(), alias_variables.len());
             for ((_, t, _), v) in type_arguments.iter().zip(alias_variables.iter()) {
                 let type_as_var =
                     type_to_variable(subs, Rank::NONE, pools, arena, cached_aliases, t);
                 roc_unify::unify::unify(subs, *v, type_as_var);
+            }
+
+            let it = alias_variables.iter().skip(type_arguments.len());
+
+            for (lambda_set_var, v) in lambda_set_variables.iter().zip(it) {
+                let copy = deep_copy_var(subs, rank, pools, *lambda_set_var);
+                roc_unify::unify::unify(subs, *v, copy);
             }
 
             let type_variables = alias_variables[..type_arguments.len()].iter().copied();
@@ -1476,7 +1484,7 @@ fn instantiate_alias(
         if let Some(copied) = opt_var {
             *var = copied; // deep_copy_var_help(subs, rank, pools, visited, *var);
         } else {
-            panic!(" {:?}", var);
+            // panic!(" {:?}", var);
         }
     }
 
