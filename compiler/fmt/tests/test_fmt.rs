@@ -10,6 +10,7 @@ mod test_fmt {
     use roc_fmt::annotation::{Formattable, Newlines, Parens};
     use roc_fmt::def::fmt_def;
     use roc_fmt::module::fmt_module;
+    use roc_fmt::Buf;
     use roc_parse::module::{self, module_defs};
     use roc_parse::parser::{Parser, State};
     use roc_test_utils::assert_multiline_str_eq;
@@ -19,7 +20,7 @@ mod test_fmt {
         let arena = Bump::new();
         match roc_parse::test_helpers::parse_expr_with(&arena, input.trim()) {
             Ok(actual) => {
-                let mut buf = String::new_in(&arena);
+                let mut buf = Buf::new_in(&arena);
 
                 actual.format_with_options(&mut buf, Parens::NotNeeded, Newlines::Yes, 0);
 
@@ -52,7 +53,7 @@ mod test_fmt {
 
         match module::parse_header(&arena, State::new(src.as_bytes())) {
             Ok((actual, state)) => {
-                let mut buf = String::new_in(&arena);
+                let mut buf = Buf::new_in(&arena);
 
                 fmt_module(&mut buf, &actual);
 
@@ -2697,6 +2698,21 @@ mod test_fmt {
     }
 
     #[test]
+    fn multiline_tag_union_annotation_beginning_on_same_line() {
+        expr_formats_same(indoc!(
+            r#"
+            Expr  : [
+                    Add Expr Expr,
+                    Mul Expr Expr,
+                    Val I64,
+                    Var I64,
+                ]
+
+            Expr"#
+        ));
+    }
+
+    #[test]
     fn multiline_tag_union_annotation_with_final_comment() {
         expr_formats_to(
             indoc!(
@@ -2873,12 +2889,13 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r#"
             Task.fromResult
-                (a, b <- binaryOp ctx
+                (
+                    a, b <- binaryOp ctx
                     if a == b then
                         -1
                     else
                         0
-                    )
+                )
             "#
         ));
     }

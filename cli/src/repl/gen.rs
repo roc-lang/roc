@@ -238,7 +238,7 @@ pub fn gen_and_eval<'a>(
                 ptr_bytes,
             )
         };
-        let mut expr = bumpalo::collections::String::new_in(&arena);
+        let mut expr = roc_fmt::Buf::new_in(&arena);
 
         use eval::ToAstProblem::*;
         match res_answer {
