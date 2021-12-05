@@ -2620,24 +2620,18 @@ mod test_fmt {
 
     #[test]
     fn single_line_platform() {
-        // There are many places that there should probably be spaces, e.g.:
-        // requires { model=>Model, msg=>Msg } { main : Effect {} }
-        //                                             ^
-        // putLine : Str -> Effect {},
-        //          ^
-        // TODO: improve spacing
         module_formats_same(
             "platform folkertdev/foo \
-            requires { model=>Model, msg=>Msg } { main :Effect {} } \
+            requires { model=>Model, msg=>Msg } { main : Effect {} } \
             exposes [] \
             packages {} \
             imports [ Task.{ Task } ] \
             provides [ mainForHost ] \
             effects fx.Effect \
             { \
-                putLine :Str -> Effect {}, \
-                putInt :I64 -> Effect {}, \
-                getInt :Effect { value : I64, errorCode : [ A, B ], isError : Bool } \
+                putLine : Str -> Effect {}, \
+                putInt : I64 -> Effect {}, \
+                getInt : Effect { value : I64, errorCode : [ A, B ], isError : Bool } \
             } ",
         );
     }

@@ -184,7 +184,7 @@ fn fmt_typed_ident<'a>(buf: &mut Buf<'a>, entry: &TypedIdent<'a>, indent: u16) {
             buf.indent(indent);
             buf.push_str(ident.value);
             fmt_default_spaces(buf, spaces_before_colon, " ", indent);
-            buf.push(':');
+            buf.push_str(": ");
             ann.value.format(buf, indent);
         }
         SpaceBefore(sub_entry, spaces) => {
