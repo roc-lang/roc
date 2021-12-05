@@ -167,7 +167,7 @@ fn main() -> io::Result<()> {
 
 fn read_all_roc_files(
     dir: &OsString,
-    mut roc_file_paths: &mut Vec<OsString>,
+    roc_file_paths: &mut Vec<OsString>,
 ) -> Result<(), std::io::Error> {
     let entries = fs::read_dir(dir)?;
 
