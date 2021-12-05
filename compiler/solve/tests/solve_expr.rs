@@ -109,7 +109,7 @@ mod solve_expr {
 
         // name type vars
         for var in exposed_to_host.values() {
-            name_all_type_vars(*var, &mut subs);
+            name_all_type_vars(*var, subs);
         }
 
         let content = {
