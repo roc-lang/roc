@@ -124,6 +124,9 @@ enum CanonicalizeFieldProblem {
         field_region: Region,
     },
 }
+
+// TODO: the `value_output: Output` field takes _a lot_ of space!
+#[allow(clippy::large_enum_variant)]
 enum CanonicalField<'a> {
     LabelAndValue {
         label: &'a str,
@@ -136,6 +139,7 @@ enum CanonicalField<'a> {
         var: Variable,
     }, // TODO make ValidLabelOnly
 }
+
 fn canonicalize_field<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
