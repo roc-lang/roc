@@ -1,20 +1,10 @@
-#[derive(Debug)]
+// note: the Default is that these are all False
+#[derive(Debug, Default)]
 pub struct Modifiers {
     pub shift: bool,
     pub ctrl: bool,
     pub alt: bool,
     pub logo: bool,
-}
-
-impl Default for Modifiers {
-    fn default() -> Self {
-        Self {
-            shift: false,
-            ctrl: false,
-            alt: false,
-            logo: false,
-        }
-    }
 }
 
 impl Modifiers {
