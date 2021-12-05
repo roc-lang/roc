@@ -246,6 +246,7 @@ pub fn gen_and_eval<'a>(
                 answer.format_with_options(&mut expr, Parens::NotNeeded, Newlines::Yes, 0);
             }
             Err(FunctionLayout) => {
+                expr.indent(0);
                 expr.push_str("<function>");
             }
         }
