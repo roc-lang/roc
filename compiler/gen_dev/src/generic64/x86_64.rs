@@ -2256,7 +2256,6 @@ mod tests {
         let mut buf = bumpalo::vec![in &arena];
         let cvtss2sd_code: u8 = 0x5A;
 
-
         for (op_code, reg1, reg2, expected) in &[(
             cvtss2sd_code,
             X86_64FloatReg::XMM0,
