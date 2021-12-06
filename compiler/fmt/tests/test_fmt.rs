@@ -2643,7 +2643,7 @@ mod test_fmt {
                 putLine : Str -> Effect {}, \
                 putInt : I64 -> Effect {}, \
                 getInt : Effect { value : I64, errorCode : [ A, B ], isError : Bool } \
-            } ",
+            }",
         );
     }
 
