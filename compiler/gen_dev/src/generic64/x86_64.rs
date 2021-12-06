@@ -2258,8 +2258,8 @@ mod tests {
 
         for (op_code, reg1, reg2, expected) in &[(
             cvtss2sd_code,
-            X86_64FloatReg::XMM0,
             X86_64FloatReg::XMM1,
+            X86_64FloatReg::XMM0,
             [0xF3, 0x0F, 0x5A, 0xC8],
         )] {
             buf.clear();
