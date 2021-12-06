@@ -1556,7 +1556,7 @@ fn sete_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
 /// `CVTSS2SD xmm` -> Convert one single-precision floating-point value in xmm/m32 to one double-precision floating-point value in xmm.
 #[inline(always)]
 fn cvtss2sd_freg64_freg32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
-    cvtsx2_help(buf, 0xF3, 0x5A, src as u8, dst as u8)
+    cvtsx2_help(buf, 0xF3, 0x5A, dst as u8, src as u8)
 }
 
 /// `CVTSD2SS xmm` -> Convert one double-precision floating-point value in xmm to one single-precision floating-point value and merge with high bits.
@@ -2186,7 +2186,6 @@ mod tests {
         let mut buf = bumpalo::vec![in &arena];
         let cvtsi2ss_code: u8 = 0x2A;
         let cvttss2si_code: u8 = 0x2C;
-        let cvtss2sd_code: u8 = 0x5A;
 
         for (op_code, reg1, reg2, expected) in &[
             (
@@ -2249,11 +2248,19 @@ mod tests {
             cvtsi2_help(&mut buf, 0xF3, *op_code, *reg1 as u8, *reg2 as u8);
             assert_eq!(expected, &buf[..]);
         }
+    }
+
+    #[test]
+    fn test_cvtsx2_help() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        let cvtss2sd_code: u8 = 0x5A;
+
 
         for (op_code, reg1, reg2, expected) in &[(
             cvtss2sd_code,
-            X86_64FloatReg::XMM1,
             X86_64FloatReg::XMM0,
+            X86_64FloatReg::XMM1,
             [0xF3, 0x0F, 0x5A, 0xC8],
         )] {
             buf.clear();
