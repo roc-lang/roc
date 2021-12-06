@@ -36,7 +36,7 @@ pub fn start_new_int(ed_model: &mut EdModel, digit_char: &char) -> EdResult<Inpu
         number: IntVal::U64(*digit_char as u64), // TODO determine if u64 on wordlength of current arch, perhaps introduce Unknown(i64)
         var: int_var,
         style: IntStyle::Decimal,
-        text: PoolStr::new(&digit_string, &mut ed_model.module.env.pool),
+        text: PoolStr::new(&digit_string, ed_model.module.env.pool),
     };
 
     ed_model

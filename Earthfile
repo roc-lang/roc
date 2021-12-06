@@ -1,4 +1,4 @@
-FROM rust:1.56.1-slim-bullseye
+FROM rust:1.57.0-slim-bullseye
 WORKDIR /earthbuild
 
 prep-debian:

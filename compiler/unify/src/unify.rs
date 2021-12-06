@@ -1,4 +1,3 @@
-use roc_collections::all::MutMap;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_types::subs::Content::{self, *};
@@ -70,12 +69,6 @@ pub enum Unified {
     Success(Pool),
     Failure(Pool, ErrorType, ErrorType),
     BadType(Pool, roc_types::types::Problem),
-}
-
-#[derive(Debug)]
-struct TagUnionStructure {
-    tags: MutMap<TagName, Vec<Variable>>,
-    ext: Variable,
 }
 
 type Outcome = Vec<Mismatch>;

@@ -88,7 +88,7 @@ mod solve_expr {
         let mut can_problems = can_problems.remove(&home).unwrap_or_default();
         let type_problems = type_problems.remove(&home).unwrap_or_default();
 
-        let mut subs = solved.inner_mut();
+        let subs = solved.inner_mut();
 
         //        assert!(can_problems.is_empty());
         //        assert!(type_problems.is_empty());
@@ -109,7 +109,7 @@ mod solve_expr {
 
         // name type vars
         for var in exposed_to_host.values() {
-            name_all_type_vars(*var, &mut subs);
+            name_all_type_vars(*var, subs);
         }
 
         let content = {

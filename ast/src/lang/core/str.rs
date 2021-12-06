@@ -22,7 +22,7 @@ pub(crate) fn flatten_str_literal<'a>(
     match literal {
         PlainLine(str_slice) => {
             // TODO use smallstr
-            let expr = Expr2::Str(PoolStr::new(str_slice, &mut env.pool));
+            let expr = Expr2::Str(PoolStr::new(str_slice, env.pool));
 
             (expr, Output::default())
         }
@@ -88,7 +88,7 @@ fn flatten_str_lines<'a>(
                         output.references.calls.insert(Symbol::STR_CONCAT);
 
                         if !buf.is_empty() {
-                            segments.push(StrSegment::Plaintext(PoolStr::new(&buf, &mut env.pool)));
+                            segments.push(StrSegment::Plaintext(PoolStr::new(&buf, env.pool)));
 
                             buf = String::new();
                         }
@@ -115,7 +115,7 @@ fn flatten_str_lines<'a>(
     }
 
     if !buf.is_empty() {
-        segments.push(StrSegment::Plaintext(PoolStr::new(&buf, &mut env.pool)));
+        segments.push(StrSegment::Plaintext(PoolStr::new(&buf, env.pool)));
     }
 
     (desugar_str_segments(env, segments), output)

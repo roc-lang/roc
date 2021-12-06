@@ -151,8 +151,7 @@ pub type JPLiveVarMap = MutMap<JoinPointId, LiveVarSet>;
 struct Context<'a> {
     arena: &'a Bump,
     vars: VarMap,
-    jp_live_vars: JPLiveVarMap,      // map: join point => live variables
-    local_context: LocalContext<'a>, // we use it to store the join point declarations
+    jp_live_vars: JPLiveVarMap, // map: join point => live variables
     param_map: &'a ParamMap<'a>,
 }
 
@@ -244,7 +243,6 @@ impl<'a> Context<'a> {
             arena,
             vars,
             jp_live_vars: MutMap::default(),
-            local_context: LocalContext::default(),
             param_map,
         }
     }
@@ -956,7 +954,6 @@ impl<'a> Context<'a> {
                 };
                 // TODO use borrow signature here?
                 let ps = self.param_map.get_join_point(*j);
-                // let ps = self.local_context.join_points.get(j).unwrap().0;
 
                 let b = self.add_inc_before(xs, ps, stmt, j_live_vars);
 
@@ -1012,11 +1009,6 @@ impl<'a> Context<'a> {
             RuntimeError(_) | Refcounting(_, _) => (stmt, MutSet::default()),
         }
     }
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct LocalContext<'a> {
-    join_points: MutMap<JoinPointId, (&'a [Param<'a>], &'a Stmt<'a>)>,
 }
 
 pub fn collect_stmt(

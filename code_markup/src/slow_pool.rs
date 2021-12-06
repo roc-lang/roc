@@ -4,7 +4,7 @@ use crate::markup::nodes::MarkupNode;
 
 pub type MarkNodeId = usize;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct SlowPool {
     nodes: Vec<MarkupNode>,
 }
@@ -67,11 +67,5 @@ impl fmt::Display for SlowPool {
         }
 
         Ok(())
-    }
-}
-
-impl Default for SlowPool {
-    fn default() -> Self {
-        SlowPool { nodes: Vec::new() }
     }
 }

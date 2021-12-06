@@ -7,7 +7,7 @@ use crate::ui::util::slice_get_mut;
 use std::cmp::Ordering;
 use std::fmt;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct CodeLines {
     pub lines: Vec<String>,
     pub nr_of_chars: usize,
@@ -151,15 +151,6 @@ impl CodeLines {
         TextPos {
             line: last_line_nr,
             column: self.line_len(last_line_nr).unwrap(), // safe because we just calculated last_line
-        }
-    }
-}
-
-impl Default for CodeLines {
-    fn default() -> Self {
-        CodeLines {
-            lines: Vec::new(),
-            nr_of_chars: 0,
         }
     }
 }
