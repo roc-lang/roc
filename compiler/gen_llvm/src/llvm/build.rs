@@ -2214,6 +2214,24 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
     data_ptr
 }
 
+macro_rules! dict_key_value_layout {
+    ($dict_layout:expr) => {
+        match $dict_layout {
+            Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => (key_layout, value_layout),
+            _ => unreachable!("invalid dict layout"),
+        }
+    };
+}
+
+macro_rules! list_element_layout {
+    ($dict_layout:expr) => {
+        match $dict_layout {
+            Layout::Builtin(Builtin::List(list_layout)) => *list_layout,
+            _ => unreachable!("invalid list layout"),
+        }
+    };
+}
+
 fn list_literal<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
@@ -5452,17 +5470,15 @@ fn run_low_level<'a, 'ctx, 'env>(
             let index_1 = load_symbol(scope, &args[1]);
             let index_2 = load_symbol(scope, &args[2]);
 
-            match list_layout {
-                Layout::Builtin(Builtin::List(element_layout)) => list_swap(
-                    env,
-                    original_wrapper,
-                    index_1.into_int_value(),
-                    index_2.into_int_value(),
-                    element_layout,
-                    update_mode,
-                ),
-                _ => unreachable!("Invalid layout {:?} in List.swap", list_layout),
-            }
+            let element_layout = list_element_layout!(list_layout);
+            list_swap(
+                env,
+                original_wrapper,
+                index_1.into_int_value(),
+                index_2.into_int_value(),
+                element_layout,
+                update_mode,
+            )
         }
         ListSublist => {
             // List.sublist : List elem, { start : Nat, len : Nat } -> List elem
@@ -5477,17 +5493,15 @@ fn run_low_level<'a, 'ctx, 'env>(
             let start = load_symbol(scope, &args[1]);
             let len = load_symbol(scope, &args[2]);
 
-            match list_layout {
-                Layout::Builtin(Builtin::List(element_layout)) => list_sublist(
-                    env,
-                    layout_ids,
-                    original_wrapper,
-                    start.into_int_value(),
-                    len.into_int_value(),
-                    element_layout,
-                ),
-                _ => unreachable!("Invalid layout {:?} in List.sublist", list_layout),
-            }
+            let element_layout = list_element_layout!(list_layout);
+            list_sublist(
+                env,
+                layout_ids,
+                original_wrapper,
+                start.into_int_value(),
+                len.into_int_value(),
+                element_layout,
+            )
         }
         ListDropAt => {
             // List.dropAt : List elem, Nat -> List elem
@@ -5498,16 +5512,14 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let count = load_symbol(scope, &args[1]);
 
-            match list_layout {
-                Layout::Builtin(Builtin::List(element_layout)) => list_drop_at(
-                    env,
-                    layout_ids,
-                    original_wrapper,
-                    count.into_int_value(),
-                    element_layout,
-                ),
-                _ => unreachable!("Invalid layout {:?} in List.dropAt", list_layout),
-            }
+            let element_layout = list_element_layout!(list_layout);
+            list_drop_at(
+                env,
+                layout_ids,
+                original_wrapper,
+                count.into_int_value(),
+                element_layout,
+            )
         }
         ListPrepend => {
             // List.prepend : List elem, elem -> List elem
@@ -5525,6 +5537,38 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (list, outer_list_layout) = load_symbol_and_layout(scope, &args[0]);
 
             list_join(env, parent, list, outer_list_layout)
+        }
+        ListGetUnsafe => {
+            // List.get : List elem, Nat -> [ Ok elem, OutOfBounds ]*
+            debug_assert_eq!(args.len(), 2);
+
+            let (wrapper_struct, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let wrapper_struct = wrapper_struct.into_struct_value();
+            let elem_index = load_symbol(scope, &args[1]).into_int_value();
+
+            list_get_unsafe(
+                env,
+                layout_ids,
+                parent,
+                list_layout,
+                elem_index,
+                wrapper_struct,
+            )
+        }
+        ListSet => {
+            let list = load_symbol(scope, &args[0]);
+            let index = load_symbol(scope, &args[1]);
+            let (element, element_layout) = load_symbol_and_layout(scope, &args[2]);
+
+            list_set(
+                env,
+                layout_ids,
+                list,
+                index.into_int_value(),
+                element,
+                element_layout,
+                update_mode,
+            )
         }
         NumToStr => {
             // Num.toStr : Num a -> Str
@@ -5807,41 +5851,6 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             BasicValueEnum::IntValue(bool_val)
         }
-        ListGetUnsafe => {
-            // List.get : List elem, Nat -> [ Ok elem, OutOfBounds ]*
-            debug_assert_eq!(args.len(), 2);
-
-            let (wrapper_struct, list_layout) = load_symbol_and_layout(scope, &args[0]);
-            let wrapper_struct = wrapper_struct.into_struct_value();
-            let elem_index = load_symbol(scope, &args[1]).into_int_value();
-
-            list_get_unsafe(
-                env,
-                layout_ids,
-                parent,
-                list_layout,
-                elem_index,
-                wrapper_struct,
-            )
-        }
-        ListSet => {
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (index, _) = load_symbol_and_layout(scope, &args[1]);
-            let (element, _) = load_symbol_and_layout(scope, &args[2]);
-
-            match list_layout {
-                Layout::Builtin(Builtin::List(element_layout)) => list_set(
-                    env,
-                    layout_ids,
-                    list,
-                    index.into_int_value(),
-                    element,
-                    element_layout,
-                    update_mode,
-                ),
-                _ => unreachable!("invalid dict layout"),
-            }
-        }
         Hash => {
             debug_assert_eq!(args.len(), 2);
             let seed = load_symbol(scope, &args[0]);
@@ -5873,12 +5882,8 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
             let (key, key_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            match dict_layout {
-                Layout::Builtin(Builtin::Dict(_, value_layout)) => {
-                    dict_remove(env, layout_ids, dict, key, key_layout, value_layout)
-                }
-                _ => unreachable!("invalid dict layout"),
-            }
+            let (key_layout, value_layout) = dict_key_value_layout!(dict_layout);
+            dict_remove(env, layout_ids, dict, key, key_layout, value_layout)
         }
         DictContains => {
             debug_assert_eq!(args.len(), 2);
@@ -5886,12 +5891,8 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
             let (key, key_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            match dict_layout {
-                Layout::Builtin(Builtin::Dict(_, value_layout)) => {
-                    dict_contains(env, layout_ids, dict, key, key_layout, value_layout)
-                }
-                _ => unreachable!("invalid dict layout"),
-            }
+            let (key_layout, value_layout) = dict_key_value_layout!(dict_layout);
+            dict_contains(env, layout_ids, dict, key, key_layout, value_layout)
         }
         DictGetUnsafe => {
             debug_assert_eq!(args.len(), 2);
@@ -5899,36 +5900,24 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
             let (key, key_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            match dict_layout {
-                Layout::Builtin(Builtin::Dict(_, value_layout)) => {
-                    dict_get(env, layout_ids, dict, key, key_layout, value_layout)
-                }
-                _ => unreachable!("invalid dict layout"),
-            }
+            let (key_layout, value_layout) = dict_key_value_layout!(dict_layout);
+            dict_get(env, layout_ids, dict, key, key_layout, value_layout)
         }
         DictKeys => {
             debug_assert_eq!(args.len(), 1);
 
             let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            match dict_layout {
-                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
-                    dict_keys(env, layout_ids, dict, key_layout, value_layout)
-                }
-                _ => unreachable!("invalid dict layout"),
-            }
+            let (key_layout, value_layout) = dict_key_value_layout!(dict_layout);
+            dict_keys(env, layout_ids, dict, key_layout, value_layout)
         }
         DictValues => {
             debug_assert_eq!(args.len(), 1);
 
             let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            match dict_layout {
-                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
-                    dict_values(env, layout_ids, dict, key_layout, value_layout)
-                }
-                _ => unreachable!("invalid dict layout"),
-            }
+            let (key_layout, value_layout) = dict_key_value_layout!(dict_layout);
+            dict_values(env, layout_ids, dict, key_layout, value_layout)
         }
         DictUnion => {
             debug_assert_eq!(args.len(), 2);
@@ -5936,12 +5925,8 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (dict1, dict_layout) = load_symbol_and_layout(scope, &args[0]);
             let (dict2, _) = load_symbol_and_layout(scope, &args[1]);
 
-            match dict_layout {
-                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
-                    dict_union(env, layout_ids, dict1, dict2, key_layout, value_layout)
-                }
-                _ => unreachable!("invalid dict layout"),
-            }
+            let (key_layout, value_layout) = dict_key_value_layout!(dict_layout);
+            dict_union(env, layout_ids, dict1, dict2, key_layout, value_layout)
         }
         DictDifference => {
             debug_assert_eq!(args.len(), 2);
@@ -5949,12 +5934,8 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (dict1, dict_layout) = load_symbol_and_layout(scope, &args[0]);
             let (dict2, _) = load_symbol_and_layout(scope, &args[1]);
 
-            match dict_layout {
-                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
-                    dict_difference(env, layout_ids, dict1, dict2, key_layout, value_layout)
-                }
-                _ => unreachable!("invalid dict layout"),
-            }
+            let (key_layout, value_layout) = dict_key_value_layout!(dict_layout);
+            dict_difference(env, layout_ids, dict1, dict2, key_layout, value_layout)
         }
         DictIntersection => {
             debug_assert_eq!(args.len(), 2);
@@ -5962,24 +5943,16 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (dict1, dict_layout) = load_symbol_and_layout(scope, &args[0]);
             let (dict2, _) = load_symbol_and_layout(scope, &args[1]);
 
-            match dict_layout {
-                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
-                    dict_intersection(env, layout_ids, dict1, dict2, key_layout, value_layout)
-                }
-                _ => unreachable!("invalid dict layout"),
-            }
+            let (key_layout, value_layout) = dict_key_value_layout!(dict_layout);
+            dict_intersection(env, layout_ids, dict1, dict2, key_layout, value_layout)
         }
         SetFromList => {
             debug_assert_eq!(args.len(), 1);
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            match list_layout {
-                Layout::Builtin(Builtin::List(key_layout)) => {
-                    set_from_list(env, layout_ids, list, key_layout)
-                }
-                _ => unreachable!("invalid dict layout"),
-            }
+            let key_layout = list_element_layout!(list_layout);
+            set_from_list(env, layout_ids, list, key_layout)
         }
         ExpectTrue => {
             debug_assert_eq!(args.len(), 1);
@@ -6482,17 +6455,6 @@ pub fn build_num_binop<'a, 'ctx, 'env>(
         {
             use roc_mono::layout::Builtin::*;
 
-            let float_binop = |float_width| {
-                build_float_binop(
-                    env,
-                    parent,
-                    float_width,
-                    lhs_arg.into_float_value(),
-                    rhs_arg.into_float_value(),
-                    op,
-                )
-            };
-
             match lhs_builtin {
                 Int(int_width) => build_int_binop(
                     env,
@@ -6503,7 +6465,14 @@ pub fn build_num_binop<'a, 'ctx, 'env>(
                     op,
                 ),
 
-                Float(float_width) => float_binop(*float_width),
+                Float(float_width) => build_float_binop(
+                    env,
+                    parent,
+                    *float_width,
+                    lhs_arg.into_float_value(),
+                    rhs_arg.into_float_value(),
+                    op,
+                ),
 
                 Decimal => {
                     build_dec_binop(env, parent, lhs_arg, lhs_layout, rhs_arg, rhs_layout, op)

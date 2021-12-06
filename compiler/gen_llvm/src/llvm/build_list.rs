@@ -346,7 +346,7 @@ pub fn list_set<'a, 'ctx, 'env>(
     list: BasicValueEnum<'ctx>,
     index: IntValue<'ctx>,
     element: BasicValueEnum<'ctx>,
-    element_layout: &'a Layout<'a>,
+    element_layout: &Layout<'a>,
     update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
     let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
