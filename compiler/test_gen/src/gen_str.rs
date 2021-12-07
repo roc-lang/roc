@@ -1505,6 +1505,23 @@ fn str_to_f64() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_to_f32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Str.toF32 "1.0" is
+                Ok n -> n
+                Err _ -> 0
+
+            "#
+        ),
+        1.0,
+        f32
+    );
+}
+
+#[test]
 #[ignore = "TODO: figure out why returning i128 across FFI boundary is an issue"]
 #[cfg(any(feature = "gen-llvm"))]
 fn str_to_dec() {
