@@ -1754,8 +1754,8 @@ fn tag_pointer_set_tag_id<'a, 'ctx, 'env>(
     tag_id: u8,
     pointer: PointerValue<'ctx>,
 ) -> PointerValue<'ctx> {
-    // we only have 3 bits, so can encode only 0..7
-    debug_assert!(tag_id < 8);
+    // we only have 3 bits, so can encode only 0..7 (or on 32-bit targets, 2 bits to encode 0..3)
+    debug_assert!((tag_id as u32) < env.ptr_bytes);
 
     let ptr_int = env.ptr_int();
 
