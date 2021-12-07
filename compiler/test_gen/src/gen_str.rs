@@ -1300,56 +1300,53 @@ fn str_trim_right_small_to_small_shared() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn str_to_num() {
+fn str_to_nat() {
     assert_evals_to!(
         indoc!(
             r#"
-            when Str.toNum "1" is
+            when Str.toNat "1" is
                 Ok n -> n
                 Err _ -> 0
 
                "#
         ),
         1,
-        i64
+        usize
     );
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn str_to_num_float() {
+fn str_to_f64() {
     assert_evals_to!(
         indoc!(
             r#"
-            when Str.toNum "1.0" is
-                Ok n -> n + 2.0
+            when Str.toF64 "1.0" is
+                Ok n -> n
                 Err _ -> 0
 
             "#
         ),
-        3.0,
+        1.0,
         f64
     );
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn str_to_num_dec() {
+fn str_to_dec() {
     use roc_std::RocDec;
 
     assert_evals_to!(
         indoc!(
             r#"
-            x : Dec
-            x = 2.0
-
-            when Str.toNum "1.0" is
+            when Str.toDec "1.0" is
                 Ok n -> n + x
                 Err _ -> 0
 
             "#
         ),
-        RocDec::from_str("3.0").unwrap(),
+        RocDec::from_str("1.0").unwrap(),
         RocDec
     );
 }

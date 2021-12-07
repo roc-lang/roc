@@ -1029,7 +1029,12 @@ define_builtins! {
         18 STR_TRIM: "trim"
         19 STR_TRIM_LEFT: "trimLeft"
         20 STR_TRIM_RIGHT: "trimRight"
-        21 STR_TO_NUM: "toNum"
+        21 STR_TO_DEC: "toDec"
+        22 STR_TO_F64: "toF64"
+        23 STR_TO_F32: "toF32"
+        24 STR_TO_NAT: "toNat"
+        25 STR_TO_U64: "toU64"
+
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias

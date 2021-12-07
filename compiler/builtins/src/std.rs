@@ -3,9 +3,9 @@ use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::builtin_aliases::{
-    bool_type, dict_type, float_type, i128_type, int_type, list_type, nat_type, num_type,
-    ordering_type, result_type, set_type, str_type, str_utf8_byte_problem_type, u16_type, u32_type,
-    u8_type,
+    bool_type, dec_type, dict_type, f32_type, f64_type, float_type, i128_type, int_type, list_type,
+    nat_type, num_type, ordering_type, result_type, set_type, str_type, str_utf8_byte_problem_type,
+    u16_type, u32_type, u64_type, u8_type,
 };
 use roc_types::solved_types::SolvedType;
 use roc_types::subs::VarId;
@@ -702,16 +702,52 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(list_type(u8_type()))
     );
 
-    // toNum : Str -> Result (Num a) {}
-    let invalid_str = SolvedType::TagUnion(
-        vec![(TagName::Global("InvalidNumStr".into()), vec![])],
-        Box::new(SolvedType::Wildcard),
+    // toNum : Str -> Result (Num a) [ InvalidNumStr ]
+    // Because toNum doesn't work with floats & decimals by default without
+    // a point of usage to be able to infer the proper layout
+    // we decided that separate functions for each sub num type
+    // is the best approach. These below all end up mapping to
+    // `str_to_num` in can `builtins.rs`
+    let invalid_str = || {
+        SolvedType::TagUnion(
+            vec![(TagName::Global("InvalidNumStr".into()), vec![])],
+            Box::new(SolvedType::Wildcard),
+        )
+    };
+
+    // toDec : Str -> Result Dec [ InvalidNumStr ]
+    add_top_level_function_type!(
+        Symbol::STR_TO_DEC,
+        vec![str_type()],
+        Box::new(result_type(dec_type(), invalid_str()))
     );
 
+    // toF64 : Str -> Result F64 [ InvalidNumStr ]
     add_top_level_function_type!(
-        Symbol::STR_TO_NUM,
+        Symbol::STR_TO_F64,
         vec![str_type()],
-        Box::new(result_type(num_type(flex(TVAR1)), invalid_str))
+        Box::new(result_type(f64_type(), invalid_str()))
+    );
+
+    // toF32 : Str -> Result F32 [ InvalidNumStr ]
+    add_top_level_function_type!(
+        Symbol::STR_TO_F32,
+        vec![str_type()],
+        Box::new(result_type(f32_type(), invalid_str()))
+    );
+
+    // toNat : Str -> Result Nat [ InvalidNumStr ]
+    add_top_level_function_type!(
+        Symbol::STR_TO_NAT,
+        vec![str_type()],
+        Box::new(result_type(nat_type(), invalid_str()))
+    );
+
+    // toU64 : Str -> Result U64 [ InvalidNumStr ]
+    add_top_level_function_type!(
+        Symbol::STR_TO_U64,
+        vec![str_type()],
+        Box::new(result_type(u64_type(), invalid_str()))
     );
 
     // List module

@@ -409,6 +409,40 @@ fn float_alias_content(range: SolvedType) -> SolvedType {
     num_type(floatingpoint_type(range))
 }
 
+// F64
+
+#[inline(always)]
+pub fn f64_type() -> SolvedType {
+    SolvedType::Alias(
+        Symbol::NUM_F64,
+        vec![],
+        vec![],
+        Box::new(f64_alias_content()),
+    )
+}
+
+#[inline(always)]
+fn f64_alias_content() -> SolvedType {
+    float_alias_content(binary64_type())
+}
+
+// F32
+
+#[inline(always)]
+pub fn f32_type() -> SolvedType {
+    SolvedType::Alias(
+        Symbol::NUM_F32,
+        vec![],
+        vec![],
+        Box::new(f32_alias_content()),
+    )
+}
+
+#[inline(always)]
+fn f32_alias_content() -> SolvedType {
+    float_alias_content(binary32_type())
+}
+
 // Nat
 
 #[inline(always)]
@@ -729,6 +763,23 @@ fn unsigned8_alias_content() -> SolvedType {
 #[inline(always)]
 fn decimal_alias_content() -> SolvedType {
     single_private_tag(Symbol::NUM_AT_DECIMAL, vec![])
+}
+
+// Dec
+
+#[inline(always)]
+pub fn dec_type() -> SolvedType {
+    SolvedType::Alias(
+        Symbol::NUM_DEC,
+        vec![],
+        vec![],
+        Box::new(dec_alias_content()),
+    )
+}
+
+#[inline(always)]
+fn dec_alias_content() -> SolvedType {
+    float_alias_content(decimal_type())
 }
 
 #[inline(always)]
