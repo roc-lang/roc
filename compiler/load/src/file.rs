@@ -1369,6 +1369,21 @@ where
 
     let it = worker_arenas.iter_mut();
 
+    use std::panic;
+    let orig_hook = panic::take_hook();
+    panic::set_hook(Box::new(move |panic_info| {
+        println!(
+            "panic occured: {:?}",
+            panic_info.payload().downcast_ref::<String>().unwrap()
+        );
+        println!("{:?}", backtrace::Backtrace::new());
+        use std::io::Write;
+        std::io::stderr().flush();
+        std::io::stdout().flush();
+        // invoke the default handler and exit the process
+        std::process::exit(11);
+    }));
+
     {
         thread::scope(|thread_scope| {
             for _ in 0..num_workers {
