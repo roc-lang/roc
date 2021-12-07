@@ -640,10 +640,9 @@ impl<'a> WasmBackend<'a> {
                     let (local_id, offset) =
                         location.local_and_offset(self.storage.stack_frame_pointer);
 
-                    // This is a minor cheat. We only need the first two 32 bit
-                    // chunks here. We fill both chunks with zeros, so we
-                    // can simplify things to a single group of 64 bit operations instead of
-                    // doing the below twice for 32 bits.
+                    // This is a minor cheat.
+                    // What we want to write to stack memory is { elements: null, length: 0 }
+                    // But instead of two 32-bit stores, we can do a single 64-bit store.
                     self.code_builder.get_local(local_id);
                     self.code_builder.i64_const(0);
                     self.code_builder.i64_store(Align::Bytes4, offset);
