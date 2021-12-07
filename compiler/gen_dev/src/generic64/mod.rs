@@ -130,6 +130,12 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait> {
         offset: i32,
     ) -> usize;
 
+    fn mov_freg32_imm32(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        dst: FloatReg,
+        imm: f32,
+    );
     fn mov_freg64_imm64(
         buf: &mut Vec<'_, u8>,
         relocs: &mut Vec<'_, Relocation>,
@@ -244,7 +250,7 @@ pub struct Backend64Bit<
     free_map: MutMap<*const Stmt<'a>, Vec<'a, Symbol>>,
 
     symbol_storage_map: MutMap<Symbol, SymbolStorage<GeneralReg, FloatReg>>,
-    literal_map: MutMap<Symbol, Literal<'a>>,
+    literal_map: MutMap<Symbol, (Literal<'a>, Layout<'a>)>,
     join_map: MutMap<JoinPointId, u64>,
 
     // This should probably be smarter than a vec.
@@ -331,7 +337,7 @@ impl<
             .extend_from_slice(CC::FLOAT_DEFAULT_FREE_REGS);
     }
 
-    fn literal_map(&mut self) -> &mut MutMap<Symbol, Literal<'a>> {
+    fn literal_map(&mut self) -> &mut MutMap<Symbol, (Literal<'a>, Layout<'a>)> {
         &mut self.literal_map
     }
 
@@ -977,19 +983,36 @@ impl<
         }
     }
 
-    fn load_literal(&mut self, sym: &Symbol, lit: &Literal<'a>) {
-        match lit {
-            Literal::Int(x) => {
+    fn load_literal(&mut self, sym: &Symbol, layout: &Layout<'a>, lit: &Literal<'a>) {
+        match (lit, layout) {
+            (
+                Literal::Int(x),
+                Layout::Builtin(Builtin::Int(
+                    IntWidth::U8
+                    | IntWidth::U16
+                    | IntWidth::U32
+                    | IntWidth::U64
+                    | IntWidth::I8
+                    | IntWidth::I16
+                    | IntWidth::I32
+                    | IntWidth::I64,
+                )),
+            ) => {
                 let reg = self.claim_general_reg(sym);
                 let val = *x;
                 ASM::mov_reg64_imm64(&mut self.buf, reg, val as i64);
             }
-            Literal::Float(x) => {
+            (Literal::Float(x), Layout::Builtin(Builtin::Float(FloatWidth::F64))) => {
                 let reg = self.claim_float_reg(sym);
                 let val = *x;
                 ASM::mov_freg64_imm64(&mut self.buf, &mut self.relocs, reg, val);
             }
-            Literal::Str(x) if x.len() < 16 => {
+            (Literal::Float(x), Layout::Builtin(Builtin::Float(FloatWidth::F32))) => {
+                let reg = self.claim_float_reg(sym);
+                let val = *x as f32;
+                ASM::mov_freg32_imm32(&mut self.buf, &mut self.relocs, reg, val);
+            }
+            (Literal::Str(x), Layout::Builtin(Builtin::Str)) if x.len() < 16 => {
                 // Load small string.
                 let reg = self.get_tmp_general_reg();
 

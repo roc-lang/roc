@@ -196,9 +196,9 @@ where
         match expr {
             Expr::Literal(lit) => {
                 if self.env().lazy_literals {
-                    self.literal_map().insert(*sym, *lit);
+                    self.literal_map().insert(*sym, (*lit, *layout));
                 } else {
-                    self.load_literal(sym, lit);
+                    self.load_literal(sym, layout, lit);
                 }
             }
             Expr::Call(roc_mono::ir::Call {
@@ -494,7 +494,7 @@ where
                     "NumIsZero: expected to have return layout of type Bool"
                 );
 
-                self.load_literal(&Symbol::DEV_TMP, &Literal::Int(0));
+                self.load_literal(&Symbol::DEV_TMP, &arg_layouts[0], &Literal::Int(0));
                 self.build_eq(sym, &args[0], &Symbol::DEV_TMP, &arg_layouts[0]);
                 self.free_symbol(&Symbol::DEV_TMP)
             }
@@ -546,18 +546,21 @@ where
         ret_layout: &Layout<'a>,
     );
 
-    /// literal_map gets the map from symbol to literal, used for lazy loading and literal folding.
-    fn literal_map(&mut self) -> &mut MutMap<Symbol, Literal<'a>>;
+    /// literal_map gets the map from symbol to literal and layout, used for lazy loading and literal folding.
+    fn literal_map(&mut self) -> &mut MutMap<Symbol, (Literal<'a>, Layout<'a>)>;
 
     fn load_literal_symbols(&mut self, syms: &[Symbol]) {
         if self.env().lazy_literals {
             for sym in syms {
-                if let Some(lit) = self.literal_map().remove(sym) {
-                    self.load_literal(sym, &lit);
+                if let Some((lit, layout)) = self.literal_map().remove(sym) {
+                    self.load_literal(sym, &layout, &lit);
                 }
             }
         }
     }
+
+    /// load_literal sets a symbol to be equal to a literal.
+    fn load_literal(&mut self, sym: &Symbol, layout: &Layout<'a>, lit: &Literal<'a>);
 
     /// create_struct creates a struct with the elements specified loaded into it as data.
     fn create_struct(&mut self, sym: &Symbol, layout: &Layout<'a>, fields: &'a [Symbol]);
@@ -570,9 +573,6 @@ where
         index: u64,
         field_layouts: &'a [Layout<'a>],
     );
-
-    /// load_literal sets a symbol to be equal to a literal.
-    fn load_literal(&mut self, sym: &Symbol, lit: &Literal<'a>);
 
     /// return_symbol moves a symbol to the correct return location for the backend and adds a jump to the end of the function.
     fn return_symbol(&mut self, sym: &Symbol, layout: &Layout<'a>);

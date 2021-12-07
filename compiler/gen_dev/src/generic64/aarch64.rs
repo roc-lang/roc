@@ -360,13 +360,22 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
+    fn mov_freg32_imm32(
+        _buf: &mut Vec<'_, u8>,
+        _relocs: &mut Vec<'_, Relocation>,
+        _dst: AArch64FloatReg,
+        _imm: f32,
+    ) {
+        unimplemented!("loading f32 literal not yet implemented for AArch64");
+    }
+    #[inline(always)]
     fn mov_freg64_imm64(
         _buf: &mut Vec<'_, u8>,
         _relocs: &mut Vec<'_, Relocation>,
         _dst: AArch64FloatReg,
         _imm: f64,
     ) {
-        unimplemented!("loading float literal not yet implemented for AArch64");
+        unimplemented!("loading f64 literal not yet implemented for AArch64");
     }
     #[inline(always)]
     fn mov_reg64_imm64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm: i64) {
