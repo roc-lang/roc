@@ -85,7 +85,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
-            typ: int_alias_content(natural_type()),
+            typ: nat_alias_content(),
         },
     );
 
@@ -115,7 +115,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
-            typ: int_alias_content(unsigned128_type()),
+            typ: u128_alias_content(),
         },
     );
 
@@ -135,7 +135,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
-            typ: int_alias_content(signed64_type()),
+            typ: i64_alias_content(),
         },
     );
 
@@ -145,7 +145,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
-            typ: int_alias_content(unsigned64_type()),
+            typ: u64_alias_content(),
         },
     );
 
@@ -165,7 +165,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
-            typ: int_alias_content(signed32_type()),
+            typ: i32_alias_content(),
         },
     );
 
@@ -175,7 +175,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
-            typ: int_alias_content(unsigned32_type()),
+            typ: u32_alias_content(),
         },
     );
 
@@ -195,7 +195,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
-            typ: int_alias_content(signed16_type()),
+            typ: i16_alias_content(),
         },
     );
 
@@ -205,7 +205,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
-            typ: int_alias_content(unsigned16_type()),
+            typ: u16_alias_content(),
         },
     );
 
@@ -225,7 +225,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
-            typ: int_alias_content(signed8_type()),
+            typ: i8_alias_content(),
         },
     );
 
@@ -235,7 +235,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
-            typ: int_alias_content(unsigned8_type()),
+            typ: u8_alias_content(),
         },
     );
 
@@ -285,7 +285,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
-            typ: float_alias_content(decimal_type()),
+            typ: dec_alias_content(),
         },
     );
 
@@ -295,7 +295,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
-            typ: float_alias_content(binary64_type()),
+            typ: f64_alias_content(),
         },
     );
 
@@ -305,7 +305,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
-            typ: float_alias_content(binary32_type()),
+            typ: f32_alias_content(),
         },
     );
 
@@ -460,6 +460,40 @@ fn nat_alias_content() -> SolvedType {
     int_alias_content(natural_type())
 }
 
+// I128
+
+#[inline(always)]
+pub fn i128_type() -> SolvedType {
+    SolvedType::Alias(
+        Symbol::NUM_I128,
+        vec![],
+        vec![],
+        Box::new(i128_alias_content()),
+    )
+}
+
+#[inline(always)]
+fn i128_alias_content() -> SolvedType {
+    int_alias_content(signed128_type())
+}
+
+// I128
+
+#[inline(always)]
+pub fn u128_type() -> SolvedType {
+    SolvedType::Alias(
+        Symbol::NUM_U128,
+        vec![],
+        vec![],
+        Box::new(u128_alias_content()),
+    )
+}
+
+#[inline(always)]
+fn u128_alias_content() -> SolvedType {
+    int_alias_content(unsigned128_type())
+}
+
 // U64
 
 #[inline(always)]
@@ -475,6 +509,23 @@ pub fn u64_type() -> SolvedType {
 #[inline(always)]
 fn u64_alias_content() -> SolvedType {
     int_alias_content(unsigned64_type())
+}
+
+// I64
+
+#[inline(always)]
+pub fn i64_type() -> SolvedType {
+    SolvedType::Alias(
+        Symbol::NUM_I64,
+        vec![],
+        vec![],
+        Box::new(i64_alias_content()),
+    )
+}
+
+#[inline(always)]
+fn i64_alias_content() -> SolvedType {
+    int_alias_content(signed64_type())
 }
 
 // U32
@@ -494,21 +545,79 @@ fn u32_alias_content() -> SolvedType {
     int_alias_content(unsigned32_type())
 }
 
-// I128
+// I32
 
 #[inline(always)]
-pub fn i128_type() -> SolvedType {
+pub fn i32_type() -> SolvedType {
     SolvedType::Alias(
-        Symbol::NUM_I128,
+        Symbol::NUM_I32,
         vec![],
         vec![],
-        Box::new(i128_alias_content()),
+        Box::new(i32_alias_content()),
     )
 }
 
 #[inline(always)]
-fn i128_alias_content() -> SolvedType {
-    int_alias_content(signed128_type())
+fn i32_alias_content() -> SolvedType {
+    int_alias_content(signed32_type())
+}
+
+// U16
+
+#[inline(always)]
+pub fn u16_type() -> SolvedType {
+    SolvedType::Alias(
+        Symbol::NUM_U16,
+        vec![],
+        vec![],
+        Box::new(u16_alias_content()),
+    )
+}
+
+#[inline(always)]
+fn u16_alias_content() -> SolvedType {
+    int_alias_content(unsigned16_type())
+}
+
+// I16
+
+#[inline(always)]
+pub fn i16_type() -> SolvedType {
+    SolvedType::Alias(
+        Symbol::NUM_I16,
+        vec![],
+        vec![],
+        Box::new(i16_alias_content()),
+    )
+}
+
+#[inline(always)]
+fn i16_alias_content() -> SolvedType {
+    int_alias_content(signed16_type())
+}
+
+// U8
+
+#[inline(always)]
+pub fn u8_type() -> SolvedType {
+    SolvedType::Alias(Symbol::NUM_U8, vec![], vec![], Box::new(u8_alias_content()))
+}
+
+#[inline(always)]
+fn u8_alias_content() -> SolvedType {
+    int_alias_content(unsigned8_type())
+}
+
+// I8
+
+#[inline(always)]
+pub fn i8_type() -> SolvedType {
+    SolvedType::Alias(Symbol::NUM_I8, vec![], vec![], Box::new(i8_alias_content()))
+}
+
+#[inline(always)]
+fn i8_alias_content() -> SolvedType {
+    int_alias_content(signed8_type())
 }
 
 // INT
@@ -543,26 +652,6 @@ pub fn integer_type(range: SolvedType) -> SolvedType {
 #[inline(always)]
 fn integer_alias_content(range: SolvedType) -> SolvedType {
     single_private_tag(Symbol::NUM_AT_INTEGER, vec![range])
-}
-
-#[inline(always)]
-pub fn u8_type() -> SolvedType {
-    SolvedType::Alias(
-        Symbol::NUM_U8,
-        vec![],
-        vec![],
-        Box::new(int_alias_content(unsigned8_type())),
-    )
-}
-
-#[inline(always)]
-pub fn u16_type() -> SolvedType {
-    SolvedType::Alias(
-        Symbol::NUM_U16,
-        vec![],
-        vec![],
-        Box::new(int_alias_content(unsigned16_type())),
-    )
 }
 
 #[inline(always)]

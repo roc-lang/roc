@@ -3,9 +3,10 @@ use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::builtin_aliases::{
-    bool_type, dec_type, dict_type, f32_type, f64_type, float_type, i128_type, int_type, list_type,
-    nat_type, num_type, ordering_type, result_type, set_type, str_type, str_utf8_byte_problem_type,
-    u16_type, u32_type, u64_type, u8_type,
+    bool_type, dec_type, dict_type, f32_type, f64_type, float_type, i128_type, i16_type, i32_type,
+    i64_type, i8_type, int_type, list_type, nat_type, num_type, ordering_type, result_type,
+    set_type, str_type, str_utf8_byte_problem_type, u128_type, u16_type, u32_type, u64_type,
+    u8_type,
 };
 use roc_types::solved_types::SolvedType;
 use roc_types::subs::VarId;
@@ -743,11 +744,74 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(result_type(nat_type(), invalid_str()))
     );
 
+    // toU128 : Str -> Result U128 [ InvalidNumStr ]
+    add_top_level_function_type!(
+        Symbol::STR_TO_U128,
+        vec![str_type()],
+        Box::new(result_type(u128_type(), invalid_str()))
+    );
+
+    // toI128 : Str -> Result I128 [ InvalidNumStr ]
+    add_top_level_function_type!(
+        Symbol::STR_TO_I128,
+        vec![str_type()],
+        Box::new(result_type(i128_type(), invalid_str()))
+    );
+
     // toU64 : Str -> Result U64 [ InvalidNumStr ]
     add_top_level_function_type!(
         Symbol::STR_TO_U64,
         vec![str_type()],
         Box::new(result_type(u64_type(), invalid_str()))
+    );
+
+    // toI64 : Str -> Result I64 [ InvalidNumStr ]
+    add_top_level_function_type!(
+        Symbol::STR_TO_I64,
+        vec![str_type()],
+        Box::new(result_type(i64_type(), invalid_str()))
+    );
+
+    // toU32 : Str -> Result U32 [ InvalidNumStr ]
+    add_top_level_function_type!(
+        Symbol::STR_TO_U32,
+        vec![str_type()],
+        Box::new(result_type(u32_type(), invalid_str()))
+    );
+
+    // toI32 : Str -> Result I32 [ InvalidNumStr ]
+    add_top_level_function_type!(
+        Symbol::STR_TO_I32,
+        vec![str_type()],
+        Box::new(result_type(i32_type(), invalid_str()))
+    );
+
+    // toU16 : Str -> Result U16 [ InvalidNumStr ]
+    add_top_level_function_type!(
+        Symbol::STR_TO_U16,
+        vec![str_type()],
+        Box::new(result_type(u16_type(), invalid_str()))
+    );
+
+    // toI16 : Str -> Result I16 [ InvalidNumStr ]
+    add_top_level_function_type!(
+        Symbol::STR_TO_I16,
+        vec![str_type()],
+        Box::new(result_type(i16_type(), invalid_str()))
+    );
+
+    // toU8 : Str -> Result U8 [ InvalidNumStr ]
+    add_top_level_function_type!(
+        Symbol::STR_TO_U8,
+        vec![str_type()],
+        Box::new(result_type(u8_type(), invalid_str()))
+    );
+
+    // toI8 : Str -> Result I8 [ InvalidNumStr ]
+    add_top_level_function_type!(
+        Symbol::STR_TO_I8,
+        vec![str_type()],
+        Box::new(result_type(i8_type(), invalid_str()))
     );
 
     // List module

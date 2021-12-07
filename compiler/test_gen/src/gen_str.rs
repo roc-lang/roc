@@ -1317,6 +1317,176 @@ fn str_to_nat() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn str_to_i128() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Str.toI128 "1" is
+                Ok n -> n
+                Err _ -> 0
+
+               "#
+        ),
+        1,
+        i128
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_to_u128() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Str.toU128 "1" is
+                Ok n -> n
+                Err _ -> 0
+
+               "#
+        ),
+        1,
+        u128
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_to_i64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Str.toI64 "1" is
+                Ok n -> n
+                Err _ -> 0
+
+               "#
+        ),
+        1,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_to_u64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Str.toU64 "1" is
+                Ok n -> n
+                Err _ -> 0
+
+               "#
+        ),
+        1,
+        u64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_to_i32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Str.toI32 "1" is
+                Ok n -> n
+                Err _ -> 0
+
+               "#
+        ),
+        1,
+        i32
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_to_u32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Str.toU32 "1" is
+                Ok n -> n
+                Err _ -> 0
+
+               "#
+        ),
+        1,
+        u32
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_to_i16() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Str.toI16 "1" is
+                Ok n -> n
+                Err _ -> 0
+
+               "#
+        ),
+        1,
+        i16
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_to_u16() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Str.toU16 "1" is
+                Ok n -> n
+                Err _ -> 0
+
+               "#
+        ),
+        1,
+        u16
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_to_i8() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Str.toI8 "1" is
+                Ok n -> n
+                Err _ -> 0
+
+               "#
+        ),
+        1,
+        i8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_to_u8() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Str.toU8 "1" is
+                Ok n -> n
+                Err _ -> 0
+
+               "#
+        ),
+        1,
+        u8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_to_f64() {
     assert_evals_to!(
         indoc!(
@@ -1341,7 +1511,7 @@ fn str_to_dec() {
         indoc!(
             r#"
             when Str.toDec "1.0" is
-                Ok n -> n + x
+                Ok n -> n
                 Err _ -> 0
 
             "#
