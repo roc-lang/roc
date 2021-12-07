@@ -296,18 +296,12 @@ impl<'a> WasmBackend<'a> {
 
                     self.build_expr(sym, expr, layout, &sym_storage)?;
 
-                    // For primitives, we record that this symbol is at the top of the VM stack
-                    // (For other values, we wrote to memory and there's nothing on the VM stack)
-                    if let WasmLayout::Primitive(value_type, size) = wasm_layout {
-                        let vm_state = self.code_builder.set_top_symbol(*sym);
-                        self.storage.symbol_storage_map.insert(
-                            *sym,
-                            StoredValue::VirtualMachineStack {
-                                vm_state,
-                                value_type,
-                                size,
-                            },
-                        );
+                    // If this value is stored in the VM stack, we need code_builder to track it
+                    // (since every instruction can change the VM stack)
+                    if let Some(StoredValue::VirtualMachineStack { vm_state, .. }) =
+                        self.storage.symbol_storage_map.get_mut(sym)
+                    {
+                        *vm_state = self.code_builder.set_top_symbol(*sym);
                     }
 
                     self.symbol_layouts.insert(*sym, *layout);
@@ -854,14 +848,14 @@ impl<'a> WasmBackend<'a> {
         // Not passing it as an argument because I'm trying to match Backend method signatures
         let storage = self.storage.get(sym).to_owned();
 
-        if let Layout::Struct(field_layouts) = layout {
+        if matches!(layout, Layout::Struct(_)) {
             match storage {
                 StoredValue::StackMemory { location, size, .. } => {
                     if size > 0 {
                         let (local_id, struct_offset) =
                             location.local_and_offset(self.storage.stack_frame_pointer);
                         let mut field_offset = struct_offset;
-                        for (field, _) in fields.iter().zip(field_layouts.iter()) {
+                        for field in fields.iter() {
                             field_offset += self.storage.copy_value_to_memory(
                                 &mut self.code_builder,
                                 local_id,
