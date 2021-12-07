@@ -207,20 +207,24 @@ pub enum UnionLayout<'a> {
     /// A non-recursive tag union
     /// e.g. `Result a e : [ Ok a, Err e ]`
     NonRecursive(&'a [&'a [Layout<'a>]]),
-    /// A recursive tag union
+    /// A recursive tag union (general case)
     /// e.g. `Expr : [ Sym Str, Add Expr Expr ]`
     Recursive(&'a [&'a [Layout<'a>]]),
     /// A recursive tag union with just one constructor
+    /// Optimization: No need to store a tag ID (the payload is "unwrapped")
     /// e.g. `RoseTree a : [ Tree a (List (RoseTree a)) ]`
     NonNullableUnwrapped(&'a [Layout<'a>]),
-    /// A recursive tag union where the non-nullable variant(s) store the tag id
+    /// A recursive tag union that has an empty variant
+    /// Optimization: Represent the empty variant as null pointer => no memory usage & fast comparison
+    /// It has more than one other variant, so they need tag IDs (payloads are "wrapped")
     /// e.g. `FingerTree a : [ Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a) ]`
     /// see also: https://youtu.be/ip92VMpf_-A?t=164
     NullableWrapped {
         nullable_id: u16,
         other_tags: &'a [&'a [Layout<'a>]],
     },
-    /// A recursive tag union where the non-nullable variant does NOT store the tag id
+    /// A recursive tag union with only two variants, where one is empty.
+    /// Optimizations: Use null for the empty variant AND don't store a tag ID for the other variant.
     /// e.g. `ConsList a : [ Nil, Cons a (ConsList a) ]`
     NullableUnwrapped {
         nullable_id: bool,
