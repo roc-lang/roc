@@ -198,6 +198,7 @@ fn solve(
         }
         TagPresent(typ, constr) => {
             let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
+            dbg!(typ, actual, constr);
             match constr {
                 PresenceConstraint::IsOpen => {
                     let mut new_desc = subs.get(actual);

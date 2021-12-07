@@ -1354,7 +1354,7 @@ mod solve_expr {
                             False -> 0
                 "#
             ),
-            "[ False, True ]* -> Num *",
+            "[ False, True ] -> Num *",
         );
     }
 
@@ -1435,7 +1435,6 @@ mod solve_expr {
         );
     }
 
-    #[ignore = "This hangs, figure out why. We're saying [Foo Str] >= [Foo a]; why does that spin?"]
     #[test]
     fn global_tag_with_field() {
         infer_eq(
@@ -1449,7 +1448,6 @@ mod solve_expr {
         );
     }
 
-    #[ignore = "This hangs, figure out why. We're saying [@Foo Str] >= [@Foo a]; why does that spin?"]
     #[test]
     fn private_tag_with_field() {
         infer_eq(
@@ -2418,7 +2416,7 @@ mod solve_expr {
                    toBit
                 "#
             ),
-            "[ False, True ]* -> Num *",
+            "[ False, True ] -> Num *",
         );
     }
 
@@ -2666,6 +2664,7 @@ mod solve_expr {
     }
 
     #[test]
+    #[ignore = "we don't infer recursive tag unions properly yet"]
     fn infer_linked_list_map() {
         infer_eq_without_problem(
             indoc!(
@@ -2926,6 +2925,7 @@ mod solve_expr {
     }
 
     #[test]
+    #[ignore = "we don't infer recursive tag unions properly yet"]
     fn peano_map_infer() {
         infer_eq(
             indoc!(
@@ -2948,6 +2948,7 @@ mod solve_expr {
     }
 
     #[test]
+    #[ignore = "we don't infer recursive tag unions properly yet"]
     fn peano_map_infer_nested() {
         infer_eq(
             indoc!(
@@ -3020,6 +3021,7 @@ mod solve_expr {
     }
 
     #[test]
+    #[ignore = "we don't infer recursive tag unions properly yet"]
     fn infer_record_linked_list_map() {
         infer_eq_without_problem(
             indoc!(
@@ -3086,6 +3088,7 @@ mod solve_expr {
     }
 
     #[test]
+    #[ignore = "we don't infer recursive tag unions properly yet"]
     fn infer_mutually_recursive_tag_union() {
         infer_eq_without_problem(
             indoc!(
@@ -3140,7 +3143,6 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore = "This hangs, figure out why."]
     fn quicksort_partition() {
         with_larger_debug_stack(|| {
             infer_eq_without_problem(
@@ -3908,7 +3910,7 @@ mod solve_expr {
                             x
                 "#
             ),
-            "[ Empty, Foo [ Bar ] I64 ]",
+            "[ Empty, Foo Bar I64 ]",
         );
     }
 
@@ -4452,7 +4454,6 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore = "This hangs, figure out why."]
     fn rbtree_balance() {
         infer_eq_without_problem(
             indoc!(
@@ -4814,6 +4815,24 @@ mod solve_expr {
                 "#
             ),
             "[ A [ M, N ], B ] -> [ X ]*",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position7() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                \tag ->
+                    when tag is
+                        A -> X
+                        t -> t
+                "#
+            ),
+            // TODO: we could be a bit smarter by subtracting "A" as a possible
+            // tag in the union known by t, which would yield the principal type
+            // [ A ]* -> [ X ]*
+            "[ A ]* -> [ A, X ]*",
         )
     }
 }

@@ -146,9 +146,15 @@ pub fn constrain_pattern(
                 *symbol,
                 Located {
                     region,
-                    value: expected.get_type(),
+                    value: expected.clone().get_type(),
                 },
             );
+            if destruct_position {
+                state.constraints.push(Constraint::TagPresent(
+                    expected.get_type(),
+                    PresenceConstraint::IsOpen,
+                ));
+            }
         }
 
         NumLiteral(var, _, _) => {

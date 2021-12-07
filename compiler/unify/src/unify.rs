@@ -157,9 +157,7 @@ pub fn unify_pool_present(
 }
 
 fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context, present: bool) -> Outcome {
-    if
-    /* true */
-    false {
+    if true {
         // if true, print the types that are unified.
         //
         // NOTE: names are generated here (when creating an error type) and that modifies names
@@ -182,7 +180,7 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context, present: bool) 
             roc_types::subs::SubsFmtContent(&content_2, subs),
         );
     }
-    // dbg!(present, &ctx.first_desc.content);
+    dbg!(present, &ctx.first_desc.content);
     match &ctx.first_desc.content {
         FlexVar(opt_name) => unify_flex(subs, &ctx, opt_name, &ctx.second_desc.content),
         RecursionVar {
@@ -195,6 +193,7 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context, present: bool) 
             opt_name,
             *structure,
             &ctx.second_desc.content,
+            present,
         ),
         RigidVar(name) => unify_rigid(subs, &ctx, name, &ctx.second_desc.content),
         Structure(flat_type) => unify_structure(
@@ -205,7 +204,9 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context, present: bool) 
             &ctx.second_desc.content,
             present,
         ),
-        Alias(symbol, args, real_var) => unify_alias(subs, pool, &ctx, *symbol, *args, *real_var),
+        Alias(symbol, args, real_var) => {
+            unify_alias(subs, pool, &ctx, *symbol, *args, *real_var, present)
+        }
         Error => {
             // Error propagates. Whatever we're comparing it to doesn't matter!
             merge(subs, &ctx, Error)
@@ -221,6 +222,7 @@ fn unify_alias(
     symbol: Symbol,
     args: AliasVariables,
     real_var: Variable,
+    present: bool,
 ) -> Outcome {
     let other_content = &ctx.second_desc.content;
 
@@ -261,6 +263,7 @@ fn unify_alias(
                 unify_pool(subs, pool, real_var, *other_real_var)
             }
         }
+        Structure(_) if present => unify_pool_present(subs, pool, real_var, ctx.second),
         Structure(_) => unify_pool(subs, pool, real_var, ctx.second),
         Error => merge(subs, ctx, Error),
     }
@@ -280,18 +283,22 @@ fn unify_structure(
         FlexVar(_) => {
             // If the other is flex, Structure wins!
             // Unless it's a presence variable... TODO more documentation
-            if present {
-                match flat_type {
-                    FlatType::TagUnion(tags, ext) => {
-                        let mut new_desc = ctx.first_desc.clone();
-                        new_desc.content = Structure(FlatType::TagUnion(*tags, ctx.second));
-                        subs.set(ctx.first, new_desc);
-                        return vec![];
-                    }
-                    _ => panic!("I don't know how to handle {:?} yet", flat_type),
+            match (present, flat_type) {
+                (true, FlatType::TagUnion(tags, ext)) => {
+                    let mut new_desc = ctx.first_desc.clone();
+                    new_desc.content = Structure(FlatType::TagUnion(*tags, ctx.second));
+                    subs.set(ctx.first, new_desc);
+                    return vec![];
                 }
+                (true, FlatType::FunctionOrTagUnion(tn, sym, ext)) => {
+                    let mut new_desc = ctx.first_desc.clone();
+                    new_desc.content =
+                        Structure(FlatType::FunctionOrTagUnion(*tn, *sym, ctx.second));
+                    subs.set(ctx.first, new_desc);
+                    return vec![];
+                }
+                _ => merge(subs, ctx, Structure(flat_type.clone())),
             }
-            merge(subs, ctx, Structure(flat_type.clone()))
         }
         RigidVar(name) => {
             // Type mismatch! Rigid can only unify with flex.
@@ -686,7 +693,7 @@ fn unify_tag_union_new(
 
     let shared_tags = separate.in_both;
 
-    // dbg!(present, ext1);
+    dbg!(present, tags1, ext1, tags2, ext2);
 
     match (present, subs.get(ext1).content) {
         (true, Content::Structure(FlatType::EmptyTagUnion)) => {
@@ -1329,6 +1336,7 @@ fn unify_recursion(
     opt_name: &Option<Lowercase>,
     structure: Variable,
     other: &Content,
+    present: bool,
 ) -> Outcome {
     match other {
         RecursionVar {
@@ -1350,7 +1358,11 @@ fn unify_recursion(
 
         Structure(_) => {
             // unify the structure variable with this Structure
-            unify_pool(subs, pool, structure, ctx.second)
+            if present {
+                unify_pool_present(subs, pool, structure, ctx.second)
+            } else {
+                unify_pool(subs, pool, structure, ctx.second)
+            }
         }
         RigidVar(_) => mismatch!("RecursionVar {:?} with rigid {:?}", ctx.first, &other),
 
@@ -1366,7 +1378,11 @@ fn unify_recursion(
         Alias(_, _, actual) => {
             // look at the type the alias stands for
 
-            unify_pool(subs, pool, ctx.first, *actual)
+            if present {
+                unify_pool_present(subs, pool, structure, ctx.second)
+            } else {
+                unify_pool(subs, pool, structure, ctx.second)
+            }
         }
 
         Error => merge(subs, ctx, Error),
