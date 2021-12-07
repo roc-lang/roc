@@ -38,7 +38,7 @@ pub fn build_module<'a>(
             > = Backend::new(env);
             build_object(
                 env,
-                procedures,
+                &procedures,
                 backend,
                 Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little),
             )
@@ -56,7 +56,7 @@ pub fn build_module<'a>(
             > = Backend::new(env);
             build_object(
                 env,
-                procedures,
+                &procedures,
                 backend,
                 Object::new(
                     BinaryFormat::MachO,
@@ -78,7 +78,7 @@ pub fn build_module<'a>(
             > = Backend::new(env);
             build_object(
                 env,
-                procedures,
+                &procedures,
                 backend,
                 Object::new(BinaryFormat::Elf, Architecture::Aarch64, Endianness::Little),
             )
@@ -96,7 +96,7 @@ pub fn build_module<'a>(
             > = Backend::new(env);
             build_object(
                 env,
-                procedures,
+                &procedures,
                 backend,
                 Object::new(
                     BinaryFormat::MachO,
@@ -164,7 +164,7 @@ fn generate_wrapper<'a, B: Backend<'a>>(
 
 fn build_object<'a, B: Backend<'a>>(
     env: &'a Env,
-    procedures: MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
+    procedures: &'a MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
     mut backend: B,
     mut output: Object,
 ) -> Object {
@@ -212,8 +212,8 @@ fn build_object<'a, B: Backend<'a>>(
     let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
     for ((sym, layout), proc) in procedures {
         let base_name = layout_ids
-            .get_toplevel(sym, &layout)
-            .to_symbol_string(sym, &env.interns);
+            .get_toplevel(*sym, &layout)
+            .to_symbol_string(*sym, &env.interns);
 
         let fn_name = if env.exposed_to_host.contains(&sym) {
             format!("roc_{}_exposed", base_name)
@@ -251,7 +251,7 @@ fn build_object<'a, B: Backend<'a>>(
     let mut relocations = bumpalo::vec![in env.arena];
     for (fn_name, section_id, proc_id, proc) in procs {
         let mut local_data_index = 0;
-        let (proc_data, relocs) = backend.build_proc(proc);
+        let (proc_data, relocs) = backend.build_proc(&proc);
         let proc_offset = output.add_symbol_data(proc_id, section_id, proc_data, 16);
         for reloc in relocs {
             let elfreloc = match reloc {

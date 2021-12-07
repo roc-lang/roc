@@ -243,14 +243,14 @@ pub struct Backend64Bit<
     buf: Vec<'a, u8>,
     relocs: Vec<'a, Relocation>,
     proc_name: Option<String>,
-    is_self_recursive: Option<SelfRecursive>,
+    is_self_recursive: Option<&'a SelfRecursive>,
 
     last_seen_map: MutMap<Symbol, *const Stmt<'a>>,
     layout_map: MutMap<Symbol, Layout<'a>>,
     free_map: MutMap<*const Stmt<'a>, Vec<'a, Symbol>>,
 
     symbol_storage_map: MutMap<Symbol, SymbolStorage<GeneralReg, FloatReg>>,
-    literal_map: MutMap<Symbol, (Literal<'a>, Layout<'a>)>,
+    literal_map: MutMap<Symbol, (&'a Literal<'a>, &'a Layout<'a>)>,
     join_map: MutMap<JoinPointId, u64>,
 
     // This should probably be smarter than a vec.
@@ -313,7 +313,7 @@ impl<
         self.env
     }
 
-    fn reset(&mut self, name: String, is_self_recursive: SelfRecursive) {
+    fn reset(&mut self, name: String, is_self_recursive: &'a SelfRecursive) {
         self.proc_name = Some(name);
         self.is_self_recursive = Some(is_self_recursive);
         self.stack_size = 0;
@@ -337,7 +337,7 @@ impl<
             .extend_from_slice(CC::FLOAT_DEFAULT_FREE_REGS);
     }
 
-    fn literal_map(&mut self) -> &mut MutMap<Symbol, (Literal<'a>, Layout<'a>)> {
+    fn literal_map(&mut self) -> &mut MutMap<Symbol, (&'a Literal<'a>, &'a Layout<'a>)> {
         &mut self.literal_map
     }
 
