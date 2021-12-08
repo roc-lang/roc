@@ -6,7 +6,7 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::gen_refcount::{RefcountProcGenerator, REFCOUNT_MAX};
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
-use roc_mono::layout::{Builtin, Layout, LayoutIds};
+use roc_mono::layout::{Builtin, Layout, LayoutIds, TagIdIntType, UnionLayout};
 
 use crate::layout::{CallConv, ReturnMethod, WasmLayout};
 use crate::low_level::{decode_low_level, LowlevelBuildResult};
@@ -24,8 +24,8 @@ use crate::wasm_module::{
     LinkingSubSection, LocalId, Signature, SymInfo, ValueType,
 };
 use crate::{
-    copy_memory, CopyMemoryConfig, Env, BUILTINS_IMPORT_MODULE_NAME, MEMORY_NAME, PTR_SIZE,
-    PTR_TYPE, STACK_POINTER_GLOBAL_ID, STACK_POINTER_NAME,
+    copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, BUILTINS_IMPORT_MODULE_NAME,
+    MEMORY_NAME, PTR_SIZE, PTR_TYPE, STACK_POINTER_GLOBAL_ID, STACK_POINTER_NAME,
 };
 
 /// The memory address where the constants data will be loaded during module instantiation.
@@ -633,7 +633,7 @@ impl<'a> WasmBackend<'a> {
                 Ok(())
             }
 
-            Expr::Array { .. } => Err(format!("Expression is not yet implemented {:?}", 2)),
+            Expr::Array { .. } => Err(format!("Expression is not yet implemented {:?}", expr)),
 
             Expr::EmptyArray => {
                 if let StoredValue::StackMemory { location, .. } = storage {
@@ -653,7 +653,65 @@ impl<'a> WasmBackend<'a> {
                 }
             }
 
+            Expr::Tag {
+                tag_layout,
+                tag_id,
+                arguments,
+                ..
+            } => {
+                self.build_tag(tag_layout, *tag_id, arguments, storage);
+                Ok(())
+            }
+
             x => Err(format!("Expression is not yet implemented {:?}", x)),
+        }
+    }
+
+    fn build_tag(
+        &mut self,
+        union_layout: &UnionLayout<'a>,
+        tag_id: TagIdIntType,
+        arguments: &'a [Symbol],
+        stored: &StoredValue,
+    ) {
+        match union_layout {
+            UnionLayout::NonRecursive(tags) => {
+                let (local_id, offset) = if let StoredValue::StackMemory { location, .. } = stored {
+                    location.local_and_offset(self.storage.stack_frame_pointer)
+                } else {
+                    panic!("NonRecursive Tag should always be stored in StackMemory");
+                };
+
+                let mut field_offset = offset;
+                for field_symbol in arguments.iter() {
+                    field_offset += self.storage.copy_value_to_memory(
+                        &mut self.code_builder,
+                        local_id,
+                        field_offset,
+                        *field_symbol,
+                    );
+                }
+
+                let tag_field_layouts = &tags[tag_id as usize];
+                let alignment_bytes = Layout::Struct(tag_field_layouts).alignment_bytes(PTR_SIZE);
+                let tag_id_offset =
+                    round_up_to_alignment(field_offset as i32, alignment_bytes as i32) as u32;
+                let tag_id_align = Align::from(alignment_bytes);
+
+                match tag_id_align {
+                    Align::Bytes1 | Align::Bytes2 | Align::Bytes4 => {
+                        self.code_builder.get_local(local_id);
+                        self.code_builder.i32_const(tag_id as i32);
+                        self.code_builder.i32_store(tag_id_align, tag_id_offset);
+                    }
+                    _ => {
+                        self.code_builder.get_local(local_id);
+                        self.code_builder.i64_const(tag_id as i64);
+                        self.code_builder.i64_store(tag_id_align, tag_id_offset);
+                    }
+                }
+            }
+            _ => unimplemented!("Tag with layout {:?}", union_layout),
         }
     }
 

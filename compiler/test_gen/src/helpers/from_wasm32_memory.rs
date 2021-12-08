@@ -27,7 +27,7 @@ macro_rules! from_wasm_memory_primitive_decode {
             let raw_ptr = ptr as *mut u8;
             let slice = unsafe { std::slice::from_raw_parts_mut(raw_ptr, width) };
 
-            let ptr: wasmer::WasmPtr<u8, wasmer::Array> = wasmer::WasmPtr::new(offset as u32);
+            let ptr: wasmer::WasmPtr<u8, wasmer::Array> = wasmer::WasmPtr::new(offset);
             let foobar = (ptr.deref(memory, 0, width as u32)).unwrap();
             let wasm_slice = unsafe { std::mem::transmute(foobar) };
 

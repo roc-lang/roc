@@ -221,7 +221,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
 }
 
 #[allow(dead_code)]
-pub fn assert_wasm_evals_to_help<T>(src: &str, expected: T) -> Result<T, String>
+pub fn assert_wasm_evals_to_help<T>(src: &str, phantom: T) -> Result<T, String>
 where
     T: FromWasm32Memory + Wasm32TestResult,
 {
@@ -230,7 +230,7 @@ where
     // NOTE the stdlib must be in the arena; just taking a reference will segfault
     let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
 
-    let instance = crate::helpers::wasm::helper_wasm(&arena, src, stdlib, &expected);
+    let instance = crate::helpers::wasm::helper_wasm(&arena, src, stdlib, &phantom);
 
     let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
 
@@ -254,7 +254,8 @@ where
 #[allow(unused_macros)]
 macro_rules! assert_wasm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        match $crate::helpers::wasm::assert_wasm_evals_to_help::<$ty>($src, $expected) {
+        let phantom = <$ty>::default();
+        match $crate::helpers::wasm::assert_wasm_evals_to_help::<$ty>($src, phantom) {
             Err(msg) => panic!("{:?}", msg),
             Ok(actual) => {
                 assert_eq!($transform(actual), $expected)

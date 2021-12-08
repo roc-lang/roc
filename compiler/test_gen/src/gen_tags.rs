@@ -1,16 +1,15 @@
-#![cfg(feature = "gen-llvm")]
-
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
 
 // #[cfg(feature = "gen-dev")]
 // use crate::helpers::dev::assert_evals_to;
 
-// #[cfg(feature = "gen-wasm")]
-// use crate::helpers::wasm::assert_evals_to;
+#[cfg(feature = "gen-wasm")]
+use crate::helpers::wasm::assert_evals_to;
 
 // use crate::assert_wasm_evals_to as assert_evals_to;
 use indoc::indoc;
+#[allow(unused_imports)]
 use roc_std::{RocList, RocStr};
 
 #[test]
@@ -71,7 +70,7 @@ fn applied_tag_nothing() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn applied_tag_just() {
     assert_evals_to!(
         indoc!(
@@ -90,7 +89,7 @@ fn applied_tag_just() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn applied_tag_just_ir() {
     assert_evals_to!(
         indoc!(
@@ -109,7 +108,7 @@ fn applied_tag_just_ir() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn applied_tag_just_enum() {
     assert_evals_to!(
         indoc!(
@@ -133,7 +132,7 @@ fn applied_tag_just_enum() {
 }
 
 // #[test]
-#[cfg(any(feature = "gen-llvm"))]
+// #[cfg(any(feature = "gen-llvm"))]
 // fn raw_result() {
 //     assert_evals_to!(
 //         indoc!(
@@ -149,7 +148,7 @@ fn applied_tag_just_enum() {
 //     );
 // }
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn true_is_true() {
     assert_evals_to!(
         indoc!(
@@ -166,7 +165,7 @@ fn true_is_true() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn false_is_false() {
     assert_evals_to!(
         indoc!(
@@ -205,7 +204,7 @@ fn basic_enum() {
 }
 
 //    #[test]
-#[cfg(any(feature = "gen-llvm"))]
+// #[cfg(any(feature = "gen-llvm"))]
 //    fn linked_list_empty() {
 //        assert_evals_to!(
 //            indoc!(
@@ -224,7 +223,7 @@ fn basic_enum() {
 //    }
 //
 //    #[test]
-#[cfg(any(feature = "gen-llvm"))]
+// #[cfg(any(feature = "gen-llvm"))]
 //    fn linked_list_singleton() {
 //        assert_evals_to!(
 //            indoc!(
@@ -243,7 +242,7 @@ fn basic_enum() {
 //    }
 //
 //    #[test]
-#[cfg(any(feature = "gen-llvm"))]
+// #[cfg(any(feature = "gen-llvm"))]
 //    fn linked_list_is_empty() {
 //        assert_evals_to!(
 //            indoc!(
@@ -264,7 +263,7 @@ fn basic_enum() {
 //        );
 //    }
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn even_odd() {
     assert_evals_to!(
         indoc!(
@@ -290,7 +289,7 @@ fn even_odd() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_literal_true() {
     assert_evals_to!(
         indoc!(
@@ -304,7 +303,7 @@ fn gen_literal_true() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_if_float() {
     assert_evals_to!(
         indoc!(
@@ -792,7 +791,7 @@ fn pattern_matching_unit() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn one_element_tag() {
     assert_evals_to!(
         indoc!(
@@ -809,7 +808,7 @@ fn one_element_tag() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn nested_tag_union() {
     assert_evals_to!(
         indoc!(
@@ -830,7 +829,7 @@ fn nested_tag_union() {
     );
 }
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn unit_type() {
     assert_evals_to!(
         indoc!(
@@ -845,24 +844,6 @@ fn unit_type() {
         ),
         (),
         ()
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm"))]
-fn nested_record_load() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                x = { a : { b : 0x5 } }
-
-                y = x.a
-
-                y.b
-                "#
-        ),
-        5,
-        i64
     );
 }
 
@@ -949,7 +930,7 @@ fn join_point_with_cond_expr() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn alignment_in_single_tag_construction() {
     assert_evals_to!(indoc!("Three (1 == 1) 32"), (32i64, true), (i64, bool));
 
@@ -993,7 +974,7 @@ fn alignment_in_single_tag_pattern_match() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn alignment_in_multi_tag_construction_two() {
     assert_evals_to!(
         indoc!(
@@ -1011,7 +992,7 @@ fn alignment_in_multi_tag_construction_two() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn alignment_in_multi_tag_construction_three() {
     assert_evals_to!(
         indoc!(
