@@ -706,7 +706,7 @@ impl<'a> WasmBackend<'a> {
                     _ => {
                         self.code_builder.get_local(local_id);
                         self.code_builder.i64_const(tag_id as i64);
-                        self.code_builder.i64_store(tag_id_align, tag_id_offset);
+                        self.code_builder.i64_store(Align::Bytes8, tag_id_offset);
                     }
                 }
             }
