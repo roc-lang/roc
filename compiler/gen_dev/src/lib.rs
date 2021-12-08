@@ -144,10 +144,7 @@ trait Backend<'a> {
                     let module_id = env.module_id;
                     let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
 
-                    let expanded =
-                        rc_proc_gen.expand_refcount_stmt(ident_ids, layout, modify, *following);
-
-                    expanded
+                    rc_proc_gen.expand_refcount_stmt(ident_ids, layout, modify, *following)
                 };
 
                 if let Some((rc_proc_symbol, rc_proc_layout)) = new_proc_info {
