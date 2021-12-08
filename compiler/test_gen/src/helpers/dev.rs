@@ -66,7 +66,7 @@ pub fn helper(
     let MonomorphizedModule {
         module_id,
         procedures,
-        interns,
+        mut interns,
         exposed_to_host,
         ..
     } = loaded;
@@ -177,14 +177,13 @@ pub fn helper(
     let env = roc_gen_dev::Env {
         arena,
         module_id,
-        interns: std::cell::Cell::new(interns),
         exposed_to_host: exposed_to_host.keys().copied().collect(),
         lazy_literals,
         generate_allocators: true, // Needed for testing, since we don't have a platform
     };
 
     let target = target_lexicon::Triple::host();
-    let module_object = roc_gen_dev::build_module(&env, &target, procedures);
+    let module_object = roc_gen_dev::build_module(&env, &mut interns, &target, procedures);
 
     let module_out = module_object
         .write()

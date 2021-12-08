@@ -529,7 +529,7 @@ fn gen_from_mono_module_dev_assembly(
     let MonomorphizedModule {
         module_id,
         procedures,
-        interns,
+        mut interns,
         exposed_to_host,
         ..
     } = loaded;
@@ -537,13 +537,12 @@ fn gen_from_mono_module_dev_assembly(
     let env = roc_gen_dev::Env {
         arena,
         module_id,
-        interns: std::cell::Cell::new(interns),
         exposed_to_host: exposed_to_host.keys().copied().collect(),
         lazy_literals,
         generate_allocators,
     };
 
-    let module_object = roc_gen_dev::build_module(&env, target, procedures);
+    let module_object = roc_gen_dev::build_module(&env, &mut interns, target, procedures);
 
     let module_out = module_object
         .write()

@@ -1,4 +1,4 @@
-use crate::generic64::{aarch64, x86_64, Backend64Bit};
+use crate::generic64::{aarch64, new_backend_64bit, x86_64};
 use crate::{Backend, Env, Relocation};
 use bumpalo::collections::Vec;
 use object::write::{self, SectionId, SymbolId};
@@ -9,6 +9,7 @@ use object::{
 };
 use roc_collections::all::MutMap;
 use roc_module::symbol;
+use roc_module::symbol::Interns;
 use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::LayoutIds;
 use roc_reporting::internal_error;
@@ -22,6 +23,7 @@ use target_lexicon::{Architecture as TargetArch, BinaryFormat as TargetBF, Tripl
 /// It takes the request to build a module and output the object file for the module.
 pub fn build_module<'a>(
     env: &'a Env,
+    interns: &'a mut Interns,
     target: &Triple,
     procedures: MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Object {
@@ -31,12 +33,12 @@ pub fn build_module<'a>(
             binary_format: TargetBF::Elf,
             ..
         } if cfg!(feature = "target-x86_64") => {
-            let backend: Backend64Bit<
+            let backend = new_backend_64bit::<
                 x86_64::X86_64GeneralReg,
                 x86_64::X86_64FloatReg,
                 x86_64::X86_64Assembler,
                 x86_64::X86_64SystemV,
-            > = Backend::new(env);
+            >(env, interns);
             build_object(
                 procedures,
                 backend,
@@ -48,12 +50,12 @@ pub fn build_module<'a>(
             binary_format: TargetBF::Macho,
             ..
         } if cfg!(feature = "target-x86_64") => {
-            let backend: Backend64Bit<
+            let backend = new_backend_64bit::<
                 x86_64::X86_64GeneralReg,
                 x86_64::X86_64FloatReg,
                 x86_64::X86_64Assembler,
                 x86_64::X86_64SystemV,
-            > = Backend::new(env);
+            >(env, interns);
             build_object(
                 procedures,
                 backend,
@@ -69,12 +71,12 @@ pub fn build_module<'a>(
             binary_format: TargetBF::Elf,
             ..
         } if cfg!(feature = "target-aarch64") => {
-            let backend: Backend64Bit<
+            let backend = new_backend_64bit::<
                 aarch64::AArch64GeneralReg,
                 aarch64::AArch64FloatReg,
                 aarch64::AArch64Assembler,
                 aarch64::AArch64Call,
-            > = Backend::new(env);
+            >(env, interns);
             build_object(
                 procedures,
                 backend,
@@ -86,12 +88,12 @@ pub fn build_module<'a>(
             binary_format: TargetBF::Macho,
             ..
         } if cfg!(feature = "target-aarch64") => {
-            let backend: Backend64Bit<
+            let backend = new_backend_64bit::<
                 aarch64::AArch64GeneralReg,
                 aarch64::AArch64FloatReg,
                 aarch64::AArch64Assembler,
                 aarch64::AArch64Call,
-            > = Backend::new(env);
+            >(env, interns);
             build_object(
                 procedures,
                 backend,
@@ -215,7 +217,7 @@ fn build_object<'a, B: Backend<'a>>(
             &mut output,
             &mut layout_ids,
             &mut procs,
-            backend.env(),
+            &backend,
             sym,
             layout,
             proc,
@@ -241,16 +243,12 @@ fn build_object<'a, B: Backend<'a>>(
     let rc_procs = {
         let module_id = backend.env().module_id;
 
-        let mut interns = backend.env().interns.take();
+        let (env, interns, rc_proc_gen) = backend.env_interns_refcount_mut();
 
         // Generate IR for refcounting procedures
-        let rc_proc_gen = backend.refcount_proc_gen_mut();
-
         let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
         let rc_procs = rc_proc_gen.generate_refcount_procs(arena, ident_ids);
-        backend.env().module_id.register_debug_idents(ident_ids);
-
-        backend.env().interns.set(interns);
+        env.module_id.register_debug_idents(ident_ids);
 
         rc_procs
     };
@@ -262,7 +260,7 @@ fn build_object<'a, B: Backend<'a>>(
     // Names and linker data for refcounting procedures
     for ((sym, layout), proc) in rc_symbols_and_layouts.into_iter().zip(rc_procs) {
         let layout_id = layout_ids.get_toplevel(sym, &layout);
-        let fn_name = backend.env().symbol_to_string(sym, layout_id);
+        let fn_name = backend.symbol_to_string(sym, layout_id);
         if let Some(proc_id) = output.symbol_id(fn_name.as_bytes()) {
             if let SymbolSection::Section(section_id) = output.symbol(proc_id).section {
                 rc_names_symbols_procs.push((fn_name, section_id, proc_id, proc));
@@ -297,19 +295,19 @@ fn build_object<'a, B: Backend<'a>>(
     output
 }
 
-fn build_proc_symbol<'a>(
+fn build_proc_symbol<'a, B: Backend<'a>>(
     output: &mut Object,
     layout_ids: &mut LayoutIds<'a>,
     procs: &mut Vec<'a, (String, SectionId, SymbolId, Proc<'a>)>,
-    env: &'a Env,
+    backend: &B,
     sym: roc_module::symbol::Symbol,
     layout: ProcLayout<'a>,
     proc: Proc<'a>,
 ) {
     let layout_id = layout_ids.get_toplevel(sym, &layout);
-    let base_name = env.symbol_to_string(sym, layout_id);
+    let base_name = backend.symbol_to_string(sym, layout_id);
 
-    let fn_name = if env.exposed_to_host.contains(&sym) {
+    let fn_name = if backend.env().exposed_to_host.contains(&sym) {
         format!("roc_{}_exposed", base_name)
     } else {
         base_name
@@ -328,7 +326,7 @@ fn build_proc_symbol<'a>(
         kind: SymbolKind::Text,
         // TODO: Depending on whether we are building a static or dynamic lib, this should change.
         // We should use Dynamic -> anyone, Linkage -> static link, Compilation -> this module only.
-        scope: if env.exposed_to_host.contains(&sym) {
+        scope: if backend.env().exposed_to_host.contains(&sym) {
             SymbolScope::Dynamic
         } else {
             SymbolScope::Linkage
@@ -420,7 +418,7 @@ fn build_proc<'a, B: Backend<'a>>(
                 if output.symbol_id(name.as_bytes()) == None {
                     for (sym, layout) in backend.refcount_proc_symbols().iter() {
                         let layout_id = layout_ids.get_toplevel(*sym, layout);
-                        let rc_name = backend.env().symbol_to_string(*sym, layout_id);
+                        let rc_name = backend.symbol_to_string(*sym, layout_id);
                         if name == &rc_name {
                             let section_id = output.add_section(
                                 output.segment_name(StandardSegment::Text).to_vec(),

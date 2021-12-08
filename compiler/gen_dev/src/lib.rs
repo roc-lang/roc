@@ -15,7 +15,6 @@ use roc_mono::ir::{
 };
 use roc_mono::layout::{Builtin, Layout, LayoutId, LayoutIds};
 use roc_reporting::internal_error;
-use std::cell::Cell;
 
 mod generic64;
 mod object_builder;
@@ -25,34 +24,14 @@ mod run_roc;
 pub struct Env<'a> {
     pub arena: &'a Bump,
     pub module_id: ModuleId,
-    // it's compilicated
-    pub interns: Cell<Interns>,
     pub exposed_to_host: MutSet<Symbol>,
     pub lazy_literals: bool,
     pub generate_allocators: bool,
 }
 
-impl<'a> Env<'a> {
-    pub fn symbol_to_string(&self, symbol: Symbol, layout_id: LayoutId) -> String {
-        let interns = self.interns.take();
+// impl<'a> Env<'a> {
 
-        let result = layout_id.to_symbol_string(symbol, &interns);
-
-        self.interns.set(interns);
-
-        result
-    }
-
-    fn defined_in_app_module(&self, symbol: Symbol) -> bool {
-        let interns = self.interns.take();
-
-        let result = symbol.module_string(&interns).starts_with(ModuleName::APP);
-
-        self.interns.set(interns);
-
-        result
-    }
-}
+// }
 
 // These relocations likely will need a length.
 // They may even need more definition, but this should be at least good enough for how we will use elf.
@@ -80,14 +59,26 @@ pub enum Relocation {
     },
 }
 
-trait Backend<'a>
-where
-    Self: Sized,
-{
-    /// new creates a new backend that will output to the specific Object.
-    fn new(env: &'a Env) -> Self;
+trait Backend<'a> {
+    fn env(&self) -> &Env<'a>;
+    fn interns(&self) -> &Interns;
 
-    fn env(&self) -> &'a Env<'a>;
+    // This method is suboptimal, but it seems to be the only way to make rust understand
+    // that all of these values can be mutable at the same time. By returning them together,
+    // rust understands that they are part of a single use of mutable self.
+    fn env_interns_refcount_mut(
+        &mut self,
+    ) -> (&Env<'a>, &mut Interns, &mut RefcountProcGenerator<'a>);
+
+    fn symbol_to_string(&self, symbol: Symbol, layout_id: LayoutId) -> String {
+        layout_id.to_symbol_string(symbol, self.interns())
+    }
+
+    fn defined_in_app_module(&self, symbol: Symbol) -> bool {
+        symbol
+            .module_string(self.interns())
+            .starts_with(ModuleName::APP)
+    }
 
     fn refcount_proc_gen_mut(&mut self) -> &mut RefcountProcGenerator<'a>;
 
@@ -115,7 +106,7 @@ where
     /// build_proc creates a procedure and outputs it to the wrapped object writer.
     fn build_proc(&mut self, proc: Proc<'a>) -> (Vec<u8>, Vec<Relocation>) {
         let layout_id = LayoutIds::default().get(proc.name, &proc.ret_layout);
-        let proc_name = self.env().symbol_to_string(proc.name, layout_id);
+        let proc_name = self.symbol_to_string(proc.name, layout_id);
         self.reset(proc_name, proc.is_self_recursive);
         self.load_args(proc.args, &proc.ret_layout);
         for (layout, sym) in proc.args {
@@ -149,15 +140,12 @@ where
                 // If this layout requires a new RC proc, we get enough info to create a linker symbol
                 // for it. Here we don't create linker symbols at this time, but in Wasm backend, we do.
                 let (rc_stmt, new_proc_info) = {
-                    let module_id = self.env().module_id;
-                    let mut interns = self.env().interns.take();
+                    let (env, interns, rc_proc_gen) = self.env_interns_refcount_mut();
+                    let module_id = env.module_id;
                     let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
 
-                    let expanded = self
-                        .refcount_proc_gen_mut()
-                        .expand_refcount_stmt(ident_ids, layout, modify, *following);
-
-                    self.env().interns.set(interns);
+                    let expanded =
+                        rc_proc_gen.expand_refcount_stmt(ident_ids, layout, modify, *following);
 
                     expanded
                 };
@@ -276,9 +264,9 @@ where
                                 arg_layouts,
                                 ret_layout,
                             )
-                        } else if self.env().defined_in_app_module(*func_sym) {
+                        } else if self.defined_in_app_module(*func_sym) {
                             let layout_id = LayoutIds::default().get(*func_sym, layout);
-                            let fn_name = self.env().symbol_to_string(*func_sym, layout_id);
+                            let fn_name = self.symbol_to_string(*func_sym, layout_id);
                             // Now that the arguments are needed, load them if they are literals.
                             self.load_literal_symbols(arguments);
                             self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)

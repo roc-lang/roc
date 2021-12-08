@@ -2,7 +2,7 @@ use crate::{Backend, Env, Relocation};
 use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{Interns, Symbol};
 use roc_mono::gen_refcount::RefcountProcGenerator;
 use roc_mono::ir::{BranchInfo, JoinPointId, Literal, Param, ProcLayout, SelfRecursive, Stmt};
 use roc_mono::layout::{Builtin, Layout};
@@ -239,6 +239,7 @@ pub struct Backend64Bit<
     phantom_asm: PhantomData<ASM>,
     phantom_cc: PhantomData<CC>,
     env: &'a Env<'a>,
+    interns: &'a mut Interns,
     refcount_proc_gen: RefcountProcGenerator<'a>,
     refcount_proc_symbols: Vec<'a, (Symbol, ProcLayout<'a>)>,
     buf: Vec<'a, u8>,
@@ -275,6 +276,46 @@ pub struct Backend64Bit<
     fn_call_stack_size: u32,
 }
 
+/// new creates a new backend that will output to the specific Object.
+pub fn new_backend_64bit<
+    'a,
+    GeneralReg: RegTrait,
+    FloatReg: RegTrait,
+    ASM: Assembler<GeneralReg, FloatReg>,
+    CC: CallConv<GeneralReg, FloatReg>,
+>(
+    env: &'a Env,
+    interns: &'a mut Interns,
+) -> Backend64Bit<'a, GeneralReg, FloatReg, ASM, CC> {
+    Backend64Bit {
+        phantom_asm: PhantomData,
+        phantom_cc: PhantomData,
+        env,
+        interns,
+        refcount_proc_gen: RefcountProcGenerator::new(env.arena, IntWidth::I64, env.module_id),
+        refcount_proc_symbols: bumpalo::vec![in env.arena],
+        proc_name: None,
+        is_self_recursive: None,
+        buf: bumpalo::vec![in env.arena],
+        relocs: bumpalo::vec![in env.arena],
+        last_seen_map: MutMap::default(),
+        layout_map: MutMap::default(),
+        free_map: MutMap::default(),
+        symbol_storage_map: MutMap::default(),
+        literal_map: MutMap::default(),
+        join_map: MutMap::default(),
+        general_free_regs: bumpalo::vec![in env.arena],
+        general_used_regs: bumpalo::vec![in env.arena],
+        general_used_callee_saved_regs: MutSet::default(),
+        float_free_regs: bumpalo::vec![in env.arena],
+        float_used_regs: bumpalo::vec![in env.arena],
+        float_used_callee_saved_regs: MutSet::default(),
+        free_stack_chunks: bumpalo::vec![in env.arena],
+        stack_size: 0,
+        fn_call_stack_size: 0,
+    }
+}
+
 impl<
         'a,
         GeneralReg: RegTrait,
@@ -283,37 +324,16 @@ impl<
         CC: CallConv<GeneralReg, FloatReg>,
     > Backend<'a> for Backend64Bit<'a, GeneralReg, FloatReg, ASM, CC>
 {
-    fn new(env: &'a Env) -> Self {
-        Backend64Bit {
-            phantom_asm: PhantomData,
-            phantom_cc: PhantomData,
-            env,
-            refcount_proc_gen: RefcountProcGenerator::new(env.arena, IntWidth::I64, env.module_id),
-            refcount_proc_symbols: bumpalo::vec![in env.arena],
-            proc_name: None,
-            is_self_recursive: None,
-            buf: bumpalo::vec![in env.arena],
-            relocs: bumpalo::vec![in env.arena],
-            last_seen_map: MutMap::default(),
-            layout_map: MutMap::default(),
-            free_map: MutMap::default(),
-            symbol_storage_map: MutMap::default(),
-            literal_map: MutMap::default(),
-            join_map: MutMap::default(),
-            general_free_regs: bumpalo::vec![in env.arena],
-            general_used_regs: bumpalo::vec![in env.arena],
-            general_used_callee_saved_regs: MutSet::default(),
-            float_free_regs: bumpalo::vec![in env.arena],
-            float_used_regs: bumpalo::vec![in env.arena],
-            float_used_callee_saved_regs: MutSet::default(),
-            free_stack_chunks: bumpalo::vec![in env.arena],
-            stack_size: 0,
-            fn_call_stack_size: 0,
-        }
-    }
-
-    fn env(&self) -> &'a Env<'a> {
+    fn env(&self) -> &Env<'a> {
         self.env
+    }
+    fn interns(&self) -> &Interns {
+        self.interns
+    }
+    fn env_interns_refcount_mut(
+        &mut self,
+    ) -> (&Env<'a>, &mut Interns, &mut RefcountProcGenerator<'a>) {
+        (self.env, self.interns, &mut self.refcount_proc_gen)
     }
     fn refcount_proc_gen_mut(&mut self) -> &mut RefcountProcGenerator<'a> {
         &mut self.refcount_proc_gen
@@ -642,66 +662,68 @@ impl<
 
         // This section can essentially be seen as a sub function within the main function.
         // Thus we build using a new backend with some minor extra synchronization.
-        let mut sub_backend = Self::new(self.env);
-        sub_backend.reset(
-            self.proc_name.as_ref().unwrap().clone(),
-            self.is_self_recursive.as_ref().unwrap().clone(),
-        );
-        // Sync static maps of important information.
-        sub_backend.last_seen_map = self.last_seen_map.clone();
-        sub_backend.layout_map = self.layout_map.clone();
-        sub_backend.free_map = self.free_map.clone();
+        {
+            let mut sub_backend =
+                new_backend_64bit::<GeneralReg, FloatReg, ASM, CC>(self.env, self.interns);
+            sub_backend.reset(
+                self.proc_name.as_ref().unwrap().clone(),
+                self.is_self_recursive.as_ref().unwrap().clone(),
+            );
+            // Sync static maps of important information.
+            sub_backend.last_seen_map = self.last_seen_map.clone();
+            sub_backend.layout_map = self.layout_map.clone();
+            sub_backend.free_map = self.free_map.clone();
 
-        // Setup join point.
-        sub_backend.join_map.insert(*id, 0);
-        self.join_map.insert(*id, self.buf.len() as u64);
+            // Setup join point.
+            sub_backend.join_map.insert(*id, 0);
+            self.join_map.insert(*id, self.buf.len() as u64);
 
-        // Sync stack size so the "sub function" doesn't mess up our stack.
-        sub_backend.stack_size = self.stack_size;
-        sub_backend.fn_call_stack_size = self.fn_call_stack_size;
+            // Sync stack size so the "sub function" doesn't mess up our stack.
+            sub_backend.stack_size = self.stack_size;
+            sub_backend.fn_call_stack_size = self.fn_call_stack_size;
 
-        // Load params as if they were args.
-        let mut args = bumpalo::vec![in self.env.arena];
-        for param in parameters {
-            args.push((param.layout, param.symbol));
+            // Load params as if they were args.
+            let mut args = bumpalo::vec![in self.env.arena];
+            for param in parameters {
+                args.push((param.layout, param.symbol));
+            }
+            sub_backend.load_args(args.into_bump_slice(), ret_layout);
+
+            // Build all statements in body.
+            sub_backend.build_stmt(body, ret_layout);
+
+            // Merge the "sub function" into the main function.
+            let sub_func_offset = self.buf.len() as u64;
+            self.buf.extend_from_slice(&sub_backend.buf);
+            // Update stack based on how much was used by the sub function.
+            self.stack_size = sub_backend.stack_size;
+            self.fn_call_stack_size = sub_backend.fn_call_stack_size;
+            // Relocations must be shifted to be merged correctly.
+            self.relocs
+                .extend(sub_backend.relocs.into_iter().map(|reloc| match reloc {
+                    Relocation::LocalData { offset, data } => Relocation::LocalData {
+                        offset: offset + sub_func_offset,
+                        data,
+                    },
+                    Relocation::LinkedData { offset, name } => Relocation::LinkedData {
+                        offset: offset + sub_func_offset,
+                        name,
+                    },
+                    Relocation::LinkedFunction { offset, name } => Relocation::LinkedFunction {
+                        offset: offset + sub_func_offset,
+                        name,
+                    },
+                    Relocation::JmpToReturn {
+                        inst_loc,
+                        inst_size,
+                        offset,
+                    } => Relocation::JmpToReturn {
+                        inst_loc: inst_loc + sub_func_offset,
+                        inst_size,
+                        offset: offset + sub_func_offset,
+                    },
+                }));
         }
-        sub_backend.load_args(args.into_bump_slice(), ret_layout);
-
-        // Build all statements in body.
-        sub_backend.build_stmt(body, ret_layout);
-
-        // Merge the "sub function" into the main function.
-        let sub_func_offset = self.buf.len() as u64;
-        self.buf.extend_from_slice(&sub_backend.buf);
-        // Update stack based on how much was used by the sub function.
-        self.stack_size = sub_backend.stack_size;
-        self.fn_call_stack_size = sub_backend.fn_call_stack_size;
-        // Relocations must be shifted to be merged correctly.
-        self.relocs
-            .extend(sub_backend.relocs.into_iter().map(|reloc| match reloc {
-                Relocation::LocalData { offset, data } => Relocation::LocalData {
-                    offset: offset + sub_func_offset,
-                    data,
-                },
-                Relocation::LinkedData { offset, name } => Relocation::LinkedData {
-                    offset: offset + sub_func_offset,
-                    name,
-                },
-                Relocation::LinkedFunction { offset, name } => Relocation::LinkedFunction {
-                    offset: offset + sub_func_offset,
-                    name,
-                },
-                Relocation::JmpToReturn {
-                    inst_loc,
-                    inst_size,
-                    offset,
-                } => Relocation::JmpToReturn {
-                    inst_loc: inst_loc + sub_func_offset,
-                    inst_size,
-                    offset: offset + sub_func_offset,
-                },
-            }));
-
         // Overwrite the original jump with the correct offset.
         let mut tmp = bumpalo::vec![in self.env.arena];
         self.update_jmp_imm32_offset(
