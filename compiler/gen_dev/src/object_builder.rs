@@ -40,7 +40,7 @@ pub fn build_module<'a>(
                 x86_64::X86_64SystemV,
             >(env, interns);
             build_object(
-                &procedures,
+                procedures,
                 backend,
                 Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little),
             )
@@ -57,7 +57,7 @@ pub fn build_module<'a>(
                 x86_64::X86_64SystemV,
             >(env, interns);
             build_object(
-                &procedures,
+                procedures,
                 backend,
                 Object::new(
                     BinaryFormat::MachO,
@@ -78,7 +78,7 @@ pub fn build_module<'a>(
                 aarch64::AArch64Call,
             >(env, interns);
             build_object(
-                &procedures,
+                procedures,
                 backend,
                 Object::new(BinaryFormat::Elf, Architecture::Aarch64, Endianness::Little),
             )
@@ -95,7 +95,7 @@ pub fn build_module<'a>(
                 aarch64::AArch64Call,
             >(env, interns);
             build_object(
-                &procedures,
+                procedures,
                 backend,
                 Object::new(
                     BinaryFormat::MachO,
@@ -162,7 +162,7 @@ fn generate_wrapper<'a, B: Backend<'a>>(
 }
 
 fn build_object<'a, B: Backend<'a>>(
-    procedures: &'a MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
+    procedures: MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
     mut backend: B,
     mut output: Object,
 ) -> Object {

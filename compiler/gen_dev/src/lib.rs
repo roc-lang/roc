@@ -84,7 +84,7 @@ trait Backend<'a> {
 
     /// reset resets any registers or other values that may be occupied at the end of a procedure.
     /// It also passes basic procedure information to the builder for setup of the next function.
-    fn reset(&mut self, name: String, is_self_recursive: &'a SelfRecursive);
+    fn reset(&mut self, name: String, is_self_recursive: SelfRecursive);
 
     /// finalize does any setup and cleanup that should happen around the procedure.
     /// finalize does setup because things like stack size and jump locations are not know until the function is written.
@@ -103,12 +103,12 @@ trait Backend<'a> {
     /// Returns the procedure bytes, its relocations, and the names of the refcounting functions it references.
     fn build_proc(
         &mut self,
-        proc: &'a Proc<'a>,
+        proc: Proc<'a>,
         layout_ids: &mut LayoutIds<'a>,
     ) -> (Vec<u8>, Vec<Relocation>, Vec<'a, (Symbol, String)>) {
         let layout_id = layout_ids.get(proc.name, &proc.ret_layout);
         let proc_name = self.symbol_to_string(proc.name, layout_id);
-        self.reset(proc_name, &proc.is_self_recursive);
+        self.reset(proc_name, proc.is_self_recursive);
         self.load_args(proc.args, &proc.ret_layout);
         for (layout, sym) in proc.args {
             self.set_layout_map(*sym, layout);
@@ -130,7 +130,7 @@ trait Backend<'a> {
     }
 
     /// build_stmt builds a statement and outputs at the end of the buffer.
-    fn build_stmt(&mut self, stmt: &'a Stmt<'a>, ret_layout: &Layout<'a>) {
+    fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) {
         match stmt {
             Stmt::Let(sym, expr, layout, following) => {
                 self.build_expr(sym, expr, layout);
@@ -243,7 +243,7 @@ trait Backend<'a> {
 
     /// build_expr builds the expressions for the specified symbol.
     /// The builder must keep track of the symbol because it may be referred to later.
-    fn build_expr(&mut self, sym: &Symbol, expr: &'a Expr<'a>, layout: &'a Layout<'a>) {
+    fn build_expr(&mut self, sym: &Symbol, expr: &Expr<'a>, layout: &Layout<'a>) {
         match expr {
             Expr::Literal(lit) => {
                 if self.env().lazy_literals {
@@ -648,13 +648,17 @@ trait Backend<'a> {
     fn build_refcount_getptr(&mut self, dst: &Symbol, src: &Symbol);
 
     /// literal_map gets the map from symbol to literal and layout, used for lazy loading and literal folding.
-    fn literal_map(&mut self) -> &mut MutMap<Symbol, (&'a Literal<'a>, &'a Layout<'a>)>;
+    fn literal_map(&mut self) -> &mut MutMap<Symbol, (*const Literal<'a>, *const Layout<'a>)>;
 
     fn load_literal_symbols(&mut self, syms: &[Symbol]) {
         if self.env().lazy_literals {
             for sym in syms {
                 if let Some((lit, layout)) = self.literal_map().remove(sym) {
-                    self.load_literal(sym, layout, lit);
+                    // This operation is always safe but complicates lifetimes.
+                    // The map is reset when building a procedure and then used for that single procedure.
+                    // Since the lifetime is shorter than the entire backend, we need to use a pointer.
+                    let (lit, layout) = unsafe { (*lit, *layout) };
+                    self.load_literal(sym, &layout, &lit);
                 }
             }
         }
