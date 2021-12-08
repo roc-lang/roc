@@ -231,7 +231,6 @@ fn build_object<'a, B: Backend<'a>>(
             &mut output,
             &mut backend,
             &mut relocations,
-            &mut layout_ids,
             data_section,
             fn_name,
             section_id,
@@ -276,7 +275,6 @@ fn build_object<'a, B: Backend<'a>>(
             &mut output,
             &mut backend,
             &mut relocations,
-            &mut layout_ids,
             data_section,
             fn_name,
             section_id,
@@ -344,7 +342,6 @@ fn build_proc<'a, B: Backend<'a>>(
     output: &mut Object,
     backend: &mut B,
     relocations: &mut Vec<'a, (SectionId, object::write::Relocation)>,
-    layout_ids: &mut LayoutIds<'a>,
     data_section: SectionId,
     fn_name: String,
     section_id: SectionId,
@@ -352,13 +349,9 @@ fn build_proc<'a, B: Backend<'a>>(
     proc: Proc<'a>,
 ) {
     let mut local_data_index = 0;
-    let (proc_data, relocs) = backend.build_proc(proc);
+    let (proc_data, relocs, rc_proc_names) = backend.build_proc(proc);
     let proc_offset = output.add_symbol_data(proc_id, section_id, &proc_data, 16);
-    // TODO: figure out the borrowing here and fix this hack.
-    let relocs2 = relocs.to_vec();
-    std::mem::drop(proc_data);
-    std::mem::drop(relocs);
-    for reloc in relocs2.iter() {
+    for reloc in relocs.iter() {
         let elfreloc = match reloc {
             Relocation::LocalData { offset, data } => {
                 let data_symbol = write::Symbol {
@@ -416,10 +409,8 @@ fn build_proc<'a, B: Backend<'a>>(
                 }
                 // If the symbol is an undefined reference counting procedure, we need to add it here.
                 if output.symbol_id(name.as_bytes()) == None {
-                    for (sym, layout) in backend.refcount_proc_symbols().iter() {
-                        let layout_id = layout_ids.get_toplevel(*sym, layout);
-                        let rc_name = backend.symbol_to_string(*sym, layout_id);
-                        if name == &rc_name {
+                    for (sym, rc_name) in rc_proc_names.iter() {
+                        if name == rc_name {
                             let section_id = output.add_section(
                                 output.segment_name(StandardSegment::Text).to_vec(),
                                 format!(".text.{:x}", sym.as_u64()).as_bytes().to_vec(),

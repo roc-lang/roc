@@ -104,7 +104,11 @@ trait Backend<'a> {
     fn build_wrapped_jmp(&mut self) -> (&'a [u8], u64);
 
     /// build_proc creates a procedure and outputs it to the wrapped object writer.
-    fn build_proc(&mut self, proc: Proc<'a>) -> (Vec<u8>, Vec<Relocation>) {
+    /// Returns the procedure bytes, its relocations, and the names of the refcounting functions it references.
+    fn build_proc(
+        &mut self,
+        proc: Proc<'a>,
+    ) -> (Vec<u8>, Vec<Relocation>, Vec<'a, (Symbol, String)>) {
         let layout_id = LayoutIds::default().get(proc.name, &proc.ret_layout);
         let proc_name = self.symbol_to_string(proc.name, layout_id);
         self.reset(proc_name, proc.is_self_recursive);
@@ -115,7 +119,13 @@ trait Backend<'a> {
         self.scan_ast(&proc.body);
         self.create_free_map();
         self.build_stmt(&proc.body, &proc.ret_layout);
-        self.finalize()
+        let mut rc_proc_names = bumpalo::vec![in self.env().arena];
+        rc_proc_names.reserve(self.refcount_proc_symbols().len());
+        for (sym, _) in self.refcount_proc_symbols() {
+            rc_proc_names.push((*sym, self.symbol_to_string(*sym, layout_id)));
+        }
+        let (bytes, relocs) = self.finalize();
+        (bytes, relocs, rc_proc_names)
     }
 
     /// build_stmt builds a statement and outputs at the end of the buffer.
