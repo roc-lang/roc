@@ -130,10 +130,10 @@ impl<K: Id, V> IdVec<K, V> {
         }
     }
 
-    pub fn filled_with_indexed(count: Count<K>, mut f: impl FnMut(K) -> V) -> Self {
+    pub fn filled_with_indexed(count: Count<K>, f: impl FnMut(K) -> V) -> Self {
         IdVec {
             key: PhantomData,
-            items: count.iter().map(|k| f(k)).collect(),
+            items: count.iter().map(f).collect(),
         }
     }
 

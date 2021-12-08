@@ -3148,6 +3148,7 @@ dependencies = [
  "roc_parse",
  "roc_problem",
  "roc_region",
+ "roc_reporting",
  "roc_types",
  "roc_unify",
  "snafu",
@@ -3594,6 +3595,9 @@ version = "0.1.0"
 [[package]]
 name = "roc_test_utils"
 version = "0.1.0"
+dependencies = [
+ "pretty_assertions",
+]
 
 [[package]]
 name = "roc_types"

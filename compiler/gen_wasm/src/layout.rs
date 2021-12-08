@@ -135,13 +135,6 @@ impl WasmLayout {
             }
         }
     }
-
-    pub fn size(&self) -> u32 {
-        match self {
-            Self::Primitive(_, size) => *size,
-            Self::StackMemory { size, .. } => *size,
-        }
-    }
 }
 
 #[derive(PartialEq, Eq)]

@@ -1,5 +1,7 @@
-use crate::spaces::{fmt_comments_only, fmt_spaces, newline, NewlineAt, INDENT};
-use bumpalo::collections::String;
+use crate::{
+    spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT},
+    Buf,
+};
 use roc_parse::ast::{AssignedField, Expr, Tag, TypeAnnotation};
 use roc_region::all::Located;
 
@@ -42,7 +44,7 @@ pub trait Formattable<'a> {
 
     fn format_with_options(
         &self,
-        buf: &mut String<'a>,
+        buf: &mut Buf<'a>,
         _parens: Parens,
         _newlines: Newlines,
         indent: u16,
@@ -50,7 +52,7 @@ pub trait Formattable<'a> {
         self.format(buf, indent);
     }
 
-    fn format(&self, buf: &mut String<'a>, indent: u16) {
+    fn format(&self, buf: &mut Buf<'a>, indent: u16) {
         self.format_with_options(buf, Parens::NotNeeded, Newlines::No, indent);
     }
 }
@@ -66,7 +68,7 @@ where
 
     fn format_with_options(
         &self,
-        buf: &mut String<'a>,
+        buf: &mut Buf<'a>,
         parens: Parens,
         newlines: Newlines,
         indent: u16,
@@ -74,7 +76,7 @@ where
         (*self).format_with_options(buf, parens, newlines, indent)
     }
 
-    fn format(&self, buf: &mut String<'a>, indent: u16) {
+    fn format(&self, buf: &mut Buf<'a>, indent: u16) {
         (*self).format(buf, indent)
     }
 }
@@ -90,7 +92,7 @@ where
 
     fn format_with_options(
         &self,
-        buf: &mut String<'a>,
+        buf: &mut Buf<'a>,
         parens: Parens,
         newlines: Newlines,
         indent: u16,
@@ -99,28 +101,30 @@ where
             .format_with_options(buf, parens, newlines, indent)
     }
 
-    fn format(&self, buf: &mut String<'a>, indent: u16) {
+    fn format(&self, buf: &mut Buf<'a>, indent: u16) {
         self.value.format(buf, indent)
     }
 }
 
 macro_rules! format_sequence {
     ($buf: expr, $indent:expr, $start:expr, $end:expr, $items:expr, $newline:expr, $t:ident) => {
+        $buf.indent($indent);
         let is_multiline = $items.iter().any(|item| item.value.is_multiline())
             || !$items.final_comments().is_empty();
 
         if is_multiline {
-            let braces_indent = $indent + INDENT;
+            let braces_indent = $indent;
             let item_indent = braces_indent + INDENT;
             if ($newline == Newlines::Yes) {
-                newline($buf, braces_indent);
+                $buf.newline();
             }
+            $buf.indent(braces_indent);
             $buf.push($start);
 
             for item in $items.iter() {
                 match item.value {
                     $t::SpaceBefore(expr_below, spaces_above_expr) => {
-                        newline($buf, item_indent);
+                        $buf.newline();
                         fmt_comments_only(
                             $buf,
                             spaces_above_expr.iter(),
@@ -149,14 +153,14 @@ macro_rules! format_sequence {
                     }
 
                     $t::SpaceAfter(sub_expr, spaces) => {
-                        newline($buf, item_indent);
+                        $buf.newline();
                         sub_expr.format($buf, item_indent);
                         $buf.push(',');
                         fmt_comments_only($buf, spaces.iter(), NewlineAt::Top, item_indent);
                     }
 
                     _ => {
-                        newline($buf, item_indent);
+                        $buf.newline();
                         item.format($buf, item_indent);
                         $buf.push(',');
                     }
@@ -168,7 +172,8 @@ macro_rules! format_sequence {
                 NewlineAt::Top,
                 item_indent,
             );
-            newline($buf, braces_indent);
+            $buf.newline();
+            $buf.indent(braces_indent);
             $buf.push($end);
         } else {
             // is_multiline == false
@@ -234,7 +239,7 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
 
     fn format_with_options(
         &self,
-        buf: &mut String<'a>,
+        buf: &mut Buf<'a>,
         parens: Parens,
         newlines: Newlines,
         indent: u16,
@@ -278,6 +283,7 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
                 }
             }
             Apply(pkg, name, arguments) => {
+                buf.indent(indent);
                 // NOTE apply is never multiline
                 let write_parens = parens == Parens::InApply && !arguments.is_empty();
 
@@ -334,8 +340,8 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
             }
 
             SpaceBefore(ann, spaces) => {
-                newline(buf, indent + INDENT);
-                fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent + INDENT);
+                buf.newline();
+                fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
                 ann.format_with_options(buf, parens, Newlines::No, indent)
             }
             SpaceAfter(ann, spaces) => {
@@ -365,7 +371,7 @@ impl<'a> Formattable<'a> for AssignedField<'a, TypeAnnotation<'a>> {
 
     fn format_with_options(
         &self,
-        buf: &mut String<'a>,
+        buf: &mut Buf<'a>,
         parens: Parens,
         newlines: Newlines,
         indent: u16,
@@ -382,7 +388,7 @@ impl<'a> Formattable<'a> for AssignedField<'a, Expr<'a>> {
 
     fn format_with_options(
         &self,
-        buf: &mut String<'a>,
+        buf: &mut Buf<'a>,
         parens: Parens,
         newlines: Newlines,
         indent: u16,
@@ -407,7 +413,7 @@ fn is_multiline_assigned_field_help<'a, T: Formattable<'a>>(afield: &AssignedFie
 
 fn format_assigned_field_help<'a, T>(
     zelf: &AssignedField<'a, T>,
-    buf: &mut String<'a>,
+    buf: &mut Buf<'a>,
     parens: Parens,
     indent: u16,
     separator_prefix: &str,
@@ -420,9 +426,10 @@ fn format_assigned_field_help<'a, T>(
     match zelf {
         RequiredValue(name, spaces, ann) => {
             if is_multiline {
-                newline(buf, indent);
+                buf.newline();
             }
 
+            buf.indent(indent);
             buf.push_str(name.value);
 
             if !spaces.is_empty() {
@@ -435,7 +442,8 @@ fn format_assigned_field_help<'a, T>(
         }
         OptionalValue(name, spaces, ann) => {
             if is_multiline {
-                newline(buf, indent);
+                buf.newline();
+                buf.indent(indent);
             }
 
             buf.push_str(name.value);
@@ -450,7 +458,8 @@ fn format_assigned_field_help<'a, T>(
         }
         LabelOnly(name) => {
             if is_multiline {
-                newline(buf, indent);
+                buf.newline();
+                buf.indent(indent);
             }
 
             buf.push_str(name.value);
@@ -498,7 +507,7 @@ impl<'a> Formattable<'a> for Tag<'a> {
 
     fn format_with_options(
         &self,
-        buf: &mut String<'a>,
+        buf: &mut Buf<'a>,
         _parens: Parens,
         _newlines: Newlines,
         indent: u16,
@@ -507,12 +516,13 @@ impl<'a> Formattable<'a> for Tag<'a> {
 
         match self {
             Tag::Global { name, args } => {
+                buf.indent(indent);
                 buf.push_str(name.value);
                 if is_multiline {
                     let arg_indent = indent + INDENT;
 
                     for arg in *args {
-                        newline(buf, arg_indent);
+                        buf.newline();
                         arg.format_with_options(buf, Parens::InApply, Newlines::No, arg_indent);
                     }
                 } else {
@@ -524,12 +534,13 @@ impl<'a> Formattable<'a> for Tag<'a> {
             }
             Tag::Private { name, args } => {
                 debug_assert!(name.value.starts_with('@'));
+                buf.indent(indent);
                 buf.push_str(name.value);
                 if is_multiline {
                     let arg_indent = indent + INDENT;
 
                     for arg in *args {
-                        newline(buf, arg_indent);
+                        buf.newline();
                         arg.format_with_options(buf, Parens::InApply, Newlines::No, arg_indent);
                     }
                 } else {
@@ -540,7 +551,10 @@ impl<'a> Formattable<'a> for Tag<'a> {
                 }
             }
             Tag::SpaceBefore(_, _) | Tag::SpaceAfter(_, _) => unreachable!(),
-            Tag::Malformed(raw) => buf.push_str(raw),
+            Tag::Malformed(raw) => {
+                buf.indent(indent);
+                buf.push_str(raw);
+            }
         }
     }
 }

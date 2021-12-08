@@ -837,25 +837,13 @@ fn type_to_variable<'a>(
             actual,
             lambda_set_variables,
         } => {
-            // the rank of these variables is NONE (encoded as 0 in practice)
-            // using them for other ranks causes issues
-            if rank.is_none() {
-                // TODO replace by arithmetic?
-                match *symbol {
-                    Symbol::NUM_I128 => return Variable::I128,
-                    Symbol::NUM_I64 => return Variable::I64,
-                    Symbol::NUM_I32 => return Variable::I32,
-                    Symbol::NUM_I16 => return Variable::I16,
-                    Symbol::NUM_I8 => return Variable::I8,
-
-                    Symbol::NUM_U128 => return Variable::U128,
-                    Symbol::NUM_U64 => return Variable::U64,
-                    Symbol::NUM_U32 => return Variable::U32,
-                    Symbol::NUM_U16 => return Variable::U16,
-                    Symbol::NUM_U8 => return Variable::U8,
-
-                    Symbol::NUM_NAT => return Variable::NAT,
-                    _ => {}
+            if let Some(reserved) = Variable::get_reserved(*symbol) {
+                if rank.is_none() {
+                    // reserved variables are stored with rank NONE
+                    return reserved;
+                } else {
+                    // for any other rank, we need to copy; it takes care of adjusting the rank
+                    return deep_copy_var(subs, rank, pools, reserved);
                 }
             }
 
@@ -868,7 +856,11 @@ fn type_to_variable<'a>(
                 lambda_set_variables,
             );
 
-            let alias_variable = type_to_variable(subs, rank, pools, arena, actual);
+            let alias_variable = if let Symbol::RESULT_RESULT = *symbol {
+                roc_result_to_var(subs, rank, pools, arena, actual)
+            } else {
+                type_to_variable(subs, rank, pools, arena, actual)
+            };
             let content = Content::Alias(*symbol, alias_variables, alias_variable);
 
             register(subs, rank, pools, content)
@@ -938,6 +930,52 @@ fn alias_to_var<'a>(
         variables_start: new_variables.start,
         type_variables_len: type_arguments.len() as _,
         all_variables_len: length as _,
+    }
+}
+
+fn roc_result_to_var<'a>(
+    subs: &mut Subs,
+    rank: Rank,
+    pools: &mut Pools,
+    arena: &'a bumpalo::Bump,
+    result_type: &Type,
+) -> Variable {
+    match result_type {
+        Type::TagUnion(tags, ext) => {
+            debug_assert!(ext.is_empty_tag_union());
+            debug_assert!(tags.len() == 2);
+
+            if let [(err, err_args), (ok, ok_args)] = &tags[..] {
+                debug_assert_eq!(err, &subs.tag_names[0]);
+                debug_assert_eq!(ok, &subs.tag_names[1]);
+
+                if let ([err_type], [ok_type]) = (err_args.as_slice(), ok_args.as_slice()) {
+                    let err_var = type_to_variable(subs, rank, pools, arena, err_type);
+                    let ok_var = type_to_variable(subs, rank, pools, arena, ok_type);
+
+                    let start = subs.variables.len() as u32;
+                    let err_slice = SubsSlice::new(start, 1);
+                    let ok_slice = SubsSlice::new(start + 1, 1);
+
+                    subs.variables.push(err_var);
+                    subs.variables.push(ok_var);
+
+                    let variables = SubsSlice::new(subs.variable_slices.len() as _, 2);
+                    subs.variable_slices.push(err_slice);
+                    subs.variable_slices.push(ok_slice);
+
+                    let union_tags = UnionTags::from_slices(Subs::RESULT_TAG_NAMES, variables);
+                    let ext = Variable::EMPTY_TAG_UNION;
+
+                    let content = Content::Structure(FlatType::TagUnion(union_tags, ext));
+
+                    return register(subs, rank, pools, content);
+                }
+            }
+
+            unreachable!("invalid arguments to Result.Result; canonicalization should catch this!")
+        }
+        _ => unreachable!("not a valid type inside a Result.Result alias"),
     }
 }
 
