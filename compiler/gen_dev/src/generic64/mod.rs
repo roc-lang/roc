@@ -367,6 +367,7 @@ impl<
         self.float_used_regs.clear();
         self.float_free_regs
             .extend_from_slice(CC::FLOAT_DEFAULT_FREE_REGS);
+        self.refcount_proc_symbols.clear();
     }
 
     fn literal_map(&mut self) -> &mut MutMap<Symbol, Literal<'a>> {

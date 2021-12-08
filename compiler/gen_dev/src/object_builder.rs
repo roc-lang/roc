@@ -231,6 +231,7 @@ fn build_object<'a, B: Backend<'a>>(
             &mut output,
             &mut backend,
             &mut relocations,
+            &mut layout_ids,
             data_section,
             fn_name,
             section_id,
@@ -275,6 +276,7 @@ fn build_object<'a, B: Backend<'a>>(
             &mut output,
             &mut backend,
             &mut relocations,
+            &mut layout_ids,
             data_section,
             fn_name,
             section_id,
@@ -342,6 +344,7 @@ fn build_proc<'a, B: Backend<'a>>(
     output: &mut Object,
     backend: &mut B,
     relocations: &mut Vec<'a, (SectionId, object::write::Relocation)>,
+    layout_ids: &mut LayoutIds<'a>,
     data_section: SectionId,
     fn_name: String,
     section_id: SectionId,
@@ -349,7 +352,7 @@ fn build_proc<'a, B: Backend<'a>>(
     proc: Proc<'a>,
 ) {
     let mut local_data_index = 0;
-    let (proc_data, relocs, rc_proc_names) = backend.build_proc(proc);
+    let (proc_data, relocs, rc_proc_names) = backend.build_proc(proc, layout_ids);
     let proc_offset = output.add_symbol_data(proc_id, section_id, &proc_data, 16);
     for reloc in relocs.iter() {
         let elfreloc = match reloc {

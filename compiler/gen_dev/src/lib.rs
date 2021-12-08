@@ -108,8 +108,9 @@ trait Backend<'a> {
     fn build_proc(
         &mut self,
         proc: Proc<'a>,
+        layout_ids: &mut LayoutIds<'a>,
     ) -> (Vec<u8>, Vec<Relocation>, Vec<'a, (Symbol, String)>) {
-        let layout_id = LayoutIds::default().get(proc.name, &proc.ret_layout);
+        let layout_id = layout_ids.get(proc.name, &proc.ret_layout);
         let proc_name = self.symbol_to_string(proc.name, layout_id);
         self.reset(proc_name, proc.is_self_recursive);
         self.load_args(proc.args, &proc.ret_layout);
@@ -121,8 +122,12 @@ trait Backend<'a> {
         self.build_stmt(&proc.body, &proc.ret_layout);
         let mut rc_proc_names = bumpalo::vec![in self.env().arena];
         rc_proc_names.reserve(self.refcount_proc_symbols().len());
-        for (sym, _) in self.refcount_proc_symbols() {
-            rc_proc_names.push((*sym, self.symbol_to_string(*sym, layout_id)));
+        for (rc_proc_sym, rc_proc_layout) in self.refcount_proc_symbols() {
+            let name = layout_ids
+                .get_toplevel(*rc_proc_sym, rc_proc_layout)
+                .to_symbol_string(*rc_proc_sym, self.interns());
+
+            rc_proc_names.push((*rc_proc_sym, name));
         }
         let (bytes, relocs) = self.finalize();
         (bytes, relocs, rc_proc_names)
