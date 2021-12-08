@@ -29,10 +29,6 @@ pub struct Env<'a> {
     pub generate_allocators: bool,
 }
 
-// impl<'a> Env<'a> {
-
-// }
-
 // These relocations likely will need a length.
 // They may even need more definition, but this should be at least good enough for how we will use elf.
 #[derive(Debug, Clone)]
