@@ -2224,8 +2224,8 @@ macro_rules! dict_key_value_layout {
 }
 
 macro_rules! list_element_layout {
-    ($dict_layout:expr) => {
-        match $dict_layout {
+    ($list_layout:expr) => {
+        match $list_layout {
             Layout::Builtin(Builtin::List(list_layout)) => *list_layout,
             _ => unreachable!("invalid list layout"),
         }
@@ -5416,7 +5416,9 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            list_reverse(env, list, list_layout, update_mode)
+            let element_layout = list_element_layout!(list_layout);
+
+            list_reverse(env, list, element_layout, update_mode)
         }
         ListConcat => {
             debug_assert_eq!(args.len(), 2);
@@ -5425,7 +5427,9 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let second_list = load_symbol(scope, &args[1]);
 
-            list_concat(env, parent, first_list, second_list, list_layout)
+            let element_layout = list_element_layout!(list_layout);
+
+            list_concat(env, first_list, second_list, element_layout)
         }
         ListContains => {
             // List.contains : List elem, elem -> Bool
@@ -5536,7 +5540,10 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, outer_list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            list_join(env, parent, list, outer_list_layout)
+            let inner_list_layout = list_element_layout!(outer_list_layout);
+            let element_layout = list_element_layout!(inner_list_layout);
+
+            list_join(env, list, element_layout)
         }
         ListGetUnsafe => {
             // List.get : List elem, Nat -> [ Ok elem, OutOfBounds ]*
@@ -5546,11 +5553,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             let wrapper_struct = wrapper_struct.into_struct_value();
             let elem_index = load_symbol(scope, &args[1]).into_int_value();
 
+            let element_layout = list_element_layout!(list_layout);
+
             list_get_unsafe(
                 env,
                 layout_ids,
                 parent,
-                list_layout,
+                element_layout,
                 elem_index,
                 wrapper_struct,
             )
@@ -5880,7 +5889,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             debug_assert_eq!(args.len(), 2);
 
             let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (key, key_layout) = load_symbol_and_layout(scope, &args[1]);
+            let key = load_symbol(scope, &args[1]);
 
             let (key_layout, value_layout) = dict_key_value_layout!(dict_layout);
             dict_remove(env, layout_ids, dict, key, key_layout, value_layout)
@@ -5889,7 +5898,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             debug_assert_eq!(args.len(), 2);
 
             let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (key, key_layout) = load_symbol_and_layout(scope, &args[1]);
+            let key = load_symbol(scope, &args[1]);
 
             let (key_layout, value_layout) = dict_key_value_layout!(dict_layout);
             dict_contains(env, layout_ids, dict, key, key_layout, value_layout)
@@ -5898,7 +5907,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             debug_assert_eq!(args.len(), 2);
 
             let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (key, key_layout) = load_symbol_and_layout(scope, &args[1]);
+            let key = load_symbol(scope, &args[1]);
 
             let (key_layout, value_layout) = dict_key_value_layout!(dict_layout);
             dict_get(env, layout_ids, dict, key, key_layout, value_layout)
