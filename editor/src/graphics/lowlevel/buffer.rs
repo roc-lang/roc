@@ -17,7 +17,9 @@ pub struct QuadBufferBuilder {
 impl QuadBufferBuilder {
     pub fn new() -> Self {
         Self {
-            ..Default::default()
+            vertex_data: Vec::new(),
+            index_data: Vec::new(),
+            current_quad: 0,
         }
     }
 
@@ -81,11 +83,7 @@ impl QuadBufferBuilder {
 
 impl Default for QuadBufferBuilder {
     fn default() -> Self {
-        Self {
-            vertex_data: Vec::new(),
-            index_data: Vec::new(),
-            current_quad: 0,
-        }
+        Self::new()
     }
 }
 

@@ -105,12 +105,12 @@ pub fn update_empty_record(
         {
             // update AST
             let record_var = ed_model.module.env.var_store.fresh();
-            let field_name = PoolStr::new(new_input, &mut ed_model.module.env.pool);
+            let field_name = PoolStr::new(new_input, ed_model.module.env.pool);
             let field_var = ed_model.module.env.var_store.fresh();
             //TODO actually check if field_str belongs to a previously defined variable
             let first_field = RecordField::InvalidLabelOnly(field_name, field_var);
 
-            let fields = PoolVec::new(vec![first_field].into_iter(), &mut ed_model.module.env.pool);
+            let fields = PoolVec::new(vec![first_field].into_iter(), ed_model.module.env.pool);
 
             let new_ast_node = Expr2::Record { record_var, fields };
 
@@ -354,7 +354,7 @@ pub fn update_record_field(
     // -push old field name
     new_field_name.push_str(field_pool_str);
     new_field_name.insert_str(node_caret_offset, new_input);
-    let new_field_pool_str = PoolStr::new(&new_field_name, &mut ed_model.module.env.pool);
+    let new_field_pool_str = PoolStr::new(&new_field_name, ed_model.module.env.pool);
 
     let first_field_mut = record_fields
         .iter_mut(ed_model.module.env.pool)

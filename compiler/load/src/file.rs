@@ -13,7 +13,7 @@ use roc_constrain::module::{
     constrain_imports, pre_constrain_imports, ConstrainableImports, Import,
 };
 use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
-use roc_module::ident::{Ident, Lowercase, ModuleName, QualifiedModuleName, TagName};
+use roc_module::ident::{Ident, ModuleName, QualifiedModuleName, TagName};
 use roc_module::symbol::{
     IdentIds, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds, PackageQualified,
     Symbol,
@@ -687,6 +687,8 @@ enum HeaderFor<'a> {
         /// usually `base`
         config_shorthand: &'a str,
         /// the type scheme of the main function (required by the platform)
+        /// (currently unused)
+        #[allow(dead_code)]
         platform_main_type: TypedIdent<'a>,
         /// provided symbol to host (commonly `mainForHost`)
         main_for_host: Symbol,
@@ -762,12 +764,6 @@ impl<'a> MonomorphizedModule<'a> {
 
         total
     }
-}
-
-#[derive(Debug, Default)]
-pub struct VariablySizedLayouts<'a> {
-    rigids: MutMap<Lowercase, Layout<'a>>,
-    aliases: MutMap<Symbol, Layout<'a>>,
 }
 
 #[derive(Debug)]
@@ -880,8 +876,6 @@ struct State<'a> {
     pub platform_path: PlatformPath<'a>,
     pub ptr_bytes: u32,
 
-    pub headers_parsed: MutSet<ModuleId>,
-
     pub module_cache: ModuleCache<'a>,
     pub dependencies: Dependencies<'a>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
@@ -897,24 +891,9 @@ struct State<'a> {
 
     pub ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
 
-    /// All the dependent modules we've already begun loading -
-    /// meaning we should never kick off another load_module on them!
-    pub loading_started: MutSet<ModuleId>,
-
     pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
 
     pub exposed_symbols_by_module: MutMap<ModuleId, MutSet<Symbol>>,
-
-    pub unsolved_modules: MutMap<ModuleId, UnsolvedModule<'a>>,
-
-    /// These are the modules which need to add their pending specializations to
-    /// the queue. Adding specializations to the queue can be done completely in
-    /// parallel, and order doesn't matter, so as soon as a module has been solved,
-    /// it gets an entry in here, and then immediately begins working on its
-    /// pending specializations in the same thread.
-    pub needs_specialization: MutSet<ModuleId>,
-
-    pub specializations_in_flight: u32,
 
     pub timings: MutMap<ModuleId, ModuleTiming>,
 
@@ -924,20 +903,6 @@ struct State<'a> {
     // since the unioning process could potentially take longer than the savings.
     // (Granted, this has not been attempted or measured!)
     pub layout_caches: std::vec::Vec<LayoutCache<'a>>,
-
-    pub procs: Procs<'a>,
-}
-
-#[derive(Debug)]
-struct UnsolvedModule<'a> {
-    module: Module,
-    src: &'a str,
-    imported_modules: MutSet<ModuleId>,
-    ident_ids: IdentIds,
-    constraint: Constraint,
-    var_store: VarStore,
-    module_timing: ModuleTiming,
-    declarations: Vec<Declaration>,
 }
 
 #[derive(Debug)]
@@ -1417,19 +1382,6 @@ where
             // reference to each worker. (Slices are Sync, but bumpalo Vecs are not.)
             let stealers = stealers.into_bump_slice();
 
-            let mut headers_parsed = MutSet::default();
-
-            // We've already parsed the root's header. (But only its header, so far.)
-            headers_parsed.insert(root_id);
-
-            let mut loading_started = MutSet::default();
-
-            // If the root module we're still processing happens to be an interface,
-            // it's possible that something else will import it. That will
-            // necessarily cause a cyclic import error, but in the meantime
-            // we still shouldn't load it.
-            loading_started.insert(root_id);
-
             let mut worker_listeners =
                 bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
 
@@ -1529,20 +1481,14 @@ where
                 procedures: MutMap::default(),
                 exposed_to_host: MutMap::default(),
                 exposed_types,
-                headers_parsed,
-                loading_started,
                 arc_modules,
                 arc_shorthands,
                 constrained_ident_ids: IdentIds::exposed_builtins(0),
                 ident_ids_by_module,
                 declarations_by_id: MutMap::default(),
                 exposed_symbols_by_module: MutMap::default(),
-                unsolved_modules: MutMap::default(),
                 timings: MutMap::default(),
-                needs_specialization: MutSet::default(),
-                specializations_in_flight: 0,
                 layout_caches: std::vec::Vec::with_capacity(num_cpus::get()),
-                procs: Procs::new_in(arena),
             };
 
             // We've now distributed one worker queue to each thread.
@@ -2062,10 +2008,13 @@ fn update<'a>(
             solved_subs,
             ident_ids,
             layout_cache,
-            problems: _,
+            problems,
             module_timing,
         } => {
             log!("found specializations for {:?}", module_id);
+
+            debug_assert!(problems.is_empty());
+
             let subs = solved_subs.into_inner();
 
             state
@@ -2106,9 +2055,13 @@ fn update<'a>(
             external_specializations_requested,
             problems,
             module_timing,
+            layout_cache,
             ..
         } => {
             log!("made specializations for {:?}", module_id);
+
+            // in the future, layouts will be in SoA form and we'll want to hold on to this data
+            let _ = layout_cache;
 
             state.module_cache.mono_problems.insert(module_id, problems);
 

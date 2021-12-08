@@ -1,4 +1,4 @@
-FROM rust:1.56.1-slim-bullseye
+FROM rust:1.57.0-slim-bullseye
 WORKDIR /earthbuild
 
 prep-debian:
@@ -117,7 +117,7 @@ build-nightly-release:
     RUN git log --pretty=format:'%h' -n 1 >> version.txt
     RUN printf " on: " >> version.txt
     RUN date >> version.txt
-    RUN RUSTFLAGS="-C target-cpu=x86-64-v2" cargo build --features with_sound --release
+    RUN RUSTFLAGS="-C target-cpu=x86-64" cargo build --features with_sound --release
     RUN cd ./target/release && tar -czvf roc_linux_x86_64.tar.gz ./roc ../../LICENSE ../../LEGAL_DETAILS ../../examples/hello-world ../../examples/hello-rust ../../examples/hello-zig ../../compiler/builtins/bitcode/src/ ../../roc_std
     SAVE ARTIFACT ./target/release/roc_linux_x86_64.tar.gz AS LOCAL roc_linux_x86_64.tar.gz
 

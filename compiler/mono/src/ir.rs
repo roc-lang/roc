@@ -2163,10 +2163,7 @@ fn specialize_external_help<'a>(
 
             procs.specialized.insert_specialized(name, top_level, proc);
         }
-        Err(SpecializeFailure {
-            problem: _,
-            attempted_layout,
-        }) => {
+        Err(SpecializeFailure { attempted_layout }) => {
             let proc = generate_runtime_error_function(env, name, attempted_layout);
 
             let top_level = ProcLayout::from_raw(env.arena, attempted_layout);
@@ -2735,8 +2732,6 @@ fn build_specialized_proc<'a>(
 struct SpecializeFailure<'a> {
     /// The layout we attempted to create
     attempted_layout: RawFunctionLayout<'a>,
-    /// The problem we ran into while creating it
-    problem: LayoutProblem,
 }
 
 type SpecializeSuccess<'a> = (Proc<'a>, RawFunctionLayout<'a>);
@@ -2831,8 +2826,11 @@ where
             env.subs.rollback_to(snapshot);
             layout_cache.rollback_to(cache_snapshot);
 
+            // earlier we made this information available where we handle the failure
+            // but we didn't do anything useful with it. So it's here if we ever need it again
+            let _ = error;
+
             Err(SpecializeFailure {
-                problem: error,
                 attempted_layout: raw,
             })
         }
@@ -6941,10 +6939,7 @@ fn call_by_name_help<'a>(
                                     hole,
                                 )
                             }
-                            Err(SpecializeFailure {
-                                attempted_layout,
-                                problem: _,
-                            }) => {
+                            Err(SpecializeFailure { attempted_layout }) => {
                                 let proc = generate_runtime_error_function(
                                     env,
                                     proc_name,
@@ -7067,10 +7062,7 @@ fn call_by_name_module_thunk<'a>(
 
                                 force_thunk(env, proc_name, inner_layout, assigned, hole)
                             }
-                            Err(SpecializeFailure {
-                                attempted_layout,
-                                problem: _,
-                            }) => {
+                            Err(SpecializeFailure { attempted_layout }) => {
                                 let proc = generate_runtime_error_function(
                                     env,
                                     proc_name,
