@@ -38,7 +38,7 @@ pub fn build_module<'a>(
             > = Backend::new(env);
             build_object(
                 env,
-                procedures,
+                &procedures,
                 backend,
                 Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little),
             )
@@ -56,7 +56,7 @@ pub fn build_module<'a>(
             > = Backend::new(env);
             build_object(
                 env,
-                procedures,
+                &procedures,
                 backend,
                 Object::new(
                     BinaryFormat::MachO,
@@ -78,7 +78,7 @@ pub fn build_module<'a>(
             > = Backend::new(env);
             build_object(
                 env,
-                procedures,
+                &procedures,
                 backend,
                 Object::new(BinaryFormat::Elf, Architecture::Aarch64, Endianness::Little),
             )
@@ -96,7 +96,7 @@ pub fn build_module<'a>(
             > = Backend::new(env);
             build_object(
                 env,
-                procedures,
+                &procedures,
                 backend,
                 Object::new(
                     BinaryFormat::MachO,
@@ -164,7 +164,7 @@ fn generate_wrapper<'a, B: Backend<'a>>(
 
 fn build_object<'a, B: Backend<'a>>(
     env: &'a Env,
-    procedures: MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
+    procedures: &'a MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
     mut backend: B,
     mut output: Object,
 ) -> Object {
@@ -212,10 +212,10 @@ fn build_object<'a, B: Backend<'a>>(
     let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
     for ((sym, layout), proc) in procedures {
         let base_name = layout_ids
-            .get_toplevel(sym, &layout)
-            .to_symbol_string(sym, &env.interns);
+            .get_toplevel(*sym, layout)
+            .to_symbol_string(*sym, &env.interns);
 
-        let fn_name = if env.exposed_to_host.contains(&sym) {
+        let fn_name = if env.exposed_to_host.contains(sym) {
             format!("roc_{}_exposed", base_name)
         } else {
             base_name
@@ -234,7 +234,7 @@ fn build_object<'a, B: Backend<'a>>(
             kind: SymbolKind::Text,
             // TODO: Depending on whether we are building a static or dynamic lib, this should change.
             // We should use Dynamic -> anyone, Linkage -> static link, Compilation -> this module only.
-            scope: if env.exposed_to_host.contains(&sym) {
+            scope: if env.exposed_to_host.contains(sym) {
                 SymbolScope::Dynamic
             } else {
                 SymbolScope::Linkage

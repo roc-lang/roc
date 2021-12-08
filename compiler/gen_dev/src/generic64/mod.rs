@@ -130,6 +130,12 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait> {
         offset: i32,
     ) -> usize;
 
+    fn mov_freg32_imm32(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        dst: FloatReg,
+        imm: f32,
+    );
     fn mov_freg64_imm64(
         buf: &mut Vec<'_, u8>,
         relocs: &mut Vec<'_, Relocation>,
@@ -239,14 +245,14 @@ pub struct Backend64Bit<
     buf: Vec<'a, u8>,
     relocs: Vec<'a, Relocation>,
     proc_name: Option<String>,
-    is_self_recursive: Option<SelfRecursive>,
+    is_self_recursive: Option<&'a SelfRecursive>,
 
     last_seen_map: MutMap<Symbol, *const Stmt<'a>>,
     layout_map: MutMap<Symbol, Layout<'a>>,
     free_map: MutMap<*const Stmt<'a>, Vec<'a, Symbol>>,
 
     symbol_storage_map: MutMap<Symbol, SymbolStorage<GeneralReg, FloatReg>>,
-    literal_map: MutMap<Symbol, Literal<'a>>,
+    literal_map: MutMap<Symbol, (&'a Literal<'a>, &'a Layout<'a>)>,
     join_map: MutMap<JoinPointId, u64>,
 
     // This should probably be smarter than a vec.
@@ -309,7 +315,7 @@ impl<
         self.env
     }
 
-    fn reset(&mut self, name: String, is_self_recursive: SelfRecursive) {
+    fn reset(&mut self, name: String, is_self_recursive: &'a SelfRecursive) {
         self.proc_name = Some(name);
         self.is_self_recursive = Some(is_self_recursive);
         self.stack_size = 0;
@@ -333,7 +339,7 @@ impl<
             .extend_from_slice(CC::FLOAT_DEFAULT_FREE_REGS);
     }
 
-    fn literal_map(&mut self) -> &mut MutMap<Symbol, Literal<'a>> {
+    fn literal_map(&mut self) -> &mut MutMap<Symbol, (&'a Literal<'a>, &'a Layout<'a>)> {
         &mut self.literal_map
     }
 
@@ -485,8 +491,8 @@ impl<
         ret_layout: &Layout<'a>,
     ) {
         if let Some(SelfRecursive::SelfRecursive(id)) = self.is_self_recursive {
-            if &fn_name == self.proc_name.as_ref().unwrap() && self.join_map.contains_key(&id) {
-                return self.build_jump(&id, args, arg_layouts, ret_layout);
+            if &fn_name == self.proc_name.as_ref().unwrap() && self.join_map.contains_key(id) {
+                return self.build_jump(id, args, arg_layouts, ret_layout);
             }
         }
         // Save used caller saved regs.
@@ -625,7 +631,7 @@ impl<
         let mut sub_backend = Self::new(self.env);
         sub_backend.reset(
             self.proc_name.as_ref().unwrap().clone(),
-            self.is_self_recursive.as_ref().unwrap().clone(),
+            <&roc_mono::ir::SelfRecursive>::clone(self.is_self_recursive.as_ref().unwrap()),
         );
         // Sync static maps of important information.
         sub_backend.last_seen_map = self.last_seen_map.clone();
@@ -974,19 +980,36 @@ impl<
         }
     }
 
-    fn load_literal(&mut self, sym: &Symbol, lit: &Literal<'a>) {
-        match lit {
-            Literal::Int(x) => {
+    fn load_literal(&mut self, sym: &Symbol, layout: &Layout<'a>, lit: &Literal<'a>) {
+        match (lit, layout) {
+            (
+                Literal::Int(x),
+                Layout::Builtin(Builtin::Int(
+                    IntWidth::U8
+                    | IntWidth::U16
+                    | IntWidth::U32
+                    | IntWidth::U64
+                    | IntWidth::I8
+                    | IntWidth::I16
+                    | IntWidth::I32
+                    | IntWidth::I64,
+                )),
+            ) => {
                 let reg = self.claim_general_reg(sym);
                 let val = *x;
                 ASM::mov_reg64_imm64(&mut self.buf, reg, val as i64);
             }
-            Literal::Float(x) => {
+            (Literal::Float(x), Layout::Builtin(Builtin::Float(FloatWidth::F64))) => {
                 let reg = self.claim_float_reg(sym);
                 let val = *x;
                 ASM::mov_freg64_imm64(&mut self.buf, &mut self.relocs, reg, val);
             }
-            Literal::Str(x) if x.len() < 16 => {
+            (Literal::Float(x), Layout::Builtin(Builtin::Float(FloatWidth::F32))) => {
+                let reg = self.claim_float_reg(sym);
+                let val = *x as f32;
+                ASM::mov_freg32_imm32(&mut self.buf, &mut self.relocs, reg, val);
+            }
+            (Literal::Str(x), Layout::Builtin(Builtin::Str)) if x.len() < 16 => {
                 // Load small string.
                 let reg = self.get_tmp_general_reg();
 

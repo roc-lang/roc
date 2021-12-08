@@ -65,7 +65,7 @@ where
 
     /// reset resets any registers or other values that may be occupied at the end of a procedure.
     /// It also passes basic procedure information to the builder for setup of the next function.
-    fn reset(&mut self, name: String, is_self_recursive: SelfRecursive);
+    fn reset(&mut self, name: String, is_self_recursive: &'a SelfRecursive);
 
     /// finalize does any setup and cleanup that should happen around the procedure.
     /// finalize does setup because things like stack size and jump locations are not know until the function is written.
@@ -81,11 +81,11 @@ where
     fn build_wrapped_jmp(&mut self) -> (&'a [u8], u64);
 
     /// build_proc creates a procedure and outputs it to the wrapped object writer.
-    fn build_proc(&mut self, proc: Proc<'a>) -> (&'a [u8], &[Relocation]) {
+    fn build_proc(&mut self, proc: &'a Proc<'a>) -> (&'a [u8], &[Relocation]) {
         let proc_name = LayoutIds::default()
             .get(proc.name, &proc.ret_layout)
             .to_symbol_string(proc.name, &self.env().interns);
-        self.reset(proc_name, proc.is_self_recursive);
+        self.reset(proc_name, &proc.is_self_recursive);
         self.load_args(proc.args, &proc.ret_layout);
         for (layout, sym) in proc.args {
             self.set_layout_map(*sym, layout);
@@ -97,7 +97,7 @@ where
     }
 
     /// build_stmt builds a statement and outputs at the end of the buffer.
-    fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) {
+    fn build_stmt(&mut self, stmt: &'a Stmt<'a>, ret_layout: &Layout<'a>) {
         match stmt {
             Stmt::Let(sym, expr, layout, following) => {
                 self.build_expr(sym, expr, layout);
@@ -192,13 +192,13 @@ where
 
     /// build_expr builds the expressions for the specified symbol.
     /// The builder must keep track of the symbol because it may be referred to later.
-    fn build_expr(&mut self, sym: &Symbol, expr: &Expr<'a>, layout: &Layout<'a>) {
+    fn build_expr(&mut self, sym: &Symbol, expr: &'a Expr<'a>, layout: &'a Layout<'a>) {
         match expr {
             Expr::Literal(lit) => {
                 if self.env().lazy_literals {
-                    self.literal_map().insert(*sym, *lit);
+                    self.literal_map().insert(*sym, (lit, layout));
                 } else {
-                    self.load_literal(sym, lit);
+                    self.load_literal(sym, layout, lit);
                 }
             }
             Expr::Call(roc_mono::ir::Call {
@@ -497,7 +497,7 @@ where
                     "NumIsZero: expected to have return layout of type Bool"
                 );
 
-                self.load_literal(&Symbol::DEV_TMP, &Literal::Int(0));
+                self.load_literal(&Symbol::DEV_TMP, &arg_layouts[0], &Literal::Int(0));
                 self.build_eq(sym, &args[0], &Symbol::DEV_TMP, &arg_layouts[0]);
                 self.free_symbol(&Symbol::DEV_TMP)
             }
@@ -549,18 +549,21 @@ where
         ret_layout: &Layout<'a>,
     );
 
-    /// literal_map gets the map from symbol to literal, used for lazy loading and literal folding.
-    fn literal_map(&mut self) -> &mut MutMap<Symbol, Literal<'a>>;
+    /// literal_map gets the map from symbol to literal and layout, used for lazy loading and literal folding.
+    fn literal_map(&mut self) -> &mut MutMap<Symbol, (&'a Literal<'a>, &'a Layout<'a>)>;
 
     fn load_literal_symbols(&mut self, syms: &[Symbol]) {
         if self.env().lazy_literals {
             for sym in syms {
-                if let Some(lit) = self.literal_map().remove(sym) {
-                    self.load_literal(sym, &lit);
+                if let Some((lit, layout)) = self.literal_map().remove(sym) {
+                    self.load_literal(sym, layout, lit);
                 }
             }
         }
     }
+
+    /// load_literal sets a symbol to be equal to a literal.
+    fn load_literal(&mut self, sym: &Symbol, layout: &Layout<'a>, lit: &Literal<'a>);
 
     /// create_struct creates a struct with the elements specified loaded into it as data.
     fn create_struct(&mut self, sym: &Symbol, layout: &Layout<'a>, fields: &'a [Symbol]);
@@ -573,9 +576,6 @@ where
         index: u64,
         field_layouts: &'a [Layout<'a>],
     );
-
-    /// load_literal sets a symbol to be equal to a literal.
-    fn load_literal(&mut self, sym: &Symbol, lit: &Literal<'a>);
 
     /// return_symbol moves a symbol to the correct return location for the backend and adds a jump to the end of the function.
     fn return_symbol(&mut self, sym: &Symbol, layout: &Layout<'a>);

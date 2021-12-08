@@ -972,6 +972,19 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
+    fn mov_freg32_imm32(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        dst: X86_64FloatReg,
+        imm: f32,
+    ) {
+        movss_freg32_rip_offset32(buf, dst, 0);
+        relocs.push(Relocation::LocalData {
+            offset: buf.len() as u64 - 4,
+            data: imm.to_le_bytes().to_vec(),
+        });
+    }
+    #[inline(always)]
     fn mov_freg64_imm64(
         buf: &mut Vec<'_, u8>,
         relocs: &mut Vec<'_, Relocation>,
@@ -1411,6 +1424,20 @@ fn movsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64Fl
     } else {
         buf.extend(&[0xF2, 0x0F, 0x10, 0xC0 + (dst_mod << 3) + (src_mod)])
     }
+}
+
+// `MOVSS xmm, m32` -> Load scalar single-precision floating-point value from m32 to xmm register.
+#[inline(always)]
+fn movss_freg32_rip_offset32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, offset: u32) {
+    let dst_mod = dst as u8 % 8;
+    if dst as u8 > 7 {
+        buf.reserve(9);
+        buf.extend(&[0xF3, 0x44, 0x0F, 0x10, 0x05 + (dst_mod << 3)]);
+    } else {
+        buf.reserve(8);
+        buf.extend(&[0xF3, 0x0F, 0x10, 0x05 + (dst_mod << 3)]);
+    }
+    buf.extend(&offset.to_le_bytes());
 }
 
 // `MOVSD xmm, m64` -> Load scalar double-precision floating-point value from m64 to xmm register.
@@ -2128,6 +2155,27 @@ mod tests {
             buf.clear();
             movsd_freg64_freg64(&mut buf, *dst, *src);
             assert_eq!(&expected[..], &buf[..]);
+        }
+    }
+
+    #[test]
+    fn test_movss_freg32_rip_offset32() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        for ((dst, offset), expected) in &[
+            (
+                (X86_64FloatReg::XMM0, TEST_I32),
+                vec![0xF3, 0x0F, 0x10, 0x05],
+            ),
+            (
+                (X86_64FloatReg::XMM15, TEST_I32),
+                vec![0xF3, 0x44, 0x0F, 0x10, 0x3D],
+            ),
+        ] {
+            buf.clear();
+            movss_freg32_rip_offset32(&mut buf, *dst, *offset as u32);
+            assert_eq!(&expected[..], &buf[..(buf.len() - 4)]);
+            assert_eq!(TEST_I32.to_le_bytes(), &buf[(buf.len() - 4)..]);
         }
     }
 
