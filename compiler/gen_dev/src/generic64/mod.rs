@@ -136,6 +136,12 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait> {
         offset: i32,
     ) -> usize;
 
+    fn mov_freg32_imm32(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        dst: FloatReg,
+        imm: f32,
+    );
     fn mov_freg64_imm64(
         buf: &mut Vec<'_, u8>,
         relocs: &mut Vec<'_, Relocation>,
@@ -194,6 +200,14 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait> {
         src2: GeneralReg,
     );
 
+    fn to_float_freg32_reg64(buf: &mut Vec<'_, u8>, dst: FloatReg, src: GeneralReg);
+
+    fn to_float_freg64_reg64(buf: &mut Vec<'_, u8>, dst: FloatReg, src: GeneralReg);
+
+    fn to_float_freg32_freg64(buf: &mut Vec<'_, u8>, dst: FloatReg, src: FloatReg);
+
+    fn to_float_freg64_freg32(buf: &mut Vec<'_, u8>, dst: FloatReg, src: FloatReg);
+
     fn gte_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
@@ -227,7 +241,9 @@ pub enum SymbolStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
     },
 }
 
-pub trait RegTrait: Copy + Eq + std::hash::Hash + std::fmt::Debug + 'static {}
+pub trait RegTrait: Copy + Eq + std::hash::Hash + std::fmt::Debug + 'static {
+    fn value(&self) -> u8;
+}
 
 pub struct Backend64Bit<
     'a,
@@ -252,7 +268,7 @@ pub struct Backend64Bit<
     free_map: MutMap<*const Stmt<'a>, Vec<'a, Symbol>>,
 
     symbol_storage_map: MutMap<Symbol, SymbolStorage<GeneralReg, FloatReg>>,
-    literal_map: MutMap<Symbol, Literal<'a>>,
+    literal_map: MutMap<Symbol, (*const Literal<'a>, *const Layout<'a>)>,
     join_map: MutMap<JoinPointId, u64>,
 
     // This should probably be smarter than a vec.
@@ -370,7 +386,7 @@ impl<
         self.refcount_proc_symbols.clear();
     }
 
-    fn literal_map(&mut self) -> &mut MutMap<Symbol, Literal<'a>> {
+    fn literal_map(&mut self) -> &mut MutMap<Symbol, (*const Literal<'a>, *const Layout<'a>)> {
         &mut self.literal_map
     }
 
@@ -886,6 +902,65 @@ impl<
         }
     }
 
+    fn build_num_to_float(
+        &mut self,
+        dst: &Symbol,
+        src: &Symbol,
+        arg_layout: &Layout<'a>,
+        ret_layout: &Layout<'a>,
+    ) {
+        let dst_reg = self.claim_float_reg(dst);
+        match (arg_layout, ret_layout) {
+            (
+                Layout::Builtin(Builtin::Int(IntWidth::I32 | IntWidth::I64)),
+                Layout::Builtin(Builtin::Float(FloatWidth::F64)),
+            ) => {
+                let src_reg = self.load_to_general_reg(src);
+                ASM::to_float_freg64_reg64(&mut self.buf, dst_reg, src_reg);
+            }
+            (
+                Layout::Builtin(Builtin::Int(IntWidth::I32 | IntWidth::I64)),
+                Layout::Builtin(Builtin::Float(FloatWidth::F32)),
+            ) => {
+                let src_reg = self.load_to_general_reg(src);
+                ASM::to_float_freg32_reg64(&mut self.buf, dst_reg, src_reg);
+            }
+            (
+                Layout::Builtin(Builtin::Float(FloatWidth::F64)),
+                Layout::Builtin(Builtin::Float(FloatWidth::F32)),
+            ) => {
+                let src_reg = self.load_to_float_reg(src);
+                ASM::to_float_freg32_freg64(&mut self.buf, dst_reg, src_reg);
+            }
+            (
+                Layout::Builtin(Builtin::Float(FloatWidth::F32)),
+                Layout::Builtin(Builtin::Float(FloatWidth::F64)),
+            ) => {
+                let src_reg = self.load_to_float_reg(src);
+                ASM::to_float_freg64_freg32(&mut self.buf, dst_reg, src_reg);
+            }
+            (
+                Layout::Builtin(Builtin::Float(FloatWidth::F64)),
+                Layout::Builtin(Builtin::Float(FloatWidth::F64)),
+            ) => {
+                let src_reg = self.load_to_float_reg(src);
+                ASM::mov_freg64_freg64(&mut self.buf, dst_reg, src_reg);
+            }
+            (
+                Layout::Builtin(Builtin::Float(FloatWidth::F32)),
+                Layout::Builtin(Builtin::Float(FloatWidth::F32)),
+            ) => {
+                let src_reg = self.load_to_float_reg(src);
+                ASM::mov_freg64_freg64(&mut self.buf, dst_reg, src_reg);
+            }
+            (a, r) => unimplemented!(
+                "NumToFloat: layout, arg {:?}, ret {:?}, not implemented yet",
+                a,
+                r
+            ),
+        }
+    }
+
     fn build_num_gte(
         &mut self,
         dst: &Symbol,
@@ -983,19 +1058,36 @@ impl<
         }
     }
 
-    fn load_literal(&mut self, sym: &Symbol, lit: &Literal<'a>) {
-        match lit {
-            Literal::Int(x) => {
+    fn load_literal(&mut self, sym: &Symbol, layout: &Layout<'a>, lit: &Literal<'a>) {
+        match (lit, layout) {
+            (
+                Literal::Int(x),
+                Layout::Builtin(Builtin::Int(
+                    IntWidth::U8
+                    | IntWidth::U16
+                    | IntWidth::U32
+                    | IntWidth::U64
+                    | IntWidth::I8
+                    | IntWidth::I16
+                    | IntWidth::I32
+                    | IntWidth::I64,
+                )),
+            ) => {
                 let reg = self.claim_general_reg(sym);
                 let val = *x;
                 ASM::mov_reg64_imm64(&mut self.buf, reg, val as i64);
             }
-            Literal::Float(x) => {
+            (Literal::Float(x), Layout::Builtin(Builtin::Float(FloatWidth::F64))) => {
                 let reg = self.claim_float_reg(sym);
                 let val = *x;
                 ASM::mov_freg64_imm64(&mut self.buf, &mut self.relocs, reg, val);
             }
-            Literal::Str(x) if x.len() < 16 => {
+            (Literal::Float(x), Layout::Builtin(Builtin::Float(FloatWidth::F32))) => {
+                let reg = self.claim_float_reg(sym);
+                let val = *x as f32;
+                ASM::mov_freg32_imm32(&mut self.buf, &mut self.relocs, reg, val);
+            }
+            (Literal::Str(x), Layout::Builtin(Builtin::Str)) if x.len() < 16 => {
                 // Load small string.
                 let reg = self.get_tmp_general_reg();
 
