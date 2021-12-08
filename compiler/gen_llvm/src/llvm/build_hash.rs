@@ -346,7 +346,7 @@ fn build_hash_tag<'a, 'ctx, 'env>(
         .set_current_debug_location(env.context, di_location);
     let call = env
         .builder
-        .build_call(function, &[seed.into(), value], "struct_hash");
+        .build_call(function, &[seed.into(), value.into()], "struct_hash");
 
     call.set_call_convention(FAST_CALL_CONV);
 

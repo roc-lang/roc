@@ -23,7 +23,7 @@ edition = "2018"
 # commit of TheDan64/inkwell, push a new tag which points to the latest commit,
 # change the tag value in this Cargo.toml to point to that tag, and `cargo update`.
 # This way, GitHub Actions works and nobody's builds get broken.
-inkwell = { git = "https://github.com/rtfeldman/inkwell", tag = "llvm12-0.release8", features = [ "llvm12-0" ] }
+inkwell = { git = "https://github.com/rtfeldman/inkwell", tag = "llvm13-0.release1", features = [ "llvm12-0" ] }
 
 [features]
 target-arm = []
