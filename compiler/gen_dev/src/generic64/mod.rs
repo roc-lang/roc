@@ -489,8 +489,8 @@ impl<
         ret_layout: &Layout<'a>,
     ) {
         if let Some(SelfRecursive::SelfRecursive(id)) = self.is_self_recursive {
-            if &fn_name == self.proc_name.as_ref().unwrap() && self.join_map.contains_key(&id) {
-                return self.build_jump(&id, args, arg_layouts, ret_layout);
+            if &fn_name == self.proc_name.as_ref().unwrap() && self.join_map.contains_key(id) {
+                return self.build_jump(id, args, arg_layouts, ret_layout);
             }
         }
         // Save used caller saved regs.
@@ -629,7 +629,7 @@ impl<
         let mut sub_backend = Self::new(self.env);
         sub_backend.reset(
             self.proc_name.as_ref().unwrap().clone(),
-            self.is_self_recursive.as_ref().unwrap().clone(),
+            <&roc_mono::ir::SelfRecursive>::clone(self.is_self_recursive.as_ref().unwrap()),
         );
         // Sync static maps of important information.
         sub_backend.last_seen_map = self.last_seen_map.clone();

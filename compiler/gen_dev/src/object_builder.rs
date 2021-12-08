@@ -212,10 +212,10 @@ fn build_object<'a, B: Backend<'a>>(
     let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
     for ((sym, layout), proc) in procedures {
         let base_name = layout_ids
-            .get_toplevel(*sym, &layout)
+            .get_toplevel(*sym, layout)
             .to_symbol_string(*sym, &env.interns);
 
-        let fn_name = if env.exposed_to_host.contains(&sym) {
+        let fn_name = if env.exposed_to_host.contains(sym) {
             format!("roc_{}_exposed", base_name)
         } else {
             base_name
@@ -234,7 +234,7 @@ fn build_object<'a, B: Backend<'a>>(
             kind: SymbolKind::Text,
             // TODO: Depending on whether we are building a static or dynamic lib, this should change.
             // We should use Dynamic -> anyone, Linkage -> static link, Compilation -> this module only.
-            scope: if env.exposed_to_host.contains(&sym) {
+            scope: if env.exposed_to_host.contains(sym) {
                 SymbolScope::Dynamic
             } else {
                 SymbolScope::Linkage
@@ -251,7 +251,7 @@ fn build_object<'a, B: Backend<'a>>(
     let mut relocations = bumpalo::vec![in env.arena];
     for (fn_name, section_id, proc_id, proc) in procs {
         let mut local_data_index = 0;
-        let (proc_data, relocs) = backend.build_proc(&proc);
+        let (proc_data, relocs) = backend.build_proc(proc);
         let proc_offset = output.add_symbol_data(proc_id, section_id, proc_data, 16);
         for reloc in relocs {
             let elfreloc = match reloc {

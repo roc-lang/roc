@@ -553,7 +553,7 @@ where
         if self.env().lazy_literals {
             for sym in syms {
                 if let Some((lit, layout)) = self.literal_map().remove(sym) {
-                    self.load_literal(sym, &layout, &lit);
+                    self.load_literal(sym, layout, lit);
                 }
             }
         }
