@@ -1,4 +1,5 @@
 use crate::{
+    collection::fmt_collection,
     spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT},
     Buf,
 };
@@ -104,96 +105,6 @@ where
     fn format(&self, buf: &mut Buf<'a>, indent: u16) {
         self.value.format(buf, indent)
     }
-}
-
-macro_rules! format_sequence {
-    ($buf: expr, $indent:expr, $start:expr, $end:expr, $items:expr, $newline:expr, $t:ident) => {
-        $buf.indent($indent);
-        let is_multiline = $items.iter().any(|item| item.value.is_multiline())
-            || !$items.final_comments().is_empty();
-
-        if is_multiline {
-            let braces_indent = $indent;
-            let item_indent = braces_indent + INDENT;
-            if ($newline == Newlines::Yes) {
-                $buf.newline();
-            }
-            $buf.indent(braces_indent);
-            $buf.push($start);
-
-            for item in $items.iter() {
-                match item.value {
-                    $t::SpaceBefore(expr_below, spaces_above_expr) => {
-                        $buf.newline();
-                        fmt_comments_only(
-                            $buf,
-                            spaces_above_expr.iter(),
-                            NewlineAt::Bottom,
-                            item_indent,
-                        );
-
-                        match &expr_below {
-                            $t::SpaceAfter(expr_above, spaces_below_expr) => {
-                                expr_above.format($buf, item_indent);
-
-                                $buf.push(',');
-
-                                fmt_comments_only(
-                                    $buf,
-                                    spaces_below_expr.iter(),
-                                    NewlineAt::Top,
-                                    item_indent,
-                                );
-                            }
-                            _ => {
-                                expr_below.format($buf, item_indent);
-                                $buf.push(',');
-                            }
-                        }
-                    }
-
-                    $t::SpaceAfter(sub_expr, spaces) => {
-                        $buf.newline();
-                        sub_expr.format($buf, item_indent);
-                        $buf.push(',');
-                        fmt_comments_only($buf, spaces.iter(), NewlineAt::Top, item_indent);
-                    }
-
-                    _ => {
-                        $buf.newline();
-                        item.format($buf, item_indent);
-                        $buf.push(',');
-                    }
-                }
-            }
-            fmt_comments_only(
-                $buf,
-                $items.final_comments().iter(),
-                NewlineAt::Top,
-                item_indent,
-            );
-            $buf.newline();
-            $buf.indent(braces_indent);
-            $buf.push($end);
-        } else {
-            // is_multiline == false
-            // there is no comment to add
-            $buf.push($start);
-            let mut iter = $items.iter().peekable();
-            while let Some(item) = iter.next() {
-                $buf.push(' ');
-                item.format($buf, $indent);
-                if iter.peek().is_some() {
-                    $buf.push(',');
-                }
-            }
-
-            if !$items.is_empty() {
-                $buf.push(' ');
-            }
-            $buf.push($end);
-        }
-    };
 }
 
 impl<'a> Formattable<'a> for TypeAnnotation<'a> {
@@ -317,7 +228,7 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
             Inferred => buf.push('_'),
 
             TagUnion { tags, ext } => {
-                format_sequence!(buf, indent, '[', ']', tags, newlines, Tag);
+                fmt_collection(buf, indent, '[', ']', *tags, newlines);
 
                 if let Some(loc_ext_ann) = *ext {
                     loc_ext_ann.value.format(buf, indent);
@@ -325,7 +236,7 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
             }
 
             Record { fields, ext } => {
-                format_sequence!(buf, indent, '{', '}', fields, newlines, AssignedField);
+                fmt_collection(buf, indent, '{', '}', *fields, newlines);
 
                 if let Some(loc_ext_ann) = *ext {
                     loc_ext_ann.value.format(buf, indent);

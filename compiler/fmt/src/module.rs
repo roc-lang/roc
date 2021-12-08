@@ -1,5 +1,5 @@
-use crate::annotation::Formattable;
-use crate::collection::{fmt_collection, CollectionConfig};
+use crate::annotation::{Formattable, Newlines};
+use crate::collection::fmt_collection;
 use crate::expr::fmt_str_literal;
 use crate::spaces::{fmt_default_spaces, fmt_spaces, INDENT};
 use crate::Buf;
@@ -132,16 +132,7 @@ pub fn fmt_platform_header<'a>(buf: &mut Buf<'a>, header: &'a PlatformHeader<'a>
 }
 
 fn fmt_requires<'a>(buf: &mut Buf<'a>, requires: &PlatformRequires<'a>, indent: u16) {
-    fmt_collection(
-        buf,
-        requires.rigids,
-        indent,
-        CollectionConfig {
-            begin: '{',
-            end: '}',
-            delimiter: ',',
-        },
-    );
+    fmt_collection(buf, indent, '{', '}', requires.rigids, Newlines::No);
 
     buf.push_str(" { ");
     fmt_typed_ident(buf, &requires.signature.value, indent);
@@ -161,16 +152,7 @@ fn fmt_effects<'a>(buf: &mut Buf<'a>, effects: &Effects<'a>, indent: u16) {
 
     fmt_default_spaces(buf, effects.spaces_after_type_name, " ", indent);
 
-    fmt_collection(
-        buf,
-        effects.entries,
-        indent,
-        CollectionConfig {
-            begin: '{',
-            end: '}',
-            delimiter: ',',
-        },
-    );
+    fmt_collection(buf, indent, '{', '}', effects.entries, Newlines::No)
 }
 
 fn fmt_typed_ident<'a>(buf: &mut Buf<'a>, entry: &TypedIdent<'a>, indent: u16) {
@@ -250,16 +232,7 @@ fn fmt_imports<'a>(
     loc_entries: Collection<'a, Located<ImportsEntry<'a>>>,
     indent: u16,
 ) {
-    fmt_collection(
-        buf,
-        loc_entries,
-        indent,
-        CollectionConfig {
-            begin: '[',
-            end: ']',
-            delimiter: ',',
-        },
-    );
+    fmt_collection(buf, indent, '[', ']', loc_entries, Newlines::No)
 }
 
 fn fmt_provides<'a>(
@@ -267,16 +240,7 @@ fn fmt_provides<'a>(
     loc_entries: Collection<'a, Located<ExposesEntry<'a, &'a str>>>,
     indent: u16,
 ) {
-    fmt_collection(
-        buf,
-        loc_entries,
-        indent,
-        CollectionConfig {
-            begin: '[',
-            end: ']',
-            delimiter: ',',
-        },
-    );
+    fmt_collection(buf, indent, '[', ']', loc_entries, Newlines::No)
 }
 
 fn fmt_to<'a>(buf: &mut Buf<'a>, to: To<'a>, indent: u16) {
@@ -288,21 +252,12 @@ fn fmt_to<'a>(buf: &mut Buf<'a>, to: To<'a>, indent: u16) {
     }
 }
 
-fn fmt_exposes<'a, N: FormatName + 'a>(
+fn fmt_exposes<'a, N: FormatName + Copy + 'a>(
     buf: &mut Buf<'a>,
     loc_entries: Collection<'_, Located<ExposesEntry<'_, N>>>,
     indent: u16,
 ) {
-    fmt_collection(
-        buf,
-        loc_entries,
-        indent,
-        CollectionConfig {
-            begin: '[',
-            end: ']',
-            delimiter: ',',
-        },
-    );
+    fmt_collection(buf, indent, '[', ']', loc_entries, Newlines::No)
 }
 
 impl<'a, 'b, N: FormatName> Formattable<'a> for ExposesEntry<'b, N> {
@@ -357,16 +312,7 @@ fn fmt_packages<'a>(
     loc_entries: Collection<'a, Located<PackageEntry<'a>>>,
     indent: u16,
 ) {
-    fmt_collection(
-        buf,
-        loc_entries,
-        indent,
-        CollectionConfig {
-            begin: '{',
-            end: '}',
-            delimiter: ',',
-        },
-    );
+    fmt_collection(buf, indent, '{', '}', loc_entries, Newlines::No)
 }
 
 impl<'a> Formattable<'a> for PackageEntry<'a> {
@@ -431,16 +377,7 @@ fn fmt_imports_entry<'a>(buf: &mut Buf<'a>, entry: &ImportsEntry<'a>, indent: u1
             if !loc_exposes_entries.is_empty() {
                 buf.push('.');
 
-                fmt_collection(
-                    buf,
-                    *loc_exposes_entries,
-                    indent,
-                    CollectionConfig {
-                        begin: '{',
-                        end: '}',
-                        delimiter: ',',
-                    },
-                );
+                fmt_collection(buf, indent, '{', '}', *loc_exposes_entries, Newlines::No)
             }
         }
 
@@ -452,16 +389,7 @@ fn fmt_imports_entry<'a>(buf: &mut Buf<'a>, entry: &ImportsEntry<'a>, indent: u1
             if !entries.is_empty() {
                 buf.push('.');
 
-                fmt_collection(
-                    buf,
-                    *entries,
-                    indent,
-                    CollectionConfig {
-                        begin: '{',
-                        end: '}',
-                        delimiter: ',',
-                    },
-                );
+                fmt_collection(buf, indent, '{', '}', *entries, Newlines::No)
             }
         }
 
