@@ -4,6 +4,7 @@ use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use tempfile::{tempdir, TempDir};
+use wasmer::Memory;
 
 use crate::helpers::from_wasm32_memory::FromWasm32Memory;
 use crate::helpers::wasm32_test_result::Wasm32TestResult;
@@ -244,10 +245,38 @@ where
                 _ => panic!(),
             };
 
+            if false {
+                crate::helpers::wasm::debug_memory_hex(memory, address, std::mem::size_of::<T>());
+            }
+
             let output = <T as FromWasm32Memory>::decode(memory, address as u32);
 
             Ok(output)
         }
+    }
+}
+
+/// Print out hex bytes of the test result, and a few words on either side
+/// Can be handy for debugging misalignment issues etc.
+pub fn debug_memory_hex(memory: &Memory, address: i32, size: usize) {
+    let memory_words: &[u32] = unsafe {
+        let memory_bytes = memory.data_unchecked();
+        std::mem::transmute(memory_bytes)
+    };
+
+    let extra_words = 2;
+    let offset = (address as usize) / 4;
+    let start = offset - extra_words;
+    let end = offset + (size / 4) + extra_words;
+
+    for index in start..end {
+        let result_marker = if index == offset { "*" } else { " " };
+        println!(
+            "{:x} {} {:08x}",
+            index * 4,
+            result_marker,
+            memory_words[index]
+        );
     }
 }
 
