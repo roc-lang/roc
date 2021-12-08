@@ -175,20 +175,23 @@ pub fn copy_memory(code_builder: &mut CodeBuilder, config: CopyMemoryConfig) {
 }
 
 /// Round up to alignment_bytes (which must be a power of 2)
-pub fn round_up_to_alignment(unaligned: i32, alignment_bytes: i32) -> i32 {
-    if alignment_bytes <= 1 {
-        return unaligned;
-    }
-    if alignment_bytes.count_ones() != 1 {
-        panic!(
-            "Cannot align to {} bytes. Not a power of 2.",
-            alignment_bytes
-        );
-    }
-    let mut aligned = unaligned;
-    aligned += alignment_bytes - 1; // if lower bits are non-zero, push it over the next boundary
-    aligned &= -alignment_bytes; // mask with a flag that has upper bits 1, lower bits 0
-    aligned
+#[macro_export]
+macro_rules! round_up_to_alignment {
+    ($unaligned: expr, $alignment_bytes: expr) => {
+        if $alignment_bytes <= 1 {
+            $unaligned
+        } else if $alignment_bytes.count_ones() != 1 {
+            panic!(
+                "Cannot align to {} bytes. Not a power of 2.",
+                $alignment_bytes
+            );
+        } else {
+            let mut aligned = $unaligned;
+            aligned += $alignment_bytes - 1; // if lower bits are non-zero, push it over the next boundary
+            aligned &= !$alignment_bytes + 1; // mask with a flag that has upper bits 1, lower bits 0
+            aligned
+        }
+    };
 }
 
 pub fn debug_panic<E: std::fmt::Debug>(error: E) {

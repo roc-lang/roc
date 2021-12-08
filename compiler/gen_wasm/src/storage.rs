@@ -171,7 +171,7 @@ impl<'a> Storage<'a> {
                         }
 
                         let offset =
-                            round_up_to_alignment(self.stack_frame_size, *alignment_bytes as i32);
+                            round_up_to_alignment!(self.stack_frame_size, *alignment_bytes as i32);
 
                         self.stack_frame_size = offset + (*size as i32);
 

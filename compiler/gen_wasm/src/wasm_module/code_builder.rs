@@ -442,7 +442,7 @@ impl<'a> CodeBuilder<'a> {
 
         if frame_size != 0 {
             if let Some(frame_ptr_id) = frame_pointer {
-                let aligned_size = round_up_to_alignment(frame_size, FRAME_ALIGNMENT_BYTES);
+                let aligned_size = round_up_to_alignment!(frame_size, FRAME_ALIGNMENT_BYTES);
                 self.build_stack_frame_push(aligned_size, frame_ptr_id);
                 self.build_stack_frame_pop(aligned_size, frame_ptr_id);
             }
