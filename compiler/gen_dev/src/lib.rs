@@ -446,11 +446,14 @@ where
                     args.len(),
                     "NumToFloat: expected to have exactly one argument"
                 );
-                // debug_assert_eq!(
-                //     Layout::Builtin(Builtin::Float(FloatWidth::F32 | FloatWidth::F64)),
-                //     *ret_layout,
-                //     "NumToFloat: expected to have return layout of type Float64"
-                // );
+
+                debug_assert!(
+                    matches!(
+                        *ret_layout,
+                        Layout::Builtin(Builtin::Float(FloatWidth::F32 | FloatWidth::F64)),
+                    ),
+                    "NumToFloat: expected to have return layout of type Float"
+                );
                 self.build_num_to_float(sym, &args[0], &arg_layouts[0], ret_layout)
             }
             LowLevel::NumRound => self.build_fn_call(
