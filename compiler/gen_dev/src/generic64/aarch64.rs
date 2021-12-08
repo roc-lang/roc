@@ -76,6 +76,9 @@ pub struct AArch64Call {}
 const STACK_ALIGNMENT: u8 = 16;
 
 impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
+    const BASE_PTR_REG: AArch64GeneralReg = AArch64GeneralReg::FP;
+    const STACK_PTR_REG: AArch64GeneralReg = AArch64GeneralReg::ZRSP;
+
     const GENERAL_PARAM_REGS: &'static [AArch64GeneralReg] = &[
         AArch64GeneralReg::X0,
         AArch64GeneralReg::X1,
@@ -249,7 +252,8 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
         _symbol_map: &mut MutMap<Symbol, SymbolStorage<AArch64GeneralReg, AArch64FloatReg>>,
         _args: &'a [(Layout<'a>, Symbol)],
         _ret_layout: &Layout<'a>,
-    ) {
+        mut _stack_size: u32,
+    ) -> u32 {
         unimplemented!("Loading args not yet implemented for AArch64");
     }
 
@@ -572,6 +576,16 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _src: AArch64FloatReg,
     ) {
         unimplemented!("registers to float not implemented yet for AArch64");
+    }
+
+    #[inline(always)]
+    fn gte_reg64_reg64_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) {
+        unimplemented!("registers greater than or equal not implemented yet for AArch64");
     }
 
     #[inline(always)]
