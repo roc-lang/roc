@@ -848,12 +848,12 @@ impl<
         arg_layout: &Layout<'a>,
         ret_layout: &Layout<'a>,
     ) {
+        let dst_reg = self.claim_float_reg(dst);
         match (arg_layout, ret_layout) {
             (
                 Layout::Builtin(Builtin::Int(IntWidth::I32 | IntWidth::I64)),
                 Layout::Builtin(Builtin::Float(FloatWidth::F64)),
             ) => {
-                let dst_reg = self.claim_float_reg(dst);
                 let src_reg = self.load_to_general_reg(src);
                 ASM::to_float_freg64_reg64(&mut self.buf, dst_reg, src_reg);
             }
@@ -861,7 +861,6 @@ impl<
                 Layout::Builtin(Builtin::Int(IntWidth::I32 | IntWidth::I64)),
                 Layout::Builtin(Builtin::Float(FloatWidth::F32)),
             ) => {
-                let dst_reg = self.claim_float_reg(dst);
                 let src_reg = self.load_to_general_reg(src);
                 ASM::to_float_freg32_reg64(&mut self.buf, dst_reg, src_reg);
             }
@@ -869,7 +868,6 @@ impl<
                 Layout::Builtin(Builtin::Float(FloatWidth::F64)),
                 Layout::Builtin(Builtin::Float(FloatWidth::F32)),
             ) => {
-                let dst_reg = self.claim_float_reg(dst);
                 let src_reg = self.load_to_float_reg(src);
                 ASM::to_float_freg32_freg64(&mut self.buf, dst_reg, src_reg);
             }
@@ -877,7 +875,6 @@ impl<
                 Layout::Builtin(Builtin::Float(FloatWidth::F32)),
                 Layout::Builtin(Builtin::Float(FloatWidth::F64)),
             ) => {
-                let dst_reg = self.claim_float_reg(dst);
                 let src_reg = self.load_to_float_reg(src);
                 ASM::to_float_freg64_freg32(&mut self.buf, dst_reg, src_reg);
             }
@@ -885,7 +882,6 @@ impl<
                 Layout::Builtin(Builtin::Float(FloatWidth::F64)),
                 Layout::Builtin(Builtin::Float(FloatWidth::F64)),
             ) => {
-                let dst_reg = self.claim_float_reg(dst);
                 let src_reg = self.load_to_float_reg(src);
                 ASM::mov_freg64_freg64(&mut self.buf, dst_reg, src_reg);
             }
@@ -893,7 +889,6 @@ impl<
                 Layout::Builtin(Builtin::Float(FloatWidth::F32)),
                 Layout::Builtin(Builtin::Float(FloatWidth::F32)),
             ) => {
-                let dst_reg = self.claim_float_reg(dst);
                 let src_reg = self.load_to_float_reg(src);
                 ASM::mov_freg64_freg64(&mut self.buf, dst_reg, src_reg);
             }
