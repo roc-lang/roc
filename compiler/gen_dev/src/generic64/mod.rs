@@ -222,7 +222,9 @@ pub enum SymbolStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
     },
 }
 
-pub trait RegTrait: Copy + Eq + std::hash::Hash + std::fmt::Debug + 'static {}
+pub trait RegTrait: Copy + Eq + std::hash::Hash + std::fmt::Debug + 'static {
+    fn value(&self) -> u8;
+}
 
 pub struct Backend64Bit<
     'a,
