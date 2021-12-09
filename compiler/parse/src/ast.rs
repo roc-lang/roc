@@ -322,12 +322,12 @@ impl<'a> CommentOrNewline<'a> {
         }
     }
 
-    pub fn to_string(&self) -> std::string::String {
+    pub fn to_string_repr(&self) -> std::string::String {
         use CommentOrNewline::*;
         match self {
             Newline => "\n".to_owned(),
-            LineComment(comment_str) => format!("#{}",comment_str),
-            DocComment(comment_str) => format!("##{}",comment_str),
+            LineComment(comment_str) => format!("#{}", comment_str),
+            DocComment(comment_str) => format!("##{}", comment_str),
         }
     }
 }

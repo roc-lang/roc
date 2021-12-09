@@ -4,8 +4,17 @@ use roc_ast::{
 };
 use roc_module::symbol::IdentId;
 
-use crate::{markup::{attribute::Attributes, common_nodes::{new_comments_mn, new_equals_mn}, nodes::MarkupNode}, slow_pool::{MarkNodeId, SlowPool}, syntax_highlight::HighlightStyle};
+use crate::{
+    markup::{
+        attribute::Attributes,
+        common_nodes::{new_comments_mn, new_equals_mn},
+        nodes::MarkupNode,
+    },
+    slow_pool::{MarkNodeId, SlowPool},
+    syntax_highlight::HighlightStyle,
+};
 
+// Top Level Defined Value. example: `main = "Hello, World!"`
 pub fn tld_mark_node<'a>(
     identifier_id: IdentId,
     expr_mark_node_id: MarkNodeId,
@@ -32,7 +41,7 @@ pub fn tld_mark_node<'a>(
         ast_node_id,
         children_ids: vec![val_name_mn_id, equals_mn_id, expr_mark_node_id],
         parent_id_opt: None,
-        newlines_at_end: 2,
+        newlines_at_end: 3,
     };
 
     Ok(full_let_node)
@@ -45,22 +54,17 @@ pub fn tld_w_comments_mark_node(
     mark_node_pool: &mut SlowPool,
     comments_before: bool,
 ) -> ASTResult<MarkupNode> {
+    let comment_mn_id = mark_node_pool.add(new_comments_mn(comments, ast_node_id, 1));
 
-    let comment_mn_id = 
-        mark_node_pool.add(
-            new_comments_mn(comments, ast_node_id, 1)
-        );
-
-    let children_ids =
-        if comments_before {
-            vec![comment_mn_id, def_mark_node_id]
-        } else {
-            vec![def_mark_node_id, comment_mn_id]
-        };
+    let children_ids = if comments_before {
+        vec![comment_mn_id, def_mark_node_id]
+    } else {
+        vec![def_mark_node_id, comment_mn_id]
+    };
 
     let tld_w_comment_node = MarkupNode::Nested {
         ast_node_id,
-        children_ids: children_ids,
+        children_ids,
         parent_id_opt: None,
         newlines_at_end: 2,
     };

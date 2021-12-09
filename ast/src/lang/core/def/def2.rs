@@ -1,6 +1,9 @@
 use roc_module::symbol::IdentId;
 
-use crate::{lang::core::expr::{expr2::Expr2, expr2_to_string::expr2_to_string}, mem_pool::{pool::{NodeId, Pool}}};
+use crate::{
+    lang::core::expr::{expr2::Expr2, expr2_to_string::expr2_to_string},
+    mem_pool::pool::{NodeId, Pool},
+};
 
 // A top level definition, not inside a function. For example: `main = "Hello, world!"`
 #[derive(Debug)]
@@ -13,11 +16,11 @@ pub enum Def2 {
     Blank,
     CommentsBefore {
         comments: String,
-        def_id: DefId
+        def_id: DefId,
     },
     CommentsAfter {
         comments: String,
-        def_id: DefId
+        def_id: DefId,
     },
 }
 
@@ -43,11 +46,11 @@ pub fn def2_to_string(node_id: DefId, pool: &Pool) -> String {
         }
         Def2::CommentsBefore {
             comments,
-            def_id:_
+            def_id: _,
         } => full_string.push_str(comments),
         Def2::CommentsAfter {
             comments,
-            def_id:_
+            def_id: _,
         } => full_string.push_str(comments),
     }
 

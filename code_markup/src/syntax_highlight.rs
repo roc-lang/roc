@@ -44,7 +44,7 @@ pub fn default_highlight_map() -> HashMap<HighlightStyle, RgbaTup> {
         (Import, from_hsb(225, 50, 100)),
         (Provides, from_hsb(225, 50, 100)),
         (Blank, from_hsb(258, 50, 90)),
-        (Comment, from_hsb(258, 50, 90)), // TODO check color
+        (Comment, from_hsb(258, 50, 90)),     // TODO check color
         (DocsComment, from_hsb(258, 50, 90)), // TODO check color
     ]
     .iter()

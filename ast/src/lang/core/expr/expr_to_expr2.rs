@@ -670,7 +670,8 @@ pub fn expr_to_expr2<'a>(
                 bad_expr
             );
         }
-        bad_expr @ SpaceBefore(_, _) => { // TODO no panic, move in  Expr2::Comment
+        bad_expr @ SpaceBefore(_, _) => {
+            // TODO no panic, move in  Expr2::Comment
             panic!(
                 "A SpaceBefore did not get removed during operator desugaring somehow: {:#?}",
                 bad_expr

@@ -1,4 +1,10 @@
-use crate::{markup::{common_nodes::new_blank_mn_w_nls, top_level_def::{tld_mark_node, tld_w_comments_mark_node}}, slow_pool::{MarkNodeId, SlowPool}};
+use crate::{
+    markup::{
+        common_nodes::new_blank_mn_w_nls,
+        top_level_def::{tld_mark_node, tld_w_comments_mark_node},
+    },
+    slow_pool::{MarkNodeId, SlowPool},
+};
 
 use super::from_expr2::expr2_to_markup;
 
@@ -43,40 +49,36 @@ pub fn def2_to_markup<'a>(
             mark_node_pool.add(tld_mn)
         }
         Def2::Blank => mark_node_pool.add(new_blank_mn_w_nls(ast_node_id, None, 2)),
-        Def2::CommentsBefore {
-            comments,
-            def_id
-        } => {
+        Def2::CommentsBefore { comments, def_id } => {
             let inner_def = env.pool.get(*def_id);
-            let inner_def_mark_node_id = def2_to_markup(env, inner_def, *def_id, mark_node_pool, interns)?;
+            let inner_def_mark_node_id =
+                def2_to_markup(env, inner_def, *def_id, mark_node_pool, interns)?;
 
             let full_mark_node = tld_w_comments_mark_node(
                 comments.clone(),
                 inner_def_mark_node_id,
                 ast_node_id,
                 mark_node_pool,
-                true
+                true,
             )?;
 
             mark_node_pool.add(full_mark_node)
-        },
-        Def2::CommentsAfter {
-            def_id,
-            comments
-        } => {
+        }
+        Def2::CommentsAfter { def_id, comments } => {
             let inner_def = env.pool.get(*def_id);
-            let inner_def_mark_node_id = def2_to_markup(env, inner_def, *def_id, mark_node_pool, interns)?;
+            let inner_def_mark_node_id =
+                def2_to_markup(env, inner_def, *def_id, mark_node_pool, interns)?;
 
             let full_mark_node = tld_w_comments_mark_node(
                 comments.clone(),
                 inner_def_mark_node_id,
                 ast_node_id,
                 mark_node_pool,
-                false
+                false,
             )?;
 
             mark_node_pool.add(full_mark_node)
-        },
+        }
     };
 
     Ok(mark_node_id)

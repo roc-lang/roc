@@ -1,7 +1,7 @@
 use bumpalo::collections::Vec as BumpVec;
 use bumpalo::Bump;
 use roc_module::ident::{Ident, IdentStr};
-use roc_parse::parser::SyntaxError;
+use roc_parse::{ast::CommentOrNewline, parser::SyntaxError};
 use roc_region::all::Region;
 
 use crate::lang::{core::expr::expr_to_expr2::loc_expr_to_expr2, env::Env, scope::Scope};
@@ -29,20 +29,19 @@ pub fn def_to_def2<'a>(
     region: Region,
 ) -> Def2 {
     use roc_parse::ast::Def::*;
+    //dbg!(parsed_def);
 
     match parsed_def {
         SpaceBefore(inner_def, comments) => {
-            if comments.len() > 0 {
+            if !comments.is_empty() && !all_newlines(comments) {
                 let inner_def = def_to_def2(arena, env, scope, inner_def, region);
 
                 let inner_def_id = env.pool.add(inner_def);
                 let mut all_comments_str = String::new();
 
-                for comment in comments.iter() {
-                    all_comments_str.push_str(&comment.to_string());
+                for comment in comments.iter().filter(|c_or_nl| !c_or_nl.is_newline()) {
+                    all_comments_str.push_str(&comment.to_string_repr());
                 }
-
-                all_comments_str = all_comments_str.trim().to_string();
 
                 Def2::CommentsBefore {
                     comments: all_comments_str,
@@ -51,19 +50,17 @@ pub fn def_to_def2<'a>(
             } else {
                 def_to_def2(arena, env, scope, inner_def, region)
             }
-        },
+        }
         SpaceAfter(inner_def, comments) => {
-            if comments.len() > 0 {
+            if !comments.is_empty() && !all_newlines(comments) {
                 let inner_def = def_to_def2(arena, env, scope, inner_def, region);
 
                 let inner_def_id = env.pool.add(inner_def);
                 let mut all_comments_str = String::new();
 
-                for comment in comments.iter() {
-                    all_comments_str.push_str(&comment.to_string());
+                for comment in comments.iter().filter(|c_or_nl| !c_or_nl.is_newline()) {
+                    all_comments_str.push_str(&comment.to_string_repr());
                 }
-
-                all_comments_str = all_comments_str.trim().to_string();
 
                 Def2::CommentsAfter {
                     def_id: inner_def_id,
@@ -72,7 +69,7 @@ pub fn def_to_def2<'a>(
             } else {
                 def_to_def2(arena, env, scope, inner_def, region)
             }
-        },
+        }
         Body(&loc_pattern, &loc_expr) => {
             let expr2 = loc_expr_to_expr2(arena, loc_expr, env, scope, region).0;
             let expr_id = env.pool.add(expr2);
@@ -104,6 +101,12 @@ pub fn def_to_def2<'a>(
             )
         }
     }
+}
+
+fn all_newlines(comments: &[CommentOrNewline]) -> bool {
+    comments
+        .iter()
+        .all(|com_or_newline| com_or_newline.is_newline())
 }
 
 pub fn str_to_def2<'a>(
