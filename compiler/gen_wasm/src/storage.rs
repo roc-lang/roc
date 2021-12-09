@@ -3,6 +3,7 @@ use bumpalo::Bump;
 
 use roc_collections::all::MutMap;
 use roc_module::symbol::Symbol;
+use roc_reporting::internal_error;
 
 use crate::layout::{
     CallConv, ReturnMethod, StackMemoryFormat, WasmLayout, ZigVersion, BUILTINS_ZIG_VERSION,
@@ -198,9 +199,10 @@ impl<'a> Storage<'a> {
     /// Get storage info for a given symbol
     pub fn get(&self, sym: &Symbol) -> &StoredValue {
         self.symbol_storage_map.get(sym).unwrap_or_else(|| {
-            panic!(
+            internal_error!(
                 "Symbol {:?} not found in function scope:\n{:?}",
-                sym, self.symbol_storage_map
+                sym,
+                self.symbol_storage_map
             )
         })
     }
@@ -335,7 +337,7 @@ impl<'a> Storage<'a> {
         let storage = self.get(&sym).to_owned();
         match storage {
             StoredValue::VirtualMachineStack { .. } | StoredValue::Local { .. } => {
-                unreachable!("these storage types are not returned by writing to a pointer")
+                internal_error!("these storage types are not returned by writing to a pointer")
             }
             StoredValue::StackMemory { location, size, .. } => {
                 if size == 0 {
@@ -400,7 +402,7 @@ impl<'a> Storage<'a> {
                 0 => {}
                 1 => wasm_args.push(*arg),
                 2 => wasm_args.extend_from_slice(&[*arg, *arg]),
-                n => unreachable!("Cannot have {} Wasm arguments for 1 Roc argument", n),
+                n => internal_error!("Cannot have {} Wasm arguments for 1 Roc argument", n),
             }
         }
 
@@ -471,7 +473,11 @@ impl<'a> Storage<'a> {
                     (ValueType::F32, 4) => code_builder.f32_store(Bytes4, to_offset),
                     (ValueType::F64, 8) => code_builder.f64_store(Bytes8, to_offset),
                     _ => {
-                        panic!("Cannot store {:?} with alignment of {:?}", value_type, size);
+                        internal_error!(
+                            "Cannot store {:?} with alignment of {:?}",
+                            value_type,
+                            size
+                        );
                     }
                 };
                 size
@@ -528,7 +534,11 @@ impl<'a> Storage<'a> {
                     (ValueType::F32, 4) => code_builder.f32_load(Bytes4, from_offset),
                     (ValueType::F64, 8) => code_builder.f64_load(Bytes8, from_offset),
                     _ => {
-                        panic!("Cannot store {:?} with alignment of {:?}", value_type, size);
+                        internal_error!(
+                            "Cannot store {:?} with alignment of {:?}",
+                            value_type,
+                            size
+                        );
                     }
                 };
 
@@ -623,7 +633,7 @@ impl<'a> Storage<'a> {
             }
 
             _ => {
-                panic!("Cannot copy storage from {:?} to {:?}", from, to);
+                internal_error!("Cannot copy storage from {:?} to {:?}", from, to);
             }
         }
     }

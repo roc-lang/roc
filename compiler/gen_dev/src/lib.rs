@@ -247,9 +247,9 @@ trait Backend<'a> {
         match expr {
             Expr::Literal(lit) => {
                 if self.env().lazy_literals {
-                    self.literal_map().insert(*sym, *lit);
+                    self.literal_map().insert(*sym, (lit, layout));
                 } else {
-                    self.load_literal(sym, lit);
+                    self.load_literal(sym, layout, lit);
                 }
             }
             Expr::Call(roc_mono::ir::Call {
@@ -487,6 +487,22 @@ trait Backend<'a> {
                 );
                 self.build_num_lt(sym, &args[0], &args[1], &arg_layouts[0])
             }
+            LowLevel::NumToFloat => {
+                debug_assert_eq!(
+                    1,
+                    args.len(),
+                    "NumToFloat: expected to have exactly one argument"
+                );
+
+                debug_assert!(
+                    matches!(
+                        *ret_layout,
+                        Layout::Builtin(Builtin::Float(FloatWidth::F32 | FloatWidth::F64)),
+                    ),
+                    "NumToFloat: expected to have return layout of type Float"
+                );
+                self.build_num_to_float(sym, &args[0], &arg_layouts[0], ret_layout)
+            }
             LowLevel::NumGte => {
                 debug_assert_eq!(
                     2,
@@ -567,7 +583,7 @@ trait Backend<'a> {
                     "NumIsZero: expected to have return layout of type Bool"
                 );
 
-                self.load_literal(&Symbol::DEV_TMP, &Literal::Int(0));
+                self.load_literal(&Symbol::DEV_TMP, &arg_layouts[0], &Literal::Int(0));
                 self.build_eq(sym, &args[0], &Symbol::DEV_TMP, &arg_layouts[0]);
                 self.free_symbol(&Symbol::DEV_TMP)
             }
@@ -610,6 +626,15 @@ trait Backend<'a> {
     /// build_num_lt stores the result of `src1 < src2` into dst.
     fn build_num_lt(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &Layout<'a>);
 
+    /// build_num_to_float convert Number to Float
+    fn build_num_to_float(
+        &mut self,
+        dst: &Symbol,
+        src: &Symbol,
+        arg_layout: &Layout<'a>,
+        ret_layout: &Layout<'a>,
+    );
+
     /// build_num_gte stores the result of `src1 >= src2` into dst.
     fn build_num_gte(
         &mut self,
@@ -622,18 +647,25 @@ trait Backend<'a> {
     /// build_refcount_getptr loads the pointer to the reference count of src into dst.
     fn build_refcount_getptr(&mut self, dst: &Symbol, src: &Symbol);
 
-    /// literal_map gets the map from symbol to literal, used for lazy loading and literal folding.
-    fn literal_map(&mut self) -> &mut MutMap<Symbol, Literal<'a>>;
+    /// literal_map gets the map from symbol to literal and layout, used for lazy loading and literal folding.
+    fn literal_map(&mut self) -> &mut MutMap<Symbol, (*const Literal<'a>, *const Layout<'a>)>;
 
     fn load_literal_symbols(&mut self, syms: &[Symbol]) {
         if self.env().lazy_literals {
             for sym in syms {
-                if let Some(lit) = self.literal_map().remove(sym) {
-                    self.load_literal(sym, &lit);
+                if let Some((lit, layout)) = self.literal_map().remove(sym) {
+                    // This operation is always safe but complicates lifetimes.
+                    // The map is reset when building a procedure and then used for that single procedure.
+                    // Since the lifetime is shorter than the entire backend, we need to use a pointer.
+                    let (lit, layout) = unsafe { (*lit, *layout) };
+                    self.load_literal(sym, &layout, &lit);
                 }
             }
         }
     }
+
+    /// load_literal sets a symbol to be equal to a literal.
+    fn load_literal(&mut self, sym: &Symbol, layout: &Layout<'a>, lit: &Literal<'a>);
 
     /// create_struct creates a struct with the elements specified loaded into it as data.
     fn create_struct(&mut self, sym: &Symbol, layout: &Layout<'a>, fields: &'a [Symbol]);
@@ -646,9 +678,6 @@ trait Backend<'a> {
         index: u64,
         field_layouts: &'a [Layout<'a>],
     );
-
-    /// load_literal sets a symbol to be equal to a literal.
-    fn load_literal(&mut self, sym: &Symbol, lit: &Literal<'a>);
 
     /// return_symbol moves a symbol to the correct return location for the backend and adds a jump to the end of the function.
     fn return_symbol(&mut self, sym: &Symbol, layout: &Layout<'a>);

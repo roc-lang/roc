@@ -1,6 +1,7 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use core::panic;
+use roc_reporting::internal_error;
 
 use roc_module::symbol::Symbol;
 
@@ -102,8 +103,13 @@ impl From<u32> for Align {
             1 => Align::Bytes1,
             2 => Align::Bytes2,
             4 => Align::Bytes4,
-            8 => Align::Bytes8,
-            _ => panic!("{:?}-byte alignment not supported", x),
+            _ => {
+                if x.count_ones() == 1 {
+                    Align::Bytes8 // Max value supported by any Wasm instruction
+                } else {
+                    internal_error!("Cannot align to {} bytes", x);
+                }
+            }
         }
     }
 }
@@ -231,7 +237,7 @@ impl<'a> CodeBuilder<'a> {
         let pushed_at = self.code.len();
         let top_symbol: &mut Symbol = current_stack
             .last_mut()
-            .unwrap_or_else(|| unreachable!("Empty stack when trying to set Symbol {:?}", sym));
+            .unwrap_or_else(|| internal_error!("Empty stack when trying to set Symbol {:?}", sym));
         *top_symbol = sym;
 
         VmSymbolState::Pushed { pushed_at }
@@ -291,7 +297,9 @@ impl<'a> CodeBuilder<'a> {
         use VmSymbolState::*;
 
         match vm_state {
-            NotYetPushed => unreachable!("Symbol {:?} has no value yet. Nothing to load.", symbol),
+            NotYetPushed => {
+                internal_error!("Symbol {:?} has no value yet. Nothing to load.", symbol)
+            }
 
             Pushed { pushed_at } => {
                 match self.current_stack().last() {
@@ -643,7 +651,7 @@ impl<'a> CodeBuilder<'a> {
     }
     #[allow(dead_code)]
     fn br_table() {
-        panic!("TODO");
+        todo!("br instruction");
     }
 
     instruction_no_args!(return_, RETURN, 0, false);
@@ -679,7 +687,9 @@ impl<'a> CodeBuilder<'a> {
 
     #[allow(dead_code)]
     fn call_indirect() {
-        panic!("Not implemented. Roc doesn't use function pointers");
+        unimplemented!(
+            "There is no plan to implement call_indirect. Roc doesn't use function pointers"
+        );
     }
 
     instruction_no_args!(drop_, DROP, 1, false);
