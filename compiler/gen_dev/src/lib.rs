@@ -209,7 +209,7 @@ trait Backend<'a> {
                 self.build_jump(id, args, arg_layouts.into_bump_slice(), ret_layout);
                 self.free_symbols(stmt);
             }
-            x => unimplemented!("the statement, {:?}, is not yet implemented", x),
+            x => todo!("the statement, {:?}", x),
         }
     }
     // build_switch generates a instructions for a switch statement.
@@ -309,7 +309,7 @@ trait Backend<'a> {
                             layout,
                         )
                     }
-                    x => unimplemented!("the call type, {:?}, is not yet implemented", x),
+                    x => todo!("the call type, {:?}", x),
                 }
             }
             Expr::Struct(fields) => {
@@ -323,7 +323,7 @@ trait Backend<'a> {
             } => {
                 self.load_struct_at_index(sym, structure, *index, field_layouts);
             }
-            x => unimplemented!("the expression, {:?}, is not yet implemented", x),
+            x => todo!("the expression, {:?}", x),
         }
     }
 
@@ -556,7 +556,7 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
-            x => unimplemented!("low level, {:?}. is not yet implemented", x),
+            x => todo!("low level, {:?}", x),
         }
     }
 
@@ -587,7 +587,7 @@ trait Backend<'a> {
                 self.build_eq(sym, &args[0], &Symbol::DEV_TMP, &arg_layouts[0]);
                 self.free_symbol(&Symbol::DEV_TMP)
             }
-            _ => unimplemented!("the function, {:?}, is not yet implemented", func_sym),
+            _ => todo!("the function, {:?}", func_sym),
         }
     }
 

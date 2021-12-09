@@ -154,7 +154,7 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
     }
     #[inline(always)]
     fn float_callee_saved(_reg: &AArch64FloatReg) -> bool {
-        unimplemented!("AArch64 FloatRegs not implemented yet");
+        todo!("AArch64 FloatRegs");
     }
 
     #[inline(always)]
@@ -254,7 +254,7 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
         _ret_layout: &Layout<'a>,
         mut _stack_size: u32,
     ) -> u32 {
-        unimplemented!("Loading args not yet implemented for AArch64");
+        todo!("Loading args for AArch64");
     }
 
     #[inline(always)]
@@ -265,7 +265,7 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
         _arg_layouts: &[Layout<'a>],
         _ret_layout: &Layout<'a>,
     ) -> u32 {
-        unimplemented!("Storing args not yet implemented for AArch64");
+        todo!("Storing args for AArch64");
     }
 
     fn return_struct<'a>(
@@ -275,18 +275,18 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
         _field_layouts: &[Layout<'a>],
         _ret_reg: Option<AArch64GeneralReg>,
     ) {
-        unimplemented!("Returning structs not yet implemented for AArch64");
+        todo!("Returning structs for AArch64");
     }
 
     fn returns_via_arg_pointer(_ret_layout: &Layout) -> bool {
-        unimplemented!("Returning via arg pointer not yet implemented for AArch64");
+        todo!("Returning via arg pointer for AArch64");
     }
 }
 
 impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     #[inline(always)]
     fn abs_reg64_reg64(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg, _src: AArch64GeneralReg) {
-        unimplemented!("abs_reg64_reg64 is not yet implement for AArch64");
+        todo!("abs_reg64_reg64 for AArch64");
     }
 
     #[inline(always)]
@@ -296,7 +296,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _dst: AArch64FloatReg,
         _src: AArch64FloatReg,
     ) {
-        unimplemented!("abs_reg64_reg64 is not yet implement for AArch64");
+        todo!("abs_reg64_reg64 for AArch64");
     }
 
     #[inline(always)]
@@ -307,13 +307,11 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         imm32: i32,
     ) {
         if imm32 < 0 {
-            unimplemented!("immediate addition with values less than 0 are not yet implemented");
+            todo!("immediate addition with values less than 0");
         } else if imm32 < 0xFFF {
             add_reg64_reg64_imm12(buf, dst, src, imm32 as u16);
         } else {
-            unimplemented!(
-                "immediate additions with values greater than 12bits are not yet implemented"
-            );
+            todo!("immediate additions with values greater than 12bits");
         }
     }
     #[inline(always)]
@@ -332,12 +330,12 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _src1: AArch64FloatReg,
         _src2: AArch64FloatReg,
     ) {
-        unimplemented!("adding floats not yet implemented for AArch64");
+        todo!("adding floats for AArch64");
     }
 
     #[inline(always)]
     fn call(_buf: &mut Vec<'_, u8>, _relocs: &mut Vec<'_, Relocation>, _fn_name: String) {
-        unimplemented!("calling functions literal not yet implemented for AArch64");
+        todo!("calling functions literal for AArch64");
     }
 
     #[inline(always)]
@@ -347,12 +345,12 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _src1: AArch64GeneralReg,
         _src2: AArch64GeneralReg,
     ) {
-        unimplemented!("register multiplication not implemented yet for AArch64");
+        todo!("register multiplication for AArch64");
     }
 
     #[inline(always)]
     fn jmp_imm32(_buf: &mut Vec<'_, u8>, _offset: i32) -> usize {
-        unimplemented!("jump instructions not yet implemented for AArch64");
+        todo!("jump instructions for AArch64");
     }
 
     #[inline(always)]
@@ -368,7 +366,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _imm: u64,
         _offset: i32,
     ) -> usize {
-        unimplemented!("jump not equal instructions not yet implemented for AArch64");
+        todo!("jump not equal instructions for AArch64");
     }
 
     #[inline(always)]
@@ -378,7 +376,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _dst: AArch64FloatReg,
         _imm: f32,
     ) {
-        unimplemented!("loading f32 literal not yet implemented for AArch64");
+        todo!("loading f32 literal for AArch64");
     }
     #[inline(always)]
     fn mov_freg64_imm64(
@@ -387,7 +385,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _dst: AArch64FloatReg,
         _imm: f64,
     ) {
-        unimplemented!("loading f64 literal not yet implemented for AArch64");
+        todo!("loading f64 literal for AArch64");
     }
     #[inline(always)]
     fn mov_reg64_imm64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm: i64) {
@@ -408,7 +406,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
     #[inline(always)]
     fn mov_freg64_freg64(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _src: AArch64FloatReg) {
-        unimplemented!("moving data between float registers not yet implemented for AArch64");
+        todo!("moving data between float registers for AArch64");
     }
     #[inline(always)]
     fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64GeneralReg) {
@@ -417,70 +415,68 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
     #[inline(always)]
     fn mov_freg64_base32(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _offset: i32) {
-        unimplemented!(
-            "loading floating point reg from base offset not yet implemented for AArch64"
-        );
+        todo!("loading floating point reg from base offset for AArch64");
     }
     #[inline(always)]
     fn mov_reg64_base32(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, offset: i32) {
         if offset < 0 {
-            unimplemented!("negative base offsets are not yet implement for AArch64");
+            todo!("negative base offsets for AArch64");
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
             ldr_reg64_imm12(buf, dst, AArch64GeneralReg::FP, (offset as u16) >> 3);
         } else {
-            unimplemented!("base offsets over 32k are not yet implement for AArch64");
+            todo!("base offsets over 32k for AArch64");
         }
     }
     #[inline(always)]
     fn mov_base32_freg64(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64FloatReg) {
-        unimplemented!("saving floating point reg to base offset not yet implemented for AArch64");
+        todo!("saving floating point reg to base offset for AArch64");
     }
     #[inline(always)]
     fn mov_base32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: AArch64GeneralReg) {
         if offset < 0 {
-            unimplemented!("negative base offsets are not yet implement for AArch64");
+            todo!("negative base offsets for AArch64");
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
             str_reg64_imm12(buf, src, AArch64GeneralReg::FP, (offset as u16) >> 3);
         } else {
-            unimplemented!("base offsets over 32k are not yet implement for AArch64");
+            todo!("base offsets over 32k for AArch64");
         }
     }
 
     #[inline(always)]
     fn mov_freg64_stack32(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _offset: i32) {
-        unimplemented!("loading floating point reg from stack not yet implemented for AArch64");
+        todo!("loading floating point reg from stack for AArch64");
     }
     #[inline(always)]
     fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, offset: i32) {
         if offset < 0 {
-            unimplemented!("negative stack offsets are not yet implement for AArch64");
+            todo!("negative stack offsets for AArch64");
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
             ldr_reg64_imm12(buf, dst, AArch64GeneralReg::ZRSP, (offset as u16) >> 3);
         } else {
-            unimplemented!("stack offsets over 32k are not yet implement for AArch64");
+            todo!("stack offsets over 32k for AArch64");
         }
     }
     #[inline(always)]
     fn mov_stack32_freg64(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64FloatReg) {
-        unimplemented!("saving floating point reg to stack not yet implemented for AArch64");
+        todo!("saving floating point reg to stack for AArch64");
     }
     #[inline(always)]
     fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: AArch64GeneralReg) {
         if offset < 0 {
-            unimplemented!("negative stack offsets are not yet implement for AArch64");
+            todo!("negative stack offsets for AArch64");
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
             str_reg64_imm12(buf, src, AArch64GeneralReg::ZRSP, (offset as u16) >> 3);
         } else {
-            unimplemented!("stack offsets over 32k are not yet implement for AArch64");
+            todo!("stack offsets over 32k for AArch64");
         }
     }
     #[inline(always)]
     fn neg_reg64_reg64(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg, _src: AArch64GeneralReg) {
-        unimplemented!("neg is not yet implement for AArch64");
+        todo!("neg for AArch64");
     }
 
     #[inline(always)]
@@ -491,15 +487,11 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         imm32: i32,
     ) {
         if imm32 < 0 {
-            unimplemented!(
-                "immediate subtractions with values less than 0 are not yet implemented"
-            );
+            todo!("immediate subtractions with values less than 0");
         } else if imm32 < 0xFFF {
             sub_reg64_reg64_imm12(buf, dst, src, imm32 as u16);
         } else {
-            unimplemented!(
-                "immediate subtractions with values greater than 12bits are not yet implemented"
-            );
+            todo!("immediate subtractions with values greater than 12bits");
         }
     }
     #[inline(always)]
@@ -509,7 +501,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _src1: AArch64GeneralReg,
         _src2: AArch64GeneralReg,
     ) {
-        unimplemented!("registers subtractions not implemented yet for AArch64");
+        todo!("registers subtractions for AArch64");
     }
 
     #[inline(always)]
@@ -519,7 +511,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _src1: AArch64GeneralReg,
         _src2: AArch64GeneralReg,
     ) {
-        unimplemented!("registers equality not implemented yet for AArch64");
+        todo!("registers equality for AArch64");
     }
 
     #[inline(always)]
@@ -529,7 +521,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _src1: AArch64GeneralReg,
         _src2: AArch64GeneralReg,
     ) {
-        unimplemented!("registers non-equality not implemented yet for AArch64");
+        todo!("registers non-equality for AArch64");
     }
 
     #[inline(always)]
@@ -539,7 +531,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _src1: AArch64GeneralReg,
         _src2: AArch64GeneralReg,
     ) {
-        unimplemented!("registers less than not implemented yet for AArch64");
+        todo!("registers less than for AArch64");
     }
 
     #[inline(always)]
@@ -548,7 +540,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _dst: AArch64FloatReg,
         _src: AArch64GeneralReg,
     ) {
-        unimplemented!("registers to float not implemented yet for AArch64");
+        todo!("registers to float for AArch64");
     }
 
     #[inline(always)]
@@ -557,7 +549,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _dst: AArch64FloatReg,
         _src: AArch64GeneralReg,
     ) {
-        unimplemented!("registers to float not implemented yet for AArch64");
+        todo!("registers to float for AArch64");
     }
 
     #[inline(always)]
@@ -566,7 +558,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _dst: AArch64FloatReg,
         _src: AArch64FloatReg,
     ) {
-        unimplemented!("registers to float not implemented yet for AArch64");
+        todo!("registers to float for AArch64");
     }
 
     #[inline(always)]
@@ -575,7 +567,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _dst: AArch64FloatReg,
         _src: AArch64FloatReg,
     ) {
-        unimplemented!("registers to float not implemented yet for AArch64");
+        todo!("registers to float for AArch64");
     }
 
     #[inline(always)]
@@ -585,7 +577,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _src1: AArch64GeneralReg,
         _src2: AArch64GeneralReg,
     ) {
-        unimplemented!("registers greater than or equal not implemented yet for AArch64");
+        todo!("registers greater than or equal for AArch64");
     }
 
     #[inline(always)]
