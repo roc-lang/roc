@@ -104,7 +104,7 @@ pub fn build_module<'a>(
                 ),
             )
         }
-        x => unimplemented!("the target, {:?}, is not yet implemented", x),
+        x => unimplemented!("the target, {:?}", x),
     }
 }
 
@@ -157,7 +157,7 @@ fn generate_wrapper<'a, B: Backend<'a>>(
             Err(e) => internal_error!("{:?}", e),
         }
     } else {
-        unimplemented!("failed to find fn symbol for {:?}", wraps);
+        internal_error!("failed to find fn symbol for {:?}", wraps);
     }
 }
 

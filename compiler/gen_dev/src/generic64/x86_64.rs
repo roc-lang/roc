@@ -265,12 +265,12 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                         );
                         general_i += 2;
                     } else {
-                        unimplemented!("loading strings args on the stack is not yet implemented");
+                        todo!("loading strings args on the stack");
                     }
                 }
                 Layout::Struct(&[]) => {}
                 x => {
-                    unimplemented!("Loading args with layout {:?} not yet implemented", x);
+                    todo!("Loading args with layout {:?}", x);
                 }
             }
         }
@@ -295,7 +295,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                 // Nothing needs to be done for any of these cases.
             }
             x => {
-                unimplemented!("receiving return type, {:?}, is not yet implemented", x);
+                todo!("receiving return type, {:?}", x);
             }
         }
         for (i, layout) in arg_layouts.iter().enumerate() {
@@ -426,14 +426,12 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
                         }
                         general_i += 2;
                     } else {
-                        unimplemented!(
-                            "calling functions with strings on the stack is not yet implemented"
-                        );
+                        todo!("calling functions with strings on the stack");
                     }
                 }
                 Layout::Struct(&[]) => {}
                 x => {
-                    unimplemented!("calling with arg type, {:?}, is not yet implemented", x);
+                    todo!("calling with arg type, {:?}", x);
                 }
             }
         }
@@ -447,7 +445,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
         _field_layouts: &[Layout<'a>],
         _ret_reg: Option<X86_64GeneralReg>,
     ) {
-        unimplemented!("Returning structs not yet implemented for X86_64");
+        todo!("Returning structs for X86_64");
     }
 
     fn returns_via_arg_pointer(ret_layout: &Layout) -> bool {
@@ -603,20 +601,18 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                     }
                     Layout::Builtin(Builtin::Str) => {
                         // I think this just needs to be passed on the stack, so not a huge deal.
-                        unimplemented!(
-                            "Passing str args with Windows fast call not yet implemented."
-                        );
+                        todo!("Passing str args with Windows fast call");
                     }
                     Layout::Struct(&[]) => {}
                     x => {
-                        unimplemented!("Loading args with layout {:?} not yet implemented", x);
+                        todo!("Loading args with layout {:?}", x);
                     }
                 }
             } else {
                 arg_offset += match layout {
                     single_register_builtins!() => 8,
                     x => {
-                        unimplemented!("Loading args with layout {:?} not yet implemented", x);
+                        todo!("Loading args with layout {:?}", x);
                     }
                 };
                 symbol_map.insert(
@@ -648,7 +644,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                 // Nothing needs to be done for any of these cases.
             }
             x => {
-                unimplemented!("receiving return type, {:?}, is not yet implemented", x);
+                todo!("receiving return type, {:?}", x);
             }
         }
         for (i, layout) in arg_layouts.iter().enumerate() {
@@ -722,7 +718,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                             }
                             SymbolStorage::GeneralReg(_)
                             | SymbolStorage::BaseAndGeneralReg { .. } => {
-                                unimplemented!("Cannot load general symbol into FloatReg")
+                                internal_error!("Cannot load general symbol into FloatReg")
                             }
                         }
                     } else {
@@ -747,7 +743,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                             }
                             SymbolStorage::GeneralReg(_)
                             | SymbolStorage::BaseAndGeneralReg { .. } => {
-                                unimplemented!("Cannot load general symbol into FloatReg")
+                                internal_error!("Cannot load general symbol into FloatReg")
                             }
                         }
                         stack_offset += 8;
@@ -755,11 +751,11 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                 }
                 Layout::Builtin(Builtin::Str) => {
                     // I think this just needs to be passed on the stack, so not a huge deal.
-                    unimplemented!("Passing str args with Windows fast call not yet implemented.");
+                    todo!("Passing str args with Windows fast call");
                 }
                 Layout::Struct(&[]) => {}
                 x => {
-                    unimplemented!("calling with arg type, {:?}, is not yet implemented", x);
+                    todo!("calling with arg type, {:?}", x);
                 }
             }
         }
@@ -773,7 +769,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
         _field_layouts: &[Layout<'a>],
         _ret_reg: Option<X86_64GeneralReg>,
     ) {
-        unimplemented!("Returning structs not yet implemented for X86_64WindowsFastCall");
+        todo!("Returning structs for X86_64WindowsFastCall");
     }
 
     fn returns_via_arg_pointer(ret_layout: &Layout) -> bool {
@@ -977,9 +973,7 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     ) -> usize {
         buf.reserve(13);
         if imm > i32::MAX as u64 {
-            unimplemented!(
-                "comparison with values greater than i32::max not yet implemented for jne"
-            );
+            todo!("comparison with values greater than i32::max");
         }
         cmp_reg64_imm32(buf, reg, imm as i32);
         jne_imm32(buf, offset);
