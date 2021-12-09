@@ -5272,6 +5272,31 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             str_ends_with(env, scope, args[0], args[1])
         }
+        StrToNum => {
+            // Str.toNum : Str -> Result (Num *) {}
+            debug_assert_eq!(args.len(), 1);
+
+            let (string, _string_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            if let Layout::Struct(struct_layout) = layout {
+                // match on the return layout to figure out which zig builtin we need
+                let intrinsic = match struct_layout[0] {
+                    Layout::Builtin(Builtin::Int(int_width)) => &bitcode::STR_TO_INT[int_width],
+                    Layout::Builtin(Builtin::Float(float_width)) => {
+                        &bitcode::STR_TO_FLOAT[float_width]
+                    }
+                    Layout::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
+                    _ => unreachable!(),
+                };
+
+                let string =
+                    complex_bitcast(env.builder, string, env.str_list_c_abi().into(), "to_utf8");
+
+                call_bitcode_fn(env, &[string], intrinsic)
+            } else {
+                unreachable!()
+            }
+        }
         StrFromInt => {
             // Str.fromInt : Int -> Str
             debug_assert_eq!(args.len(), 1);

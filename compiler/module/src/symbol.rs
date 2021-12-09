@@ -1029,6 +1029,21 @@ define_builtins! {
         18 STR_TRIM: "trim"
         19 STR_TRIM_LEFT: "trimLeft"
         20 STR_TRIM_RIGHT: "trimRight"
+        21 STR_TO_DEC: "toDec"
+        22 STR_TO_F64: "toF64"
+        23 STR_TO_F32: "toF32"
+        24 STR_TO_NAT: "toNat"
+        25 STR_TO_U128: "toU128"
+        26 STR_TO_I128: "toI128"
+        27 STR_TO_U64: "toU64"
+        28 STR_TO_I64: "toI64"
+        29 STR_TO_U32: "toU32"
+        30 STR_TO_I32: "toI32"
+        31 STR_TO_U16: "toU16"
+        32 STR_TO_I16: "toI16"
+        33 STR_TO_U8: "toU8"
+        34 STR_TO_I8: "toI8"
+
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
