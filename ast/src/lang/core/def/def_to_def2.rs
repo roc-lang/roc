@@ -33,6 +33,7 @@ pub fn def_to_def2<'a>(
 
     match parsed_def {
         SpaceBefore(inner_def, comments) => {
+            // filter comments
             if !comments.is_empty() && !all_newlines(comments) {
                 let inner_def = def_to_def2(arena, env, scope, inner_def, region);
 
@@ -52,6 +53,7 @@ pub fn def_to_def2<'a>(
             }
         }
         SpaceAfter(inner_def, comments) => {
+            // filter comments
             if !comments.is_empty() && !all_newlines(comments) {
                 let inner_def = def_to_def2(arena, env, scope, inner_def, region);
 

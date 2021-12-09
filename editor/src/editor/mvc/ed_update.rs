@@ -1472,7 +1472,7 @@ pub mod test_ed_update {
     // add newlines like the editor's formatting would add them
     fn add_nls(lines: Vec<String>) -> Vec<String> {
         let mut new_lines = lines;
-
+        //Two lines between TLD's, extra newline so the user can go to third line add new def there
         new_lines.append(&mut vec!["".to_owned(), "".to_owned(), "".to_owned()]);
 
         new_lines
