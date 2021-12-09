@@ -7,6 +7,7 @@ use roc_module::symbol::{Interns, Symbol};
 use roc_mono::gen_refcount::{RefcountProcGenerator, REFCOUNT_MAX};
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
+use roc_reporting::internal_error;
 
 use crate::layout::{CallConv, ReturnMethod, WasmLayout};
 use crate::low_level::{decode_low_level, LowlevelBuildResult};
@@ -200,19 +201,17 @@ impl<'a> WasmBackend<'a> {
 
     ***********************************************************/
 
-    pub fn build_proc(&mut self, proc: &Proc<'a>) -> Result<(), String> {
+    pub fn build_proc(&mut self, proc: &Proc<'a>) {
         // println!("\ngenerating procedure {:?}\n", proc.name);
 
         self.start_proc(proc);
 
-        self.build_stmt(&proc.body, &proc.ret_layout)?;
+        self.build_stmt(&proc.body, &proc.ret_layout);
 
-        self.finalize_proc()?;
+        self.finalize_proc();
         self.reset();
 
         // println!("\nfinished generating {:?}\n", proc.name);
-
-        Ok(())
     }
 
     fn start_proc(&mut self, proc: &Proc<'a>) {
@@ -243,7 +242,7 @@ impl<'a> WasmBackend<'a> {
         });
     }
 
-    fn finalize_proc(&mut self) -> Result<(), String> {
+    fn finalize_proc(&mut self) {
         // end the block from start_proc, to ensure all paths pop stack memory (if any)
         self.end_block();
 
@@ -253,8 +252,6 @@ impl<'a> WasmBackend<'a> {
             self.storage.stack_frame_size,
             self.storage.stack_frame_pointer,
         );
-
-        Ok(())
     }
 
     /**********************************************************
@@ -278,7 +275,7 @@ impl<'a> WasmBackend<'a> {
         self.code_builder.end();
     }
 
-    fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) -> Result<(), String> {
+    fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) {
         match stmt {
             Stmt::Let(_, _, _, _) => {
                 let mut current_stmt = stmt;
@@ -294,7 +291,7 @@ impl<'a> WasmBackend<'a> {
 
                     let sym_storage = self.storage.allocate(&wasm_layout, *sym, kind);
 
-                    self.build_expr(sym, expr, layout, &sym_storage)?;
+                    self.build_expr(sym, expr, layout, &sym_storage);
 
                     // For primitives, we record that this symbol is at the top of the VM stack
                     // (For other values, we wrote to memory and there's nothing on the VM stack)
@@ -315,8 +312,7 @@ impl<'a> WasmBackend<'a> {
                     current_stmt = *following;
                 }
 
-                self.build_stmt(current_stmt, ret_layout)?;
-                Ok(())
+                self.build_stmt(current_stmt, ret_layout);
             }
 
             Stmt::Ret(sym) => {
@@ -352,8 +348,6 @@ impl<'a> WasmBackend<'a> {
                 }
                 // jump to the "stack frame pop" code at the end of the function
                 self.code_builder.br(self.block_depth - 1);
-
-                Ok(())
             }
 
             Stmt::Switch {
@@ -421,7 +415,7 @@ impl<'a> WasmBackend<'a> {
                 }
 
                 // if we never jumped because a value matched, we're in the default case
-                self.build_stmt(default_branch.1, ret_layout)?;
+                self.build_stmt(default_branch.1, ret_layout);
 
                 // now put in the actual body of each branch in order
                 // (the first branch would have broken out of 1 block,
@@ -429,10 +423,8 @@ impl<'a> WasmBackend<'a> {
                 for (_, _, branch) in branches.iter() {
                     self.end_block();
 
-                    self.build_stmt(branch, ret_layout)?;
+                    self.build_stmt(branch, ret_layout);
                 }
-
-                Ok(())
             }
             Stmt::Join {
                 id,
@@ -462,7 +454,7 @@ impl<'a> WasmBackend<'a> {
                 self.joinpoint_label_map
                     .insert(*id, (self.block_depth, jp_param_storages));
 
-                self.build_stmt(remainder, ret_layout)?;
+                self.build_stmt(remainder, ret_layout);
 
                 self.end_block();
 
@@ -475,12 +467,10 @@ impl<'a> WasmBackend<'a> {
                 };
                 self.start_loop(loop_block_type);
 
-                self.build_stmt(body, ret_layout)?;
+                self.build_stmt(body, ret_layout);
 
                 // ends the loop
                 self.end_block();
-
-                Ok(())
             }
             Stmt::Jump(id, arguments) => {
                 let (target, param_storages) = self.joinpoint_label_map[id].clone();
@@ -498,8 +488,6 @@ impl<'a> WasmBackend<'a> {
                 // jump
                 let levels = self.block_depth - target;
                 self.code_builder.br(levels);
-
-                Ok(())
             }
 
             Stmt::Refcounting(modify, following) => {
@@ -541,11 +529,10 @@ impl<'a> WasmBackend<'a> {
                         }));
                 }
 
-                self.build_stmt(&rc_stmt, ret_layout)?;
-                Ok(())
+                self.build_stmt(&rc_stmt, ret_layout);
             }
 
-            x => Err(format!("statement not yet implemented: {:?}", x)),
+            x => todo!("statement {:?}", x),
         }
     }
 
@@ -561,7 +548,7 @@ impl<'a> WasmBackend<'a> {
         expr: &Expr<'a>,
         layout: &Layout<'a>,
         storage: &StoredValue,
-    ) -> Result<(), String> {
+    ) {
         let wasm_layout = WasmLayout::new(layout);
         match expr {
             Expr::Literal(lit) => self.load_literal(lit, storage, *sym, layout),
@@ -597,13 +584,14 @@ impl<'a> WasmBackend<'a> {
                                 num_wasm_args,
                                 has_return_val,
                             );
-                            return Ok(());
+                            return;
                         }
                     }
 
-                    unreachable!(
+                    internal_error!(
                         "Could not find procedure {:?}\nKnown procedures: {:?}",
-                        func_sym, self.proc_symbols
+                        func_sym,
+                        self.proc_symbols
                     );
                 }
 
@@ -611,7 +599,7 @@ impl<'a> WasmBackend<'a> {
                     self.build_low_level(*lowlevel, arguments, *sym, wasm_layout)
                 }
 
-                x => Err(format!("the call type, {:?}, is not yet implemented", x)),
+                x => todo!("call type {:?}", x),
             },
 
             Expr::Struct(fields) => self.create_struct(sym, layout, fields),
@@ -634,12 +622,11 @@ impl<'a> WasmBackend<'a> {
                         offset,
                     );
                 } else {
-                    unreachable!("Unexpected storage for {:?}", structure)
+                    internal_error!("Unexpected storage for {:?}", structure)
                 }
-                Ok(())
             }
 
-            Expr::Array { .. } => Err(format!("Expression is not yet implemented {:?}", 2)),
+            Expr::Array { .. } => todo!("Expression {:?}", expr),
 
             Expr::EmptyArray => {
                 if let StoredValue::StackMemory { location, .. } = storage {
@@ -653,14 +640,12 @@ impl<'a> WasmBackend<'a> {
                     self.code_builder.get_local(local_id);
                     self.code_builder.i64_const(0);
                     self.code_builder.i64_store(Align::Bytes4, offset);
-
-                    Ok(())
                 } else {
-                    unreachable!("Unexpected storage for {:?}", sym)
+                    internal_error!("Unexpected storage for {:?}", sym)
                 }
             }
 
-            x => Err(format!("Expression is not yet implemented {:?}", x)),
+            x => todo!("Expression {:?}", x),
         }
     }
 
@@ -670,7 +655,7 @@ impl<'a> WasmBackend<'a> {
         arguments: &'a [Symbol],
         return_sym: Symbol,
         return_layout: WasmLayout,
-    ) -> Result<(), String> {
+    ) {
         let (param_types, ret_type) = self.storage.load_symbols_for_call(
             self.env.arena,
             &mut self.code_builder,
@@ -690,15 +675,13 @@ impl<'a> WasmBackend<'a> {
         use LowlevelBuildResult::*;
 
         match build_result {
-            Done => Ok(()),
+            Done => {}
             BuiltinCall(name) => {
                 self.call_zig_builtin(name, param_types, ret_type);
-                Ok(())
             }
-            NotImplemented => Err(format!(
-                "Low level operation {:?} is not yet implemented",
-                lowlevel
-            )),
+            NotImplemented => {
+                todo!("Low level operation {:?}", lowlevel)
+            }
         }
     }
 
@@ -708,8 +691,8 @@ impl<'a> WasmBackend<'a> {
         storage: &StoredValue,
         sym: Symbol,
         layout: &Layout<'a>,
-    ) -> Result<(), String> {
-        let not_supported_error = || panic!("Literal value {:?} is not yet implemented", lit);
+    ) {
+        let not_supported_error = || todo!("Literal value {:?}", lit);
 
         match storage {
             StoredValue::VirtualMachineStack { value_type, .. } => {
@@ -720,9 +703,7 @@ impl<'a> WasmBackend<'a> {
                     (Literal::Int(x), ValueType::I32) => self.code_builder.i32_const(*x as i32),
                     (Literal::Bool(x), ValueType::I32) => self.code_builder.i32_const(*x as i32),
                     (Literal::Byte(x), ValueType::I32) => self.code_builder.i32_const(*x as i32),
-                    _ => {
-                        return not_supported_error();
-                    }
+                    _ => not_supported_error(),
                 };
             }
 
@@ -772,16 +753,11 @@ impl<'a> WasmBackend<'a> {
                         self.code_builder.i32_store(Align::Bytes4, offset + 4);
                     };
                 }
-                _ => {
-                    return not_supported_error();
-                }
+                _ => not_supported_error(),
             },
 
-            _ => {
-                return not_supported_error();
-            }
+            _ => not_supported_error(),
         };
-        Ok(())
     }
 
     /// Look up a string constant in our internal data structures
@@ -802,9 +778,10 @@ impl<'a> WasmBackend<'a> {
                         let elements_addr = *segment_offset + CONST_SEGMENT_BASE_ADDR;
                         (*linker_sym_index as u32, elements_addr)
                     }
-                    _ => unreachable!(
+                    _ => internal_error!(
                         "Compiler bug: Invalid linker symbol info for string {:?}:\n{:?}",
-                        string, syminfo
+                        string,
+                        syminfo
                     ),
                 }
             }
@@ -844,12 +821,7 @@ impl<'a> WasmBackend<'a> {
         }
     }
 
-    fn create_struct(
-        &mut self,
-        sym: &Symbol,
-        layout: &Layout<'a>,
-        fields: &'a [Symbol],
-    ) -> Result<(), String> {
+    fn create_struct(&mut self, sym: &Symbol, layout: &Layout<'a>, fields: &'a [Symbol]) {
         // TODO: we just calculated storage and now we're getting it out of a map
         // Not passing it as an argument because I'm trying to match Backend method signatures
         let storage = self.storage.get(sym).to_owned();
@@ -872,15 +844,9 @@ impl<'a> WasmBackend<'a> {
                     } else {
                         // Zero-size struct. No code to emit.
                         // These values are purely conceptual, they only exist internally in the compiler
-                        return Ok(());
                     }
                 }
-                _ => {
-                    return Err(format!(
-                        "Cannot create struct {:?} with storage {:?}",
-                        sym, storage
-                    ));
-                }
+                _ => internal_error!("Cannot create struct {:?} with storage {:?}", sym, storage),
             };
         } else {
             // Struct expression but not Struct layout => single element. Copy it.
@@ -888,7 +854,6 @@ impl<'a> WasmBackend<'a> {
             self.storage
                 .clone_value(&mut self.code_builder, &storage, &field_storage, fields[0]);
         }
-        Ok(())
     }
 
     /// Generate a call instruction to a Zig builtin function.
@@ -908,7 +873,7 @@ impl<'a> WasmBackend<'a> {
                 SymInfo::Function(WasmObjectSymbol::Imported { index, .. }) => {
                     (*index, *sym_idx as u32)
                 }
-                x => unreachable!("Invalid linker symbol for builtin {}: {:?}", name, x),
+                x => internal_error!("Invalid linker symbol for builtin {}: {:?}", name, x),
             },
 
             None => {
