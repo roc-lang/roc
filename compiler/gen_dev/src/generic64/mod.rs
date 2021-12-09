@@ -2,8 +2,9 @@ use crate::{Backend, Env, Relocation};
 use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
-use roc_module::symbol::Symbol;
-use roc_mono::ir::{BranchInfo, JoinPointId, Literal, Param, SelfRecursive, Stmt};
+use roc_module::symbol::{Interns, Symbol};
+use roc_mono::gen_refcount::RefcountProcGenerator;
+use roc_mono::ir::{BranchInfo, JoinPointId, Literal, Param, ProcLayout, SelfRecursive, Stmt};
 use roc_mono::layout::{Builtin, Layout};
 use roc_reporting::internal_error;
 use std::marker::PhantomData;
@@ -14,6 +15,9 @@ pub mod x86_64;
 const PTR_SIZE: u32 = 8;
 
 pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait> {
+    const BASE_PTR_REG: GeneralReg;
+    const STACK_PTR_REG: GeneralReg;
+
     const GENERAL_PARAM_REGS: &'static [GeneralReg];
     const GENERAL_RETURN_REGS: &'static [GeneralReg];
     const GENERAL_DEFAULT_FREE_REGS: &'static [GeneralReg];
@@ -49,13 +53,15 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait> {
     );
 
     // load_args updates the symbol map to know where every arg is stored.
+    // It returns the total stack space after loading the args.
     fn load_args<'a>(
         buf: &mut Vec<'a, u8>,
         symbol_map: &mut MutMap<Symbol, SymbolStorage<GeneralReg, FloatReg>>,
         args: &'a [(Layout<'a>, Symbol)],
         // ret_layout is needed because if it is a complex type, we pass a pointer as the first arg.
         ret_layout: &Layout<'a>,
-    );
+        stack_size: u32,
+    ) -> u32;
 
     // store_args stores the args in registers and on the stack for function calling.
     // It returns the amount of stack space needed to temporarily store the args.
@@ -130,6 +136,12 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait> {
         offset: i32,
     ) -> usize;
 
+    fn mov_freg32_imm32(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        dst: FloatReg,
+        imm: f32,
+    );
     fn mov_freg64_imm64(
         buf: &mut Vec<'_, u8>,
         relocs: &mut Vec<'_, Relocation>,
@@ -188,6 +200,21 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait> {
         src2: GeneralReg,
     );
 
+    fn to_float_freg32_reg64(buf: &mut Vec<'_, u8>, dst: FloatReg, src: GeneralReg);
+
+    fn to_float_freg64_reg64(buf: &mut Vec<'_, u8>, dst: FloatReg, src: GeneralReg);
+
+    fn to_float_freg32_freg64(buf: &mut Vec<'_, u8>, dst: FloatReg, src: FloatReg);
+
+    fn to_float_freg64_freg32(buf: &mut Vec<'_, u8>, dst: FloatReg, src: FloatReg);
+
+    fn gte_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        src1: GeneralReg,
+        src2: GeneralReg,
+    );
+
     fn ret(buf: &mut Vec<'_, u8>);
 }
 
@@ -214,7 +241,9 @@ pub enum SymbolStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
     },
 }
 
-pub trait RegTrait: Copy + Eq + std::hash::Hash + std::fmt::Debug + 'static {}
+pub trait RegTrait: Copy + Eq + std::hash::Hash + std::fmt::Debug + 'static {
+    fn value(&self) -> u8;
+}
 
 pub struct Backend64Bit<
     'a,
@@ -226,6 +255,9 @@ pub struct Backend64Bit<
     phantom_asm: PhantomData<ASM>,
     phantom_cc: PhantomData<CC>,
     env: &'a Env<'a>,
+    interns: &'a mut Interns,
+    refcount_proc_gen: RefcountProcGenerator<'a>,
+    refcount_proc_symbols: Vec<'a, (Symbol, ProcLayout<'a>)>,
     buf: Vec<'a, u8>,
     relocs: Vec<'a, Relocation>,
     proc_name: Option<String>,
@@ -236,7 +268,7 @@ pub struct Backend64Bit<
     free_map: MutMap<*const Stmt<'a>, Vec<'a, Symbol>>,
 
     symbol_storage_map: MutMap<Symbol, SymbolStorage<GeneralReg, FloatReg>>,
-    literal_map: MutMap<Symbol, Literal<'a>>,
+    literal_map: MutMap<Symbol, (*const Literal<'a>, *const Layout<'a>)>,
     join_map: MutMap<JoinPointId, u64>,
 
     // This should probably be smarter than a vec.
@@ -260,6 +292,46 @@ pub struct Backend64Bit<
     fn_call_stack_size: u32,
 }
 
+/// new creates a new backend that will output to the specific Object.
+pub fn new_backend_64bit<
+    'a,
+    GeneralReg: RegTrait,
+    FloatReg: RegTrait,
+    ASM: Assembler<GeneralReg, FloatReg>,
+    CC: CallConv<GeneralReg, FloatReg>,
+>(
+    env: &'a Env,
+    interns: &'a mut Interns,
+) -> Backend64Bit<'a, GeneralReg, FloatReg, ASM, CC> {
+    Backend64Bit {
+        phantom_asm: PhantomData,
+        phantom_cc: PhantomData,
+        env,
+        interns,
+        refcount_proc_gen: RefcountProcGenerator::new(env.arena, IntWidth::I64, env.module_id),
+        refcount_proc_symbols: bumpalo::vec![in env.arena],
+        proc_name: None,
+        is_self_recursive: None,
+        buf: bumpalo::vec![in env.arena],
+        relocs: bumpalo::vec![in env.arena],
+        last_seen_map: MutMap::default(),
+        layout_map: MutMap::default(),
+        free_map: MutMap::default(),
+        symbol_storage_map: MutMap::default(),
+        literal_map: MutMap::default(),
+        join_map: MutMap::default(),
+        general_free_regs: bumpalo::vec![in env.arena],
+        general_used_regs: bumpalo::vec![in env.arena],
+        general_used_callee_saved_regs: MutSet::default(),
+        float_free_regs: bumpalo::vec![in env.arena],
+        float_used_regs: bumpalo::vec![in env.arena],
+        float_used_callee_saved_regs: MutSet::default(),
+        free_stack_chunks: bumpalo::vec![in env.arena],
+        stack_size: 0,
+        fn_call_stack_size: 0,
+    }
+}
+
 impl<
         'a,
         GeneralReg: RegTrait,
@@ -268,35 +340,25 @@ impl<
         CC: CallConv<GeneralReg, FloatReg>,
     > Backend<'a> for Backend64Bit<'a, GeneralReg, FloatReg, ASM, CC>
 {
-    fn new(env: &'a Env) -> Self {
-        Backend64Bit {
-            phantom_asm: PhantomData,
-            phantom_cc: PhantomData,
-            env,
-            proc_name: None,
-            is_self_recursive: None,
-            buf: bumpalo::vec![in env.arena],
-            relocs: bumpalo::vec![in env.arena],
-            last_seen_map: MutMap::default(),
-            layout_map: MutMap::default(),
-            free_map: MutMap::default(),
-            symbol_storage_map: MutMap::default(),
-            literal_map: MutMap::default(),
-            join_map: MutMap::default(),
-            general_free_regs: bumpalo::vec![in env.arena],
-            general_used_regs: bumpalo::vec![in env.arena],
-            general_used_callee_saved_regs: MutSet::default(),
-            float_free_regs: bumpalo::vec![in env.arena],
-            float_used_regs: bumpalo::vec![in env.arena],
-            float_used_callee_saved_regs: MutSet::default(),
-            free_stack_chunks: bumpalo::vec![in env.arena],
-            stack_size: 0,
-            fn_call_stack_size: 0,
-        }
-    }
-
-    fn env(&self) -> &'a Env<'a> {
+    fn env(&self) -> &Env<'a> {
         self.env
+    }
+    fn interns(&self) -> &Interns {
+        self.interns
+    }
+    fn env_interns_refcount_mut(
+        &mut self,
+    ) -> (&Env<'a>, &mut Interns, &mut RefcountProcGenerator<'a>) {
+        (self.env, self.interns, &mut self.refcount_proc_gen)
+    }
+    fn refcount_proc_gen_mut(&mut self) -> &mut RefcountProcGenerator<'a> {
+        &mut self.refcount_proc_gen
+    }
+    fn refcount_proc_symbols_mut(&mut self) -> &mut Vec<'a, (Symbol, ProcLayout<'a>)> {
+        &mut self.refcount_proc_symbols
+    }
+    fn refcount_proc_symbols(&self) -> &Vec<'a, (Symbol, ProcLayout<'a>)> {
+        &self.refcount_proc_symbols
     }
 
     fn reset(&mut self, name: String, is_self_recursive: SelfRecursive) {
@@ -321,9 +383,10 @@ impl<
         self.float_used_regs.clear();
         self.float_free_regs
             .extend_from_slice(CC::FLOAT_DEFAULT_FREE_REGS);
+        self.refcount_proc_symbols.clear();
     }
 
-    fn literal_map(&mut self) -> &mut MutMap<Symbol, Literal<'a>> {
+    fn literal_map(&mut self) -> &mut MutMap<Symbol, (*const Literal<'a>, *const Layout<'a>)> {
         &mut self.literal_map
     }
 
@@ -343,7 +406,7 @@ impl<
         &mut self.free_map
     }
 
-    fn finalize(&mut self) -> (&'a [u8], &[Relocation]) {
+    fn finalize(&mut self) -> (Vec<u8>, Vec<Relocation>) {
         let mut out = bumpalo::vec![in self.env.arena];
 
         // Setup stack.
@@ -432,15 +495,16 @@ impl<
                     Relocation::JmpToReturn { .. } => unreachable!(),
                 }),
         );
-        (out.into_bump_slice(), out_relocs.into_bump_slice())
+        (out, out_relocs)
     }
 
     fn load_args(&mut self, args: &'a [(Layout<'a>, Symbol)], ret_layout: &Layout<'a>) {
-        CC::load_args(
+        self.stack_size = CC::load_args(
             &mut self.buf,
             &mut self.symbol_storage_map,
             args,
             ret_layout,
+            self.stack_size,
         );
         // Update used and free regs.
         for (sym, storage) in &self.symbol_storage_map {
@@ -522,6 +586,9 @@ impl<
                     ASM::mov_base32_reg64(&mut self.buf, offset, CC::GENERAL_RETURN_REGS[0]);
                     ASM::mov_base32_reg64(&mut self.buf, offset + 8, CC::GENERAL_RETURN_REGS[1]);
                 }
+            }
+            Layout::Struct([]) => {
+                // Nothing needs to be done to load a returned empty struct.
             }
             x => unimplemented!(
                 "FnCall: receiving return type, {:?}, is not yet implemented",
@@ -612,66 +679,68 @@ impl<
 
         // This section can essentially be seen as a sub function within the main function.
         // Thus we build using a new backend with some minor extra synchronization.
-        let mut sub_backend = Self::new(self.env);
-        sub_backend.reset(
-            self.proc_name.as_ref().unwrap().clone(),
-            self.is_self_recursive.as_ref().unwrap().clone(),
-        );
-        // Sync static maps of important information.
-        sub_backend.last_seen_map = self.last_seen_map.clone();
-        sub_backend.layout_map = self.layout_map.clone();
-        sub_backend.free_map = self.free_map.clone();
+        {
+            let mut sub_backend =
+                new_backend_64bit::<GeneralReg, FloatReg, ASM, CC>(self.env, self.interns);
+            sub_backend.reset(
+                self.proc_name.as_ref().unwrap().clone(),
+                self.is_self_recursive.as_ref().unwrap().clone(),
+            );
+            // Sync static maps of important information.
+            sub_backend.last_seen_map = self.last_seen_map.clone();
+            sub_backend.layout_map = self.layout_map.clone();
+            sub_backend.free_map = self.free_map.clone();
 
-        // Setup join point.
-        sub_backend.join_map.insert(*id, 0);
-        self.join_map.insert(*id, self.buf.len() as u64);
+            // Setup join point.
+            sub_backend.join_map.insert(*id, 0);
+            self.join_map.insert(*id, self.buf.len() as u64);
 
-        // Sync stack size so the "sub function" doesn't mess up our stack.
-        sub_backend.stack_size = self.stack_size;
-        sub_backend.fn_call_stack_size = self.fn_call_stack_size;
+            // Sync stack size so the "sub function" doesn't mess up our stack.
+            sub_backend.stack_size = self.stack_size;
+            sub_backend.fn_call_stack_size = self.fn_call_stack_size;
 
-        // Load params as if they were args.
-        let mut args = bumpalo::vec![in self.env.arena];
-        for param in parameters {
-            args.push((param.layout, param.symbol));
+            // Load params as if they were args.
+            let mut args = bumpalo::vec![in self.env.arena];
+            for param in parameters {
+                args.push((param.layout, param.symbol));
+            }
+            sub_backend.load_args(args.into_bump_slice(), ret_layout);
+
+            // Build all statements in body.
+            sub_backend.build_stmt(body, ret_layout);
+
+            // Merge the "sub function" into the main function.
+            let sub_func_offset = self.buf.len() as u64;
+            self.buf.extend_from_slice(&sub_backend.buf);
+            // Update stack based on how much was used by the sub function.
+            self.stack_size = sub_backend.stack_size;
+            self.fn_call_stack_size = sub_backend.fn_call_stack_size;
+            // Relocations must be shifted to be merged correctly.
+            self.relocs
+                .extend(sub_backend.relocs.into_iter().map(|reloc| match reloc {
+                    Relocation::LocalData { offset, data } => Relocation::LocalData {
+                        offset: offset + sub_func_offset,
+                        data,
+                    },
+                    Relocation::LinkedData { offset, name } => Relocation::LinkedData {
+                        offset: offset + sub_func_offset,
+                        name,
+                    },
+                    Relocation::LinkedFunction { offset, name } => Relocation::LinkedFunction {
+                        offset: offset + sub_func_offset,
+                        name,
+                    },
+                    Relocation::JmpToReturn {
+                        inst_loc,
+                        inst_size,
+                        offset,
+                    } => Relocation::JmpToReturn {
+                        inst_loc: inst_loc + sub_func_offset,
+                        inst_size,
+                        offset: offset + sub_func_offset,
+                    },
+                }));
         }
-        sub_backend.load_args(args.into_bump_slice(), ret_layout);
-
-        // Build all statements in body.
-        sub_backend.build_stmt(body, ret_layout);
-
-        // Merge the "sub function" into the main function.
-        let sub_func_offset = self.buf.len() as u64;
-        self.buf.extend_from_slice(&sub_backend.buf);
-        // Update stack based on how much was used by the sub function.
-        self.stack_size = sub_backend.stack_size;
-        self.fn_call_stack_size = sub_backend.fn_call_stack_size;
-        // Relocations must be shifted to be merged correctly.
-        self.relocs
-            .extend(sub_backend.relocs.into_iter().map(|reloc| match reloc {
-                Relocation::LocalData { offset, data } => Relocation::LocalData {
-                    offset: offset + sub_func_offset,
-                    data,
-                },
-                Relocation::LinkedData { offset, name } => Relocation::LinkedData {
-                    offset: offset + sub_func_offset,
-                    name,
-                },
-                Relocation::LinkedFunction { offset, name } => Relocation::LinkedFunction {
-                    offset: offset + sub_func_offset,
-                    name,
-                },
-                Relocation::JmpToReturn {
-                    inst_loc,
-                    inst_size,
-                    offset,
-                } => Relocation::JmpToReturn {
-                    inst_loc: inst_loc + sub_func_offset,
-                    inst_size,
-                    offset: offset + sub_func_offset,
-                },
-            }));
-
         // Overwrite the original jump with the correct offset.
         let mut tmp = bumpalo::vec![in self.env.arena];
         self.update_jmp_imm32_offset(
@@ -833,6 +902,90 @@ impl<
         }
     }
 
+    fn build_num_to_float(
+        &mut self,
+        dst: &Symbol,
+        src: &Symbol,
+        arg_layout: &Layout<'a>,
+        ret_layout: &Layout<'a>,
+    ) {
+        let dst_reg = self.claim_float_reg(dst);
+        match (arg_layout, ret_layout) {
+            (
+                Layout::Builtin(Builtin::Int(IntWidth::I32 | IntWidth::I64)),
+                Layout::Builtin(Builtin::Float(FloatWidth::F64)),
+            ) => {
+                let src_reg = self.load_to_general_reg(src);
+                ASM::to_float_freg64_reg64(&mut self.buf, dst_reg, src_reg);
+            }
+            (
+                Layout::Builtin(Builtin::Int(IntWidth::I32 | IntWidth::I64)),
+                Layout::Builtin(Builtin::Float(FloatWidth::F32)),
+            ) => {
+                let src_reg = self.load_to_general_reg(src);
+                ASM::to_float_freg32_reg64(&mut self.buf, dst_reg, src_reg);
+            }
+            (
+                Layout::Builtin(Builtin::Float(FloatWidth::F64)),
+                Layout::Builtin(Builtin::Float(FloatWidth::F32)),
+            ) => {
+                let src_reg = self.load_to_float_reg(src);
+                ASM::to_float_freg32_freg64(&mut self.buf, dst_reg, src_reg);
+            }
+            (
+                Layout::Builtin(Builtin::Float(FloatWidth::F32)),
+                Layout::Builtin(Builtin::Float(FloatWidth::F64)),
+            ) => {
+                let src_reg = self.load_to_float_reg(src);
+                ASM::to_float_freg64_freg32(&mut self.buf, dst_reg, src_reg);
+            }
+            (
+                Layout::Builtin(Builtin::Float(FloatWidth::F64)),
+                Layout::Builtin(Builtin::Float(FloatWidth::F64)),
+            ) => {
+                let src_reg = self.load_to_float_reg(src);
+                ASM::mov_freg64_freg64(&mut self.buf, dst_reg, src_reg);
+            }
+            (
+                Layout::Builtin(Builtin::Float(FloatWidth::F32)),
+                Layout::Builtin(Builtin::Float(FloatWidth::F32)),
+            ) => {
+                let src_reg = self.load_to_float_reg(src);
+                ASM::mov_freg64_freg64(&mut self.buf, dst_reg, src_reg);
+            }
+            (a, r) => unimplemented!(
+                "NumToFloat: layout, arg {:?}, ret {:?}, not implemented yet",
+                a,
+                r
+            ),
+        }
+    }
+
+    fn build_num_gte(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        arg_layout: &Layout<'a>,
+    ) {
+        match arg_layout {
+            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
+                let dst_reg = self.claim_general_reg(dst);
+                let src1_reg = self.load_to_general_reg(src1);
+                let src2_reg = self.load_to_general_reg(src2);
+                ASM::gte_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            x => unimplemented!("NumGte: layout, {:?}, not implemented yet", x),
+        }
+    }
+
+    fn build_refcount_getptr(&mut self, dst: &Symbol, src: &Symbol) {
+        let dst_reg = self.claim_general_reg(dst);
+        let src_reg = self.load_to_general_reg(src);
+        // The refcount pointer is the value before the pointer.
+        ASM::sub_reg64_reg64_imm32(&mut self.buf, dst_reg, src_reg, PTR_SIZE as i32);
+    }
+
     fn create_struct(&mut self, sym: &Symbol, layout: &Layout<'a>, fields: &'a [Symbol]) {
         let struct_size = layout.stack_size(PTR_SIZE);
 
@@ -905,19 +1058,36 @@ impl<
         }
     }
 
-    fn load_literal(&mut self, sym: &Symbol, lit: &Literal<'a>) {
-        match lit {
-            Literal::Int(x) => {
+    fn load_literal(&mut self, sym: &Symbol, layout: &Layout<'a>, lit: &Literal<'a>) {
+        match (lit, layout) {
+            (
+                Literal::Int(x),
+                Layout::Builtin(Builtin::Int(
+                    IntWidth::U8
+                    | IntWidth::U16
+                    | IntWidth::U32
+                    | IntWidth::U64
+                    | IntWidth::I8
+                    | IntWidth::I16
+                    | IntWidth::I32
+                    | IntWidth::I64,
+                )),
+            ) => {
                 let reg = self.claim_general_reg(sym);
                 let val = *x;
                 ASM::mov_reg64_imm64(&mut self.buf, reg, val as i64);
             }
-            Literal::Float(x) => {
+            (Literal::Float(x), Layout::Builtin(Builtin::Float(FloatWidth::F64))) => {
                 let reg = self.claim_float_reg(sym);
                 let val = *x;
                 ASM::mov_freg64_imm64(&mut self.buf, &mut self.relocs, reg, val);
             }
-            Literal::Str(x) if x.len() < 16 => {
+            (Literal::Float(x), Layout::Builtin(Builtin::Float(FloatWidth::F32))) => {
+                let reg = self.claim_float_reg(sym);
+                let val = *x as f32;
+                ASM::mov_freg32_imm32(&mut self.buf, &mut self.relocs, reg, val);
+            }
+            (Literal::Str(x), Layout::Builtin(Builtin::Str)) if x.len() < 16 => {
                 // Load small string.
                 let reg = self.get_tmp_general_reg();
 
@@ -1095,8 +1265,11 @@ impl<
                 ),
             },
             Some(x) => unimplemented!("returning symbol storage, {:?}, is not yet implemented", x),
+            None if layout == &Layout::Struct(&[]) => {
+                // Empty struct is not defined and does nothing.
+            }
             None => {
-                internal_error!("Unknown return symbol: {}", sym);
+                internal_error!("Unknown return symbol: {:?}", sym);
             }
         }
         let inst_loc = self.buf.len() as u64;
@@ -1475,24 +1648,26 @@ impl<
 #[macro_export]
 macro_rules! single_register_integers {
     () => {
-        Builtin::Bool
-            | Builtin::Int(
-                IntWidth::I8
-                    | IntWidth::I16
-                    | IntWidth::I32
-                    | IntWidth::I64
-                    | IntWidth::U8
-                    | IntWidth::U16
-                    | IntWidth::U32
-                    | IntWidth::U64,
-            )
+        Layout::Builtin(
+            Builtin::Bool
+                | Builtin::Int(
+                    IntWidth::I8
+                        | IntWidth::I16
+                        | IntWidth::I32
+                        | IntWidth::I64
+                        | IntWidth::U8
+                        | IntWidth::U16
+                        | IntWidth::U32
+                        | IntWidth::U64,
+                ),
+        ) | Layout::RecursivePointer
     };
 }
 
 #[macro_export]
 macro_rules! single_register_floats {
     () => {
-        Builtin::Float(FloatWidth::F32 | FloatWidth::F64)
+        Layout::Builtin(Builtin::Float(FloatWidth::F32 | FloatWidth::F64))
     };
 }
 

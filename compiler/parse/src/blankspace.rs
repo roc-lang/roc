@@ -363,6 +363,16 @@ fn eat_line_comment<'a>(
         }
     }
 
+    // We made it to the end of the bytes. This means there's a comment without a trailing newline.
+    let delta = (col - initial_col) as usize;
+    let comment = unsafe { std::str::from_utf8_unchecked(&initial[..delta]) };
+
+    if is_doc_comment {
+        comments_and_newlines.push(CommentOrNewline::DocComment(comment));
+    } else {
+        comments_and_newlines.push(CommentOrNewline::LineComment(comment));
+    }
+
     Good {
         row,
         col,

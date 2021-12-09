@@ -113,7 +113,7 @@ pub fn update_string(new_char: char, ed_model: &mut EdModel) -> EdResult<InputOu
             ast_node_id.to_expr_id()?,
             new_char,
             node_caret_offset - 1, // -1 because offset was calculated with quotes
-            &mut ed_model.module.env.pool,
+            ed_model.module.env.pool,
         )?;
 
         // update caret

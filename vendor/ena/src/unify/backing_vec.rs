@@ -103,8 +103,8 @@ impl<K: UnifyKey> UnificationStore for InPlace<K> {
     }
 
     #[inline]
-    fn reset_unifications(&mut self, mut value: impl FnMut(usize) -> VarValue<Self::Key>) {
-        self.values.set_all(|i| value(i));
+    fn reset_unifications(&mut self, value: impl FnMut(usize) -> VarValue<Self::Key>) {
+        self.values.set_all(value);
     }
 
     fn len(&self) -> usize {

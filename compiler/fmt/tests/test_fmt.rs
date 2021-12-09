@@ -5,11 +5,11 @@ extern crate roc_fmt;
 
 #[cfg(test)]
 mod test_fmt {
-    use bumpalo::collections::String;
     use bumpalo::Bump;
     use roc_fmt::annotation::{Formattable, Newlines, Parens};
     use roc_fmt::def::fmt_def;
     use roc_fmt::module::fmt_module;
+    use roc_fmt::Buf;
     use roc_parse::module::{self, module_defs};
     use roc_parse::parser::{Parser, State};
     use roc_test_utils::assert_multiline_str_eq;
@@ -19,7 +19,7 @@ mod test_fmt {
         let arena = Bump::new();
         match roc_parse::test_helpers::parse_expr_with(&arena, input.trim()) {
             Ok(actual) => {
-                let mut buf = String::new_in(&arena);
+                let mut buf = Buf::new_in(&arena);
 
                 actual.format_with_options(&mut buf, Parens::NotNeeded, Newlines::Yes, 0);
 
@@ -48,11 +48,10 @@ mod test_fmt {
     fn module_formats_to(src: &str, expected: &str) {
         let arena = Bump::new();
         let src = src.trim_end();
-        let expected = expected.trim_end();
 
         match module::parse_header(&arena, State::new(src.as_bytes())) {
             Ok((actual, state)) => {
-                let mut buf = String::new_in(&arena);
+                let mut buf = Buf::new_in(&arena);
 
                 fmt_module(&mut buf, &actual);
 
@@ -2570,9 +2569,26 @@ mod test_fmt {
     fn single_line_interface() {
         module_formats_same(indoc!(
             r#"
-                interface Foo exposes [] imports []
-            "#
+                interface Foo exposes [] imports []"#
         ));
+    }
+
+    #[test]
+    fn defs_with_trailing_comment() {
+        // TODO: make the formatter add a space between '42' and # below:
+        module_formats_to(
+            indoc!(
+                r#"
+            interface Foo exposes [] imports []
+            a = 42 # Yay greetings"#
+            ),
+            indoc!(
+                r#"
+            interface Foo exposes [] imports []
+            a = 42# Yay greetings
+            "#
+            ),
+        );
     }
 
     #[test]
@@ -2581,8 +2597,7 @@ mod test_fmt {
             r#"
                 interface Foo
                     exposes []
-                    imports []
-            "#
+                    imports []"#
         ));
     }
 
@@ -2592,8 +2607,7 @@ mod test_fmt {
             r#"
                 interface Foo
                     exposes [ Bar, Baz, a, b ]
-                    imports []
-            "#
+                    imports []"#
         ));
     }
 
@@ -2603,8 +2617,7 @@ mod test_fmt {
             r#"
                 interface Foo
                     exposes [ Bar, Baz, a, b ]
-                    imports [ Blah, Thing.{ foo, bar }, Stuff ]
-            "#
+                    imports [ Blah, Thing.{ foo, bar }, Stuff ]"#
         ));
     }
 
@@ -2612,32 +2625,25 @@ mod test_fmt {
     fn single_line_app() {
         module_formats_same(indoc!(
             r#"
-                app "Foo" packages { base: "platform" } imports [] provides [ main ] to base
-            "#
+                app "Foo" packages { base: "platform" } imports [] provides [ main ] to base"#
         ));
     }
 
     #[test]
     fn single_line_platform() {
-        // There are many places that there should probably be spaces, e.g.:
-        // requires { model=>Model, msg=>Msg } { main : Effect {} }
-        //                                             ^
-        // putLine : Str -> Effect {},
-        //          ^
-        // TODO: improve spacing
         module_formats_same(
             "platform folkertdev/foo \
-            requires { model=>Model, msg=>Msg } { main :Effect {} } \
+            requires { model=>Model, msg=>Msg } { main : Effect {} } \
             exposes [] \
             packages {} \
             imports [ Task.{ Task } ] \
             provides [ mainForHost ] \
             effects fx.Effect \
             { \
-                putLine :Str -> Effect {}, \
-                putInt :I64 -> Effect {}, \
-                getInt :Effect { value : I64, errorCode : [ A, B ], isError : Bool } \
-            } ",
+                putLine : Str -> Effect {}, \
+                putInt : I64 -> Effect {}, \
+                getInt : Effect { value : I64, errorCode : [ A, B ], isError : Bool } \
+            }",
         );
     }
 
@@ -2693,6 +2699,21 @@ mod test_fmt {
 
             b
             "#
+        ));
+    }
+
+    #[test]
+    fn multiline_tag_union_annotation_beginning_on_same_line() {
+        expr_formats_same(indoc!(
+            r#"
+            Expr  : [
+                    Add Expr Expr,
+                    Mul Expr Expr,
+                    Val I64,
+                    Var I64,
+                ]
+
+            Expr"#
         ));
     }
 
@@ -2873,12 +2894,13 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r#"
             Task.fromResult
-                (a, b <- binaryOp ctx
+                (
+                    a, b <- binaryOp ctx
                     if a == b then
                         -1
                     else
                         0
-                    )
+                )
             "#
         ));
     }

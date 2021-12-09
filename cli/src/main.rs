@@ -167,7 +167,7 @@ fn main() -> io::Result<()> {
 
 fn read_all_roc_files(
     dir: &OsString,
-    mut roc_file_paths: &mut Vec<OsString>,
+    roc_file_paths: &mut Vec<OsString>,
 ) -> Result<(), std::io::Error> {
     let entries = fs::read_dir(dir)?;
 
@@ -175,7 +175,7 @@ fn read_all_roc_files(
         let path = entry?.path();
 
         if path.is_dir() {
-            read_all_roc_files(&path.into_os_string(), &mut roc_file_paths)?;
+            read_all_roc_files(&path.into_os_string(), roc_file_paths)?;
         } else if path.extension().and_then(OsStr::to_str) == Some("roc") {
             let file_path = path.into_os_string();
             roc_file_paths.push(file_path);

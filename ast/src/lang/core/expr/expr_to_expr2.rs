@@ -56,7 +56,7 @@ pub fn expr_to_expr2<'a>(
                     let expr = Expr2::Float {
                         number: FloatVal::F64(float),
                         var: env.var_store.fresh(),
-                        text: PoolStr::new(string, &mut env.pool),
+                        text: PoolStr::new(string, env.pool),
                     };
 
                     (expr, Output::default())
@@ -80,7 +80,7 @@ pub fn expr_to_expr2<'a>(
                         var: env.var_store.fresh(),
                         // TODO non-hardcode
                         style: IntStyle::Decimal,
-                        text: PoolStr::new(string, &mut env.pool),
+                        text: PoolStr::new(string, env.pool),
                     };
 
                     (expr, Output::default())
@@ -113,7 +113,7 @@ pub fn expr_to_expr2<'a>(
                         var: env.var_store.fresh(),
                         // TODO non-hardcode
                         style: IntStyle::from_base(*base),
-                        text: PoolStr::new(string, &mut env.pool),
+                        text: PoolStr::new(string, env.pool),
                     };
 
                     (expr, Output::default())
