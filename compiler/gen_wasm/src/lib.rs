@@ -13,6 +13,7 @@ use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::gen_refcount::RefcountProcGenerator;
 use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::LayoutIds;
+use roc_reporting::internal_error;
 
 use crate::backend::WasmBackend;
 use crate::wasm_module::{
@@ -106,7 +107,7 @@ pub fn build_module_help<'a>(
 
     // Generate procs from user code
     for proc in procs.iter() {
-        backend.build_proc(proc)?;
+        backend.build_proc(proc);
     }
 
     // Generate IR for refcounting procs
@@ -124,7 +125,7 @@ pub fn build_module_help<'a>(
 
     // Generate Wasm for refcounting procs
     for proc in refcount_procs.iter() {
-        backend.build_proc(proc)?;
+        backend.build_proc(proc);
     }
 
     let module = backend.finalize_module();
@@ -180,7 +181,7 @@ pub fn round_up_to_alignment(unaligned: i32, alignment_bytes: i32) -> i32 {
         return unaligned;
     }
     if alignment_bytes.count_ones() != 1 {
-        panic!(
+        internal_error!(
             "Cannot align to {} bytes. Not a power of 2.",
             alignment_bytes
         );
@@ -192,5 +193,5 @@ pub fn round_up_to_alignment(unaligned: i32, alignment_bytes: i32) -> i32 {
 }
 
 pub fn debug_panic<E: std::fmt::Debug>(error: E) {
-    panic!("{:?}", error);
+    internal_error!("{:?}", error);
 }

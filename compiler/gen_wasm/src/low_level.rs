@@ -1,6 +1,7 @@
 use roc_builtins::bitcode::{self, FloatWidth};
 use roc_module::low_level::{LowLevel, LowLevel::*};
 use roc_module::symbol::Symbol;
+use roc_reporting::internal_error;
 
 use crate::layout::{StackMemoryFormat::*, WasmLayout};
 use crate::storage::{Storage, StoredValue};
@@ -21,7 +22,8 @@ pub fn decode_low_level<'a>(
 ) -> LowlevelBuildResult {
     use LowlevelBuildResult::*;
 
-    let panic_ret_type = || panic!("Invalid return layout for {:?}: {:?}", lowlevel, ret_layout);
+    let panic_ret_type =
+        || internal_error!("Invalid return layout for {:?}: {:?}", lowlevel, ret_layout);
 
     match lowlevel {
         StrConcat => return BuiltinCall(bitcode::STR_CONCAT),
@@ -525,6 +527,6 @@ fn float_width_from_layout(wasm_layout: &WasmLayout) -> FloatWidth {
     match wasm_layout {
         WasmLayout::Primitive(F32, _) => FloatWidth::F32,
         WasmLayout::Primitive(F64, _) => FloatWidth::F64,
-        _ => panic!("{:?} does not have a FloatWidth", wasm_layout),
+        _ => internal_error!("{:?} does not have a FloatWidth", wasm_layout),
     }
 }
