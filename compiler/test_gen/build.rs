@@ -3,9 +3,9 @@ use std::ffi::OsStr;
 use std::path::Path;
 use std::process::Command;
 
-pub const PLATFORM_FILENAME: &str = "wasm_test_platform";
-pub const OUT_DIR_VAR: &str = "TEST_GEN_OUT";
-pub const LIBC_PATH_VAR: &str = "TEST_GEN_WASM_LIBC_PATH";
+const PLATFORM_FILENAME: &str = "wasm_test_platform";
+const OUT_DIR_VAR: &str = "TEST_GEN_OUT";
+const LIBC_PATH_VAR: &str = "TEST_GEN_WASM_LIBC_PATH";
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -55,15 +55,7 @@ fn build_wasm_libc(out_dir: &str) {
         ],
     );
 
-    let libc_path = run_command(
-        cwd,
-        "find",
-        [
-            out_dir,
-            "-name",
-            "libc.a"
-        ],
-    );
+    let libc_path = run_command(cwd, "find", [out_dir, "-name", "libc.a"]);
 
     println!("cargo:rustc-env={}={}", LIBC_PATH_VAR, libc_path);
 }
@@ -79,7 +71,7 @@ where
         .output();
     match output_result {
         Ok(output) => match output.status.success() {
-            true => std::str::from_utf8(&output.stdout),
+            true => std::str::from_utf8(&output.stdout).unwrap().to_string(),
             false => {
                 let error_str = match std::str::from_utf8(&output.stderr) {
                     Ok(stderr) => stderr.to_string(),

@@ -1,5 +1,3 @@
-use bumpalo::collections::vec::Vec;
-use bumpalo::Bump;
 use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -11,12 +9,12 @@ use crate::helpers::wasm32_test_result::Wasm32TestResult;
 use roc_builtins::bitcode;
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
-use roc_gen_wasm::wasm_module::linking::{WasmObjectSymbol, WASM_SYM_UNDEFINED};
-use roc_gen_wasm::wasm_module::sections::{Import, ImportDesc};
-use roc_gen_wasm::wasm_module::{
-    CodeBuilder, Export, ExportType, LocalId, Signature, SymInfo, ValueType, WasmModule,
-};
 use roc_gen_wasm::MEMORY_NAME;
+
+// Should manually match build.rs
+const PLATFORM_FILENAME: &str = "wasm_test_platform";
+const OUT_DIR_VAR: &str = "TEST_GEN_OUT";
+const LIBC_PATH_VAR: &str = "TEST_GEN_WASM_LIBC_PATH";
 
 #[allow(unused_imports)]
 use roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS;
@@ -125,9 +123,6 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
 
     T::insert_test_wrapper(arena, &mut wasm_module, TEST_WRAPPER_NAME, main_fn_index);
 
-    // We can either generate the test platform or write an external source file, whatever works
-    generate_test_platform(&mut wasm_module, arena);
-
     let mut module_bytes = std::vec::Vec::with_capacity(4096);
     wasm_module.serialize_mut(&mut module_bytes);
 
@@ -163,7 +158,9 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
 
         let final_wasm_file = wasm_build_dir.join("final.wasm");
         let app_o_file = wasm_build_dir.join("app.o");
-        let libc_a_file = "../gen_wasm/lib/libc.a";
+        let test_out_dir = std::env::var(OUT_DIR_VAR).unwrap();
+        let test_platform_o = format!("{}/{}.o", test_out_dir, PLATFORM_FILENAME);
+        let libc_a_file = std::env::var(LIBC_PATH_VAR).unwrap();
 
         // write the module to a file so the linker can access it
         std::fs::write(&app_o_file, &module_bytes).unwrap();
@@ -173,7 +170,8 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
             // input files
             app_o_file.to_str().unwrap(),
             bitcode::BUILTINS_WASM32_OBJ_PATH,
-            libc_a_file,
+            &test_platform_o,
+            &libc_a_file,
             // output
             "-o",
             final_wasm_file.to_str().unwrap(),
@@ -328,123 +326,3 @@ pub fn identity<T>(value: T) -> T {
 pub(crate) use assert_evals_to;
 #[allow(unused_imports)]
 pub(crate) use assert_wasm_evals_to;
-
-fn wrap_libc_fn<'a>(
-    module: &mut WasmModule<'a>,
-    arena: &'a Bump,
-    roc_name: &'a str,
-    libc_name: &'a str,
-    params: &'a [(ValueType, bool)],
-    ret_type: Option<ValueType>,
-) {
-    let symbol_table = module.linking.symbol_table_mut();
-
-    // Type signatures
-    let mut wrapper_signature = Signature {
-        param_types: Vec::with_capacity_in(params.len(), arena),
-        ret_type,
-    };
-    let mut libc_signature = Signature {
-        param_types: Vec::with_capacity_in(params.len(), arena),
-        ret_type,
-    };
-    for (ty, used) in params.iter() {
-        wrapper_signature.param_types.push(*ty);
-        if *used {
-            libc_signature.param_types.push(*ty);
-        }
-    }
-
-    /*
-     * Import a function from libc
-     */
-    let libc_signature_index = module.types.insert(libc_signature);
-
-    // Import
-    let import_index = module.import.entries.len() as u32;
-    module.import.entries.push(Import {
-        module: "env",
-        name: libc_name.to_string(),
-        description: ImportDesc::Func {
-            signature_index: libc_signature_index,
-        },
-    });
-
-    // Linker info
-    let libc_sym_idx = symbol_table.len() as u32;
-    symbol_table.push(SymInfo::Function(WasmObjectSymbol::Imported {
-        flags: WASM_SYM_UNDEFINED,
-        index: import_index,
-    }));
-
-    /*
-     * Export a wrapper function
-     */
-
-    // Declaration
-    let wrapper_sig_index = module.types.insert(wrapper_signature);
-    module.function.signature_indices.push(wrapper_sig_index);
-
-    // Body
-    let mut code_builder = CodeBuilder::new(arena);
-    let mut num_libc_args = 0;
-    for (i, (_, used)) in params.iter().enumerate() {
-        if *used {
-            code_builder.get_local(LocalId(i as u32));
-            num_libc_args += 1;
-        }
-    }
-    code_builder.call(
-        import_index,
-        libc_sym_idx,
-        num_libc_args,
-        ret_type.is_some(),
-    );
-    code_builder.build_fn_header(&[], 0, None);
-    let wrapper_index = module.code.code_builders.len() as u32;
-    module.code.code_builders.push(code_builder);
-
-    // Export
-    module.export.entries.push(Export {
-        name: roc_name.to_string(),
-        ty: ExportType::Func,
-        index: wrapper_index,
-    });
-
-    // Linker symbol
-    symbol_table.push(SymInfo::Function(WasmObjectSymbol::Defined {
-        flags: 0,
-        index: wrapper_index,
-        name: roc_name.to_string(),
-    }));
-}
-
-fn generate_test_platform<'a>(module: &mut WasmModule<'a>, arena: &'a Bump) {
-    use ValueType::I32;
-
-    wrap_libc_fn(
-        module,
-        arena,
-        "roc_alloc",
-        "malloc",
-        // only the first argument of roc_alloc is passed to malloc
-        &[(I32, true), (I32, false)],
-        Some(I32),
-    );
-    wrap_libc_fn(
-        module,
-        arena,
-        "roc_dealloc",
-        "free",
-        &[(I32, true), (I32, false)],
-        None,
-    );
-    wrap_libc_fn(
-        module,
-        arena,
-        "roc_realloc",
-        "realloc",
-        &[(I32, true), (I32, false), (I32, true), (I32, false)],
-        Some(I32),
-    );
-}
