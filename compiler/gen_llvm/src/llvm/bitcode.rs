@@ -46,12 +46,15 @@ fn call_bitcode_fn_help<'a, 'ctx, 'env>(
     args: &[BasicValueEnum<'ctx>],
     fn_name: &str,
 ) -> CallSiteValue<'ctx> {
+    let it = args.iter().map(|x| (*x).into());
+    let arguments = bumpalo::collections::Vec::from_iter_in(it, env.arena);
+
     let fn_val = env
         .module
         .get_function(fn_name)
         .unwrap_or_else(|| panic!("Unrecognized builtin function: {:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md", fn_name));
 
-    let call = env.builder.build_call(fn_val, args, "call_builtin");
+    let call = env.builder.build_call(fn_val, &arguments, "call_builtin");
 
     call.set_call_convention(fn_val.get_call_conventions());
     call
@@ -595,7 +598,7 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
             let value1 = env.builder.build_load(value_cast1, "load_opaque");
             let value2 = env.builder.build_load(value_cast2, "load_opaque");
 
-            let default = [value1, value2];
+            let default = [value1.into(), value2.into()];
 
             let arguments_cast = match closure_data_layout.runtime_representation() {
                 Layout::Struct(&[]) => {
@@ -613,7 +616,9 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
 
                     let closure_data = env.builder.build_load(closure_cast, "load_opaque");
 
-                    env.arena.alloc([value1, value2, closure_data]) as &[_]
+                    env.arena
+                        .alloc([value1.into(), value2.into(), closure_data.into()])
+                        as &[_]
                 }
             };
 
