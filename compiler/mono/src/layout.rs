@@ -968,14 +968,9 @@ impl<'a> Layout<'a> {
         use Layout::*;
 
         match self {
-            Union(variant) => {
-                use UnionLayout::*;
+            Union(UnionLayout::NonRecursive(_)) => false,
 
-                matches!(
-                    variant,
-                    Recursive(_) | NullableWrapped { .. } | NullableUnwrapped { .. }
-                )
-            }
+            Union(_) => true,
 
             RecursivePointer => true,
 
