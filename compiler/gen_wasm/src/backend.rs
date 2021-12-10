@@ -626,7 +626,30 @@ impl<'a> WasmBackend<'a> {
                 }
             }
 
-            Expr::Array { .. } => todo!("Expression {:?}", expr),
+            Expr::Array { elems, elem_layout } => {
+                if let StoredValue::StackMemory { location, .. } = storage {
+                    let (local_id, offset) =
+                        location.local_and_offset(self.storage.stack_frame_pointer);
+
+                    // TODO: will be passed into roc_alloc
+                    let size = elem_layout.stack_size(PTR_SIZE) * (elems.len() as u32);
+
+                    self.code_builder.get_local(local_id);
+                    // TODO: we'll need a pointer here actually
+                    //  waiting on #2169
+                    self.code_builder.i32_const(0);
+                    self.code_builder.i32_store(Align::Bytes4, offset);
+
+                    // length of the list
+                    self.code_builder.get_local(local_id);
+                    self.code_builder.i32_const(elems.len() as i32);
+                    self.code_builder.i32_store(Align::Bytes4, offset + 4);
+
+                    for elem in elems.iter() {}
+                } else {
+                    internal_error!("Unexpected storage for {:?}", sym)
+                }
+            }
 
             Expr::EmptyArray => {
                 if let StoredValue::StackMemory { location, .. } = storage {

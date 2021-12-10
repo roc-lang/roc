@@ -1,5 +1,5 @@
-#![cfg(feature = "gen-llvm")]
-#![cfg(feature = "gen-wasm")]
+// #![cfg(feature = "gen-llvm")]
+// #![cfg(feature = "gen-wasm")]
 
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
@@ -16,7 +16,7 @@ use indoc::indoc;
 use roc_std::{RocList, RocStr};
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn roc_list_construction() {
     let list = RocList::from_slice(&[1i64; 23]);
     assert_eq!(&list, &list);
@@ -29,13 +29,13 @@ fn empty_list_literal() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_literal_empty_record() {
     assert_evals_to!("[{}]", RocList::from_slice(&[()]), RocList<()>);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_singleton_list_literal() {
     assert_evals_to!("[1, 2]", RocList::from_slice(&[1, 2]), RocList<i64>);
 }
