@@ -1,11 +1,45 @@
 use std::fmt::Debug;
 
-use crate::header::{AppHeader, ImportsEntry, InterfaceHeader, PlatformHeader, TypedIdent};
+use crate::header::{
+    AppHeader, ExposesEntry, ImportsEntry, InterfaceHeader, PackageEntry, PlatformHeader,
+    PlatformRigid, TypedIdent,
+};
 use crate::ident::Ident;
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
-use roc_region::all::{Loc, Position, Region};
+use roc_region::all::{Loc, Located, Position, Region};
+
+#[derive(Debug)]
+pub struct Spaces<'a, T> {
+    pub before: &'a [CommentOrNewline<'a>],
+    pub item: T,
+    pub after: &'a [CommentOrNewline<'a>],
+}
+
+pub trait ExtractSpaces<'a>: Sized + Copy {
+    type Item;
+    fn extract_spaces(&self) -> Spaces<'a, Self::Item>;
+}
+
+impl<'a, T: ExtractSpaces<'a>> ExtractSpaces<'a> for &'a T {
+    type Item = T::Item;
+    fn extract_spaces(&self) -> Spaces<'a, Self::Item> {
+        (*self).extract_spaces()
+    }
+}
+
+impl<'a, T: ExtractSpaces<'a>> ExtractSpaces<'a> for Located<T> {
+    type Item = T::Item;
+    fn extract_spaces(&self) -> Spaces<'a, Self::Item> {
+        let spaces = self.value.extract_spaces();
+        Spaces {
+            before: spaces.before,
+            item: spaces.item,
+            after: spaces.after,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Module<'a> {
@@ -727,3 +761,70 @@ impl<'a> Expr<'a> {
         }
     }
 }
+
+macro_rules! impl_extract_spaces {
+    ($t:ident $(< $($generic_args:ident),* >)?) => {
+
+        impl<'a, $($($generic_args: Copy),*)?> ExtractSpaces<'a> for $t<'a, $($($generic_args),*)?> {
+            type Item = Self;
+            fn extract_spaces(&self) -> Spaces<'a, Self::Item> {
+                match self {
+                    $t::SpaceBefore(item, before) => {
+                        match item {
+                            $t::SpaceBefore(_, _) => todo!(),
+                            $t::SpaceAfter(item, after) => {
+                                Spaces {
+                                    before,
+                                    item: **item,
+                                    after,
+                                }
+                            }
+                            _ => {
+                                Spaces {
+                                    before,
+                                    item: **item,
+                                    after: &[],
+                                }
+                            }
+                        }
+                    },
+                    $t::SpaceAfter(item, after) => {
+                        match item {
+                            $t::SpaceBefore(item, before) => {
+                                Spaces {
+                                    before,
+                                    item: **item,
+                                    after,
+                                }
+                            }
+                            $t::SpaceAfter(_, _) => todo!(),
+                            _ => {
+                                Spaces {
+                                    before: &[],
+                                    item: **item,
+                                    after,
+                                }
+                            }
+                        }
+                    },
+                    _ => {
+                        Spaces {
+                            before: &[],
+                            item: *self,
+                            after: &[],
+                        }
+                    }
+                }
+            }
+        }
+    };
+}
+
+impl_extract_spaces!(Expr);
+impl_extract_spaces!(Tag);
+impl_extract_spaces!(AssignedField<T>);
+impl_extract_spaces!(PlatformRigid);
+impl_extract_spaces!(TypedIdent);
+impl_extract_spaces!(ImportsEntry);
+impl_extract_spaces!(ExposesEntry<T>);
+impl_extract_spaces!(PackageEntry);
