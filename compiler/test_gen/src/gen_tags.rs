@@ -8,6 +8,7 @@ use crate::helpers::llvm::assert_evals_to;
 use crate::helpers::wasm::assert_evals_to;
 
 // use crate::assert_wasm_evals_to as assert_evals_to;
+#[allow(unused_imports)]
 use indoc::indoc;
 #[allow(unused_imports)]
 use roc_std::{RocList, RocStr};
