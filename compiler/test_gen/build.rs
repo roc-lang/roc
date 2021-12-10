@@ -4,15 +4,22 @@ use std::path::Path;
 use std::process::Command;
 
 pub const PLATFORM_FILENAME: &str = "wasm_test_platform";
-pub const DIRNAME_VAR: &str = "TEST_GEN_OUT";
+pub const OUT_DIR_VAR: &str = "TEST_GEN_OUT";
+pub const LIBC_PATH_VAR: &str = "TEST_GEN_WASM_LIBC_PATH";
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=src/helpers/{}.c", PLATFORM_FILENAME);
 
     let out_dir = env::var("OUT_DIR").unwrap();
 
-    println!("cargo:rustc-env={}={}", DIRNAME_VAR, out_dir);
+    println!("cargo:rustc-env={}={}", OUT_DIR_VAR, out_dir);
+
+    build_wasm_test_platform(&out_dir);
+    build_wasm_libc(&out_dir);
+}
+
+fn build_wasm_test_platform(out_dir: &str) {
+    println!("cargo:rerun-if-changed=src/helpers/{}.c", PLATFORM_FILENAME);
 
     run_command(
         Path::new("."),
@@ -28,7 +35,40 @@ fn main() {
     );
 }
 
-fn run_command<S, I, P: AsRef<Path>>(path: P, command_str: &str, args: I)
+fn build_wasm_libc(out_dir: &str) {
+    let source_path = "src/helpers/dummy_libc_program.c";
+    println!("cargo:rerun-if-changed={}", source_path);
+    let cwd = Path::new(".");
+
+    run_command(
+        cwd,
+        "zig",
+        [
+            "build-exe", // must be an executable or it won't compile libc
+            "-target",
+            "wasm32-wasi",
+            "-lc",
+            source_path,
+            "-femit-bin=/dev/null",
+            "--global-cache-dir",
+            out_dir,
+        ],
+    );
+
+    let libc_path = run_command(
+        cwd,
+        "find",
+        [
+            out_dir,
+            "-name",
+            "libc.a"
+        ],
+    );
+
+    println!("cargo:rustc-env={}={}", LIBC_PATH_VAR, libc_path);
+}
+
+fn run_command<S, I, P: AsRef<Path>>(path: P, command_str: &str, args: I) -> String
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -39,7 +79,7 @@ where
         .output();
     match output_result {
         Ok(output) => match output.status.success() {
-            true => (),
+            true => std::str::from_utf8(&output.stdout),
             false => {
                 let error_str = match std::str::from_utf8(&output.stderr) {
                     Ok(stderr) => stderr.to_string(),
