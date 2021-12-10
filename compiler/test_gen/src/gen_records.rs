@@ -807,6 +807,24 @@ fn return_nested_record() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn nested_record_load() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                x = { a : { b : 0x5 } }
+
+                y = x.a
+
+                y.b
+                "#
+        ),
+        5,
+        i64
+    );
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn accessor_twice() {
     assert_evals_to!(".foo { foo: 4 }  + .foo { bar: 6.28, foo: 3 } ", 7, i64);

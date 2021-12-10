@@ -6,7 +6,7 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::gen_refcount::{RefcountProcGenerator, REFCOUNT_MAX};
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
-use roc_mono::layout::{Builtin, Layout, LayoutIds};
+use roc_mono::layout::{Builtin, Layout, LayoutIds, TagIdIntType, UnionLayout};
 use roc_reporting::internal_error;
 
 use crate::layout::{CallConv, ReturnMethod, WasmLayout};
@@ -25,8 +25,8 @@ use crate::wasm_module::{
     LinkingSubSection, LocalId, Signature, SymInfo, ValueType,
 };
 use crate::{
-    copy_memory, CopyMemoryConfig, Env, BUILTINS_IMPORT_MODULE_NAME, MEMORY_NAME, PTR_SIZE,
-    PTR_TYPE, STACK_POINTER_GLOBAL_ID, STACK_POINTER_NAME,
+    copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, BUILTINS_IMPORT_MODULE_NAME,
+    MEMORY_NAME, PTR_SIZE, PTR_TYPE, STACK_POINTER_GLOBAL_ID, STACK_POINTER_NAME,
 };
 
 /// The memory address where the constants data will be loaded during module instantiation.
@@ -293,18 +293,12 @@ impl<'a> WasmBackend<'a> {
 
                     self.build_expr(sym, expr, layout, &sym_storage);
 
-                    // For primitives, we record that this symbol is at the top of the VM stack
-                    // (For other values, we wrote to memory and there's nothing on the VM stack)
-                    if let WasmLayout::Primitive(value_type, size) = wasm_layout {
-                        let vm_state = self.code_builder.set_top_symbol(*sym);
-                        self.storage.symbol_storage_map.insert(
-                            *sym,
-                            StoredValue::VirtualMachineStack {
-                                vm_state,
-                                value_type,
-                                size,
-                            },
-                        );
+                    // If this value is stored in the VM stack, we need code_builder to track it
+                    // (since every instruction can change the VM stack)
+                    if let Some(StoredValue::VirtualMachineStack { vm_state, .. }) =
+                        self.storage.symbol_storage_map.get_mut(sym)
+                    {
+                        *vm_state = self.code_builder.set_top_symbol(*sym);
                     }
 
                     self.symbol_layouts.insert(*sym, *layout);
@@ -633,10 +627,9 @@ impl<'a> WasmBackend<'a> {
                     let (local_id, offset) =
                         location.local_and_offset(self.storage.stack_frame_pointer);
 
-                    // This is a minor cheat. We only need the first two 32 bit
-                    // chunks here. We fill both chunks with zeros, so we
-                    // can simplify things to a single group of 64 bit operations instead of
-                    // doing the below twice for 32 bits.
+                    // This is a minor cheat.
+                    // What we want to write to stack memory is { elements: null, length: 0 }
+                    // But instead of two 32-bit stores, we can do a single 64-bit store.
                     self.code_builder.get_local(local_id);
                     self.code_builder.i64_const(0);
                     self.code_builder.i64_store(Align::Bytes4, offset);
@@ -645,7 +638,64 @@ impl<'a> WasmBackend<'a> {
                 }
             }
 
+            Expr::Tag {
+                tag_layout,
+                tag_id,
+                arguments,
+                ..
+            } => self.build_tag(tag_layout, *tag_id, arguments, storage),
+
             x => todo!("Expression {:?}", x),
+        }
+    }
+
+    fn build_tag(
+        &mut self,
+        union_layout: &UnionLayout<'a>,
+        tag_id: TagIdIntType,
+        arguments: &'a [Symbol],
+        stored: &StoredValue,
+    ) {
+        match union_layout {
+            UnionLayout::NonRecursive(tags) => {
+                let (local_id, offset) = if let StoredValue::StackMemory { location, .. } = stored {
+                    location.local_and_offset(self.storage.stack_frame_pointer)
+                } else {
+                    internal_error!("NonRecursive Tag should always be stored in StackMemory");
+                };
+
+                let mut field_offset = offset;
+                for field_symbol in arguments.iter() {
+                    field_offset += self.storage.copy_value_to_memory(
+                        &mut self.code_builder,
+                        local_id,
+                        field_offset,
+                        *field_symbol,
+                    );
+                }
+
+                let tag_field_layouts = &tags[tag_id as usize];
+                let fields_alignment_bytes =
+                    Layout::Struct(tag_field_layouts).alignment_bytes(PTR_SIZE);
+                let tag_id_alignment_bytes = union_layout.tag_id_layout().alignment_bytes(PTR_SIZE);
+                let total_alignment_bytes = fields_alignment_bytes.max(tag_id_alignment_bytes);
+                let tag_id_offset = round_up_to_alignment!(field_offset, total_alignment_bytes);
+                let tag_id_align = Align::from(total_alignment_bytes);
+
+                match tag_id_align {
+                    Align::Bytes1 | Align::Bytes2 | Align::Bytes4 => {
+                        self.code_builder.get_local(local_id);
+                        self.code_builder.i32_const(tag_id as i32);
+                        self.code_builder.i32_store(tag_id_align, tag_id_offset);
+                    }
+                    _ => {
+                        self.code_builder.get_local(local_id);
+                        self.code_builder.i64_const(tag_id as i64);
+                        self.code_builder.i64_store(Align::Bytes8, tag_id_offset);
+                    }
+                }
+            }
+            _ => todo!("Tag with layout {:?}", union_layout),
         }
     }
 
@@ -826,14 +876,14 @@ impl<'a> WasmBackend<'a> {
         // Not passing it as an argument because I'm trying to match Backend method signatures
         let storage = self.storage.get(sym).to_owned();
 
-        if let Layout::Struct(field_layouts) = layout {
+        if matches!(layout, Layout::Struct(_)) {
             match storage {
                 StoredValue::StackMemory { location, size, .. } => {
                     if size > 0 {
                         let (local_id, struct_offset) =
                             location.local_and_offset(self.storage.stack_frame_pointer);
                         let mut field_offset = struct_offset;
-                        for (field, _) in fields.iter().zip(field_layouts.iter()) {
+                        for field in fields.iter() {
                             field_offset += self.storage.copy_value_to_memory(
                                 &mut self.code_builder,
                                 local_id,

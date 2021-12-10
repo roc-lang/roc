@@ -85,7 +85,9 @@ impl std::fmt::Debug for VmBlock<'_> {
     }
 }
 
-/// Wasm memory alignment. (Rust representation matches Wasm encoding)
+/// Wasm memory alignment for load/store instructions.
+/// Rust representation matches Wasm encoding.
+/// It's an error to specify alignment higher than the "natural" alignment of the instruction
 #[repr(u8)]
 #[derive(Clone, Copy, Debug)]
 pub enum Align {
@@ -93,10 +95,6 @@ pub enum Align {
     Bytes2 = 1,
     Bytes4 = 2,
     Bytes8 = 3,
-    Bytes16 = 4,
-    Bytes32 = 5,
-    Bytes64 = 6,
-    // ... we can add more if we need them ...
 }
 
 impl From<u32> for Align {
@@ -105,11 +103,13 @@ impl From<u32> for Align {
             1 => Align::Bytes1,
             2 => Align::Bytes2,
             4 => Align::Bytes4,
-            8 => Align::Bytes8,
-            16 => Align::Bytes16,
-            32 => Align::Bytes32,
-            64 => Align::Bytes64,
-            _ => internal_error!("{:?}-byte alignment not supported", x),
+            _ => {
+                if x.count_ones() == 1 {
+                    Align::Bytes8 // Max value supported by any Wasm instruction
+                } else {
+                    internal_error!("Cannot align to {} bytes", x);
+                }
+            }
         }
     }
 }
@@ -445,7 +445,7 @@ impl<'a> CodeBuilder<'a> {
 
         if frame_size != 0 {
             if let Some(frame_ptr_id) = frame_pointer {
-                let aligned_size = round_up_to_alignment(frame_size, FRAME_ALIGNMENT_BYTES);
+                let aligned_size = round_up_to_alignment!(frame_size, FRAME_ALIGNMENT_BYTES);
                 self.build_stack_frame_push(aligned_size, frame_ptr_id);
                 self.build_stack_frame_pop(aligned_size, frame_ptr_id);
             }
