@@ -96,7 +96,7 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
         // Call libc realloc()
         let call = builder.build_call(
             libc_realloc_val,
-            &[ptr_arg, new_size_arg],
+            &[ptr_arg.into(), new_size_arg.into()],
             "call_libc_realloc",
         );
 

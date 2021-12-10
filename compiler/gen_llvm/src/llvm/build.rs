@@ -39,11 +39,13 @@ use inkwell::debug_info::{
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage, Module};
 use inkwell::passes::{PassManager, PassManagerBuilder};
-use inkwell::types::{BasicType, BasicTypeEnum, FunctionType, IntType, StructType};
+use inkwell::types::{
+    BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType, IntType, StructType,
+};
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{
-    BasicValue, CallSiteValue, CallableValue, FloatValue, FunctionValue, InstructionOpcode,
-    InstructionValue, IntValue, PointerValue, StructValue,
+    BasicMetadataValueEnum, BasicValue, CallSiteValue, CallableValue, FloatValue, FunctionValue,
+    InstructionOpcode, InstructionValue, IntValue, PointerValue, StructValue,
 };
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
@@ -226,10 +228,11 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
             .get_function(intrinsic_name)
             .unwrap_or_else(|| panic!("Unrecognized intrinsic function: {}", intrinsic_name));
 
-        let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), self.arena);
+        let mut arg_vals: Vec<BasicMetadataValueEnum> =
+            Vec::with_capacity_in(args.len(), self.arena);
 
         for arg in args.iter() {
-            arg_vals.push(*arg);
+            arg_vals.push((*arg).into());
         }
 
         let call = self
@@ -3287,7 +3290,9 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
             let output_type = return_type.ptr_type(AddressSpace::Generic);
             argument_types.push(output_type.into());
 
-            env.context.void_type().fn_type(&argument_types, false)
+            env.context
+                .void_type()
+                .fn_type(&function_arguments(env, &argument_types), false)
         }
     };
 
@@ -3392,7 +3397,9 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
     let c_function_type = {
         let output_type = return_type.ptr_type(AddressSpace::Generic);
         argument_types.push(output_type.into());
-        env.context.void_type().fn_type(&argument_types, false)
+        env.context
+            .void_type()
+            .fn_type(&function_arguments(env, &argument_types), false)
     };
 
     let c_function = add_func(
@@ -3536,12 +3543,17 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
     let cc_return = to_cc_return(env, &return_layout);
 
     let c_function_type = match cc_return {
-        CCReturn::Void => env.context.void_type().fn_type(&argument_types, false),
-        CCReturn::Return => return_type.fn_type(&argument_types, false),
+        CCReturn::Void => env
+            .context
+            .void_type()
+            .fn_type(&function_arguments(env, &argument_types), false),
+        CCReturn::Return => return_type.fn_type(&function_arguments(env, &argument_types), false),
         CCReturn::ByPointer => {
             let output_type = return_type.ptr_type(AddressSpace::Generic);
             argument_types.push(output_type.into());
-            env.context.void_type().fn_type(&argument_types, false)
+            env.context
+                .void_type()
+                .fn_type(&function_arguments(env, &argument_types), false)
         }
     };
 
@@ -3902,7 +3914,8 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
     // argument_types.push(wrapper_return_type.ptr_type(AddressSpace::Generic).into());
 
     // let wrapper_function_type = env.context.void_type().fn_type(&argument_types, false);
-    let wrapper_function_type = wrapper_return_type.fn_type(&argument_types, false);
+    let wrapper_function_type =
+        wrapper_return_type.fn_type(&function_arguments(env, &argument_types), false);
 
     // Add main to the module.
     let wrapper_function = add_func(
@@ -4134,11 +4147,13 @@ fn build_proc_header<'a, 'ctx, 'env>(
     }
 
     let fn_type = match RocReturn::from_layout(env, &proc.ret_layout) {
-        RocReturn::Return => ret_type.fn_type(&arg_basic_types, false),
+        RocReturn::Return => ret_type.fn_type(&function_arguments(env, &arg_basic_types), false),
         RocReturn::ByPointer => {
             // println!( "{:?}  will return void instead of {:?}", symbol, proc.ret_layout);
             arg_basic_types.push(ret_type.ptr_type(AddressSpace::Generic).into());
-            env.context.void_type().fn_type(&arg_basic_types, false)
+            env.context
+                .void_type()
+                .fn_type(&function_arguments(env, &arg_basic_types), false)
         }
     };
 
@@ -4542,7 +4557,8 @@ pub fn call_roc_function<'a, 'ctx, 'env>(
     match RocReturn::from_layout(env, result_layout) {
         RocReturn::ByPointer if !pass_by_pointer => {
             // WARNING this is a hack!!
-            let mut arguments = Vec::from_iter_in(arguments.iter().copied(), env.arena);
+            let it = arguments.iter().map(|x| (*x).into());
+            let mut arguments = Vec::from_iter_in(it, env.arena);
             arguments.pop();
 
             let result_type = basic_type_from_layout(env, result_layout);
@@ -4563,7 +4579,8 @@ pub fn call_roc_function<'a, 'ctx, 'env>(
             env.builder.build_load(result_alloca, "load_result")
         }
         RocReturn::ByPointer => {
-            let mut arguments = Vec::from_iter_in(arguments.iter().copied(), env.arena);
+            let it = arguments.iter().map(|x| (*x).into());
+            let mut arguments = Vec::from_iter_in(it, env.arena);
 
             let result_type = basic_type_from_layout(env, result_layout);
             let result_alloca = tag_alloca(env, result_type, "result_value");
@@ -4592,7 +4609,10 @@ pub fn call_roc_function<'a, 'ctx, 'env>(
                 roc_function.get_type().get_param_types().len(),
                 arguments.len()
             );
-            let call = env.builder.build_call(roc_function, arguments, "call");
+            let it = arguments.iter().map(|x| (*x).into());
+            let arguments = Vec::from_iter_in(it, env.arena);
+
+            let call = env.builder.build_call(roc_function, &arguments, "call");
 
             // roc functions should have the fast calling convention
             debug_assert_eq!(roc_function.get_call_conventions(), FAST_CALL_CONV);
@@ -5271,6 +5291,31 @@ fn run_low_level<'a, 'ctx, 'env>(
             debug_assert_eq!(args.len(), 2);
 
             str_ends_with(env, scope, args[0], args[1])
+        }
+        StrToNum => {
+            // Str.toNum : Str -> Result (Num *) {}
+            debug_assert_eq!(args.len(), 1);
+
+            let (string, _string_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            if let Layout::Struct(struct_layout) = layout {
+                // match on the return layout to figure out which zig builtin we need
+                let intrinsic = match struct_layout[0] {
+                    Layout::Builtin(Builtin::Int(int_width)) => &bitcode::STR_TO_INT[int_width],
+                    Layout::Builtin(Builtin::Float(float_width)) => {
+                        &bitcode::STR_TO_FLOAT[float_width]
+                    }
+                    Layout::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
+                    _ => unreachable!(),
+                };
+
+                let string =
+                    complex_bitcast(env.builder, string, env.str_list_c_abi().into(), "to_utf8");
+
+                call_bitcode_fn(env, &[string], intrinsic)
+            } else {
+                unreachable!()
+            }
         }
         StrFromInt => {
             // Str.fromInt : Int -> Str
@@ -6135,6 +6180,14 @@ fn to_cc_return<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) 
     }
 }
 
+fn function_arguments<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    arguments: &[BasicTypeEnum<'ctx>],
+) -> Vec<'a, BasicMetadataTypeEnum<'ctx>> {
+    let it = arguments.iter().map(|x| (*x).into());
+    Vec::from_iter_in(it, env.arena)
+}
+
 fn build_foreign_symbol<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &mut Scope<'a, 'ctx>,
@@ -6189,17 +6242,25 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
             }
 
             let cc_type = match cc_return {
-                CCReturn::Void => env.context.void_type().fn_type(&cc_argument_types, false),
+                CCReturn::Void => env
+                    .context
+                    .void_type()
+                    .fn_type(&function_arguments(env, &cc_argument_types), false),
                 CCReturn::ByPointer => {
                     cc_argument_types.push(return_type.ptr_type(AddressSpace::Generic).into());
-                    env.context.void_type().fn_type(&cc_argument_types, false)
+                    env.context
+                        .void_type()
+                        .fn_type(&function_arguments(env, &cc_argument_types), false)
                 }
-                CCReturn::Return => return_type.fn_type(&cc_argument_types, false),
+                CCReturn::Return => {
+                    return_type.fn_type(&function_arguments(env, &cc_argument_types), false)
+                }
             };
 
             let cc_function = get_foreign_symbol(env, foreign.clone(), cc_type);
 
-            let fastcc_type = return_type.fn_type(&fastcc_argument_types, false);
+            let fastcc_type =
+                return_type.fn_type(&function_arguments(env, &fastcc_argument_types), false);
 
             let fastcc_function = add_func(
                 env.module,
@@ -6220,14 +6281,14 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                 let mut cc_arguments =
                     Vec::with_capacity_in(fastcc_parameters.len() + 1, env.arena);
 
-                for (param, cc_type) in fastcc_parameters.into_iter().zip(cc_argument_types.iter())
-                {
+                let it = fastcc_parameters.into_iter().zip(cc_argument_types.iter());
+                for (param, cc_type) in it {
                     if param.get_type() == *cc_type {
-                        cc_arguments.push(param);
+                        cc_arguments.push(param.into());
                     } else {
                         let as_cc_type =
                             complex_bitcast(env.builder, param, *cc_type, "to_cc_type");
-                        cc_arguments.push(as_cc_type);
+                        cc_arguments.push(as_cc_type.into());
                     }
                 }
 

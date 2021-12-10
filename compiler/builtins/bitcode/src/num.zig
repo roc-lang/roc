@@ -2,6 +2,48 @@ const std = @import("std");
 const always_inline = std.builtin.CallOptions.Modifier.always_inline;
 const math = std.math;
 const RocList = @import("list.zig").RocList;
+const RocStr = @import("str.zig").RocStr;
+
+pub fn NumParseResult(comptime T: type) type {
+    // on the roc side we sort by alignment; putting the errorcode last
+    // always works out (no number with smaller alignment than 1)
+    return extern struct {
+        value: T,
+        errorcode: u8, // 0 indicates success
+    };
+}
+
+pub fn exportParseInt(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(buf: RocStr) callconv(.C) NumParseResult(T) {
+            // a radix of 0 will make zig determine the radix from the frefix:
+            //  * A prefix of "0b" implies radix=2,
+            //  * A prefix of "0o" implies radix=8,
+            //  * A prefix of "0x" implies radix=16,
+            //  * Otherwise radix=10 is assumed.
+            const radix = 0;
+            if (std.fmt.parseInt(T, buf.asSlice(), radix)) |success| {
+                return .{ .errorcode = 0, .value = success };
+            } else |err| {
+                return .{ .errorcode = 1, .value = 0 };
+            }
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
+pub fn exportParseFloat(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(buf: RocStr) callconv(.C) NumParseResult(T) {
+            if (std.fmt.parseFloat(T, buf.asSlice())) |success| {
+                return .{ .errorcode = 0, .value = success };
+            } else |err| {
+                return .{ .errorcode = 1, .value = 0 };
+            }
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
 
 pub fn exportPow(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {

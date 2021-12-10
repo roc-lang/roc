@@ -1,4 +1,5 @@
 use crate::annotation::{Formattable, Newlines, Parens};
+use crate::collection::fmt_collection;
 use crate::def::fmt_def;
 use crate::pattern::fmt_pattern;
 use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT};
@@ -256,9 +257,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 fmt_if(buf, branches, final_else, self.is_multiline(), indent);
             }
             When(loc_condition, branches) => fmt_when(buf, loc_condition, branches, indent),
-            List(items) => {
-                fmt_list(buf, *items, indent);
-            }
+            List(items) => fmt_collection(buf, indent, '[', ']', *items, Newlines::No),
             BinOps(lefts, right) => fmt_bin_ops(buf, lefts, right, false, parens, indent),
             UnaryOp(sub_expr, unary_op) => {
                 buf.indent(indent);
@@ -426,89 +425,6 @@ fn fmt_bin_ops<'a>(
     }
 
     loc_right_side.format_with_options(buf, apply_needs_parens, Newlines::Yes, indent);
-}
-
-fn fmt_list<'a>(buf: &mut Buf<'a>, items: Collection<'a, &'a Located<Expr<'a>>>, indent: u16) {
-    let loc_items = items.items;
-    let final_comments = items.final_comments();
-    buf.indent(indent);
-    if loc_items.is_empty() && final_comments.iter().all(|c| c.is_newline()) {
-        buf.push_str("[]");
-    } else {
-        buf.push('[');
-        let is_multiline = loc_items.iter().any(|item| (&item.value).is_multiline());
-        if is_multiline {
-            let item_indent = indent + INDENT;
-            for item in loc_items.iter() {
-                match &item.value {
-                    // TODO?? These SpaceAfter/SpaceBefore litany seems overcomplicated
-                    // Can we simplify this? Or at least move this in a separate function.
-                    Expr::SpaceBefore(expr_below, spaces_above_expr) => {
-                        buf.newline();
-                        fmt_comments_only(
-                            buf,
-                            spaces_above_expr.iter(),
-                            NewlineAt::Bottom,
-                            item_indent,
-                        );
-
-                        match &expr_below {
-                            Expr::SpaceAfter(expr_above, spaces_below_expr) => {
-                                expr_above.format(buf, item_indent);
-                                buf.push(',');
-
-                                fmt_comments_only(
-                                    buf,
-                                    spaces_below_expr.iter(),
-                                    NewlineAt::Top,
-                                    item_indent,
-                                );
-                            }
-                            _ => {
-                                expr_below.format(buf, item_indent);
-                                buf.push(',');
-                            }
-                        }
-                    }
-
-                    Expr::SpaceAfter(sub_expr, spaces) => {
-                        buf.newline();
-
-                        sub_expr.format(buf, item_indent);
-                        buf.push(',');
-
-                        fmt_comments_only(buf, spaces.iter(), NewlineAt::Top, item_indent);
-                    }
-
-                    _ => {
-                        buf.newline();
-                        item.format_with_options(
-                            buf,
-                            Parens::NotNeeded,
-                            Newlines::Yes,
-                            item_indent,
-                        );
-                        buf.push(',');
-                    }
-                }
-            }
-            fmt_comments_only(buf, final_comments.iter(), NewlineAt::Top, item_indent);
-            buf.newline();
-            buf.indent(indent);
-            buf.push(']');
-        } else {
-            // is_multiline == false
-            let mut iter = loc_items.iter().peekable();
-            while let Some(item) = iter.next() {
-                buf.push(' ');
-                item.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
-                if iter.peek().is_some() {
-                    buf.push(',');
-                }
-            }
-            buf.push_str(" ]");
-        }
-    }
 }
 
 fn empty_line_before_expr<'a>(expr: &'a Expr<'a>) -> bool {
