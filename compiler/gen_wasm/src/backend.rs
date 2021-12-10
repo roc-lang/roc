@@ -643,9 +643,21 @@ impl<'a> WasmBackend<'a> {
                 tag_id,
                 arguments,
                 ..
-            } => self.build_tag(tag_layout, *tag_id, arguments, storage),
+            } => self.build_tag(tag_layout, *tag_id, arguments, *sym, storage),
 
-            x => todo!("Expression {:?}", x),
+            Expr::GetTagId {
+                structure,
+                union_layout,
+            } => self.build_get_tag_id(*structure, union_layout, storage),
+
+            Expr::UnionAtIndex {
+                structure,
+                tag_id,
+                union_layout,
+                index,
+            } => self.build_union_at_index(*structure, *tag_id, union_layout, *index, *sym),
+
+            _ => todo!("Expression `{}`", expr.to_pretty(100)),
         }
     }
 
@@ -654,49 +666,326 @@ impl<'a> WasmBackend<'a> {
         union_layout: &UnionLayout<'a>,
         tag_id: TagIdIntType,
         arguments: &'a [Symbol],
+        symbol: Symbol,
         stored: &StoredValue,
     ) {
-        match union_layout {
-            UnionLayout::NonRecursive(tags) => {
-                let (local_id, offset) = if let StoredValue::StackMemory { location, .. } = stored {
-                    location.local_and_offset(self.storage.stack_frame_pointer)
-                } else {
-                    internal_error!("NonRecursive Tag should always be stored in StackMemory");
-                };
+        if union_layout.tag_is_null(tag_id) {
+            self.code_builder.i32_const(0);
+            return;
+        }
 
-                let mut field_offset = offset;
-                for field_symbol in arguments.iter() {
-                    field_offset += self.storage.copy_value_to_memory(
-                        &mut self.code_builder,
-                        local_id,
-                        field_offset,
-                        *field_symbol,
-                    );
+        use UnionLayout::*;
+        let (mut fields_size_aligned, fields_alignment) = match union_layout {
+            NonRecursive(tags) => Self::union_fields_size_and_alignment(tags),
+            Recursive(tags) => Self::union_fields_size_and_alignment(tags),
+            NonNullableUnwrapped(fields) => Self::union_fields_size_and_alignment(&[fields]),
+            NullableWrapped { other_tags, .. } => Self::union_fields_size_and_alignment(other_tags),
+            NullableUnwrapped { other_fields, .. } => {
+                Self::union_fields_size_and_alignment(&[other_fields])
+            }
+        };
+
+        let stores_tag_id_as_data = union_layout.stores_tag_id_as_data(PTR_SIZE);
+        let stores_tag_id_in_pointer = union_layout.stores_tag_id_in_pointer(PTR_SIZE);
+        let id_alignment = union_layout.tag_id_layout().alignment_bytes(PTR_SIZE);
+
+        let (total_size, total_alignment) = if stores_tag_id_as_data {
+            let alignment = fields_alignment.max(id_alignment);
+            fields_size_aligned = round_up_to_alignment!(fields_size_aligned, alignment);
+            let size = fields_size_aligned + alignment;
+            (size, alignment)
+        } else {
+            (fields_size_aligned, fields_alignment)
+        };
+
+        // We're going to use the pointer many times, so put it in a local variable
+        let stored_with_local =
+            self.storage
+                .ensure_value_has_local(&mut self.code_builder, symbol, stored.to_owned());
+
+        let (local_id, data_offset) = match stored_with_local {
+            StoredValue::StackMemory { location, .. } => {
+                location.local_and_offset(self.storage.stack_frame_pointer)
+            }
+            StoredValue::Local { local_id, .. } => {
+                // Tag is stored as a pointer to the heap. Call the allocator to get a memory address.
+                self.allocate_with_refcount(Some(total_size), total_alignment, 1);
+                self.code_builder.set_local(local_id);
+                (local_id, 0)
+            }
+            StoredValue::VirtualMachineStack { .. } => {
+                internal_error!("{:?} should have a local variable", symbol)
+            }
+        };
+
+        // Write the field values to memory
+        let mut field_offset = data_offset;
+        for field_symbol in arguments.iter() {
+            field_offset += self.storage.copy_value_to_memory(
+                &mut self.code_builder,
+                local_id,
+                field_offset,
+                *field_symbol,
+            );
+        }
+
+        // Store the tag ID (if any)
+        if stores_tag_id_as_data {
+            let id_offset = data_offset + fields_size_aligned;
+            let id_align = Align::from(total_alignment);
+
+            self.code_builder.get_local(local_id);
+
+            match id_align {
+                Align::Bytes1 => {
+                    self.code_builder.i32_const(tag_id as i32);
+                    self.code_builder.i32_store8(id_align, id_offset);
                 }
-
-                let tag_field_layouts = &tags[tag_id as usize];
-                let fields_alignment_bytes =
-                    Layout::Struct(tag_field_layouts).alignment_bytes(PTR_SIZE);
-                let tag_id_alignment_bytes = union_layout.tag_id_layout().alignment_bytes(PTR_SIZE);
-                let total_alignment_bytes = fields_alignment_bytes.max(tag_id_alignment_bytes);
-                let tag_id_offset = round_up_to_alignment!(field_offset, total_alignment_bytes);
-                let tag_id_align = Align::from(total_alignment_bytes);
-
-                match tag_id_align {
-                    Align::Bytes1 | Align::Bytes2 | Align::Bytes4 => {
-                        self.code_builder.get_local(local_id);
-                        self.code_builder.i32_const(tag_id as i32);
-                        self.code_builder.i32_store(tag_id_align, tag_id_offset);
-                    }
-                    _ => {
-                        self.code_builder.get_local(local_id);
-                        self.code_builder.i64_const(tag_id as i64);
-                        self.code_builder.i64_store(Align::Bytes8, tag_id_offset);
-                    }
+                Align::Bytes2 => {
+                    self.code_builder.i32_const(tag_id as i32);
+                    self.code_builder.i32_store16(id_align, id_offset);
+                }
+                Align::Bytes4 => {
+                    self.code_builder.i32_const(tag_id as i32);
+                    self.code_builder.i32_store(id_align, id_offset);
+                }
+                Align::Bytes8 => {
+                    self.code_builder.i64_const(tag_id as i64);
+                    self.code_builder.i64_store(id_align, id_offset);
                 }
             }
-            _ => todo!("Tag with layout {:?}", union_layout),
+        } else if stores_tag_id_in_pointer {
+            self.code_builder.get_local(local_id);
+            self.code_builder.i32_const(tag_id as i32);
+            self.code_builder.i32_or();
+            self.code_builder.set_local(local_id);
         }
+    }
+
+    fn build_get_tag_id(
+        &mut self,
+        structure: Symbol,
+        union_layout: &UnionLayout<'a>,
+        tag_id_storage: &StoredValue,
+    ) {
+        use UnionLayout::*;
+
+        // Variables to control shared logic
+        let mut wrapped_tags: Option<&[&[Layout]]> = None;
+        let mut get_pointer_bits = false;
+        let mut need_to_close_block = false;
+
+        match union_layout {
+            NonRecursive(tags) => {
+                wrapped_tags = Some(*tags);
+            }
+            Recursive(tags) => {
+                if union_layout.stores_tag_id_as_data(PTR_SIZE) {
+                    wrapped_tags = Some(*tags);
+                } else {
+                    get_pointer_bits = true;
+                }
+            }
+            NonNullableUnwrapped(_) => {
+                self.code_builder.i32_const(0);
+            }
+            NullableWrapped {
+                nullable_id,
+                other_tags,
+            } => {
+                self.storage
+                    .load_symbols(&mut self.code_builder, &[structure]);
+                self.code_builder.i32_eqz();
+                self.code_builder.if_(BlockType::Value(ValueType::I32));
+                self.code_builder.i32_const(*nullable_id as i32);
+                self.code_builder.else_();
+                if union_layout.stores_tag_id_as_data(PTR_SIZE) {
+                    wrapped_tags = Some(*other_tags);
+                } else {
+                    get_pointer_bits = true;
+                }
+                need_to_close_block = true;
+            }
+            NullableUnwrapped { nullable_id, .. } => {
+                self.storage
+                    .load_symbols(&mut self.code_builder, &[structure]);
+                self.code_builder.i32_eqz();
+                self.code_builder.if_(BlockType::Value(ValueType::I32));
+                self.code_builder.i32_const(*nullable_id as i32);
+                self.code_builder.else_();
+                self.code_builder.i32_const(!(*nullable_id) as i32);
+                self.code_builder.end();
+            }
+        }
+
+        // Logic shared between different union layouts
+
+        if let Some(tags) = wrapped_tags {
+            // Fields are wrapped with a tag ID at the end
+
+            let (id_type, id_size) =
+                if let StoredValue::VirtualMachineStack {
+                    value_type, size, ..
+                } = tag_id_storage
+                {
+                    (value_type, size)
+                } else {
+                    internal_error!("Unexpected storage for tag ID {:?}", tag_id_storage);
+                };
+
+            let (id_offset, id_align_bytes) = Self::union_fields_size_and_alignment(tags);
+            let id_align = Align::from(id_align_bytes);
+
+            self.storage
+                .load_symbols(&mut self.code_builder, &[structure]);
+
+            match (id_type, id_size) {
+                (ValueType::I32, 1) => self.code_builder.i32_load8_u(id_align, id_offset),
+                (ValueType::I32, 2) => self.code_builder.i32_load16_u(id_align, id_offset),
+                (ValueType::I32, 4) => self.code_builder.i32_load(id_align, id_offset),
+                (ValueType::I64, 8) => self.code_builder.i64_load(id_align, id_offset),
+                _ => internal_error!("Invalid tag ID: type={:?} size={}", id_type, id_size),
+            }
+        } else if get_pointer_bits {
+            self.storage
+                .load_symbols(&mut self.code_builder, &[structure]);
+            self.code_builder.i32_const(3);
+            self.code_builder.i32_and();
+        }
+
+        if need_to_close_block {
+            self.code_builder.end();
+        }
+    }
+
+    fn build_union_at_index(
+        &mut self,
+        structure: Symbol,
+        tag_id: TagIdIntType,
+        union_layout: &UnionLayout<'a>,
+        index: u64,
+        symbol: Symbol,
+    ) {
+        use UnionLayout::*;
+
+        debug_assert!(!union_layout.tag_is_null(tag_id));
+
+        let tag_index = tag_id as usize;
+        let field_layouts = match union_layout {
+            NonRecursive(tags) => tags[tag_index],
+            Recursive(tags) => tags[tag_index],
+            NonNullableUnwrapped(layouts) => *layouts,
+            NullableWrapped { other_tags, .. } => other_tags[tag_index],
+            NullableUnwrapped { other_fields, .. } => *other_fields,
+        };
+
+        let field_offset: u32 = field_layouts
+            .iter()
+            .take(index as usize)
+            .map(|field_layout| field_layout.stack_size(PTR_SIZE))
+            .sum();
+
+        // Get pointer and offset to the tag's data
+        let structure_storage = self.storage.get(&structure).to_owned();
+        let stored_with_local = self.storage.ensure_value_has_local(
+            &mut self.code_builder,
+            structure,
+            structure_storage,
+        );
+        let (tag_local_id, tag_offset) = match stored_with_local {
+            StoredValue::StackMemory { location, .. } => {
+                location.local_and_offset(self.storage.stack_frame_pointer)
+            }
+            StoredValue::Local { local_id, .. } => (local_id, 0),
+            StoredValue::VirtualMachineStack { .. } => {
+                internal_error!("{:?} should have a local variable", structure)
+            }
+        };
+
+        let stores_tag_id_in_pointer = union_layout.stores_tag_id_in_pointer(PTR_SIZE);
+
+        let from_ptr = if stores_tag_id_in_pointer {
+            let ptr = self.storage.create_anonymous_local(ValueType::I32);
+            self.code_builder.get_local(tag_local_id);
+            self.code_builder.i32_const(-4);
+            self.code_builder.i32_and();
+            self.code_builder.set_local(ptr);
+            ptr
+        } else {
+            tag_local_id
+        };
+
+        let from_offset = tag_offset + field_offset;
+        self.storage
+            .copy_value_from_memory(&mut self.code_builder, symbol, from_ptr, from_offset);
+    }
+
+    fn union_fields_size_and_alignment(variant_field_layouts: &[&[Layout]]) -> (u32, u32) {
+        let mut size = 0;
+        let mut alignment_bytes = 0;
+        for field_layouts in variant_field_layouts {
+            let mut variant_size = 0;
+            for layout in field_layouts.iter() {
+                let (field_size, field_alignment) = layout.stack_size_and_alignment(PTR_SIZE);
+                variant_size += field_size;
+                alignment_bytes = alignment_bytes.max(field_alignment);
+            }
+            size = size.max(variant_size);
+        }
+        size = round_up_to_alignment!(size, alignment_bytes);
+        (size, alignment_bytes)
+    }
+
+    /// Allocate heap space and write an initial refcount
+    /// If the data size is known at compile time, pass it in comptime_data_size.
+    /// If size is only known at runtime, push *data* size to the VM stack first.
+    /// Leaves the *data* address on the VM stack
+    fn allocate_with_refcount(
+        &mut self,
+        comptime_data_size: Option<u32>,
+        alignment_bytes: u32,
+        initial_refcount: u32,
+    ) {
+        // Add extra bytes for the refcount
+        let extra_bytes = alignment_bytes.max(PTR_SIZE);
+
+        if let Some(data_size) = comptime_data_size {
+            // Data size known at compile time and passed as an argument
+            self.code_builder
+                .i32_const((data_size + extra_bytes) as i32);
+        } else {
+            // Data size known only at runtime and is on top of VM stack
+            self.code_builder.i32_const(extra_bytes as i32);
+            self.code_builder.i32_add();
+        }
+
+        // Provide a constant for the alignment argument
+        self.code_builder.i32_const(alignment_bytes as i32);
+
+        // Call the foreign function. (Zig and C calling conventions are the same for this signature)
+        let param_types = bumpalo::vec![in self.env.arena; ValueType::I32, ValueType::I32];
+        let ret_type = Some(ValueType::I32);
+        self.call_zig_builtin("roc_alloc", param_types, ret_type);
+
+        // Save the allocation address to a temporary local variable
+        let local_id = self.storage.create_anonymous_local(ValueType::I32);
+        self.code_builder.set_local(local_id);
+
+        // Write the initial refcount
+        let refcount_offset = extra_bytes - PTR_SIZE;
+        let encoded_refcount = (initial_refcount as i32) - 1 + i32::MIN;
+        self.code_builder.get_local(local_id);
+        if refcount_offset != 0 {
+            self.code_builder.i32_const(refcount_offset as i32);
+            self.code_builder.i32_add();
+        }
+        self.code_builder.i32_const(encoded_refcount);
+        self.code_builder.i32_store(Align::Bytes4, refcount_offset);
+
+        // Put the data address on the VM stack
+        self.code_builder.get_local(local_id);
+        self.code_builder.i32_const(extra_bytes as i32);
+        self.code_builder.i32_add();
     }
 
     fn build_low_level(

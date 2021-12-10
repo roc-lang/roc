@@ -31,7 +31,7 @@ fn width_and_alignment_u8_u8() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn applied_tag_nothing_ir() {
     assert_evals_to!(
         indoc!(
@@ -51,7 +51,7 @@ fn applied_tag_nothing_ir() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn applied_tag_nothing() {
     assert_evals_to!(
         indoc!(
@@ -317,7 +317,7 @@ fn gen_if_float() {
     );
 }
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn when_on_nothing() {
     assert_evals_to!(
         indoc!(
@@ -336,7 +336,7 @@ fn when_on_nothing() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn when_on_just() {
     assert_evals_to!(
         indoc!(
@@ -355,7 +355,7 @@ fn when_on_just() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn when_on_result() {
     assert_evals_to!(
         indoc!(
@@ -374,7 +374,7 @@ fn when_on_result() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn when_on_these() {
     assert_evals_to!(
         indoc!(
@@ -396,7 +396,7 @@ fn when_on_these() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn match_on_two_values() {
     // this will produce a Chain internally
     assert_evals_to!(
@@ -413,8 +413,8 @@ fn match_on_two_values() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
-fn pair_with_guard_pattern() {
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn pair_with_underscore() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -430,8 +430,8 @@ fn pair_with_guard_pattern() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
-fn result_with_guard_pattern() {
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn result_with_underscore() {
     // This test revealed an issue with hashing Test values
     assert_evals_to!(
         indoc!(
@@ -451,7 +451,7 @@ fn result_with_guard_pattern() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn maybe_is_just_not_nested() {
     assert_evals_to!(
         indoc!(
@@ -476,7 +476,7 @@ fn maybe_is_just_not_nested() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn maybe_is_just_nested() {
     assert_evals_to!(
         indoc!(
@@ -498,7 +498,7 @@ fn maybe_is_just_nested() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn nested_pattern_match() {
     assert_evals_to!(
         indoc!(
@@ -535,7 +535,7 @@ fn if_guard_vanilla() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[ignore]
 fn when_on_single_value_tag() {
     // this fails because the switched-on symbol is not defined
@@ -711,7 +711,7 @@ fn if_guard_exhaustiveness() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn when_on_enum() {
     assert_evals_to!(
         indoc!(
@@ -733,7 +733,7 @@ fn when_on_enum() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn pattern_matching_unit() {
     assert_evals_to!(
         indoc!(
@@ -849,7 +849,7 @@ fn unit_type() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn join_point_if() {
     assert_evals_to!(
         indoc!(
@@ -866,7 +866,7 @@ fn join_point_if() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn join_point_when() {
     assert_evals_to!(
         indoc!(
@@ -892,7 +892,7 @@ fn join_point_when() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn join_point_with_cond_expr() {
     assert_evals_to!(
         indoc!(
@@ -943,7 +943,7 @@ fn alignment_in_single_tag_construction() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn alignment_in_single_tag_pattern_match() {
     assert_evals_to!(
         indoc!(
@@ -1010,7 +1010,7 @@ fn alignment_in_multi_tag_construction_three() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn alignment_in_multi_tag_pattern_match() {
     assert_evals_to!(
         indoc!(
@@ -1049,7 +1049,7 @@ fn alignment_in_multi_tag_pattern_match() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[ignore]
 fn phantom_polymorphic() {
     // see https://github.com/rtfeldman/roc/issues/786 and below
@@ -1075,7 +1075,7 @@ fn phantom_polymorphic() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[ignore]
 fn phantom_polymorphic_record() {
     // see https://github.com/rtfeldman/roc/issues/786
@@ -1230,7 +1230,7 @@ fn applied_tag_function_linked_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = "")]
 fn tag_must_be_its_own_type() {
     assert_evals_to!(

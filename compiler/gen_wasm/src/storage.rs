@@ -108,9 +108,15 @@ impl<'a> Storage<'a> {
         self.stack_frame_size = 0;
     }
 
-    /// Internal use only. If you think you want it externally, you really want `allocate`
+    /// Internal use only. See `allocate` or `create_anonymous_local`
     fn get_next_local_id(&self) -> LocalId {
         LocalId((self.arg_types.len() + self.local_types.len()) as u32)
+    }
+
+    pub fn create_anonymous_local(&mut self, value_type: ValueType) -> LocalId {
+        let id = self.get_next_local_id();
+        self.local_types.push(value_type);
+        id
     }
 
     /// Allocate storage for a Roc value
