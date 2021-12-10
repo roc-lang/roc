@@ -135,7 +135,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * show editor plugins for library X
 * commands to control log filtering
 * collaps all arms of when
-* "complex" filtered search:  search for all occurences of `"#` but ignore all like `"#,`
+* "complex" filtered search:  search for all occurrences of `"#` but ignore all like `"#,`
 * color this debug print orange
 * remove unused imports
     
