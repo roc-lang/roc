@@ -675,9 +675,12 @@ impl<'a> WasmBackend<'a> {
                 }
 
                 let tag_field_layouts = &tags[tag_id as usize];
-                let alignment_bytes = Layout::Struct(tag_field_layouts).alignment_bytes(PTR_SIZE);
-                let tag_id_offset = round_up_to_alignment!(field_offset, alignment_bytes);
-                let tag_id_align = Align::from(alignment_bytes);
+                let fields_alignment_bytes =
+                    Layout::Struct(tag_field_layouts).alignment_bytes(PTR_SIZE);
+                let tag_id_alignment_bytes = union_layout.tag_id_layout().alignment_bytes(PTR_SIZE);
+                let total_alignment_bytes = fields_alignment_bytes.max(tag_id_alignment_bytes);
+                let tag_id_offset = round_up_to_alignment!(field_offset, total_alignment_bytes);
+                let tag_id_align = Align::from(total_alignment_bytes);
 
                 match tag_id_align {
                     Align::Bytes1 | Align::Bytes2 | Align::Bytes4 => {
