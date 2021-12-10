@@ -3455,7 +3455,6 @@ dependencies = [
 name = "roc_load"
 version = "0.1.0"
 dependencies = [
- "backtrace",
  "bumpalo",
  "crossbeam",
  "indoc",
