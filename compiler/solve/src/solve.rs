@@ -1530,6 +1530,24 @@ fn adjust_rank_content(
 
                 TagUnion(tags, ext_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
+                    // For performance reasons, we only keep one representation of empty tag unions
+                    // in subs. That representation exists at rank 0, which we don't always want to
+                    // reflect the whole tag union as, because doing so may over-generalize free
+                    // type variables.
+                    // Normally this is not a problem because of the loop below that maximizes the
+                    // rank from nested types in the union. But suppose we have the simple tag
+                    // union
+                    //   [ Z ]{}
+                    // there are no nested types in the tags, and the empty tag union is at rank 0,
+                    // so we promote the tag union to rank 0. Now if we introduce the presence
+                    // constraint
+                    //   [ Z ]{} += [ S a ]
+                    // we'll wind up with [ Z, S a ]{}, but it will be at rank 0, and "a" will get
+                    // over-generalized. Really, the empty tag union should be introduced at
+                    // whatever current group rank we're at, and so that's how we encode it here.
+                    if *ext_var == Variable::EMPTY_TAG_UNION {
+                        rank = group_rank;
+                    }
 
                     for (_, index) in tags.iter_all() {
                         let slice = subs[index];

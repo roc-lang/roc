@@ -2664,7 +2664,6 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore = "we don't infer recursive tag unions properly yet"]
     fn infer_linked_list_map() {
         infer_eq_without_problem(
             indoc!(
@@ -2681,7 +2680,7 @@ mod solve_expr {
                     map
                        "#
             ),
-            "(a -> b), [ Cons a c, Nil ]* as c -> [ Cons b d, Nil ]* as d",
+            "(a -> b), [ Cons a c, Nil ] as c -> [ Cons b d, Nil ]* as d",
         );
     }
 
@@ -2925,7 +2924,6 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore = "we don't infer recursive tag unions properly yet"]
     fn peano_map_infer() {
         infer_eq(
             indoc!(
@@ -2943,12 +2941,11 @@ mod solve_expr {
                     map
                 "#
             ),
-            "[ S a, Z ]* as a -> [ S b, Z ]* as b",
+            "[ S a, Z ] as a -> [ S b, Z ]* as b",
         );
     }
 
     #[test]
-    #[ignore = "we don't infer recursive tag unions properly yet"]
     fn peano_map_infer_nested() {
         infer_eq(
             indoc!(
@@ -2963,7 +2960,7 @@ mod solve_expr {
                     map
                 "#
             ),
-            "[ S a, Z ]* as a -> [ S b, Z ]* as b",
+            "[ S a, Z ] as a -> [ S b, Z ]* as b",
         );
     }
 
@@ -3021,7 +3018,6 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore = "we don't infer recursive tag unions properly yet"]
     fn infer_record_linked_list_map() {
         infer_eq_without_problem(
             indoc!(
@@ -3035,7 +3031,7 @@ mod solve_expr {
                     map
                 "#
             ),
-            "(a -> b), [ Cons { x : a, xs : c }*, Nil ]* as c -> [ Cons { x : b, xs : d }, Nil ]* as d",
+            "(a -> b), [ Cons { x : a, xs : c }*, Nil ] as c -> [ Cons { x : b, xs : d }, Nil ]* as d",
         );
     }
 
@@ -3088,7 +3084,6 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore = "we don't infer recursive tag unions properly yet"]
     fn infer_mutually_recursive_tag_union() {
         infer_eq_without_problem(
             indoc!(
@@ -3105,7 +3100,7 @@ mod solve_expr {
                    toAs
                 "#
             ),
-            "(a -> b), [ Cons c [ Cons a d, Nil ]*, Nil ]* as d -> [ Cons c [ Cons b e ]*, Nil ]* as e"
+            "(a -> b), [ Cons c [ Cons a d, Nil ], Nil ] as d -> [ Cons c [ Cons b e ]*, Nil ]* as e"
         );
     }
 
@@ -4831,8 +4826,8 @@ mod solve_expr {
             ),
             // TODO: we could be a bit smarter by subtracting "A" as a possible
             // tag in the union known by t, which would yield the principal type
-            // [ A ]* -> [ X ]*
-            "[ A ]* -> [ A, X ]*",
+            // [ A, ]a -> [ X ]a
+            "[ A, X ]a -> [ A, X ]a",
         )
     }
 }
