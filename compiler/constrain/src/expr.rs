@@ -14,9 +14,8 @@ use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Located, Region};
 use roc_types::subs::Variable;
-use roc_types::types::AnnotationSource::{self, *};
 use roc_types::types::Type::{self, *};
-use roc_types::types::{Category, PReason, Reason, RecordField};
+use roc_types::types::{AnnotationSource, Category, PReason, Reason, RecordField};
 
 /// This is for constraining Defs
 #[derive(Default, Debug)]
@@ -604,7 +603,7 @@ pub fn constrain_expr(
                             FromAnnotation(
                                 name.clone(),
                                 *arity,
-                                TypedWhenBranch {
+                                AnnotationSource::TypedWhenBranch {
                                     index: Index::zero_based(index),
                                     region: ann_source.region(),
                                 },
