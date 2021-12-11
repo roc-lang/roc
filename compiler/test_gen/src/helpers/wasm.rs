@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::marker::PhantomData;
 use tempfile::{tempdir, TempDir};
 use wasmer::Memory;
 
@@ -43,7 +44,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     arena: &'a bumpalo::Bump,
     src: &str,
     stdlib: &'a roc_builtins::std::StdLib,
-    _result_type_dummy: &T,
+    _result_type_dummy: PhantomData<T>,
 ) -> wasmer::Instance {
     use std::path::{Path, PathBuf};
 
@@ -132,14 +133,14 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
 
     let store = Store::default();
 
-    // Keep the final .wasm file for debugging with wasm-objdump or wasm2wat
-    const DEBUG_WASM_FILE: bool = false;
+    // Keep the output binary for debugging with wasm2wat, wasm-objdump, wasm-validate, wasmer...
+    const KEEP_WASM_FILE: bool = false;
 
     let wasmer_module = {
         let tmp_dir: TempDir; // directory for normal test runs, deleted when dropped
         let debug_dir: String; // persistent directory for debugging
 
-        let wasm_build_dir: &Path = if DEBUG_WASM_FILE {
+        let wasm_build_dir: &Path = if KEEP_WASM_FILE {
             // Directory name based on a hash of the Roc source
             let mut hash_state = DefaultHasher::new();
             src.hash(&mut hash_state);
@@ -220,7 +221,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
 }
 
 #[allow(dead_code)]
-pub fn assert_wasm_evals_to_help<T>(src: &str, phantom: T) -> Result<T, String>
+pub fn assert_wasm_evals_to_help<T>(src: &str, phantom: PhantomData<T>) -> Result<T, String>
 where
     T: FromWasm32Memory + Wasm32TestResult,
 {
@@ -229,7 +230,7 @@ where
     // NOTE the stdlib must be in the arena; just taking a reference will segfault
     let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
 
-    let instance = crate::helpers::wasm::helper_wasm(&arena, src, stdlib, &phantom);
+    let instance = crate::helpers::wasm::helper_wasm(&arena, src, stdlib, phantom);
 
     let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
 
@@ -281,7 +282,7 @@ pub fn debug_memory_hex(memory: &Memory, address: i32, size: usize) {
 #[allow(unused_macros)]
 macro_rules! assert_wasm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        let phantom = <$ty>::default();
+        let phantom = std::marker::PhantomData;
         match $crate::helpers::wasm::assert_wasm_evals_to_help::<$ty>($src, phantom) {
             Err(msg) => panic!("{:?}", msg),
             Ok(actual) => {
