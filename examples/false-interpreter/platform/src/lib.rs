@@ -2,7 +2,7 @@
 
 use core::alloc::Layout;
 use core::ffi::c_void;
-use core::mem::MaybeUninit;
+use core::mem::{ManuallyDrop, MaybeUninit};
 use libc;
 use roc_std::{RocList, RocStr};
 use std::env;
@@ -141,29 +141,19 @@ pub extern "C" fn roc_fx_getChar() -> u8 {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_putLine(line: RocStr) -> () {
+pub extern "C" fn roc_fx_putLine(line: ManuallyDrop<RocStr>) {
     let bytes = line.as_slice();
     let string = unsafe { std::str::from_utf8_unchecked(bytes) };
     println!("{}", string);
     std::io::stdout().lock().flush();
-
-    // don't mess with the refcount!
-    core::mem::forget(line);
-
-    ()
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_putRaw(line: RocStr) -> () {
+pub extern "C" fn roc_fx_putRaw(line: ManuallyDrop<RocStr>) {
     let bytes = line.as_slice();
     let string = unsafe { std::str::from_utf8_unchecked(bytes) };
     print!("{}", string);
     std::io::stdout().lock().flush();
-
-    // don't mess with the refcount!
-    core::mem::forget(line);
-
-    ()
 }
 
 #[no_mangle]
@@ -190,25 +180,23 @@ pub extern "C" fn roc_fx_getFileBytes(br_ptr: *mut BufReader<File>) -> RocList<u
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_closeFile(br_ptr: *mut BufReader<File>) -> () {
+pub extern "C" fn roc_fx_closeFile(br_ptr: *mut BufReader<File>) {
     unsafe {
         Box::from_raw(br_ptr);
     }
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_openFile(name: RocStr) -> *mut BufReader<File> {
+pub extern "C" fn roc_fx_openFile(name: ManuallyDrop<RocStr>) -> *mut BufReader<File> {
     let f = File::open(name.as_str()).expect("Unable to open file");
     let br = BufReader::new(f);
-
-    // don't mess with the refcount!
-    core::mem::forget(name);
 
     Box::into_raw(Box::new(br))
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_withFileOpen(name: RocStr, buffer: *const u8) -> () {
+pub extern "C" fn roc_fx_withFileOpen(name: ManuallyDrop<RocStr>, buffer: *const u8) {
+    // TODO: figure out accepting a closure in an fx and passing data to it.
     // let f = File::open(name.as_str()).expect("Unable to open file");
     // let mut br = BufReader::new(f);
 
@@ -216,9 +204,4 @@ pub extern "C" fn roc_fx_withFileOpen(name: RocStr, buffer: *const u8) -> () {
     //     let closure_data_ptr = buffer.offset(8);
     //     call_the_closure(closure_data_ptr);
     // }
-
-    // // don't mess with the refcount!
-    // core::mem::forget(name);
-
-    ()
 }
