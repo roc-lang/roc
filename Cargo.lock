@@ -3411,6 +3411,7 @@ dependencies = [
  "roc_collections",
  "roc_module",
  "roc_mono",
+ "roc_reporting",
  "roc_std",
  "target-lexicon",
 ]
