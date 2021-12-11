@@ -1309,7 +1309,7 @@ fn num_to_float() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn num_to_float_f64_to_f32() {
     assert_evals_to!(
         indoc!(
@@ -1328,7 +1328,47 @@ fn num_to_float_f64_to_f32() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+fn num_to_float_f32_to_f32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+
+                    arg : F32
+                    arg = 9.0
+
+                    ret : F32
+                    ret = Num.toFloat arg
+                    ret
+                "#
+        ),
+        9.0,
+        f32
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn num_to_float_f64_to_f64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+
+                    arg : F64
+                    arg = 9.0
+
+                    ret : F64
+                    ret = Num.toFloat arg
+                    ret
+                "#
+        ),
+        9.0,
+        f64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn num_to_float_f32_to_f64() {
     assert_evals_to!(
         indoc!(

@@ -1,4 +1,3 @@
-use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
@@ -22,10 +21,6 @@ const COMPILER_RT_PATH_VAR: &str = "TEST_GEN_WASM_COMPILER_RT_PATH";
 use roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS;
 
 const TEST_WRAPPER_NAME: &str = "test_wrapper";
-
-std::thread_local! {
-    static TEST_COUNTER: Cell<u32> = Cell::new(0);
-}
 
 fn promote_expr_to_module(src: &str) -> String {
     let mut buffer = String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");

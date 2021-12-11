@@ -62,6 +62,7 @@ use roc_mono::ir::{
     ModifyRc, OptLevel, ProcLayout,
 };
 use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, TagIdIntType, UnionLayout};
+use roc_reporting::internal_error;
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
@@ -5604,9 +5605,13 @@ fn run_low_level<'a, 'ctx, 'env>(
                             let int_type = convert::int_type_from_int_width(env, *int_width);
                             build_int_unary_op(env, arg.into_int_value(), int_type, op)
                         }
-                        Float(float_width) => {
-                            build_float_unary_op(env, arg.into_float_value(), op, *float_width)
-                        }
+                        Float(float_width) => build_float_unary_op(
+                            env,
+                            layout,
+                            arg.into_float_value(),
+                            op,
+                            *float_width,
+                        ),
                         _ => {
                             unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, arg_layout);
                         }
@@ -6983,9 +6988,10 @@ fn int_abs_with_overflow<'a, 'ctx, 'env>(
 
 fn build_float_unary_op<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout: &Layout<'a>,
     arg: FloatValue<'ctx>,
     op: LowLevel,
-    float_width: FloatWidth,
+    float_width: FloatWidth, // arg width
 ) -> BasicValueEnum<'ctx> {
     use roc_module::low_level::LowLevel::*;
 
@@ -6997,7 +7003,35 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
         NumAbs => env.call_intrinsic(&LLVM_FABS[float_width], &[arg.into()]),
         NumSqrtUnchecked => env.call_intrinsic(&LLVM_SQRT[float_width], &[arg.into()]),
         NumLogUnchecked => env.call_intrinsic(&LLVM_LOG[float_width], &[arg.into()]),
-        NumToFloat => arg.into(), /* Converting from Float to Float is a no-op */
+        NumToFloat => {
+            let return_width = match layout {
+                Layout::Builtin(Builtin::Float(return_width)) => *return_width,
+                _ => internal_error!("Layout for returning is not Float : {:?}", layout),
+            };
+            match (float_width, return_width) {
+                (FloatWidth::F32, FloatWidth::F32) => arg.into(),
+                (FloatWidth::F32, FloatWidth::F64) => bd.build_cast(
+                    InstructionOpcode::FPExt,
+                    arg,
+                    env.context.f64_type(),
+                    "f32_to_f64",
+                ),
+                (FloatWidth::F64, FloatWidth::F32) => bd.build_cast(
+                    InstructionOpcode::FPTrunc,
+                    arg,
+                    env.context.f32_type(),
+                    "f64_to_f32",
+                ),
+                (FloatWidth::F64, FloatWidth::F64) => arg.into(),
+                (FloatWidth::F128, FloatWidth::F128) => arg.into(),
+                (FloatWidth::F128, _) => {
+                    unimplemented!("I cannot handle F128 with Num.toFloat yet")
+                }
+                (_, FloatWidth::F128) => {
+                    unimplemented!("I cannot handle F128 with Num.toFloat yet")
+                }
+            }
+        }
         NumCeiling => env.builder.build_cast(
             InstructionOpcode::FPToSI,
             env.call_intrinsic(&LLVM_CEILING[float_width], &[arg.into()]),

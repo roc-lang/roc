@@ -10,6 +10,7 @@ edition = "2018"
 roc_collections = { path = "../collections" }
 roc_module = { path = "../module" }
 roc_builtins = { path = "../builtins" }
+roc_reporting = { path = "../../reporting" }
 roc_mono = { path = "../mono" }
 roc_std = { path = "../../roc_std" }
 morphic_lib = { path = "../../vendor/morphic_lib" }
