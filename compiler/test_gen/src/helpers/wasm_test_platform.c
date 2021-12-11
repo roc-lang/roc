@@ -3,18 +3,26 @@
 // If any printf is included for compilation, even if unused, test runs take 50% longer
 #define DEBUG 0
 
+//--------------------------
+
 void *roc_alloc(size_t size, unsigned int alignment)
 {
     void *allocated = malloc(size);
+#if DEBUG
     if (!allocated)
     {
         fprintf(stderr, "roc_alloc failed\n");
         exit(1);
-    } else {
+    }
+    else
+    {
         printf("roc_alloc allocated %d bytes at %p\n", size, allocated);
     }
+#endif
     return allocated;
 }
+
+//--------------------------
 
 void *roc_realloc(void *ptr, size_t new_size, size_t old_size,
                   unsigned int alignment)
@@ -22,7 +30,14 @@ void *roc_realloc(void *ptr, size_t new_size, size_t old_size,
     return realloc(ptr, new_size);
 }
 
-void roc_dealloc(void *ptr, unsigned int alignment) { free(ptr); }
+//--------------------------
+
+void roc_dealloc(void *ptr, unsigned int alignment)
+{
+    free(ptr);
+}
+
+//--------------------------
 
 void roc_panic(void *ptr, unsigned int alignment)
 {
@@ -34,9 +49,16 @@ void roc_panic(void *ptr, unsigned int alignment)
     exit(1);
 }
 
+//--------------------------
+
 void *roc_memcpy(void *dest, const void *src, size_t n)
 {
     return memcpy(dest, src, n);
 }
 
-void *roc_memset(void *str, int c, size_t n) { return memset(str, c, n); }
+//--------------------------
+
+void *roc_memset(void *str, int c, size_t n)
+{
+    return memset(str, c, n);
+}
