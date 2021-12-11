@@ -975,10 +975,6 @@ impl<'a> WasmBackend<'a> {
         let refcount_offset = extra_bytes - PTR_SIZE;
         let encoded_refcount = (initial_refcount as i32) - 1 + i32::MIN;
         self.code_builder.get_local(local_id);
-        if refcount_offset != 0 {
-            self.code_builder.i32_const(refcount_offset as i32);
-            self.code_builder.i32_add();
-        }
         self.code_builder.i32_const(encoded_refcount);
         self.code_builder.i32_store(Align::Bytes4, refcount_offset);
 
