@@ -1125,7 +1125,7 @@ fn result_never() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn nested_recursive_literal() {
     assert_evals_to!(
         indoc!(
