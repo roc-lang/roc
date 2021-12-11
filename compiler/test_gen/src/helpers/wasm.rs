@@ -1,4 +1,3 @@
-use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use tempfile::{tempdir, TempDir};
@@ -13,17 +12,14 @@ use roc_gen_wasm::MEMORY_NAME;
 
 // Should manually match build.rs
 const PLATFORM_FILENAME: &str = "wasm_test_platform";
-const OUT_DIR_VAR: &str = "TEST_GEN_OUT";
-const LIBC_PATH_VAR: &str = "TEST_GEN_WASM_LIBC_PATH";
+
+const TEST_OUT_DIR: &str = env!("TEST_GEN_OUT");
+const LIBC_A_FILE: &str = env!("TEST_GEN_WASM_LIBC_PATH");
 
 #[allow(unused_imports)]
 use roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS;
 
 const TEST_WRAPPER_NAME: &str = "test_wrapper";
-
-std::thread_local! {
-    static TEST_COUNTER: Cell<u32> = Cell::new(0);
-}
 
 fn promote_expr_to_module(src: &str) -> String {
     let mut buffer = String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
@@ -158,9 +154,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
 
         let final_wasm_file = wasm_build_dir.join("final.wasm");
         let app_o_file = wasm_build_dir.join("app.o");
-        let test_out_dir = std::env::var(OUT_DIR_VAR).unwrap();
-        let test_platform_o = format!("{}/{}.o", test_out_dir, PLATFORM_FILENAME);
-        let libc_a_file = std::env::var(LIBC_PATH_VAR).unwrap();
+        let test_platform_o = format!("{}/{}.o", TEST_OUT_DIR, PLATFORM_FILENAME);
 
         // write the module to a file so the linker can access it
         std::fs::write(&app_o_file, &module_bytes).unwrap();
@@ -171,7 +165,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
             app_o_file.to_str().unwrap(),
             bitcode::BUILTINS_WASM32_OBJ_PATH,
             &test_platform_o,
-            &libc_a_file,
+            LIBC_A_FILE,
             // output
             "-o",
             final_wasm_file.to_str().unwrap(),
