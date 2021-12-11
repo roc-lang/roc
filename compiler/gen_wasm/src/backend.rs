@@ -523,7 +523,7 @@ impl<'a> WasmBackend<'a> {
                         }));
                 }
 
-                self.build_stmt(&rc_stmt, ret_layout);
+                self.build_stmt(rc_stmt, ret_layout);
             }
 
             x => todo!("statement {:?}", x),
