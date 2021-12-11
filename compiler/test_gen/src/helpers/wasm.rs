@@ -247,10 +247,16 @@ where
                 _ => panic!(),
             };
 
-            if false {
+            if true {
+                println!("test_wrapper returned 0x{:x}", address);
+                println!("Stack:");
                 crate::helpers::wasm::debug_memory_hex(memory, address, std::mem::size_of::<T>());
             }
-
+            if true {
+                println!("Heap:");
+                // Manually provide address and size based on printf in test_platform.c
+                crate::helpers::wasm::debug_memory_hex(memory, 0x11440, 24);
+            }
             let output = <T as FromWasm32Memory>::decode(memory, address as u32);
 
             Ok(output)
@@ -267,12 +273,17 @@ pub fn debug_memory_hex(memory: &Memory, address: i32, size: usize) {
     };
 
     let extra_words = 2;
-    let offset = (address as usize) / 4;
-    let start = offset - extra_words;
-    let end = offset + (size / 4) + extra_words;
+    let result_start = (address as usize) / 4;
+    let result_end = result_start + ((size + 3) / 4);
+    let start = result_start - extra_words;
+    let end = result_end + extra_words;
 
     for index in start..end {
-        let result_marker = if index == offset { "*" } else { " " };
+        let result_marker = if index >= result_start && index < result_end {
+            "|"
+        } else {
+            " "
+        };
         println!(
             "{:x} {} {:08x}",
             index * 4,
@@ -280,6 +291,7 @@ pub fn debug_memory_hex(memory: &Memory, address: i32, size: usize) {
             memory_words[index]
         );
     }
+    println!();
 }
 
 #[allow(unused_macros)]

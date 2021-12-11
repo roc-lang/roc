@@ -3,7 +3,18 @@
 // If any printf is included for compilation, even if unused, test runs take 50% longer
 #define DEBUG 0
 
-void *roc_alloc(size_t size, unsigned int alignment) { return malloc(size); }
+void *roc_alloc(size_t size, unsigned int alignment)
+{
+    void *allocated = malloc(size);
+    if (!allocated)
+    {
+        fprintf(stderr, "roc_alloc failed\n");
+        exit(1);
+    } else {
+        printf("roc_alloc allocated %d bytes at %p\n", size, allocated);
+    }
+    return allocated;
+}
 
 void *roc_realloc(void *ptr, size_t new_size, size_t old_size,
                   unsigned int alignment)

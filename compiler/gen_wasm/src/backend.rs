@@ -58,6 +58,8 @@ pub struct WasmBackend<'a> {
     /// how many blocks deep are we (used for jumps)
     block_depth: u32,
     joinpoint_label_map: MutMap<JoinPointId, (u32, Vec<'a, StoredValue>)>,
+
+    debug_current_proc_index: usize,
 }
 
 impl<'a> WasmBackend<'a> {
@@ -149,6 +151,8 @@ impl<'a> WasmBackend<'a> {
             code_builder: CodeBuilder::new(arena),
             storage: Storage::new(arena),
             symbol_layouts: MutMap::default(),
+
+            debug_current_proc_index: 0,
         }
     }
 
@@ -203,6 +207,7 @@ impl<'a> WasmBackend<'a> {
 
     pub fn build_proc(&mut self, proc: &Proc<'a>) {
         // println!("\ngenerating procedure {:?}\n", proc.name);
+        self.debug_current_proc_index += 1;
 
         self.start_proc(proc);
 
@@ -1245,5 +1250,19 @@ impl<'a> WasmBackend<'a> {
 
         self.code_builder
             .call(fn_index, linker_symbol_index, num_wasm_args, has_return_val);
+    }
+
+    /// Debug utility
+    ///
+    /// if _debug_current_proc_is("#UserApp_foo_1") {
+    ///     self.code_builder._debug_assert_i32(0x1234);
+    /// }
+    fn _debug_current_proc_is(&self, linker_name: &'static str) -> bool {
+        let (_, linker_sym_index) = self.proc_symbols[self.debug_current_proc_index];
+        let sym_info = &self.linker_symbols[linker_sym_index as usize];
+        match sym_info {
+            SymInfo::Function(WasmObjectSymbol::Defined { name, .. }) => name == linker_name,
+            _ => false,
+        }
     }
 }

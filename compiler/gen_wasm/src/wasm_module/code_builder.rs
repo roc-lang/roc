@@ -901,4 +901,17 @@ impl<'a> CodeBuilder<'a> {
     instruction_no_args!(i64_reinterpret_f64, I64REINTERPRETF64, 1, true);
     instruction_no_args!(f32_reinterpret_i32, F32REINTERPRETI32, 1, true);
     instruction_no_args!(f64_reinterpret_i64, F64REINTERPRETI64, 1, true);
+
+    /// Generate a debug assertion for an expected i32 value
+    pub fn _debug_assert_i32(&mut self, expected: i32) {
+        self.i32_const(expected);
+        self.i32_eq();
+        self.i32_eqz();
+        self.if_(BlockType::NoResult);
+        self.unreachable_(); // Tell Wasm runtime to throw an exception
+        self.end();
+        // It matches. Restore the original value to the VM stack and continue the program.
+        // We know it matched the expected value, so just use that!
+        self.i32_const(expected);
+    }
 }
