@@ -16,6 +16,7 @@ use roc_gen_wasm::MEMORY_NAME;
 const PLATFORM_FILENAME: &str = "wasm_test_platform";
 const OUT_DIR_VAR: &str = "TEST_GEN_OUT";
 const LIBC_PATH_VAR: &str = "TEST_GEN_WASM_LIBC_PATH";
+const COMPILER_RT_PATH_VAR: &str = "TEST_GEN_WASM_COMPILER_RT_PATH";
 
 #[allow(unused_imports)]
 use roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS;
@@ -162,6 +163,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
         let test_out_dir = std::env::var(OUT_DIR_VAR).unwrap();
         let test_platform_o = format!("{}/{}.o", test_out_dir, PLATFORM_FILENAME);
         let libc_a_file = std::env::var(LIBC_PATH_VAR).unwrap();
+        let compiler_rt_o_file = std::env::var(COMPILER_RT_PATH_VAR).unwrap();
 
         // write the module to a file so the linker can access it
         std::fs::write(&app_o_file, &module_bytes).unwrap();
@@ -173,6 +175,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
             bitcode::BUILTINS_WASM32_OBJ_PATH,
             &test_platform_o,
             &libc_a_file,
+            &compiler_rt_o_file,
             // output
             "-o",
             final_wasm_file.to_str().unwrap(),
