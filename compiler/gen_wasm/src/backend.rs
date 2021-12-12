@@ -1,6 +1,7 @@
 use bumpalo::{self, collections::Vec};
 
 use code_builder::Align;
+use roc_builtins::bitcode::IntWidth;
 use roc_collections::all::MutMap;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
@@ -653,7 +654,7 @@ impl<'a> WasmBackend<'a> {
             Expr::GetTagId {
                 structure,
                 union_layout,
-            } => self.build_get_tag_id(*structure, union_layout, storage),
+            } => self.build_get_tag_id(*structure, union_layout),
 
             Expr::UnionAtIndex {
                 structure,
@@ -771,44 +772,24 @@ impl<'a> WasmBackend<'a> {
         &mut self,
         structure: Symbol,
         union_layout: &UnionLayout<'a>,
-        tag_id_storage: &StoredValue,
     ) {
         use UnionLayout::*;
 
-        // Variables to control shared logic
-        let mut wrapped_tags: Option<&[&[Layout]]> = None;
-        let mut get_pointer_bits = false;
         let mut need_to_close_block = false;
-
         match union_layout {
-            NonRecursive(tags) => {
-                wrapped_tags = Some(*tags);
-            }
-            Recursive(tags) => {
-                if union_layout.stores_tag_id_as_data(PTR_SIZE) {
-                    wrapped_tags = Some(*tags);
-                } else {
-                    get_pointer_bits = true;
-                }
-            }
+            NonRecursive(_) => {}
+            Recursive(_) => {}
             NonNullableUnwrapped(_) => {
                 self.code_builder.i32_const(0);
+                return;
             }
-            NullableWrapped {
-                nullable_id,
-                other_tags,
-            } => {
+            NullableWrapped { nullable_id, .. } => {
                 self.storage
                     .load_symbols(&mut self.code_builder, &[structure]);
                 self.code_builder.i32_eqz();
                 self.code_builder.if_(BlockType::Value(ValueType::I32));
                 self.code_builder.i32_const(*nullable_id as i32);
                 self.code_builder.else_();
-                if union_layout.stores_tag_id_as_data(PTR_SIZE) {
-                    wrapped_tags = Some(*other_tags);
-                } else {
-                    get_pointer_bits = true;
-                }
                 need_to_close_block = true;
             }
             NullableUnwrapped { nullable_id, .. } => {
@@ -821,37 +802,27 @@ impl<'a> WasmBackend<'a> {
                 self.code_builder.i32_const(!(*nullable_id) as i32);
                 self.code_builder.end();
             }
-        }
+        };
 
-        // Logic shared between different union layouts
-
-        if let Some(tags) = wrapped_tags {
-            // Fields are wrapped with a tag ID at the end
-
-            let (id_type, id_size) =
-                if let StoredValue::VirtualMachineStack {
-                    value_type, size, ..
-                } = tag_id_storage
-                {
-                    (value_type, size)
-                } else {
-                    internal_error!("Unexpected storage for tag ID {:?}", tag_id_storage);
-                };
-
-            let (id_offset, id_align_bytes) = Self::union_fields_size_and_alignment(tags);
-            let id_align = Align::from(id_align_bytes);
+        if union_layout.stores_tag_id_as_data(PTR_SIZE) {
+            let (total_size, total_alignment) =
+                Layout::Union(*union_layout).stack_size_and_alignment(PTR_SIZE);
+            let id_offset = total_size - total_alignment;
+            let id_align = Align::from(total_alignment);
 
             self.storage
                 .load_symbols(&mut self.code_builder, &[structure]);
 
-            match (id_type, id_size) {
-                (ValueType::I32, 1) => self.code_builder.i32_load8_u(id_align, id_offset),
-                (ValueType::I32, 2) => self.code_builder.i32_load16_u(id_align, id_offset),
-                (ValueType::I32, 4) => self.code_builder.i32_load(id_align, id_offset),
-                (ValueType::I64, 8) => self.code_builder.i64_load(id_align, id_offset),
-                _ => internal_error!("Invalid tag ID: type={:?} size={}", id_type, id_size),
+            match union_layout.tag_id_builtin() {
+                Builtin::Bool | Builtin::Int(IntWidth::U8) => {
+                    self.code_builder.i32_load8_u(id_align, id_offset)
+                }
+                Builtin::Int(IntWidth::U16) => self.code_builder.i32_load16_u(id_align, id_offset),
+                Builtin::Int(IntWidth::U32) => self.code_builder.i32_load(id_align, id_offset),
+                Builtin::Int(IntWidth::U64) => self.code_builder.i64_load(id_align, id_offset),
+                x => internal_error!("Unexpected layout for tag union id {:?}", x),
             }
-        } else if get_pointer_bits {
+        } else if union_layout.stores_tag_id_in_pointer(PTR_SIZE) {
             self.storage
                 .load_symbols(&mut self.code_builder, &[structure]);
             self.code_builder.i32_const(3);
@@ -912,7 +883,7 @@ impl<'a> WasmBackend<'a> {
         let from_ptr = if stores_tag_id_in_pointer {
             let ptr = self.storage.create_anonymous_local(ValueType::I32);
             self.code_builder.get_local(tag_local_id);
-            self.code_builder.i32_const(-4);
+            self.code_builder.i32_const(-4); // 11111111...1100
             self.code_builder.i32_and();
             self.code_builder.set_local(ptr);
             ptr
@@ -1254,7 +1225,7 @@ impl<'a> WasmBackend<'a> {
 
     /// Debug utility
     ///
-    /// if _debug_current_proc_is("#UserApp_foo_1") {
+    /// if self._debug_current_proc_is("#UserApp_foo_1") {
     ///     self.code_builder._debug_assert_i32(0x1234);
     /// }
     fn _debug_current_proc_is(&self, linker_name: &'static str) -> bool {
