@@ -31,7 +31,7 @@ fn nat_alias() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn i128_signed_int_alias() {
     assert_evals_to!(
         indoc!(
@@ -115,7 +115,7 @@ fn i8_signed_int_alias() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn i128_hex_int_alias() {
     assert_evals_to!(
         indoc!(
@@ -741,7 +741,7 @@ fn gen_int_less_than() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_dec_eq() {
     assert_evals_to!(
         indoc!(
@@ -761,7 +761,7 @@ fn gen_dec_eq() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_dec_neq() {
     assert_evals_to!(
         indoc!(
@@ -864,7 +864,7 @@ fn gen_sub_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_mul_dec() {
     assert_evals_to!(
         indoc!(
@@ -1830,7 +1830,7 @@ fn shift_right_zf_by() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn max_i128() {
     assert_evals_to!(
         indoc!(
