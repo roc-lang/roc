@@ -1,7 +1,7 @@
 app "test-astar"
-    packages { base: "platform" }
-    imports [base.Task, AStar]
-    provides [ main ] to base
+    packages { pf: "platform" }
+    imports [pf.Task, AStar]
+    provides [ main ] to pf
 
 main : Task.Task {} []
 main =

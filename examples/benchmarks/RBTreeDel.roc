@@ -1,7 +1,7 @@
 app "rbtree-del"
-    packages { base: "platform" }
-    imports [base.Task]
-    provides [ main ] to base
+    packages { pf: "platform" }
+    imports [pf.Task]
+    provides [ main ] to pf
 
 
 Color : [ Red, Black ]

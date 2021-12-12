@@ -204,7 +204,7 @@ pub enum ImportsEntry<'a> {
         Collection<'a, Loc<ExposesEntry<'a, &'a str>>>,
     ),
 
-    /// e.g. `base.Task` or `base.Task.{ after }` or `base.{ Task.{ Task, after } }`
+    /// e.g. `pf.Task` or `pf.Task.{ after }` or `pf.{ Task.{ Task, after } }`
     Package(
         &'a str,
         ModuleName<'a>,

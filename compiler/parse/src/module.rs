@@ -786,7 +786,7 @@ fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>, EImports> {
     map_with_arena!(
         and!(
             and!(
-                // e.g. `base.`
+                // e.g. `pf.`
                 maybe!(skip_second!(
                     shortname(),
                     word1(b'.', EImports::ShorthandDot)

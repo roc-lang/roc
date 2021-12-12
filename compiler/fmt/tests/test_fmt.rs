@@ -2625,7 +2625,7 @@ mod test_fmt {
     fn single_line_app() {
         module_formats_same(indoc!(
             r#"
-                app "Foo" packages { base: "platform" } imports [] provides [ main ] to base"#
+                app "Foo" packages { pf: "platform" } imports [] provides [ main ] to pf"#
         ));
     }
 

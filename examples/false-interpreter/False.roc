@@ -1,8 +1,8 @@
 #!/usr/bin/env roc
 app "false"
-    packages { base: "platform" }
-    imports [ base.Task.{ Task }, base.Stdout, base.Stdin, Context.{ Context }, Variable.{ Variable } ]
-    provides [ main ] to base
+    packages { pf: "platform" }
+    imports [ pf.Task.{ Task }, pf.Stdout, pf.Stdin, Context.{ Context }, Variable.{ Variable } ]
+    provides [ main ] to pf
 
 # An interpreter for the False programming language: https://strlen.com/false-language/
 # This is just a silly example to test this variety of program.
