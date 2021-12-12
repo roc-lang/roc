@@ -768,11 +768,7 @@ impl<'a> WasmBackend<'a> {
         }
     }
 
-    fn build_get_tag_id(
-        &mut self,
-        structure: Symbol,
-        union_layout: &UnionLayout<'a>,
-    ) {
+    fn build_get_tag_id(&mut self, structure: Symbol, union_layout: &UnionLayout<'a>) {
         use UnionLayout::*;
 
         let mut need_to_close_block = false;
