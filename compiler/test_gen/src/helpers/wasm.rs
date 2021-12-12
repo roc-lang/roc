@@ -242,14 +242,14 @@ where
                 _ => panic!(),
             };
 
-            if true {
+            if false {
                 println!("test_wrapper returned 0x{:x}", address);
                 println!("Stack:");
                 crate::helpers::wasm::debug_memory_hex(memory, address, std::mem::size_of::<T>());
             }
-            if true {
+            if false {
                 println!("Heap:");
-                // Manually provide address and size based on printf in test_platform.c
+                // Manually provide address and size based on printf in wasm_test_platform.c
                 crate::helpers::wasm::debug_memory_hex(memory, 0x11440, 24);
             }
             let output = <T as FromWasm32Memory>::decode(memory, address as u32);
