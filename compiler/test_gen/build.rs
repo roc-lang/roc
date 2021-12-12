@@ -9,7 +9,7 @@ const LIBC_PATH_VAR: &str = "TEST_GEN_WASM_LIBC_PATH";
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    if feature_is_enabled("gen-wasm") {
+    if feature_is_enabled("gen-wasm") || feature_is_enabled("gen-llvm-wasm") {
         build_wasm();
     }
 }

@@ -1,8 +1,6 @@
-use crate::helpers::from_wasm32_memory::FromWasm32Memory;
-use inkwell::module::Module;
-use libloading::Library;
 use roc_build::link::module_to_dylib;
 use roc_build::program::FunctionIterator;
+use roc_builtins::bitcode;
 use roc_can::builtins::builtin_defs_map;
 use roc_can::def::Def;
 use roc_collections::all::{MutMap, MutSet};
@@ -10,7 +8,12 @@ use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::OptLevel;
 use roc_types::subs::VarStore;
+
+use crate::helpers::from_wasm32_memory::FromWasm32Memory;
+use inkwell::module::Module;
+use libloading::Library;
 use target_lexicon::Triple;
+use tempfile::{tempdir, TempDir};
 
 fn promote_expr_to_module(src: &str) -> String {
     let mut buffer = String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
@@ -337,7 +340,7 @@ pub fn helper_wasm<'a>(
 
     use inkwell::targets::{InitializationConfig, Target, TargetTriple};
 
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir().unwrap();
     let dir_path = dir.path();
     // let zig_global_cache_path = std::path::PathBuf::from("/home/folkertdev/roc/wasm/mess");
 
@@ -369,60 +372,91 @@ pub fn helper_wasm<'a>(
         .write_to_file(llvm_module, file_type, &test_a_path)
         .unwrap();
 
-    use std::process::Command;
-
-    Command::new("zig")
-        .current_dir(dir_path)
-        .args(&[
-            "wasm-ld",
-            "/home/folkertdev/roc/wasm/libmain.a",
-            "/home/folkertdev/roc/wasm/libc.a",
-            test_a_path.to_str().unwrap(),
-            "-o",
-            test_wasm_path.to_str().unwrap(),
-            "--export-dynamic",
-            "--allow-undefined",
-            "--no-entry",
-        ])
-        .status()
-        .unwrap();
-
     // now, do wasmer stuff
 
-    use wasmer::{Function, Instance, Module, Store};
+    use wasmer::{Instance, Module, Store};
 
     let store = Store::default();
-    let module = Module::from_file(&store, &test_wasm_path).unwrap();
+
+    let app_o_file = test_a_path;
+
+    // get env variables; these are only available when running tests for llvm+wasm
+    // this function is always defined so we spot compiler errors in it quickly
+    // (code behind a feature flag is not checked unless the feature flag is enabled)
+    #[cfg(feature = "gen-llvm-wasm")]
+    const TEST_OUT_DIR: &str = env!("TEST_GEN_OUT");
+    #[cfg(feature = "gen-llvm-wasm")]
+    const LIBC_A_FILE: &str = env!("TEST_GEN_WASM_LIBC_PATH");
+
+    #[cfg(not(feature = "gen-llvm-wasm"))]
+    const TEST_OUT_DIR: &str = "";
+    #[cfg(not(feature = "gen-llvm-wasm"))]
+    const LIBC_A_FILE: &str = "";
+
+    const PLATFORM_FILENAME: &str = "wasm_test_platform";
+    let test_platform_o = format!("{}/{}.o", TEST_OUT_DIR, PLATFORM_FILENAME);
+
+    let wasmer_module = {
+        let tmp_dir: TempDir; // directory for normal test runs, deleted when dropped
+
+        let wasm_build_dir = {
+            tmp_dir = tempdir().unwrap();
+            tmp_dir.path()
+        };
+        let final_wasm_file = wasm_build_dir.join("final.wasm");
+
+        let args = &[
+            "wasm-ld",
+            // input files
+            app_o_file.to_str().unwrap(),
+            bitcode::BUILTINS_WASM32_OBJ_PATH,
+            &test_platform_o,
+            LIBC_A_FILE,
+            // output
+            "-o",
+            final_wasm_file.to_str().unwrap(),
+            // we don't define `_start`
+            "--no-entry",
+            // If you only specify test_wrapper, it will stop at the call to UserApp_main_1
+            // But if you specify both exports, you get all the dependencies.
+            //
+            // It seems that it will not write out an export you didn't explicitly specify,
+            // even if it's a dependency of another export!
+            // In our case we always export main and test_wrapper so that's OK.
+            "--export",
+            "test_wrapper",
+            "--export",
+            "#UserApp_main_1",
+        ];
+
+        let linker_output = std::process::Command::new("zig")
+            .args(args)
+            .output()
+            .unwrap();
+
+        if !linker_output.status.success() {
+            print!("\nLINKER FAILED\n");
+            for arg in args {
+                print!("{} ", arg);
+            }
+            println!("\n{}", std::str::from_utf8(&linker_output.stdout).unwrap());
+            println!("{}", std::str::from_utf8(&linker_output.stderr).unwrap());
+        }
+
+        Module::from_file(&store, &final_wasm_file).unwrap()
+    };
 
     // First, we create the `WasiEnv`
     use wasmer_wasi::WasiState;
-    let mut wasi_env = WasiState::new("hello")
-        // .args(&["world"])
-        // .env("KEY", "Value")
-        .finalize()
-        .unwrap();
+    let mut wasi_env = WasiState::new("hello").finalize().unwrap();
 
     // Then, we get the import object related to our WASI
     // and attach it to the Wasm instance.
-    let mut import_object = wasi_env
-        .import_object(&module)
+    let import_object = wasi_env
+        .import_object(&wasmer_module)
         .unwrap_or_else(|_| wasmer::imports!());
 
-    {
-        let mut exts = wasmer::Exports::new();
-
-        let main_function = Function::new_native(&store, fake_wasm_main_function);
-        let ext = wasmer::Extern::Function(main_function);
-        exts.insert("main", ext);
-
-        let main_function = Function::new_native(&store, wasm_roc_panic);
-        let ext = wasmer::Extern::Function(main_function);
-        exts.insert("roc_panic", ext);
-
-        import_object.register("env", exts);
-    }
-
-    Instance::new(&module, &import_object).unwrap()
+    Instance::new(&wasmer_module, &import_object).unwrap()
 }
 
 #[allow(dead_code)]
@@ -454,11 +488,6 @@ use std::cell::RefCell;
 
 thread_local! {
     pub static MEMORY: RefCell<Option<&'static wasmer::Memory>> = RefCell::new(None);
-}
-
-#[allow(dead_code)]
-fn fake_wasm_main_function(_: u32, _: u32) -> u32 {
-    panic!("wasm entered the main function; this should never happen!")
 }
 
 #[allow(dead_code)]
@@ -591,9 +620,10 @@ macro_rules! assert_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
         // Same as above, except with an additional transformation argument.
         {
-            #[cfg(feature = "wasm-cli-run")]
+            #[cfg(feature = "gen-llvm-wasm")]
             $crate::helpers::llvm::assert_wasm_evals_to!($src, $expected, $ty, $transform, false);
 
+            #[cfg(not(feature = "gen-llvm-wasm"))]
             $crate::helpers::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
         }
     };
