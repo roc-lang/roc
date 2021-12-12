@@ -426,6 +426,58 @@ impl<'a> UnionLayout<'a> {
         // because we store a refcount, the alignment must be at least the size of a pointer
         allocation.max(pointer_size)
     }
+
+    /// Size of the data in memory, whether it's stack or heap (for non-null tag ids)
+    pub fn data_size_and_alignment(&self, pointer_size: u32) -> (u32, u32) {
+        let id_data_layout = if self.stores_tag_id_as_data(pointer_size) {
+            Some(self.tag_id_layout())
+        } else {
+            None
+        };
+
+        match self {
+            Self::NonRecursive(tags) => {
+                Self::data_size_and_alignment_help(tags, id_data_layout, pointer_size)
+            }
+            Self::Recursive(tags) => {
+                Self::data_size_and_alignment_help(tags, id_data_layout, pointer_size)
+            }
+            Self::NonNullableUnwrapped(fields) => {
+                Self::data_size_and_alignment_help(&[fields], id_data_layout, pointer_size)
+            }
+            Self::NullableWrapped { other_tags, .. } => {
+                Self::data_size_and_alignment_help(other_tags, id_data_layout, pointer_size)
+            }
+            Self::NullableUnwrapped { other_fields, .. } => {
+                Self::data_size_and_alignment_help(&[other_fields], id_data_layout, pointer_size)
+            }
+        }
+    }
+
+    fn data_size_and_alignment_help(
+        variant_field_layouts: &[&[Layout]],
+        id_data_layout: Option<Layout>,
+        pointer_size: u32,
+    ) -> (u32, u32) {
+        let mut size = 0;
+        let mut alignment_bytes = 0;
+
+        for field_layouts in variant_field_layouts {
+            let mut data = Layout::Struct(field_layouts);
+
+            let fields_and_id;
+            if let Some(id_layout) = id_data_layout {
+                fields_and_id = [data, id_layout];
+                data = Layout::Struct(&fields_and_id);
+            }
+
+            let (variant_size, variant_alignment) = data.stack_size_and_alignment(pointer_size);
+            alignment_bytes = alignment_bytes.max(variant_alignment);
+            size = size.max(variant_size);
+        }
+
+        (size, alignment_bytes)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

@@ -26,8 +26,8 @@ use crate::wasm_module::{
     LinkingSubSection, LocalId, Signature, SymInfo, ValueType,
 };
 use crate::{
-    copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, BUILTINS_IMPORT_MODULE_NAME,
-    MEMORY_NAME, PTR_SIZE, PTR_TYPE, STACK_POINTER_GLOBAL_ID, STACK_POINTER_NAME,
+    copy_memory, CopyMemoryConfig, Env, BUILTINS_IMPORT_MODULE_NAME, MEMORY_NAME, PTR_SIZE,
+    PTR_TYPE, STACK_POINTER_GLOBAL_ID, STACK_POINTER_NAME,
 };
 
 /// The memory address where the constants data will be loaded during module instantiation.
@@ -645,11 +645,11 @@ impl<'a> WasmBackend<'a> {
             }
 
             Expr::Tag {
-                tag_layout,
+                tag_layout: union_layout,
                 tag_id,
                 arguments,
                 ..
-            } => self.build_tag(tag_layout, *tag_id, arguments, *sym, storage),
+            } => self.build_tag(union_layout, *tag_id, arguments, *sym, storage),
 
             Expr::GetTagId {
                 structure,
@@ -680,29 +680,9 @@ impl<'a> WasmBackend<'a> {
             return;
         }
 
-        use UnionLayout::*;
-        let (mut fields_size_aligned, fields_alignment) = match union_layout {
-            NonRecursive(tags) => Self::union_fields_size_and_alignment(tags),
-            Recursive(tags) => Self::union_fields_size_and_alignment(tags),
-            NonNullableUnwrapped(fields) => Self::union_fields_size_and_alignment(&[fields]),
-            NullableWrapped { other_tags, .. } => Self::union_fields_size_and_alignment(other_tags),
-            NullableUnwrapped { other_fields, .. } => {
-                Self::union_fields_size_and_alignment(&[other_fields])
-            }
-        };
-
         let stores_tag_id_as_data = union_layout.stores_tag_id_as_data(PTR_SIZE);
         let stores_tag_id_in_pointer = union_layout.stores_tag_id_in_pointer(PTR_SIZE);
-        let id_alignment = union_layout.tag_id_layout().alignment_bytes(PTR_SIZE);
-
-        let (total_size, total_alignment) = if stores_tag_id_as_data {
-            let alignment = fields_alignment.max(id_alignment);
-            fields_size_aligned = round_up_to_alignment!(fields_size_aligned, alignment);
-            let size = fields_size_aligned + alignment;
-            (size, alignment)
-        } else {
-            (fields_size_aligned, fields_alignment)
-        };
+        let (data_size, data_alignment) = union_layout.data_size_and_alignment(PTR_SIZE);
 
         // We're going to use the pointer many times, so put it in a local variable
         let stored_with_local =
@@ -715,7 +695,7 @@ impl<'a> WasmBackend<'a> {
             }
             StoredValue::Local { local_id, .. } => {
                 // Tag is stored as a pointer to the heap. Call the allocator to get a memory address.
-                self.allocate_with_refcount(Some(total_size), total_alignment, 1);
+                self.allocate_with_refcount(Some(data_size), data_alignment, 1);
                 self.code_builder.set_local(local_id);
                 (local_id, 0)
             }
@@ -737,8 +717,8 @@ impl<'a> WasmBackend<'a> {
 
         // Store the tag ID (if any)
         if stores_tag_id_as_data {
-            let id_offset = data_offset + fields_size_aligned;
-            let id_align = Align::from(total_alignment);
+            let id_offset = data_offset + data_size - data_alignment;
+            let id_align = Align::from(data_alignment);
 
             self.code_builder.get_local(local_id);
 
@@ -801,10 +781,9 @@ impl<'a> WasmBackend<'a> {
         };
 
         if union_layout.stores_tag_id_as_data(PTR_SIZE) {
-            let (total_size, total_alignment) =
-                Layout::Union(*union_layout).stack_size_and_alignment(PTR_SIZE);
-            let id_offset = total_size - total_alignment;
-            let id_align = Align::from(total_alignment);
+            let (data_size, data_alignment) = union_layout.data_size_and_alignment(PTR_SIZE);
+            let id_offset = data_size - data_alignment;
+            let id_align = Align::from(data_alignment);
 
             self.storage
                 .load_symbols(&mut self.code_builder, &[structure]);
@@ -890,22 +869,6 @@ impl<'a> WasmBackend<'a> {
         let from_offset = tag_offset + field_offset;
         self.storage
             .copy_value_from_memory(&mut self.code_builder, symbol, from_ptr, from_offset);
-    }
-
-    fn union_fields_size_and_alignment(variant_field_layouts: &[&[Layout]]) -> (u32, u32) {
-        let mut size = 0;
-        let mut alignment_bytes = 0;
-        for field_layouts in variant_field_layouts {
-            let mut variant_size = 0;
-            for layout in field_layouts.iter() {
-                let (field_size, field_alignment) = layout.stack_size_and_alignment(PTR_SIZE);
-                variant_size += field_size;
-                alignment_bytes = alignment_bytes.max(field_alignment);
-            }
-            size = size.max(variant_size);
-        }
-        size = round_up_to_alignment!(size, alignment_bytes);
-        (size, alignment_bytes)
     }
 
     /// Allocate heap space and write an initial refcount
