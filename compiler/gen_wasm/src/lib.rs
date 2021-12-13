@@ -110,21 +110,21 @@ pub fn build_module_help<'a>(
         backend.build_proc(proc);
     }
 
-    // Generate IR for refcounting procs
-    let refcount_procs = backend.generate_refcount_procs();
+    // Generate specialized helpers for refcounting & equality
+    let helper_procs = backend.generate_helpers();
 
     backend.register_symbol_debug_names();
 
     if false {
-        println!("## refcount_procs");
-        for proc in refcount_procs.iter() {
+        println!("## helper_procs");
+        for proc in helper_procs.iter() {
             println!("{}", proc.to_pretty(200));
             println!("{:#?}", proc);
         }
     }
 
     // Generate Wasm for refcounting procs
-    for proc in refcount_procs.iter() {
+    for proc in helper_procs.iter() {
         backend.build_proc(proc);
     }
 

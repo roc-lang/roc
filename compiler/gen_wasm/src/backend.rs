@@ -49,7 +49,7 @@ pub struct WasmBackend<'a> {
     builtin_sym_index_map: MutMap<&'a str, usize>,
     proc_symbols: Vec<'a, (Symbol, u32)>,
     linker_symbols: Vec<'a, SymInfo>,
-    refcount_proc_gen: CodeGenHelp<'a>,
+    helper_proc_gen: CodeGenHelp<'a>,
 
     // Function-level data
     code_builder: CodeBuilder<'a>,
@@ -71,7 +71,7 @@ impl<'a> WasmBackend<'a> {
         proc_symbols: Vec<'a, (Symbol, u32)>,
         mut linker_symbols: Vec<'a, SymInfo>,
         mut exports: Vec<'a, Export>,
-        refcount_proc_gen: CodeGenHelp<'a>,
+        helper_proc_gen: CodeGenHelp<'a>,
     ) -> Self {
         const MEMORY_INIT_SIZE: u32 = 1024 * 1024;
         let arena = env.arena;
@@ -144,7 +144,7 @@ impl<'a> WasmBackend<'a> {
             builtin_sym_index_map: MutMap::default(),
             proc_symbols,
             linker_symbols,
-            refcount_proc_gen,
+            helper_proc_gen,
 
             // Function-level data
             block_depth: 0,
@@ -157,15 +157,15 @@ impl<'a> WasmBackend<'a> {
         }
     }
 
-    pub fn generate_refcount_procs(&mut self) -> Vec<'a, Proc<'a>> {
+    pub fn generate_helpers(&mut self) -> Vec<'a, Proc<'a>> {
         let ident_ids = self
             .interns
             .all_ident_ids
             .get_mut(&self.env.module_id)
             .unwrap();
 
-        self.refcount_proc_gen
-            .generate_refcount_procs(self.env.arena, ident_ids)
+        self.helper_proc_gen
+            .generate_procs(self.env.arena, ident_ids)
     }
 
     pub fn finalize_module(mut self) -> WasmModule<'a> {
@@ -501,7 +501,7 @@ impl<'a> WasmBackend<'a> {
                     .unwrap();
 
                 let (rc_stmt, new_proc_info) = self
-                    .refcount_proc_gen
+                    .helper_proc_gen
                     .expand_refcount_stmt(ident_ids, *layout, modify, *following);
 
                 if false {

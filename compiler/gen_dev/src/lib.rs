@@ -62,9 +62,7 @@ trait Backend<'a> {
     // This method is suboptimal, but it seems to be the only way to make rust understand
     // that all of these values can be mutable at the same time. By returning them together,
     // rust understands that they are part of a single use of mutable self.
-    fn env_interns_refcount_mut(
-        &mut self,
-    ) -> (&Env<'a>, &mut Interns, &mut CodeGenHelp<'a>);
+    fn env_interns_helpers_mut(&mut self) -> (&Env<'a>, &mut Interns, &mut CodeGenHelp<'a>);
 
     fn symbol_to_string(&self, symbol: Symbol, layout_id: LayoutId) -> String {
         layout_id.to_symbol_string(symbol, self.interns())
@@ -76,11 +74,11 @@ trait Backend<'a> {
             .starts_with(ModuleName::APP)
     }
 
-    fn refcount_proc_gen_mut(&mut self) -> &mut CodeGenHelp<'a>;
+    fn helper_proc_gen_mut(&mut self) -> &mut CodeGenHelp<'a>;
 
-    fn refcount_proc_symbols_mut(&mut self) -> &mut Vec<'a, (Symbol, ProcLayout<'a>)>;
+    fn helper_proc_symbols_mut(&mut self) -> &mut Vec<'a, (Symbol, ProcLayout<'a>)>;
 
-    fn refcount_proc_symbols(&self) -> &Vec<'a, (Symbol, ProcLayout<'a>)>;
+    fn helper_proc_symbols(&self) -> &Vec<'a, (Symbol, ProcLayout<'a>)>;
 
     /// reset resets any registers or other values that may be occupied at the end of a procedure.
     /// It also passes basic procedure information to the builder for setup of the next function.
@@ -116,17 +114,17 @@ trait Backend<'a> {
         self.scan_ast(&proc.body);
         self.create_free_map();
         self.build_stmt(&proc.body, &proc.ret_layout);
-        let mut rc_proc_names = bumpalo::vec![in self.env().arena];
-        rc_proc_names.reserve(self.refcount_proc_symbols().len());
-        for (rc_proc_sym, rc_proc_layout) in self.refcount_proc_symbols() {
+        let mut helper_proc_names = bumpalo::vec![in self.env().arena];
+        helper_proc_names.reserve(self.helper_proc_symbols().len());
+        for (rc_proc_sym, rc_proc_layout) in self.helper_proc_symbols() {
             let name = layout_ids
                 .get_toplevel(*rc_proc_sym, rc_proc_layout)
                 .to_symbol_string(*rc_proc_sym, self.interns());
 
-            rc_proc_names.push((*rc_proc_sym, name));
+            helper_proc_names.push((*rc_proc_sym, name));
         }
         let (bytes, relocs) = self.finalize();
-        (bytes, relocs, rc_proc_names)
+        (bytes, relocs, helper_proc_names)
     }
 
     /// build_stmt builds a statement and outputs at the end of the buffer.
@@ -151,7 +149,7 @@ trait Backend<'a> {
                 // If this layout requires a new RC proc, we get enough info to create a linker symbol
                 // for it. Here we don't create linker symbols at this time, but in Wasm backend, we do.
                 let (rc_stmt, new_proc_info) = {
-                    let (env, interns, rc_proc_gen) = self.env_interns_refcount_mut();
+                    let (env, interns, rc_proc_gen) = self.env_interns_helpers_mut();
                     let module_id = env.module_id;
                     let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
 
@@ -159,7 +157,7 @@ trait Backend<'a> {
                 };
 
                 if let Some((rc_proc_symbol, rc_proc_layout)) = new_proc_info {
-                    self.refcount_proc_symbols_mut()
+                    self.helper_proc_symbols_mut()
                         .push((rc_proc_symbol, rc_proc_layout));
                 }
 
@@ -538,7 +536,7 @@ trait Backend<'a> {
                 debug_assert_eq!(
                     1,
                     args.len(),
-                    "RefCountGetPtr: expected to have exactly two argument"
+                    "RefCountGetPtr: expected to have exactly one argument"
                 );
                 self.build_refcount_getptr(sym, &args[0])
             }

@@ -240,38 +240,38 @@ fn build_object<'a, B: Backend<'a>>(
         )
     }
 
-    let rc_procs = {
+    // Generate IR for specialized helper procs (refcounting & equality)
+    let helper_procs = {
         let module_id = backend.env().module_id;
 
-        let (env, interns, rc_proc_gen) = backend.env_interns_refcount_mut();
+        let (env, interns, helper_proc_gen) = backend.env_interns_helpers_mut();
 
-        // Generate IR for refcounting procedures
         let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
-        let rc_procs = rc_proc_gen.generate_refcount_procs(arena, ident_ids);
+        let helper_procs = helper_proc_gen.generate_procs(arena, ident_ids);
         env.module_id.register_debug_idents(ident_ids);
 
-        rc_procs
+        helper_procs
     };
 
     let empty = bumpalo::collections::Vec::new_in(arena);
-    let rc_symbols_and_layouts = std::mem::replace(backend.refcount_proc_symbols_mut(), empty);
-    let mut rc_names_symbols_procs = Vec::with_capacity_in(rc_procs.len(), arena);
+    let helper_symbols_and_layouts = std::mem::replace(backend.helper_proc_symbols_mut(), empty);
+    let mut helper_names_symbols_procs = Vec::with_capacity_in(helper_procs.len(), arena);
 
-    // Names and linker data for refcounting procedures
-    for ((sym, layout), proc) in rc_symbols_and_layouts.into_iter().zip(rc_procs) {
+    // Names and linker data for helpers
+    for ((sym, layout), proc) in helper_symbols_and_layouts.into_iter().zip(helper_procs) {
         let layout_id = layout_ids.get_toplevel(sym, &layout);
         let fn_name = backend.symbol_to_string(sym, layout_id);
         if let Some(proc_id) = output.symbol_id(fn_name.as_bytes()) {
             if let SymbolSection::Section(section_id) = output.symbol(proc_id).section {
-                rc_names_symbols_procs.push((fn_name, section_id, proc_id, proc));
+                helper_names_symbols_procs.push((fn_name, section_id, proc_id, proc));
                 continue;
             }
         }
         internal_error!("failed to create rc fn for symbol {:?}", sym);
     }
 
-    // Build refcounting procedures
-    for (fn_name, section_id, proc_id, proc) in rc_names_symbols_procs {
+    // Build helpers
+    for (fn_name, section_id, proc_id, proc) in helper_names_symbols_procs {
         build_proc(
             &mut output,
             &mut backend,
@@ -285,7 +285,7 @@ fn build_object<'a, B: Backend<'a>>(
         )
     }
 
-    // Relocations for all procedures (user code & refcounting)
+    // Relocations for all procedures (user code & helpers)
     for (section_id, reloc) in relocations {
         match output.add_relocation(section_id, reloc) {
             Ok(obj) => obj,

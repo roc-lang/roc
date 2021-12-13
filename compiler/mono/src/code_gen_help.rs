@@ -27,26 +27,21 @@ pub enum RefcountOp {
     DecRef,
 }
 
-/// Generate specialized refcounting code in mono IR format
-/// -------------------------------------------------------
+/// Generate mono IR to help with code gen
+/// --------------------------------------
 ///
-/// Any backend that wants to use this, needs a field of type `RefcountProcGenerator`.
+/// Some operations, such as refcounting and equality comparison, need
+/// specialized helper procs to traverse data structures at runtime.
 ///
-/// Whenever the backend sees a `Stmt::Refcounting`, it calls
-/// `RefcountProcGenerator::expand_refcount_stmt()`, which returns IR statements
-/// to call a refcounting procedure. The backend can then generate target code
-/// for those IR statements instead of the original `Refcounting` statement.
+/// For example, when checking List equality, we need to visit each element
+/// and compare them recursively. Similarly, when incrementing a List refcount,
+/// we also increment the elements recursively.
+/// This logic is the same for all targets, so we implement it once using mono IR.
 ///
-/// Essentially we are expanding the `Refcounting` statement into a more detailed
-/// form that's more suitable for code generation.
-///
-/// But so far, we've only mentioned _calls_ to the refcounting procedures.
-/// The procedures themselves don't exist yet!
-///
-/// So when the backend has finished with all the `Proc`s from user code,
-/// it's time to call `RefcountProcGenerator::generate_refcount_procs()`,
-/// which generates the `Procs` for refcounting helpers. The backend can
-/// simply generate target code for these `Proc`s just like any other Proc.
+/// The backend drives the process, in two steps:
+/// 1) When it sees the relevant node, it calls MonoCodeGen to get the replacement IR.
+///    MonoCodeGen generates a call to the helper proc, and remembers it for step 2.
+/// 2) After the backend has generated all user procs, it generates the helper procs too.
 ///
 pub struct CodeGenHelp<'a> {
     arena: &'a Bump,
@@ -55,7 +50,7 @@ pub struct CodeGenHelp<'a> {
     layout_isize: Layout<'a>,
     /// List of refcounting procs to generate, specialised by Layout and RefCountOp
     /// Order of insertion is preserved, since it is important for Wasm backend
-    procs_to_generate: Vec<'a, (Layout<'a>, RefcountOp, Symbol)>,
+    rc_procs_to_generate: Vec<'a, (Layout<'a>, RefcountOp, Symbol)>,
 }
 
 impl<'a> CodeGenHelp<'a> {
@@ -65,12 +60,12 @@ impl<'a> CodeGenHelp<'a> {
             home,
             ptr_size: intwidth_isize.stack_size(),
             layout_isize: Layout::Builtin(Builtin::Int(intwidth_isize)),
-            procs_to_generate: Vec::with_capacity_in(16, arena),
+            rc_procs_to_generate: Vec::with_capacity_in(16, arena),
         }
     }
 
-    /// Expands the IR node Stmt::Refcounting to a more detailed IR Stmt that calls a helper proc.
-    /// The helper procs themselves can be generated later by calling `generate_refcount_procs`
+    /// Expands a `Refcounting` node to a `Let` node that calls a specialized helper.
+    /// The helper procs themselves are to be generated later with `generate_procs`
     pub fn expand_refcount_stmt(
         &mut self,
         ident_ids: &mut IdentIds,
@@ -213,14 +208,14 @@ impl<'a> CodeGenHelp<'a> {
     /// Generate refcounting helper procs, each specialized to a particular Layout.
     /// For example `List (Result { a: Str, b: Int } Str)` would get its own helper
     /// to update the refcounts on the List, the Result and the strings.
-    pub fn generate_refcount_procs(
+    pub fn generate_procs(
         &mut self,
         arena: &'a Bump,
         ident_ids: &mut IdentIds,
     ) -> Vec<'a, Proc<'a>> {
         // Move the vector out of self, so we can loop over it safely
         let mut procs_to_generate =
-            std::mem::replace(&mut self.procs_to_generate, Vec::with_capacity_in(0, arena));
+            std::mem::replace(&mut self.rc_procs_to_generate, Vec::with_capacity_in(0, arena));
 
         let procs_iter = procs_to_generate
             .drain(0..)
@@ -247,7 +242,7 @@ impl<'a> CodeGenHelp<'a> {
         op: RefcountOp,
     ) -> (bool, Symbol) {
         let found = self
-            .procs_to_generate
+            .rc_procs_to_generate
             .iter()
             .find(|(l, o, _)| *l == layout && *o == op);
 
@@ -255,10 +250,10 @@ impl<'a> CodeGenHelp<'a> {
             (true, *existing_symbol)
         } else {
             let layout_name = layout_debug_name(&layout);
-            let unique_idx = self.procs_to_generate.len();
+            let unique_idx = self.rc_procs_to_generate.len();
             let debug_name = format!("#rc{:?}_{}_{}", op, layout_name, unique_idx);
             let new_symbol: Symbol = self.create_symbol(ident_ids, &debug_name);
-            self.procs_to_generate.push((layout, op, new_symbol));
+            self.rc_procs_to_generate.push((layout, op, new_symbol));
             (false, new_symbol)
         }
     }
