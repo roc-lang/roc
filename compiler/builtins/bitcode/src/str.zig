@@ -246,7 +246,7 @@ pub const RocStr = extern struct {
         } else {
             // This is a big string, and it's not empty, so we can safely
             // dereference the pointer.
-            const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, self.str_bytes));
+            const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.str_bytes));
             const capacity_or_refcount: isize = (ptr - 1)[0];
 
             // If capacity_or_refcount is positive, then it's a capacity value.
@@ -277,7 +277,7 @@ pub const RocStr = extern struct {
             // to first change its flag to mark it as a small string!
             return longest_small_str;
         } else {
-            const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, self.str_bytes));
+            const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.str_bytes));
             const capacity_or_refcount: isize = (ptr - 1)[0];
 
             if (capacity_or_refcount > 0) {
@@ -309,7 +309,7 @@ pub const RocStr = extern struct {
     }
 
     fn isRefcountOne(self: RocStr) bool {
-        const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, self.str_bytes));
+        const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.str_bytes));
         return (ptr - 1)[0] == utils.REFCOUNT_ONE;
     }
 
