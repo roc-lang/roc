@@ -351,8 +351,7 @@ pub fn decode_low_level<'a>(
             match storage.get(&args[0]) {
                 VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
                     match value_type {
-                        I32 => code_builder.i32_const(1),
-                        I64 => code_builder.i32_const(1),
+                        I32 | I64 => code_builder.i32_const(1), // always true for integers
                         F32 => {
                             code_builder.i32_reinterpret_f32();
                             code_builder.i32_const(0x7f80_0000);
@@ -591,7 +590,7 @@ pub fn decode_low_level<'a>(
         And => code_builder.i32_and(),
         Or => code_builder.i32_or(),
         Not => code_builder.i32_eqz(),
-        Hash => return NotImplemented,
+        Hash => return NotImplemented, // TODO: generated helpers
         ExpectTrue => return NotImplemented,
         RefCountGetPtr => {
             code_builder.i32_const(4);

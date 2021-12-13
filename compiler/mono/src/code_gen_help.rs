@@ -52,21 +52,23 @@ impl From<&ModifyRc> for RefcountOp {
     }
 }
 
-/// Generate mono IR to help with code gen
-/// --------------------------------------
+/// Generate specialized helper procs for code gen
+/// ----------------------------------------------
 ///
-/// Some operations, such as refcounting and equality comparison, need
-/// specialized helper procs to traverse data structures at runtime.
+/// Some low level operations need specialized helper procs to traverse data structures at runtime.
+/// This includes refcounting, hashing, and equality checks.
 ///
-/// For example, when checking List equality, we need to visit each element
-/// and compare them recursively. Similarly, when incrementing a List refcount,
-/// we also increment the elements recursively.
-/// This logic is the same for all targets, so we implement it once using mono IR.
+/// For example, when checking List equality, we need to visit each element and compare them.
+/// Depending on the type of the list elements, we may need to recurse deeper into each element.
+/// For tag unions, we may need branches for different tag IDs, etc.
+///
+/// This module creates specialized helper procs for all such operations and types used in the program.
 ///
 /// The backend drives the process, in two steps:
-/// 1) When it sees the relevant node, it calls MonoCodeGen to get the replacement IR.
-///    MonoCodeGen generates a call to the helper proc, and remembers it for step 2.
-/// 2) After the backend has generated all user procs, it generates the helper procs too.
+/// 1) When it sees the relevant node, it calls CodeGenHelp to get the replacement IR.
+///    CodeGenHelp returns IR for a call to the helper proc, and remembers the specialization.
+/// 2) After the backend has generated code for all user procs, it takes the IR for all of the
+///    specialized helpers procs, and generates target code for them too.
 ///
 pub struct CodeGenHelp<'a> {
     arena: &'a Bump,
