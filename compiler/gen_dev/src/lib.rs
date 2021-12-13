@@ -8,7 +8,7 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{ModuleName, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_mono::gen_refcount::RefcountProcGenerator;
+use roc_mono::code_gen_help::RefcountProcGenerator;
 use roc_mono::ir::{
     BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, Param, Proc, ProcLayout,
     SelfRecursive, Stmt,

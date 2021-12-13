@@ -3,7 +3,7 @@ use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::{Interns, Symbol};
-use roc_mono::gen_refcount::RefcountProcGenerator;
+use roc_mono::code_gen_help::RefcountProcGenerator;
 use roc_mono::ir::{BranchInfo, JoinPointId, Literal, Param, ProcLayout, SelfRecursive, Stmt};
 use roc_mono::layout::{Builtin, Layout};
 use roc_reporting::internal_error;
