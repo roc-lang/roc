@@ -538,8 +538,8 @@ pub fn decode_low_level<'a>(
                         };
 
                         match format {
-                            Float128 | Decimal => {
-                                // Check both args are finite AND bytes are identical
+                            Decimal => {
+                                // Both args are finite
                                 let first = [args[0]];
                                 let second = [args[1]];
                                 decode_low_level(
@@ -557,11 +557,13 @@ pub fn decode_low_level<'a>(
                                     ret_layout,
                                 );
                                 code_builder.i32_and();
+
+                                // AND they have the same bytes
                                 compare_bytes(code_builder);
                                 code_builder.i32_and();
                             }
                             Int128 => compare_bytes(code_builder),
-                            DataStructure => return NotImplemented,
+                            Float128 | DataStructure => return NotImplemented,
                         }
                     }
                 }
