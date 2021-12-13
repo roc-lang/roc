@@ -23,13 +23,14 @@ use roc_mono::ir::{
     UpdateModeIds,
 };
 use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
-use roc_parse::ast::{self, StrLiteral, TypeAnnotation};
+use roc_parse::ast::{self, ExtractSpaces, StrLiteral, TypeAnnotation};
 use roc_parse::header::{
     ExposesEntry, ImportsEntry, PackageEntry, PackageOrPath, PlatformHeader, To, TypedIdent,
 };
 use roc_parse::module::module_defs;
 use roc_parse::parser::{self, ParseProblem, Parser, SyntaxError};
 use roc_region::all::{Located, Region};
+use roc_reporting::internal_error;
 use roc_solve::module::SolvedModule;
 use roc_solve::solve;
 use roc_types::solved_types::Solved;
@@ -2605,9 +2606,9 @@ fn parse_header<'a>(
                     let opt_base_package = packages.iter().find(|loc_package_entry| {
                         let Located { value, .. } = loc_package_entry;
 
-                        match value {
-                            PackageEntry::Entry { shorthand, .. } => shorthand == &existing_package,
-                            _ => false,
+                        match value.extract_spaces().item {
+                            PackageEntry::Entry { shorthand, .. } => shorthand == existing_package,
+                            _ => internal_error!(),
                         }
                     });
 
