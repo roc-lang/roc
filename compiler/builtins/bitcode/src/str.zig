@@ -105,11 +105,8 @@ pub const RocStr = extern struct {
     }
 
     pub fn eq(self: RocStr, other: RocStr) bool {
-        const self_bytes_ptr: ?[*]const u8 = self.str_bytes;
-        const other_bytes_ptr: ?[*]const u8 = other.str_bytes;
-
         // If they are byte-for-byte equal, they're definitely equal!
-        if (self_bytes_ptr == other_bytes_ptr and self.str_len == other.str_len) {
+        if (self.str_bytes == other.str_bytes and self.str_len == other.str_len) {
             return true;
         }
 
@@ -121,21 +118,27 @@ pub const RocStr = extern struct {
             return false;
         }
 
-        const self_u8_ptr: [*]const u8 = @ptrCast([*]const u8, &self);
-        const other_u8_ptr: [*]const u8 = @ptrCast([*]const u8, &other);
-        const self_bytes: [*]const u8 = if (self.isSmallStr() or self.isEmpty()) self_u8_ptr else self_bytes_ptr orelse unreachable;
-        const other_bytes: [*]const u8 = if (other.isSmallStr() or other.isEmpty()) other_u8_ptr else other_bytes_ptr orelse unreachable;
+        // Now we have to look at the string contents
+        const self_bytes = self.asU8ptr();
+        const other_bytes = other.asU8ptr();
 
-        var index: usize = 0;
-
-        // TODO rewrite this into a for loop
-        const length = self.len();
-        while (index < length) {
-            if (self_bytes[index] != other_bytes[index]) {
+        // It's faster to compare pointer-sized words rather than bytes, as far as possible
+        // The bytes are always pointer-size aligned due to the refcount
+        const self_words = @ptrCast([*]const usize, @alignCast(@alignOf(usize), self_bytes));
+        const other_words = @ptrCast([*]const usize, @alignCast(@alignOf(usize), other_bytes));
+        var w: usize = 0;
+        while (w < self_len / @sizeOf(usize)) : (w += 1) {
+            if (self_words[w] != other_words[w]) {
                 return false;
             }
+        }
 
-            index = index + 1;
+        // Compare the leftover bytes
+        var b = w * @sizeOf(usize);
+        while (b < self_len) : (b += 1) {
+            if (self_bytes[b] != other_bytes[b]) {
+                return false;
+            }
         }
 
         return true;
