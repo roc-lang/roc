@@ -8,7 +8,7 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{ModuleName, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_mono::code_gen_help::RefcountProcGenerator;
+use roc_mono::code_gen_help::CodeGenHelp;
 use roc_mono::ir::{
     BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, Param, Proc, ProcLayout,
     SelfRecursive, Stmt,
@@ -64,7 +64,7 @@ trait Backend<'a> {
     // rust understands that they are part of a single use of mutable self.
     fn env_interns_refcount_mut(
         &mut self,
-    ) -> (&Env<'a>, &mut Interns, &mut RefcountProcGenerator<'a>);
+    ) -> (&Env<'a>, &mut Interns, &mut CodeGenHelp<'a>);
 
     fn symbol_to_string(&self, symbol: Symbol, layout_id: LayoutId) -> String {
         layout_id.to_symbol_string(symbol, self.interns())
@@ -76,7 +76,7 @@ trait Backend<'a> {
             .starts_with(ModuleName::APP)
     }
 
-    fn refcount_proc_gen_mut(&mut self) -> &mut RefcountProcGenerator<'a>;
+    fn refcount_proc_gen_mut(&mut self) -> &mut CodeGenHelp<'a>;
 
     fn refcount_proc_symbols_mut(&mut self) -> &mut Vec<'a, (Symbol, ProcLayout<'a>)>;
 

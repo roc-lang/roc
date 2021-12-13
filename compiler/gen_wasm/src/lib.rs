@@ -10,7 +10,7 @@ use roc_builtins::bitcode::IntWidth;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_mono::code_gen_help::RefcountProcGenerator;
+use roc_mono::code_gen_help::CodeGenHelp;
 use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::LayoutIds;
 use roc_reporting::internal_error;
@@ -94,7 +94,7 @@ pub fn build_module_help<'a>(
         proc_symbols,
         linker_symbols,
         exports,
-        RefcountProcGenerator::new(env.arena, IntWidth::I32, env.module_id),
+        CodeGenHelp::new(env.arena, IntWidth::I32, env.module_id),
     );
 
     if false {

@@ -48,7 +48,7 @@ pub enum RefcountOp {
 /// which generates the `Procs` for refcounting helpers. The backend can
 /// simply generate target code for these `Proc`s just like any other Proc.
 ///
-pub struct RefcountProcGenerator<'a> {
+pub struct CodeGenHelp<'a> {
     arena: &'a Bump,
     home: ModuleId,
     ptr_size: u32,
@@ -58,9 +58,9 @@ pub struct RefcountProcGenerator<'a> {
     procs_to_generate: Vec<'a, (Layout<'a>, RefcountOp, Symbol)>,
 }
 
-impl<'a> RefcountProcGenerator<'a> {
+impl<'a> CodeGenHelp<'a> {
     pub fn new(arena: &'a Bump, intwidth_isize: IntWidth, home: ModuleId) -> Self {
-        RefcountProcGenerator {
+        CodeGenHelp {
             arena,
             home,
             ptr_size: intwidth_isize.stack_size(),

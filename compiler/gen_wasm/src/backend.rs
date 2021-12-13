@@ -5,7 +5,7 @@ use roc_builtins::bitcode::IntWidth;
 use roc_collections::all::MutMap;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
-use roc_mono::code_gen_help::{RefcountProcGenerator, REFCOUNT_MAX};
+use roc_mono::code_gen_help::{CodeGenHelp, REFCOUNT_MAX};
 use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
 use roc_mono::layout::{Builtin, Layout, LayoutIds, TagIdIntType, UnionLayout};
 use roc_reporting::internal_error;
@@ -49,7 +49,7 @@ pub struct WasmBackend<'a> {
     builtin_sym_index_map: MutMap<&'a str, usize>,
     proc_symbols: Vec<'a, (Symbol, u32)>,
     linker_symbols: Vec<'a, SymInfo>,
-    refcount_proc_gen: RefcountProcGenerator<'a>,
+    refcount_proc_gen: CodeGenHelp<'a>,
 
     // Function-level data
     code_builder: CodeBuilder<'a>,
@@ -71,7 +71,7 @@ impl<'a> WasmBackend<'a> {
         proc_symbols: Vec<'a, (Symbol, u32)>,
         mut linker_symbols: Vec<'a, SymInfo>,
         mut exports: Vec<'a, Export>,
-        refcount_proc_gen: RefcountProcGenerator<'a>,
+        refcount_proc_gen: CodeGenHelp<'a>,
     ) -> Self {
         const MEMORY_INIT_SIZE: u32 = 1024 * 1024;
         let arena = env.arena;
