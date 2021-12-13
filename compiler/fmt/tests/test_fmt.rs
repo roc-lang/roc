@@ -2574,6 +2574,17 @@ mod test_fmt {
         );
     }
 
+    #[test]
+    fn pipline_op_with_apply() {
+        expr_formats_same(indoc!(
+            r#"
+            output
+                |> List.set (offset + 0) b
+                |> List.set (offset + 1) a
+            "#
+        ));
+    }
+
     // MODULES
 
     #[test]
