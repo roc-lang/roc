@@ -977,13 +977,10 @@ impl<'a> WasmBackend<'a> {
                 };
             }
 
-            StoredValue::StackMemory { location, .. } => match lit {
-                Literal::Decimal(decimal) => {
+            StoredValue::StackMemory { location, .. } => {
+                let mut write128 = |lower_bits, upper_bits| {
                     let (local_id, offset) =
                         location.local_and_offset(self.storage.stack_frame_pointer);
-
-                    let lower_bits = decimal.0 as i64;
-                    let upper_bits = (decimal.0 >> 64) as i64;
 
                     self.code_builder.get_local(local_id);
                     self.code_builder.i64_const(lower_bits);
@@ -992,39 +989,56 @@ impl<'a> WasmBackend<'a> {
                     self.code_builder.get_local(local_id);
                     self.code_builder.i64_const(upper_bits);
                     self.code_builder.i64_store(Align::Bytes8, offset + 8);
+                };
+
+                match lit {
+                    Literal::Decimal(decimal) => {
+                        let lower_bits = (decimal.0 & 0xffff_ffff_ffff_ffff) as i64;
+                        let upper_bits = (decimal.0 >> 64) as i64;
+                        write128(lower_bits, upper_bits);
+                    }
+                    Literal::Int(x) => {
+                        let lower_bits = (*x & 0xffff_ffff_ffff_ffff) as i64;
+                        let upper_bits = (*x >> 64) as i64;
+                        write128(lower_bits, upper_bits);
+                    }
+                    Literal::Float(_) => {
+                        // Also not implemented in LLVM backend (nor in Rust!)
+                        todo!("f128 type");
+                    }
+                    Literal::Str(string) => {
+                        let (local_id, offset) =
+                            location.local_and_offset(self.storage.stack_frame_pointer);
+
+                        let len = string.len();
+                        if len < 8 {
+                            let mut stack_mem_bytes = [0; 8];
+                            stack_mem_bytes[0..len].clone_from_slice(string.as_bytes());
+                            stack_mem_bytes[7] = 0x80 | (len as u8);
+                            let str_as_int = i64::from_le_bytes(stack_mem_bytes);
+
+                            // Write all 8 bytes at once using an i64
+                            // Str is normally two i32's, but in this special case, we can get away with fewer instructions
+                            self.code_builder.get_local(local_id);
+                            self.code_builder.i64_const(str_as_int);
+                            self.code_builder.i64_store(Align::Bytes4, offset);
+                        } else {
+                            let (linker_sym_index, elements_addr) =
+                                self.lookup_string_constant(string, sym, layout);
+
+                            self.code_builder.get_local(local_id);
+                            self.code_builder
+                                .i32_const_mem_addr(elements_addr, linker_sym_index);
+                            self.code_builder.i32_store(Align::Bytes4, offset);
+
+                            self.code_builder.get_local(local_id);
+                            self.code_builder.i32_const(string.len() as i32);
+                            self.code_builder.i32_store(Align::Bytes4, offset + 4);
+                        };
+                    }
+                    _ => not_supported_error(),
                 }
-                Literal::Str(string) => {
-                    let (local_id, offset) =
-                        location.local_and_offset(self.storage.stack_frame_pointer);
-
-                    let len = string.len();
-                    if len < 8 {
-                        let mut stack_mem_bytes = [0; 8];
-                        stack_mem_bytes[0..len].clone_from_slice(string.as_bytes());
-                        stack_mem_bytes[7] = 0x80 | (len as u8);
-                        let str_as_int = i64::from_le_bytes(stack_mem_bytes);
-
-                        // Write all 8 bytes at once using an i64
-                        // Str is normally two i32's, but in this special case, we can get away with fewer instructions
-                        self.code_builder.get_local(local_id);
-                        self.code_builder.i64_const(str_as_int);
-                        self.code_builder.i64_store(Align::Bytes4, offset);
-                    } else {
-                        let (linker_sym_index, elements_addr) =
-                            self.lookup_string_constant(string, sym, layout);
-
-                        self.code_builder.get_local(local_id);
-                        self.code_builder
-                            .i32_const_mem_addr(elements_addr, linker_sym_index);
-                        self.code_builder.i32_store(Align::Bytes4, offset);
-
-                        self.code_builder.get_local(local_id);
-                        self.code_builder.i32_const(string.len() as i32);
-                        self.code_builder.i32_store(Align::Bytes4, offset + 4);
-                    };
-                }
-                _ => not_supported_error(),
-            },
+            }
 
             _ => not_supported_error(),
         };
