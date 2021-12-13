@@ -217,6 +217,41 @@ pub fn allocateWithRefcount(
     }
 }
 
+const Failure = struct{
+    start_line: u32,
+    end_line: u32,
+    start_col: u16,
+    end_col: u16,
+};
+threadlocal var failures = [_]Failure{  };
+threadlocal var failure_capacity: usize = 0;
+
+pub fn expectFailed(
+    start_line: u32,
+    end_line: u32,
+    start_col: u16,
+    end_col: u16,
+) void {
+    const new_failure = Failure{
+        .start_line = start_line,
+        .end_line = end_line,
+        .start_col = start_col,
+        .end_col = end_col
+    };
+
+    if (failures.len >= failure_capacity) {
+        failure_capacity += 4096;
+        failures.ptr = roc_alloc(failure_capacity, @alignOf(Failure));
+    }
+
+    failures[failures.len] = new_failure;
+    failures.len += 1;
+}
+
+pub fn getExpectFailures() [_]Failure {
+    return failures;
+}
+
 pub fn unsafeReallocate(
     source_ptr: [*]u8,
     alignment: u32,
@@ -280,4 +315,17 @@ test "increfC, static data" {
     var ptr_to_refcount: *isize = &mock_rc;
     increfC(ptr_to_refcount, 2);
     try std.testing.expectEqual(mock_rc, REFCOUNT_MAX_ISIZE);
+}
+
+test "expectFailure does something"{
+    try std.testing.expectEqual(failures.len, 0);
+    expectFailed(1, 2, 3, 4);
+    try std.testing.expectEqual(failures.len, 1);
+    const what_it_should_look_like = Failure{
+        .start_line = 1,
+        .end_line = 2,
+        .start_col = 3,
+        .end_col = 4
+    };
+    try std.testing.expectEqual(failures[0], what_it_should_look_like);
 }
