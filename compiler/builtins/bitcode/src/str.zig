@@ -214,7 +214,7 @@ pub const RocStr = extern struct {
     }
 
     pub fn isEmpty(self: RocStr) bool {
-        return self.len() == 0;
+        return (self.str_len << 1) == 0;
     }
 
     // If a string happens to be null-terminated already, then we can pass its
