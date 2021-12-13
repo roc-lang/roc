@@ -1,5 +1,6 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::marker::PhantomData;
 use tempfile::{tempdir, TempDir};
 use wasmer::Memory;
 
@@ -12,9 +13,9 @@ use roc_gen_wasm::MEMORY_NAME;
 
 // Should manually match build.rs
 const PLATFORM_FILENAME: &str = "wasm_test_platform";
-
-const TEST_OUT_DIR: &str = env!("TEST_GEN_OUT");
-const LIBC_A_FILE: &str = env!("TEST_GEN_WASM_LIBC_PATH");
+const OUT_DIR_VAR: &str = "TEST_GEN_OUT";
+const LIBC_PATH_VAR: &str = "TEST_GEN_WASM_LIBC_PATH";
+const COMPILER_RT_PATH_VAR: &str = "TEST_GEN_WASM_COMPILER_RT_PATH";
 
 #[allow(unused_imports)]
 use roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS;
@@ -39,7 +40,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
     arena: &'a bumpalo::Bump,
     src: &str,
     stdlib: &'a roc_builtins::std::StdLib,
-    _result_type_dummy: &T,
+    _result_type_dummy: PhantomData<T>,
 ) -> wasmer::Instance {
     use std::path::{Path, PathBuf};
 
@@ -128,14 +129,14 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
 
     let store = Store::default();
 
-    // Keep the final .wasm file for debugging with wasm-objdump or wasm2wat
-    const DEBUG_WASM_FILE: bool = false;
+    // Keep the output binary for debugging with wasm2wat, wasm-objdump, wasm-validate, wasmer...
+    const KEEP_WASM_FILE: bool = false;
 
     let wasmer_module = {
         let tmp_dir: TempDir; // directory for normal test runs, deleted when dropped
         let debug_dir: String; // persistent directory for debugging
 
-        let wasm_build_dir: &Path = if DEBUG_WASM_FILE {
+        let wasm_build_dir: &Path = if KEEP_WASM_FILE {
             // Directory name based on a hash of the Roc source
             let mut hash_state = DefaultHasher::new();
             src.hash(&mut hash_state);
@@ -154,7 +155,10 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
 
         let final_wasm_file = wasm_build_dir.join("final.wasm");
         let app_o_file = wasm_build_dir.join("app.o");
-        let test_platform_o = format!("{}/{}.o", TEST_OUT_DIR, PLATFORM_FILENAME);
+        let test_out_dir = std::env::var(OUT_DIR_VAR).unwrap();
+        let test_platform_o = format!("{}/{}.o", test_out_dir, PLATFORM_FILENAME);
+        let libc_a_file = std::env::var(LIBC_PATH_VAR).unwrap();
+        let compiler_rt_o_file = std::env::var(COMPILER_RT_PATH_VAR).unwrap();
 
         // write the module to a file so the linker can access it
         std::fs::write(&app_o_file, &module_bytes).unwrap();
@@ -165,7 +169,8 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
             app_o_file.to_str().unwrap(),
             bitcode::BUILTINS_WASM32_OBJ_PATH,
             &test_platform_o,
-            LIBC_A_FILE,
+            &libc_a_file,
+            &compiler_rt_o_file,
             // output
             "-o",
             final_wasm_file.to_str().unwrap(),
@@ -214,7 +219,7 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
 }
 
 #[allow(dead_code)]
-pub fn assert_wasm_evals_to_help<T>(src: &str, phantom: T) -> Result<T, String>
+pub fn assert_wasm_evals_to_help<T>(src: &str, phantom: PhantomData<T>) -> Result<T, String>
 where
     T: FromWasm32Memory + Wasm32TestResult,
 {
@@ -223,7 +228,7 @@ where
     // NOTE the stdlib must be in the arena; just taking a reference will segfault
     let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
 
-    let instance = crate::helpers::wasm::helper_wasm(&arena, src, stdlib, &phantom);
+    let instance = crate::helpers::wasm::helper_wasm(&arena, src, stdlib, phantom);
 
     let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
 
@@ -238,9 +243,15 @@ where
             };
 
             if false {
+                println!("test_wrapper returned 0x{:x}", address);
+                println!("Stack:");
                 crate::helpers::wasm::debug_memory_hex(memory, address, std::mem::size_of::<T>());
             }
-
+            if false {
+                println!("Heap:");
+                // Manually provide address and size based on printf in wasm_test_platform.c
+                crate::helpers::wasm::debug_memory_hex(memory, 0x11440, 24);
+            }
             let output = <T as FromWasm32Memory>::decode(memory, address as u32);
 
             Ok(output)
@@ -257,12 +268,17 @@ pub fn debug_memory_hex(memory: &Memory, address: i32, size: usize) {
     };
 
     let extra_words = 2;
-    let offset = (address as usize) / 4;
-    let start = offset - extra_words;
-    let end = offset + (size / 4) + extra_words;
+    let result_start = (address as usize) / 4;
+    let result_end = result_start + ((size + 3) / 4);
+    let start = result_start - extra_words;
+    let end = result_end + extra_words;
 
     for index in start..end {
-        let result_marker = if index == offset { "*" } else { " " };
+        let result_marker = if index >= result_start && index < result_end {
+            "|"
+        } else {
+            " "
+        };
         println!(
             "{:x} {} {:08x}",
             index * 4,
@@ -270,12 +286,13 @@ pub fn debug_memory_hex(memory: &Memory, address: i32, size: usize) {
             memory_words[index]
         );
     }
+    println!();
 }
 
 #[allow(unused_macros)]
 macro_rules! assert_wasm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        let phantom = <$ty>::default();
+        let phantom = std::marker::PhantomData;
         match $crate::helpers::wasm::assert_wasm_evals_to_help::<$ty>($src, phantom) {
             Err(msg) => panic!("{:?}", msg),
             Ok(actual) => {

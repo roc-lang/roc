@@ -163,7 +163,7 @@ trait Backend<'a> {
                         .push((rc_proc_symbol, rc_proc_layout));
                 }
 
-                self.build_stmt(&rc_stmt, ret_layout)
+                self.build_stmt(rc_stmt, ret_layout)
             }
             Stmt::Switch {
                 cond_symbol,

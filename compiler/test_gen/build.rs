@@ -6,6 +6,7 @@ use std::process::Command;
 const PLATFORM_FILENAME: &str = "wasm_test_platform";
 const OUT_DIR_VAR: &str = "TEST_GEN_OUT";
 const LIBC_PATH_VAR: &str = "TEST_GEN_WASM_LIBC_PATH";
+const COMPILER_RT_PATH_VAR: &str = "TEST_GEN_WASM_COMPILER_RT_PATH";
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -62,8 +63,13 @@ fn build_wasm_libc(out_dir: &str) {
     );
 
     let libc_path = run_command(cwd, "find", [&zig_cache_dir, "-name", "libc.a"]);
+    let compiler_rt_path = run_command(cwd, "find", [&zig_cache_dir, "-name", "compiler_rt.o"]);
 
     println!("cargo:rustc-env={}={}", LIBC_PATH_VAR, libc_path);
+    println!(
+        "cargo:rustc-env={}={}",
+        COMPILER_RT_PATH_VAR, compiler_rt_path
+    );
 }
 
 fn feature_is_enabled(feature_name: &str) -> bool {
