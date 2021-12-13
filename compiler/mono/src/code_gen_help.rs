@@ -89,7 +89,7 @@ impl<'a> CodeGenHelp<'a> {
         }
     }
 
-    /// Expands a `Refcounting` node to a `Let` node that calls a specialized helper.
+    /// Expand a `Refcounting` node to a `Let` node that calls a specialized helper proc.
     /// The helper procs themselves are to be generated later with `generate_procs`
     pub fn expand_refcount_stmt(
         &mut self,
@@ -222,6 +222,16 @@ impl<'a> CodeGenHelp<'a> {
                 (rc_stmt, None)
             }
         }
+    }
+
+    /// Replace a generic `Lowlevel::Eq` call with a specialized helper proc.
+    /// The helper procs themselves are to be generated later with `generate_procs`
+    pub fn replace_generic_equals(
+        &mut self,
+        _ident_ids: &mut IdentIds,
+        _layout: Layout<'a>,
+    ) -> (&'a Expr<'a>, Option<(Symbol, ProcLayout<'a>)>) {
+        todo!()
     }
 
     // Check if the specialization is implemented yet. In the long term, this will be deleted.

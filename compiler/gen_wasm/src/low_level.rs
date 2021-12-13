@@ -10,6 +10,7 @@ use crate::wasm_module::{Align, CodeBuilder, ValueType::*};
 pub enum LowlevelBuildResult {
     Done,
     BuiltinCall(&'static str),
+    GeneratedHelper,
     NotImplemented,
 }
 
@@ -563,7 +564,8 @@ pub fn decode_low_level<'a>(
                                 code_builder.i32_and();
                             }
                             Int128 => compare_bytes(code_builder),
-                            Float128 | DataStructure => return NotImplemented,
+                            Float128 => return NotImplemented,
+                            DataStructure => return GeneratedHelper,
                         }
                     }
                 }
@@ -577,9 +579,13 @@ pub fn decode_low_level<'a>(
                 F32 => code_builder.f32_ne(),
                 F64 => code_builder.f64_ne(),
             },
-            StoredValue::StackMemory { .. } => {
-                decode_low_level(code_builder, storage, LowLevel::Eq, args, ret_layout);
-                code_builder.i32_eqz();
+            StoredValue::StackMemory { format, .. } => {
+                if matches!(format, DataStructure) {
+                    return GeneratedHelper;
+                } else {
+                    decode_low_level(code_builder, storage, LowLevel::Eq, args, ret_layout);
+                    code_builder.i32_eqz();
+                }
             }
         },
         And => code_builder.i32_and(),

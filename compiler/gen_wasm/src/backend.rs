@@ -6,7 +6,7 @@ use roc_collections::all::MutMap;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::code_gen_help::{CodeGenHelp, REFCOUNT_MAX};
-use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
+use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, ProcLayout, Stmt};
 use roc_mono::layout::{Builtin, Layout, LayoutIds, TagIdIntType, UnionLayout};
 use roc_reporting::internal_error;
 
@@ -166,6 +166,25 @@ impl<'a> WasmBackend<'a> {
 
         self.helper_proc_gen
             .generate_procs(self.env.arena, ident_ids)
+    }
+
+    fn register_helper_proc(&mut self, new_proc_info: (Symbol, ProcLayout<'a>)) {
+        let (new_proc_sym, new_proc_layout) = new_proc_info;
+        let wasm_fn_index = self.proc_symbols.len() as u32;
+        let linker_sym_index = self.linker_symbols.len() as u32;
+
+        let name = self
+            .layout_ids
+            .get_toplevel(new_proc_sym, &new_proc_layout)
+            .to_symbol_string(new_proc_sym, self.interns);
+
+        self.proc_symbols.push((new_proc_sym, linker_sym_index));
+        self.linker_symbols
+            .push(SymInfo::Function(WasmObjectSymbol::Defined {
+                flags: 0,
+                index: wasm_fn_index,
+                name,
+            }));
     }
 
     pub fn finalize_module(mut self) -> WasmModule<'a> {
@@ -500,7 +519,7 @@ impl<'a> WasmBackend<'a> {
                     .get_mut(&self.env.module_id)
                     .unwrap();
 
-                let (rc_stmt, new_proc_info) = self
+                let (rc_stmt, maybe_new_proc_info) = self
                     .helper_proc_gen
                     .expand_refcount_stmt(ident_ids, *layout, modify, *following);
 
@@ -509,25 +528,8 @@ impl<'a> WasmBackend<'a> {
                     println!("## rc_stmt:\n{}\n{:?}", rc_stmt.to_pretty(200), rc_stmt);
                 }
 
-                // If we're creating a new RC procedure, we need to store its symbol data,
-                // so that we can correctly generate calls to it.
-                if let Some((rc_proc_sym, rc_proc_layout)) = new_proc_info {
-                    let wasm_fn_index = self.proc_symbols.len() as u32;
-                    let linker_sym_index = self.linker_symbols.len() as u32;
-
-                    let name = self
-                        .layout_ids
-                        .get_toplevel(rc_proc_sym, &rc_proc_layout)
-                        .to_symbol_string(rc_proc_sym, self.interns);
-
-                    self.proc_symbols.push((rc_proc_sym, linker_sym_index));
-                    self.linker_symbols
-                        .push(SymInfo::Function(WasmObjectSymbol::Defined {
-                            flags: 0,
-                            index: wasm_fn_index,
-                            name,
-                        }));
-                }
+                // If this is the first call to a new helper proc, register its symbol data
+                maybe_new_proc_info.map(|info| self.register_helper_proc(info));
 
                 self.build_stmt(rc_stmt, ret_layout);
             }
@@ -560,7 +562,13 @@ impl<'a> WasmBackend<'a> {
                 CallType::ByName { name: func_sym, .. } => {
                     // If this function is just a lowlevel wrapper, then inline it
                     if let Some(lowlevel) = LowLevel::from_inlined_wrapper(*func_sym) {
-                        return self.build_low_level(lowlevel, arguments, *sym, wasm_layout);
+                        return self.build_low_level(
+                            lowlevel,
+                            arguments,
+                            *sym,
+                            wasm_layout,
+                            storage,
+                        );
                     }
 
                     let (param_types, ret_type) = self.storage.load_symbols_for_call(
@@ -596,7 +604,7 @@ impl<'a> WasmBackend<'a> {
                 }
 
                 CallType::LowLevel { op: lowlevel, .. } => {
-                    self.build_low_level(*lowlevel, arguments, *sym, wasm_layout)
+                    self.build_low_level(*lowlevel, arguments, *sym, wasm_layout, storage)
                 }
 
                 x => todo!("call type {:?}", x),
@@ -925,6 +933,7 @@ impl<'a> WasmBackend<'a> {
         arguments: &'a [Symbol],
         return_sym: Symbol,
         return_layout: WasmLayout,
+        storage: &StoredValue,
     ) {
         let (param_types, ret_type) = self.storage.load_symbols_for_call(
             self.env.arena,
@@ -948,6 +957,30 @@ impl<'a> WasmBackend<'a> {
             Done => {}
             BuiltinCall(name) => {
                 self.call_zig_builtin(name, param_types, ret_type);
+            }
+            GeneratedHelper => {
+                let layout = self.symbol_layouts[&arguments[0]];
+
+                let ident_ids = self
+                    .interns
+                    .all_ident_ids
+                    .get_mut(&self.env.module_id)
+                    .unwrap();
+
+                let (replacement_expr, maybe_new_proc_info) = self
+                    .helper_proc_gen
+                    .replace_generic_equals(ident_ids, layout);
+
+                // If this is the first call to a new helper proc, register its symbol data
+                maybe_new_proc_info.map(|info| self.register_helper_proc(info));
+
+                self.build_expr(&return_sym, replacement_expr, &layout, storage);
+
+                if lowlevel == LowLevel::NotEq {
+                    self.code_builder.i32_eqz();
+                } else {
+                    debug_assert!(lowlevel == LowLevel::Eq);
+                }
             }
             NotImplemented => {
                 todo!("Low level operation {:?}", lowlevel)
