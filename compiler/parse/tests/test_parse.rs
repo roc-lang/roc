@@ -487,7 +487,12 @@ mod test_parse {
     }
 
     #[quickcheck]
-    fn all_f64_values_parse(num: f64) {
+    fn all_f64_values_parse(mut num: f64) {
+        // NaN, Infinity, -Infinity (these would all parse as tags in Roc)
+        if !num.is_finite() {
+            num = 0.0;
+        }
+
         // These can potentially be whole numbers. `Display` omits the decimal point for those,
         // causing them to no longer be parsed as fractional numbers by Roc.
         // Using `Debug` instead of `Display` ensures they always have a decimal point.
