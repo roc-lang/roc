@@ -21,10 +21,35 @@ const LAYOUT_U32: Layout = Layout::Builtin(Builtin::Int(IntWidth::U32));
 pub const REFCOUNT_MAX: usize = 0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum HelperOp {
+    Rc(RefcountOp),
+    Eq,
+}
+
+impl HelperOp {
+    fn rc(&self) -> RefcountOp {
+        match self {
+            Self::Rc(rc) => *rc,
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RefcountOp {
     Inc,
     Dec,
     DecRef,
+}
+
+impl From<&ModifyRc> for RefcountOp {
+    fn from(modify: &ModifyRc) -> Self {
+        match modify {
+            ModifyRc::Inc(..) => Self::Inc,
+            ModifyRc::Dec(_) => Self::Dec,
+            ModifyRc::DecRef(_) => Self::DecRef,
+        }
+    }
 }
 
 /// Generate mono IR to help with code gen
@@ -48,9 +73,9 @@ pub struct CodeGenHelp<'a> {
     home: ModuleId,
     ptr_size: u32,
     layout_isize: Layout<'a>,
-    /// List of refcounting procs to generate, specialised by Layout and RefCountOp
+    /// Specializations to generate
     /// Order of insertion is preserved, since it is important for Wasm backend
-    rc_procs_to_generate: Vec<'a, (Layout<'a>, RefcountOp, Symbol)>,
+    specs: Vec<'a, (Layout<'a>, HelperOp, Symbol)>,
 }
 
 impl<'a> CodeGenHelp<'a> {
@@ -60,7 +85,7 @@ impl<'a> CodeGenHelp<'a> {
             home,
             ptr_size: intwidth_isize.stack_size(),
             layout_isize: Layout::Builtin(Builtin::Int(intwidth_isize)),
-            rc_procs_to_generate: Vec::with_capacity_in(16, arena),
+            specs: Vec::with_capacity_in(16, arena),
         }
     }
 
@@ -73,7 +98,7 @@ impl<'a> CodeGenHelp<'a> {
         modify: &ModifyRc,
         following: &'a Stmt<'a>,
     ) -> (&'a Stmt<'a>, Option<(Symbol, ProcLayout<'a>)>) {
-        if !Self::layout_is_supported(&layout) {
+        if !Self::is_supported(&layout, HelperOp::Rc(RefcountOp::from(modify))) {
             // Just a warning, so we can decouple backend development from refcounting development.
             // When we are closer to completion, we can change it to a panic.
             println!(
@@ -90,7 +115,7 @@ impl<'a> CodeGenHelp<'a> {
                 let layout_isize = self.layout_isize;
 
                 let (is_existing, proc_name) =
-                    self.get_proc_symbol(ident_ids, layout, RefcountOp::Inc);
+                    self.get_proc_symbol(ident_ids, layout, HelperOp::Rc(RefcountOp::Inc));
 
                 // Define a constant for the amount to increment
                 let amount_sym = self.create_symbol(ident_ids, "amount");
@@ -130,7 +155,7 @@ impl<'a> CodeGenHelp<'a> {
 
             ModifyRc::Dec(structure) => {
                 let (is_existing, proc_name) =
-                    self.get_proc_symbol(ident_ids, layout, RefcountOp::Dec);
+                    self.get_proc_symbol(ident_ids, layout, HelperOp::Rc(RefcountOp::Dec));
 
                 // Call helper proc, passing the Roc structure
                 let arg_layouts = arena.alloc([layout, self.layout_isize]);
@@ -199,10 +224,14 @@ impl<'a> CodeGenHelp<'a> {
         }
     }
 
-    // TODO: consider refactoring so that we have just one place to define what's supported
-    // (Probably by generating procs on the fly instead of all at the end)
-    fn layout_is_supported(layout: &Layout) -> bool {
-        matches!(layout, Layout::Builtin(Builtin::Str))
+    // Check if the specialization is implemented yet. In the long term, this will be deleted.
+    // In the short term, we have to specify in two places what's complete and what's not:
+    // Here and in generate_procs. We use assertions to ensure they match.
+    fn is_supported(layout: &Layout, op: HelperOp) -> bool {
+        match (layout, op) {
+            (Layout::Builtin(Builtin::Str), HelperOp::Rc(_)) => true,
+            _ => false,
+        }
     }
 
     /// Generate refcounting helper procs, each specialized to a particular Layout.
@@ -214,21 +243,30 @@ impl<'a> CodeGenHelp<'a> {
         ident_ids: &mut IdentIds,
     ) -> Vec<'a, Proc<'a>> {
         // Move the vector out of self, so we can loop over it safely
-        let mut procs_to_generate =
-            std::mem::replace(&mut self.rc_procs_to_generate, Vec::with_capacity_in(0, arena));
+        let mut specs = std::mem::replace(&mut self.specs, Vec::with_capacity_in(0, arena));
 
-        let procs_iter = procs_to_generate
-            .drain(0..)
-            .map(|(layout, op, proc_symbol)| {
-                debug_assert!(Self::layout_is_supported(&layout));
-                match layout {
+        let procs_iter = specs.drain(0..).map(|(layout, op, proc_symbol)| {
+            debug_assert!(Self::is_supported(&layout, op));
+
+            match op {
+                HelperOp::Rc(_) => match layout {
                     Layout::Builtin(Builtin::Str) => {
                         self.gen_modify_str(ident_ids, op, proc_symbol)
                     }
 
-                    _ => todo!("Please update layout_is_supported for {:?}", layout),
-                }
-            });
+                    _ => todo!(
+                        "Please update is_supported for `{:?}` on `{:?}`",
+                        op,
+                        layout
+                    ),
+                },
+                HelperOp::Eq => todo!(
+                    "Please update is_supported for `{:?}` on `{:?}`",
+                    op,
+                    layout
+                ),
+            }
+        });
 
         Vec::from_iter_in(procs_iter, arena)
     }
@@ -239,21 +277,18 @@ impl<'a> CodeGenHelp<'a> {
         &mut self,
         ident_ids: &mut IdentIds,
         layout: Layout<'a>,
-        op: RefcountOp,
+        op: HelperOp,
     ) -> (bool, Symbol) {
-        let found = self
-            .rc_procs_to_generate
-            .iter()
-            .find(|(l, o, _)| *l == layout && *o == op);
+        let found = self.specs.iter().find(|(l, o, _)| *l == layout && *o == op);
 
         if let Some((_, _, existing_symbol)) = found {
             (true, *existing_symbol)
         } else {
             let layout_name = layout_debug_name(&layout);
-            let unique_idx = self.rc_procs_to_generate.len();
+            let unique_idx = self.specs.len();
             let debug_name = format!("#rc{:?}_{}_{}", op, layout_name, unique_idx);
             let new_symbol: Symbol = self.create_symbol(ident_ids, &debug_name);
-            self.rc_procs_to_generate.push((layout, op, new_symbol));
+            self.specs.push((layout, op, new_symbol));
             (false, new_symbol)
         }
     }
@@ -269,14 +304,17 @@ impl<'a> CodeGenHelp<'a> {
         Stmt::Let(unit, Expr::Struct(&[]), LAYOUT_UNIT, ret_stmt)
     }
 
-    fn gen_args(&self, op: RefcountOp, layout: Layout<'a>) -> &'a [(Layout<'a>, Symbol)] {
+    fn gen_args(&self, op: HelperOp, layout: Layout<'a>) -> &'a [(Layout<'a>, Symbol)] {
         let roc_value = (layout, Symbol::ARG_1);
         match op {
-            RefcountOp::Inc => {
-                let inc_amount = (self.layout_isize, Symbol::ARG_2);
-                self.arena.alloc([roc_value, inc_amount])
-            }
-            RefcountOp::Dec | RefcountOp::DecRef => self.arena.alloc([roc_value]),
+            HelperOp::Rc(rc_op) => match rc_op {
+                RefcountOp::Inc => {
+                    let inc_amount = (self.layout_isize, Symbol::ARG_2);
+                    self.arena.alloc([roc_value, inc_amount])
+                }
+                RefcountOp::Dec | RefcountOp::DecRef => self.arena.alloc([roc_value]),
+            },
+            HelperOp::Eq => todo!(),
         }
     }
 
@@ -284,7 +322,7 @@ impl<'a> CodeGenHelp<'a> {
     fn gen_modify_str(
         &mut self,
         ident_ids: &mut IdentIds,
-        op: RefcountOp,
+        op: HelperOp,
         proc_name: Symbol,
     ) -> Proc<'a> {
         let string = Symbol::ARG_1;
@@ -343,7 +381,7 @@ impl<'a> CodeGenHelp<'a> {
 
         // Call the relevant Zig lowlevel to actually modify the refcount
         let zig_call_result = self.create_symbol(ident_ids, "zig_call_result");
-        let zig_call_expr = match op {
+        let zig_call_expr = match op.rc() {
             RefcountOp::Inc => Expr::Call(Call {
                 call_type: CallType::LowLevel {
                     op: LowLevel::RefCountInc,
