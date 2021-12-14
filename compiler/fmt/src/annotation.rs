@@ -83,7 +83,7 @@ where
 }
 
 /// A Located formattable value is also formattable
-impl<'a, T> Formattable for Located<T>
+impl<T> Formattable for Located<T>
 where
     T: Formattable,
 {

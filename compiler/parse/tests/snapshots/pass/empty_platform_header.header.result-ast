@@ -6,7 +6,7 @@ Platform {
         },
         requires: PlatformRequires {
             rigids: [],
-            signature: |L 0-0, C 38-47| Entry {
+            signature: |L 0-0, C 38-47| TypedIdent {
                 ident: |L 0-0, C 38-42| "main",
                 spaces_before_colon: [],
                 ann: |L 0-0, C 45-47| Record {

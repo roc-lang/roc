@@ -4,7 +4,7 @@ App {
             "quicksort",
         ),
         packages: [
-            |L 1-1, C 15-31| Entry {
+            |L 1-1, C 15-31| PackageEntry {
                 shorthand: "pf",
                 spaces_after_shorthand: [],
                 package_or_path: |L 1-1, C 19-31| Path(
@@ -24,7 +24,7 @@ App {
             ),
         ],
         provides: [
-            |L 3-3, C 15-24| Exposed(
+            |L 3-3, C 15-24| ExposedName(
                 "quicksort",
             ),
         ],
