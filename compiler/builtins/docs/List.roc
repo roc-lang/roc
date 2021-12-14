@@ -446,9 +446,6 @@ drop : List elem, Nat -> List elem
 ## To replace the element at a given index, instead of dropping it, see [List.set].
 dropAt : List elem, Nat -> List elem
 
-## Drops the last element in a List.
-dropLast : List elem -> List elem
-
 ## Adds a new element to the end of the list.
 ##
 ## >>> List.append [ "a", "b" ] "c"
@@ -684,8 +681,6 @@ contains : List elem, elem -> Bool
 startsWith : List elem, List elem -> Bool
 
 endsWith : List elem, List elem -> Bool
-
-all : List elem, (elem -> Bool) -> Bool
 
 ## Run the given predicate on each element of the list, returning `True` if
 ## any of the elements satisfy it.
