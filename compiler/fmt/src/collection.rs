@@ -6,15 +6,15 @@ use crate::{
     Buf,
 };
 
-pub fn fmt_collection<'a, 'b, T: ExtractSpaces<'a> + Formattable<'b>>(
-    buf: &mut Buf<'b>,
+pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable>(
+    buf: &mut Buf<'buf>,
     indent: u16,
     start: char,
     end: char,
     items: Collection<'a, T>,
     newline: Newlines,
 ) where
-    <T as ExtractSpaces<'a>>::Item: Formattable<'b>,
+    <T as ExtractSpaces<'a>>::Item: Formattable,
 {
     buf.indent(indent);
     let is_multiline =

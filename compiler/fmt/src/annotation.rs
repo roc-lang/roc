@@ -40,12 +40,12 @@ pub enum Newlines {
     No,
 }
 
-pub trait Formattable<'a> {
+pub trait Formattable {
     fn is_multiline(&self) -> bool;
 
-    fn format_with_options(
+    fn format_with_options<'buf>(
         &self,
-        buf: &mut Buf<'a>,
+        buf: &mut Buf<'buf>,
         _parens: Parens,
         _newlines: Newlines,
         indent: u16,
@@ -53,23 +53,23 @@ pub trait Formattable<'a> {
         self.format(buf, indent);
     }
 
-    fn format(&self, buf: &mut Buf<'a>, indent: u16) {
+    fn format<'buf>(&self, buf: &mut Buf<'buf>, indent: u16) {
         self.format_with_options(buf, Parens::NotNeeded, Newlines::No, indent);
     }
 }
 
 /// A reference to a formattable value is also formattable
-impl<'a, T> Formattable<'a> for &'a T
+impl<'a, T> Formattable for &'a T
 where
-    T: Formattable<'a>,
+    T: Formattable,
 {
     fn is_multiline(&self) -> bool {
         (*self).is_multiline()
     }
 
-    fn format_with_options(
+    fn format_with_options<'buf>(
         &self,
-        buf: &mut Buf<'a>,
+        buf: &mut Buf<'buf>,
         parens: Parens,
         newlines: Newlines,
         indent: u16,
@@ -77,23 +77,23 @@ where
         (*self).format_with_options(buf, parens, newlines, indent)
     }
 
-    fn format(&self, buf: &mut Buf<'a>, indent: u16) {
+    fn format<'buf>(&self, buf: &mut Buf<'buf>, indent: u16) {
         (*self).format(buf, indent)
     }
 }
 
 /// A Located formattable value is also formattable
-impl<'a, T> Formattable<'a> for Located<T>
+impl<'a, T> Formattable for Located<T>
 where
-    T: Formattable<'a>,
+    T: Formattable,
 {
     fn is_multiline(&self) -> bool {
         self.value.is_multiline()
     }
 
-    fn format_with_options(
+    fn format_with_options<'buf>(
         &self,
-        buf: &mut Buf<'a>,
+        buf: &mut Buf<'buf>,
         parens: Parens,
         newlines: Newlines,
         indent: u16,
@@ -102,12 +102,12 @@ where
             .format_with_options(buf, parens, newlines, indent)
     }
 
-    fn format(&self, buf: &mut Buf<'a>, indent: u16) {
+    fn format<'buf>(&self, buf: &mut Buf<'buf>, indent: u16) {
         self.value.format(buf, indent)
     }
 }
 
-impl<'a> Formattable<'a> for TypeAnnotation<'a> {
+impl<'a> Formattable for TypeAnnotation<'a> {
     fn is_multiline(&self) -> bool {
         use roc_parse::ast::TypeAnnotation::*;
 
@@ -148,9 +148,9 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
         }
     }
 
-    fn format_with_options(
+    fn format_with_options<'buf>(
         &self,
-        buf: &mut Buf<'a>,
+        buf: &mut Buf<'buf>,
         parens: Parens,
         newlines: Newlines,
         indent: u16,
@@ -275,14 +275,14 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
 /// >   term: { x: 100, y: True }
 ///
 /// So we need two instances, each having the specific separator
-impl<'a> Formattable<'a> for AssignedField<'a, TypeAnnotation<'a>> {
+impl<'a> Formattable for AssignedField<'a, TypeAnnotation<'a>> {
     fn is_multiline(&self) -> bool {
         is_multiline_assigned_field_help(self)
     }
 
-    fn format_with_options(
+    fn format_with_options<'buf>(
         &self,
-        buf: &mut Buf<'a>,
+        buf: &mut Buf<'buf>,
         parens: Parens,
         newlines: Newlines,
         indent: u16,
@@ -292,14 +292,14 @@ impl<'a> Formattable<'a> for AssignedField<'a, TypeAnnotation<'a>> {
     }
 }
 
-impl<'a> Formattable<'a> for AssignedField<'a, Expr<'a>> {
+impl<'a> Formattable for AssignedField<'a, Expr<'a>> {
     fn is_multiline(&self) -> bool {
         is_multiline_assigned_field_help(self)
     }
 
-    fn format_with_options(
+    fn format_with_options<'buf>(
         &self,
-        buf: &mut Buf<'a>,
+        buf: &mut Buf<'buf>,
         parens: Parens,
         newlines: Newlines,
         indent: u16,
@@ -309,7 +309,7 @@ impl<'a> Formattable<'a> for AssignedField<'a, Expr<'a>> {
     }
 }
 
-fn is_multiline_assigned_field_help<'a, T: Formattable<'a>>(afield: &AssignedField<'a, T>) -> bool {
+fn is_multiline_assigned_field_help<T: Formattable>(afield: &AssignedField<'_, T>) -> bool {
     use self::AssignedField::*;
 
     match afield {
@@ -322,15 +322,15 @@ fn is_multiline_assigned_field_help<'a, T: Formattable<'a>>(afield: &AssignedFie
     }
 }
 
-fn format_assigned_field_help<'a, T>(
+fn format_assigned_field_help<'a, 'buf, T>(
     zelf: &AssignedField<'a, T>,
-    buf: &mut Buf<'a>,
+    buf: &mut Buf<'buf>,
     parens: Parens,
     indent: u16,
     separator_prefix: &str,
     is_multiline: bool,
 ) where
-    T: Formattable<'a>,
+    T: Formattable,
 {
     use self::AssignedField::*;
 
@@ -403,7 +403,7 @@ fn format_assigned_field_help<'a, T>(
     }
 }
 
-impl<'a> Formattable<'a> for Tag<'a> {
+impl<'a> Formattable for Tag<'a> {
     fn is_multiline(&self) -> bool {
         use self::Tag::*;
 
@@ -416,9 +416,9 @@ impl<'a> Formattable<'a> for Tag<'a> {
         }
     }
 
-    fn format_with_options(
+    fn format_with_options<'buf>(
         &self,
-        buf: &mut Buf<'a>,
+        buf: &mut Buf<'buf>,
         _parens: Parens,
         _newlines: Newlines,
         indent: u16,

@@ -6,7 +6,7 @@ use roc_parse::ast::{Def, Expr, Pattern};
 use roc_region::all::Located;
 
 /// A Located formattable value is also formattable
-impl<'a> Formattable<'a> for Def<'a> {
+impl<'a> Formattable for Def<'a> {
     fn is_multiline(&self) -> bool {
         use roc_parse::ast::Def::*;
 
@@ -25,9 +25,9 @@ impl<'a> Formattable<'a> for Def<'a> {
         }
     }
 
-    fn format_with_options(
+    fn format_with_options<'buf>(
         &self,
-        buf: &mut Buf<'a>,
+        buf: &mut Buf<'buf>,
         _parens: Parens,
         _newlines: Newlines,
         indent: u16,
@@ -107,8 +107,8 @@ impl<'a> Formattable<'a> for Def<'a> {
     }
 }
 
-fn fmt_expect<'a>(
-    buf: &mut Buf<'a>,
+fn fmt_expect<'a, 'buf>(
+    buf: &mut Buf<'buf>,
     condition: &'a Located<Expr<'a>>,
     is_multiline: bool,
     indent: u16,
@@ -123,11 +123,16 @@ fn fmt_expect<'a>(
     condition.format(buf, return_indent);
 }
 
-pub fn fmt_def<'a>(buf: &mut Buf<'a>, def: &Def<'a>, indent: u16) {
+pub fn fmt_def<'a, 'buf>(buf: &mut Buf<'buf>, def: &Def<'a>, indent: u16) {
     def.format(buf, indent);
 }
 
-pub fn fmt_body<'a>(buf: &mut Buf<'a>, pattern: &'a Pattern<'a>, body: &'a Expr<'a>, indent: u16) {
+pub fn fmt_body<'a, 'buf>(
+    buf: &mut Buf<'buf>,
+    pattern: &'a Pattern<'a>,
+    body: &'a Expr<'a>,
+    indent: u16,
+) {
     pattern.format_with_options(buf, Parens::InApply, Newlines::No, indent);
     buf.push_str(" =");
     if body.is_multiline() {
