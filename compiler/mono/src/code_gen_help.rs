@@ -100,7 +100,7 @@ impl<'a> CodeGenHelp<'a> {
         modify: &ModifyRc,
         following: &'a Stmt<'a>,
     ) -> (&'a Stmt<'a>, Option<(Symbol, ProcLayout<'a>)>) {
-        if !Self::is_supported(&layout, HelperOp::Rc(RefcountOp::from(modify))) {
+        if !Self::is_rc_implemented_yet(&layout) {
             // Just a warning, so we can decouple backend development from refcounting development.
             // When we are closer to completion, we can change it to a panic.
             println!(
@@ -231,17 +231,18 @@ impl<'a> CodeGenHelp<'a> {
     pub fn replace_generic_equals(
         &mut self,
         _ident_ids: &mut IdentIds,
-        _layout: Layout<'a>,
+        _layout: &Layout<'a>,
+        _arguments: &[Symbol],
     ) -> (&'a Expr<'a>, Option<(Symbol, ProcLayout<'a>)>) {
         todo!()
     }
 
-    // Check if the specialization is implemented yet. In the long term, this will be deleted.
-    // In the short term, we have to specify in two places what's complete and what's not:
-    // Here and in generate_procs. We use assertions to ensure they match.
-    fn is_supported(layout: &Layout, op: HelperOp) -> bool {
-        match (layout, op) {
-            (Layout::Builtin(Builtin::Str), HelperOp::Rc(_)) => true,
+    // Check if refcounting is implemented yet. In the long term, this will be deleted.
+    // In the short term, it helps us to skip refcounting and let it leak, so we can make
+    // progress incrementally. Kept in sync with generate_procs using assertions.
+    fn is_rc_implemented_yet(layout: &Layout) -> bool {
+        match layout {
+            Layout::Builtin(Builtin::Str) => true,
             _ => false,
         }
     }
@@ -257,27 +258,18 @@ impl<'a> CodeGenHelp<'a> {
         // Move the vector out of self, so we can loop over it safely
         let mut specs = std::mem::replace(&mut self.specs, Vec::with_capacity_in(0, arena));
 
-        let procs_iter = specs.drain(0..).map(|(layout, op, proc_symbol)| {
-            debug_assert!(Self::is_supported(&layout, op));
-
-            match op {
-                HelperOp::Rc(_) => match layout {
+        let procs_iter = specs.drain(0..).map(|(layout, op, proc_symbol)| match op {
+            HelperOp::Rc(_) => {
+                debug_assert!(Self::is_rc_implemented_yet(&layout));
+                match layout {
                     Layout::Builtin(Builtin::Str) => {
                         self.gen_modify_str(ident_ids, op, proc_symbol)
                     }
 
-                    _ => todo!(
-                        "Please update is_supported for `{:?}` on `{:?}`",
-                        op,
-                        layout
-                    ),
-                },
-                HelperOp::Eq => todo!(
-                    "Please update is_supported for `{:?}` on `{:?}`",
-                    op,
-                    layout
-                ),
+                    _ => todo!("Please update is_rc_implemented_yet for `{:?}`", layout),
+                }
             }
+            HelperOp::Eq => todo!("Please update is_rc_implemented_yet for `{:?}`", layout),
         });
 
         Vec::from_iter_in(procs_iter, arena)

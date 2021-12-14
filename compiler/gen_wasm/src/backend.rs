@@ -969,7 +969,7 @@ impl<'a> WasmBackend<'a> {
 
                 let (replacement_expr, maybe_new_proc_info) = self
                     .helper_proc_gen
-                    .replace_generic_equals(ident_ids, layout);
+                    .replace_generic_equals(ident_ids, &layout, arguments);
 
                 // If this is the first call to a new helper proc, register its symbol data
                 maybe_new_proc_info.map(|info| self.register_helper_proc(info));
