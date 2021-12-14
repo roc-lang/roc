@@ -2553,8 +2553,8 @@ fn parse_header<'a>(
                 opt_shorthand,
                 header_src,
                 packages: &[],
-                exposes: header.exposes.items,
-                imports: header.imports.items,
+                exposes: unspace(arena, header.exposes.items),
+                imports: unspace(arena, header.imports.items),
                 to_platform: None,
             };
 
@@ -2575,7 +2575,7 @@ fn parse_header<'a>(
                 std::str::from_utf8_unchecked(&src_bytes[..chomped])
             };
 
-            let packages = header.packages.items;
+            let packages = unspace(arena, header.packages.items);
 
             let info = HeaderInfo {
                 loc_name: Located {
@@ -2587,8 +2587,8 @@ fn parse_header<'a>(
                 opt_shorthand,
                 header_src,
                 packages,
-                exposes: header.provides.items,
-                imports: header.imports.items,
+                exposes: unspace(arena, header.provides.items),
+                imports: unspace(arena, header.imports.items),
                 to_platform: Some(header.to.value),
             };
 
@@ -2605,9 +2605,8 @@ fn parse_header<'a>(
                     let opt_base_package = packages.iter().find_map(|loc_package_entry| {
                         let Located { value, .. } = loc_package_entry;
 
-                        let item = value.extract_spaces().item;
-                        if item.shorthand == existing_package {
-                            Some(item)
+                        if value.shorthand == existing_package {
+                            Some(value)
                         } else {
                             None
                         }
@@ -2759,9 +2758,9 @@ struct HeaderInfo<'a> {
     is_root_module: bool,
     opt_shorthand: Option<&'a str>,
     header_src: &'a str,
-    packages: &'a [Located<Spaced<'a, PackageEntry<'a>>>],
-    exposes: &'a [Located<Spaced<'a, ExposedName<'a>>>],
-    imports: &'a [Located<Spaced<'a, ImportsEntry<'a>>>],
+    packages: &'a [Located<PackageEntry<'a>>],
+    exposes: &'a [Located<ExposedName<'a>>],
+    imports: &'a [Located<ImportsEntry<'a>>],
     to_platform: Option<To<'a>>,
 }
 
@@ -2894,8 +2893,7 @@ fn send_header<'a>(
             // For example, if module A has [ B.{ foo } ], then
             // when we get here for B, `foo` will already have
             // an IdentId. We must reuse that!
-            let ident_id =
-                ident_ids.get_or_insert(&loc_exposed.value.extract_spaces().item.as_str().into());
+            let ident_id = ident_ids.get_or_insert(&loc_exposed.value.as_str().into());
             let symbol = Symbol::new(home, ident_id);
 
             exposed.push(symbol);
@@ -2911,7 +2909,7 @@ fn send_header<'a>(
     let package_entries = packages
         .iter()
         .map(|pkg| {
-            let pkg = pkg.value.extract_spaces().item;
+            let pkg = pkg.value;
             (pkg.shorthand, pkg.package_or_path.value)
         })
         .collect::<MutMap<_, _>>();
@@ -2973,9 +2971,9 @@ struct PlatformHeaderInfo<'a> {
     header_src: &'a str,
     app_module_id: ModuleId,
     packages: &'a [Located<PackageEntry<'a>>],
-    provides: &'a [Located<Spaced<'a, ExposedName<'a>>>],
+    provides: &'a [Located<ExposedName<'a>>],
     requires: &'a [Located<TypedIdent<'a>>],
-    imports: &'a [Located<Spaced<'a, ImportsEntry<'a>>>],
+    imports: &'a [Located<ImportsEntry<'a>>],
 }
 
 // TODO refactor so more logic is shared with `send_header`
@@ -3118,8 +3116,7 @@ fn send_header_two<'a>(
             // For example, if module A has [ B.{ foo } ], then
             // when we get here for B, `foo` will already have
             // an IdentId. We must reuse that!
-            let ident_id =
-                ident_ids.get_or_insert(&loc_exposed.value.extract_spaces().item.as_str().into());
+            let ident_id = ident_ids.get_or_insert(&loc_exposed.value.as_str().into());
             let symbol = Symbol::new(home, ident_id);
 
             exposed.push(symbol);
@@ -3146,7 +3143,7 @@ fn send_header_two<'a>(
     let module_name = ModuleNameEnum::PkgConfig;
 
     let main_for_host = {
-        let ident_str: Ident = provides[0].value.extract_spaces().item.as_str().into();
+        let ident_str: Ident = provides[0].value.as_str().into();
         let ident_id = ident_ids.get_or_insert(&ident_str);
 
         Symbol::new(home, ident_id)
@@ -3314,6 +3311,16 @@ fn run_solve<'a>(
     }
 }
 
+fn unspace<'a, T: Copy>(arena: &'a Bump, items: &[Located<Spaced<'a, T>>]) -> &'a [Located<T>] {
+    bumpalo::collections::Vec::from_iter_in(
+        items
+            .iter()
+            .map(|item| Located::at(item.region, item.value.extract_spaces().item)),
+        arena,
+    )
+    .into_bump_slice()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn fabricate_pkg_config_module<'a>(
     arena: &'a Bump,
@@ -3327,8 +3334,6 @@ fn fabricate_pkg_config_module<'a>(
     header_src: &'a str,
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
-    let provides: &'a [Located<Spaced<'a, ExposedName<'a>>>] = header.provides.items;
-
     let info = PlatformHeaderInfo {
         filename,
         is_root_module: false,
@@ -3336,12 +3341,12 @@ fn fabricate_pkg_config_module<'a>(
         header_src,
         app_module_id,
         packages: &[],
-        provides,
+        provides: unspace(arena, header.provides.items),
         requires: &*arena.alloc([Located::at(
             header.requires.signature.region,
             header.requires.signature.extract_spaces().item,
         )]),
-        imports: header.imports.items,
+        imports: unspace(arena, header.imports.items),
     };
 
     send_header_two(
@@ -3773,12 +3778,10 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
     Ok(Msg::Parsed(parsed))
 }
 
-fn exposed_from_import<'a>(
-    entry: &Spaced<'a, ImportsEntry<'a>>,
-) -> (QualifiedModuleName<'a>, Vec<Ident>) {
+fn exposed_from_import<'a>(entry: &ImportsEntry<'a>) -> (QualifiedModuleName<'a>, Vec<Ident>) {
     use roc_parse::header::ImportsEntry::*;
 
-    match entry.extract_spaces().item {
+    match entry {
         Module(module_name, exposes) => {
             let mut exposed = Vec::with_capacity(exposes.len());
 
