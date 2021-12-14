@@ -10,7 +10,9 @@ use crate::wasm_module::{Align, CodeBuilder, ValueType::*};
 pub enum LowlevelBuildResult {
     Done,
     BuiltinCall(&'static str),
-    GeneratedHelper,
+    SpecializedEq,
+    SpecializedNotEq,
+    SpecializedHash,
     NotImplemented,
 }
 
@@ -564,7 +566,7 @@ pub fn decode_low_level<'a>(
                             }
                             Int128 => compare_bytes(code_builder),
                             Float128 => return NotImplemented,
-                            DataStructure => return GeneratedHelper,
+                            DataStructure => return SpecializedEq,
                         }
                     }
                 }
@@ -580,7 +582,7 @@ pub fn decode_low_level<'a>(
             },
             StoredValue::StackMemory { format, .. } => {
                 if matches!(format, DataStructure) {
-                    return GeneratedHelper;
+                    return SpecializedNotEq;
                 } else {
                     decode_low_level(code_builder, storage, LowLevel::Eq, args, ret_layout);
                     code_builder.i32_eqz();
@@ -590,7 +592,7 @@ pub fn decode_low_level<'a>(
         And => code_builder.i32_and(),
         Or => code_builder.i32_or(),
         Not => code_builder.i32_eqz(),
-        Hash => return NotImplemented, // TODO: generated helpers
+        Hash => return SpecializedHash,
         ExpectTrue => return NotImplemented,
         RefCountGetPtr => {
             code_builder.i32_const(4);

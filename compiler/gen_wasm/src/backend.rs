@@ -1,7 +1,7 @@
 use bumpalo::{self, collections::Vec};
 
 use code_builder::Align;
-use roc_builtins::bitcode::IntWidth;
+use roc_builtins::bitcode::{self, IntWidth};
 use roc_collections::all::MutMap;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
@@ -958,29 +958,34 @@ impl<'a> WasmBackend<'a> {
             BuiltinCall(name) => {
                 self.call_zig_builtin(name, param_types, ret_type);
             }
-            GeneratedHelper => {
+            SpecializedEq | SpecializedNotEq => {
                 let layout = self.symbol_layouts[&arguments[0]];
 
-                let ident_ids = self
-                    .interns
-                    .all_ident_ids
-                    .get_mut(&self.env.module_id)
-                    .unwrap();
-
-                let (replacement_expr, maybe_new_proc_info) = self
-                    .helper_proc_gen
-                    .replace_generic_equals(ident_ids, &layout, arguments);
-
-                // If this is the first call to a new helper proc, register its symbol data
-                maybe_new_proc_info.map(|info| self.register_helper_proc(info));
-
-                self.build_expr(&return_sym, replacement_expr, &layout, storage);
-
-                if lowlevel == LowLevel::NotEq {
-                    self.code_builder.i32_eqz();
+                if layout == Layout::Builtin(Builtin::Str) {
+                    self.call_zig_builtin(bitcode::STR_EQUAL, param_types, ret_type);
                 } else {
-                    debug_assert!(lowlevel == LowLevel::Eq);
+                    let ident_ids = self
+                        .interns
+                        .all_ident_ids
+                        .get_mut(&self.env.module_id)
+                        .unwrap();
+
+                    let (replacement_expr, maybe_new_proc_info) = self
+                        .helper_proc_gen
+                        .replace_generic_equals(ident_ids, &layout, arguments);
+
+                    // If this is the first call to a new helper proc, register its symbol data
+                    maybe_new_proc_info.map(|info| self.register_helper_proc(info));
+
+                    self.build_expr(&return_sym, replacement_expr, &layout, storage);
                 }
+
+                if matches!(build_result, SpecializedNotEq) {
+                    self.code_builder.i32_eqz();
+                }
+            }
+            SpecializedHash => {
+                todo!("Specialized hash functions")
             }
             NotImplemented => {
                 todo!("Low level operation {:?}", lowlevel)
