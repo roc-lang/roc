@@ -117,7 +117,7 @@ impl<'a> CodeGenHelp<'a> {
                 let layout_isize = self.layout_isize;
 
                 let (is_existing, proc_name) =
-                    self.get_proc_symbol(ident_ids, layout, HelperOp::Rc(RefcountOp::Inc));
+                    self.get_proc_symbol(ident_ids, &layout, HelperOp::Rc(RefcountOp::Inc));
 
                 // Define a constant for the amount to increment
                 let amount_sym = self.create_symbol(ident_ids, "amount");
@@ -157,7 +157,7 @@ impl<'a> CodeGenHelp<'a> {
 
             ModifyRc::Dec(structure) => {
                 let (is_existing, proc_name) =
-                    self.get_proc_symbol(ident_ids, layout, HelperOp::Rc(RefcountOp::Dec));
+                    self.get_proc_symbol(ident_ids, &layout, HelperOp::Rc(RefcountOp::Dec));
 
                 // Call helper proc, passing the Roc structure
                 let arg_layouts = arena.alloc([layout, self.layout_isize]);
@@ -230,11 +230,39 @@ impl<'a> CodeGenHelp<'a> {
     /// The helper procs themselves are to be generated later with `generate_procs`
     pub fn replace_generic_equals(
         &mut self,
-        _ident_ids: &mut IdentIds,
-        _layout: &Layout<'a>,
-        _arguments: &[Symbol],
+        ident_ids: &mut IdentIds,
+        layout: &Layout<'a>,
+        arguments: &'a [Symbol],
     ) -> (&'a Expr<'a>, Option<(Symbol, ProcLayout<'a>)>) {
-        todo!()
+        // Record a specialization and get its name
+        let (is_existing, proc_name) = self.get_proc_symbol(ident_ids, layout, HelperOp::Eq);
+
+        // Call the specialized helper
+        let arg_layouts = self.arena.alloc([*layout, *layout]);
+        let expr = self.arena.alloc(Expr::Call(Call {
+            call_type: CallType::ByName {
+                name: proc_name,
+                ret_layout: &LAYOUT_BOOL,
+                arg_layouts,
+                specialization_id: CallSpecId::BACKEND_DUMMY,
+            },
+            arguments,
+        }));
+
+        // Create a linker symbol for the helper proc if this is the first usage
+        let new_proc_info = if is_existing {
+            None
+        } else {
+            Some((
+                proc_name,
+                ProcLayout {
+                    arguments: arg_layouts,
+                    result: LAYOUT_BOOL,
+                },
+            ))
+        };
+
+        (expr, new_proc_info)
     }
 
     // Check if refcounting is implemented yet. In the long term, this will be deleted.
@@ -269,7 +297,17 @@ impl<'a> CodeGenHelp<'a> {
                     _ => todo!("Please update is_rc_implemented_yet for `{:?}`", layout),
                 }
             }
-            HelperOp::Eq => todo!("Please update is_rc_implemented_yet for `{:?}`", layout),
+            HelperOp::Eq => match layout {
+                Layout::Builtin(
+                    Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal,
+                ) => panic!("No generated helper proc. Use direct code gen for {:?}", layout),
+
+                Layout::Builtin(Builtin::Str) => {
+                    panic!("No generated helper proc. Use Zig builtin for Str.")
+                }
+
+                _ => todo!("Specialized equality check for `{:?}`", layout),
+            },
         });
 
         Vec::from_iter_in(procs_iter, arena)
@@ -280,10 +318,10 @@ impl<'a> CodeGenHelp<'a> {
     fn get_proc_symbol(
         &mut self,
         ident_ids: &mut IdentIds,
-        layout: Layout<'a>,
+        layout: &Layout<'a>,
         op: HelperOp,
     ) -> (bool, Symbol) {
-        let found = self.specs.iter().find(|(l, o, _)| *l == layout && *o == op);
+        let found = self.specs.iter().find(|(l, o, _)| l == layout && *o == op);
 
         if let Some((_, _, existing_symbol)) = found {
             (true, *existing_symbol)
@@ -292,7 +330,7 @@ impl<'a> CodeGenHelp<'a> {
             let unique_idx = self.specs.len();
             let debug_name = format!("#rc{:?}_{}_{}", op, layout_name, unique_idx);
             let new_symbol: Symbol = self.create_symbol(ident_ids, &debug_name);
-            self.specs.push((layout, op, new_symbol));
+            self.specs.push((*layout, op, new_symbol));
             (false, new_symbol)
         }
     }
