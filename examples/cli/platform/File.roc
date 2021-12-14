@@ -76,8 +76,10 @@ readUtf8 = \path ->
 
 readBytes : Path -> Task (List U8) [ ReadBytes ReadErr ]*
 readBytes = \path ->
-    Effect.readAllBytes path
-        |> Task.mapFail ReadBytes
+    Effect.map (Effect.readAllBytes path) \answer ->
+        when List.len answer is
+            0 -> Err (UnknownError -1 path)
+            _  -> Ok answer
 
 
 writeUtf8 : Path, Str -> Task {} [ WriteUtf8 WriteErr ]*

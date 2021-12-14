@@ -132,21 +132,12 @@ pub extern "C" fn roc_fx_putLine(line: ManuallyDrop<RocStr>) -> () {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_readAllBytes(path: ManuallyDrop<RocStr>) -> (RocList<u8>, i32) {
+pub extern "C" fn roc_fx_readAllBytes(path: ManuallyDrop<RocStr>) -> RocList<u8> {
     let result = read_bytes(path.as_str());
 
     match result {
-        Ok(list) => {
-            println!("Read this list of bytes: {:?}", list);
-
-            (list, 0)
-        },
-        Err(err) => {
-            println!("Error reading file: {:?}", err);
-
-            // TODO give a more helpful error
-            (RocList::default(), -1)
-        }
+        Ok(list) => list,
+        Err(err) => RocList::default(),
     }
 }
 
