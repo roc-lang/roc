@@ -1,5 +1,5 @@
 use crate::def::Def;
-use crate::expr::{ClosureData, Expr::*, self};
+use crate::expr::{self, ClosureData, Expr::*};
 use crate::expr::{Expr, Field, Recursive};
 use crate::pattern::Pattern;
 use roc_collections::all::SendMap;
