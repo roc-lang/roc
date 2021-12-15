@@ -22,27 +22,13 @@ pub const REFCOUNT_MAX: usize = 0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum HelperOp {
-    Rc(RefcountOp),
-    Eq,
-}
-
-impl HelperOp {
-    fn rc(&self) -> RefcountOp {
-        match self {
-            Self::Rc(rc) => *rc,
-            _ => unreachable!(),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum RefcountOp {
     Inc,
     Dec,
     DecRef,
+    Eq,
 }
 
-impl From<&ModifyRc> for RefcountOp {
+impl From<&ModifyRc> for HelperOp {
     fn from(modify: &ModifyRc) -> Self {
         match modify {
             ModifyRc::Inc(..) => Self::Inc,
@@ -116,11 +102,8 @@ impl<'a> CodeGenHelp<'a> {
             ModifyRc::Inc(structure, amount) => {
                 let layout_isize = self.layout_isize;
 
-                let (proc_name, new_procs_info) = self.get_or_create_proc_symbols_recursive(
-                    ident_ids,
-                    &layout,
-                    HelperOp::Rc(RefcountOp::Inc),
-                );
+                let (proc_name, new_procs_info) =
+                    self.get_or_create_proc_symbols_recursive(ident_ids, &layout, HelperOp::Inc);
 
                 // Define a constant for the amount to increment
                 let amount_sym = self.create_symbol(ident_ids, "amount");
@@ -146,11 +129,8 @@ impl<'a> CodeGenHelp<'a> {
             }
 
             ModifyRc::Dec(structure) => {
-                let (proc_name, new_procs_info) = self.get_or_create_proc_symbols_recursive(
-                    ident_ids,
-                    &layout,
-                    HelperOp::Rc(RefcountOp::Dec),
-                );
+                let (proc_name, new_procs_info) =
+                    self.get_or_create_proc_symbols_recursive(ident_ids, &layout, HelperOp::Dec);
 
                 // Call helper proc, passing the Roc structure
                 let call_result_empty = self.create_symbol(ident_ids, "call_result_empty");
@@ -250,11 +230,13 @@ impl<'a> CodeGenHelp<'a> {
         arena: &'a Bump,
         ident_ids: &mut IdentIds,
     ) -> Vec<'a, Proc<'a>> {
+        use HelperOp::*;
+
         // Move the vector out of self, so we can loop over it safely
         let mut specs = std::mem::replace(&mut self.specs, Vec::with_capacity_in(0, arena));
 
         let procs_iter = specs.drain(0..).map(|(layout, op, proc_symbol)| match op {
-            HelperOp::Rc(_) => {
+            Inc | Dec | DecRef => {
                 debug_assert!(Self::is_rc_implemented_yet(&layout));
                 match layout {
                     Layout::Builtin(Builtin::Str) => {
@@ -264,7 +246,7 @@ impl<'a> CodeGenHelp<'a> {
                     _ => todo!("Please update is_rc_implemented_yet for `{:?}`", layout),
                 }
             }
-            HelperOp::Eq => match layout {
+            Eq => match layout {
                 Layout::Builtin(
                     Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal,
                 ) => panic!(
@@ -381,17 +363,15 @@ impl<'a> CodeGenHelp<'a> {
             self.specs.push((*layout, op, new_symbol));
 
             let new_proc_layout = match op {
-                HelperOp::Rc(rc) => match rc {
-                    RefcountOp::Inc => Some(ProcLayout {
-                        arguments: self.arena.alloc([*layout, self.layout_isize]),
-                        result: LAYOUT_UNIT,
-                    }),
-                    RefcountOp::Dec => Some(ProcLayout {
-                        arguments: self.arena.alloc([*layout]),
-                        result: LAYOUT_UNIT,
-                    }),
-                    RefcountOp::DecRef => None,
-                },
+                HelperOp::Inc => Some(ProcLayout {
+                    arguments: self.arena.alloc([*layout, self.layout_isize]),
+                    result: LAYOUT_UNIT,
+                }),
+                HelperOp::Dec => Some(ProcLayout {
+                    arguments: self.arena.alloc([*layout]),
+                    result: LAYOUT_UNIT,
+                }),
+                HelperOp::DecRef => None,
                 HelperOp::Eq => Some(ProcLayout {
                     arguments: self.arena.alloc([*layout, *layout]),
                     result: LAYOUT_BOOL,
@@ -416,13 +396,11 @@ impl<'a> CodeGenHelp<'a> {
     fn gen_args(&self, op: HelperOp, layout: Layout<'a>) -> &'a [(Layout<'a>, Symbol)] {
         let roc_value = (layout, Symbol::ARG_1);
         match op {
-            HelperOp::Rc(rc_op) => match rc_op {
-                RefcountOp::Inc => {
-                    let inc_amount = (self.layout_isize, Symbol::ARG_2);
-                    self.arena.alloc([roc_value, inc_amount])
-                }
-                RefcountOp::Dec | RefcountOp::DecRef => self.arena.alloc([roc_value]),
-            },
+            HelperOp::Inc => {
+                let inc_amount = (self.layout_isize, Symbol::ARG_2);
+                self.arena.alloc([roc_value, inc_amount])
+            }
+            HelperOp::Dec | HelperOp::DecRef => self.arena.alloc([roc_value]),
             HelperOp::Eq => self.arena.alloc([roc_value, (layout, Symbol::ARG_2)]),
         }
     }
@@ -490,21 +468,22 @@ impl<'a> CodeGenHelp<'a> {
 
         // Call the relevant Zig lowlevel to actually modify the refcount
         let zig_call_result = self.create_symbol(ident_ids, "zig_call_result");
-        let zig_call_expr = match op.rc() {
-            RefcountOp::Inc => Expr::Call(Call {
+        let zig_call_expr = match op {
+            HelperOp::Inc => Expr::Call(Call {
                 call_type: CallType::LowLevel {
                     op: LowLevel::RefCountInc,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
                 arguments: self.arena.alloc([rc_ptr, Symbol::ARG_2]),
             }),
-            RefcountOp::Dec | RefcountOp::DecRef => Expr::Call(Call {
+            HelperOp::Dec | HelperOp::DecRef => Expr::Call(Call {
                 call_type: CallType::LowLevel {
                     op: LowLevel::RefCountDec,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
                 arguments: self.arena.alloc([rc_ptr, alignment]),
             }),
+            _ => unreachable!(),
         };
         let zig_call_stmt = |next| Stmt::Let(zig_call_result, zig_call_expr, LAYOUT_UNIT, next);
 
