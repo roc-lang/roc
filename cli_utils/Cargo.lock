@@ -1310,13 +1310,13 @@ dependencies = [
 name = "inkwell"
 version = "0.1.0"
 dependencies = [
- "inkwell 0.1.0 (git+https://github.com/rtfeldman/inkwell?tag=llvm12-0.release8)",
+ "inkwell 0.1.0 (git+https://github.com/rtfeldman/inkwell?tag=llvm13-0.release1)",
 ]
 
 [[package]]
 name = "inkwell"
 version = "0.1.0"
-source = "git+https://github.com/rtfeldman/inkwell?tag=llvm12-0.release8#14b78d96d2dbc95694e181be66e4cd53df3fc02f"
+source = "git+https://github.com/rtfeldman/inkwell?tag=llvm13-0.release1#e15d665227b2acad4ca949820d80048e09f3f4e5"
 dependencies = [
  "either",
  "inkwell_internals",
@@ -1324,13 +1324,12 @@ dependencies = [
  "llvm-sys",
  "once_cell",
  "parking_lot",
- "regex",
 ]
 
 [[package]]
 name = "inkwell_internals"
-version = "0.3.0"
-source = "git+https://github.com/rtfeldman/inkwell?tag=llvm12-0.release8#14b78d96d2dbc95694e181be66e4cd53df3fc02f"
+version = "0.5.0"
+source = "git+https://github.com/rtfeldman/inkwell?tag=llvm13-0.release1#e15d665227b2acad4ca949820d80048e09f3f4e5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2666,6 +2665,7 @@ dependencies = [
  "roc_collections",
  "roc_module",
  "roc_mono",
+ "roc_reporting",
  "roc_std",
  "target-lexicon",
 ]

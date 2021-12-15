@@ -3091,7 +3091,7 @@ fn list_keep_errs(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::ListKeepErrs, var_store)
 }
 
-/// List.keepErrs: List before, (before -> Result * after) -> List after
+/// List.range: Int a, Int a -> List (Int a)
 fn list_range(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::ListRange, var_store)
 }
