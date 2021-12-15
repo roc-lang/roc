@@ -1,0 +1,18 @@
+[package]
+name = "roc_debug_buf"
+version = "0.1.0"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+edition = "2018"
+
+[dependencies]
+backtrace = "0.3.63"
+serde = "1.0.130"
+serde_json = "1.0.72"
+blake2 = "0.10.0"
+base32 = "0.4.0"
+
+[dev-dependencies]
+pretty_assertions = "1.0.0"
+indoc = "1.0.3"
+roc_test_utils = { path = "../../test_utils" }

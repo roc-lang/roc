@@ -31,6 +31,7 @@ roc_types = { path = "../compiler/types" }
 roc_unify = { path = "../compiler/unify" }
 roc_reporting = { path = "../reporting" }
 roc_solve = { path = "../compiler/solve" }
+roc_debug_buf = { path = "../compiler/debug_buf" }
 ven_graph = { path = "../vendor/pathfinding" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
 arrayvec = "0.7.2"
