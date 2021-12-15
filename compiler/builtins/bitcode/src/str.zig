@@ -342,7 +342,7 @@ pub const RocStr = extern struct {
         @memcpy(dest, src, self.len());
     }
 
-    test "RocStr.eq: equal" {
+    test "RocStr.eq: small, equal" {
         const str1_len = 3;
         var str1: [str1_len]u8 = "abc".*;
         const str1_ptr: [*]u8 = &str1;
@@ -359,7 +359,7 @@ pub const RocStr = extern struct {
         roc_str2.deinit();
     }
 
-    test "RocStr.eq: not equal different length" {
+    test "RocStr.eq: small, not equal, different length" {
         const str1_len = 4;
         var str1: [str1_len]u8 = "abcd".*;
         const str1_ptr: [*]u8 = &str1;
@@ -378,7 +378,7 @@ pub const RocStr = extern struct {
         try expect(!roc_str1.eq(roc_str2));
     }
 
-    test "RocStr.eq: not equal same length" {
+    test "RocStr.eq: small, not equal, same length" {
         const str1_len = 3;
         var str1: [str1_len]u8 = "acb".*;
         const str1_ptr: [*]u8 = &str1;
@@ -395,6 +395,67 @@ pub const RocStr = extern struct {
         }
 
         try expect(!roc_str1.eq(roc_str2));
+    }
+
+    test "RocStr.eq: large, equal" {
+        const content = "012345678901234567890123456789";
+        const roc_str1 = RocStr.init(content, content.len);
+        const roc_str2 = RocStr.init(content, content.len);
+
+        defer {
+            roc_str1.deinit();
+            roc_str2.deinit();
+        }
+
+        try expect(roc_str1.eq(roc_str2));
+    }
+
+    test "RocStr.eq: large, different lengths, unequal" {
+        const content1 = "012345678901234567890123456789";
+        const roc_str1 = RocStr.init(content1, content1.len);
+        const content2 = "012345678901234567890";
+        const roc_str2 = RocStr.init(content2, content2.len);
+
+        defer {
+            roc_str1.deinit();
+            roc_str2.deinit();
+        }
+
+        try expect(!roc_str1.eq(roc_str2));
+    }
+
+    test "RocStr.eq: large, different content, unequal" {
+        const content1 = "012345678901234567890123456789!!";
+        const roc_str1 = RocStr.init(content1, content1.len);
+        const content2 = "012345678901234567890123456789--";
+        const roc_str2 = RocStr.init(content2, content2.len);
+
+        defer {
+            roc_str1.deinit();
+            roc_str2.deinit();
+        }
+
+        try expect(!roc_str1.eq(roc_str2));
+    }
+
+    test "RocStr.eq: large, garbage after end, equal" {
+        const content = "012345678901234567890123456789";
+        const roc_str1 = RocStr.init(content, content.len);
+        const roc_str2 = RocStr.init(content, content.len);
+        try expect(roc_str1.str_bytes != roc_str2.str_bytes);
+
+        // Insert garbage after the end of each string
+        roc_str1.str_bytes.?[30] = '!';
+        roc_str1.str_bytes.?[31] = '!';
+        roc_str2.str_bytes.?[30] = '-';
+        roc_str2.str_bytes.?[31] = '-';
+
+        defer {
+            roc_str1.deinit();
+            roc_str2.deinit();
+        }
+
+        try expect(roc_str1.eq(roc_str2));
     }
 };
 
