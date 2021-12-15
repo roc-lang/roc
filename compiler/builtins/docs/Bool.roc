@@ -2,9 +2,6 @@ interface Bool
     exposes [ and, isEq, isNotEq, not, or, xor ]
     imports []
 
-## Returns `False` when given `True`, and vice versa.
-not : [True, False] -> [True, False]
-
 ## Returns `True` when given `True` and `True`, and `False` when either argument is `False`.
 ##
 ## `a && b` is shorthand for `Bool.and a b`
@@ -38,29 +35,6 @@ not : [True, False] -> [True, False]
 ## one explicitly!)
 and : Bool, Bool -> Bool
 
-
-## Returns `True` when given `True` for either argument, and `False` only when given `False` and `False`.
-##
-## `a || b` is shorthand for `Bool.or a b`.
-##
-## >>> True || True
-#
-## >>> True || False
-#
-## >>> False || True
-##
-## >>> False || False
-##
-## ## Performance Notes
-##
-## In some languages, `&&` and `||` are special-cased in the compiler to skip
-## evaluating the expression after the operator under certain circumstances.
-## In Roc, this is not the case. See the performance notes for [Bool.and] for details.
-or : Bool, Bool -> Bool
-
-## Exclusive or
-xor : Bool, Bool -> Bool
-
 # TODO: removed `'` from signature because parser does not support it yet
 # Original signature: `isEq : 'val, 'val -> Bool`
 ## Returns `True` if the two values are *structurally equal*, and `False` otherwise.
@@ -88,3 +62,28 @@ isEq : val, val -> Bool
 ## Note that `isNotEq` takes `'val` instead of `val`, which means `isNotEq` does not
 ## accept arguments whose types contain functions.
 isNotEq : val, val -> Bool
+
+## Returns `False` when given `True`, and vice versa.
+not : [True, False] -> [True, False]
+
+## Returns `True` when given `True` for either argument, and `False` only when given `False` and `False`.
+##
+## `a || b` is shorthand for `Bool.or a b`.
+##
+## >>> True || True
+#
+## >>> True || False
+#
+## >>> False || True
+##
+## >>> False || False
+##
+## ## Performance Notes
+##
+## In some languages, `&&` and `||` are special-cased in the compiler to skip
+## evaluating the expression after the operator under certain circumstances.
+## In Roc, this is not the case. See the performance notes for [Bool.and] for details.
+or : Bool, Bool -> Bool
+
+## Exclusive or
+xor : Bool, Bool -> Bool

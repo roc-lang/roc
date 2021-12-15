@@ -307,30 +307,6 @@ Float a : Num [ @Fraction a ]
 ## * Finally, if a particular numeric calculation is running too slowly, you can try experimenting with other number sizes. This rarely makes a meaningful difference, but some processors can operate on different number sizes at different speeds.
 Int size : Num [ @Integer size ]
 
-## A signed 8-bit integer, ranging from -128 to 127
-I8 : Int [ @Signed8 ]
-U8 : Int [ @Unsigned8 ]
-I16 : Int [ @Signed16 ]
-U16 : Int [ @Unsigned16 ]
-I32 : Int [ @Signed32 ]
-U32 : Int [ @Unsigned32 ]
-I64 : Int [ @Signed64 ]
-U64 : Int [ @Unsigned64 ]
-I128 : Int [ @Signed128 ]
-U128 : Int [ @Unsigned128 ]
-
-## A [natural number](https://en.wikipedia.org/wiki/Natural_number) represented
-## as a 64-bit unsigned integer on 64-bit systems, a 32-bit unsigned integer
-## on 32-bit systems, and so on.
-##
-## This system-specific size makes it useful for certain data structure
-## functions like [List.len], because the number of elements many data strucures
-## can hold is also system-specific. For example, the maximum number of elements
-## a [List] can hold on a 64-bit system fits in a 64-bit unsigned integer, and
-## on a 32-bit system it fits in 32-bit unsigned integer. This makes [Nat] a
-## good fit for [List.len] regardless of system.
-Nat : Int [ @Natural ]
-
 ## A 64-bit signed integer. All number literals without decimal points are compatible with #Int values.
 ##
 ## >>> 1
@@ -407,28 +383,32 @@ Nat : Int [ @Natural ]
 ## If you need to do math outside these bounds, consider using a larger numeric size.
 Int size : Num [ @Int size ]
 
-## Convert
+## A signed 8-bit integer, ranging from -128 to 127
+I8 : Int [ @Signed8 ]
+I16 : Int [ @Signed16 ]
+I32 : Int [ @Signed32 ]
+I64 : Int [ @Signed64 ]
+I128 : Int [ @Signed128 ]
 
-## Return a negative number when given a positive one, and vice versa.
+## A [natural number](https://en.wikipedia.org/wiki/Natural_number) represented
+## as a 64-bit unsigned integer on 64-bit systems, a 32-bit unsigned integer
+## on 32-bit systems, and so on.
 ##
-## >>> Num.neg 5
-##
-## >>> Num.neg -2.5
-##
-## >>> Num.neg 0
-##
-## >>> Num.neg 0.0
-##
-## This is safe to use with any [Float], but it can cause overflow when used with certain #Int values.
-##
-## For example, calling #Num.neg on the lowest value of a signed integer (such as #Int.lowestI64 or #Int.lowestI32) will cause overflow.
-## This is because, for any given size of signed integer (32-bit, 64-bit, etc.) its negated lowest value turns out to be 1 higher than
-## the highest value it can represent. (For this reason, calling #Num.abs on the lowest signed value will also cause overflow.)
-##
-## Additionally, calling #Num.neg on any unsigned integer (such as any #U64 or #U32 value) other than zero will cause overflow.
-##
-## (It will never crash when given a [Float], however, because of how floating point numbers represent positive and negative numbers.)
-neg : Num a -> Num a
+## This system-specific size makes it useful for certain data structure
+## functions like [List.len], because the number of elements many data strucures
+## can hold is also system-specific. For example, the maximum number of elements
+## a [List] can hold on a 64-bit system fits in a 64-bit unsigned integer, and
+## on a 32-bit system it fits in 32-bit unsigned integer. This makes [Nat] a
+## good fit for [List.len] regardless of system.
+Nat : Int [ @Natural ]
+
+U8 : Int [ @Unsigned8 ]
+U16 : Int [ @Unsigned16 ]
+U32 : Int [ @Unsigned32 ]
+U64 : Int [ @Unsigned64 ]
+U128 : Int [ @Unsigned128 ]
+
+## Convert
 
 ## Return the absolute value of the number.
 ##
@@ -453,26 +433,47 @@ neg : Num a -> Num a
 ## Calling this on an unsigned integer (like #U32 or #U64) never does anything.
 abs : Num a -> Num a
 
+## Return a negative number when given a positive one, and vice versa.
+##
+## >>> Num.neg 5
+##
+## >>> Num.neg -2.5
+##
+## >>> Num.neg 0
+##
+## >>> Num.neg 0.0
+##
+## This is safe to use with any [Float], but it can cause overflow when used with certain #Int values.
+##
+## For example, calling #Num.neg on the lowest value of a signed integer (such as #Int.lowestI64 or #Int.lowestI32) will cause overflow.
+## This is because, for any given size of signed integer (32-bit, 64-bit, etc.) its negated lowest value turns out to be 1 higher than
+## the highest value it can represent. (For this reason, calling #Num.abs on the lowest signed value will also cause overflow.)
+##
+## Additionally, calling #Num.neg on any unsigned integer (such as any #U64 or #U32 value) other than zero will cause overflow.
+##
+## (It will never crash when given a [Float], however, because of how floating point numbers represent positive and negative numbers.)
+neg : Num a -> Num a
+
 ## Check
-
-## The same as using `== 0` on the number.
-isZero : Num * -> Bool
-
-## Positive numbers are greater than 0.
-isPositive : Num * -> Bool
-
-## Negative numbers are less than 0.
-isNegative : Num * -> Bool
 
 ## A number is even if dividing it by 2 gives a remainder of 0.
 ##
 ## Examples of even numbers: 0, 2, 4, 6, 8, -2, -4, -6, -8
 isEven : Num * -> Bool
 
+## Negative numbers are less than 0.
+isNegative : Num * -> Bool
+
 ## A number is odd if dividing it by 2 gives a remainder of 1.
 ##
 ## Examples of odd numbers: 1, 3, 5, 7, -1, -3, -5, -7
 isOdd : Num * -> Bool
+
+## Positive numbers are greater than 0.
+isPositive : Num * -> Bool
+
+## The same as using `== 0` on the number.
+isZero : Num * -> Bool
 
 ## Arithmetic
 
@@ -503,33 +504,6 @@ add : Num a, Num a -> Num a
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
 addCheckOverflow : Num a, Num a -> Result (Num a) [ Overflow ]*
 
-## Subtract two numbers of the same type.
-##
-## (To subtract an #Int and a [Float], first convert one so that they both have the same type. There are functions in the [`Frac`](/Frac) module that can convert both #Int to [Float] and the other way around.)
-##
-## `a - b` is shorthand for `Num.sub a b`.
-##
-## >>> 7 - 5
-##
-## >>> Num.sub 7 5
-##
-## `Num.sub` can be convenient in pipelines.
-##
-## >>> Frac.pi
-## >>>     |> Num.sub 2.0
-##
-## If the answer to this operation can't fit in the return value (e.g. an
-## [I8] answer that's higher than 127 or lower than -128), the result is an
-## *overflow*. For [F64] and [F32], overflow results in an answer of either
-## ∞ or -∞. For all other number types, overflow results in a panic.
-sub : Num a, Num a -> Num a
-
-## Subtract two numbers and check for overflow.
-##
-## This is the same as [Num.sub] except if the operation overflows, instead of
-## panicking or returning ∞ or -∞, it will return `Err Overflow`.
-subCheckOverflow : Num a, Num a -> Result (Num a) [ Overflow ]*
-
 ## Multiply two numbers of the same type.
 ##
 ## (To multiply an #Int and a [Float], first convert one so that they both have the same type. There are functions in the [`Frac`](/Frac) module that can convert both #Int to [Float] and the other way around.)
@@ -557,26 +531,61 @@ mul : Num a, Num a -> Num a
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
 mulCheckOverflow : Num a, Num a -> Result (Num a) [ Overflow ]*
 
+## Subtract two numbers of the same type.
+##
+## (To subtract an #Int and a [Float], first convert one so that they both have the same type. There are functions in the [`Frac`](/Frac) module that can convert both #Int to [Float] and the other way around.)
+##
+## `a - b` is shorthand for `Num.sub a b`.
+##
+## >>> 7 - 5
+##
+## >>> Num.sub 7 5
+##
+## `Num.sub` can be convenient in pipelines.
+##
+## >>> Frac.pi
+## >>>     |> Num.sub 2.0
+##
+## If the answer to this operation can't fit in the return value (e.g. an
+## [I8] answer that's higher than 127 or lower than -128), the result is an
+## *overflow*. For [F64] and [F32], overflow results in an answer of either
+## ∞ or -∞. For all other number types, overflow results in a panic.
+sub : Num a, Num a -> Num a
+
+## Subtract two numbers and check for overflow.
+##
+## This is the same as [Num.sub] except if the operation overflows, instead of
+## panicking or returning ∞ or -∞, it will return `Err Overflow`.
+subCheckOverflow : Num a, Num a -> Result (Num a) [ Overflow ]*
+
 ## Convert
 
-## Convert a number to a [Str].
+ceil : Float * -> Int *
+
+## Divide two integers and #Num.round  the resulut.
 ##
-## This is the same as calling `Num.format {}` - so for more details on
-## exact formatting, see [Num.format].
+## Division by zero is undefined in mathematics. As such, you should make
+## sure never to pass zero as the denomaintor to this function!
 ##
-## >>> Num.toStr 42
+## If zero does get passed as the denominator...
 ##
-## Only [Float] values will include a decimal point, and they will always include one.
+## * In a development build, you'll get an assertion failure.
+## * In an optimized build, the function will return 0.
 ##
-## >>> Num.toStr 4.2
+## `a // b` is shorthand for `Num.divRound a b`.
 ##
-## >>> Num.toStr 4.0
+## >>> 5 // 7
 ##
-## When this function is given a non-[finite](Num.isFinite)
-## [F64] or [F32] value, the returned string will be `"NaN"`, `"∞"`, or `"-∞"`.
+## >>> Num.divRound 5 7
 ##
-## To get strings in hexadecimal, octal, or binary format, use [Num.format].
-toStr : Num * -> Str
+## >>> 8 // -3
+##
+## >>> Num.divRound 8 -3
+##
+## This is the same as the #// operator.
+divRound : Int a, Int a -> Int a
+
+floor : Float * -> Int *
 
 ## Convert a number into a [Str], formatted with the given options.
 ##
@@ -640,82 +649,6 @@ format :
     }
     -> Str
 
-## Round off the given float to the nearest integer.
-round : Float * -> Int *
-ceil : Float * -> Int *
-floor : Float * -> Int *
-trunc : Float * -> Int *
-
-## Convert an #Int to a #Nat. If the given number doesn't fit in #Nat, it will be truncated.
-## Since #Nat has a different maximum number depending on the system you're building
-## for, this may give a different answer on different systems.
-##
-## For example, on a 32-bit system, [Num.maxNat] will return the same answer as
-## #Num.maxU32. This means that calling `Num.toNat 9_000_000_000` on a 32-bit
-## system will return #Num.maxU32 instead of 9 billion, because 9 billion is
-## higher than #Num.maxU32 and will not fit in a #Nat on a 32-bit system.
-##
-## However, calling `Num.toNat 9_000_000_000` on a 64-bit system will return
-## the #Nat value of 9_000_000_000. This is because on a 64-bit system, #Nat can
-## hold up to #Num.maxU64, and 9_000_000_000 is lower than #Num.maxU64.
-##
-## To convert a [Float] to a #Nat, first call either #Num.round, #Num.ceil, or #Num.floor
-## on it, then call this on the resulting #Int.
-toNat : Int * -> Nat
-
-## Convert an #Int to an #I8. If the given number doesn't fit in #I8, it will be truncated.
-##
-## To convert a [Float] to an #I8, first call either #Num.round, #Num.ceil, or #Num.floor
-## on it, then call this on the resulting #Int.
-toI8 : Int * -> I8
-toI16 : Int * -> I16
-toI32 : Int * -> I32
-toI64 : Int * -> I64
-toI128 : Int * -> I128
-
-## Convert an #Int to an #U8. If the given number doesn't fit in #U8, it will be truncated.
-## Crashes if the given number is negative.
-toU8 : Int * -> U8
-toU16 : Int * -> U16
-toU32 : Int * -> U32
-toU64 : Int * -> U64
-toU128 : Int * -> U128
-
-## Convert a #Num to a #F32. If the given number can't be precisely represented in a #F32,
-## there will be a loss of precision.
-toF32 : Num * -> F32
-
-## Convert a #Num to a #F64. If the given number can't be precisely represented in a #F64,
-## there will be a loss of precision.
-toF64 : Num * -> F64
-
-## Convert a #Num to a #Dec. If the given number can't be precisely represented in a #Dec,
-## there will be a loss of precision.
-toDec : Num * -> Dec
-
-## Divide two integers and #Num.round  the resulut.
-##
-## Division by zero is undefined in mathematics. As such, you should make
-## sure never to pass zero as the denomaintor to this function!
-##
-## If zero does get passed as the denominator...
-##
-## * In a development build, you'll get an assertion failure.
-## * In an optimized build, the function will return 0.
-##
-## `a // b` is shorthand for `Num.divRound a b`.
-##
-## >>> 5 // 7
-##
-## >>> Num.divRound 5 7
-##
-## >>> 8 // -3
-##
-## >>> Num.divRound 8 -3
-##
-## This is the same as the #// operator.
-divRound : Int a, Int a -> Int a
-
 ## Perform flooring modulo on two integers.
 ##
 ## Modulo is the same as remainder when working with positive numbers,
@@ -738,16 +671,108 @@ divRound : Int a, Int a -> Int a
 ## >>> Int.modFloor -8 -3
 #modFloor : Int a, Int a -> Result (Int a) [ DivByZero ]*
 
+## Round off the given float to the nearest integer.
+round : Float * -> Int *
+
+## Convert a #Num to a #Dec. If the given number can't be precisely represented in a #Dec,
+## there will be a loss of precision.
+toDec : Num * -> Dec
+
+## Convert a #Num to a #F32. If the given number can't be precisely represented in a #F32,
+## there will be a loss of precision.
+toF32 : Num * -> F32
+
+## Convert a #Num to a #F64. If the given number can't be precisely represented in a #F64,
+## there will be a loss of precision.
+toF64 : Num * -> F64
+
+## Convert an #Int to an #I8. If the given number doesn't fit in #I8, it will be truncated.
+##
+## To convert a [Float] to an #I8, first call either #Num.round, #Num.ceil, or #Num.floor
+## on it, then call this on the resulting #Int.
+toI8 : Int * -> I8
+toI16 : Int * -> I16
+toI32 : Int * -> I32
+toI64 : Int * -> I64
+toI128 : Int * -> I128
+
+## Convert an #Int to a #Nat. If the given number doesn't fit in #Nat, it will be truncated.
+## Since #Nat has a different maximum number depending on the system you're building
+## for, this may give a different answer on different systems.
+##
+## For example, on a 32-bit system, [Num.maxNat] will return the same answer as
+## #Num.maxU32. This means that calling `Num.toNat 9_000_000_000` on a 32-bit
+## system will return #Num.maxU32 instead of 9 billion, because 9 billion is
+## higher than #Num.maxU32 and will not fit in a #Nat on a 32-bit system.
+##
+## However, calling `Num.toNat 9_000_000_000` on a 64-bit system will return
+## the #Nat value of 9_000_000_000. This is because on a 64-bit system, #Nat can
+## hold up to #Num.maxU64, and 9_000_000_000 is lower than #Num.maxU64.
+##
+## To convert a [Float] to a #Nat, first call either #Num.round, #Num.ceil, or #Num.floor
+## on it, then call this on the resulting #Int.
+toNat : Int * -> Nat
+
+## Convert a number to a [Str].
+##
+## This is the same as calling `Num.format {}` - so for more details on
+## exact formatting, see [Num.format].
+##
+## >>> Num.toStr 42
+##
+## Only [Float] values will include a decimal point, and they will always include one.
+##
+## >>> Num.toStr 4.2
+##
+## >>> Num.toStr 4.0
+##
+## When this function is given a non-[finite](Num.isFinite)
+## [F64] or [F32] value, the returned string will be `"NaN"`, `"∞"`, or `"-∞"`.
+##
+## To get strings in hexadecimal, octal, or binary format, use [Num.format].
+toStr : Num * -> Str
+
+## Convert an #Int to an #U8. If the given number doesn't fit in #U8, it will be truncated.
+## Crashes if the given number is negative.
+toU8 : Int * -> U8
+toU16 : Int * -> U16
+toU32 : Int * -> U32
+toU64 : Int * -> U64
+toU128 : Int * -> U128
+
+trunc : Float * -> Int *
 
 ## Bitwise
-
-xor : Int a, Int a -> Int a
 
 and : Int a, Int a -> Int a
 
 not : Int a -> Int a
 
+xor : Int a, Int a -> Int a
+
 ## Limits
+
+## The highest supported #Dec value you can have, which is precisely 170_141_183_460_469_231_731.687303715884105727.
+##
+## If you go higher than this, your running Roc code will crash - so be careful not to!
+maxDec : Dec
+
+## The highest supported #F32 value you can have, which is approximately 1.8 × 10^308.
+##
+## If you go higher than this, your running Roc code will crash - so be careful not to!
+maxF32 : F32
+
+## The highest supported #F64 value you can have, which is approximately 1.8 × 10^308.
+##
+## If you go higher than this, your running Roc code will crash - so be careful not to!
+maxF64 : F64
+
+## The highest number that can be stored in an #I32 without overflowing its
+## available memory and crashing.
+##
+## Note that this is smaller than the positive version of #Int.minI32
+## which means if you call #Num.abs on #Int.minI32, it will overflow and crash!
+maxI32 : I32
 
 ## The highest number that can be stored in a #Nat without overflowing its
 ## available memory and crashing.
@@ -757,19 +782,32 @@ not : Int a -> Int a
 ## 32-bit system, this will be equal to #Num.maxU32.
 maxNat : Nat
 
-## The number zero.
-##
-## #Num.minNat is the lowest number that can be stored in a #Nat, which is zero
-## because #Nat is [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
-## and zero is the lowest unsigned number. Unsigned numbers cannot be negative.
-minNat : Nat
-
-## The highest number that can be stored in an #I32 without overflowing its
+## The highest number that can be stored in a #U32 without overflowing its
 ## available memory and crashing.
 ##
-## Note that this is smaller than the positive version of #Int.minI32
-## which means if you call #Num.abs on #Int.minI32, it will overflow and crash!
-maxI32 : I32
+## For reference, that number is `4_294_967_295`, which is over 4 million.
+maxU32 : U32
+
+## The highest number that can be stored in a #U64 without overflowing its
+## available memory and crashing.
+##
+## For reference, that number is `18_446_744_073_709_551_615`, which is over 18 quintillion.
+maxU64 : U64
+
+## The lowest supported #Dec value you can have, which is precisely -170_141_183_460_469_231_731.687303715884105728.
+##
+## If you go lower than this, your running Roc code will crash - so be careful not to!
+minDec : Dec
+
+## The lowest supported #F32 value you can have, which is approximately -1.8 × 10^308.
+##
+## If you go lower than this, your running Roc code will crash - so be careful not to!
+minF32 : F32
+
+## The lowest supported #F64 value you can have, which is approximately -1.8 × 10^308.
+##
+## If you go lower than this, your running Roc code will crash - so be careful not to!
+minF64 : F64
 
 ## The min number that can be stored in an #I32 without overflowing its
 ## available memory and crashing.
@@ -778,24 +816,12 @@ maxI32 : I32
 ## #Int.maxI32, which means if you call #Num.abs on #Int.minI32, it will overflow and crash!
 minI32 : I32
 
-## The highest number that can be stored in a #U64 without overflowing its
-## available memory and crashing.
-##
-## For reference, that number is `18_446_744_073_709_551_615`, which is over 18 quintillion.
-maxU64 : U64
-
 ## The number zero.
 ##
-## #Num.minU64 is the lowest number that can be stored in a #U64, which is zero
-## because #U64 is [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
+## #Num.minNat is the lowest number that can be stored in a #Nat, which is zero
+## because #Nat is [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
 ## and zero is the lowest unsigned number. Unsigned numbers cannot be negative.
-minU64 : U64
-
-## The highest number that can be stored in a #U32 without overflowing its
-## available memory and crashing.
-##
-## For reference, that number is `4_294_967_295`, which is over 4 million.
-maxU32 : U32
+minNat : Nat
 
 ## The number zero.
 ##
@@ -804,35 +830,12 @@ maxU32 : U32
 ## and zero is the lowest unsigned number. Unsigned numbers cannot be negative.
 minU32 : U32
 
-## The highest supported #F64 value you can have, which is approximately 1.8 × 10^308.
+## The number zero.
 ##
-## If you go higher than this, your running Roc code will crash - so be careful not to!
-maxF64 : F64
-
-## The lowest supported #F64 value you can have, which is approximately -1.8 × 10^308.
-##
-## If you go lower than this, your running Roc code will crash - so be careful not to!
-minF64 : F64
-
-## The highest supported #F32 value you can have, which is approximately 1.8 × 10^308.
-##
-## If you go higher than this, your running Roc code will crash - so be careful not to!
-maxF32 : F32
-
-## The lowest supported #F32 value you can have, which is approximately -1.8 × 10^308.
-##
-## If you go lower than this, your running Roc code will crash - so be careful not to!
-minF32 : F32
-
-## The highest supported #Dec value you can have, which is precisely 170_141_183_460_469_231_731.687303715884105727.
-##
-## If you go higher than this, your running Roc code will crash - so be careful not to!
-maxDec : Dec
-
-## The lowest supported #Dec value you can have, which is precisely -170_141_183_460_469_231_731.687303715884105728.
-##
-## If you go lower than this, your running Roc code will crash - so be careful not to!
-minDec : Dec
+## #Num.minU64 is the lowest number that can be stored in a #U64, which is zero
+## because #U64 is [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
+## and zero is the lowest unsigned number. Unsigned numbers cannot be negative.
+minU64 : U64
 
 ## Constants
 
@@ -844,17 +847,17 @@ pi : Float *
 
 ## Trigonometry
 
-cos : Float a -> Float a
-
 acos : Float a -> Float a
-
-sin : Float a -> Float a
 
 asin : Float a -> Float a
 
-tan : Float a -> Float a
-
 atan : Float a -> Float a
+
+cos : Float a -> Float a
+
+sin : Float a -> Float a
+
+tan : Float a -> Float a
 
 ## Other Calculations (arithmetic?)
 
@@ -890,6 +893,28 @@ atan : Float a -> Float a
 ## >>>     |> Num.div 2.0
 div : Float a, Float a -> Float a
 
+## Raises an integer to the power of another, by multiplying the integer by
+## itself the given number of times.
+##
+## This process is known as [exponentiation by squaring](https://en.wikipedia.org/wiki/Exponentiation_by_squaring).
+##
+## For a [Float] alternative to this function, which supports negative exponents,
+## see #Num.exp.
+##
+## >>> Num.exp 5 0
+##
+## >>> Num.exp 5 1
+##
+## >>> Num.exp 5 2
+##
+## >>> Num.exp 5 6
+##
+## ## Performance Notes
+##
+## Be careful! Even though this function takes only a #U8, it is very easy to
+## overflow
+expBySquaring : Int a, U8 -> Int a
+
 ## Perform modulo on two [Float]s.
 ##
 ## Modulo is the same as remainder when working with positive numbers,
@@ -921,28 +946,6 @@ mod : Float a, Float a -> Float a
 ## For an #Int alternative to this function, see #Num.raise.
 pow : Float a, Float a -> Float a
 
-## Raises an integer to the power of another, by multiplying the integer by
-## itself the given number of times.
-##
-## This process is known as [exponentiation by squaring](https://en.wikipedia.org/wiki/Exponentiation_by_squaring).
-##
-## For a [Float] alternative to this function, which supports negative exponents,
-## see #Num.exp.
-##
-## >>> Num.exp 5 0
-##
-## >>> Num.exp 5 1
-##
-## >>> Num.exp 5 2
-##
-## >>> Num.exp 5 6
-##
-## ## Performance Notes
-##
-## Be careful! Even though this function takes only a #U8, it is very easy to
-## overflow
-expBySquaring : Int a, U8 -> Int a
-
 ## Returns an approximation of the absolute value of a [Float]'s square root.
 ##
 ## The square root of a negative number is an irrational number, and [Float] only
@@ -973,6 +976,19 @@ sqrt : Float a -> Float a
 
 ## Bit shifts
 
+## [Endianness](https://en.wikipedia.org/wiki/Endianness)
+# Endi : [ Big, Little, Native ]
+
+## when Num.fromBytes bytes Big is
+##     Ok f64 -> ...
+##     Err (ExpectedNum (Float Binary64)) -> ...
+# fromBytes : List U8, Endi -> Result (Num a) [ ExpectedNum a ]*
+
+## when Num.parseBytes bytes Big is
+##     Ok { val: f64, rest } -> ...
+##     Err (ExpectedNum (Float Binary64)) -> ...
+# parseBytes : List U8, Endi -> Result { val : Num a, rest : List U8 } [ ExpectedNum a ]*
+
 ## [Logical bit shift](https://en.wikipedia.org/wiki/Bitwise_operation#Logical_shift) left.
 ##
 ## `a << b` is shorthand for `Num.shl a b`.
@@ -997,43 +1013,34 @@ shr : Int a, Int a -> Int a
 ## the beginning. (In contrast, [shr] replaces discarded bits with zeroes.)
 shrWrap : Int a, Int a -> Int a
 
-## [Endianness](https://en.wikipedia.org/wiki/Endianness)
-# Endi : [ Big, Little, Native ]
-
 ## The `Endi` argument does not matter for [U8] and [I8], since they have
 ## only one byte.
 # toBytes : Num *, Endi -> List U8
 
-## when Num.parseBytes bytes Big is
-##     Ok { val: f64, rest } -> ...
-##     Err (ExpectedNum (Float Binary64)) -> ...
-# parseBytes : List U8, Endi -> Result { val : Num a, rest : List U8 } [ ExpectedNum a ]*
-
-## when Num.fromBytes bytes Big is
-##     Ok f64 -> ...
-##     Err (ExpectedNum (Float Binary64)) -> ...
-# fromBytes : List U8, Endi -> Result (Num a) [ ExpectedNum a ]*
-
 ## Comparison
 
-## Returns `True` if the first number is less than the second.
-##
-## `a < b` is shorthand for `Num.isLt a b`.
-##
-## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
-## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
-##
-## >>> 5
-## >>>     |> Num.isLt 6
-isLt : Num a, Num a -> Bool
+# Branchless implementation that works for all numeric types:
+#
+# let is_lt = arg1 < arg2;
+# let is_eq = arg1 == arg2;
+# return (is_lt as i8 - is_eq as i8) + 1;
+#
+# 1, 1 -> (0 - 1) + 1 == 0 # Eq
+# 5, 1 -> (0 - 0) + 1 == 1 # Gt
+# 1, 5 -> (1 - 0) + 1 == 2 # Lt
 
-## Returns `True` if the first number is less than or equal to the second.
+## Returns `Lt` if the first number is less than the second, `Gt` if
+## the first is greater than the second, and `Eq` if they're equal.
 ##
-## `a <= b` is shorthand for `Num.isLte a b`.
+## Although this can be passed to `List.sort`, you'll get better performance
+## by using `List.sortAsc` or `List.sortDesc` instead.
+compare : Num a, Num a -> [ Lt, Eq, Gt ]
+
+## Returns the higher of two numbers.
 ##
 ## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
-isLte : Num a, Num a -> Bool
+higher : Num a, Num a -> Num a
 
 ## Returns `True` if the first number is greater than the second.
 ##
@@ -1054,34 +1061,30 @@ isGt : Num a, Num a -> Bool
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 isGte : Num a, Num a -> Bool
 
-## Returns the higher of two numbers.
+## Returns `True` if the first number is less than the second.
+##
+## `a < b` is shorthand for `Num.isLt a b`.
 ##
 ## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
-higher : Num a, Num a -> Num a
+##
+## >>> 5
+## >>>     |> Num.isLt 6
+isLt : Num a, Num a -> Bool
+
+## Returns `True` if the first number is less than or equal to the second.
+##
+## `a <= b` is shorthand for `Num.isLte a b`.
+##
+## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
+## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
+isLte : Num a, Num a -> Bool
 
 ## Returns the lower of two numbers.
 ##
 ## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 lower : Num a, Num a -> Num a
-
-# Branchless implementation that works for all numeric types:
-#
-# let is_lt = arg1 < arg2;
-# let is_eq = arg1 == arg2;
-# return (is_lt as i8 - is_eq as i8) + 1;
-#
-# 1, 1 -> (0 - 1) + 1 == 0 # Eq
-# 5, 1 -> (0 - 0) + 1 == 1 # Gt
-# 1, 5 -> (1 - 0) + 1 == 2 # Lt
-
-## Returns `Lt` if the first number is less than the second, `Gt` if
-## the first is greater than the second, and `Eq` if they're equal.
-##
-## Although this can be passed to `List.sort`, you'll get better performance
-## by using `List.sortAsc` or `List.sortDesc` instead.
-compare : Num a, Num a -> [ Lt, Eq, Gt ]
 
 ## Special Floating-Point Values
 

@@ -125,22 +125,6 @@ Str : [ @Str ]
 ## If you want to keep all the digits, use [Str.num] instead.
 decimal : Float *, Nat -> Str
 
-
-## Convert a [Num] to a string.
-num : Float *, Nat -> Str
-
-## Split a string around a separator.
-##
-## >>> Str.split "1,2,3" ","
-##
-## Passing `""` for the separator is not useful; it returns the original string
-## wrapped in a list.
-##
-## >>> Str.split "1,2,3" ""
-##
-## To split a string into its individual graphemes, use `Str.graphemes`
-split : Str, Str -> List Str
-
 ## Split a string around newlines.
 ##
 ## On strings that use `"\n"` for their line endings, this gives the same answer
@@ -156,7 +140,30 @@ split : Str, Str -> List Str
 ## string splitting, use a #Parser.
 lines : Str, Str -> List Str
 
+## Split a string around a separator.
+##
+## >>> Str.split "1,2,3" ","
+##
+## Passing `""` for the separator is not useful; it returns the original string
+## wrapped in a list.
+##
+## >>> Str.split "1,2,3" ""
+##
+## To split a string into its individual graphemes, use `Str.graphemes`
+split : Str, Str -> List Str
+
+## Convert a [Num] to a string.
+num : Float *, Nat -> Str
+
 ## Check
+
+allGraphemes : Str, (Str -> Bool) -> Bool
+
+anyGraphemes : Str, (Str -> Bool) -> Bool
+
+contains : Str, Str -> Bool
+
+endsWith : Str, Str -> Bool
 
 ## Returns `True` if the string is empty, and `False` otherwise.
 ##
@@ -183,14 +190,6 @@ startsWith : Str, Str -> Bool
 ## single [U32]. You'd need to use `Str.startsWithCodePt "🕊"` instead.
 startsWithCodePt : Str, U32 -> Bool
 
-endsWith : Str, Str -> Bool
-
-contains : Str, Str -> Bool
-
-anyGraphemes : Str, (Str -> Bool) -> Bool
-
-allGraphemes : Str, (Str -> Bool) -> Bool
-
 ## Combine
 
 ## Combine a list of strings into a single string.
@@ -204,18 +203,6 @@ join : List Str -> Str
 ## >>> Str.joinWith [ "one", "two", "three" ] ", "
 joinWith : List Str, Str -> Str
 
-## Add to the start of a string until it has at least the given number of
-## graphemes.
-##
-## >>> Str.padGraphemesStart "0" 5 "36"
-##
-## >>> Str.padGraphemesStart "0" 1 "36"
-##
-## >>> Str.padGraphemesStart "0" 5 "12345"
-##
-## >>> Str.padGraphemesStart "✈️"" 5 "👩‍👩‍👦‍👦👩‍👩‍👦‍👦👩‍👩‍👦‍👦"
-padGraphemesStart : Str, Nat, Str -> Str
-
 ## Add to the end of a string until it has at least the given number of
 ## graphemes.
 ##
@@ -228,15 +215,19 @@ padGraphemesStart : Str, Nat, Str -> Str
 ## >>> Str.padGraphemesStart "✈️"" 5 "👩‍👩‍👦‍👦👩‍👩‍👦‍👦👩‍👩‍👦‍👦"
 padGraphemesEnd : Str, Nat, Str -> Str
 
-## Graphemes
+## Add to the start of a string until it has at least the given number of
+## graphemes.
+##
+## >>> Str.padGraphemesStart "0" 5 "36"
+##
+## >>> Str.padGraphemesStart "0" 1 "36"
+##
+## >>> Str.padGraphemesStart "0" 5 "12345"
+##
+## >>> Str.padGraphemesStart "✈️"" 5 "👩‍👩‍👦‍👦👩‍👩‍👦‍👦👩‍👩‍👦‍👦"
+padGraphemesStart : Str, Nat, Str -> Str
 
-## Split a string into its individual graphemes.
-##
-## >>> Str.graphemes "1,2,3"
-##
-## >>> Str.graphemes  "👍👍👍"
-##
-graphemes : Str -> List Str
+## Graphemes
 
 ## Count the number of [extended grapheme clusters](http://www.unicode.org/glossary/#extended_grapheme_cluster)
 ## in the string.
@@ -246,26 +237,47 @@ graphemes : Str -> List Str
 ##     Str.countGraphemes "🕊"     # 1
 countGraphemes : Str -> Nat
 
-## Reverse the order of the string's individual graphemes.
+## Returns `True` if the string consists entirely of lowercase letters.
 ##
-## >>> Str.reverseGraphemes "1-2-3"
+## >>> Str.isAllLowercase "hi"
 ##
-## >>> Str.reverseGraphemes  "🐦✈️"👩‍👩‍👦‍👦"
+## >>> Str.isAllLowercase "Hi"
 ##
-## >>> Str.reversegraphemes "Crème Brûlée"
-reverseGraphemes : Str -> Str
+## >>> Str.isAllLowercase "HI"
+##
+## >>> Str.isAllLowercase " Hi"
+##
+## >>> Str.isAllLowercase "Česká"
+##
+## >>> Str.isAllLowercase "Э"
+##
+## >>> Str.isAllLowercase "東京"
+##
+## >>> Str.isAllLowercase "🐦"
+##
+## >>> Str.isAllLowercase ""
+isAllLowercase : Str -> Bool
 
-## Returns `True` if the two strings are equal when ignoring case.
+## Returns `True` if the string consists entirely of uppercase letters.
 ##
-## >>> Str.caseInsensitiveEq "hi" "Hi"
-isCaseInsensitiveEq : Str, Str -> Bool
-
-isCaseInsensitiveNeq : Str, Str -> Bool
-
-walkGraphemes : Str, { start: state, step: (state, Str -> state) } -> state
-walkGraphemesUntil : Str, { start: state, step: (state, Str -> [ Continue state, Done state ]) } -> state
-walkGraphemesBackwards : Str, { start: state, step: (state, Str -> state) } -> state
-walkGraphemesBackwardsUntil : Str, { start: state, step: (state, Str -> [ Continue state, Done state ]) } -> state
+## >>> Str.isAllUppercase "hi"
+##
+## >>> Str.isAllUppercase "Hi"
+##
+## >>> Str.isAllUppercase "HI"
+##
+## >>> Str.isAllUppercase " Hi"
+##
+## >>> Str.isAllUppercase "Česká"
+##
+## >>> Str.isAllUppercase "Э"
+##
+## >>> Str.isAllUppercase "東京"
+##
+## >>> Str.isAllUppercase "🐦"
+##
+## >>> Str.isAllUppercase ""
+isAllUppercase : Str -> Bool
 
 ## Returns `True` if the string begins with an uppercase letter.
 ##
@@ -292,60 +304,18 @@ walkGraphemesBackwardsUntil : Str, { start: state, step: (state, Str -> [ Contin
 ## package for functions which capitalize strings.
 isCapitalized : Str -> Bool
 
-## Returns `True` if the string consists entirely of uppercase letters.
+## Returns `True` if the two strings are equal when ignoring case.
 ##
-## >>> Str.isAllUppercase "hi"
-##
-## >>> Str.isAllUppercase "Hi"
-##
-## >>> Str.isAllUppercase "HI"
-##
-## >>> Str.isAllUppercase " Hi"
-##
-## >>> Str.isAllUppercase "Česká"
-##
-## >>> Str.isAllUppercase "Э"
-##
-## >>> Str.isAllUppercase "東京"
-##
-## >>> Str.isAllUppercase "🐦"
-##
-## >>> Str.isAllUppercase ""
-isAllUppercase : Str -> Bool
+## >>> Str.caseInsensitiveEq "hi" "Hi"
+isCaseInsensitiveEq : Str, Str -> Bool
 
-## Returns `True` if the string consists entirely of lowercase letters.
-##
-## >>> Str.isAllLowercase "hi"
-##
-## >>> Str.isAllLowercase "Hi"
-##
-## >>> Str.isAllLowercase "HI"
-##
-## >>> Str.isAllLowercase " Hi"
-##
-## >>> Str.isAllLowercase "Česká"
-##
-## >>> Str.isAllLowercase "Э"
-##
-## >>> Str.isAllLowercase "東京"
-##
-## >>> Str.isAllLowercase "🐦"
-##
-## >>> Str.isAllLowercase ""
-isAllLowercase : Str -> Bool
-
-## Return the string with any blank spaces removed from both the beginning
-## as well as the end.
-trim : Str -> Str
+isCaseInsensitiveNeq : Str, Str -> Bool
 
 ## If the given [U32] is a valid [Unicode Scalar Value](http://www.unicode.org/glossary/#unicode_scalar_value),
 ## return a [Str] containing only that scalar.
-fromScalar : U32 -> Result Str [ BadScalar ]*
 fromCodePts : List U32 -> Result Str [ BadCodePt U32 ]*
+fromScalar : U32 -> Result Str [ BadScalar ]*
 fromUtf8 : List U8 -> Result Str [ BadUtf8 ]*
-
-## Create a [Str] from bytes encoded as [UTF-16LE](https://en.wikipedia.org/wiki/UTF-16#Byte-order_encoding_schemes).
-# fromUtf16Le : List U8 -> Result Str [ BadUtf16Le Endi ]*
 
 # ## Create a [Str] from bytes encoded as [UTF-16BE](https://en.wikipedia.org/wiki/UTF-16#Byte-order_encoding_schemes).
 # fromUtf16Be : List U8 -> Result Str [ BadUtf16Be Endi ]*
@@ -353,8 +323,8 @@ fromUtf8 : List U8 -> Result Str [ BadUtf8 ]*
 # ## Create a [Str] from bytes encoded as UTF-16 with a [Byte Order Mark](https://en.wikipedia.org/wiki/Byte_order_mark).
 # fromUtf16Bom : List U8 -> Result Str [ BadUtf16 Endi, NoBom ]*
 
-# ## Create a [Str] from bytes encoded as [UTF-32LE](https://web.archive.org/web/20120322145307/http://mail.apps.ietf.org/ietf/charsets/msg01095.html)
-# fromUtf32Le : List U8 -> Result Str [ BadUtf32Le Endi ]*
+## Create a [Str] from bytes encoded as [UTF-16LE](https://en.wikipedia.org/wiki/UTF-16#Byte-order_encoding_schemes).
+# fromUtf16Le : List U8 -> Result Str [ BadUtf16Le Endi ]*
 
 # ## Create a [Str] from bytes encoded as [UTF-32BE](https://web.archive.org/web/20120322145307/http://mail.apps.ietf.org/ietf/charsets/msg01095.html)
 # fromUtf32Be : List U8 -> Result Str [ BadUtf32Be Endi ]*
@@ -362,11 +332,31 @@ fromUtf8 : List U8 -> Result Str [ BadUtf8 ]*
 # ## Create a [Str] from bytes encoded as UTF-32 with a [Byte Order Mark](https://en.wikipedia.org/wiki/Byte_order_mark).
 # fromUtf32Bom : List U8 -> Result Str [ BadUtf32 Endi, NoBom ]*
 
+# ## Create a [Str] from bytes encoded as [UTF-32LE](https://web.archive.org/web/20120322145307/http://mail.apps.ietf.org/ietf/charsets/msg01095.html)
+# fromUtf32Le : List U8 -> Result Str [ BadUtf32Le Endi ]*
+
 # ## Convert from UTF-8, substituting the replacement character ("�") for any
 # ## invalid sequences encountered.
 # fromUtf8Sub : List U8 -> Str
-# fromUtf16Sub : List U8, Endi -> Str
 # fromUtf16BomSub : List U8 -> Result Str [ NoBom ]*
+# fromUtf16Sub : List U8, Endi -> Str
+
+## Split a string into its individual graphemes.
+##
+## >>> Str.graphemes "1,2,3"
+##
+## >>> Str.graphemes  "👍👍👍"
+##
+graphemes : Str -> List Str
+
+## Reverse the order of the string's individual graphemes.
+##
+## >>> Str.reverseGraphemes "1-2-3"
+##
+## >>> Str.reverseGraphemes  "🐦✈️"👩‍👩‍👦‍👦"
+##
+## >>> Str.reversegraphemes "Crème Brûlée"
+reverseGraphemes : Str -> Str
 
 ## Return a [List] of the string's [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit).
 ## (To split the string into a [List] of smaller [Str] values instead of [U8] values,
@@ -384,27 +374,22 @@ fromUtf8 : List U8 -> Result Str [ BadUtf8 ]*
 ## without creating a [List], see `Str.walkUtf8` and `Str.walkRevUtf8`.
 toUtf8 : Str -> List U8
 toUtf16Be : Str -> List U8
-toUtf16Le : Str -> List U8
 # toUtf16Bom : Str, Endi -> List U8
+toUtf16Le : Str -> List U8
 toUtf32Be : Str -> List U8
-toUtf32Le : Str -> List U8
 # toUtf32Bom : Str, Endi -> List U8
+toUtf32Le : Str -> List U8
+
+## Return the string with any blank spaces removed from both the beginning
+## as well as the end.
+trim : Str -> Str
+
+walkGraphemes : Str, { start: state, step: (state, Str -> state) } -> state
+walkGraphemesBackwards : Str, { start: state, step: (state, Str -> state) } -> state
+walkGraphemesBackwardsUntil : Str, { start: state, step: (state, Str -> [ Continue state, Done state ]) } -> state
+walkGraphemesUntil : Str, { start: state, step: (state, Str -> [ Continue state, Done state ]) } -> state
 
 # Parsing
-
-## If the string begins with a valid [extended grapheme cluster](http://www.unicode.org/glossary/#extended_grapheme_cluster),
-## return it along with the rest of the string after that grapheme.
-##
-## If the string does not begin with a full grapheme, for example because it was
-## empty, return `Err`.
-parseGrapheme : Str -> Result { val : Str, rest : Str } [ Expected [ Grapheme ]* Str ]*
-
-## If the string begins with a valid [Unicode code point](http://www.unicode.org/glossary/#code_point),
-## return it along with the rest of the string after that code point.
-##
-## If the string does not begin with a valid code point, for example because it was
-## empty, return `Err`.
-parseCodePt : Str -> Result { val : U32, rest : Str } [ Expected [ CodePt ]* Str ]*
 
 ## If the first string begins with the second, return whatever comes
 ## after the second.
@@ -414,38 +399,19 @@ chomp : Str, Str -> Result Str [ Expected [ ExactStr Str ]* Str ]*
 ## equal to the given [U32], return whatever comes after that code point.
 chompCodePt : Str, U32 -> Result Str [ Expected [ ExactCodePt U32 ]* Str ]*
 
-## If the string represents a valid [U8] number, return that number.
+## If the string begins with a valid [Unicode code point](http://www.unicode.org/glossary/#code_point),
+## return it along with the rest of the string after that code point.
 ##
-## For more advanced options, see [parseU8].
-toU8 : Str -> Result U8 [ InvalidU8 ]*
-toI8 : Str -> Result I8 [ InvalidI8 ]*
-toU16 : Str -> Result U16 [ InvalidU16 ]*
-toI16 : Str -> Result I16 [ InvalidI16 ]*
-toU32 : Str -> Result U32 [ InvalidU32 ]*
-toI32 : Str -> Result I32 [ InvalidI32 ]*
-toU64 : Str -> Result U64 [ InvalidU64 ]*
-toI64 : Str -> Result I64 [ InvalidI64 ]*
-toU128 : Str -> Result U128 [ InvalidU128 ]*
-toI128 : Str -> Result I128 [ InvalidI128 ]*
-toF64 : Str -> Result U128 [ InvalidF64 ]*
-toF32 : Str -> Result I128 [ InvalidF32 ]*
-toDec : Str -> Result Dec [ InvalidDec ]*
+## If the string does not begin with a valid code point, for example because it was
+## empty, return `Err`.
+parseCodePt : Str -> Result { val : U32, rest : Str } [ Expected [ CodePt ]* Str ]*
 
-## If the string represents a valid number, return that number.
+## If the string begins with a valid [extended grapheme cluster](http://www.unicode.org/glossary/#extended_grapheme_cluster),
+## return it along with the rest of the string after that grapheme.
 ##
-## The exact number type to look for will be inferred from usage.
-## In the example below, the usage of I64 in the type signature will require that type instead of (Num *).
-##
-## >>> strToI64 : Str -> Result I64 [ InvalidNumStr ]*
-## >>> strToI64 = \inputStr ->
-## >>>     Str.toNum inputStr
-##
-## If the string is exactly `"NaN"`, `"∞"`, or `"-∞"`, they will be accepted
-## only when converting to [F64] or [F32] numbers, and will be translated accordingly.
-##
-## This never accepts numbers with underscores or commas in them. For more
-## advanced options, see [parseNum].
-toNum : Str -> Result (Num *) [ InvalidNumStr ]*
+## If the string does not begin with a full grapheme, for example because it was
+## empty, return `Err`.
+parseGrapheme : Str -> Result { val : Str, rest : Str } [ Expected [ Grapheme ]* Str ]*
 
 ## If the string begins with an [Int] or a [finite](Num.isFinite) [Frac], return
 ## that number along with the rest of the string after it.
@@ -476,3 +442,39 @@ toNum : Str -> Result (Num *) [ InvalidNumStr ]*
 #         trailingZeroes ? [ Allowed, Disallowed ],
 #         wholeSep ? { mark : Str, policy : [ Allowed, Required U64 ] }
 #     }
+
+toDec : Str -> Result Dec [ InvalidDec ]*
+
+toF32 : Str -> Result I128 [ InvalidF32 ]*
+toF64 : Str -> Result U128 [ InvalidF64 ]*
+
+toI8 : Str -> Result I8 [ InvalidI8 ]*
+toI16 : Str -> Result I16 [ InvalidI16 ]*
+toI32 : Str -> Result I32 [ InvalidI32 ]*
+toI64 : Str -> Result I64 [ InvalidI64 ]*
+toI128 : Str -> Result I128 [ InvalidI128 ]*
+
+## If the string represents a valid number, return that number.
+##
+## The exact number type to look for will be inferred from usage.
+## In the example below, the usage of I64 in the type signature will require that type instead of (Num *).
+##
+## >>> strToI64 : Str -> Result I64 [ InvalidNumStr ]*
+## >>> strToI64 = \inputStr ->
+## >>>     Str.toNum inputStr
+##
+## If the string is exactly `"NaN"`, `"∞"`, or `"-∞"`, they will be accepted
+## only when converting to [F64] or [F32] numbers, and will be translated accordingly.
+##
+## This never accepts numbers with underscores or commas in them. For more
+## advanced options, see [parseNum].
+toNum : Str -> Result (Num *) [ InvalidNumStr ]*
+
+## If the string represents a valid [U8] number, return that number.
+##
+## For more advanced options, see [parseU8].
+toU8 : Str -> Result U8 [ InvalidU8 ]*
+toU16 : Str -> Result U16 [ InvalidU16 ]*
+toU32 : Str -> Result U32 [ InvalidU32 ]*
+toU64 : Str -> Result U64 [ InvalidU64 ]*
+toU128 : Str -> Result U128 [ InvalidU128 ]*

@@ -189,6 +189,20 @@ List elem : [ @List elem ]
 
 ## Initialize
 
+## An empty list.
+empty : List *
+
+## Returns a list of all the integers between one and another,
+## including both of the given numbers.
+##
+## >>> List.range 2 8
+range : Int a, Int a -> List (Int a)
+
+## Returns a list with the given length, where every element is the given value.
+##
+##
+repeat : elem, Nat -> List elem
+
 ## A list with a single element in it.
 ##
 ## This is useful in pipelines, like so:
@@ -199,50 +213,28 @@ List elem : [ @List elem ]
 ##
 single : elem -> List elem
 
-## An empty list.
-empty : List *
-
-## Returns a list with the given length, where every element is the given value.
-##
-##
-repeat : elem, Nat -> List elem
-
-## Returns a list of all the integers between one and another,
-## including both of the given numbers.
-##
-## >>> List.range 2 8
-range : Int a, Int a -> List (Int a)
-
 ## Transform
 
-## Returns the list with its elements reversed.
-##
-## >>> List.reverse [ 1, 2, 3 ]
-reverse : List elem -> List elem
+## If all the elements in the list are #Ok, return a new list containing the
+## contents of those #Ok tags. If any elements are #Err, return #Err.
+allOks : List (Result ok err) -> Result (List ok) err
 
-## Sorts a list using a function which specifies how two elements are ordered.
+## Put two lists together.
 ##
-## When sorting by numeric values, it's more efficient to use [sortAsc] or
-## [sortDesc] instead.
-sort : List elem, (elem, elem -> [ Lt, Eq, Gt ]) -> List elem
+## >>> List.concat [ 1, 2, 3 ] [ 4, 5 ]
+##
+## >>> [ 0, 1, 2 ]
+## >>>     |> List.concat [ 3, 4 ]
+concat : List elem, List elem -> List elem
 
-## Sorts a list in ascending order (lowest to highest), using a function which
-## specifies a way to represent each element as a number.
+## Join the given lists together into one list.
 ##
-## This is more efficient than [sort] because it skips
-## calculating the `[ Lt, Eq, Gt ]` value and uses the number directly instead.
+## >>> List.join [ [ 1, 2, 3 ], [ 4, 5 ], [], [ 6, 7 ] ]
 ##
-## To sort in descending order (highest to lowest), use [List.sortDesc] instead.
-sortAsc : List elem, (elem -> Num *) -> List elem
-
-## Sorts a list in descending order (highest to lowest), using a function which
-## specifies a way to represent each element as a number.
+## >>> List.join [ [], [] ]
 ##
-## This is more efficient than [sort] because it skips
-## calculating the `[ Lt, Eq, Gt ]` value and uses the number directly instead.
-##
-## To sort in ascending order (lowest to highest), use [List.sortAsc] instead.
-sortDesc : List elem, (elem -> Num *) -> List elem
+## >>> List.join []
+join : List (List elem) -> List elem
 
 ## Convert each element in the list to something new, by calling a conversion
 ## function on each of them. Then return a new list of the converted values.
@@ -275,20 +267,6 @@ map3 : List a, List b, List c, (a, b, c -> d) -> List d
 ## Repeat until a list runs out of elements.
 map4 : List a, List b, List c, List d, (a, b, c, d -> e) -> List e
 
-## This works like [List.map], except it also passes the index
-## of the element to the conversion function.
-mapWithIndex : List before, (before, Nat -> after) -> List after
-
-## This works like [List.map], except at any time you can return `Err` to
-## cancel the entire operation immediately, and return that #Err.
-mapOrCancel : List before, (before -> Result after err) -> Result (List after) err
-
-## Like [List.map], except the transformation function specifies whether to
-## `Keep` or `Drop` each element from the final [List].
-##
-## You may know a similar function named `filterMap` in other languages.
-mapOrDrop : List before, (before -> [ Keep after, Drop ]) -> List after
-
 ## Like [List.map], except the transformation function wraps the return value
 ## in a list. At the end, all the lists get joined together into one list.
 ##
@@ -304,6 +282,72 @@ mapJoin : List before, (before -> List after) -> List after
 ## >>>
 ## >>> List.mapOks [ "", "a", "bc", "", "d", "ef", "" ]
 mapOks : List before, (before -> Result after *) -> List after
+
+## This works like [List.map], except at any time you can return `Err` to
+## cancel the entire operation immediately, and return that #Err.
+mapOrCancel : List before, (before -> Result after err) -> Result (List after) err
+
+## Like [List.map], except the transformation function specifies whether to
+## `Keep` or `Drop` each element from the final [List].
+##
+## You may know a similar function named `filterMap` in other languages.
+mapOrDrop : List before, (before -> [ Keep after, Drop ]) -> List after
+
+## This works like [List.map], except it also passes the index
+## of the element to the conversion function.
+mapWithIndex : List before, (before, Nat -> after) -> List after
+
+## Like [List.join], but only keeps elements tagged with `Ok`. Elements
+## tagged with `Err` are dropped.
+##
+## This can be useful after using an operation that returns a #Result
+## on each element of a list, for example [List.first]:
+##
+## >>> [ [ 1, 2, 3 ], [], [], [ 4, 5 ] ]
+## >>>     |> List.map List.first
+## >>>     |> List.joinOks
+##
+## Eventually, `oks` type signature will be `List [Ok elem]* -> List elem`.
+## The implementation for that is a lot tricker then `List (Result elem *)`
+## so we're sticking with `Result` for now.
+oks : List (Result elem *) -> List elem
+
+## Add a single element to the beginning of a list.
+##
+## >>> List.prepend [ 1, 2, 3 ] 0
+##
+## >>> [ 2, 3, 4 ]
+## >>>     |> List.prepend 1
+prepend : List elem, elem -> List elem
+
+## Returns the list with its elements reversed.
+##
+## >>> List.reverse [ 1, 2, 3 ]
+reverse : List elem -> List elem
+
+## Sorts a list using a function which specifies how two elements are ordered.
+##
+## When sorting by numeric values, it's more efficient to use [sortAsc] or
+## [sortDesc] instead.
+sort : List elem, (elem, elem -> [ Lt, Eq, Gt ]) -> List elem
+
+## Sorts a list in ascending order (lowest to highest), using a function which
+## specifies a way to represent each element as a number.
+##
+## This is more efficient than [sort] because it skips
+## calculating the `[ Lt, Eq, Gt ]` value and uses the number directly instead.
+##
+## To sort in descending order (highest to lowest), use [List.sortDesc] instead.
+sortAsc : List elem, (elem -> Num *) -> List elem
+
+## Sorts a list in descending order (highest to lowest), using a function which
+## specifies a way to represent each element as a number.
+##
+## This is more efficient than [sort] because it skips
+## calculating the `[ Lt, Eq, Gt ]` value and uses the number directly instead.
+##
+## To sort in ascending order (lowest to highest), use [List.sortAsc] instead.
+sortDesc : List elem, (elem -> Num *) -> List elem
 
 ## Returns a list with the element at the given index having been transformed by
 ## the given function.
@@ -322,59 +366,18 @@ update : List elem, Nat, (elem -> elem) -> List elem
 ## that lets you delay performing the update until later.
 updater : List elem, Nat -> { elem, new : (elem -> List elem) }
 
-## If all the elements in the list are #Ok, return a new list containing the
-## contents of those #Ok tags. If any elements are #Err, return #Err.
-allOks : List (Result ok err) -> Result (List ok) err
-
-## Add a single element to the end of a list.
-##
-## >>> List.append [ 1, 2, 3 ] 4
-##
-## >>> [ 0, 1, 2 ]
-## >>>     |> List.append 3
-append : List elem, elem -> List elem
-
-## Add a single element to the beginning of a list.
-##
-## >>> List.prepend [ 1, 2, 3 ] 0
-##
-## >>> [ 2, 3, 4 ]
-## >>>     |> List.prepend 1
-prepend : List elem, elem -> List elem
-
-## Put two lists together.
-##
-## >>> List.concat [ 1, 2, 3 ] [ 4, 5 ]
-##
-## >>> [ 0, 1, 2 ]
-## >>>     |> List.concat [ 3, 4 ]
-concat : List elem, List elem -> List elem
-
-## Join the given lists together into one list.
-##
-## >>> List.join [ [ 1, 2, 3 ], [ 4, 5 ], [], [ 6, 7 ] ]
-##
-## >>> List.join [ [], [] ]
-##
-## >>> List.join []
-join : List (List elem) -> List elem
-
-## Like [List.join], but only keeps elements tagged with `Ok`. Elements
-## tagged with `Err` are dropped.
-##
-## This can be useful after using an operation that returns a #Result
-## on each element of a list, for example [List.first]:
-##
-## >>> [ [ 1, 2, 3 ], [], [], [ 4, 5 ] ]
-## >>>     |> List.map List.first
-## >>>     |> List.joinOks
-##
-## Eventually, `oks` type signature will be `List [Ok elem]* -> List elem`.
-## The implementation for that is a lot tricker then `List (Result elem *)`
-## so we're sticking with `Result` for now.
-oks : List (Result elem *) -> List elem
-
 ## Filter
+
+## Run the given function on each element of a list, and return all the
+## elements for which the function returned `False`.
+##
+## >>> List.dropIf [ 1, 2, 3, 4 ] (\num -> num > 2)
+##
+## ## Performance Details
+##
+## `List.dropIf` has the same performance characteristics as [List.keepIf].
+## See its documentation for details on those characteristics!
+dropIf : List elem, (elem -> Bool) -> List elem
 
 ## Run the given function on each element of a list, and return all the
 ## elements for which the function returned `True`.
@@ -399,26 +402,15 @@ oks : List (Result elem *) -> List elem
 ##
 keepIf : List elem, (elem -> Bool) -> List elem
 
-## Run the given function on each element of a list, and return all the
-## elements for which the function returned `False`.
-##
-## >>> List.dropIf [ 1, 2, 3, 4 ] (\num -> num > 2)
-##
-## ## Performance Details
-##
-## `List.dropIf` has the same performance characteristics as [List.keepIf].
-## See its documentation for details on those characteristics!
-dropIf : List elem, (elem -> Bool) -> List elem
-
 ## Access
 
 ## Returns the first element in the list, or `ListWasEmpty` if it was empty.
 first : List elem -> Result elem [ ListWasEmpty ]*
 
+get : List elem, Nat -> Result elem [ OutOfBounds ]*
+
 ## Returns the last element in the list, or `ListWasEmpty` if it was empty.
 last : List elem -> Result elem [ ListWasEmpty ]*
-
-get : List elem, Nat -> Result elem [ OutOfBounds ]*
 
 max : List (Num a) -> Result (Num a) [ ListWasEmpty ]*
 
@@ -426,15 +418,20 @@ min : List (Num a) -> Result (Num a) [ ListWasEmpty ]*
 
 ## Modify
 
-## Replaces the element at the given index with a replacement.
+## Adds a new element to the end of the list.
 ##
-## >>> List.set [ "a", "b", "c" ] 1 "B"
+## >>> List.append [ "a", "b" ] "c"
 ##
-## If the given index is outside the bounds of the list, returns the original
-## list unmodified.
+## >>> [ "a", "b" ]
+## >>>     |> List.append "c"
 ##
-## To drop the element at a given index, instead of replacing it, see [List.dropAt].
-set : List elem, Nat, elem -> List elem
+## ## Performance Details
+##
+## When given a Unique list, this adds the new element in-place if possible.
+## This is only possible if the list has enough capacity. Otherwise, it will
+## have to *clone and grow*. See the section on [capacity](#capacity) in this
+## module's documentation.
+append : List elem, elem -> List elem
 
 ## Drops n elements from the beginning of the list.
 drop : List elem, Nat -> List elem
@@ -445,61 +442,6 @@ drop : List elem, Nat -> List elem
 ##
 ## To replace the element at a given index, instead of dropping it, see [List.set].
 dropAt : List elem, Nat -> List elem
-
-## Adds a new element to the end of the list.
-##
-## >>> List.append [ "a", "b" ] "c"
-##
-## ## Performance Details
-##
-## When given a Unique list, this adds the new element in-place if possible.
-## This is only possible if the list has enough capacity. Otherwise, it will
-## have to *clone and grow*. See the section on [capacity](#capacity) in this
-## module's documentation.
-append : List elem, elem -> List elem
-
-## Adds a new element to the beginning of the list.
-##
-## >>> List.prepend [ "b", "c" ] "a"
-##
-## ## Performance Details
-##
-## This always clones the entire list, even when given a Unique list. That means
-## it runs about as fast as `List.addLast` when both are given a Shared list.
-##
-## If you have a Unique list instead, [List.append] will run much faster than
-## [List.append] except in the specific case where the list has no excess capacity,
-## and needs to *clone and grow*. In that uncommon case, both [List.append] and
-## [List.append] will run at about the same speed—since [List.append] always
-## has to clone and grow.
-##
-##         | Unique list                    | Shared list    |
-##---------+--------------------------------+----------------+
-## append  | in-place given enough capacity | clone and grow |
-## prepend | clone and grow                 | clone and grow |
-prepend : List elem, elem -> List elem
-
-## Remove the last element from the list.
-##
-## Returns both the removed element as well as the new list (with the removed
-## element missing), or `Err ListWasEmpty` if the list was empty.
-##
-## Here's one way you can use this:
-##
-##     when List.pop list is
-##         Ok { others, last } -> ...
-##         Err ListWasEmpty -> ...
-##
-## ## Performance Details
-##
-## Calling `List.pop` on a Unique list runs extremely fast. It's essentially
-## the same as a [List.last] except it also returns the [List] it was given,
-## with its length decreased by 1.
-##
-## In contrast, calling `List.pop` on a Shared list creates a new list, then
-## copies over every element in the original list except the last one. This
-## takes much longer.
-dropLast : List elem -> Result { others : List elem, last : elem } [ ListWasEmpty ]*
 
 ##
 ## Here's one way you can use this:
@@ -523,6 +465,62 @@ dropLast : List elem -> Result { others : List elem, last : elem } [ ListWasEmpt
 ## dropFirst | [List.last] + length change       | [List.last] + clone rest of list |
 ## dropLast  | [List.last] + clone rest of list  | [List.last] + clone rest of list |
 dropFirst : List elem -> Result { first: elem, others : List elem } [ ListWasEmpty ]*
+
+## Remove the last element from the list.
+##
+## Returns both the removed element as well as the new list (with the removed
+## element missing), or `Err ListWasEmpty` if the list was empty.
+##
+## Here's one way you can use this:
+##
+##     when List.pop list is
+##         Ok { others, last } -> ...
+##         Err ListWasEmpty -> ...
+##
+## ## Performance Details
+##
+## Calling `List.pop` on a Unique list runs extremely fast. It's essentially
+## the same as a [List.last] except it also returns the [List] it was given,
+## with its length decreased by 1.
+##
+## In contrast, calling `List.pop` on a Shared list creates a new list, then
+## copies over every element in the original list except the last one. This
+## takes much longer.
+dropLast : List elem -> Result { others : List elem, last : elem } [ ListWasEmpty ]*
+
+## Adds a new element to the beginning of the list.
+##
+## >>> List.prepend [ "b", "c" ] "a"
+##
+## >>> [ "b", "c" ]
+## >>>     |> List.append "a"
+##
+## ## Performance Details
+##
+## This always clones the entire list, even when given a Unique list. That means
+## it runs about as fast as `List.addLast` when both are given a Shared list.
+##
+## If you have a Unique list instead, [List.append] will run much faster than
+## [List.append] except in the specific case where the list has no excess capacity,
+## and needs to *clone and grow*. In that uncommon case, both [List.append] and
+## [List.append] will run at about the same speed—since [List.append] always
+## has to clone and grow.
+##
+##         | Unique list                    | Shared list    |
+##---------+--------------------------------+----------------+
+## append  | in-place given enough capacity | clone and grow |
+## prepend | clone and grow                 | clone and grow |
+prepend : List elem, elem -> List elem
+
+## Replaces the element at the given index with a replacement.
+##
+## >>> List.set [ "a", "b", "c" ] 1 "B"
+##
+## If the given index is outside the bounds of the list, returns the original
+## list unmodified.
+##
+## To drop the element at a given index, instead of replacing it, see [List.dropAt].
+set : List elem, Nat, elem -> List elem
 
 ## Returns the given number of elements from the beginning of the list.
 ##
@@ -649,6 +647,9 @@ walk : List elem, state, (state, elem -> state) -> state
 ## `fold`, `foldRight`, or `foldr`.
 walkBackwards : List elem, state, (state, elem -> state) -> state
 
+# Same as [List.walk]Backwards, except you can stop walking early.
+walkBackwardsUntil : List elem, state, (state, elem -> [ Continue state, Done state ]) -> state
+
 ## Same as [List.walk], except you can stop walking early.
 ##
 ## ## Performance Details
@@ -662,10 +663,33 @@ walkBackwards : List elem, state, (state, elem -> state) -> state
 ## if returning `Done` earlier than the last element is expected to be common.
 walkUntil : List elem, state, (state, elem -> [ Continue state, Done state ]) -> state
 
-# Same as [List.walk]Backwards, except you can stop walking early.
-walkBackwardsUntil : List elem, state, (state, elem -> [ Continue state, Done state ]) -> state
-
 ## Check
+
+## Run the given predicate on each element of the list, returning `True` if
+## all of the elements satisfy it.
+all : List elem, (elem -> Bool) -> Bool
+
+## Run the given predicate on each element of the list, returning `True` if
+## any of the elements satisfy it.
+any : List elem, (elem -> Bool) -> Bool
+
+contains : List elem, elem -> Bool
+
+endsWith : List elem, List elem -> Bool
+
+## Returns the first element of the list satisfying a predicate function.
+## If no satisfying element is found, an `Err NotFound` is returned.
+find : List elem, (elem -> Bool) -> Result elem [ NotFound ]*
+
+isEmpty : List * -> Bool
+
+## Apply a function that returns a Result on a list, only unsuccessful
+## Results are kept and returned unwrapped.
+keepErrs : List before, (before -> Result * after) -> List after
+
+## Apply a function that returns a Result on a list, only successful
+## Results are kept and returned unwrapped.
+keepOks : List before, (before -> Result after *) -> List after
 
 ## Returns the length of the list - the number of elements it contains.
 ##
@@ -674,30 +698,11 @@ walkBackwardsUntil : List elem, state, (state, elem -> [ Continue state, Done st
 ## returns can always be safely converted to an #I32 without losing any data.
 len : List * -> Nat
 
-isEmpty : List * -> Bool
-
-contains : List elem, elem -> Bool
+## Returns the length of the list - the number of elements it contains.
+##
+## One [List] can store up to 2,147,483,648 elements (just over 2 billion), which
+## is exactly equal to the highest valid #I32 value. This means the #U32 this function
+## returns can always be safely converted to an #I32 without losing any data.
+len : List * -> Nat
 
 startsWith : List elem, List elem -> Bool
-
-endsWith : List elem, List elem -> Bool
-
-## Run the given predicate on each element of the list, returning `True` if
-## any of the elements satisfy it.
-any : List elem, (elem -> Bool) -> Bool
-
-## Run the given predicate on each element of the list, returning `True` if
-## all of the elements satisfy it.
-all : List elem, (elem -> Bool) -> Bool
-
-## Returns the first element of the list satisfying a predicate function.
-## If no satisfying element is found, an `Err NotFound` is returned.
-find : List elem, (elem -> Bool) -> Result elem [ NotFound ]*
-
-## Apply a function that returns a Result on a list, only successful
-## Results are kept and returned unwrapped.
-keepOks : List before, (before -> Result after *) -> List after
-
-## Apply a function that returns a Result on a list, only unsuccessful
-## Results are kept and returned unwrapped.
-keepErrs : List before, (before -> Result * after) -> List after

@@ -15,24 +15,6 @@ interface Result
 ## okay, or else there was an error of some sort.
 Result ok err : [ @Result ok err ]
 
-## Return True if the result indicates a success, else return False
-##
-## >>> Result.isOk (Ok 5)
-isOk : Result * * -> bool
-
-## Return True if the result indicates a failure, else return False
-##
-## >>> Result.isErr (Err "uh oh")
-isErr : Result * * -> bool
-
-## If the result is `Ok`, return the value it holds. Otherwise, return
-## the given default value.
-##
-## >>> Result.withDefault (Ok 7) 42
-##
-## >>> Result.withDefault (Err "uh oh") 42
-withDefault : Result ok err, ok -> ok
-
 ## If the result is `Ok`, transform the entire result by running a conversion
 ## function on the value the `Ok` holds. Then return that new result.
 ##
@@ -42,6 +24,16 @@ withDefault : Result ok err, ok -> ok
 ##
 ## >>> Result.after (Err "yipes!") \num -> if num < 0 then Err "negative!" else Ok -num
 after : Result before err, (before -> Result after err) -> Result after err
+
+## Return True if the result indicates a success, else return False
+##
+## >>> Result.isOk (Ok 5)
+isOk : Result * * -> bool
+
+## Return True if the result indicates a failure, else return False
+##
+## >>> Result.isErr (Err "uh oh")
+isErr : Result * * -> bool
 
 ## If the result is `Ok`, transform the value it holds by running a conversion
 ## function on it. Then return a new `Ok` holding the transformed value.
@@ -65,3 +57,11 @@ map : Result before err, (before -> after) -> Result after err
 ##
 ## >>> Result.mapErr (Ok 12) Str.isEmpty
 mapErr : Result ok before, (before -> after) -> Result ok after
+
+## If the result is `Ok`, return the value it holds. Otherwise, return
+## the given default value.
+##
+## >>> Result.withDefault (Ok 7) 42
+##
+## >>> Result.withDefault (Err "uh oh") 42
+withDefault : Result ok err, ok -> ok
