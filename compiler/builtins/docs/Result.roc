@@ -2,12 +2,12 @@ interface Result
     exposes
         [
             Result,
+            after,
             isOk,
             isErr,
             map,
             mapErr,
-            withDefault,
-            after
+            withDefault
         ]
     imports []
 

@@ -2,19 +2,19 @@ interface Dict
     exposes
         [
             Dict,
+            contains,
+            difference,
             empty,
-            single,
             get,
-            walk,
+            keys,
             insert,
+            intersection,
             len,
             remove,
-            contains,
-            keys,
-            values,
+            single,
             union,
-            intersection,
-            difference
+            values,
+            walk
         ]
     imports []
 
