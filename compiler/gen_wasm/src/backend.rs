@@ -519,7 +519,7 @@ impl<'a> WasmBackend<'a> {
                     .get_mut(&self.env.module_id)
                     .unwrap();
 
-                let (rc_stmt, maybe_new_proc_info) = self
+                let (rc_stmt, new_specializations) = self
                     .helper_proc_gen
                     .expand_refcount_stmt(ident_ids, *layout, modify, *following);
 
@@ -528,8 +528,10 @@ impl<'a> WasmBackend<'a> {
                     println!("## rc_stmt:\n{}\n{:?}", rc_stmt.to_pretty(200), rc_stmt);
                 }
 
-                // If this is the first call to a new helper proc, register its symbol data
-                maybe_new_proc_info.map(|info| self.register_helper_proc(info));
+                // If any new specializations were created, register their symbol data
+                for spec in new_specializations.into_iter() {
+                    self.register_helper_proc(spec);
+                }
 
                 self.build_stmt(rc_stmt, ret_layout);
             }
@@ -970,12 +972,14 @@ impl<'a> WasmBackend<'a> {
                         .get_mut(&self.env.module_id)
                         .unwrap();
 
-                    let (replacement_expr, maybe_new_proc_info) = self
+                    let (replacement_expr, new_specializations) = self
                         .helper_proc_gen
-                        .replace_generic_equals(ident_ids, &layout, arguments);
+                        .specialize_equals(ident_ids, &layout, arguments);
 
-                    // If this is the first call to a new helper proc, register its symbol data
-                    maybe_new_proc_info.map(|info| self.register_helper_proc(info));
+                    // If any new specializations were created, register their symbol data
+                    for spec in new_specializations.into_iter() {
+                        self.register_helper_proc(spec);
+                    }
 
                     self.build_expr(&return_sym, replacement_expr, &layout, storage);
                 }

@@ -9,7 +9,7 @@ use crate::ir::{
     BranchInfo, Call, CallSpecId, CallType, Expr, HostExposedLayouts, Literal, ModifyRc, Proc,
     ProcLayout, SelfRecursive, Stmt, UpdateModeId,
 };
-use crate::layout::{Builtin, Layout};
+use crate::layout::{Builtin, Layout, UnionLayout};
 
 const LAYOUT_BOOL: Layout = Layout::Builtin(Builtin::Bool);
 const LAYOUT_UNIT: Layout = Layout::Struct(&[]);
@@ -99,7 +99,7 @@ impl<'a> CodeGenHelp<'a> {
         layout: Layout<'a>,
         modify: &ModifyRc,
         following: &'a Stmt<'a>,
-    ) -> (&'a Stmt<'a>, Option<(Symbol, ProcLayout<'a>)>) {
+    ) -> (&'a Stmt<'a>, Vec<'a, (Symbol, ProcLayout<'a>)>) {
         if !Self::is_rc_implemented_yet(&layout) {
             // Just a warning, so we can decouple backend development from refcounting development.
             // When we are closer to completion, we can change it to a panic.
@@ -107,7 +107,7 @@ impl<'a> CodeGenHelp<'a> {
                 "WARNING! MEMORY LEAK! Refcounting not yet implemented for Layout {:?}",
                 layout
             );
-            return (following, None);
+            return (following, Vec::new_in(self.arena));
         }
 
         let arena = self.arena;
@@ -116,8 +116,11 @@ impl<'a> CodeGenHelp<'a> {
             ModifyRc::Inc(structure, amount) => {
                 let layout_isize = self.layout_isize;
 
-                let (is_existing, proc_name) =
-                    self.get_proc_symbol(ident_ids, &layout, HelperOp::Rc(RefcountOp::Inc));
+                let (proc_name, new_procs_info) = self.get_or_create_proc_symbols_recursive(
+                    ident_ids,
+                    &layout,
+                    HelperOp::Rc(RefcountOp::Inc),
+                );
 
                 // Define a constant for the amount to increment
                 let amount_sym = self.create_symbol(ident_ids, "amount");
@@ -139,28 +142,17 @@ impl<'a> CodeGenHelp<'a> {
                 let call_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
                 let rc_stmt = arena.alloc(amount_stmt(arena.alloc(call_stmt)));
 
-                // Create a linker symbol for the helper proc if this is the first usage
-                let new_proc_info = if is_existing {
-                    None
-                } else {
-                    Some((
-                        proc_name,
-                        ProcLayout {
-                            arguments: arg_layouts,
-                            result: LAYOUT_UNIT,
-                        },
-                    ))
-                };
-
-                (rc_stmt, new_proc_info)
+                (rc_stmt, new_procs_info)
             }
 
             ModifyRc::Dec(structure) => {
-                let (is_existing, proc_name) =
-                    self.get_proc_symbol(ident_ids, &layout, HelperOp::Rc(RefcountOp::Dec));
+                let (proc_name, new_procs_info) = self.get_or_create_proc_symbols_recursive(
+                    ident_ids,
+                    &layout,
+                    HelperOp::Rc(RefcountOp::Dec),
+                );
 
                 // Call helper proc, passing the Roc structure
-                let arg_layouts = arena.alloc([layout, self.layout_isize]);
                 let call_result_empty = self.create_symbol(ident_ids, "call_result_empty");
                 let call_expr = Expr::Call(Call {
                     call_type: CallType::ByName {
@@ -179,20 +171,7 @@ impl<'a> CodeGenHelp<'a> {
                     following,
                 ));
 
-                // Create a linker symbol for the helper proc if this is the first usage
-                let new_proc_info = if is_existing {
-                    None
-                } else {
-                    Some((
-                        proc_name,
-                        ProcLayout {
-                            arguments: arg_layouts,
-                            result: LAYOUT_UNIT,
-                        },
-                    ))
-                };
-
-                (rc_stmt, new_proc_info)
+                (rc_stmt, new_procs_info)
             }
 
             ModifyRc::DecRef(structure) => {
@@ -221,21 +200,22 @@ impl<'a> CodeGenHelp<'a> {
                 let call_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
                 let rc_stmt = arena.alloc(rc_ptr_stmt(arena.alloc(call_stmt)));
 
-                (rc_stmt, None)
+                (rc_stmt, Vec::new_in(self.arena))
             }
         }
     }
 
     /// Replace a generic `Lowlevel::Eq` call with a specialized helper proc.
     /// The helper procs themselves are to be generated later with `generate_procs`
-    pub fn replace_generic_equals(
+    pub fn specialize_equals(
         &mut self,
         ident_ids: &mut IdentIds,
         layout: &Layout<'a>,
         arguments: &'a [Symbol],
-    ) -> (&'a Expr<'a>, Option<(Symbol, ProcLayout<'a>)>) {
+    ) -> (&'a Expr<'a>, Vec<'a, (Symbol, ProcLayout<'a>)>) {
         // Record a specialization and get its name
-        let (is_existing, proc_name) = self.get_proc_symbol(ident_ids, layout, HelperOp::Eq);
+        let (proc_name, new_procs_info) =
+            self.get_or_create_proc_symbols_recursive(ident_ids, layout, HelperOp::Eq);
 
         // Call the specialized helper
         let arg_layouts = self.arena.alloc([*layout, *layout]);
@@ -249,20 +229,7 @@ impl<'a> CodeGenHelp<'a> {
             arguments,
         }));
 
-        // Create a linker symbol for the helper proc if this is the first usage
-        let new_proc_info = if is_existing {
-            None
-        } else {
-            Some((
-                proc_name,
-                ProcLayout {
-                    arguments: arg_layouts,
-                    result: LAYOUT_BOOL,
-                },
-            ))
-        };
-
-        (expr, new_proc_info)
+        (expr, new_procs_info)
     }
 
     // Check if refcounting is implemented yet. In the long term, this will be deleted.
@@ -300,7 +267,10 @@ impl<'a> CodeGenHelp<'a> {
             HelperOp::Eq => match layout {
                 Layout::Builtin(
                     Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal,
-                ) => panic!("No generated helper proc. Use direct code gen for {:?}", layout),
+                ) => panic!(
+                    "No generated helper proc. Use direct code gen for {:?}",
+                    layout
+                ),
 
                 Layout::Builtin(Builtin::Str) => {
                     panic!("No generated helper proc. Use Zig builtin for Str.")
@@ -313,25 +283,122 @@ impl<'a> CodeGenHelp<'a> {
         Vec::from_iter_in(procs_iter, arena)
     }
 
-    /// Find the Symbol of the procedure for this layout and refcount operation,
-    /// or create one if needed.
-    fn get_proc_symbol(
+    /// Find the Symbol of the procedure for this layout and operation
+    /// If any new helper procs are needed for this layout or its children,
+    /// return their details in a vector.
+    fn get_or_create_proc_symbols_recursive(
         &mut self,
         ident_ids: &mut IdentIds,
         layout: &Layout<'a>,
         op: HelperOp,
-    ) -> (bool, Symbol) {
+    ) -> (Symbol, Vec<'a, (Symbol, ProcLayout<'a>)>) {
+        let mut new_procs_info = Vec::new_in(self.arena);
+
+        let proc_symbol =
+            self.get_or_create_proc_symbols_visit(ident_ids, &mut new_procs_info, op, layout);
+
+        (proc_symbol, new_procs_info)
+    }
+
+    fn get_or_create_proc_symbols_visit(
+        &mut self,
+        ident_ids: &mut IdentIds,
+        new_procs_info: &mut Vec<'a, (Symbol, ProcLayout<'a>)>,
+        op: HelperOp,
+        layout: &Layout<'a>,
+    ) -> Symbol {
+        if let Layout::LambdaSet(lambda_set) = layout {
+            return self.get_or_create_proc_symbols_visit(
+                ident_ids,
+                new_procs_info,
+                op,
+                &lambda_set.runtime_representation(),
+            );
+        }
+
+        let (symbol, new_proc_layout) = self.get_or_create_proc_symbol(ident_ids, layout, op);
+
+        if let Some(proc_layout) = new_proc_layout {
+            new_procs_info.push((symbol, proc_layout));
+
+            let mut visit_child = |child| {
+                self.get_or_create_proc_symbols_visit(ident_ids, new_procs_info, op, child);
+            };
+
+            let mut visit_children = |children: &'a [Layout]| {
+                for child in children {
+                    visit_child(child);
+                }
+            };
+
+            let mut visit_tags = |tags: &'a [&'a [Layout]]| {
+                for tag in tags {
+                    visit_children(tag);
+                }
+            };
+
+            match layout {
+                Layout::Builtin(builtin) => match builtin {
+                    Builtin::Dict(key, value) => {
+                        visit_child(key);
+                        visit_child(value);
+                    }
+                    Builtin::Set(element) | Builtin::List(element) => visit_child(element),
+                    _ => {}
+                },
+                Layout::Struct(fields) => visit_children(fields),
+                Layout::Union(union_layout) => match union_layout {
+                    UnionLayout::NonRecursive(tags) => visit_tags(tags),
+                    UnionLayout::Recursive(tags) => visit_tags(tags),
+                    UnionLayout::NonNullableUnwrapped(fields) => visit_children(fields),
+                    UnionLayout::NullableWrapped { other_tags, .. } => visit_tags(other_tags),
+                    UnionLayout::NullableUnwrapped { other_fields, .. } => {
+                        visit_children(other_fields)
+                    }
+                },
+                Layout::LambdaSet(_) => unreachable!(),
+                Layout::RecursivePointer => {}
+            }
+        }
+
+        symbol
+    }
+
+    fn get_or_create_proc_symbol(
+        &mut self,
+        ident_ids: &mut IdentIds,
+        layout: &Layout<'a>,
+        op: HelperOp,
+    ) -> (Symbol, Option<ProcLayout<'a>>) {
         let found = self.specs.iter().find(|(l, o, _)| l == layout && *o == op);
 
         if let Some((_, _, existing_symbol)) = found {
-            (true, *existing_symbol)
+            (*existing_symbol, None)
         } else {
             let layout_name = layout_debug_name(&layout);
-            let unique_idx = self.specs.len();
-            let debug_name = format!("#rc{:?}_{}_{}", op, layout_name, unique_idx);
+            let debug_name = format!("#help{:?}_{}", op, layout_name);
             let new_symbol: Symbol = self.create_symbol(ident_ids, &debug_name);
             self.specs.push((*layout, op, new_symbol));
-            (false, new_symbol)
+
+            let new_proc_layout = match op {
+                HelperOp::Rc(rc) => match rc {
+                    RefcountOp::Inc => Some(ProcLayout {
+                        arguments: self.arena.alloc([*layout, self.layout_isize]),
+                        result: LAYOUT_UNIT,
+                    }),
+                    RefcountOp::Dec => Some(ProcLayout {
+                        arguments: self.arena.alloc([*layout]),
+                        result: LAYOUT_UNIT,
+                    }),
+                    RefcountOp::DecRef => None,
+                },
+                HelperOp::Eq => Some(ProcLayout {
+                    arguments: self.arena.alloc([*layout, *layout]),
+                    result: LAYOUT_BOOL,
+                }),
+            };
+
+            (new_symbol, new_proc_layout)
         }
     }
 
@@ -356,7 +423,7 @@ impl<'a> CodeGenHelp<'a> {
                 }
                 RefcountOp::Dec | RefcountOp::DecRef => self.arena.alloc([roc_value]),
             },
-            HelperOp::Eq => todo!(),
+            HelperOp::Eq => self.arena.alloc([roc_value, (layout, Symbol::ARG_2)]),
         }
     }
 

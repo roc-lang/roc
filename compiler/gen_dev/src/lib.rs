@@ -148,7 +148,7 @@ trait Backend<'a> {
                 // Expand the Refcounting statement into more detailed IR with a function call
                 // If this layout requires a new RC proc, we get enough info to create a linker symbol
                 // for it. Here we don't create linker symbols at this time, but in Wasm backend, we do.
-                let (rc_stmt, new_proc_info) = {
+                let (rc_stmt, new_specializations) = {
                     let (env, interns, rc_proc_gen) = self.env_interns_helpers_mut();
                     let module_id = env.module_id;
                     let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
@@ -156,9 +156,8 @@ trait Backend<'a> {
                     rc_proc_gen.expand_refcount_stmt(ident_ids, layout, modify, *following)
                 };
 
-                if let Some((rc_proc_symbol, rc_proc_layout)) = new_proc_info {
-                    self.helper_proc_symbols_mut()
-                        .push((rc_proc_symbol, rc_proc_layout));
+                for spec in new_specializations.into_iter() {
+                    self.helper_proc_symbols_mut().push(spec);
                 }
 
                 self.build_stmt(rc_stmt, ret_layout)
