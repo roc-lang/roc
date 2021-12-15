@@ -1,7 +1,7 @@
 app "nqueens"
-    packages { base: "platform" }
-    imports [base.Task]
-    provides [ main ] to base
+    packages { pf: "platform" }
+    imports [pf.Task]
+    provides [ main ] to pf
 
 main : Task.Task {} []
 main =

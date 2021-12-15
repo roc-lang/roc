@@ -685,7 +685,7 @@ enum HeaderFor<'a> {
         to_platform: To<'a>,
     },
     PkgConfig {
-        /// usually `base`
+        /// usually `pf`
         config_shorthand: &'a str,
         /// the type scheme of the main function (required by the platform)
         /// (currently unused)
@@ -2846,7 +2846,7 @@ fn send_header<'a>(
 
         // For each of our imports, add an entry to deps_by_name
         //
-        // e.g. for `imports [ base.Foo.{ bar } ]`, add `Foo` to deps_by_name
+        // e.g. for `imports [ pf.Foo.{ bar } ]`, add `Foo` to deps_by_name
         //
         // Also build a list of imported_values_to_expose (like `bar` above.)
         for (qualified_module_name, exposed_idents, region) in imported.into_iter() {
@@ -3067,7 +3067,7 @@ fn send_header_two<'a>(
 
         // For each of our imports, add an entry to deps_by_name
         //
-        // e.g. for `imports [ base.Foo.{ bar } ]`, add `Foo` to deps_by_name
+        // e.g. for `imports [ pf.Foo.{ bar } ]`, add `Foo` to deps_by_name
         //
         // Also build a list of imported_values_to_expose (like `bar` above.)
         for (qualified_module_name, exposed_idents, region) in imported.into_iter() {
@@ -4429,7 +4429,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
                     alloc.reflow("I could not find a platform based on your input file."),
                     alloc.reflow(r"Does the module header contain an entry that looks like this:"),
                     alloc
-                        .parser_suggestion(" packages { base: \"platform\" }")
+                        .parser_suggestion(" packages { pf: \"platform\" }")
                         .indent(4),
                     alloc.reflow("See also TODO."),
                 ]);

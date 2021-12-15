@@ -621,13 +621,13 @@ toStr : Num * -> Str
 ## Examples:
 ##
 ## In some countries (e.g. USA and UK), a comma is used to separate thousands:
-## >>> Num.format 1_000_000 { base: Decimal, wholeSep: { mark: ",", places: 3 } }
+## >>> Num.format 1_000_000 { pf: Decimal, wholeSep: { mark: ",", places: 3 } }
 ##
 ## Sometimes when rendering bits, it's nice to group them into groups of 4:
-## >>> Num.format 1_000_000 { base: Binary, wholeSep: { mark: " ", places: 4 } }
+## >>> Num.format 1_000_000 { pf: Binary, wholeSep: { mark: " ", places: 4 } }
 ##
 ## It's also common to render hexadecimal in groups of 2:
-## >>> Num.format 1_000_000 { base: Hexadecimal, wholeSep: { mark: " ", places: 2 } }
+## >>> Num.format 1_000_000 { pf: Hexadecimal, wholeSep: { mark: " ", places: 2 } }
 format :
     Num *,
     {

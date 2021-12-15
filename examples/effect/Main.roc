@@ -1,7 +1,7 @@
 app "effect-example"
-    packages { base: "thing/platform-dir" }
+    packages { pf: "thing/platform-dir" }
     imports [fx.Effect]
-    provides [ main ] to base
+    provides [ main ] to pf
 
 main : Effect.Effect {}
 main =

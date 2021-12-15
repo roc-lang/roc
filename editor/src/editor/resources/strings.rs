@@ -17,9 +17,9 @@ For convenience and consistency, there is only one way to format roc.
 
 pub const HELLO_WORLD: &str = r#"
 app "test-app"
-    packages { base: "platform" }
+    packages { pf: "platform" }
     imports []
-    provides [ main ] to base
+    provides [ main ] to pf
 
 main = "Hello, world!"
 

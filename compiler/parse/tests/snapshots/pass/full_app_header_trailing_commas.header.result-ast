@@ -4,10 +4,10 @@ App {
             "quicksort",
         ),
         packages: [
-            |L 1-1, C 15-33| Entry {
-                shorthand: "base",
+            |L 1-1, C 15-31| Entry {
+                shorthand: "pf",
                 spaces_after_shorthand: [],
-                package_or_path: |L 1-1, C 21-33| Path(
+                package_or_path: |L 1-1, C 19-31| Path(
                     PlainLine(
                         "./platform",
                     ),
@@ -53,8 +53,8 @@ App {
                 "quicksort",
             ),
         ],
-        to: |L 7-7, C 31-35| ExistingPackage(
-            "base",
+        to: |L 7-7, C 31-33| ExistingPackage(
+            "pf",
         ),
         before_header: [],
         after_app_keyword: [],
