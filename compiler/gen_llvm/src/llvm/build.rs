@@ -15,8 +15,8 @@ use crate::llvm::build_list::{
     list_single, list_sort_with, list_sublist, list_swap,
 };
 use crate::llvm::build_str::{
-    empty_str, str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int,
-    str_from_utf8, str_from_utf8_range, str_join_with, str_number_of_bytes, str_repeat, str_split,
+    str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int, str_from_utf8,
+    str_from_utf8_range, str_join_with, str_number_of_bytes, str_repeat, str_split,
     str_starts_with, str_starts_with_code_point, str_to_utf8, str_trim, str_trim_left,
     str_trim_right,
 };
@@ -779,118 +779,109 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
         Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
         Str(str_literal) => {
-            if str_literal.is_empty() {
-                empty_str(env)
-            } else {
-                let ctx = env.context;
-                let builder = env.builder;
-                let number_of_chars = str_literal.len() as u64;
+            let ctx = env.context;
+            let builder = env.builder;
+            let number_of_chars = str_literal.len() as u64;
 
-                let str_type = super::convert::zig_str_type(env);
+            let str_type = super::convert::zig_str_type(env);
 
-                if str_literal.len() < env.small_str_bytes() as usize {
-                    // TODO support big endian systems
+            if str_literal.len() < env.small_str_bytes() as usize {
+                // TODO support big endian systems
 
-                    let array_alloca = builder.build_array_alloca(
-                        ctx.i8_type(),
-                        ctx.i8_type().const_int(env.small_str_bytes() as u64, false),
-                        "alloca_small_str",
-                    );
+                let array_alloca = builder.build_array_alloca(
+                    ctx.i8_type(),
+                    ctx.i8_type().const_int(env.small_str_bytes() as u64, false),
+                    "alloca_small_str",
+                );
 
-                    // Zero out all the bytes. If we don't do this, then
-                    // small strings would have uninitialized bytes, which could
-                    // cause string equality checks to fail randomly.
-                    //
-                    // We're running memset over *all* the bytes, even though
-                    // the final one is about to be manually overridden, on
-                    // the theory that LLVM will optimize the memset call
-                    // into two instructions to move appropriately-sized
-                    // zero integers into the appropriate locations instead
-                    // of doing any iteration.
-                    //
-                    // TODO: look at the compiled output to verify this theory!
-                    env.call_memset(
+                // Zero out all the bytes. If we don't do this, then
+                // small strings would have uninitialized bytes, which could
+                // cause string equality checks to fail randomly.
+                //
+                // We're running memset over *all* the bytes, even though
+                // the final one is about to be manually overridden, on
+                // the theory that LLVM will optimize the memset call
+                // into two instructions to move appropriately-sized
+                // zero integers into the appropriate locations instead
+                // of doing any iteration.
+                //
+                // TODO: look at the compiled output to verify this theory!
+                env.call_memset(
+                    array_alloca,
+                    ctx.i8_type().const_zero(),
+                    env.ptr_int().const_int(env.small_str_bytes() as u64, false),
+                );
+
+                let final_byte = (str_literal.len() as u8) | 0b1000_0000;
+
+                let final_byte_ptr = unsafe {
+                    builder.build_in_bounds_gep(
                         array_alloca,
-                        ctx.i8_type().const_zero(),
-                        env.ptr_int().const_int(env.small_str_bytes() as u64, false),
-                    );
-
-                    let final_byte = (str_literal.len() as u8) | 0b1000_0000;
-
-                    let final_byte_ptr = unsafe {
-                        builder.build_in_bounds_gep(
-                            array_alloca,
-                            &[ctx
-                                .i8_type()
-                                .const_int(env.small_str_bytes() as u64 - 1, false)],
-                            "str_literal_final_byte",
-                        )
-                    };
-
-                    builder.build_store(
-                        final_byte_ptr,
-                        ctx.i8_type().const_int(final_byte as u64, false),
-                    );
-
-                    // Copy the elements from the list literal into the array
-                    for (index, character) in str_literal.as_bytes().iter().enumerate() {
-                        let val = env
-                            .context
+                        &[ctx
                             .i8_type()
-                            .const_int(*character as u64, false)
-                            .as_basic_value_enum();
-                        let index_val = ctx.i64_type().const_int(index as u64, false);
-                        let elem_ptr = unsafe {
-                            builder.build_in_bounds_gep(array_alloca, &[index_val], "index")
-                        };
-
-                        builder.build_store(elem_ptr, val);
-                    }
-
-                    builder.build_load(
-                        builder
-                            .build_bitcast(
-                                array_alloca,
-                                str_type.ptr_type(AddressSpace::Generic),
-                                "cast_collection",
-                            )
-                            .into_pointer_value(),
-                        "small_str_array",
+                            .const_int(env.small_str_bytes() as u64 - 1, false)],
+                        "str_literal_final_byte",
                     )
-                } else {
-                    let ptr = define_global_str_literal_ptr(env, *str_literal);
-                    let number_of_elements = env.ptr_int().const_int(number_of_chars, false);
+                };
 
-                    let struct_type = str_type;
+                builder.build_store(
+                    final_byte_ptr,
+                    ctx.i8_type().const_int(final_byte as u64, false),
+                );
 
-                    let mut struct_val;
+                // Copy the elements from the list literal into the array
+                for (index, character) in str_literal.as_bytes().iter().enumerate() {
+                    let val = env
+                        .context
+                        .i8_type()
+                        .const_int(*character as u64, false)
+                        .as_basic_value_enum();
+                    let index_val = ctx.i64_type().const_int(index as u64, false);
+                    let elem_ptr =
+                        unsafe { builder.build_in_bounds_gep(array_alloca, &[index_val], "index") };
 
-                    // Store the pointer
-                    struct_val = builder
-                        .build_insert_value(
-                            struct_type.get_undef(),
-                            ptr,
-                            Builtin::WRAPPER_PTR,
-                            "insert_ptr_str_literal",
-                        )
-                        .unwrap();
-
-                    // Store the length
-                    struct_val = builder
-                        .build_insert_value(
-                            struct_val,
-                            number_of_elements,
-                            Builtin::WRAPPER_LEN,
-                            "insert_len",
-                        )
-                        .unwrap();
-
-                    builder.build_bitcast(
-                        struct_val.into_struct_value(),
-                        str_type,
-                        "cast_collection",
-                    )
+                    builder.build_store(elem_ptr, val);
                 }
+
+                builder.build_load(
+                    builder
+                        .build_bitcast(
+                            array_alloca,
+                            str_type.ptr_type(AddressSpace::Generic),
+                            "cast_collection",
+                        )
+                        .into_pointer_value(),
+                    "small_str_array",
+                )
+            } else {
+                let ptr = define_global_str_literal_ptr(env, *str_literal);
+                let number_of_elements = env.ptr_int().const_int(number_of_chars, false);
+
+                let struct_type = str_type;
+
+                let mut struct_val;
+
+                // Store the pointer
+                struct_val = builder
+                    .build_insert_value(
+                        struct_type.get_undef(),
+                        ptr,
+                        Builtin::WRAPPER_PTR,
+                        "insert_ptr_str_literal",
+                    )
+                    .unwrap();
+
+                // Store the length
+                struct_val = builder
+                    .build_insert_value(
+                        struct_val,
+                        number_of_elements,
+                        Builtin::WRAPPER_LEN,
+                        "insert_len",
+                    )
+                    .unwrap();
+
+                builder.build_bitcast(struct_val.into_struct_value(), str_type, "cast_collection")
             }
         }
     }
