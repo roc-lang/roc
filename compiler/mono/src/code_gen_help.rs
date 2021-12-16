@@ -216,10 +216,7 @@ impl<'a> CodeGenHelp<'a> {
     // In the short term, it helps us to skip refcounting and let it leak, so we can make
     // progress incrementally. Kept in sync with generate_procs using assertions.
     fn is_rc_implemented_yet(layout: &Layout) -> bool {
-        match layout {
-            Layout::Builtin(Builtin::Str) => true,
-            _ => false,
-        }
+        matches!(layout, Layout::Builtin(Builtin::Str))
     }
 
     /// Generate refcounting helper procs, each specialized to a particular Layout.
@@ -357,7 +354,7 @@ impl<'a> CodeGenHelp<'a> {
         if let Some((_, _, existing_symbol)) = found {
             (*existing_symbol, None)
         } else {
-            let layout_name = layout_debug_name(&layout);
+            let layout_name = layout_debug_name(layout);
             let debug_name = format!("#help{:?}_{}", op, layout_name);
             let new_symbol: Symbol = self.create_symbol(ident_ids, &debug_name);
             self.specs.push((*layout, op, new_symbol));
