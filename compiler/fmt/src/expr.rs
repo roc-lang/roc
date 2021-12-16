@@ -11,7 +11,7 @@ use roc_parse::ast::{
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_region::all::Located;
 
-impl<'a> Formattable<'a> for Expr<'a> {
+impl<'a> Formattable for Expr<'a> {
     fn is_multiline(&self) -> bool {
         use roc_parse::ast::Expr::*;
         // TODO cache these answers using a Map<Pointer, bool>, so
@@ -106,9 +106,9 @@ impl<'a> Formattable<'a> for Expr<'a> {
         }
     }
 
-    fn format_with_options(
+    fn format_with_options<'buf>(
         &self,
-        buf: &mut Buf<'a>,
+        buf: &mut Buf<'buf>,
         parens: Parens,
         newlines: Newlines,
         indent: u16,
@@ -289,7 +289,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
     }
 }
 
-fn format_str_segment<'a>(seg: &StrSegment<'a>, buf: &mut Buf<'a>, indent: u16) {
+fn format_str_segment<'a, 'buf>(seg: &StrSegment<'a>, buf: &mut Buf<'buf>, indent: u16) {
     use StrSegment::*;
 
     match seg {
@@ -344,7 +344,7 @@ fn push_op(buf: &mut Buf, op: BinOp) {
     }
 }
 
-pub fn fmt_str_literal<'a>(buf: &mut Buf<'a>, literal: StrLiteral<'a>, indent: u16) {
+pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u16) {
     use roc_parse::ast::StrLiteral::*;
 
     buf.indent(indent);
@@ -395,8 +395,8 @@ pub fn fmt_str_literal<'a>(buf: &mut Buf<'a>, literal: StrLiteral<'a>, indent: u
     buf.push('"');
 }
 
-fn fmt_bin_ops<'a>(
-    buf: &mut Buf<'a>,
+fn fmt_bin_ops<'a, 'buf>(
+    buf: &mut Buf<'buf>,
     lefts: &'a [(Located<Expr<'a>>, Located<BinOp>)],
     loc_right_side: &'a Located<Expr<'a>>,
     part_of_multi_line_bin_ops: bool,
@@ -454,8 +454,8 @@ fn empty_line_before_expr<'a>(expr: &'a Expr<'a>) -> bool {
     }
 }
 
-fn fmt_when<'a>(
-    buf: &mut Buf<'a>,
+fn fmt_when<'a, 'buf>(
+    buf: &mut Buf<'buf>,
     loc_condition: &'a Located<Expr<'a>>,
     branches: &[&'a WhenBranch<'a>],
     indent: u16,
@@ -569,8 +569,8 @@ fn fmt_when<'a>(
     }
 }
 
-fn fmt_expect<'a>(
-    buf: &mut Buf<'a>,
+fn fmt_expect<'a, 'buf>(
+    buf: &mut Buf<'buf>,
     condition: &'a Located<Expr<'a>>,
     continuation: &'a Located<Expr<'a>>,
     is_multiline: bool,
@@ -588,8 +588,8 @@ fn fmt_expect<'a>(
     continuation.format(buf, return_indent);
 }
 
-fn fmt_if<'a>(
-    buf: &mut Buf<'a>,
+fn fmt_if<'a, 'buf>(
+    buf: &mut Buf<'buf>,
     branches: &'a [(Located<Expr<'a>>, Located<Expr<'a>>)],
     final_else: &'a Located<Expr<'a>>,
     is_multiline: bool,
@@ -709,8 +709,8 @@ fn fmt_if<'a>(
     final_else.format(buf, return_indent);
 }
 
-fn fmt_closure<'a>(
-    buf: &mut Buf<'a>,
+fn fmt_closure<'a, 'buf>(
+    buf: &mut Buf<'buf>,
     loc_patterns: &'a [Located<Pattern<'a>>],
     loc_ret: &'a Located<Expr<'a>>,
     indent: u16,
@@ -782,8 +782,8 @@ fn fmt_closure<'a>(
     loc_ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, body_indent);
 }
 
-fn fmt_backpassing<'a>(
-    buf: &mut Buf<'a>,
+fn fmt_backpassing<'a, 'buf>(
+    buf: &mut Buf<'buf>,
     loc_patterns: &'a [Located<Pattern<'a>>],
     loc_body: &'a Located<Expr<'a>>,
     loc_ret: &'a Located<Expr<'a>>,
@@ -876,8 +876,8 @@ fn pattern_needs_parens_when_backpassing(pat: &Pattern) -> bool {
     }
 }
 
-fn fmt_record<'a>(
-    buf: &mut Buf<'a>,
+fn fmt_record<'a, 'buf>(
+    buf: &mut Buf<'buf>,
     update: Option<&'a Located<Expr<'a>>>,
     fields: Collection<'a, Located<AssignedField<'a, Expr<'a>>>>,
     indent: u16,
@@ -945,13 +945,13 @@ fn fmt_record<'a>(
     }
 }
 
-fn format_field_multiline<'a, T>(
-    buf: &mut Buf<'a>,
+fn format_field_multiline<'a, 'buf, T>(
+    buf: &mut Buf<'buf>,
     field: &AssignedField<'a, T>,
     indent: u16,
     separator_prefix: &str,
 ) where
-    T: Formattable<'a>,
+    T: Formattable,
 {
     use self::AssignedField::*;
     match field {

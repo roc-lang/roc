@@ -1,7 +1,7 @@
-use crate::ast::{Collection, CommentOrNewline, Def, Module};
+use crate::ast::{Collection, CommentOrNewline, Def, Module, Spaced};
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::header::{
-    package_entry, package_name, package_or_path, AppHeader, Effects, ExposesEntry, ImportsEntry,
+    package_entry, package_name, package_or_path, AppHeader, Effects, ExposedName, ImportsEntry,
     InterfaceHeader, ModuleName, PackageEntry, PlatformHeader, PlatformRequires, PlatformRigid, To,
     TypedIdent,
 };
@@ -220,7 +220,7 @@ fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, EHeader<'a>> {
         #[allow(clippy::type_complexity)]
         let opt_imports: Option<(
             (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-            Collection<'a, Located<ImportsEntry<'a>>>,
+            Collection<'a, Located<Spaced<'a, ImportsEntry<'a>>>>,
         )> = opt_imports;
 
         let ((before_imports, after_imports), imports) =
@@ -303,7 +303,7 @@ fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>> {
 
 #[derive(Debug)]
 struct ProvidesTo<'a> {
-    entries: Collection<'a, Located<ExposesEntry<'a, &'a str>>>,
+    entries: Collection<'a, Located<Spaced<'a, ExposedName<'a>>>>,
     to: Located<To<'a>>,
 
     before_provides_keyword: &'a [CommentOrNewline<'a>],
@@ -362,7 +362,7 @@ fn provides_without_to<'a>() -> impl Parser<
     'a,
     (
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-        Collection<'a, Located<ExposesEntry<'a, &'a str>>>,
+        Collection<'a, Located<Spaced<'a, ExposedName<'a>>>>,
     ),
     EProvides<'a>,
 > {
@@ -385,14 +385,14 @@ fn provides_without_to<'a>() -> impl Parser<
             EProvides::Open,
             EProvides::Space,
             EProvides::IndentListEnd,
-            ExposesEntry::SpaceBefore
+            Spaced::SpaceBefore
         )
     )
 }
 
 fn exposes_entry<'a, F, E>(
     to_expectation: F,
-) -> impl Parser<'a, Located<ExposesEntry<'a, &'a str>>, E>
+) -> impl Parser<'a, Located<Spaced<'a, ExposedName<'a>>>, E>
 where
     F: Fn(crate::parser::Row, crate::parser::Col) -> E,
     F: Copy,
@@ -400,7 +400,7 @@ where
 {
     loc!(map!(
         specialize(|_, r, c| to_expectation(r, c), unqualified_ident()),
-        ExposesEntry::Exposed
+        |n| Spaced::Item(ExposedName::new(n))
     ))
 }
 
@@ -444,7 +444,7 @@ fn platform_requires<'a>() -> impl Parser<'a, PlatformRequires<'a>, ERequires<'a
 #[inline(always)]
 fn requires_rigids<'a>(
     min_indent: u16,
-) -> impl Parser<'a, Collection<'a, Located<PlatformRigid<'a>>>, ERequires<'a>> {
+) -> impl Parser<'a, Collection<'a, Located<Spaced<'a, PlatformRigid<'a>>>>, ERequires<'a>> {
     collection_trailing_sep_e!(
         word1(b'{', ERequires::ListStart),
         specialize(|_, r, c| ERequires::Rigid(r, c), loc!(requires_rigid())),
@@ -454,23 +454,24 @@ fn requires_rigids<'a>(
         ERequires::Open,
         ERequires::Space,
         ERequires::IndentListEnd,
-        PlatformRigid::SpaceBefore
+        Spaced::SpaceBefore
     )
 }
 
 #[inline(always)]
-fn requires_rigid<'a>() -> impl Parser<'a, PlatformRigid<'a>, ()> {
+fn requires_rigid<'a>() -> impl Parser<'a, Spaced<'a, PlatformRigid<'a>>, ()> {
     map!(
         and!(
             lowercase_ident(),
             skip_first!(word2(b'=', b'>', |_, _| ()), uppercase_ident())
         ),
-        |(rigid, alias)| PlatformRigid::Entry { rigid, alias }
+        |(rigid, alias)| Spaced::Item(PlatformRigid { rigid, alias })
     )
 }
 
 #[inline(always)]
-fn requires_typed_ident<'a>() -> impl Parser<'a, Located<TypedIdent<'a>>, ERequires<'a>> {
+fn requires_typed_ident<'a>() -> impl Parser<'a, Located<Spaced<'a, TypedIdent<'a>>>, ERequires<'a>>
+{
     skip_first!(
         word1(b'{', ERequires::ListStart),
         skip_second!(
@@ -491,7 +492,7 @@ fn exposes_values<'a>() -> impl Parser<
     'a,
     (
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-        Collection<'a, Located<ExposesEntry<'a, &'a str>>>,
+        Collection<'a, Located<Spaced<'a, ExposedName<'a>>>>,
     ),
     EExposes,
 > {
@@ -515,7 +516,7 @@ fn exposes_values<'a>() -> impl Parser<
             EExposes::Open,
             EExposes::Space,
             EExposes::IndentListEnd,
-            ExposesEntry::SpaceBefore
+            Spaced::SpaceBefore
         )
     )
 }
@@ -545,7 +546,7 @@ fn exposes_modules<'a>() -> impl Parser<
     'a,
     (
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-        Collection<'a, Located<ExposesEntry<'a, ModuleName<'a>>>>,
+        Collection<'a, Located<Spaced<'a, ModuleName<'a>>>>,
     ),
     EExposes,
 > {
@@ -569,14 +570,14 @@ fn exposes_modules<'a>() -> impl Parser<
             EExposes::Open,
             EExposes::Space,
             EExposes::IndentListEnd,
-            ExposesEntry::SpaceBefore
+            Spaced::SpaceBefore
         )
     )
 }
 
 fn exposes_module<'a, F, E>(
     to_expectation: F,
-) -> impl Parser<'a, Located<ExposesEntry<'a, ModuleName<'a>>>, E>
+) -> impl Parser<'a, Located<Spaced<'a, ModuleName<'a>>>, E>
 where
     F: Fn(crate::parser::Row, crate::parser::Col) -> E,
     F: Copy,
@@ -584,13 +585,13 @@ where
 {
     loc!(map!(
         specialize(|_, r, c| to_expectation(r, c), module_name()),
-        ExposesEntry::Exposed
+        Spaced::Item
     ))
 }
 
 #[derive(Debug)]
 struct Packages<'a> {
-    entries: Collection<'a, Located<PackageEntry<'a>>>,
+    entries: Collection<'a, Located<Spaced<'a, PackageEntry<'a>>>>,
     before_packages_keyword: &'a [CommentOrNewline<'a>],
     after_packages_keyword: &'a [CommentOrNewline<'a>],
 }
@@ -618,7 +619,7 @@ fn packages<'a>() -> impl Parser<'a, Packages<'a>, EPackages<'a>> {
                 EPackages::Open,
                 EPackages::Space,
                 EPackages::IndentListEnd,
-                PackageEntry::SpaceBefore
+                Spaced::SpaceBefore
             )
         ),
         |((before_packages_keyword, after_packages_keyword), entries): (
@@ -639,7 +640,7 @@ fn imports<'a>() -> impl Parser<
     'a,
     (
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-        Collection<'a, Located<ImportsEntry<'a>>>,
+        Collection<'a, Located<Spaced<'a, ImportsEntry<'a>>>>,
     ),
     EImports,
 > {
@@ -663,7 +664,7 @@ fn imports<'a>() -> impl Parser<
             EImports::Open,
             EImports::Space,
             EImports::IndentListEnd,
-            ImportsEntry::SpaceBefore
+            Spaced::SpaceBefore
         )
     )
 }
@@ -706,7 +707,7 @@ fn effects<'a>() -> impl Parser<'a, Effects<'a>, EEffects<'a>> {
             EEffects::Open,
             EEffects::Space,
             EEffects::IndentListEnd,
-            TypedIdent::SpaceBefore
+            Spaced::SpaceBefore
         )
         .parse(arena, state)?;
 
@@ -726,7 +727,7 @@ fn effects<'a>() -> impl Parser<'a, Effects<'a>, EEffects<'a>> {
 }
 
 #[inline(always)]
-fn typed_ident<'a>() -> impl Parser<'a, TypedIdent<'a>, ETypedIdent<'a>> {
+fn typed_ident<'a>() -> impl Parser<'a, Spaced<'a, TypedIdent<'a>>, ETypedIdent<'a>> {
     // e.g.
     //
     // printLine : Str -> Effect {}
@@ -752,11 +753,11 @@ fn typed_ident<'a>() -> impl Parser<'a, TypedIdent<'a>, ETypedIdent<'a>> {
             )
         ),
         |((ident, spaces_before_colon), ann)| {
-            TypedIdent::Entry {
+            Spaced::Item(TypedIdent {
                 ident,
                 spaces_before_colon,
                 ann,
-            }
+            })
         }
     )
 }
@@ -775,12 +776,12 @@ where
 }
 
 #[inline(always)]
-fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>, EImports> {
+fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports> {
     let min_indent = 1;
 
     type Temp<'a> = (
         (Option<&'a str>, ModuleName<'a>),
-        Option<Collection<'a, Located<ExposesEntry<'a, &'a str>>>>,
+        Option<Collection<'a, Located<Spaced<'a, ExposedName<'a>>>>>,
     );
 
     map_with_arena!(
@@ -806,18 +807,20 @@ fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>, EImports> {
                     EImports::Open,
                     EImports::Space,
                     EImports::IndentSetEnd,
-                    ExposesEntry::SpaceBefore
+                    Spaced::SpaceBefore
                 )
             ))
         ),
         |_arena, ((opt_shortname, module_name), opt_values): Temp<'a>| {
             let exposed_values = opt_values.unwrap_or_else(Collection::empty);
 
-            match opt_shortname {
+            let entry = match opt_shortname {
                 Some(shortname) => ImportsEntry::Package(shortname, module_name, exposed_values),
 
                 None => ImportsEntry::Module(module_name, exposed_values),
-            }
+            };
+
+            Spaced::Item(entry)
         }
     )
 }

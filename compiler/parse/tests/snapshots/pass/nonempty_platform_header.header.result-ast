@@ -6,12 +6,12 @@ Platform {
         },
         requires: PlatformRequires {
             rigids: [
-                |L 1-1, C 14-26| Entry {
+                |L 1-1, C 14-26| PlatformRigid {
                     rigid: "model",
                     alias: "Model",
                 },
             ],
-            signature: |L 1-1, C 30-39| Entry {
+            signature: |L 1-1, C 30-39| TypedIdent {
                 ident: |L 1-1, C 30-34| "main",
                 spaces_before_colon: [],
                 ann: |L 1-1, C 37-39| Record {
@@ -22,7 +22,7 @@ Platform {
         },
         exposes: [],
         packages: [
-            |L 3-3, C 15-27| Entry {
+            |L 3-3, C 15-27| PackageEntry {
                 shorthand: "foo",
                 spaces_after_shorthand: [],
                 package_or_path: |L 3-3, C 20-27| Path(
@@ -34,7 +34,7 @@ Platform {
         ],
         imports: [],
         provides: [
-            |L 5-5, C 15-26| Exposed(
+            |L 5-5, C 15-26| ExposedName(
                 "mainForHost",
             ),
         ],
