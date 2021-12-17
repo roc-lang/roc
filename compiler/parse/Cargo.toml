@@ -5,6 +5,9 @@ authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2018"
 
+[features]
+"parse_debug_trace" = []
+
 [dependencies]
 roc_collections = { path = "../collections" }
 roc_region = { path = "../region" }

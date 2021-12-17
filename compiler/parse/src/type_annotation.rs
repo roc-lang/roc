@@ -101,6 +101,7 @@ fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, ETy
             }
         }
     )
+    .trace("type_annotation:term")
 }
 
 /// The `*` type variable, e.g. in (List *) Wildcard,
@@ -208,7 +209,7 @@ fn record_type_field<'a>(
     use crate::parser::Either::*;
     use AssignedField::*;
 
-    move |arena, state: State<'a>| {
+    (move |arena, state: State<'a>| {
         // You must have a field name, e.g. "email"
         // using the initial row/col is important for error reporting
         let row = state.line;
@@ -276,14 +277,15 @@ fn record_type_field<'a>(
                 Ok((MadeProgress, value, state))
             }
         }
-    }
+    })
+    .trace("type_annotation:record_type_field")
 }
 
 #[inline(always)]
 fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, ETypeRecord<'a>> {
     use crate::type_annotation::TypeAnnotation::*;
 
-    move |arena, state| {
+    (move |arena, state| {
         let (_, fields, state) = collection_trailing_sep_e!(
             // word1_check_indent!(b'{', TRecord::Open, min_indent, TRecord::IndentOpen),
             word1(b'{', ETypeRecord::Open),
@@ -305,7 +307,8 @@ fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, EType
         let result = Record { fields, ext };
 
         Ok((MadeProgress, result, state))
-    }
+    })
+    .trace("type_annotation:record_type")
 }
 
 fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, EType<'a>> {
@@ -331,6 +334,7 @@ fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, ETyp
             }
         }
     )
+    .trace("type_annotation:applied_type")
 }
 
 fn loc_applied_args_e<'a>(
@@ -340,7 +344,7 @@ fn loc_applied_args_e<'a>(
 }
 
 fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, EType<'a>> {
-    move |arena, state: State<'a>| {
+    (move |arena, state: State<'a>| {
         let (p1, first, state) = space0_before_e(
             term(min_indent),
             min_indent,
@@ -366,6 +370,7 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
                 ))
             ]
         ))
+        .trace("type_annotation:expression:rest_args")
         .parse(arena, state)?;
 
         // TODO this space0 is dropped, so newlines just before the function arrow when there
@@ -374,6 +379,7 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
             space0_e(min_indent, EType::TSpace, EType::TIndentStart),
             word2(b'-', b'>', EType::TStart)
         ))
+        .trace("type_annotation:expression:arrow")
         .parse(arena, state)?;
 
         if is_function.is_some() {
@@ -407,7 +413,8 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
                 panic!()
             }
         }
-    }
+    })
+    .trace("type_annotation:expression")
 }
 
 /// Parse a basic type annotation that's a combination of variables

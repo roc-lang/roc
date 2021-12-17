@@ -580,6 +580,30 @@ pub struct ParseProblem<'a, T> {
 
 pub trait Parser<'a, Output, Error> {
     fn parse(&self, _: &'a Bump, _: State<'a>) -> ParseResult<'a, Output, Error>;
+
+    #[cfg(not(feature = "parse_debug_trace"))]
+    fn trace(self, _message: &'static str) -> Self
+    where
+        Self: Sized,
+        Output: std::fmt::Debug,
+        Error: std::fmt::Debug,
+    {
+        self
+    }
+
+    #[cfg(feature = "parse_debug_trace")]
+    fn trace(self, message: &'static str) -> Traced<'a, Output, Error, Self>
+    where
+        Self: Sized,
+        Output: std::fmt::Debug,
+        Error: std::fmt::Debug,
+    {
+        Traced {
+            parser: self,
+            message,
+            _phantom: Default::default(),
+        }
+    }
 }
 
 impl<'a, F, Output, Error> Parser<'a, Output, Error> for F
@@ -589,6 +613,63 @@ where
 {
     fn parse(&self, arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Output, Error> {
         self(arena, state)
+    }
+}
+
+#[cfg(feature = "parse_debug_trace")]
+pub struct Traced<'a, O, E, P: Parser<'a, O, E>> {
+    parser: P,
+    message: &'static str,
+    _phantom: std::marker::PhantomData<&'a (O, E)>,
+}
+
+#[cfg(feature = "parse_debug_trace")]
+impl<'a, O: std::fmt::Debug, E: std::fmt::Debug, P: Parser<'a, O, E>> Parser<'a, O, E>
+    for Traced<'a, O, E, P>
+where
+    E: 'a,
+{
+    fn parse(&self, arena: &'a Bump, state: State<'a>) -> ParseResult<'a, O, E> {
+        use std::cell::RefCell;
+
+        thread_local! {
+            pub static INDENT: RefCell<usize> = RefCell::new(0);
+        }
+
+        // This should be enough for anyone. Right? RIGHT?
+        let indent_text =
+            "| ; : ! | ; : ! | ; : ! | ; : ! | ; : ! | ; : ! | ; : ! | ; : ! | ; : ! ";
+
+        let cur_indent = INDENT.with(|i| *i.borrow());
+
+        println!(
+            "@{:>5}:{:<5}: {}{:<50}",
+            state.line,
+            state.column,
+            &indent_text[..cur_indent * 2],
+            self.message
+        );
+
+        INDENT.with(|i| *i.borrow_mut() += 1);
+        let res = self.parser.parse(arena, state);
+        INDENT.with(|i| *i.borrow_mut() = cur_indent);
+
+        let (progress, value, state) = match &res {
+            Ok((progress, result, state)) => (progress, Ok(result), state),
+            Err((progress, error, state)) => (progress, Err(error), state),
+        };
+
+        println!(
+            "@{:>5}:{:<5}: {}{:<50} {:<15} {:?}",
+            state.line,
+            state.column,
+            &indent_text[..cur_indent * 2],
+            self.message,
+            format!("{:?}", progress),
+            value
+        );
+
+        res
     }
 }
 
