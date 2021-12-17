@@ -232,7 +232,7 @@ fn record_type_field<'a>(
         ))
         .parse(arena, state)?;
 
-        let val_parser = specialize_ref(ETypeRecord::Type, term(min_indent));
+        let val_parser = specialize_ref(ETypeRecord::Type, expression(min_indent));
 
         match opt_loc_val {
             Some(First(_)) => {
@@ -353,37 +353,37 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
         )
         .parse(arena, state)?;
 
-        let (p2, rest, state) = zero_or_more!(skip_first!(
-            word1(b',', EType::TFunctionArgument),
-            one_of![
-                space0_around_ee(
-                    term(min_indent),
-                    min_indent,
-                    EType::TSpace,
-                    EType::TIndentStart,
-                    EType::TIndentEnd
-                ),
-                |_, state: State<'a>| Err((
-                    NoProgress,
-                    EType::TFunctionArgument(state.line, state.column),
-                    state
-                ))
-            ]
-        ))
-        .trace("type_annotation:expression:rest_args")
+        let (p2, pre_func, state) = optional(and![
+            zero_or_more!(skip_first!(
+                word1(b',', EType::TFunctionArgument),
+                one_of![
+                    space0_around_ee(
+                        term(min_indent),
+                        min_indent,
+                        EType::TSpace,
+                        EType::TIndentStart,
+                        EType::TIndentEnd
+                    ),
+                    |_, state: State<'a>| Err((
+                        NoProgress,
+                        EType::TFunctionArgument(state.line, state.column),
+                        state
+                    ))
+                ]
+            ))
+            .trace("type_annotation:expression:rest_args"),
+            // TODO this space0 is dropped, so newlines just before the function arrow when there
+            // is only one argument are not seen by the formatter. Can we do better?
+            skip_second!(
+                space0_e(min_indent, EType::TSpace, EType::TIndentStart),
+                word2(b'-', b'>', EType::TStart)
+            )
+            .trace("type_annotation:expression:arrow")
+        ])
         .parse(arena, state)?;
 
-        // TODO this space0 is dropped, so newlines just before the function arrow when there
-        // is only one argument are not seen by the formatter. Can we do better?
-        let (p3, is_function, state) = optional(skip_first!(
-            space0_e(min_indent, EType::TSpace, EType::TIndentStart),
-            word2(b'-', b'>', EType::TStart)
-        ))
-        .trace("type_annotation:expression:arrow")
-        .parse(arena, state)?;
-
-        if is_function.is_some() {
-            let (p4, return_type, state) = space0_before_e(
+        if let Some((rest, _dropped_spaces)) = pre_func {
+            let (p3, return_type, state) = space0_before_e(
                 term(min_indent),
                 min_indent,
                 EType::TSpace,
@@ -401,17 +401,11 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
                 region: return_type.region,
                 value: TypeAnnotation::Function(output, arena.alloc(return_type)),
             };
-            let progress = p1.or(p2).or(p3).or(p4);
+            let progress = p1.or(p2).or(p3);
             Ok((progress, result, state))
         } else {
-            let progress = p1.or(p2).or(p3);
-            // if there is no function arrow, there cannot be more than 1 "argument"
-            if rest.is_empty() {
-                Ok((progress, first, state))
-            } else {
-                // e.g. `Int,Int` without an arrow and return type
-                panic!()
-            }
+            // We ran into trouble parsing the function bits; just return the single term
+            Ok((p1, first, state))
         }
     })
     .trace("type_annotation:expression")
