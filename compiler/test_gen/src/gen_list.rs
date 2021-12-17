@@ -1,6 +1,3 @@
-// #![cfg(feature = "gen-llvm")]
-// #![cfg(feature = "gen-wasm")]
-
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
 
@@ -10,9 +7,12 @@ use crate::helpers::llvm::assert_evals_to;
 #[cfg(feature = "gen-wasm")]
 use crate::helpers::wasm::assert_evals_to;
 
+#[allow(unused_imports)]
 use crate::helpers::with_larger_debug_stack;
 //use crate::assert_wasm_evals_to as assert_evals_to;
+#[allow(unused_imports)]
 use indoc::indoc;
+#[allow(unused_imports)]
 use roc_std::{RocList, RocStr};
 
 #[test]
@@ -29,7 +29,7 @@ fn empty_list_literal() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm"))]
 fn list_literal_empty_record() {
     assert_evals_to!("[{}]", RocList::from_slice(&[()]), RocList<()>);
 }
@@ -41,7 +41,7 @@ fn int_singleton_list_literal() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_list_literal() {
     assert_evals_to!("[ 12, 9 ]", RocList::from_slice(&[12, 9]), RocList<i64>);
     assert_evals_to!(
@@ -131,7 +131,7 @@ fn bool_list_literal() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn variously_sized_list_literals() {
     assert_evals_to!("[]", RocList::from_slice(&[]), RocList<i64>);
     assert_evals_to!("[1]", RocList::from_slice(&[1]), RocList<i64>);
@@ -1316,6 +1316,7 @@ fn list_concat_two_bigger_non_empty_lists() {
     );
 }
 
+#[allow(dead_code)]
 fn assert_concat_worked(num_elems1: i64, num_elems2: i64) {
     let vec1: Vec<i64> = (0..num_elems1)
         .map(|i| 12345 % (i + num_elems1 + num_elems2 + 1))
