@@ -2,9 +2,8 @@ use crate::ast::{Collection, CommentOrNewline, Spaced, StrLiteral, TypeAnnotatio
 use crate::blankspace::space0_e;
 use crate::ident::lowercase_ident;
 use crate::parser::Progress::{self, *};
-use crate::parser::{
-    specialize, word1, EPackageEntry, EPackageName, EPackageOrPath, Parser, State,
-};
+use crate::parser::{specialize, word1, EPackageEntry, EPackageName, EPackageOrPath, Parser};
+use crate::state::State;
 use crate::string_literal;
 use bumpalo::collections::Vec;
 use roc_region::all::Loc;
@@ -282,8 +281,8 @@ where
     T: 'a,
 {
     |_, mut state: State<'a>| {
-        let mut chomped = 0;
-        let mut it = state.bytes.iter();
+        let mut chomped = 0usize;
+        let mut it = state.bytes().iter();
 
         while let Some(b' ') = it.next() {
             chomped += 1;
@@ -292,8 +291,8 @@ where
         if chomped == 0 {
             Ok((NoProgress, (), state))
         } else {
-            state.column += chomped;
-            state.bytes = it.as_slice();
+            state.column += chomped as u16;
+            state = state.advance(chomped);
 
             Ok((MadeProgress, (), state))
         }
@@ -316,7 +315,7 @@ pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, EPackageName> {
     // They cannot contain underscores or other special characters.
     // They must be ASCII.
 
-    |_, mut state: State<'a>| match chomp_package_part(state.bytes) {
+    |_, mut state: State<'a>| match chomp_package_part(state.bytes()) {
         Err(progress) => Err((
             progress,
             EPackageName::Account(state.line, state.column),
@@ -324,9 +323,9 @@ pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, EPackageName> {
         )),
         Ok(account) => {
             let mut chomped = account.len();
-            if let Ok(('/', width)) = char::from_utf8_slice_start(&state.bytes[chomped..]) {
+            if let Ok(('/', width)) = char::from_utf8_slice_start(&state.bytes()[chomped..]) {
                 chomped += width;
-                match chomp_package_part(&state.bytes[chomped..]) {
+                match chomp_package_part(&state.bytes()[chomped..]) {
                     Err(progress) => Err((
                         progress,
                         EPackageName::Pkg(state.line, state.column + chomped as u16),
@@ -336,7 +335,7 @@ pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, EPackageName> {
                         chomped += pkg.len();
 
                         state.column += chomped as u16;
-                        state.bytes = &state.bytes[chomped..];
+                        state = state.advance(chomped);
 
                         let value = PackageName { account, pkg };
                         Ok((MadeProgress, value, state))

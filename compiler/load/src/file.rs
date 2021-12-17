@@ -28,7 +28,7 @@ use roc_parse::header::{
     ExposedName, ImportsEntry, PackageEntry, PackageOrPath, PlatformHeader, To, TypedIdent,
 };
 use roc_parse::module::module_defs;
-use roc_parse::parser::{self, ParseProblem, Parser, SyntaxError};
+use roc_parse::parser::{ParseProblem, Parser, SyntaxError};
 use roc_region::all::{Located, Region};
 use roc_solve::module::SolvedModule;
 use roc_solve::solve;
@@ -674,7 +674,7 @@ struct ModuleHeader<'a> {
     exposes: Vec<Symbol>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     header_src: &'a str,
-    parse_state: roc_parse::parser::State<'a>,
+    parse_state: roc_parse::state::State<'a>,
     module_timing: ModuleTiming,
 }
 
@@ -2356,7 +2356,7 @@ fn load_pkg_config<'a>(
         Ok(bytes_vec) => {
             let parse_start = SystemTime::now();
             let bytes = arena.alloc(bytes_vec);
-            let parse_state = parser::State::new(bytes);
+            let parse_state = roc_parse::state::State::new(bytes);
             let parsed = roc_parse::module::parse_header(arena, parse_state);
             let parse_header_duration = parse_start.elapsed().unwrap();
 
@@ -2384,7 +2384,7 @@ fn load_pkg_config<'a>(
                     )))
                 }
                 Ok((ast::Module::Platform { header }, parser_state)) => {
-                    let delta = bytes.len() - parser_state.bytes.len();
+                    let delta = bytes.len() - parser_state.bytes().len();
                     let chomped = &bytes[..delta];
                     let header_src = unsafe { std::str::from_utf8_unchecked(chomped) };
 
@@ -2526,7 +2526,7 @@ fn parse_header<'a>(
     start_time: SystemTime,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let parse_start = SystemTime::now();
-    let parse_state = parser::State::new(src_bytes);
+    let parse_state = roc_parse::state::State::new(src_bytes);
     let parsed = roc_parse::module::parse_header(arena, parse_state);
     let parse_header_duration = parse_start.elapsed().unwrap();
 
@@ -2539,7 +2539,7 @@ fn parse_header<'a>(
     match parsed {
         Ok((ast::Module::Interface { header }, parse_state)) => {
             let header_src = unsafe {
-                let chomped = src_bytes.len() - parse_state.bytes.len();
+                let chomped = src_bytes.len() - parse_state.bytes().len();
                 std::str::from_utf8_unchecked(&src_bytes[..chomped])
             };
 
@@ -2571,7 +2571,7 @@ fn parse_header<'a>(
             pkg_config_dir.pop();
 
             let header_src = unsafe {
-                let chomped = src_bytes.len() - parse_state.bytes.len();
+                let chomped = src_bytes.len() - parse_state.bytes().len();
                 std::str::from_utf8_unchecked(&src_bytes[..chomped])
             };
 
@@ -2767,7 +2767,7 @@ struct HeaderInfo<'a> {
 #[allow(clippy::too_many_arguments)]
 fn send_header<'a>(
     info: HeaderInfo<'a>,
-    parse_state: parser::State<'a>,
+    parse_state: roc_parse::state::State<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_timing: ModuleTiming,
@@ -2980,7 +2980,7 @@ struct PlatformHeaderInfo<'a> {
 #[allow(clippy::too_many_arguments)]
 fn send_header_two<'a>(
     info: PlatformHeaderInfo<'a>,
-    parse_state: parser::State<'a>,
+    parse_state: roc_parse::state::State<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_timing: ModuleTiming,
@@ -3327,7 +3327,7 @@ fn fabricate_pkg_config_module<'a>(
     shorthand: &'a str,
     app_module_id: ModuleId,
     filename: PathBuf,
-    parse_state: parser::State<'a>,
+    parse_state: roc_parse::state::State<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     header: &PlatformHeader<'a>,
@@ -3724,7 +3724,7 @@ where
 fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let mut module_timing = header.module_timing;
     let parse_start = SystemTime::now();
-    let source = header.parse_state.bytes;
+    let source = header.parse_state.bytes();
     let parse_state = header.parse_state;
     let parsed_defs = match module_defs().parse(arena, parse_state) {
         Ok((_, success, _state)) => success,

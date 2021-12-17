@@ -20,7 +20,8 @@ mod test_parse {
     use roc_parse::ast::StrSegment::*;
     use roc_parse::ast::{self, EscapedChar};
     use roc_parse::module::module_defs;
-    use roc_parse::parser::{Parser, State, SyntaxError};
+    use roc_parse::parser::{Parser, SyntaxError};
+    use roc_parse::state::State;
     use roc_parse::test_helpers::parse_expr_with;
     use roc_region::all::{Located, Region};
     use roc_test_utils::assert_multiline_str_eq;

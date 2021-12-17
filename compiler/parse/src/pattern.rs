@@ -4,8 +4,9 @@ use crate::ident::{lowercase_ident, parse_ident, Ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
     backtrackable, optional, specialize, specialize_ref, word1, EPattern, PInParens, PRecord,
-    ParseResult, Parser, State,
+    ParseResult, Parser,
 };
+use crate::state::State;
 use bumpalo::collections::string::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;

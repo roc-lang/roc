@@ -11,7 +11,8 @@ mod test_fmt {
     use roc_fmt::module::fmt_module;
     use roc_fmt::Buf;
     use roc_parse::module::{self, module_defs};
-    use roc_parse::parser::{Parser, State};
+    use roc_parse::parser::Parser;
+    use roc_parse::state::State;
     use roc_test_utils::assert_multiline_str_eq;
 
     // Not intended to be used directly in tests; please use expr_formats_to or expr_formats_same

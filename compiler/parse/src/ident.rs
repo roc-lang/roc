@@ -1,5 +1,6 @@
 use crate::parser::Progress::{self, *};
-use crate::parser::{BadInputError, Col, EExpr, ParseResult, Parser, Row, State};
+use crate::parser::{BadInputError, Col, EExpr, ParseResult, Parser, Row};
+use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 
@@ -59,7 +60,7 @@ impl<'a> Ident<'a> {
 /// * A record field, e.g. "email" in `.email` or in `email:`
 /// * A named pattern match, e.g. "foo" in `foo =` or `foo ->` or `\foo ->`
 pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
-    move |_, state: State<'a>| match chomp_lowercase_part(state.bytes) {
+    move |_, state: State<'a>| match chomp_lowercase_part(state.bytes()) {
         Err(progress) => Err((progress, (), state)),
         Ok(ident) => {
             if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {
@@ -77,8 +78,8 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
 
 pub fn tag_name<'a>() -> impl Parser<'a, &'a str, ()> {
     move |arena, state: State<'a>| {
-        if state.bytes.starts_with(b"@") {
-            match chomp_private_tag(state.bytes, state.line, state.column) {
+        if state.bytes().starts_with(b"@") {
+            match chomp_private_tag(state.bytes(), state.line, state.column) {
                 Err(BadIdent::Start(_, _)) => Err((NoProgress, (), state)),
                 Err(_) => Err((MadeProgress, (), state)),
                 Ok(ident) => {
@@ -101,7 +102,7 @@ pub fn tag_name<'a>() -> impl Parser<'a, &'a str, ()> {
 /// * A type name
 /// * A global tag
 pub fn uppercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
-    move |_, state: State<'a>| match chomp_uppercase_part(state.bytes) {
+    move |_, state: State<'a>| match chomp_uppercase_part(state.bytes()) {
         Err(progress) => Err((progress, (), state)),
         Ok(ident) => {
             let width = ident.len();
@@ -114,7 +115,7 @@ pub fn uppercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
 }
 
 pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str, ()> {
-    move |_, state: State<'a>| match chomp_part(|c| c.is_alphabetic(), state.bytes) {
+    move |_, state: State<'a>| match chomp_part(|c| c.is_alphabetic(), state.bytes()) {
         Err(progress) => Err((progress, (), state)),
         Ok(ident) => {
             if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {
@@ -167,7 +168,7 @@ pub fn parse_ident<'a>(arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Ide
         Err((MadeProgress, fail, state)) => match fail {
             BadIdent::Start(r, c) => Err((NoProgress, EExpr::Start(r, c), state)),
             BadIdent::Space(e, r, c) => Err((NoProgress, EExpr::Space(e, r, c), state)),
-            _ => malformed_identifier(initial.bytes, fail, state),
+            _ => malformed_identifier(initial.bytes(), fail, state),
         },
     }
 }
@@ -177,8 +178,8 @@ fn malformed_identifier<'a>(
     problem: BadIdent,
     mut state: State<'a>,
 ) -> ParseResult<'a, Ident<'a>, EExpr<'a>> {
-    let chomped = chomp_malformed(state.bytes);
-    let delta = initial_bytes.len() - state.bytes.len();
+    let chomped = chomp_malformed(state.bytes());
+    let delta = initial_bytes.len() - state.bytes().len();
     let parsed_str = unsafe { std::str::from_utf8_unchecked(&initial_bytes[..chomped + delta]) };
 
     state = state.advance_without_indenting_ee(chomped, |r, c| {
@@ -448,7 +449,7 @@ fn chomp_module_chain(buffer: &[u8]) -> Result<u16, Progress> {
 }
 
 pub fn concrete_type<'a>() -> impl Parser<'a, (&'a str, &'a str), ()> {
-    move |_, state: State<'a>| match chomp_concrete_type(state.bytes) {
+    move |_, state: State<'a>| match chomp_concrete_type(state.bytes()) {
         Err(progress) => Err((progress, (), state)),
         Ok((module_name, type_name, width)) => {
             match state.advance_without_indenting_ee(width, |_, _| ()) {
@@ -527,7 +528,7 @@ fn parse_ident_help<'a>(
     arena: &'a Bump,
     mut state: State<'a>,
 ) -> ParseResult<'a, Ident<'a>, BadIdent> {
-    match chomp_identifier_chain(arena, state.bytes, state.line, state.column) {
+    match chomp_identifier_chain(arena, state.bytes(), state.line, state.column) {
         Ok((width, ident)) => {
             state = advance_state!(state, width as usize)?;
             Ok((MadeProgress, ident, state))

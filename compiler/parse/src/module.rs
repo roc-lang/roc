@@ -9,8 +9,9 @@ use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
     backtrackable, specialize, word1, word2, Col, EEffects, EExposes, EHeader, EImports, EPackages,
-    EProvides, ERequires, ETypedIdent, Parser, Row, State, SyntaxError,
+    EProvides, ERequires, ETypedIdent, Parser, Row, SyntaxError,
 };
+use crate::state::State;
 use crate::string_literal;
 use crate::type_annotation;
 use bumpalo::collections::Vec;
@@ -171,11 +172,11 @@ fn chomp_module_name(buffer: &[u8]) -> Result<&str, Progress> {
 
 #[inline(always)]
 fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, ()> {
-    |_, mut state: State<'a>| match chomp_module_name(state.bytes) {
+    |_, mut state: State<'a>| match chomp_module_name(state.bytes()) {
         Ok(name) => {
             let width = name.len();
             state.column += width as u16;
-            state.bytes = &state.bytes[width..];
+            state = state.advance(width);
 
             Ok((MadeProgress, ModuleName::new(name), state))
         }

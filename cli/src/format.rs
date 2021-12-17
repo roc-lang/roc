@@ -17,7 +17,8 @@ use roc_parse::header::{
 use roc_parse::{
     ast::{Def, Module},
     module::{self, module_defs},
-    parser::{Parser, State, SyntaxError},
+    parser::{Parser, SyntaxError},
+    state::State,
 };
 use roc_region::all::Located;
 use roc_reporting::{internal_error, user_error};

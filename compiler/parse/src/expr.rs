@@ -7,9 +7,10 @@ use crate::keyword;
 use crate::parser::{
     self, backtrackable, optional, sep_by1, sep_by1_e, specialize, specialize_ref, then,
     trailing_sep_by0, word1, word2, EExpect, EExpr, EIf, EInParens, ELambda, EList, ENumber,
-    EPattern, ERecord, EString, EType, EWhen, Either, ParseResult, Parser, State,
+    EPattern, ERecord, EString, EType, EWhen, Either, ParseResult, Parser,
 };
 use crate::pattern::loc_closure_param;
+use crate::state::State;
 use crate::type_annotation;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -304,22 +305,16 @@ fn unary_negate<'a>() -> impl Parser<'a, (), EExpr<'a>> {
         // - it is preceded by whitespace (spaces, newlines, comments)
         // - it is not followed by whitespace
         let followed_by_whitespace = state
-            .bytes
+            .bytes()
             .get(1)
             .map(|c| c.is_ascii_whitespace() || *c == b'#')
             .unwrap_or(false);
 
-        if state.bytes.starts_with(b"-") && !followed_by_whitespace {
+        if state.bytes().starts_with(b"-") && !followed_by_whitespace {
             // the negate is only unary if it is not followed by whitespace
-            Ok((
-                MadeProgress,
-                (),
-                State {
-                    bytes: &state.bytes[1..],
-                    column: state.column + 1,
-                    ..state
-                },
-            ))
+            let mut state = state.advance(1);
+            state.column += 1;
+            Ok((MadeProgress, (), state))
         } else {
             // this is not a negated expression
             Err((NoProgress, EExpr::UnaryNot(state.line, state.column), state))
@@ -515,7 +510,7 @@ fn numeric_negate_expression<'a, T>(
     expr: Located<Expr<'a>>,
     spaces: &'a [CommentOrNewline<'a>],
 ) -> Located<Expr<'a>> {
-    debug_assert_eq!(state.bytes.get(0), Some(&b'-'));
+    debug_assert_eq!(state.bytes().get(0), Some(&b'-'));
     // for overflow reasons, we must make the unary minus part of the number literal.
     let mut region = expr.region;
     region.start_col -= 1;
@@ -523,13 +518,13 @@ fn numeric_negate_expression<'a, T>(
     let new_expr = match &expr.value {
         Expr::Num(string) => {
             let new_string =
-                unsafe { std::str::from_utf8_unchecked(&state.bytes[..string.len() + 1]) };
+                unsafe { std::str::from_utf8_unchecked(&state.bytes()[..string.len() + 1]) };
 
             Expr::Num(new_string)
         }
         Expr::Float(string) => {
             let new_string =
-                unsafe { std::str::from_utf8_unchecked(&state.bytes[..string.len() + 1]) };
+                unsafe { std::str::from_utf8_unchecked(&state.bytes()[..string.len() + 1]) };
 
             Expr::Float(new_string)
         }
@@ -1283,8 +1278,8 @@ fn parse_expr_end<'a>(
                 }
                 Err((NoProgress, _, mut state)) => {
                     // try multi-backpassing
-                    if options.accept_multi_backpassing && state.bytes.starts_with(b",") {
-                        state.bytes = &state.bytes[1..];
+                    if options.accept_multi_backpassing && state.bytes().starts_with(b",") {
+                        state = state.advance(1);
                         state.column += 1;
 
                         let (_, mut patterns, state) = specialize_ref(
@@ -1344,7 +1339,7 @@ fn parse_expr_end<'a>(
                                 Ok((MadeProgress, ret, state))
                             }
                         }
-                    } else if options.check_for_arrow && state.bytes.starts_with(b"->") {
+                    } else if options.check_for_arrow && state.bytes().starts_with(b"->") {
                         Err((
                             MadeProgress,
                             EExpr::BadOperator(&[b'-', b'>'], state.line, state.column),
@@ -1755,7 +1750,7 @@ mod when {
                 }
             );
 
-            while !state.bytes.is_empty() {
+            while !state.bytes().is_empty() {
                 match branch_parser.parse(arena, state) {
                     Ok((_, next_output, next_state)) => {
                         state = next_state;
@@ -1773,14 +1768,10 @@ mod when {
                 }
             }
 
-            Ok((
-                MadeProgress,
-                branches,
-                State {
-                    indent_col: when_indent,
-                    ..state
-                },
-            ))
+            let mut state = state;
+            state.indent_col = when_indent;
+
+            Ok((MadeProgress, branches, state))
         }
     }
 
@@ -2396,12 +2387,12 @@ where
     G: Fn(&'a [u8], Row, Col) -> E,
     E: 'a,
 {
-    let chomped = chomp_ops(state.bytes);
+    let chomped = chomp_ops(state.bytes());
 
     macro_rules! good {
         ($op:expr, $width:expr) => {{
             state.column += $width;
-            state.bytes = &state.bytes[$width..];
+            state = state.advance($width);
 
             Ok((MadeProgress, $op, state))
         }};
@@ -2416,7 +2407,7 @@ where
     match chomped {
         0 => Err((NoProgress, to_expectation(state.line, state.column), state)),
         1 => {
-            let op = state.bytes[0];
+            let op = state.bytes()[0];
             match op {
                 b'+' => good!(BinOp::Plus, 1),
                 b'-' => good!(BinOp::Minus, 1),
@@ -2432,12 +2423,12 @@ where
                 }
                 b'=' => good!(BinOp::Assignment, 1),
                 b':' => good!(BinOp::HasType, 1),
-                _ => bad_made_progress!(&state.bytes[0..1]),
+                _ => bad_made_progress!(&state.bytes()[0..1]),
             }
         }
         2 => {
-            let op0 = state.bytes[0];
-            let op1 = state.bytes[1];
+            let op0 = state.bytes()[0];
+            let op1 = state.bytes()[1];
 
             match (op0, op1) {
                 (b'|', b'>') => good!(BinOp::Pizza, 2),
@@ -2454,10 +2445,10 @@ where
                     Err((NoProgress, to_error(b"->", state.line, state.column), state))
                 }
                 (b'<', b'-') => good!(BinOp::Backpassing, 2),
-                _ => bad_made_progress!(&state.bytes[0..2]),
+                _ => bad_made_progress!(&state.bytes()[0..2]),
             }
         }
-        _ => bad_made_progress!(&state.bytes[0..chomped]),
+        _ => bad_made_progress!(&state.bytes()[0..chomped]),
     }
 }
 

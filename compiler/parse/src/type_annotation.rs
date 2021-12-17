@@ -5,8 +5,8 @@ use crate::parser::{
     allocated, backtrackable, optional, specialize, specialize_ref, word1, word2, EType,
     ETypeApply, ETypeInParens, ETypeRecord, ETypeTagUnion, ParseResult, Parser,
     Progress::{self, *},
-    State,
 };
+use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_region::all::{Located, Region};
@@ -430,7 +430,7 @@ fn parse_concrete_type<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, TypeAnnotation<'a>, ETypeApply> {
-    let initial_bytes = state.bytes;
+    let initial_bytes = state.bytes();
 
     match crate::ident::concrete_type().parse(arena, state) {
         Ok((_, (module_name, type_name), state)) => {
@@ -444,8 +444,8 @@ fn parse_concrete_type<'a>(
         Err((MadeProgress, _, mut state)) => {
             // we made some progress, but ultimately failed.
             // that means a malformed type name
-            let chomped = crate::ident::chomp_malformed(state.bytes);
-            let delta = initial_bytes.len() - state.bytes.len();
+            let chomped = crate::ident::chomp_malformed(state.bytes());
+            let delta = initial_bytes.len() - state.bytes().len();
             let parsed_str =
                 unsafe { std::str::from_utf8_unchecked(&initial_bytes[..chomped + delta]) };
 
