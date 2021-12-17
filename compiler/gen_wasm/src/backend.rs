@@ -676,6 +676,8 @@ impl<'a> WasmBackend<'a> {
                     self.code_builder.i32_const(elems.len() as i32);
                     self.code_builder.i32_store(Align::Bytes4, stack_offset + 4);
 
+                    let mut elem_offset = 0;
+
                     for (i, elem) in elems.iter().enumerate() {
                         let elem_sym = match elem {
                             ListLiteralElement::Literal(lit) => {
@@ -684,19 +686,25 @@ impl<'a> WasmBackend<'a> {
                                 let debug_name = format!("{:?}_{}", sym, i);
                                 let elem_sym = self.create_symbol(&debug_name);
                                 let expr = Expr::Literal(*lit);
+
                                 self.store_expr_value(
                                     elem_sym,
                                     elem_layout,
                                     &expr,
                                     StoredValueKind::Variable,
                                 );
+
                                 elem_sym
                             }
+
                             ListLiteralElement::Symbol(elem_sym) => *elem_sym,
                         };
-                        todo!(
-                            "Copy {:?} to the address stored in heap_local_id, using self.storage.copy_value_to_memory",
-                            elem_sym
+
+                        elem_offset += self.storage.copy_value_to_memory(
+                            &mut self.code_builder,
+                            heap_local_id,
+                            elem_offset,
+                            elem_sym,
                         );
                     }
                 } else {
