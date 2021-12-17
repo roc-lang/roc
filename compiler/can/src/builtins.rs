@@ -1,6 +1,6 @@
 use crate::def::Def;
-use crate::expr::{ClosureData, Expr::*};
-use crate::expr::{Expr, Field, Recursive, WhenBranch};
+use crate::expr::{self, ClosureData, Expr::*};
+use crate::expr::{Expr, Field, Recursive};
 use crate::pattern::Pattern;
 use roc_collections::all::SendMap;
 use roc_module::called_via::CalledVia;
@@ -3091,7 +3091,7 @@ fn list_keep_errs(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::ListKeepErrs, var_store)
 }
 
-/// List.keepErrs: List before, (before -> Result * after) -> List after
+/// List.range: Int a, Int a -> List (Int a)
 fn list_range(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::ListRange, var_store)
 }
@@ -4107,7 +4107,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
             )],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(ok),
             guard: None,
@@ -4137,7 +4137,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
             )],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(err),
             guard: None,
@@ -4204,7 +4204,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             )],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(ok),
             guard: None,
@@ -4234,7 +4234,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             )],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(err),
             guard: None,
@@ -4277,7 +4277,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
             arguments: vec![(ret_var, no_region(Pattern::Identifier(Symbol::ARG_3)))],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(Var(Symbol::ARG_3)),
             guard: None,
@@ -4297,7 +4297,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
             arguments: vec![(var_store.fresh(), no_region(Pattern::Underscore))],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(Var(Symbol::ARG_2)),
             guard: None,
@@ -4347,7 +4347,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             arguments: vec![],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(false_expr),
             guard: None,
@@ -4374,7 +4374,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             arguments: vec![],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(true_expr),
             guard: None,
@@ -4424,7 +4424,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
             arguments: vec![],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(true_expr),
             guard: None,
@@ -4451,7 +4451,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
             arguments: vec![],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(false_expr),
             guard: None,
@@ -4513,7 +4513,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
             )],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(ok),
             guard: None,
@@ -4543,7 +4543,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
             )],
         };
 
-        let branch = WhenBranch {
+        let branch = expr::WhenBranch {
             patterns: vec![no_region(pattern)],
             value: no_region(err),
             guard: None,

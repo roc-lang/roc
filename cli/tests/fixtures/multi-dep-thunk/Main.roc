@@ -1,7 +1,7 @@
 app "multi-dep-thunk"
-    packages { base: "platform" }
+    packages { pf: "platform" }
     imports [ Dep1 ]
-    provides [ main ] to base
+    provides [ main ] to pf
 
 main : Str
 main = Dep1.value1 {}

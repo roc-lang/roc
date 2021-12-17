@@ -1,7 +1,7 @@
 app "cfold"
-    packages { base: "platform" }
-    imports [base.Task]
-    provides [ main ] to base
+    packages { pf: "platform" }
+    imports [pf.Task]
+    provides [ main ] to pf
 
 # adapted from https://github.com/koka-lang/koka/blob/master/test/bench/haskell/cfold.hs
 

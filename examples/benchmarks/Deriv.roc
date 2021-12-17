@@ -1,7 +1,7 @@
 app "deriv"
-    packages { base: "platform" }
-    imports [base.Task]
-    provides [ main ] to base
+    packages { pf: "platform" }
+    imports [pf.Task]
+    provides [ main ] to pf
 
 # based on: https://github.com/koka-lang/koka/blob/master/test/bench/haskell/deriv.hs
 

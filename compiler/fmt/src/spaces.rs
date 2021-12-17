@@ -18,8 +18,8 @@ pub fn add_spaces(buf: &mut String<'_>, spaces: u16) {
     }
 }
 
-pub fn fmt_default_spaces<'a>(
-    buf: &mut Buf<'a>,
+pub fn fmt_default_spaces<'a, 'buf>(
+    buf: &mut Buf<'buf>,
     spaces: &[CommentOrNewline<'a>],
     default: &str,
     indent: u16,
@@ -31,9 +31,9 @@ pub fn fmt_default_spaces<'a>(
     }
 }
 
-pub fn fmt_spaces<'a, 'b, I>(buf: &mut Buf<'a>, spaces: I, indent: u16)
+pub fn fmt_spaces<'a, 'buf, I>(buf: &mut Buf<'buf>, spaces: I, indent: u16)
 where
-    I: Iterator<Item = &'b CommentOrNewline<'b>>,
+    I: Iterator<Item = &'a CommentOrNewline<'a>>,
 {
     use self::CommentOrNewline::*;
 
@@ -84,13 +84,13 @@ pub enum NewlineAt {
 /// The `new_line_at` argument describes how new lines should be inserted
 /// at the beginning or at the end of the block
 /// in the case of there is some comment in the `spaces` argument.
-pub fn fmt_comments_only<'a, 'b, I>(
-    buf: &mut Buf<'a>,
+pub fn fmt_comments_only<'a, 'buf, I>(
+    buf: &mut Buf<'buf>,
     spaces: I,
     new_line_at: NewlineAt,
     indent: u16,
 ) where
-    I: Iterator<Item = &'b CommentOrNewline<'b>>,
+    I: Iterator<Item = &'a CommentOrNewline<'a>>,
 {
     use self::CommentOrNewline::*;
     use NewlineAt::*;
@@ -123,7 +123,7 @@ pub fn fmt_comments_only<'a, 'b, I>(
     }
 }
 
-fn fmt_comment<'a>(buf: &mut Buf<'a>, comment: &str) {
+fn fmt_comment<'buf>(buf: &mut Buf<'buf>, comment: &str) {
     buf.push('#');
     if !comment.starts_with(' ') {
         buf.push(' ');
@@ -131,7 +131,7 @@ fn fmt_comment<'a>(buf: &mut Buf<'a>, comment: &str) {
     buf.push_str(comment);
 }
 
-fn fmt_docs<'a>(buf: &mut Buf<'a>, docs: &str) {
+fn fmt_docs<'buf>(buf: &mut Buf<'buf>, docs: &str) {
     buf.push_str("##");
     if !docs.starts_with(' ') {
         buf.push(' ');

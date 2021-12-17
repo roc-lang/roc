@@ -359,7 +359,7 @@ impl fmt::Debug for ModuleId {
     }
 }
 
-/// base.Task
+/// pf.Task
 /// 1. build mapping from short name to package
 /// 2. when adding new modules from package we need to register them in some other map (this module id goes with short name) (shortname, module-name) -> moduleId
 /// 3. pass this around to other modules getting headers parsed. when parsing interfaces we need to use this map to reference shortnames

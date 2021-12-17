@@ -77,7 +77,17 @@ impl<'a> RefcountProcGenerator<'a> {
         layout: Layout<'a>,
         modify: &ModifyRc,
         following: &'a Stmt<'a>,
-    ) -> (Stmt<'a>, Option<(Symbol, ProcLayout<'a>)>) {
+    ) -> (&'a Stmt<'a>, Option<(Symbol, ProcLayout<'a>)>) {
+        if !Self::layout_is_supported(&layout) {
+            // Just a warning, so we can decouple backend development from refcounting development.
+            // When we are closer to completion, we can change it to a panic.
+            println!(
+                "WARNING! MEMORY LEAK! Refcounting not yet implemented for Layout {:?}",
+                layout
+            );
+            return (following, None);
+        }
+
         let arena = self.arena;
 
         match modify {
@@ -105,7 +115,7 @@ impl<'a> RefcountProcGenerator<'a> {
                     arguments: arena.alloc([*structure, amount_sym]),
                 });
                 let call_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
-                let rc_stmt = amount_stmt(arena.alloc(call_stmt));
+                let rc_stmt = arena.alloc(amount_stmt(arena.alloc(call_stmt)));
 
                 // Create a linker symbol for the helper proc if this is the first usage
                 let new_proc_info = if is_existing {
@@ -140,7 +150,12 @@ impl<'a> RefcountProcGenerator<'a> {
                     arguments: arena.alloc([*structure]),
                 });
 
-                let rc_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
+                let rc_stmt = arena.alloc(Stmt::Let(
+                    call_result_empty,
+                    call_expr,
+                    LAYOUT_UNIT,
+                    following,
+                ));
 
                 // Create a linker symbol for the helper proc if this is the first usage
                 let new_proc_info = if is_existing {
@@ -182,11 +197,17 @@ impl<'a> RefcountProcGenerator<'a> {
                     arguments: arena.alloc([rc_ptr_sym]),
                 });
                 let call_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
-                let rc_stmt = rc_ptr_stmt(arena.alloc(call_stmt));
+                let rc_stmt = arena.alloc(rc_ptr_stmt(arena.alloc(call_stmt)));
 
                 (rc_stmt, None)
             }
         }
+    }
+
+    // TODO: consider refactoring so that we have just one place to define what's supported
+    // (Probably by generating procs on the fly instead of all at the end)
+    fn layout_is_supported(layout: &Layout) -> bool {
+        matches!(layout, Layout::Builtin(Builtin::Str))
     }
 
     /// Generate refcounting helper procs, each specialized to a particular Layout.
@@ -197,20 +218,24 @@ impl<'a> RefcountProcGenerator<'a> {
         arena: &'a Bump,
         ident_ids: &mut IdentIds,
     ) -> Vec<'a, Proc<'a>> {
-        // Move the vector so we can loop over it safely
-        let mut procs_to_generate = Vec::with_capacity_in(0, arena);
-        std::mem::swap(&mut self.procs_to_generate, &mut procs_to_generate);
+        // Move the vector out of self, so we can loop over it safely
+        let mut procs_to_generate =
+            std::mem::replace(&mut self.procs_to_generate, Vec::with_capacity_in(0, arena));
 
-        let mut procs = Vec::with_capacity_in(procs_to_generate.len(), arena);
-        for (layout, op, proc_symbol) in procs_to_generate.drain(0..) {
-            let proc = match layout {
-                Layout::Builtin(Builtin::Str) => self.gen_modify_str(ident_ids, op, proc_symbol),
-                _ => todo!("Refcounting is not yet implemented for Layout {:?}", layout),
-            };
-            procs.push(proc);
-        }
+        let procs_iter = procs_to_generate
+            .drain(0..)
+            .map(|(layout, op, proc_symbol)| {
+                debug_assert!(Self::layout_is_supported(&layout));
+                match layout {
+                    Layout::Builtin(Builtin::Str) => {
+                        self.gen_modify_str(ident_ids, op, proc_symbol)
+                    }
 
-        procs
+                    _ => todo!("Please update layout_is_supported for {:?}", layout),
+                }
+            });
+
+        Vec::from_iter_in(procs_iter, arena)
     }
 
     /// Find the Symbol of the procedure for this layout and refcount operation,
