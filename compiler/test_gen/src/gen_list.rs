@@ -1390,19 +1390,19 @@ fn list_concat_large() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn empty_list_len() {
     assert_evals_to!("List.len []", 0, usize);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn basic_int_list_len() {
     assert_evals_to!("List.len [ 12, 9, 6, 3 ]", 4, usize);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn loaded_int_list_len() {
     assert_evals_to!(
         indoc!(
