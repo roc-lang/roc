@@ -167,7 +167,7 @@ fn newtype() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn small_str() {
     assert_evals_to!("\"aaa\" == \"aaa\"", true, bool);
     assert_evals_to!("\"aaa\" == \"bbb\"", false, bool);
@@ -175,7 +175,7 @@ fn small_str() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn large_str() {
     assert_evals_to!(
         indoc!(
