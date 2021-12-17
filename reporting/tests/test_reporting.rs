@@ -6048,9 +6048,9 @@ I need all branches in an `if` to have the same type!
             indoc!(
                 r#"
                 app "test-base64"
-                    packages { base: "platform" }
-                    imports [base.Task, Base64 ]
-                    provides [ main, @Foo ] to base
+                    packages { pf: "platform" }
+                    imports [pf.Task, Base64 ]
+                    provides [ main, @Foo ] to pf
                 "#
             ),
             indoc!(
@@ -6059,8 +6059,8 @@ I need all branches in an `if` to have the same type!
 
                 I am partway through parsing a provides list, but I got stuck here:
 
-                3│      imports [base.Task, Base64 ]
-                4│      provides [ main, @Foo ] to base
+                3│      imports [pf.Task, Base64 ]
+                4│      provides [ main, @Foo ] to pf
                                          ^
 
                 I was expecting a type name, value name or function name next, like
@@ -6116,7 +6116,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 interface Foobar
                     exposes [ main, @Foo ]
-                    imports [base.Task, Base64 ]
+                    imports [pf.Task, Base64 ]
                 "#
             ),
             indoc!(
@@ -6144,7 +6144,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 interface foobar
                     exposes [ main, @Foo ]
-                    imports [base.Task, Base64 ]
+                    imports [pf.Task, Base64 ]
                 "#
             ),
             indoc!(
@@ -6170,7 +6170,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 app foobar
                     exposes [ main, @Foo ]
-                    imports [base.Task, Base64 ]
+                    imports [pf.Task, Base64 ]
                 "#
             ),
             indoc!(

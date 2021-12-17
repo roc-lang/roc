@@ -5,11 +5,14 @@ use roc_reporting::internal_error;
 
 use crate::layout::{StackMemoryFormat::*, WasmLayout};
 use crate::storage::{Storage, StoredValue};
-use crate::wasm_module::{CodeBuilder, ValueType::*};
+use crate::wasm_module::{Align, CodeBuilder, ValueType::*};
 
 pub enum LowlevelBuildResult {
     Done,
     BuiltinCall(&'static str),
+    SpecializedEq,
+    SpecializedNotEq,
+    SpecializedHash,
     NotImplemented,
 }
 
@@ -17,7 +20,7 @@ pub fn decode_low_level<'a>(
     code_builder: &mut CodeBuilder<'a>,
     storage: &mut Storage<'a>,
     lowlevel: LowLevel,
-    args: &'a [Symbol],
+    args: &[Symbol],
     ret_layout: &WasmLayout,
 ) -> LowlevelBuildResult {
     use LowlevelBuildResult::*;
@@ -81,8 +84,6 @@ pub fn decode_low_level<'a>(
             WasmLayout::Primitive(value_type, size) => match value_type {
                 I32 => {
                     code_builder.i32_add();
-                    // TODO: is *deliberate* wrapping really in the spirit of things?
-                    // The point of choosing NumAddWrap is to go fast by skipping checks, but we're making it slower.
                     wrap_i32(code_builder, *size);
                 }
                 I64 => code_builder.i64_add(),
@@ -347,27 +348,56 @@ pub fn decode_low_level<'a>(
             },
             WasmLayout::StackMemory { .. } => return NotImplemented,
         },
-        NumIsFinite => match ret_layout {
-            WasmLayout::Primitive(value_type, _) => match value_type {
-                I32 => code_builder.i32_const(1),
-                I64 => code_builder.i32_const(1),
-                F32 => {
-                    code_builder.i32_reinterpret_f32();
-                    code_builder.i32_const(0x7f800000);
-                    code_builder.i32_and();
-                    code_builder.i32_const(0x7f800000);
-                    code_builder.i32_ne();
+        NumIsFinite => {
+            use StoredValue::*;
+            match storage.get(&args[0]) {
+                VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
+                    match value_type {
+                        I32 | I64 => code_builder.i32_const(1), // always true for integers
+                        F32 => {
+                            code_builder.i32_reinterpret_f32();
+                            code_builder.i32_const(0x7f80_0000);
+                            code_builder.i32_and();
+                            code_builder.i32_const(0x7f80_0000);
+                            code_builder.i32_ne();
+                        }
+                        F64 => {
+                            code_builder.i64_reinterpret_f64();
+                            code_builder.i64_const(0x7ff0_0000_0000_0000);
+                            code_builder.i64_and();
+                            code_builder.i64_const(0x7ff0_0000_0000_0000);
+                            code_builder.i64_ne();
+                        }
+                    }
                 }
-                F64 => {
-                    code_builder.i64_reinterpret_f64();
-                    code_builder.i64_const(0x7ff0000000000000);
-                    code_builder.i64_and();
-                    code_builder.i64_const(0x7ff0000000000000);
-                    code_builder.i64_ne();
+                StackMemory {
+                    format, location, ..
+                } => {
+                    let (local_id, offset) = location.local_and_offset(storage.stack_frame_pointer);
+
+                    match format {
+                        Int128 => code_builder.i32_const(1),
+                        Float128 => {
+                            code_builder.get_local(local_id);
+                            code_builder.i64_load(Align::Bytes4, offset + 8);
+                            code_builder.i64_const(0x7fff_0000_0000_0000);
+                            code_builder.i64_and();
+                            code_builder.i64_const(0x7fff_0000_0000_0000);
+                            code_builder.i64_ne();
+                        }
+                        Decimal => {
+                            code_builder.get_local(local_id);
+                            code_builder.i64_load(Align::Bytes4, offset + 8);
+                            code_builder.i64_const(0x7100_0000_0000_0000);
+                            code_builder.i64_and();
+                            code_builder.i64_const(0x7100_0000_0000_0000);
+                            code_builder.i64_ne();
+                        }
+                        DataStructure => return NotImplemented,
+                    }
                 }
-            },
-            WasmLayout::StackMemory { .. } => return NotImplemented,
-        },
+            }
+        }
         NumAtan => {
             let width = float_width_from_layout(ret_layout);
             return BuiltinCall(&bitcode::NUM_ATAN[width]);
@@ -468,16 +498,80 @@ pub fn decode_low_level<'a>(
                 WasmLayout::StackMemory { .. } => return NotImplemented,
             }
         }
-        Eq => match storage.get(&args[0]) {
-            StoredValue::VirtualMachineStack { value_type, .. }
-            | StoredValue::Local { value_type, .. } => match value_type {
-                I32 => code_builder.i32_eq(),
-                I64 => code_builder.i64_eq(),
-                F32 => code_builder.f32_eq(),
-                F64 => code_builder.f64_eq(),
-            },
-            StoredValue::StackMemory { .. } => return NotImplemented,
-        },
+        Eq => {
+            use StoredValue::*;
+            match storage.get(&args[0]).to_owned() {
+                VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
+                    match value_type {
+                        I32 => code_builder.i32_eq(),
+                        I64 => code_builder.i64_eq(),
+                        F32 => code_builder.f32_eq(),
+                        F64 => code_builder.f64_eq(),
+                    }
+                }
+                StackMemory {
+                    format,
+                    location: location0,
+                    ..
+                } => {
+                    if let StackMemory {
+                        location: location1,
+                        ..
+                    } = storage.get(&args[1]).to_owned()
+                    {
+                        let stack_frame_pointer = storage.stack_frame_pointer;
+                        let compare_bytes = |code_builder: &mut CodeBuilder| {
+                            let (local0, offset0) = location0.local_and_offset(stack_frame_pointer);
+                            let (local1, offset1) = location1.local_and_offset(stack_frame_pointer);
+
+                            code_builder.get_local(local0);
+                            code_builder.i64_load(Align::Bytes8, offset0);
+                            code_builder.get_local(local1);
+                            code_builder.i64_load(Align::Bytes8, offset1);
+                            code_builder.i64_eq();
+
+                            code_builder.get_local(local0);
+                            code_builder.i64_load(Align::Bytes8, offset0 + 8);
+                            code_builder.get_local(local1);
+                            code_builder.i64_load(Align::Bytes8, offset1 + 8);
+                            code_builder.i64_eq();
+
+                            code_builder.i32_and();
+                        };
+
+                        match format {
+                            Decimal => {
+                                // Both args are finite
+                                let first = [args[0]];
+                                let second = [args[1]];
+                                decode_low_level(
+                                    code_builder,
+                                    storage,
+                                    LowLevel::NumIsFinite,
+                                    &first,
+                                    ret_layout,
+                                );
+                                decode_low_level(
+                                    code_builder,
+                                    storage,
+                                    LowLevel::NumIsFinite,
+                                    &second,
+                                    ret_layout,
+                                );
+                                code_builder.i32_and();
+
+                                // AND they have the same bytes
+                                compare_bytes(code_builder);
+                                code_builder.i32_and();
+                            }
+                            Int128 => compare_bytes(code_builder),
+                            Float128 => return NotImplemented,
+                            DataStructure => return SpecializedEq,
+                        }
+                    }
+                }
+            }
+        }
         NotEq => match storage.get(&args[0]) {
             StoredValue::VirtualMachineStack { value_type, .. }
             | StoredValue::Local { value_type, .. } => match value_type {
@@ -486,12 +580,19 @@ pub fn decode_low_level<'a>(
                 F32 => code_builder.f32_ne(),
                 F64 => code_builder.f64_ne(),
             },
-            StoredValue::StackMemory { .. } => return NotImplemented,
+            StoredValue::StackMemory { format, .. } => {
+                if matches!(format, DataStructure) {
+                    return SpecializedNotEq;
+                } else {
+                    decode_low_level(code_builder, storage, LowLevel::Eq, args, ret_layout);
+                    code_builder.i32_eqz();
+                }
+            }
         },
         And => code_builder.i32_and(),
         Or => code_builder.i32_or(),
         Not => code_builder.i32_eqz(),
-        Hash => return NotImplemented,
+        Hash => return SpecializedHash,
         ExpectTrue => return NotImplemented,
         RefCountGetPtr => {
             code_builder.i32_const(4);

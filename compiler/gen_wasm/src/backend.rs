@@ -1,12 +1,12 @@
 use bumpalo::{self, collections::Vec};
 
 use code_builder::Align;
-use roc_builtins::bitcode::IntWidth;
+use roc_builtins::bitcode::{self, IntWidth};
 use roc_collections::all::MutMap;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
-use roc_mono::gen_refcount::{RefcountProcGenerator, REFCOUNT_MAX};
-use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
+use roc_mono::code_gen_help::{CodeGenHelp, REFCOUNT_MAX};
+use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, ProcLayout, Stmt};
 use roc_mono::layout::{Builtin, Layout, LayoutIds, TagIdIntType, UnionLayout};
 use roc_reporting::internal_error;
 
@@ -49,7 +49,7 @@ pub struct WasmBackend<'a> {
     builtin_sym_index_map: MutMap<&'a str, usize>,
     proc_symbols: Vec<'a, (Symbol, u32)>,
     linker_symbols: Vec<'a, SymInfo>,
-    refcount_proc_gen: RefcountProcGenerator<'a>,
+    helper_proc_gen: CodeGenHelp<'a>,
 
     // Function-level data
     code_builder: CodeBuilder<'a>,
@@ -71,7 +71,7 @@ impl<'a> WasmBackend<'a> {
         proc_symbols: Vec<'a, (Symbol, u32)>,
         mut linker_symbols: Vec<'a, SymInfo>,
         mut exports: Vec<'a, Export>,
-        refcount_proc_gen: RefcountProcGenerator<'a>,
+        helper_proc_gen: CodeGenHelp<'a>,
     ) -> Self {
         const MEMORY_INIT_SIZE: u32 = 1024 * 1024;
         let arena = env.arena;
@@ -144,7 +144,7 @@ impl<'a> WasmBackend<'a> {
             builtin_sym_index_map: MutMap::default(),
             proc_symbols,
             linker_symbols,
-            refcount_proc_gen,
+            helper_proc_gen,
 
             // Function-level data
             block_depth: 0,
@@ -157,15 +157,34 @@ impl<'a> WasmBackend<'a> {
         }
     }
 
-    pub fn generate_refcount_procs(&mut self) -> Vec<'a, Proc<'a>> {
+    pub fn generate_helpers(&mut self) -> Vec<'a, Proc<'a>> {
         let ident_ids = self
             .interns
             .all_ident_ids
             .get_mut(&self.env.module_id)
             .unwrap();
 
-        self.refcount_proc_gen
-            .generate_refcount_procs(self.env.arena, ident_ids)
+        self.helper_proc_gen
+            .generate_procs(self.env.arena, ident_ids)
+    }
+
+    fn register_helper_proc(&mut self, new_proc_info: (Symbol, ProcLayout<'a>)) {
+        let (new_proc_sym, new_proc_layout) = new_proc_info;
+        let wasm_fn_index = self.proc_symbols.len() as u32;
+        let linker_sym_index = self.linker_symbols.len() as u32;
+
+        let name = self
+            .layout_ids
+            .get_toplevel(new_proc_sym, &new_proc_layout)
+            .to_symbol_string(new_proc_sym, self.interns);
+
+        self.proc_symbols.push((new_proc_sym, linker_sym_index));
+        self.linker_symbols
+            .push(SymInfo::Function(WasmObjectSymbol::Defined {
+                flags: 0,
+                index: wasm_fn_index,
+                name,
+            }));
     }
 
     pub fn finalize_module(mut self) -> WasmModule<'a> {
@@ -500,8 +519,8 @@ impl<'a> WasmBackend<'a> {
                     .get_mut(&self.env.module_id)
                     .unwrap();
 
-                let (rc_stmt, new_proc_info) = self
-                    .refcount_proc_gen
+                let (rc_stmt, new_specializations) = self
+                    .helper_proc_gen
                     .expand_refcount_stmt(ident_ids, *layout, modify, *following);
 
                 if false {
@@ -509,24 +528,9 @@ impl<'a> WasmBackend<'a> {
                     println!("## rc_stmt:\n{}\n{:?}", rc_stmt.to_pretty(200), rc_stmt);
                 }
 
-                // If we're creating a new RC procedure, we need to store its symbol data,
-                // so that we can correctly generate calls to it.
-                if let Some((rc_proc_sym, rc_proc_layout)) = new_proc_info {
-                    let wasm_fn_index = self.proc_symbols.len() as u32;
-                    let linker_sym_index = self.linker_symbols.len() as u32;
-
-                    let name = self
-                        .layout_ids
-                        .get_toplevel(rc_proc_sym, &rc_proc_layout)
-                        .to_symbol_string(rc_proc_sym, self.interns);
-
-                    self.proc_symbols.push((rc_proc_sym, linker_sym_index));
-                    self.linker_symbols
-                        .push(SymInfo::Function(WasmObjectSymbol::Defined {
-                            flags: 0,
-                            index: wasm_fn_index,
-                            name,
-                        }));
+                // If any new specializations were created, register their symbol data
+                for spec in new_specializations.into_iter() {
+                    self.register_helper_proc(spec);
                 }
 
                 self.build_stmt(rc_stmt, ret_layout);
@@ -560,7 +564,13 @@ impl<'a> WasmBackend<'a> {
                 CallType::ByName { name: func_sym, .. } => {
                     // If this function is just a lowlevel wrapper, then inline it
                     if let Some(lowlevel) = LowLevel::from_inlined_wrapper(*func_sym) {
-                        return self.build_low_level(lowlevel, arguments, *sym, wasm_layout);
+                        return self.build_low_level(
+                            lowlevel,
+                            arguments,
+                            *sym,
+                            wasm_layout,
+                            storage,
+                        );
                     }
 
                     let (param_types, ret_type) = self.storage.load_symbols_for_call(
@@ -596,7 +606,7 @@ impl<'a> WasmBackend<'a> {
                 }
 
                 CallType::LowLevel { op: lowlevel, .. } => {
-                    self.build_low_level(*lowlevel, arguments, *sym, wasm_layout)
+                    self.build_low_level(*lowlevel, arguments, *sym, wasm_layout, storage)
                 }
 
                 x => todo!("call type {:?}", x),
@@ -925,6 +935,7 @@ impl<'a> WasmBackend<'a> {
         arguments: &'a [Symbol],
         return_sym: Symbol,
         return_layout: WasmLayout,
+        storage: &StoredValue,
     ) {
         let (param_types, ret_type) = self.storage.load_symbols_for_call(
             self.env.arena,
@@ -948,6 +959,37 @@ impl<'a> WasmBackend<'a> {
             Done => {}
             BuiltinCall(name) => {
                 self.call_zig_builtin(name, param_types, ret_type);
+            }
+            SpecializedEq | SpecializedNotEq => {
+                let layout = self.symbol_layouts[&arguments[0]];
+
+                if layout == Layout::Builtin(Builtin::Str) {
+                    self.call_zig_builtin(bitcode::STR_EQUAL, param_types, ret_type);
+                } else {
+                    let ident_ids = self
+                        .interns
+                        .all_ident_ids
+                        .get_mut(&self.env.module_id)
+                        .unwrap();
+
+                    let (replacement_expr, new_specializations) = self
+                        .helper_proc_gen
+                        .specialize_equals(ident_ids, &layout, arguments);
+
+                    // If any new specializations were created, register their symbol data
+                    for spec in new_specializations.into_iter() {
+                        self.register_helper_proc(spec);
+                    }
+
+                    self.build_expr(&return_sym, replacement_expr, &layout, storage);
+                }
+
+                if matches!(build_result, SpecializedNotEq) {
+                    self.code_builder.i32_eqz();
+                }
+            }
+            SpecializedHash => {
+                todo!("Specialized hash functions")
             }
             NotImplemented => {
                 todo!("Low level operation {:?}", lowlevel)
@@ -977,13 +1019,10 @@ impl<'a> WasmBackend<'a> {
                 };
             }
 
-            StoredValue::StackMemory { location, .. } => match lit {
-                Literal::Decimal(decimal) => {
+            StoredValue::StackMemory { location, .. } => {
+                let mut write128 = |lower_bits, upper_bits| {
                     let (local_id, offset) =
                         location.local_and_offset(self.storage.stack_frame_pointer);
-
-                    let lower_bits = decimal.0 as i64;
-                    let upper_bits = (decimal.0 >> 64) as i64;
 
                     self.code_builder.get_local(local_id);
                     self.code_builder.i64_const(lower_bits);
@@ -992,39 +1031,56 @@ impl<'a> WasmBackend<'a> {
                     self.code_builder.get_local(local_id);
                     self.code_builder.i64_const(upper_bits);
                     self.code_builder.i64_store(Align::Bytes8, offset + 8);
+                };
+
+                match lit {
+                    Literal::Decimal(decimal) => {
+                        let lower_bits = (decimal.0 & 0xffff_ffff_ffff_ffff) as i64;
+                        let upper_bits = (decimal.0 >> 64) as i64;
+                        write128(lower_bits, upper_bits);
+                    }
+                    Literal::Int(x) => {
+                        let lower_bits = (*x & 0xffff_ffff_ffff_ffff) as i64;
+                        let upper_bits = (*x >> 64) as i64;
+                        write128(lower_bits, upper_bits);
+                    }
+                    Literal::Float(_) => {
+                        // Also not implemented in LLVM backend (nor in Rust!)
+                        todo!("f128 type");
+                    }
+                    Literal::Str(string) => {
+                        let (local_id, offset) =
+                            location.local_and_offset(self.storage.stack_frame_pointer);
+
+                        let len = string.len();
+                        if len < 8 {
+                            let mut stack_mem_bytes = [0; 8];
+                            stack_mem_bytes[0..len].clone_from_slice(string.as_bytes());
+                            stack_mem_bytes[7] = 0x80 | (len as u8);
+                            let str_as_int = i64::from_le_bytes(stack_mem_bytes);
+
+                            // Write all 8 bytes at once using an i64
+                            // Str is normally two i32's, but in this special case, we can get away with fewer instructions
+                            self.code_builder.get_local(local_id);
+                            self.code_builder.i64_const(str_as_int);
+                            self.code_builder.i64_store(Align::Bytes4, offset);
+                        } else {
+                            let (linker_sym_index, elements_addr) =
+                                self.lookup_string_constant(string, sym, layout);
+
+                            self.code_builder.get_local(local_id);
+                            self.code_builder
+                                .i32_const_mem_addr(elements_addr, linker_sym_index);
+                            self.code_builder.i32_store(Align::Bytes4, offset);
+
+                            self.code_builder.get_local(local_id);
+                            self.code_builder.i32_const(string.len() as i32);
+                            self.code_builder.i32_store(Align::Bytes4, offset + 4);
+                        };
+                    }
+                    _ => not_supported_error(),
                 }
-                Literal::Str(string) => {
-                    let (local_id, offset) =
-                        location.local_and_offset(self.storage.stack_frame_pointer);
-
-                    let len = string.len();
-                    if len < 8 {
-                        let mut stack_mem_bytes = [0; 8];
-                        stack_mem_bytes[0..len].clone_from_slice(string.as_bytes());
-                        stack_mem_bytes[7] = 0x80 | (len as u8);
-                        let str_as_int = i64::from_le_bytes(stack_mem_bytes);
-
-                        // Write all 8 bytes at once using an i64
-                        // Str is normally two i32's, but in this special case, we can get away with fewer instructions
-                        self.code_builder.get_local(local_id);
-                        self.code_builder.i64_const(str_as_int);
-                        self.code_builder.i64_store(Align::Bytes4, offset);
-                    } else {
-                        let (linker_sym_index, elements_addr) =
-                            self.lookup_string_constant(string, sym, layout);
-
-                        self.code_builder.get_local(local_id);
-                        self.code_builder
-                            .i32_const_mem_addr(elements_addr, linker_sym_index);
-                        self.code_builder.i32_store(Align::Bytes4, offset);
-
-                        self.code_builder.get_local(local_id);
-                        self.code_builder.i32_const(string.len() as i32);
-                        self.code_builder.i32_store(Align::Bytes4, offset + 4);
-                    };
-                }
-                _ => not_supported_error(),
-            },
+            }
 
             _ => not_supported_error(),
         };

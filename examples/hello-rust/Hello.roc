@@ -1,7 +1,7 @@
 app "hello-rust"
-    packages { base: "platform" }
+    packages { pf: "platform" }
     imports []
-    provides [ main ] to base
+    provides [ main ] to pf
 
 greeting =
     hi = "Hello"

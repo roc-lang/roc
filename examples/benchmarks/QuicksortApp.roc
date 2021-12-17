@@ -1,7 +1,7 @@
 app "quicksortapp"
-    packages { base: "platform" }
-    imports [base.Task, Quicksort]
-    provides [ main ] to base
+    packages { pf: "platform" }
+    imports [pf.Task, Quicksort]
+    provides [ main ] to pf
 
 main : Task.Task {} []
 main =

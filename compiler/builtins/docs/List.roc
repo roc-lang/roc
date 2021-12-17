@@ -446,9 +446,6 @@ drop : List elem, Nat -> List elem
 ## To replace the element at a given index, instead of dropping it, see [List.set].
 dropAt : List elem, Nat -> List elem
 
-## Drops the last element in a List.
-dropLast : List elem -> List elem
-
 ## Adds a new element to the end of the list.
 ##
 ## >>> List.append [ "a", "b" ] "c"
@@ -685,8 +682,6 @@ startsWith : List elem, List elem -> Bool
 
 endsWith : List elem, List elem -> Bool
 
-all : List elem, (elem -> Bool) -> Bool
-
 ## Run the given predicate on each element of the list, returning `True` if
 ## any of the elements satisfy it.
 any : List elem, (elem -> Bool) -> Bool
@@ -698,3 +693,11 @@ all : List elem, (elem -> Bool) -> Bool
 ## Returns the first element of the list satisfying a predicate function.
 ## If no satisfying element is found, an `Err NotFound` is returned.
 find : List elem, (elem -> Bool) -> Result elem [ NotFound ]*
+
+## Apply a function that returns a Result on a list, only successful
+## Results are kept and returned unwrapped.
+keepOks : List before, (before -> Result after *) -> List after
+
+## Apply a function that returns a Result on a list, only unsuccessful
+## Results are kept and returned unwrapped.
+keepErrs : List before, (before -> Result * after) -> List after

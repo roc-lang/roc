@@ -1,9 +1,6 @@
 use std::fmt::Debug;
 
-use crate::header::{
-    AppHeader, ExposesEntry, ImportsEntry, InterfaceHeader, PackageEntry, PlatformHeader,
-    PlatformRigid, TypedIdent,
-};
+use crate::header::{AppHeader, InterfaceHeader, PlatformHeader};
 use crate::ident::Ident;
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
@@ -15,6 +12,33 @@ pub struct Spaces<'a, T> {
     pub before: &'a [CommentOrNewline<'a>],
     pub item: T,
     pub after: &'a [CommentOrNewline<'a>],
+}
+
+#[derive(Copy, Clone, PartialEq)]
+pub enum Spaced<'a, T> {
+    Item(T),
+
+    // Spaces
+    SpaceBefore(&'a Spaced<'a, T>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a Spaced<'a, T>, &'a [CommentOrNewline<'a>]),
+}
+
+impl<'a, T: Debug> Debug for Spaced<'a, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Item(item) => item.fmt(f),
+            Self::SpaceBefore(item, space) => f
+                .debug_tuple("SpaceBefore")
+                .field(item)
+                .field(space)
+                .finish(),
+            Self::SpaceAfter(item, space) => f
+                .debug_tuple("SpaceAfter")
+                .field(item)
+                .field(space)
+                .finish(),
+        }
+    }
 }
 
 pub trait ExtractSpaces<'a>: Sized + Copy {
@@ -674,6 +698,15 @@ pub trait Spaceable<'a> {
     }
 }
 
+impl<'a, T> Spaceable<'a> for Spaced<'a, T> {
+    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        Spaced::SpaceBefore(self, spaces)
+    }
+    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        Spaced::SpaceAfter(self, spaces)
+    }
+}
+
 impl<'a> Spaceable<'a> for Expr<'a> {
     fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
         Expr::SpaceBefore(self, spaces)
@@ -698,24 +731,6 @@ impl<'a> Spaceable<'a> for TypeAnnotation<'a> {
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
         TypeAnnotation::SpaceAfter(self, spaces)
-    }
-}
-
-impl<'a> Spaceable<'a> for ImportsEntry<'a> {
-    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        ImportsEntry::SpaceBefore(self, spaces)
-    }
-    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        ImportsEntry::SpaceAfter(self, spaces)
-    }
-}
-
-impl<'a> Spaceable<'a> for TypedIdent<'a> {
-    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        TypedIdent::SpaceBefore(self, spaces)
-    }
-    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        TypedIdent::SpaceAfter(self, spaces)
     }
 }
 
@@ -823,8 +838,55 @@ macro_rules! impl_extract_spaces {
 impl_extract_spaces!(Expr);
 impl_extract_spaces!(Tag);
 impl_extract_spaces!(AssignedField<T>);
-impl_extract_spaces!(PlatformRigid);
-impl_extract_spaces!(TypedIdent);
-impl_extract_spaces!(ImportsEntry);
-impl_extract_spaces!(ExposesEntry<T>);
-impl_extract_spaces!(PackageEntry);
+
+impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
+    type Item = T;
+
+    fn extract_spaces(&self) -> Spaces<'a, T> {
+        match self {
+            Spaced::SpaceBefore(item, before) => match item {
+                Spaced::SpaceBefore(_, _) => todo!(),
+                Spaced::SpaceAfter(item, after) => {
+                    if let Spaced::Item(item) = item {
+                        Spaces {
+                            before,
+                            item: *item,
+                            after,
+                        }
+                    } else {
+                        todo!();
+                    }
+                }
+                Spaced::Item(item) => Spaces {
+                    before,
+                    item: *item,
+                    after: &[],
+                },
+            },
+            Spaced::SpaceAfter(item, after) => match item {
+                Spaced::SpaceBefore(item, before) => {
+                    if let Spaced::Item(item) = item {
+                        Spaces {
+                            before,
+                            item: *item,
+                            after,
+                        }
+                    } else {
+                        todo!();
+                    }
+                }
+                Spaced::SpaceAfter(_, _) => todo!(),
+                Spaced::Item(item) => Spaces {
+                    before: &[],
+                    item: *item,
+                    after,
+                },
+            },
+            Spaced::Item(item) => Spaces {
+                before: &[],
+                item: *item,
+                after: &[],
+            },
+        }
+    }
+}

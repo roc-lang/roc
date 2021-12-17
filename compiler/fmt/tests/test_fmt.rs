@@ -15,7 +15,7 @@ mod test_fmt {
     use roc_test_utils::assert_multiline_str_eq;
 
     // Not intended to be used directly in tests; please use expr_formats_to or expr_formats_same
-    fn expect_format_helper(input: &str, expected: &str) {
+    fn expect_format_expr_helper(input: &str, expected: &str) {
         let arena = Bump::new();
         match roc_parse::test_helpers::parse_expr_with(&arena, input.trim()) {
             Ok(actual) => {
@@ -34,21 +34,20 @@ mod test_fmt {
         let expected = expected.trim_end();
 
         // First check that input formats to the expected version
-        expect_format_helper(input, expected);
+        expect_format_expr_helper(input, expected);
 
         // Parse the expected result format it, asserting that it doesn't change
         // It's important that formatting be stable / idempotent
-        expect_format_helper(expected, expected);
+        expect_format_expr_helper(expected, expected);
     }
 
     fn expr_formats_same(input: &str) {
         expr_formats_to(input, input);
     }
 
-    fn module_formats_to(src: &str, expected: &str) {
+    // Not intended to be used directly in tests; please use module_formats_to or module_formats_same
+    fn expect_format_module_helper(src: &str, expected: &str) {
         let arena = Bump::new();
-        let src = src.trim_end();
-
         match module::parse_header(&arena, State::new(src.as_bytes())) {
             Ok((actual, state)) => {
                 let mut buf = Buf::new_in(&arena);
@@ -68,6 +67,17 @@ mod test_fmt {
             }
             Err(error) => panic!("Unexpected parse failure when parsing this for module header formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, error)
         };
+    }
+
+    fn module_formats_to(input: &str, expected: &str) {
+        let input = input.trim_end();
+
+        // First check that input formats to the expected version
+        expect_format_module_helper(input, expected);
+
+        // Parse the expected result format it, asserting that it doesn't change
+        // It's important that formatting be stable / idempotent
+        expect_format_module_helper(expected, expected);
     }
 
     fn module_formats_same(input: &str) {
@@ -2625,7 +2635,7 @@ mod test_fmt {
     fn single_line_app() {
         module_formats_same(indoc!(
             r#"
-                app "Foo" packages { base: "platform" } imports [] provides [ main ] to base"#
+                app "Foo" packages { pf: "platform" } imports [] provides [ main ] to pf"#
         ));
     }
 

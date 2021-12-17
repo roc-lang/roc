@@ -4,10 +4,10 @@ App {
             "quicksort",
         ),
         packages: [
-            |L 1-1, C 15-33| Entry {
-                shorthand: "base",
+            |L 1-1, C 15-31| PackageEntry {
+                shorthand: "pf",
                 spaces_after_shorthand: [],
-                package_or_path: |L 1-1, C 21-33| Path(
+                package_or_path: |L 1-1, C 19-31| Path(
                     PlainLine(
                         "./platform",
                     ),
@@ -23,7 +23,7 @@ App {
                 Collection {
                     items: [
                         |L 3-3, C 8-11| SpaceBefore(
-                            Exposed(
+                            ExposedName(
                                 "Baz",
                             ),
                             [
@@ -31,7 +31,7 @@ App {
                             ],
                         ),
                         |L 4-4, C 8-16| SpaceBefore(
-                            Exposed(
+                            ExposedName(
                                 "FortyTwo",
                             ),
                             [
@@ -49,12 +49,12 @@ App {
             ),
         ],
         provides: [
-            |L 7-7, C 15-24| Exposed(
+            |L 7-7, C 15-24| ExposedName(
                 "quicksort",
             ),
         ],
-        to: |L 7-7, C 31-35| ExistingPackage(
-            "base",
+        to: |L 7-7, C 31-33| ExistingPackage(
+            "pf",
         ),
         before_header: [],
         after_app_keyword: [],

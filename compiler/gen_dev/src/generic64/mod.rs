@@ -3,7 +3,7 @@ use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::{Interns, Symbol};
-use roc_mono::gen_refcount::RefcountProcGenerator;
+use roc_mono::code_gen_help::CodeGenHelp;
 use roc_mono::ir::{BranchInfo, JoinPointId, Literal, Param, ProcLayout, SelfRecursive, Stmt};
 use roc_mono::layout::{Builtin, Layout};
 use roc_reporting::internal_error;
@@ -256,8 +256,8 @@ pub struct Backend64Bit<
     phantom_cc: PhantomData<CC>,
     env: &'a Env<'a>,
     interns: &'a mut Interns,
-    refcount_proc_gen: RefcountProcGenerator<'a>,
-    refcount_proc_symbols: Vec<'a, (Symbol, ProcLayout<'a>)>,
+    helper_proc_gen: CodeGenHelp<'a>,
+    helper_proc_symbols: Vec<'a, (Symbol, ProcLayout<'a>)>,
     buf: Vec<'a, u8>,
     relocs: Vec<'a, Relocation>,
     proc_name: Option<String>,
@@ -308,8 +308,8 @@ pub fn new_backend_64bit<
         phantom_cc: PhantomData,
         env,
         interns,
-        refcount_proc_gen: RefcountProcGenerator::new(env.arena, IntWidth::I64, env.module_id),
-        refcount_proc_symbols: bumpalo::vec![in env.arena],
+        helper_proc_gen: CodeGenHelp::new(env.arena, IntWidth::I64, env.module_id),
+        helper_proc_symbols: bumpalo::vec![in env.arena],
         proc_name: None,
         is_self_recursive: None,
         buf: bumpalo::vec![in env.arena],
@@ -346,19 +346,17 @@ impl<
     fn interns(&self) -> &Interns {
         self.interns
     }
-    fn env_interns_refcount_mut(
-        &mut self,
-    ) -> (&Env<'a>, &mut Interns, &mut RefcountProcGenerator<'a>) {
-        (self.env, self.interns, &mut self.refcount_proc_gen)
+    fn env_interns_helpers_mut(&mut self) -> (&Env<'a>, &mut Interns, &mut CodeGenHelp<'a>) {
+        (self.env, self.interns, &mut self.helper_proc_gen)
     }
-    fn refcount_proc_gen_mut(&mut self) -> &mut RefcountProcGenerator<'a> {
-        &mut self.refcount_proc_gen
+    fn helper_proc_gen_mut(&mut self) -> &mut CodeGenHelp<'a> {
+        &mut self.helper_proc_gen
     }
-    fn refcount_proc_symbols_mut(&mut self) -> &mut Vec<'a, (Symbol, ProcLayout<'a>)> {
-        &mut self.refcount_proc_symbols
+    fn helper_proc_symbols_mut(&mut self) -> &mut Vec<'a, (Symbol, ProcLayout<'a>)> {
+        &mut self.helper_proc_symbols
     }
-    fn refcount_proc_symbols(&self) -> &Vec<'a, (Symbol, ProcLayout<'a>)> {
-        &self.refcount_proc_symbols
+    fn helper_proc_symbols(&self) -> &Vec<'a, (Symbol, ProcLayout<'a>)> {
+        &self.helper_proc_symbols
     }
 
     fn reset(&mut self, name: String, is_self_recursive: SelfRecursive) {
@@ -383,7 +381,7 @@ impl<
         self.float_used_regs.clear();
         self.float_free_regs
             .extend_from_slice(CC::FLOAT_DEFAULT_FREE_REGS);
-        self.refcount_proc_symbols.clear();
+        self.helper_proc_symbols.clear();
     }
 
     fn literal_map(&mut self) -> &mut MutMap<Symbol, (*const Literal<'a>, *const Layout<'a>)> {
