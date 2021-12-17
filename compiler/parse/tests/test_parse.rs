@@ -98,7 +98,7 @@ mod test_parse {
                         let result = parse_snapshot_kind!($kind => &arena, input);
                         result
                             .map(|actual_ast| format!("{:#?}\n", actual_ast))
-                            .map_err(|error| format!("{:#?}", error))
+                            .map_err(|error| format!("{:?}", error))
                     });
                 }
             )*
@@ -106,6 +106,8 @@ mod test_parse {
     }
 
     snapshot_tests! {
+        fail/type_argument_no_arrow.expr,
+        fail/type_double_comma.expr,
         pass/add_var_with_spaces.expr,
         pass/add_with_spaces.expr,
         pass/apply_global_tag.expr,
