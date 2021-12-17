@@ -1,7 +1,8 @@
 use crate::ast::{EscapedChar, StrLiteral, StrSegment};
 use crate::expr;
 use crate::parser::Progress::*;
-use crate::parser::{allocated, loc, specialize_ref, word1, BadInputError, EString, Parser, State};
+use crate::parser::{allocated, loc, specialize_ref, word1, BadInputError, EString, Parser};
+use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 
@@ -11,7 +12,7 @@ fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
     move |arena, state: State<'a>| {
         let mut buf = bumpalo::collections::String::new_in(arena);
 
-        for &byte in state.bytes.iter() {
+        for &byte in state.bytes().iter() {
             if (byte as char).is_ascii_hexdigit() {
                 buf.push(byte as char);
             } else if buf.is_empty() {
@@ -53,15 +54,15 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
         let is_multiline;
         let mut bytes;
 
-        if state.bytes.starts_with(b"\"\"\"") {
+        if state.bytes().starts_with(b"\"\"\"") {
             // we will be parsing a multi-string
             is_multiline = true;
-            bytes = state.bytes[3..].iter();
+            bytes = state.bytes()[3..].iter();
             state = advance_state!(state, 3)?;
-        } else if state.bytes.starts_with(b"\"") {
+        } else if state.bytes().starts_with(b"\"") {
             // we will be parsing a single-string
             is_multiline = false;
-            bytes = state.bytes[1..].iter();
+            bytes = state.bytes()[1..].iter();
             state = advance_state!(state, 1)?;
         } else {
             return Err((NoProgress, EString::Open(state.line, state.column), state));
@@ -97,7 +98,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                     // something which signalled that we should end the
                     // current segment - so use segment_parsed_bytes - 1 here,
                     // to exclude that char we just parsed.
-                    let string_bytes = &state.bytes[0..(segment_parsed_bytes - 1)];
+                    let string_bytes = &state.bytes()[0..(segment_parsed_bytes - 1)];
 
                     match std::str::from_utf8(string_bytes) {
                         Ok(string) => {
@@ -224,7 +225,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                             // Advance past the `\(` before using the expr parser
                             state = advance_state!(state, 2)?;
 
-                            let original_byte_count = state.bytes.len();
+                            let original_byte_count = state.bytes().len();
 
                             // This is an interpolated variable.
                             // Parse an arbitrary expression, then give a
@@ -237,7 +238,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                             .parse(arena, state)?;
 
                             // Advance the iterator past the expr we just parsed.
-                            for _ in 0..(original_byte_count - new_state.bytes.len()) {
+                            for _ in 0..(original_byte_count - new_state.bytes().len()) {
                                 bytes.next();
                             }
 
@@ -251,7 +252,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                             // Advance past the `\u` before using the expr parser
                             state = advance_state!(state, 2)?;
 
-                            let original_byte_count = state.bytes.len();
+                            let original_byte_count = state.bytes().len();
 
                             // Parse the hex digits, surrounded by parens, then
                             // give a canonicalization error if the digits form
@@ -264,7 +265,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                             .parse(arena, state)?;
 
                             // Advance the iterator past the expr we just parsed.
-                            for _ in 0..(original_byte_count - new_state.bytes.len()) {
+                            for _ in 0..(original_byte_count - new_state.bytes().len()) {
                                 bytes.next();
                             }
 

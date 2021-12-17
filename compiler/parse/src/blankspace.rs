@@ -1,8 +1,7 @@
 use crate::ast::CommentOrNewline;
 use crate::ast::Spaceable;
-use crate::parser::{
-    self, and, backtrackable, BadInputError, Col, Parser, Progress::*, Row, State,
-};
+use crate::parser::{self, and, backtrackable, BadInputError, Col, Parser, Progress::*, Row};
+use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_region::all::Located;
@@ -193,17 +192,25 @@ where
     move |arena, mut state: State<'a>| {
         let comments_and_newlines = Vec::new_in(arena);
 
-        match eat_spaces(state.bytes, state.line, state.column, comments_and_newlines) {
+        match eat_spaces(
+            state.bytes(),
+            state.line,
+            state.column,
+            comments_and_newlines,
+        ) {
             HasTab { row, col } => {
                 // there was a tab character
+                let mut state = state;
+                state.line = row;
+                state.column = col;
+                // TODO: it _seems_ like if we're changing the line/column, we should also be
+                // advancing the state by the corresponding number of bytes.
+                // Not doing this is likely a bug!
+                // state = state.advance(<something>);
                 Err((
                     MadeProgress,
                     space_problem(BadInputError::HasTab, row, col),
-                    State {
-                        line: row,
-                        column: col,
-                        ..state
-                    },
+                    state,
                 ))
             }
             Good {
@@ -212,7 +219,7 @@ where
                 bytes,
                 comments_and_newlines,
             } => {
-                if bytes == state.bytes {
+                if bytes == state.bytes() {
                     Ok((NoProgress, &[] as &[_], state))
                 } else if state.line != row {
                     // we parsed at least one newline
@@ -222,7 +229,7 @@ where
                     if col >= min_indent {
                         state.line = row;
                         state.column = col;
-                        state.bytes = bytes;
+                        state = state.advance(state.bytes().len() - bytes.len());
 
                         Ok((MadeProgress, comments_and_newlines.into_bump_slice(), state))
                     } else {
@@ -234,7 +241,7 @@ where
                     }
                 } else {
                     state.column = col;
-                    state.bytes = bytes;
+                    state = state.advance(state.bytes().len() - bytes.len());
 
                     Ok((MadeProgress, comments_and_newlines.into_bump_slice(), state))
                 }

@@ -1,141 +1,13 @@
+use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_region::all::{Located, Position, Region};
-use std::fmt;
+use roc_region::all::{Located, Region};
 use Progress::*;
-
-/// A position in a source file.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct State<'a> {
-    /// The raw input bytes from the file.
-    pub bytes: &'a [u8],
-
-    /// Current line of the input
-    pub line: u32,
-    /// Current column of the input
-    pub column: u16,
-
-    /// Current indentation level, in columns
-    /// (so no indent is col 1 - this saves an arithmetic operation.)
-    pub indent_col: u16,
-}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Either<First, Second> {
     First(First),
     Second(Second),
-}
-
-impl<'a> State<'a> {
-    pub fn new(bytes: &'a [u8]) -> State<'a> {
-        State {
-            bytes,
-            line: 0,
-            column: 0,
-            indent_col: 0,
-        }
-    }
-
-    /// Returns whether the parser has reached the end of the input
-    pub const fn get_position(&self) -> Position {
-        Position {
-            row: self.line,
-            col: self.column,
-        }
-    }
-
-    /// Returns whether the parser has reached the end of the input
-    pub const fn has_reached_end(&self) -> bool {
-        self.bytes.is_empty()
-    }
-
-    /// Use advance_spaces to advance with indenting.
-    /// This assumes we are *not* advancing with spaces, or at least that
-    /// any spaces on the line were preceded by non-spaces - which would mean
-    /// they weren't eligible to indent anyway.
-    pub fn advance_without_indenting_e<TE, E>(
-        self,
-        quantity: usize,
-        to_error: TE,
-    ) -> Result<Self, (Progress, E, Self)>
-    where
-        TE: Fn(BadInputError, Row, Col) -> E,
-    {
-        self.advance_without_indenting_ee(quantity, |r, c| {
-            to_error(BadInputError::LineTooLong, r, c)
-        })
-    }
-
-    pub fn advance_without_indenting_ee<TE, E>(
-        self,
-        quantity: usize,
-        to_error: TE,
-    ) -> Result<Self, (Progress, E, Self)>
-    where
-        TE: Fn(Row, Col) -> E,
-    {
-        match (self.column as usize).checked_add(quantity) {
-            Some(column_usize) if column_usize <= u16::MAX as usize => {
-                Ok(State {
-                    bytes: &self.bytes[quantity..],
-                    column: column_usize as u16,
-                    // Once we hit a nonspace character, we are no longer indenting.
-                    ..self
-                })
-            }
-            _ => Err((NoProgress, to_error(self.line, self.column), self)),
-        }
-    }
-
-    /// Returns a Region corresponding to the current state, but
-    /// with the end_col advanced by the given amount. This is
-    /// useful when parsing something "manually" (using input.chars())
-    /// and thus wanting a Region while not having access to loc().
-    pub fn len_region(&self, length: u16) -> Region {
-        Region {
-            start_col: self.column,
-            start_line: self.line,
-            end_col: self
-                .column
-                .checked_add(length)
-                .unwrap_or_else(|| panic!("len_region overflowed")),
-            end_line: self.line,
-        }
-    }
-
-    /// Return a failing ParseResult for the given FailReason
-    pub fn fail<T, X>(
-        self,
-        _arena: &'a Bump,
-        progress: Progress,
-        reason: X,
-    ) -> Result<(Progress, T, Self), (Progress, X, Self)> {
-        Err((progress, reason, self))
-    }
-}
-
-impl<'a> fmt::Debug for State<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "State {{")?;
-
-        match std::str::from_utf8(self.bytes) {
-            Ok(string) => write!(f, "\n\tbytes: [utf8] {:?}", string)?,
-            Err(_) => write!(f, "\n\tbytes: [invalid utf8] {:?}", self.bytes)?,
-        }
-
-        write!(f, "\n\t(line, col): ({}, {}),", self.line, self.column)?;
-        write!(f, "\n\tindent_col: {}", self.indent_col)?;
-        write!(f, "\n}}")
-    }
-}
-
-#[test]
-fn state_size() {
-    // State should always be under 8 machine words, so it fits in a typical
-    // cache line.
-    let state_size = std::mem::size_of::<State>();
-    let maximum = std::mem::size_of::<usize>() * 8;
-    assert!(state_size <= maximum, "{:?} <= {:?}", state_size, maximum);
 }
 
 pub type ParseResult<'a, Output, Error> =
@@ -776,21 +648,21 @@ where
     move |_, mut state: State<'a>| {
         let width = keyword.len();
 
-        if !state.bytes.starts_with(keyword.as_bytes()) {
+        if !state.bytes().starts_with(keyword.as_bytes()) {
             return Err((NoProgress, if_error(state.line, state.column), state));
         }
 
         // the next character should not be an identifier character
         // to prevent treating `whence` or `iffy` as keywords
-        match state.bytes.get(width) {
+        match state.bytes().get(width) {
             Some(next) if *next == b' ' || *next == b'#' || *next == b'\n' => {
                 state.column += width as u16;
-                state.bytes = &state.bytes[width..];
+                state = state.advance(width);
                 Ok((MadeProgress, (), state))
             }
             None => {
                 state.column += width as u16;
-                state.bytes = &state.bytes[width..];
+                state = state.advance(width);
                 Ok((MadeProgress, (), state))
             }
             Some(_) => Err((NoProgress, if_error(state.line, state.column), state)),
@@ -810,7 +682,7 @@ where
     Error: 'a,
 {
     move |arena, state: State<'a>| {
-        let start_bytes_len = state.bytes.len();
+        let start_bytes_len = state.bytes().len();
 
         match parser.parse(arena, state) {
             Ok((elem_progress, first_output, next_state)) => {
@@ -837,8 +709,10 @@ where
                                 Err((_, fail, state)) => {
                                     // If the delimiter parsed, but the following
                                     // element did not, that's a fatal error.
-                                    let progress =
-                                        Progress::from_lengths(start_bytes_len, state.bytes.len());
+                                    let progress = Progress::from_lengths(
+                                        start_bytes_len,
+                                        state.bytes().len(),
+                                    );
 
                                     return Err((progress, fail, state));
                                 }
@@ -871,7 +745,7 @@ where
     Error: 'a,
 {
     move |arena, state: State<'a>| {
-        let start_bytes_len = state.bytes.len();
+        let start_bytes_len = state.bytes().len();
 
         match parser.parse(arena, state) {
             Ok((progress, first_output, next_state)) => {
@@ -899,7 +773,7 @@ where
                                     // element did not, that means we saw a trailing comma
                                     let progress = Progress::from_lengths(
                                         start_bytes_len,
-                                        old_state.bytes.len(),
+                                        old_state.bytes().len(),
                                     );
                                     return Ok((progress, buf, old_state));
                                 }
@@ -932,7 +806,7 @@ where
     Error: 'a,
 {
     move |arena, state: State<'a>| {
-        let start_bytes_len = state.bytes.len();
+        let start_bytes_len = state.bytes().len();
 
         match parser.parse(arena, state) {
             Ok((progress, first_output, next_state)) => {
@@ -965,7 +839,7 @@ where
                                 NoProgress => {
                                     let progress = Progress::from_lengths(
                                         start_bytes_len,
-                                        old_state.bytes.len(),
+                                        old_state.bytes().len(),
                                     );
                                     return Ok((progress, buf, old_state));
                                 }
@@ -993,7 +867,7 @@ where
     Error: 'a,
 {
     move |arena, state: State<'a>| {
-        let start_bytes_len = state.bytes.len();
+        let start_bytes_len = state.bytes().len();
 
         match parser.parse(arena, state) {
             Ok((progress, first_output, next_state)) => {
@@ -1033,7 +907,7 @@ where
                                 NoProgress => {
                                     let progress = Progress::from_lengths(
                                         start_bytes_len,
-                                        old_state.bytes.len(),
+                                        old_state.bytes().len(),
                                     );
                                     return Ok((progress, buf, old_state));
                                 }
@@ -1073,7 +947,7 @@ where
     move |arena: &'a Bump, state: State<'a>| {
         // We have to clone this because if the optional parser fails,
         // we need to revert back to the original state.
-        let original_state = state;
+        let original_state = state.clone();
 
         match parser.parse(arena, state) {
             Ok((progress, out1, state)) => Ok((progress, Some(out1), state)),
@@ -1094,7 +968,7 @@ where
 #[macro_export]
 macro_rules! loc {
     ($parser:expr) => {
-        move |arena, state: $crate::parser::State<'a>| {
+        move |arena, state: $crate::state::State<'a>| {
             use roc_region::all::{Located, Region};
 
             let start_col = state.column;
@@ -1123,7 +997,7 @@ macro_rules! loc {
 #[macro_export]
 macro_rules! skip_first {
     ($p1:expr, $p2:expr) => {
-        move |arena, state: $crate::parser::State<'a>| {
+        move |arena, state: $crate::state::State<'a>| {
             let original_state = state.clone();
 
             match $p1.parse(arena, state) {
@@ -1142,7 +1016,7 @@ macro_rules! skip_first {
 #[macro_export]
 macro_rules! skip_second {
     ($p1:expr, $p2:expr) => {
-        move |arena, state: $crate::parser::State<'a>| {
+        move |arena, state: $crate::state::State<'a>| {
             let original_state = state.clone();
 
             match $p1.parse(arena, state) {
@@ -1243,7 +1117,7 @@ macro_rules! collection_trailing_sep_e {
 #[macro_export]
 macro_rules! succeed {
     ($value:expr) => {
-        move |_arena: &'a bumpalo::Bump, state: $crate::parser::State<'a>| {
+        move |_arena: &'a bumpalo::Bump, state: $crate::state::State<'a>| {
             Ok((NoProgress, $value, state))
         }
     };
@@ -1252,7 +1126,7 @@ macro_rules! succeed {
 #[macro_export]
 macro_rules! and {
     ($p1:expr, $p2:expr) => {
-        move |arena: &'a bumpalo::Bump, state: $crate::parser::State<'a>| {
+        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>| {
             // We have to clone this because if the first parser passes and then
             // the second one fails, we need to revert back to the original state.
             let original_state = state.clone();
@@ -1271,7 +1145,7 @@ macro_rules! and {
 #[macro_export]
 macro_rules! one_of {
     ($p1:expr, $p2:expr) => {
-        move |arena: &'a bumpalo::Bump, state: $crate::parser::State<'a>| {
+        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>| {
 
             match $p1.parse(arena, state) {
                 valid @ Ok(_) => valid,
@@ -1292,7 +1166,7 @@ macro_rules! one_of {
 #[macro_export]
 macro_rules! maybe {
     ($p1:expr) => {
-        move |arena: &'a bumpalo::Bump, state: $crate::parser::State<'a>| match $p1
+        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>| match $p1
             .parse(arena, state)
         {
             Ok((progress, value, state)) => Ok((progress, Some(value), state)),
@@ -1305,7 +1179,7 @@ macro_rules! maybe {
 #[macro_export]
 macro_rules! one_of_with_error {
     ($toerror:expr; $p1:expr) => {
-        move |arena: &'a bumpalo::Bump, state: $crate::parser::State<'a>| {
+        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>| {
 
             match $p1.parse(arena, state) {
                 valid @ Ok(_) => valid,
@@ -1352,16 +1226,12 @@ where
 {
     debug_assert_ne!(word, b'\n');
 
-    move |_arena: &'a Bump, state: State<'a>| match state.bytes.get(0) {
-        Some(x) if *x == word => Ok((
-            MadeProgress,
-            (),
-            State {
-                bytes: &state.bytes[1..],
-                column: state.column + 1,
-                ..state
-            },
-        )),
+    move |_arena: &'a Bump, state: State<'a>| match state.bytes().get(0) {
+        Some(x) if *x == word => {
+            let mut state = state.advance(1);
+            state.column += 1;
+            Ok((MadeProgress, (), state))
+        }
         _ => Err((NoProgress, to_error(state.line, state.column), state)),
     }
 }
@@ -1377,16 +1247,10 @@ where
     let needle = [word_1, word_2];
 
     move |_arena: &'a Bump, state: State<'a>| {
-        if state.bytes.starts_with(&needle) {
-            Ok((
-                MadeProgress,
-                (),
-                State {
-                    bytes: &state.bytes[2..],
-                    column: state.column + 2,
-                    ..state
-                },
-            ))
+        if state.bytes().starts_with(&needle) {
+            let mut state = state.advance(2);
+            state.column += 2;
+            Ok((MadeProgress, (), state))
         } else {
             Err((NoProgress, to_error(state.line, state.column), state))
         }
@@ -1448,7 +1312,7 @@ macro_rules! zero_or_more {
         move |arena, state: State<'a>| {
             use bumpalo::collections::Vec;
 
-            let start_bytes_len = state.bytes.len();
+            let start_bytes_len = state.bytes().len();
 
             match $parser.parse(arena, state) {
                 Ok((_, first_output, next_state)) => {
@@ -1472,7 +1336,7 @@ macro_rules! zero_or_more {
                                     NoProgress => {
                                         // the next element failed with no progress
                                         // report whether we made progress before
-                                        let progress = Progress::from_lengths(start_bytes_len, old_state.bytes.len());
+                                        let progress = Progress::from_lengths(start_bytes_len, old_state.bytes().len());
                                         return Ok((progress, buf, old_state));
                                     }
                                 }
@@ -1539,14 +1403,14 @@ macro_rules! one_or_more {
 #[macro_export]
 macro_rules! debug {
     ($parser:expr) => {
-        move |arena, state: $crate::parser::State<'a>| dbg!($parser.parse(arena, state))
+        move |arena, state: $crate::state::State<'a>| dbg!($parser.parse(arena, state))
     };
 }
 
 #[macro_export]
 macro_rules! either {
     ($p1:expr, $p2:expr) => {
-        move |arena: &'a bumpalo::Bump, state: $crate::parser::State<'a>| match $p1
+        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>| match $p1
             .parse(arena, state)
         {
             Ok((progress, output, state)) => {
@@ -1621,7 +1485,7 @@ where
     Error: 'a,
 {
     move |arena: &'a Bump, state: State<'a>| {
-        let old_state = state;
+        let old_state = state.clone();
 
         match parser.parse(arena, state) {
             Ok((_, a, s1)) => Ok((NoProgress, a, s1)),

@@ -4,8 +4,9 @@ use crate::ident::{lowercase_ident, parse_ident, Ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
     backtrackable, optional, specialize, specialize_ref, word1, EPattern, PInParens, PRecord,
-    ParseResult, Parser, State,
+    ParseResult, Parser,
 };
+use crate::state::State;
 use bumpalo::collections::string::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -169,7 +170,7 @@ fn loc_ident_pattern_help<'a>(
     can_have_arguments: bool,
 ) -> impl Parser<'a, Located<Pattern<'a>>, EPattern<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
-        let original_state = state;
+        let original_state = state.clone();
 
         let (_, loc_ident, state) =
             specialize(|_, r, c| EPattern::Start(r, c), loc!(parse_ident)).parse(arena, state)?;
