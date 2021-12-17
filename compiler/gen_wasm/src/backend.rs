@@ -6,7 +6,7 @@ use roc_collections::all::MutMap;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::gen_refcount::{RefcountProcGenerator, REFCOUNT_MAX};
-use roc_mono::ir::{CallType, Expr, JoinPointId, Literal, Proc, Stmt};
+use roc_mono::ir::{CallType, Expr, JoinPointId, ListLiteralElement, Literal, Proc, Stmt};
 use roc_mono::layout::{Builtin, Layout, LayoutIds, TagIdIntType, UnionLayout};
 use roc_reporting::internal_error;
 
@@ -636,18 +636,50 @@ impl<'a> WasmBackend<'a> {
                     let (local_id, offset) =
                         location.local_and_offset(self.storage.stack_frame_pointer);
 
+                    let mut offset = offset;
+
                     let size = elem_layout.stack_size(PTR_SIZE) * (elems.len() as u32);
 
                     self.code_builder.get_local(local_id);
                     self.allocate_with_refcount(Some(size), *alignment_bytes, 1);
                     self.code_builder.i32_store(Align::Bytes4, offset);
 
+                    offset += 4;
+
                     // length of the list
                     self.code_builder.get_local(local_id);
                     self.code_builder.i32_const(elems.len() as i32);
-                    self.code_builder.i32_store(Align::Bytes4, offset + 4);
+                    self.code_builder.i32_store(Align::Bytes4, offset);
 
-                    for elem in elems.iter() {}
+                    let mut write128 = |lower_bits, upper_bits| {
+                        offset += 8;
+
+                        self.code_builder.get_local(local_id);
+                        self.code_builder.i64_const(lower_bits);
+                        self.code_builder.i64_store(Align::Bytes8, offset);
+
+                        offset += 8;
+
+                        self.code_builder.get_local(local_id);
+                        self.code_builder.i64_const(upper_bits);
+                        self.code_builder.i64_store(Align::Bytes8, offset);
+                    };
+
+                    for elem in elems.iter() {
+                        match elem {
+                            ListLiteralElement::Literal(elem_lit) => match elem_lit {
+                                Literal::Int(x) => {
+                                    let lower_bits = (*x & 0xffff_ffff_ffff_ffff) as i64;
+                                    let upper_bits = (*x >> 64) as i64;
+                                    write128(lower_bits, upper_bits);
+                                }
+                                rest => todo!("Handle List Literals: {:?}", rest),
+                            },
+                            ListLiteralElement::Symbol(elem_sym) => {
+                                todo!("Handle List Symbols: {:?}", elem_sym)
+                            }
+                        }
+                    }
                 } else {
                     internal_error!("Unexpected storage for {:?}", sym)
                 }
