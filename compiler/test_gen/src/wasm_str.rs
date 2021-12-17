@@ -665,17 +665,17 @@ fn str_starts_with_false_small_str() {
 //     );
 // }
 
-// #[test]
-// fn str_equality() {
-//     assert_evals_to!(r#""a" == "a""#, true, bool);
-//     assert_evals_to!(
-//         r#""loremipsumdolarsitamet" == "loremipsumdolarsitamet""#,
-//         true,
-//         bool
-//     );
-//     assert_evals_to!(r#""a" != "b""#, true, bool);
-//     assert_evals_to!(r#""a" == "b""#, false, bool);
-// }
+#[test]
+fn str_equality() {
+    assert_evals_to!(r#""a" == "a""#, true, bool);
+    assert_evals_to!(
+        r#""loremipsumdolarsitamet" == "loremipsumdolarsitamet""#,
+        true,
+        bool
+    );
+    assert_evals_to!(r#""a" != "b""#, true, bool);
+    assert_evals_to!(r#""a" == "b""#, false, bool);
+}
 
 // #[test]
 // fn nested_recursive_literal() {

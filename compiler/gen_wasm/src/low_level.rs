@@ -10,6 +10,9 @@ use crate::wasm_module::{Align, CodeBuilder, ValueType::*};
 pub enum LowlevelBuildResult {
     Done,
     BuiltinCall(&'static str),
+    SpecializedEq,
+    SpecializedNotEq,
+    SpecializedHash,
     NotImplemented,
 }
 
@@ -350,8 +353,7 @@ pub fn decode_low_level<'a>(
             match storage.get(&args[0]) {
                 VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
                     match value_type {
-                        I32 => code_builder.i32_const(1),
-                        I64 => code_builder.i32_const(1),
+                        I32 | I64 => code_builder.i32_const(1), // always true for integers
                         F32 => {
                             code_builder.i32_reinterpret_f32();
                             code_builder.i32_const(0x7f80_0000);
@@ -563,7 +565,8 @@ pub fn decode_low_level<'a>(
                                 code_builder.i32_and();
                             }
                             Int128 => compare_bytes(code_builder),
-                            Float128 | DataStructure => return NotImplemented,
+                            Float128 => return NotImplemented,
+                            DataStructure => return SpecializedEq,
                         }
                     }
                 }
@@ -577,15 +580,19 @@ pub fn decode_low_level<'a>(
                 F32 => code_builder.f32_ne(),
                 F64 => code_builder.f64_ne(),
             },
-            StoredValue::StackMemory { .. } => {
-                decode_low_level(code_builder, storage, LowLevel::Eq, args, ret_layout);
-                code_builder.i32_eqz();
+            StoredValue::StackMemory { format, .. } => {
+                if matches!(format, DataStructure) {
+                    return SpecializedNotEq;
+                } else {
+                    decode_low_level(code_builder, storage, LowLevel::Eq, args, ret_layout);
+                    code_builder.i32_eqz();
+                }
             }
         },
         And => code_builder.i32_and(),
         Or => code_builder.i32_or(),
         Not => code_builder.i32_eqz(),
-        Hash => return NotImplemented,
+        Hash => return SpecializedHash,
         ExpectTrue => return NotImplemented,
         RefCountGetPtr => {
             code_builder.i32_const(4);

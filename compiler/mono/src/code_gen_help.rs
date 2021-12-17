@@ -9,7 +9,7 @@ use crate::ir::{
     BranchInfo, Call, CallSpecId, CallType, Expr, HostExposedLayouts, Literal, ModifyRc, Proc,
     ProcLayout, SelfRecursive, Stmt, UpdateModeId,
 };
-use crate::layout::{Builtin, Layout};
+use crate::layout::{Builtin, Layout, UnionLayout};
 
 const LAYOUT_BOOL: Layout = Layout::Builtin(Builtin::Bool);
 const LAYOUT_UNIT: Layout = Layout::Struct(&[]);
@@ -21,71 +21,79 @@ const LAYOUT_U32: Layout = Layout::Builtin(Builtin::Int(IntWidth::U32));
 pub const REFCOUNT_MAX: usize = 0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum RefcountOp {
+pub enum HelperOp {
     Inc,
     Dec,
     DecRef,
+    Eq,
 }
 
-/// Generate specialized refcounting code in mono IR format
-/// -------------------------------------------------------
+impl From<&ModifyRc> for HelperOp {
+    fn from(modify: &ModifyRc) -> Self {
+        match modify {
+            ModifyRc::Inc(..) => Self::Inc,
+            ModifyRc::Dec(_) => Self::Dec,
+            ModifyRc::DecRef(_) => Self::DecRef,
+        }
+    }
+}
+
+/// Generate specialized helper procs for code gen
+/// ----------------------------------------------
 ///
-/// Any backend that wants to use this, needs a field of type `RefcountProcGenerator`.
+/// Some low level operations need specialized helper procs to traverse data structures at runtime.
+/// This includes refcounting, hashing, and equality checks.
 ///
-/// Whenever the backend sees a `Stmt::Refcounting`, it calls
-/// `RefcountProcGenerator::expand_refcount_stmt()`, which returns IR statements
-/// to call a refcounting procedure. The backend can then generate target code
-/// for those IR statements instead of the original `Refcounting` statement.
+/// For example, when checking List equality, we need to visit each element and compare them.
+/// Depending on the type of the list elements, we may need to recurse deeper into each element.
+/// For tag unions, we may need branches for different tag IDs, etc.
 ///
-/// Essentially we are expanding the `Refcounting` statement into a more detailed
-/// form that's more suitable for code generation.
+/// This module creates specialized helper procs for all such operations and types used in the program.
 ///
-/// But so far, we've only mentioned _calls_ to the refcounting procedures.
-/// The procedures themselves don't exist yet!
+/// The backend drives the process, in two steps:
+/// 1) When it sees the relevant node, it calls CodeGenHelp to get the replacement IR.
+///    CodeGenHelp returns IR for a call to the helper proc, and remembers the specialization.
+/// 2) After the backend has generated code for all user procs, it takes the IR for all of the
+///    specialized helpers procs, and generates target code for them too.
 ///
-/// So when the backend has finished with all the `Proc`s from user code,
-/// it's time to call `RefcountProcGenerator::generate_refcount_procs()`,
-/// which generates the `Procs` for refcounting helpers. The backend can
-/// simply generate target code for these `Proc`s just like any other Proc.
-///
-pub struct RefcountProcGenerator<'a> {
+pub struct CodeGenHelp<'a> {
     arena: &'a Bump,
     home: ModuleId,
     ptr_size: u32,
     layout_isize: Layout<'a>,
-    /// List of refcounting procs to generate, specialised by Layout and RefCountOp
+    /// Specializations to generate
     /// Order of insertion is preserved, since it is important for Wasm backend
-    procs_to_generate: Vec<'a, (Layout<'a>, RefcountOp, Symbol)>,
+    specs: Vec<'a, (Layout<'a>, HelperOp, Symbol)>,
 }
 
-impl<'a> RefcountProcGenerator<'a> {
+impl<'a> CodeGenHelp<'a> {
     pub fn new(arena: &'a Bump, intwidth_isize: IntWidth, home: ModuleId) -> Self {
-        RefcountProcGenerator {
+        CodeGenHelp {
             arena,
             home,
             ptr_size: intwidth_isize.stack_size(),
             layout_isize: Layout::Builtin(Builtin::Int(intwidth_isize)),
-            procs_to_generate: Vec::with_capacity_in(16, arena),
+            specs: Vec::with_capacity_in(16, arena),
         }
     }
 
-    /// Expands the IR node Stmt::Refcounting to a more detailed IR Stmt that calls a helper proc.
-    /// The helper procs themselves can be generated later by calling `generate_refcount_procs`
+    /// Expand a `Refcounting` node to a `Let` node that calls a specialized helper proc.
+    /// The helper procs themselves are to be generated later with `generate_procs`
     pub fn expand_refcount_stmt(
         &mut self,
         ident_ids: &mut IdentIds,
         layout: Layout<'a>,
         modify: &ModifyRc,
         following: &'a Stmt<'a>,
-    ) -> (&'a Stmt<'a>, Option<(Symbol, ProcLayout<'a>)>) {
-        if !Self::layout_is_supported(&layout) {
+    ) -> (&'a Stmt<'a>, Vec<'a, (Symbol, ProcLayout<'a>)>) {
+        if !Self::is_rc_implemented_yet(&layout) {
             // Just a warning, so we can decouple backend development from refcounting development.
             // When we are closer to completion, we can change it to a panic.
             println!(
                 "WARNING! MEMORY LEAK! Refcounting not yet implemented for Layout {:?}",
                 layout
             );
-            return (following, None);
+            return (following, Vec::new_in(self.arena));
         }
 
         let arena = self.arena;
@@ -94,8 +102,8 @@ impl<'a> RefcountProcGenerator<'a> {
             ModifyRc::Inc(structure, amount) => {
                 let layout_isize = self.layout_isize;
 
-                let (is_existing, proc_name) =
-                    self.get_proc_symbol(ident_ids, layout, RefcountOp::Inc);
+                let (proc_name, new_procs_info) =
+                    self.get_or_create_proc_symbols_recursive(ident_ids, &layout, HelperOp::Inc);
 
                 // Define a constant for the amount to increment
                 let amount_sym = self.create_symbol(ident_ids, "amount");
@@ -117,28 +125,14 @@ impl<'a> RefcountProcGenerator<'a> {
                 let call_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
                 let rc_stmt = arena.alloc(amount_stmt(arena.alloc(call_stmt)));
 
-                // Create a linker symbol for the helper proc if this is the first usage
-                let new_proc_info = if is_existing {
-                    None
-                } else {
-                    Some((
-                        proc_name,
-                        ProcLayout {
-                            arguments: arg_layouts,
-                            result: LAYOUT_UNIT,
-                        },
-                    ))
-                };
-
-                (rc_stmt, new_proc_info)
+                (rc_stmt, new_procs_info)
             }
 
             ModifyRc::Dec(structure) => {
-                let (is_existing, proc_name) =
-                    self.get_proc_symbol(ident_ids, layout, RefcountOp::Dec);
+                let (proc_name, new_procs_info) =
+                    self.get_or_create_proc_symbols_recursive(ident_ids, &layout, HelperOp::Dec);
 
                 // Call helper proc, passing the Roc structure
-                let arg_layouts = arena.alloc([layout, self.layout_isize]);
                 let call_result_empty = self.create_symbol(ident_ids, "call_result_empty");
                 let call_expr = Expr::Call(Call {
                     call_type: CallType::ByName {
@@ -157,20 +151,7 @@ impl<'a> RefcountProcGenerator<'a> {
                     following,
                 ));
 
-                // Create a linker symbol for the helper proc if this is the first usage
-                let new_proc_info = if is_existing {
-                    None
-                } else {
-                    Some((
-                        proc_name,
-                        ProcLayout {
-                            arguments: arg_layouts,
-                            result: LAYOUT_UNIT,
-                        },
-                    ))
-                };
-
-                (rc_stmt, new_proc_info)
+                (rc_stmt, new_procs_info)
             }
 
             ModifyRc::DecRef(structure) => {
@@ -199,67 +180,202 @@ impl<'a> RefcountProcGenerator<'a> {
                 let call_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
                 let rc_stmt = arena.alloc(rc_ptr_stmt(arena.alloc(call_stmt)));
 
-                (rc_stmt, None)
+                (rc_stmt, Vec::new_in(self.arena))
             }
         }
     }
 
-    // TODO: consider refactoring so that we have just one place to define what's supported
-    // (Probably by generating procs on the fly instead of all at the end)
-    fn layout_is_supported(layout: &Layout) -> bool {
+    /// Replace a generic `Lowlevel::Eq` call with a specialized helper proc.
+    /// The helper procs themselves are to be generated later with `generate_procs`
+    pub fn specialize_equals(
+        &mut self,
+        ident_ids: &mut IdentIds,
+        layout: &Layout<'a>,
+        arguments: &'a [Symbol],
+    ) -> (&'a Expr<'a>, Vec<'a, (Symbol, ProcLayout<'a>)>) {
+        // Record a specialization and get its name
+        let (proc_name, new_procs_info) =
+            self.get_or_create_proc_symbols_recursive(ident_ids, layout, HelperOp::Eq);
+
+        // Call the specialized helper
+        let arg_layouts = self.arena.alloc([*layout, *layout]);
+        let expr = self.arena.alloc(Expr::Call(Call {
+            call_type: CallType::ByName {
+                name: proc_name,
+                ret_layout: &LAYOUT_BOOL,
+                arg_layouts,
+                specialization_id: CallSpecId::BACKEND_DUMMY,
+            },
+            arguments,
+        }));
+
+        (expr, new_procs_info)
+    }
+
+    // Check if refcounting is implemented yet. In the long term, this will be deleted.
+    // In the short term, it helps us to skip refcounting and let it leak, so we can make
+    // progress incrementally. Kept in sync with generate_procs using assertions.
+    fn is_rc_implemented_yet(layout: &Layout) -> bool {
         matches!(layout, Layout::Builtin(Builtin::Str))
     }
 
     /// Generate refcounting helper procs, each specialized to a particular Layout.
     /// For example `List (Result { a: Str, b: Int } Str)` would get its own helper
     /// to update the refcounts on the List, the Result and the strings.
-    pub fn generate_refcount_procs(
+    pub fn generate_procs(
         &mut self,
         arena: &'a Bump,
         ident_ids: &mut IdentIds,
     ) -> Vec<'a, Proc<'a>> {
-        // Move the vector out of self, so we can loop over it safely
-        let mut procs_to_generate =
-            std::mem::replace(&mut self.procs_to_generate, Vec::with_capacity_in(0, arena));
+        use HelperOp::*;
 
-        let procs_iter = procs_to_generate
-            .drain(0..)
-            .map(|(layout, op, proc_symbol)| {
-                debug_assert!(Self::layout_is_supported(&layout));
+        // Move the vector out of self, so we can loop over it safely
+        let mut specs = std::mem::replace(&mut self.specs, Vec::with_capacity_in(0, arena));
+
+        let procs_iter = specs.drain(0..).map(|(layout, op, proc_symbol)| match op {
+            Inc | Dec | DecRef => {
+                debug_assert!(Self::is_rc_implemented_yet(&layout));
                 match layout {
                     Layout::Builtin(Builtin::Str) => {
                         self.gen_modify_str(ident_ids, op, proc_symbol)
                     }
 
-                    _ => todo!("Please update layout_is_supported for {:?}", layout),
+                    _ => todo!("Please update is_rc_implemented_yet for `{:?}`", layout),
                 }
-            });
+            }
+            Eq => match layout {
+                Layout::Builtin(
+                    Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal,
+                ) => panic!(
+                    "No generated helper proc. Use direct code gen for {:?}",
+                    layout
+                ),
+
+                Layout::Builtin(Builtin::Str) => {
+                    panic!("No generated helper proc. Use Zig builtin for Str.")
+                }
+
+                _ => todo!("Specialized equality check for `{:?}`", layout),
+            },
+        });
 
         Vec::from_iter_in(procs_iter, arena)
     }
 
-    /// Find the Symbol of the procedure for this layout and refcount operation,
-    /// or create one if needed.
-    fn get_proc_symbol(
+    /// Find the Symbol of the procedure for this layout and operation
+    /// If any new helper procs are needed for this layout or its children,
+    /// return their details in a vector.
+    fn get_or_create_proc_symbols_recursive(
         &mut self,
         ident_ids: &mut IdentIds,
-        layout: Layout<'a>,
-        op: RefcountOp,
-    ) -> (bool, Symbol) {
-        let found = self
-            .procs_to_generate
-            .iter()
-            .find(|(l, o, _)| *l == layout && *o == op);
+        layout: &Layout<'a>,
+        op: HelperOp,
+    ) -> (Symbol, Vec<'a, (Symbol, ProcLayout<'a>)>) {
+        let mut new_procs_info = Vec::new_in(self.arena);
+
+        let proc_symbol =
+            self.get_or_create_proc_symbols_visit(ident_ids, &mut new_procs_info, op, layout);
+
+        (proc_symbol, new_procs_info)
+    }
+
+    fn get_or_create_proc_symbols_visit(
+        &mut self,
+        ident_ids: &mut IdentIds,
+        new_procs_info: &mut Vec<'a, (Symbol, ProcLayout<'a>)>,
+        op: HelperOp,
+        layout: &Layout<'a>,
+    ) -> Symbol {
+        if let Layout::LambdaSet(lambda_set) = layout {
+            return self.get_or_create_proc_symbols_visit(
+                ident_ids,
+                new_procs_info,
+                op,
+                &lambda_set.runtime_representation(),
+            );
+        }
+
+        let (symbol, new_proc_layout) = self.get_or_create_proc_symbol(ident_ids, layout, op);
+
+        if let Some(proc_layout) = new_proc_layout {
+            new_procs_info.push((symbol, proc_layout));
+
+            let mut visit_child = |child| {
+                self.get_or_create_proc_symbols_visit(ident_ids, new_procs_info, op, child);
+            };
+
+            let mut visit_children = |children: &'a [Layout]| {
+                for child in children {
+                    visit_child(child);
+                }
+            };
+
+            let mut visit_tags = |tags: &'a [&'a [Layout]]| {
+                for tag in tags {
+                    visit_children(tag);
+                }
+            };
+
+            match layout {
+                Layout::Builtin(builtin) => match builtin {
+                    Builtin::Dict(key, value) => {
+                        visit_child(key);
+                        visit_child(value);
+                    }
+                    Builtin::Set(element) | Builtin::List(element) => visit_child(element),
+                    _ => {}
+                },
+                Layout::Struct(fields) => visit_children(fields),
+                Layout::Union(union_layout) => match union_layout {
+                    UnionLayout::NonRecursive(tags) => visit_tags(tags),
+                    UnionLayout::Recursive(tags) => visit_tags(tags),
+                    UnionLayout::NonNullableUnwrapped(fields) => visit_children(fields),
+                    UnionLayout::NullableWrapped { other_tags, .. } => visit_tags(other_tags),
+                    UnionLayout::NullableUnwrapped { other_fields, .. } => {
+                        visit_children(other_fields)
+                    }
+                },
+                Layout::LambdaSet(_) => unreachable!(),
+                Layout::RecursivePointer => {}
+            }
+        }
+
+        symbol
+    }
+
+    fn get_or_create_proc_symbol(
+        &mut self,
+        ident_ids: &mut IdentIds,
+        layout: &Layout<'a>,
+        op: HelperOp,
+    ) -> (Symbol, Option<ProcLayout<'a>>) {
+        let found = self.specs.iter().find(|(l, o, _)| l == layout && *o == op);
 
         if let Some((_, _, existing_symbol)) = found {
-            (true, *existing_symbol)
+            (*existing_symbol, None)
         } else {
-            let layout_name = layout_debug_name(&layout);
-            let unique_idx = self.procs_to_generate.len();
-            let debug_name = format!("#rc{:?}_{}_{}", op, layout_name, unique_idx);
+            let layout_name = layout_debug_name(layout);
+            let debug_name = format!("#help{:?}_{}", op, layout_name);
             let new_symbol: Symbol = self.create_symbol(ident_ids, &debug_name);
-            self.procs_to_generate.push((layout, op, new_symbol));
-            (false, new_symbol)
+            self.specs.push((*layout, op, new_symbol));
+
+            let new_proc_layout = match op {
+                HelperOp::Inc => Some(ProcLayout {
+                    arguments: self.arena.alloc([*layout, self.layout_isize]),
+                    result: LAYOUT_UNIT,
+                }),
+                HelperOp::Dec => Some(ProcLayout {
+                    arguments: self.arena.alloc([*layout]),
+                    result: LAYOUT_UNIT,
+                }),
+                HelperOp::DecRef => None,
+                HelperOp::Eq => Some(ProcLayout {
+                    arguments: self.arena.alloc([*layout, *layout]),
+                    result: LAYOUT_BOOL,
+                }),
+            };
+
+            (new_symbol, new_proc_layout)
         }
     }
 
@@ -274,14 +390,15 @@ impl<'a> RefcountProcGenerator<'a> {
         Stmt::Let(unit, Expr::Struct(&[]), LAYOUT_UNIT, ret_stmt)
     }
 
-    fn gen_args(&self, op: RefcountOp, layout: Layout<'a>) -> &'a [(Layout<'a>, Symbol)] {
+    fn gen_args(&self, op: HelperOp, layout: Layout<'a>) -> &'a [(Layout<'a>, Symbol)] {
         let roc_value = (layout, Symbol::ARG_1);
         match op {
-            RefcountOp::Inc => {
+            HelperOp::Inc => {
                 let inc_amount = (self.layout_isize, Symbol::ARG_2);
                 self.arena.alloc([roc_value, inc_amount])
             }
-            RefcountOp::Dec | RefcountOp::DecRef => self.arena.alloc([roc_value]),
+            HelperOp::Dec | HelperOp::DecRef => self.arena.alloc([roc_value]),
+            HelperOp::Eq => self.arena.alloc([roc_value, (layout, Symbol::ARG_2)]),
         }
     }
 
@@ -289,7 +406,7 @@ impl<'a> RefcountProcGenerator<'a> {
     fn gen_modify_str(
         &mut self,
         ident_ids: &mut IdentIds,
-        op: RefcountOp,
+        op: HelperOp,
         proc_name: Symbol,
     ) -> Proc<'a> {
         let string = Symbol::ARG_1;
@@ -349,20 +466,21 @@ impl<'a> RefcountProcGenerator<'a> {
         // Call the relevant Zig lowlevel to actually modify the refcount
         let zig_call_result = self.create_symbol(ident_ids, "zig_call_result");
         let zig_call_expr = match op {
-            RefcountOp::Inc => Expr::Call(Call {
+            HelperOp::Inc => Expr::Call(Call {
                 call_type: CallType::LowLevel {
                     op: LowLevel::RefCountInc,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
                 arguments: self.arena.alloc([rc_ptr, Symbol::ARG_2]),
             }),
-            RefcountOp::Dec | RefcountOp::DecRef => Expr::Call(Call {
+            HelperOp::Dec | HelperOp::DecRef => Expr::Call(Call {
                 call_type: CallType::LowLevel {
                     op: LowLevel::RefCountDec,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
                 arguments: self.arena.alloc([rc_ptr, alignment]),
             }),
+            _ => unreachable!(),
         };
         let zig_call_stmt = |next| Stmt::Let(zig_call_result, zig_call_expr, LAYOUT_UNIT, next);
 
