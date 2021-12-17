@@ -16,7 +16,7 @@ const InPlace = enum(u8) {
 };
 
 const SMALL_STR_MAX_LENGTH = small_string_size - 1;
-const small_string_size = 2 * @sizeOf(usize);
+const small_string_size = @sizeOf(RocStr);
 const blank_small_string: [@sizeOf(RocStr)]u8 = init_blank_small_string(small_string_size);
 
 fn init_blank_small_string(comptime n: usize) [n]u8 {
@@ -37,8 +37,9 @@ pub const RocStr = extern struct {
     pub const alignment = @alignOf(usize);
 
     pub inline fn empty() RocStr {
+        const small_str_flag: isize = std.math.minInt(isize);
         return RocStr{
-            .str_len = 0,
+            .str_len = @bitCast(usize, small_str_flag),
             .str_bytes = null,
         };
     }
@@ -80,7 +81,7 @@ pub const RocStr = extern struct {
     }
 
     pub fn deinit(self: RocStr) void {
-        if (!self.isSmallStr() and !self.isEmpty()) {
+        if (!self.isSmallStr()) {
             utils.decref(self.str_bytes, self.str_len, RocStr.alignment);
         }
     }
@@ -142,7 +143,7 @@ pub const RocStr = extern struct {
     }
 
     pub fn clone(in_place: InPlace, str: RocStr) RocStr {
-        if (str.isSmallStr() or str.isEmpty()) {
+        if (str.isSmallStr()) {
             // just return the bytes
             return str;
         } else {
@@ -214,7 +215,8 @@ pub const RocStr = extern struct {
     }
 
     pub fn isEmpty(self: RocStr) bool {
-        return self.len() == 0;
+        comptime const empty_len = RocStr.empty().str_len;
+        return self.str_len == empty_len;
     }
 
     // If a string happens to be null-terminated already, then we can pass its
@@ -294,11 +296,6 @@ pub const RocStr = extern struct {
     }
 
     pub fn isUnique(self: RocStr) bool {
-        // the empty string is unique (in the sense that copying it will not leak memory)
-        if (self.isEmpty()) {
-            return true;
-        }
-
         // small strings can be copied
         if (self.isSmallStr()) {
             return true;
@@ -321,8 +318,8 @@ pub const RocStr = extern struct {
 
         // Since this conditional would be prone to branch misprediction,
         // make sure it will compile to a cmov.
-        // return if (self.isSmallStr() or self.isEmpty()) (&@bitCast([@sizeOf(RocStr)]u8, self)) else (@ptrCast([*]u8, self.str_bytes));
-        if (self.isSmallStr() or self.isEmpty()) {
+        // return if (self.isSmallStr()) (&@bitCast([@sizeOf(RocStr)]u8, self)) else (@ptrCast([*]u8, self.str_bytes));
+        if (self.isSmallStr()) {
             const as_int = @ptrToInt(&self);
             const as_ptr = @intToPtr([*]u8, as_int);
             return as_ptr;

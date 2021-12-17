@@ -432,12 +432,3 @@ pub fn str_equal<'a, 'ctx, 'env>(
         bitcode::STR_EQUAL,
     )
 }
-
-// TODO investigate: does this cause problems when the layout is known? this value is now not refcounted!
-pub fn empty_str<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
-    let struct_type = super::convert::zig_str_type(env);
-
-    // The pointer should be null (aka zero) and the length should be zero,
-    // so the whole struct should be a const_zero
-    BasicValueEnum::StructValue(struct_type.const_zero())
-}
