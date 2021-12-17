@@ -1,6 +1,3 @@
-#![cfg(feature = "gen-llvm")]
-#![cfg(feature = "gen-wasm")]
-
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
 
@@ -10,13 +7,16 @@ use crate::helpers::llvm::assert_evals_to;
 #[cfg(feature = "gen-wasm")]
 use crate::helpers::wasm::assert_evals_to;
 
+#[allow(unused_imports)]
 use crate::helpers::with_larger_debug_stack;
 //use crate::assert_wasm_evals_to as assert_evals_to;
+#[allow(unused_imports)]
 use indoc::indoc;
+#[allow(unused_imports)]
 use roc_std::{RocList, RocStr};
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn roc_list_construction() {
     let list = RocList::from_slice(&[1i64; 23]);
     assert_eq!(&list, &list);
@@ -35,13 +35,13 @@ fn list_literal_empty_record() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_singleton_list_literal() {
     assert_evals_to!("[1, 2]", RocList::from_slice(&[1, 2]), RocList<i64>);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_list_literal() {
     assert_evals_to!("[ 12, 9 ]", RocList::from_slice(&[12, 9]), RocList<i64>);
     assert_evals_to!(
@@ -131,7 +131,7 @@ fn bool_list_literal() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn variously_sized_list_literals() {
     assert_evals_to!("[]", RocList::from_slice(&[]), RocList<i64>);
     assert_evals_to!("[1]", RocList::from_slice(&[1]), RocList<i64>);
@@ -1316,6 +1316,8 @@ fn list_concat_two_bigger_non_empty_lists() {
     );
 }
 
+#[allow(dead_code)]
+#[cfg(any(feature = "gen-llvm"))]
 fn assert_concat_worked(num_elems1: i64, num_elems2: i64) {
     let vec1: Vec<i64> = (0..num_elems1)
         .map(|i| 12345 % (i + num_elems1 + num_elems2 + 1))
@@ -1390,19 +1392,19 @@ fn list_concat_large() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn empty_list_len() {
     assert_evals_to!("List.len []", 0, usize);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn basic_int_list_len() {
     assert_evals_to!("List.len [ 12, 9, 6, 3 ]", 4, usize);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn loaded_int_list_len() {
     assert_evals_to!(
         indoc!(
@@ -1436,13 +1438,13 @@ fn fn_int_list_len() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_list_is_empty() {
     assert_evals_to!("List.isEmpty [ 12, 9, 6, 3 ]", false, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn empty_list_is_empty() {
     assert_evals_to!("List.isEmpty []", true, bool);
 }

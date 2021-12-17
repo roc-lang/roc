@@ -55,8 +55,18 @@ pub fn decode_low_level<'a>(
             return NotImplemented;
         }
         StrTrim => return BuiltinCall(bitcode::STR_TRIM),
+        ListLen => {
+            if let StoredValue::StackMemory { location, .. } = storage.get(&args[0]) {
+                let (local_id, offset) = location.local_and_offset(storage.stack_frame_pointer);
 
-        ListLen | ListGetUnsafe | ListSet | ListSingle | ListRepeat | ListReverse | ListConcat
+                code_builder.get_local(local_id);
+                code_builder.i32_load(Align::Bytes4, offset + 4);
+            } else {
+                internal_error!("Unexpected storage for {:?}", args[0]);
+            };
+        }
+
+        ListGetUnsafe | ListSet | ListSingle | ListRepeat | ListReverse | ListConcat
         | ListContains | ListAppend | ListPrepend | ListJoin | ListRange | ListMap | ListMap2
         | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk | ListWalkUntil
         | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith | ListSublist
