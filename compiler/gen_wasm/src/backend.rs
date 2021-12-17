@@ -3,6 +3,7 @@ use bumpalo::{self, collections::Vec};
 use code_builder::Align;
 use roc_builtins::bitcode::IntWidth;
 use roc_collections::all::MutMap;
+use roc_module::ident::Ident;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::gen_refcount::{RefcountProcGenerator, REFCOUNT_MAX};
@@ -187,6 +188,18 @@ impl<'a> WasmBackend<'a> {
     #[cfg(not(debug_assertions))]
     pub fn register_symbol_debug_names(&self) {}
 
+    /// Create an IR Symbol for an anonymous value (such as ListLiteral)
+    fn create_symbol(&mut self, debug_name: &str) -> Symbol {
+        let ident_ids = self
+            .interns
+            .all_ident_ids
+            .get_mut(&self.env.module_id)
+            .unwrap();
+
+        let ident_id = ident_ids.add(Ident::from(debug_name));
+        Symbol::new(self.env.module_id, ident_id)
+    }
+
     /// Reset function-level data
     fn reset(&mut self) {
         // Push the completed CodeBuilder into the module and swap it for a new empty one
@@ -281,6 +294,30 @@ impl<'a> WasmBackend<'a> {
         self.code_builder.end();
     }
 
+    fn store_expr_value(
+        &mut self,
+        sym: Symbol,
+        layout: &Layout<'a>,
+        expr: &Expr<'a>,
+        kind: StoredValueKind,
+    ) {
+        let wasm_layout = WasmLayout::new(layout);
+
+        let sym_storage = self.storage.allocate(&wasm_layout, sym, kind);
+
+        self.build_expr(&sym, expr, layout, &sym_storage);
+
+        // If this value is stored in the VM stack, we need code_builder to track it
+        // (since every instruction can change the VM stack)
+        if let Some(StoredValue::VirtualMachineStack { vm_state, .. }) =
+            self.storage.symbol_storage_map.get_mut(&sym)
+        {
+            *vm_state = self.code_builder.set_top_symbol(sym);
+        }
+
+        self.symbol_layouts.insert(sym, *layout);
+    }
+
     fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) {
         match stmt {
             Stmt::Let(_, _, _, _) => {
@@ -288,26 +325,12 @@ impl<'a> WasmBackend<'a> {
                 while let Stmt::Let(sym, expr, layout, following) = current_stmt {
                     // println!("let {:?} = {}", sym, expr.to_pretty(200)); // ignore `following`! Too confusing otherwise.
 
-                    let wasm_layout = WasmLayout::new(layout);
-
                     let kind = match following {
                         Stmt::Ret(ret_sym) if *sym == *ret_sym => StoredValueKind::ReturnValue,
                         _ => StoredValueKind::Variable,
                     };
 
-                    let sym_storage = self.storage.allocate(&wasm_layout, *sym, kind);
-
-                    self.build_expr(sym, expr, layout, &sym_storage);
-
-                    // If this value is stored in the VM stack, we need code_builder to track it
-                    // (since every instruction can change the VM stack)
-                    if let Some(StoredValue::VirtualMachineStack { vm_state, .. }) =
-                        self.storage.symbol_storage_map.get_mut(sym)
-                    {
-                        *vm_state = self.code_builder.set_top_symbol(*sym);
-                    }
-
-                    self.symbol_layouts.insert(*sym, *layout);
+                    self.store_expr_value(*sym, layout, expr, kind);
 
                     current_stmt = *following;
                 }
@@ -633,57 +656,51 @@ impl<'a> WasmBackend<'a> {
                     ..
                 } = storage
                 {
-                    let (local_id, offset) =
-                        location.local_and_offset(self.storage.stack_frame_pointer);
-
-                    let mut offset = offset;
-
                     let size = elem_layout.stack_size(PTR_SIZE) * (elems.len() as u32);
 
-                    self.code_builder.get_local(local_id);
+                    // Allocate heap space and store its address in a local variable
+                    let heap_local_id = self.storage.create_anonymous_local(PTR_TYPE);
                     self.allocate_with_refcount(Some(size), *alignment_bytes, 1);
-                    self.code_builder.i32_store(Align::Bytes4, offset);
+                    self.code_builder.set_local(heap_local_id);
 
-                    offset += 4;
+                    let (stack_local_id, stack_offset) =
+                        location.local_and_offset(self.storage.stack_frame_pointer);
+
+                    // elements pointer
+                    self.code_builder.get_local(stack_local_id);
+                    self.code_builder.get_local(heap_local_id);
+                    self.code_builder.i32_store(Align::Bytes4, stack_offset);
 
                     // length of the list
-                    self.code_builder.get_local(local_id);
+                    self.code_builder.get_local(stack_local_id);
                     self.code_builder.i32_const(elems.len() as i32);
-                    self.code_builder.i32_store(Align::Bytes4, offset);
+                    self.code_builder.i32_store(Align::Bytes4, stack_offset + 4);
 
-                    offset += 4;
-
-                    let mut write128 = |lower_bits, upper_bits| {
-                        self.code_builder.get_local(local_id);
-                        self.code_builder.i64_const(lower_bits);
-                        self.code_builder.i64_store(Align::Bytes8, offset);
-
-                        offset += 8;
-
-                        self.code_builder.get_local(local_id);
-                        self.code_builder.i64_const(upper_bits);
-                        self.code_builder.i64_store(Align::Bytes8, offset);
-
-                        offset += 8;
-                    };
-
-                    for elem in elems.iter() {
-                        match elem {
-                            ListLiteralElement::Literal(elem_lit) => match elem_lit {
-                                Literal::Int(x) => {
-                                    let lower_bits = (*x & 0xffff_ffff_ffff_ffff) as i64;
-                                    let upper_bits = (*x >> 64) as i64;
-                                    write128(lower_bits, upper_bits);
-                                }
-                                rest => todo!("Handle List Literals: {:?}", rest),
-                            },
-                            ListLiteralElement::Symbol(elem_sym) => {
-                                todo!("Handle List Symbols: {:?}", elem_sym)
+                    for (i, elem) in elems.iter().enumerate() {
+                        let elem_sym = match elem {
+                            ListLiteralElement::Literal(lit) => {
+                                // This has no Symbol but our storage methods expect one.
+                                // Let's just pretend it was defined in a `Let`.
+                                let debug_name = format!("{:?}_{}", sym, i);
+                                let elem_sym = self.create_symbol(&debug_name);
+                                let expr = Expr::Literal(*lit);
+                                self.store_expr_value(
+                                    elem_sym,
+                                    elem_layout,
+                                    &expr,
+                                    StoredValueKind::Variable,
+                                );
+                                elem_sym
                             }
-                        }
+                            ListLiteralElement::Symbol(elem_sym) => *elem_sym,
+                        };
+                        todo!(
+                            "Copy {:?} to the address stored in heap_local_id, using self.storage.copy_value_to_memory",
+                            elem_sym
+                        );
                     }
                 } else {
-                    internal_error!("Unexpected storage for {:?}", sym)
+                    internal_error!("Unexpected storage for Array {:?}: {:?}", sym, storage)
                 }
             }
 
