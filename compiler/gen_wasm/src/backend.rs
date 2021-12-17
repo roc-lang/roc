@@ -651,9 +651,9 @@ impl<'a> WasmBackend<'a> {
                     self.code_builder.i32_const(elems.len() as i32);
                     self.code_builder.i32_store(Align::Bytes4, offset);
 
-                    let mut write128 = |lower_bits, upper_bits| {
-                        offset += 8;
+                    offset += 4;
 
+                    let mut write128 = |lower_bits, upper_bits| {
                         self.code_builder.get_local(local_id);
                         self.code_builder.i64_const(lower_bits);
                         self.code_builder.i64_store(Align::Bytes8, offset);
@@ -663,6 +663,8 @@ impl<'a> WasmBackend<'a> {
                         self.code_builder.get_local(local_id);
                         self.code_builder.i64_const(upper_bits);
                         self.code_builder.i64_store(Align::Bytes8, offset);
+
+                        offset += 8;
                     };
 
                     for elem in elems.iter() {
