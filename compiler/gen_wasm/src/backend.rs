@@ -627,17 +627,19 @@ impl<'a> WasmBackend<'a> {
             }
 
             Expr::Array { elems, elem_layout } => {
-                if let StoredValue::StackMemory { location, .. } = storage {
+                if let StoredValue::StackMemory {
+                    location,
+                    alignment_bytes,
+                    ..
+                } = storage
+                {
                     let (local_id, offset) =
                         location.local_and_offset(self.storage.stack_frame_pointer);
 
-                    // TODO: will be passed into roc_alloc
                     let size = elem_layout.stack_size(PTR_SIZE) * (elems.len() as u32);
 
                     self.code_builder.get_local(local_id);
-                    // TODO: we'll need a pointer here actually
-                    //  waiting on #2169
-                    self.code_builder.i32_const(0);
+                    self.allocate_with_refcount(Some(size), *alignment_bytes, 1);
                     self.code_builder.i32_store(Align::Bytes4, offset);
 
                     // length of the list
