@@ -247,7 +247,7 @@ pub const RocResult = extern struct {
         // - the tag is the first field
         // - the tag is usize bytes wide
         // - Ok has tag_id 1, because Err < Ok
-        const usizes: [*]usize = @ptrCast([*]usize, @alignCast(8, self.bytes));
+        const usizes: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.bytes));
 
         return usizes[0] == 1;
     }

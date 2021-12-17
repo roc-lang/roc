@@ -216,7 +216,7 @@ pub const RocDict = extern struct {
         }
 
         // otherwise, check if the refcount is one
-        const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, self.dict_bytes));
+        const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.dict_bytes));
         return (ptr - 1)[0] == utils.REFCOUNT_ONE;
     }
 

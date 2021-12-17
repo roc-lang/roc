@@ -106,11 +106,8 @@ pub const RocStr = extern struct {
     }
 
     pub fn eq(self: RocStr, other: RocStr) bool {
-        const self_bytes_ptr: ?[*]const u8 = self.str_bytes;
-        const other_bytes_ptr: ?[*]const u8 = other.str_bytes;
-
         // If they are byte-for-byte equal, they're definitely equal!
-        if (self_bytes_ptr == other_bytes_ptr and self.str_len == other.str_len) {
+        if (self.str_bytes == other.str_bytes and self.str_len == other.str_len) {
             return true;
         }
 
@@ -122,21 +119,27 @@ pub const RocStr = extern struct {
             return false;
         }
 
-        const self_u8_ptr: [*]const u8 = @ptrCast([*]const u8, &self);
-        const other_u8_ptr: [*]const u8 = @ptrCast([*]const u8, &other);
-        const self_bytes: [*]const u8 = if (self.isSmallStr() or self.isEmpty()) self_u8_ptr else self_bytes_ptr orelse unreachable;
-        const other_bytes: [*]const u8 = if (other.isSmallStr() or other.isEmpty()) other_u8_ptr else other_bytes_ptr orelse unreachable;
+        // Now we have to look at the string contents
+        const self_bytes = self.asU8ptr();
+        const other_bytes = other.asU8ptr();
 
-        var index: usize = 0;
-
-        // TODO rewrite this into a for loop
-        const length = self.len();
-        while (index < length) {
-            if (self_bytes[index] != other_bytes[index]) {
+        // It's faster to compare pointer-sized words rather than bytes, as far as possible
+        // The bytes are always pointer-size aligned due to the refcount
+        const self_words = @ptrCast([*]const usize, @alignCast(@alignOf(usize), self_bytes));
+        const other_words = @ptrCast([*]const usize, @alignCast(@alignOf(usize), other_bytes));
+        var w: usize = 0;
+        while (w < self_len / @sizeOf(usize)) : (w += 1) {
+            if (self_words[w] != other_words[w]) {
                 return false;
             }
+        }
 
-            index = index + 1;
+        // Compare the leftover bytes
+        var b = w * @sizeOf(usize);
+        while (b < self_len) : (b += 1) {
+            if (self_bytes[b] != other_bytes[b]) {
+                return false;
+            }
         }
 
         return true;
@@ -248,7 +251,7 @@ pub const RocStr = extern struct {
         } else {
             // This is a big string, and it's not empty, so we can safely
             // dereference the pointer.
-            const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, self.str_bytes));
+            const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.str_bytes));
             const capacity_or_refcount: isize = (ptr - 1)[0];
 
             // If capacity_or_refcount is positive, then it's a capacity value.
@@ -279,7 +282,7 @@ pub const RocStr = extern struct {
             // to first change its flag to mark it as a small string!
             return longest_small_str;
         } else {
-            const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, self.str_bytes));
+            const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.str_bytes));
             const capacity_or_refcount: isize = (ptr - 1)[0];
 
             if (capacity_or_refcount > 0) {
@@ -306,7 +309,7 @@ pub const RocStr = extern struct {
     }
 
     fn isRefcountOne(self: RocStr) bool {
-        const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, self.str_bytes));
+        const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.str_bytes));
         return (ptr - 1)[0] == utils.REFCOUNT_ONE;
     }
 
@@ -339,7 +342,7 @@ pub const RocStr = extern struct {
         @memcpy(dest, src, self.len());
     }
 
-    test "RocStr.eq: equal" {
+    test "RocStr.eq: small, equal" {
         const str1_len = 3;
         var str1: [str1_len]u8 = "abc".*;
         const str1_ptr: [*]u8 = &str1;
@@ -356,7 +359,7 @@ pub const RocStr = extern struct {
         roc_str2.deinit();
     }
 
-    test "RocStr.eq: not equal different length" {
+    test "RocStr.eq: small, not equal, different length" {
         const str1_len = 4;
         var str1: [str1_len]u8 = "abcd".*;
         const str1_ptr: [*]u8 = &str1;
@@ -375,7 +378,7 @@ pub const RocStr = extern struct {
         try expect(!roc_str1.eq(roc_str2));
     }
 
-    test "RocStr.eq: not equal same length" {
+    test "RocStr.eq: small, not equal, same length" {
         const str1_len = 3;
         var str1: [str1_len]u8 = "acb".*;
         const str1_ptr: [*]u8 = &str1;
@@ -392,6 +395,67 @@ pub const RocStr = extern struct {
         }
 
         try expect(!roc_str1.eq(roc_str2));
+    }
+
+    test "RocStr.eq: large, equal" {
+        const content = "012345678901234567890123456789";
+        const roc_str1 = RocStr.init(content, content.len);
+        const roc_str2 = RocStr.init(content, content.len);
+
+        defer {
+            roc_str1.deinit();
+            roc_str2.deinit();
+        }
+
+        try expect(roc_str1.eq(roc_str2));
+    }
+
+    test "RocStr.eq: large, different lengths, unequal" {
+        const content1 = "012345678901234567890123456789";
+        const roc_str1 = RocStr.init(content1, content1.len);
+        const content2 = "012345678901234567890";
+        const roc_str2 = RocStr.init(content2, content2.len);
+
+        defer {
+            roc_str1.deinit();
+            roc_str2.deinit();
+        }
+
+        try expect(!roc_str1.eq(roc_str2));
+    }
+
+    test "RocStr.eq: large, different content, unequal" {
+        const content1 = "012345678901234567890123456789!!";
+        const roc_str1 = RocStr.init(content1, content1.len);
+        const content2 = "012345678901234567890123456789--";
+        const roc_str2 = RocStr.init(content2, content2.len);
+
+        defer {
+            roc_str1.deinit();
+            roc_str2.deinit();
+        }
+
+        try expect(!roc_str1.eq(roc_str2));
+    }
+
+    test "RocStr.eq: large, garbage after end, equal" {
+        const content = "012345678901234567890123456789";
+        const roc_str1 = RocStr.init(content, content.len);
+        const roc_str2 = RocStr.init(content, content.len);
+        try expect(roc_str1.str_bytes != roc_str2.str_bytes);
+
+        // Insert garbage after the end of each string
+        roc_str1.str_bytes.?[30] = '!';
+        roc_str1.str_bytes.?[31] = '!';
+        roc_str2.str_bytes.?[30] = '-';
+        roc_str2.str_bytes.?[31] = '-';
+
+        defer {
+            roc_str1.deinit();
+            roc_str2.deinit();
+        }
+
+        try expect(roc_str1.eq(roc_str2));
     }
 };
 
