@@ -170,7 +170,7 @@ fn loc_ident_pattern_help<'a>(
     can_have_arguments: bool,
 ) -> impl Parser<'a, Located<Pattern<'a>>, EPattern<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
-        let original_state = state;
+        let original_state = state.clone();
 
         let (_, loc_ident, state) =
             specialize(|_, r, c| EPattern::Start(r, c), loc!(parse_ident)).parse(arena, state)?;

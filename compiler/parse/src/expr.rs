@@ -242,14 +242,13 @@ fn parse_loc_term<'a>(
 
 fn underscore_expression<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
+        let row = state.line;
+        let col = state.column;
+
         let (_, _, next_state) = word1(b'_', EExpr::Underscore).parse(arena, state)?;
 
-        let lowercase_ident_expr = {
-            let row = state.line;
-            let col = state.column;
-
-            specialize(move |_, _, _| EExpr::End(row, col), lowercase_ident())
-        };
+        let lowercase_ident_expr =
+            { specialize(move |_, _, _| EExpr::End(row, col), lowercase_ident()) };
 
         let (_, output, final_state) = optional(lowercase_ident_expr).parse(arena, next_state)?;
 
@@ -266,7 +265,7 @@ fn loc_possibly_negative_or_negated_term<'a>(
 ) -> impl Parser<'a, Located<Expr<'a>>, EExpr<'a>> {
     one_of![
         |arena, state: State<'a>| {
-            let initial = state;
+            let initial = state.clone();
 
             let (_, (loc_op, loc_expr), state) = and!(loc!(unary_negate()), |a, s| parse_loc_term(
                 min_indent, options, a, s
@@ -353,7 +352,7 @@ fn parse_expr_operator_chain<'a>(
     let (_, expr, state) =
         loc_possibly_negative_or_negated_term(min_indent, options).parse(arena, state)?;
 
-    let initial = state;
+    let initial = state.clone();
     let end = state.get_position();
 
     match space0_e(min_indent, EExpr::Space, EExpr::IndentEnd).parse(arena, state) {
@@ -770,7 +769,7 @@ fn parse_defs_end<'a>(
     state: State<'a>,
 ) -> ParseResult<'a, DefState<'a>, EExpr<'a>> {
     let min_indent = start.col;
-    let initial = state;
+    let initial = state.clone();
 
     let state = match space0_e(min_indent, EExpr::Space, EExpr::IndentStart).parse(arena, state) {
         Err((MadeProgress, _, s)) => {
@@ -787,17 +786,17 @@ fn parse_defs_end<'a>(
         Err((NoProgress, _, state)) => state,
     };
 
+    let start = state.get_position();
+
     match space0_after_e(
         crate::pattern::loc_pattern_help(min_indent),
         min_indent,
         EPattern::Space,
         EPattern::IndentEnd,
     )
-    .parse(arena, state)
+    .parse(arena, state.clone())
     {
         Err((NoProgress, _, _)) => {
-            let start = state.get_position();
-
             match crate::parser::keyword_e(crate::keyword::EXPECT, EExpect::Expect)
                 .parse(arena, state)
             {
@@ -953,7 +952,7 @@ fn parse_expr_operator<'a>(
                 expr_state.spaces_after,
             );
 
-            expr_state.initial = state;
+            expr_state.initial = state.clone();
 
             let (spaces, state) =
                 match space0_e(min_indent, EExpr::Space, EExpr::IndentEnd).parse(arena, state) {
@@ -973,7 +972,7 @@ fn parse_expr_operator<'a>(
 
             let call = expr_state
                 .validate_assignment_or_backpassing(arena, loc_op, EExpr::ElmStyleFunction)
-                .map_err(|fail| (MadeProgress, fail, state))?;
+                .map_err(|fail| (MadeProgress, fail, state.clone()))?;
 
             let (loc_def, state) = {
                 match expr_to_pattern_help(arena, &call.value) {
@@ -1024,7 +1023,7 @@ fn parse_expr_operator<'a>(
                 .validate_assignment_or_backpassing(arena, loc_op, |_, r, c| {
                     EExpr::BadOperator(&[b'<', b'-'], r, c)
                 })
-                .map_err(|fail| (MadeProgress, fail, state))?;
+                .map_err(|fail| (MadeProgress, fail, state.clone()))?;
 
             let (loc_pattern, loc_body, state) = {
                 match expr_to_pattern_help(arena, &call.value) {
@@ -1076,7 +1075,7 @@ fn parse_expr_operator<'a>(
 
             let (expr, arguments) = expr_state
                 .validate_has_type(arena, loc_op)
-                .map_err(|fail| (MadeProgress, fail, state))?;
+                .map_err(|fail| (MadeProgress, fail, state.clone()))?;
 
             let (loc_def, state) = match &expr.value {
                 Expr::GlobalTag(name) => {
@@ -1175,7 +1174,7 @@ fn parse_expr_operator<'a>(
             Ok((_, mut new_expr, state)) => {
                 let new_end = state.get_position();
 
-                expr_state.initial = state;
+                expr_state.initial = state.clone();
 
                 // put the spaces from after the operator in front of the new_expr
                 if !spaces_after_operator.is_empty() {
@@ -1232,7 +1231,7 @@ fn parse_expr_end<'a>(
         move |a, s| parse_loc_term(min_indent, options, a, s)
     );
 
-    match parser.parse(arena, state) {
+    match parser.parse(arena, state.clone()) {
         Err((MadeProgress, f, s)) => Err((MadeProgress, f, s)),
         Ok((_, mut arg, state)) => {
             let new_end = state.get_position();
@@ -1245,7 +1244,7 @@ fn parse_expr_end<'a>(
 
                 expr_state.spaces_after = &[];
             }
-            expr_state.initial = state;
+            expr_state.initial = state.clone();
 
             match space0_e(min_indent, EExpr::Space, EExpr::IndentEnd).parse(arena, state) {
                 Err((_, _, state)) => {
@@ -1265,7 +1264,7 @@ fn parse_expr_end<'a>(
             }
         }
         Err((NoProgress, _, _)) => {
-            let before_op = state;
+            let before_op = state.clone();
             // try an operator
             match loc!(operator()).parse(arena, state) {
                 Err((MadeProgress, f, s)) => Err((MadeProgress, f, s)),
@@ -1347,7 +1346,7 @@ fn parse_expr_end<'a>(
                         ))
                     } else {
                         // roll back space parsing
-                        let state = expr_state.initial;
+                        let state = expr_state.initial.clone();
 
                         parse_expr_final(expr_state, arena, state)
                     }
@@ -1851,7 +1850,7 @@ mod when {
         pattern_indent_level: Option<u16>,
     ) -> impl Parser<'a, (Col, Vec<'a, Located<Pattern<'a>>>), EWhen<'a>> {
         move |arena, state: State<'a>| {
-            let initial = state;
+            let initial = state.clone();
 
             // put no restrictions on the indent after the spaces; we'll check it manually
             match space0_e(0, EWhen::Space, EWhen::IndentPattern).parse(arena, state) {

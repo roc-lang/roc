@@ -947,7 +947,7 @@ where
     move |arena: &'a Bump, state: State<'a>| {
         // We have to clone this because if the optional parser fails,
         // we need to revert back to the original state.
-        let original_state = state;
+        let original_state = state.clone();
 
         match parser.parse(arena, state) {
             Ok((progress, out1, state)) => Ok((progress, Some(out1), state)),
@@ -1485,7 +1485,7 @@ where
     Error: 'a,
 {
     move |arena: &'a Bump, state: State<'a>| {
-        let old_state = state;
+        let old_state = state.clone();
 
         match parser.parse(arena, state) {
             Ok((_, a, s1)) => Ok((NoProgress, a, s1)),

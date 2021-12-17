@@ -5,7 +5,7 @@ use roc_region::all::{Position, Region};
 use std::fmt;
 
 /// A position in a source file.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct State<'a> {
     /// The raw input bytes from the file.
     bytes: &'a [u8],
@@ -36,7 +36,7 @@ impl<'a> State<'a> {
 
     #[must_use]
     pub fn advance(&self, offset: usize) -> State<'a> {
-        let mut state = *self;
+        let mut state = self.clone();
         state.bytes = &state.bytes[offset..];
         state
     }
