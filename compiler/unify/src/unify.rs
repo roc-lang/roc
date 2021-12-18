@@ -284,13 +284,13 @@ fn unify_structure(
             // If the other is flex, Structure wins!
             // Unless it's a presence variable... TODO more documentation
             match (present, flat_type) {
-                (true, FlatType::TagUnion(tags, ext)) => {
+                (true, FlatType::TagUnion(tags, _ext)) => {
                     let mut new_desc = ctx.first_desc.clone();
                     new_desc.content = Structure(FlatType::TagUnion(*tags, ctx.second));
                     subs.set(ctx.first, new_desc);
                     return vec![];
                 }
-                (true, FlatType::FunctionOrTagUnion(tn, sym, ext)) => {
+                (true, FlatType::FunctionOrTagUnion(tn, sym, _ext)) => {
                     let mut new_desc = ctx.first_desc.clone();
                     new_desc.content =
                         Structure(FlatType::FunctionOrTagUnion(*tn, *sym, ctx.second));
@@ -797,7 +797,12 @@ fn unify_tag_union_new(
             }
         }
 
-        let mut tag_problems = unify_shared_tags_new(
+        
+
+        // We return ext_problems first if there are any, so this is never used!
+        // tag_problems.extend(ext_problems);
+
+        unify_shared_tags_new(
             subs,
             pool,
             ctx,
@@ -806,12 +811,7 @@ fn unify_tag_union_new(
             sub_record,
             recursion_var,
             present,
-        );
-
-        // We return ext_problems first if there are any, so this is never used!
-        // tag_problems.extend(ext_problems);
-
-        tag_problems
+        )
     } else {
         let other_tags = OtherTags2::Union(separate.only_in_1.clone(), separate.only_in_2.clone());
 
@@ -1078,7 +1078,7 @@ fn unify_flat_type(
             unify_pool(subs, pool, ctx.first, *ext)
         }
 
-        (a @ TagUnion(tags1, ext1), b @ TagUnion(tags2, ext2)) => unify_tag_union_new(
+        (_a @ TagUnion(tags1, ext1), _b @ TagUnion(tags2, ext2)) => unify_tag_union_new(
             subs,
             pool,
             ctx,
@@ -1375,7 +1375,7 @@ fn unify_recursion(
             },
         ),
 
-        Alias(_, _, actual) => {
+        Alias(_, _, _actual) => {
             // look at the type the alias stands for
 
             if present {
