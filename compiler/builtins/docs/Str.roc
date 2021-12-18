@@ -2,19 +2,19 @@ interface Str
     exposes
         [
             Str,
-            isEmpty,
             append,
             concat,
-            joinWith,
-            split,
             countGraphemes,
-            startsWith,
             endsWith,
             fromUtf8,
-            Utf8Problem,
-            Utf8ByteProblem,
+            isEmpty,
+            joinWith,
+            split,
+            startsWith,
+            startsWithCodePt,
             toUtf8,
-            startsWithCodePt
+            Utf8Problem,
+            Utf8ByteProblem
         ]
     imports []
 
