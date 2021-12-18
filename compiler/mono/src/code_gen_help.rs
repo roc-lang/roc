@@ -235,28 +235,60 @@ impl<'a> CodeGenHelp<'a> {
         let procs_iter = specs.drain(0..).map(|(layout, op, proc_symbol)| match op {
             Inc | Dec | DecRef => {
                 debug_assert!(Self::is_rc_implemented_yet(&layout));
+                let rc_todo = || todo!("Please update is_rc_implemented_yet for `{:?}`", layout);
+
                 match layout {
+                    Layout::Builtin(
+                        Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal,
+                    ) => unreachable!("Not refcounted: {:?}", layout),
                     Layout::Builtin(Builtin::Str) => {
                         self.gen_modify_str(ident_ids, op, proc_symbol)
                     }
-
-                    _ => todo!("Please update is_rc_implemented_yet for `{:?}`", layout),
+                    Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_) | Builtin::List(_)) => {
+                        rc_todo()
+                    }
+                    Layout::Struct(_) => rc_todo(),
+                    Layout::Union(union_layout) => match union_layout {
+                        UnionLayout::NonRecursive(_) => rc_todo(),
+                        UnionLayout::Recursive(_) => rc_todo(),
+                        UnionLayout::NonNullableUnwrapped(_) => rc_todo(),
+                        UnionLayout::NullableWrapped { .. } => rc_todo(),
+                        UnionLayout::NullableUnwrapped { .. } => rc_todo(),
+                    },
+                    Layout::LambdaSet(_) => unreachable!(
+                        "Refcounting on LambdaSet is invalid. Should be a Union at runtime."
+                    ),
+                    Layout::RecursivePointer => rc_todo(),
                 }
             }
-            Eq => match layout {
-                Layout::Builtin(
-                    Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal,
-                ) => panic!(
-                    "No generated helper proc. Use direct code gen for {:?}",
-                    layout
-                ),
+            Eq => {
+                let eq_todo = || todo!("Specialized `==` operator for `{:?}`", layout);
 
-                Layout::Builtin(Builtin::Str) => {
-                    panic!("No generated helper proc. Use Zig builtin for Str.")
+                match layout {
+                    Layout::Builtin(
+                        Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal,
+                    ) => unreachable!(
+                        "No generated proc for `==`. Use direct code gen for {:?}",
+                        layout
+                    ),
+                    Layout::Builtin(Builtin::Str) => {
+                        unreachable!("No generated helper proc for `==` on Str. Use Zig function.")
+                    }
+                    Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_) | Builtin::List(_)) => {
+                        eq_todo()
+                    }
+                    Layout::Struct(_) => eq_todo(),
+                    Layout::Union(union_layout) => match union_layout {
+                        UnionLayout::NonRecursive(_) => eq_todo(),
+                        UnionLayout::Recursive(_) => eq_todo(),
+                        UnionLayout::NonNullableUnwrapped(_) => eq_todo(),
+                        UnionLayout::NullableWrapped { .. } => eq_todo(),
+                        UnionLayout::NullableUnwrapped { .. } => eq_todo(),
+                    },
+                    Layout::LambdaSet(_) => unreachable!("`==` is not defined on functions"),
+                    Layout::RecursivePointer => eq_todo(),
                 }
-
-                _ => todo!("Specialized equality check for `{:?}`", layout),
-            },
+            }
         });
 
         Vec::from_iter_in(procs_iter, arena)
