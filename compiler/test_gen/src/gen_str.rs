@@ -17,6 +17,36 @@ use roc_std::{RocList, RocStr};
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn str_split_empty_delimiter() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    List.len (Str.split "hello" "")
+                "#
+        ),
+        1,
+        i64
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when List.first (Str.split "JJJ" "") is
+                        Ok str ->
+                            Str.countGraphemes str
+
+                        _ ->
+                            -1
+
+                "#
+        ),
+        3,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_split_bigger_delimiter_small_str() {
     assert_evals_to!(
         indoc!(
