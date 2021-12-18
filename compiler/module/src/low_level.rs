@@ -117,7 +117,7 @@ pub enum LowLevel {
     Not,
     Hash,
     ExpectTrue,
-    RefCountGetPtr,
+    PtrCast,
     RefCountInc,
     RefCountDec,
 }
