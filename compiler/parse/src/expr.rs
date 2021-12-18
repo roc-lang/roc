@@ -855,7 +855,7 @@ fn parse_defs_end<'a>(
                 let (_, ann_type, state) = specialize(
                     EExpr::Type,
                     space0_before_e(
-                        type_annotation::located_help(min_indent + 1),
+                        type_annotation::located_help(min_indent + 1, false),
                         min_indent + 1,
                         EType::TSpace,
                         EType::TIndentStart,
@@ -1093,7 +1093,7 @@ fn parse_expr_operator<'a>(
                     let (_, ann_type, state) = specialize(
                         EExpr::Type,
                         space0_before_e(
-                            type_annotation::located_help(indented_more),
+                            type_annotation::located_help(indented_more, true),
                             min_indent,
                             EType::TSpace,
                             EType::TIndentStart,
@@ -1120,7 +1120,7 @@ fn parse_expr_operator<'a>(
                             let parser = specialize(
                                 EExpr::Type,
                                 space0_before_e(
-                                    type_annotation::located_help(indented_more),
+                                    type_annotation::located_help(indented_more, false),
                                     min_indent,
                                     EType::TSpace,
                                     EType::TIndentStart,
