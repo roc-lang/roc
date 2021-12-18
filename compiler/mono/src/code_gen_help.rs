@@ -77,6 +77,12 @@ impl<'a> CodeGenHelp<'a> {
         }
     }
 
+    // ============================================================================
+    //
+    //              CALL GENERATED PROCS
+    //
+    // ============================================================================
+
     /// Expand a `Refcounting` node to a `Let` node that calls a specialized helper proc.
     /// The helper procs themselves are to be generated later with `generate_procs`
     pub fn expand_refcount_stmt(
@@ -218,6 +224,13 @@ impl<'a> CodeGenHelp<'a> {
 
         (expr, new_procs_info)
     }
+
+    // ============================================================================
+    //
+    //              TRAVERSE LAYOUT & CREATE PROC NAMES
+    //
+    // ============================================================================
+
     /// Find the Symbol of the procedure for this layout and operation
     /// If any new helper procs are needed for this layout or its children,
     /// return their details in a vector.
@@ -340,6 +353,12 @@ impl<'a> CodeGenHelp<'a> {
         Symbol::new(self.home, ident_id)
     }
 
+    // ============================================================================
+    //
+    //              GENERATE PROCS
+    //
+    // ============================================================================
+
     /// Generate refcounting helper procs, each specialized to a particular Layout.
     /// For example `List (Result { a: Str, b: Int } Str)` would get its own helper
     /// to update the refcounts on the List, the Result and the strings.
@@ -399,13 +418,9 @@ impl<'a> CodeGenHelp<'a> {
                         eq_todo()
                     }
                     Layout::Struct(_) => eq_todo(),
-                    Layout::Union(union_layout) => match union_layout {
-                        UnionLayout::NonRecursive(_) => eq_todo(),
-                        UnionLayout::Recursive(_) => eq_todo(),
-                        UnionLayout::NonNullableUnwrapped(_) => eq_todo(),
-                        UnionLayout::NullableWrapped { .. } => eq_todo(),
-                        UnionLayout::NullableUnwrapped { .. } => eq_todo(),
-                    },
+                    Layout::Union(union_layout) => {
+                        self.eq_tag_union(ident_ids, proc_symbol, union_layout)
+                    }
                     Layout::LambdaSet(_) => unreachable!("`==` is not defined on functions"),
                     Layout::RecursivePointer => eq_todo(),
                 }
@@ -432,6 +447,12 @@ impl<'a> CodeGenHelp<'a> {
             HelperOp::Eq => self.arena.alloc([roc_value, (layout, Symbol::ARG_2)]),
         }
     }
+
+    // ============================================================================
+    //
+    //              GENERATE REFCOUNTING
+    //
+    // ============================================================================
 
     /// Generate a procedure to modify the reference count of a Str
     fn gen_modify_str(
@@ -564,6 +585,22 @@ impl<'a> CodeGenHelp<'a> {
             must_own_arguments: false,
             host_exposed_layouts: HostExposedLayouts::NotHostExposed,
         }
+    }
+
+    // ============================================================================
+    //
+    //              GENERATE EQUALS
+    //
+    // ============================================================================
+
+    fn eq_tag_union(
+        &mut self,
+        ident_ids: &mut IdentIds,
+        proc_name: Symbol,
+        union_layout: UnionLayout<'a>,
+    ) -> Proc<'a> {
+        //
+        todo!("return something")
     }
 }
 
