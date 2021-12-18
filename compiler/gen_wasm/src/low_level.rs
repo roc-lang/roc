@@ -7,6 +7,7 @@ use crate::layout::{StackMemoryFormat::*, WasmLayout};
 use crate::storage::{Storage, StoredValue};
 use crate::wasm_module::{Align, CodeBuilder, ValueType::*};
 
+#[derive(Debug)]
 pub enum LowlevelBuildResult {
     Done,
     BuiltinCall(&'static str),
