@@ -1049,9 +1049,19 @@ impl<'a> WasmBackend<'a> {
             }
             SpecializedEq | SpecializedNotEq => {
                 let layout = self.symbol_layouts[&arguments[0]];
+                let layout_rhs = self.symbol_layouts[&arguments[1]];
+                debug_assert!(
+                    layout == layout_rhs,
+                    "Cannot do `==` comparison on different types"
+                );
 
                 if layout == Layout::Builtin(Builtin::Str) {
                     self.call_zig_builtin(bitcode::STR_EQUAL, param_types, ret_type);
+                } else if layout.stack_size(PTR_SIZE) == 0 {
+                    // If the layout has zero size, and it type-checks, the values must be equal
+                    let value = matches!(build_result, SpecializedEq);
+                    self.code_builder.i32_const(value as i32);
+                    return;
                 } else {
                     let ident_ids = self
                         .interns
@@ -1068,7 +1078,8 @@ impl<'a> WasmBackend<'a> {
                         self.register_helper_proc(spec);
                     }
 
-                    self.build_expr(&return_sym, replacement_expr, &layout, storage);
+                    let bool_layout = Layout::Builtin(Builtin::Bool);
+                    self.build_expr(&return_sym, replacement_expr, &bool_layout, storage);
                 }
 
                 if matches!(build_result, SpecializedNotEq) {
