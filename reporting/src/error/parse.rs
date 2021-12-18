@@ -250,21 +250,21 @@ fn to_expr_report<'a>(
             let region = Region::from_rows_cols(*row, *col, *row, *col + op.len() as u16);
 
             let suggestion = match *op {
-                b"|" => vec![
+                "|" => vec![
                     alloc.reflow("Maybe you want "),
                     alloc.parser_suggestion("||"),
                     alloc.reflow(" or "),
                     alloc.parser_suggestion("|>"),
                     alloc.reflow(" instead?"),
                 ],
-                b"++" => vec![
+                "++" => vec![
                     alloc.reflow("To concatenate two lists or strings, try using "),
                     alloc.parser_suggestion("List.concat"),
                     alloc.reflow(" or "),
                     alloc.parser_suggestion("Str.concat"),
                     alloc.reflow(" instead."),
                 ],
-                b":" => vec![alloc.stack(vec![
+                ":" => vec![alloc.stack(vec![
                     alloc.concat(vec![
                         alloc.reflow("The has-type operator "),
                         alloc.parser_suggestion(":"),
@@ -277,7 +277,7 @@ fn to_expr_report<'a>(
                         ])
                         .indent(4),
                 ])],
-                b"->" => match context {
+                "->" => match context {
                     Context::InNode(Node::WhenBranch, _row, _col, _) => {
                         return to_unexpected_arrow_report(
                             alloc, filename, *row, *col, start_row, start_col,
@@ -302,7 +302,7 @@ fn to_expr_report<'a>(
                         ])]
                     }
                 },
-                b"!" => vec![
+                "!" => vec![
                     alloc.reflow("The boolean negation operator "),
                     alloc.parser_suggestion("!"),
                     alloc.reflow(" must occur immediately before an expression, like "),

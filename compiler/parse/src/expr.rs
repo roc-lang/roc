@@ -416,8 +416,8 @@ impl<'a> ExprState<'a> {
         if !self.operators.is_empty() {
             // this `=` or `<-` likely occurred inline; treat it as an invalid operator
             let opchar = match loc_op.value {
-                BinOp::Assignment => arena.alloc([b'=']) as &[_],
-                BinOp::Backpassing => arena.alloc([b'<', b'-']) as &[_],
+                BinOp::Assignment => "=",
+                BinOp::Backpassing => "<-",
                 _ => unreachable!(),
             };
 
@@ -448,10 +448,7 @@ impl<'a> ExprState<'a> {
 
         if !self.operators.is_empty() {
             // this `:` likely occurred inline; treat it as an invalid operator
-            let opchar = arena.alloc([b':']) as &[_];
-
-            let fail =
-                EExpr::BadOperator(opchar, loc_op.region.start_line, loc_op.region.start_col);
+            let fail = EExpr::BadOperator(":", loc_op.region.start_line, loc_op.region.start_col);
 
             Err(fail)
         } else {
@@ -998,7 +995,7 @@ fn parse_expr_operator<'a>(
                     Err(_) => {
                         // this `=` likely occurred inline; treat it as an invalid operator
                         let fail = EExpr::BadOperator(
-                            arena.alloc([b'=']),
+                            arena.alloc("="),
                             loc_op.region.start_line,
                             loc_op.region.start_col,
                         );
@@ -1021,7 +1018,7 @@ fn parse_expr_operator<'a>(
 
             let call = expr_state
                 .validate_assignment_or_backpassing(arena, loc_op, |_, r, c| {
-                    EExpr::BadOperator(&[b'<', b'-'], r, c)
+                    EExpr::BadOperator("<-", r, c)
                 })
                 .map_err(|fail| (MadeProgress, fail, state.clone()))?;
 
@@ -1042,7 +1039,7 @@ fn parse_expr_operator<'a>(
                     Err(_) => {
                         // this `=` likely occurred inline; treat it as an invalid operator
                         let fail = EExpr::BadOperator(
-                            arena.alloc([b'=']),
+                            "=",
                             loc_op.region.start_line,
                             loc_op.region.start_col,
                         );
@@ -1151,7 +1148,7 @@ fn parse_expr_operator<'a>(
                         Err(_) => {
                             // this `:` likely occurred inline; treat it as an invalid operator
                             let fail = EExpr::BadOperator(
-                                arena.alloc([b':']),
+                                ":",
                                 loc_op.region.start_line,
                                 loc_op.region.start_col,
                             );
@@ -1341,7 +1338,7 @@ fn parse_expr_end<'a>(
                     } else if options.check_for_arrow && state.bytes().starts_with(b"->") {
                         Err((
                             MadeProgress,
-                            EExpr::BadOperator(&[b'-', b'>'], state.line, state.column),
+                            EExpr::BadOperator("->", state.line, state.column),
                             state,
                         ))
                     } else {
@@ -2383,7 +2380,7 @@ fn operator_help<'a, F, G, E>(
 ) -> ParseResult<'a, BinOp, E>
 where
     F: Fn(Row, Col) -> E,
-    G: Fn(&'a [u8], Row, Col) -> E,
+    G: Fn(&'a str, Row, Col) -> E,
     E: 'a,
 {
     let chomped = chomp_ops(state.bytes());
@@ -2404,62 +2401,51 @@ where
     }
 
     match chomped {
-        0 => Err((NoProgress, to_expectation(state.line, state.column), state)),
-        1 => {
-            let op = state.bytes()[0];
-            match op {
-                b'+' => good!(BinOp::Plus, 1),
-                b'-' => good!(BinOp::Minus, 1),
-                b'*' => good!(BinOp::Star, 1),
-                b'/' => good!(BinOp::Slash, 1),
-                b'%' => good!(BinOp::Percent, 1),
-                b'^' => good!(BinOp::Caret, 1),
-                b'>' => good!(BinOp::GreaterThan, 1),
-                b'<' => good!(BinOp::LessThan, 1),
-                b'.' => {
-                    // a `.` makes no progress, so it does not interfere with `.foo` access(or)
-                    Err((NoProgress, to_error(b".", state.line, state.column), state))
-                }
-                b'=' => good!(BinOp::Assignment, 1),
-                b':' => good!(BinOp::HasType, 1),
-                _ => bad_made_progress!(&state.bytes()[0..1]),
-            }
+        "" => Err((NoProgress, to_expectation(state.line, state.column), state)),
+        "+" => good!(BinOp::Plus, 1),
+        "-" => good!(BinOp::Minus, 1),
+        "*" => good!(BinOp::Star, 1),
+        "/" => good!(BinOp::Slash, 1),
+        "%" => good!(BinOp::Percent, 1),
+        "^" => good!(BinOp::Caret, 1),
+        ">" => good!(BinOp::GreaterThan, 1),
+        "<" => good!(BinOp::LessThan, 1),
+        "." => {
+            // a `.` makes no progress, so it does not interfere with `.foo` access(or)
+            Err((NoProgress, to_error(".", state.line, state.column), state))
         }
-        2 => {
-            let op0 = state.bytes()[0];
-            let op1 = state.bytes()[1];
-
-            match (op0, op1) {
-                (b'|', b'>') => good!(BinOp::Pizza, 2),
-                (b'=', b'=') => good!(BinOp::Equals, 2),
-                (b'!', b'=') => good!(BinOp::NotEquals, 2),
-                (b'>', b'=') => good!(BinOp::GreaterThanOrEq, 2),
-                (b'<', b'=') => good!(BinOp::LessThanOrEq, 2),
-                (b'&', b'&') => good!(BinOp::And, 2),
-                (b'|', b'|') => good!(BinOp::Or, 2),
-                (b'/', b'/') => good!(BinOp::DoubleSlash, 2),
-                (b'%', b'%') => good!(BinOp::DoublePercent, 2),
-                (b'-', b'>') => {
-                    // makes no progress, so it does not interfere with `_ if isGood -> ...`
-                    Err((NoProgress, to_error(b"->", state.line, state.column), state))
-                }
-                (b'<', b'-') => good!(BinOp::Backpassing, 2),
-                _ => bad_made_progress!(&state.bytes()[0..2]),
-            }
+        "=" => good!(BinOp::Assignment, 1),
+        ":" => good!(BinOp::HasType, 1),
+        "|>" => good!(BinOp::Pizza, 2),
+        "==" => good!(BinOp::Equals, 2),
+        "!=" => good!(BinOp::NotEquals, 2),
+        ">=" => good!(BinOp::GreaterThanOrEq, 2),
+        "<=" => good!(BinOp::LessThanOrEq, 2),
+        "&&" => good!(BinOp::And, 2),
+        "||" => good!(BinOp::Or, 2),
+        "//" => good!(BinOp::DoubleSlash, 2),
+        "%%" => good!(BinOp::DoublePercent, 2),
+        "->" => {
+            // makes no progress, so it does not interfere with `_ if isGood -> ...`
+            Err((NoProgress, to_error("->", state.line, state.column), state))
         }
-        _ => bad_made_progress!(&state.bytes()[0..chomped]),
+        "<-" => good!(BinOp::Backpassing, 2),
+        _ => bad_made_progress!(chomped),
     }
 }
 
-fn chomp_ops(bytes: &[u8]) -> usize {
+fn chomp_ops(bytes: &[u8]) -> &str {
     let mut chomped = 0;
 
     for c in bytes.iter() {
         if !BINOP_CHAR_SET.contains(c) {
-            return chomped;
+            break;
         }
         chomped += 1;
     }
 
-    chomped
+    unsafe {
+        // Safe because BINOP_CHAR_SET only contains ascii chars
+        std::str::from_utf8_unchecked(&bytes[..chomped])
+    }
 }
