@@ -824,15 +824,15 @@ maxF32 : F32
 ## If you go lower than this, your running Roc code will crash - so be careful not to!
 minF32 : F32
 
-## The highest supported #F64 value you can have, which is approximately 1.8 × 10^308.
+## The highest supported #Dec value you can have, which is precisely 170_141_183_460_469_231_731.687303715884105727.
 ##
 ## If you go higher than this, your running Roc code will crash - so be careful not to!
 maxDec : Dec
 
-## The lowest supported #F64 value you can have, which is approximately -1.8 × 10^308.
+## The lowest supported #Dec value you can have, which is precisely -170_141_183_460_469_231_731.687303715884105728.
 ##
 ## If you go lower than this, your running Roc code will crash - so be careful not to!
-maxDec : Dec
+minDec : Dec
 
 ## Constants
 
