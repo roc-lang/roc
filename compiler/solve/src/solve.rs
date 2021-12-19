@@ -450,6 +450,45 @@ fn solve(
                 }
             }
         }
+        PatternPresent(region, category, typ, expectation) => {
+            let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
+            let expected = type_to_var(
+                subs,
+                rank,
+                pools,
+                cached_aliases,
+                expectation.get_type_ref(),
+            );
+
+            match unify_present(subs, actual, expected) {
+                Success(vars) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    state
+                }
+                Failure(vars, actual_type, expected_type) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    let problem = TypeError::BadPattern(
+                        *region,
+                        category.clone(),
+                        actual_type,
+                        expectation.clone().replace(expected_type),
+                    );
+
+                    problems.push(problem);
+
+                    state
+                }
+                BadType(vars, problem) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    problems.push(TypeError::BadType(problem));
+
+                    state
+                }
+            }
+        }
         Let(let_con) => {
             match &let_con.ret_constraint {
                 True if let_con.rigid_vars.is_empty() => {

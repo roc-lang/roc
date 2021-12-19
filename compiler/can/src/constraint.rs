@@ -18,6 +18,7 @@ pub enum Constraint {
     Store(Type, Variable, &'static str, u32),
     Lookup(Symbol, Expected<Type>, Region),
     Pattern(Region, PatternCategory, Type, PExpected<Type>),
+    PatternPresent(Region, PatternCategory, Type, PExpected<Type>),
     True, // Used for things that always unify, e.g. blanks and runtime errors
     SaveTheEnvironment,
     Let(Box<LetConstraint>),
@@ -74,7 +75,7 @@ impl Constraint {
             Constraint::Eq(_, _, _, _) => false,
             Constraint::Store(_, _, _, _) => false,
             Constraint::Lookup(_, _, _) => false,
-            Constraint::Pattern(_, _, _, _) => false,
+            Constraint::Pattern(_, _, _, _) | Constraint::PatternPresent(_, _, _, _) => false,
             Constraint::True => false,
             Constraint::SaveTheEnvironment => true,
             Constraint::Let(boxed) => {
@@ -133,7 +134,8 @@ fn validate_help(constraint: &Constraint, declared: &Declared, accum: &mut Varia
             subtract(declared, &typ.variables_detail(), accum);
             subtract(declared, &expected.get_type_ref().variables_detail(), accum);
         }
-        Constraint::Pattern(_, _, typ, expected) => {
+        Constraint::Pattern(_, _, typ, expected)
+        | Constraint::PatternPresent(_, _, typ, expected) => {
             subtract(declared, &typ.variables_detail(), accum);
             subtract(declared, &expected.get_type_ref().variables_detail(), accum);
         }

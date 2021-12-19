@@ -4846,4 +4846,37 @@ mod solve_expr {
             "[ None, Some { tag : [ A, B ] }* ] -> Num *",
         )
     }
+
+    #[test]
+    fn infer_union_input_position9() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                opt : [ Some Str, None ]
+                opt = Some ""
+                rcd = { opt }
+
+                when rcd is
+                    { opt: Some s } -> s
+                    { opt: None } -> "?"
+                "#
+            ),
+            "Str",
+        )
+    }
+
+    #[test]
+    fn infer_union_input_position10() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                \r ->
+                    when r is
+                        { x: Blue, y ? 3 } -> y
+                        { x: Red, y ? 5 } -> y
+                "#
+            ),
+            "{ x : [ Blue, Red ], y ? Num a }* -> Num a",
+        )
+    }
 }

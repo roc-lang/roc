@@ -2641,28 +2641,21 @@ mod test_reporting {
                     { a: Just 3 } -> 4
                 "#
             ),
-            // TODO: this is incorrect! We shoild accept this.
             indoc!(
                 r#"
-                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
 
-                The 1st pattern in this `when` is causing a mismatch:
+                This `when` does not cover all the possibilities:
 
-                6│      { a: Nothing } -> 4
-                        ^^^^^^^^^^^^^^
+                5│>  when x is
+                6│>      { a: Nothing } -> 4
+                7│>      { a: Just 3 } -> 4
 
-                The first pattern is trying to match record values of type:
+                Other possibilities include:
 
-                    { a : [ Nothing ], b : Num a }
+                    { a: Just _, b }
 
-                But the expression between `when` and `is` has the type:
-
-                    { a : [ Just I64, Nothing ], b : Num a }
-
-                Tip: Looks like a closed tag union does not have the `Just` tag.
-
-                Tip: Closed tag unions can't grow, because that might change the size
-                in memory. Can you use an open tag union?
+                I would have to crash if I saw one of those! Add branches for them!
                 "#
             ),
         )

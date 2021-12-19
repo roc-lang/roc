@@ -297,12 +297,21 @@ pub fn constrain_pattern(
                 region,
             );
 
-            let record_con = Constraint::Pattern(
-                region,
-                PatternCategory::Record,
-                Type::Variable(*whole_var),
-                expected,
-            );
+            let record_con = if destruct_position {
+                Constraint::PatternPresent(
+                    region,
+                    PatternCategory::Record,
+                    Type::Variable(*whole_var),
+                    expected,
+                )
+            } else {
+                Constraint::Pattern(
+                    region,
+                    PatternCategory::Record,
+                    Type::Variable(*whole_var),
+                    expected,
+                )
+            };
 
             state.constraints.push(whole_con);
             state.constraints.push(record_con);
@@ -360,12 +369,21 @@ pub fn constrain_pattern(
                 )
             };
 
-            let tag_con = Constraint::Pattern(
-                region,
-                PatternCategory::Ctor(tag_name.clone()),
-                Type::Variable(*whole_var),
-                expected,
-            );
+            let tag_con = if destruct_position {
+                Constraint::PatternPresent(
+                    region,
+                    PatternCategory::Ctor(tag_name.clone()),
+                    Type::Variable(*whole_var),
+                    expected,
+                )
+            } else {
+                Constraint::Pattern(
+                    region,
+                    PatternCategory::Ctor(tag_name.clone()),
+                    Type::Variable(*whole_var),
+                    expected,
+                )
+            };
 
             if destruct_position {
                 // dbg!(&tag_con);
