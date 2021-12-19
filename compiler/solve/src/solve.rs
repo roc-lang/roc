@@ -198,7 +198,7 @@ fn solve(
         }
         TagPresent(typ, constr) => {
             let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
-            dbg!(typ, actual, constr);
+            // dbg!(typ, actual, constr);
             match constr {
                 PresenceConstraint::IsOpen => {
                     let mut new_desc = subs.get(actual);
@@ -294,6 +294,7 @@ fn solve(
             }
         }
         Store(source, target, _filename, _linenr) => {
+            // dbg!(&source, target);
             // a special version of Eq that is used to store types in the AST.
             // IT DOES NOT REPORT ERRORS!
             let actual = type_to_var(subs, rank, pools, cached_aliases, source);

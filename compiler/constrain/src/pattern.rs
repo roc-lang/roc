@@ -341,22 +341,37 @@ pub fn constrain_pattern(
                 );
             }
 
-            let whole_con = Constraint::Eq(
-                Type::Variable(*whole_var),
-                Expected::NoExpectation(Type::TagUnion(
-                    vec![(tag_name.clone(), argument_types.clone())],
-                    Box::new(Type::Variable(*ext_var)),
-                )),
-                Category::Storage(std::file!(), std::line!()),
-                region,
-            );
-
-            let tag_con = if destruct_position {
+            let whole_con = if destruct_position {
+                // dbg!(whole_var);
+                // We constrain on the expected type, since that doesn't change between patterns
+                // that are all in the same branch. Then, later on we associate the pattern's
+                // whole var with the expected type.
+                // TODO: can we do this for when we're not in a destructure position?
                 Constraint::TagPresent(
-                    expected.get_type(),
-                    PresenceConstraint::IncludesTag(tag_name.clone(), argument_types),
+                    expected.clone().get_type(),
+                    PresenceConstraint::IncludesTag(tag_name.clone(), argument_types.clone()),
                 )
             } else {
+                Constraint::Eq(
+                    Type::Variable(*whole_var),
+                    Expected::NoExpectation(Type::TagUnion(
+                        vec![(tag_name.clone(), argument_types.clone())],
+                        Box::new(Type::Variable(*ext_var)),
+                    )),
+                    Category::Storage(std::file!(), std::line!()),
+                    region,
+                )
+            };
+
+            let tag_con = if destruct_position {
+                Constraint::Pattern(
+                    region,
+                    PatternCategory::Ctor(tag_name.clone()),
+                    Type::Variable(*whole_var),
+                    expected,
+                )
+            } else {
+                // dbg!(whole_var);
                 Constraint::Pattern(
                     region,
                     PatternCategory::Ctor(tag_name.clone()),

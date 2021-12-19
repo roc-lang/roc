@@ -157,7 +157,7 @@ pub fn unify_pool_present(
 }
 
 fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context, present: bool) -> Outcome {
-    if true {
+    if false {
         // if true, print the types that are unified.
         //
         // NOTE: names are generated here (when creating an error type) and that modifies names
@@ -180,7 +180,7 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context, present: bool) 
             roc_types::subs::SubsFmtContent(&content_2, subs),
         );
     }
-    dbg!(present, &ctx.first_desc.content);
+    // dbg!(present, &ctx.first_desc.content);
     match &ctx.first_desc.content {
         FlexVar(opt_name) => unify_flex(subs, &ctx, opt_name, &ctx.second_desc.content),
         RecursionVar {
@@ -338,8 +338,15 @@ fn unify_record(
     ext1: Variable,
     fields2: RecordFields,
     ext2: Variable,
+    present: bool,
 ) -> Outcome {
     let (separate, ext1, ext2) = separate_record_fields(subs, fields1, ext1, fields2, ext2);
+
+    let unify_pool = if present {
+        unify_pool_present
+    } else {
+        unify_pool
+    };
 
     let shared_fields = separate.in_both;
 
@@ -352,8 +359,15 @@ fn unify_record(
                 return ext_problems;
             }
 
-            let mut field_problems =
-                unify_shared_fields(subs, pool, ctx, shared_fields, OtherFields::None, ext1);
+            let mut field_problems = unify_shared_fields(
+                subs,
+                pool,
+                ctx,
+                shared_fields,
+                OtherFields::None,
+                ext1,
+                present,
+            );
 
             field_problems.extend(ext_problems);
 
@@ -375,6 +389,7 @@ fn unify_record(
                 shared_fields,
                 OtherFields::None,
                 sub_record,
+                present,
             );
 
             field_problems.extend(ext_problems);
@@ -398,6 +413,7 @@ fn unify_record(
             shared_fields,
             OtherFields::None,
             sub_record,
+            present,
         );
 
         field_problems.extend(ext_problems);
@@ -427,7 +443,7 @@ fn unify_record(
         }
 
         let mut field_problems =
-            unify_shared_fields(subs, pool, ctx, shared_fields, other_fields, ext);
+            unify_shared_fields(subs, pool, ctx, shared_fields, other_fields, ext, present);
 
         field_problems.reserve(rec1_problems.len() + rec2_problems.len());
         field_problems.extend(rec1_problems);
@@ -451,9 +467,16 @@ fn unify_shared_fields(
     shared_fields: SharedFields,
     other_fields: OtherFields,
     ext: Variable,
+    present: bool,
 ) -> Outcome {
     let mut matching_fields = Vec::with_capacity(shared_fields.len());
     let num_shared_fields = shared_fields.len();
+
+    let unify_pool = if present {
+        unify_pool_present
+    } else {
+        unify_pool
+    };
 
     for (name, (actual, expected)) in shared_fields {
         let local_problems = unify_pool(subs, pool, actual.into_inner(), expected.into_inner());
@@ -693,7 +716,7 @@ fn unify_tag_union_new(
 
     let shared_tags = separate.in_both;
 
-    dbg!(present, tags1, ext1, tags2, ext2);
+    // dbg!(present, tags1, ext1, tags2, ext2);
 
     match (present, subs.get(ext1).content) {
         (true, Content::Structure(FlatType::EmptyTagUnion)) => {
@@ -796,8 +819,6 @@ fn unify_tag_union_new(
                 return ext_problems;
             }
         }
-
-        
 
         // We return ext_problems first if there are any, so this is never used!
         // tag_problems.extend(ext_problems);
@@ -1065,7 +1086,7 @@ fn unify_flat_type(
         }
 
         (Record(fields1, ext1), Record(fields2, ext2)) => {
-            unify_record(subs, pool, ctx, *fields1, *ext1, *fields2, *ext2)
+            unify_record(subs, pool, ctx, *fields1, *ext1, *fields2, *ext2, present)
         }
 
         (EmptyTagUnion, EmptyTagUnion) => merge(subs, ctx, Structure(left.clone())),

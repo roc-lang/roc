@@ -4830,4 +4830,20 @@ mod solve_expr {
             "[ A, X ]a -> [ A, X ]a",
         )
     }
+
+    #[test]
+    fn infer_union_input_position8() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                \opt ->
+                    when opt is
+                        Some ({tag: A}) -> 1
+                        Some ({tag: B}) -> 1
+                        None -> 0
+                "#
+            ),
+            "[ None, Some { tag : [ A, B ] }* ] -> Num *",
+        )
+    }
 }

@@ -796,6 +796,9 @@ impl<'a> Layout<'a> {
         content: Content,
     ) -> Result<Self, LayoutProblem> {
         use roc_types::subs::Content::*;
+        if matches!(&content, Structure(FlatType::TagUnion(_, _))) {
+            // dbg!(var);
+        }
         match content {
             FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar(var)),
             RecursionVar { structure, .. } => {
@@ -1865,6 +1868,7 @@ fn union_sorted_tags_help_new<'a>(
     subs: &Subs,
     ptr_bytes: u32,
 ) -> UnionVariant<'a> {
+    // dbg!(&tags_vec);
     // sort up front; make sure the ordering stays intact!
     tags_vec.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 

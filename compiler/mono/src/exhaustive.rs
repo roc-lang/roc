@@ -181,6 +181,7 @@ pub fn check_patterns<'a>(
     patterns: &[(Located<crate::ir::Pattern<'a>>, Guard)],
     errors: &mut Vec<Error>,
 ) {
+    // dbg!(&context, patterns);
     match to_nonredundant_rows(region, patterns) {
         Err(err) => errors.push(err),
         Ok(matrix) => {
