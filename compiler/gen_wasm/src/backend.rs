@@ -14,8 +14,8 @@ use roc_mono::ir::{
 use roc_mono::layout::{Builtin, Layout, LayoutIds, TagIdIntType, UnionLayout};
 use roc_reporting::internal_error;
 
-use crate::layout::{CallConv, ReturnMethod, WasmLayout};
-use crate::low_level::{decode_low_level, LowlevelBuildResult};
+use crate::layout::{CallConv, ReturnMethod, StackMemoryFormat, WasmLayout};
+use crate::low_level::{dispatch_low_level, LowlevelBuildResult};
 use crate::storage::{Storage, StoredValue, StoredValueKind};
 use crate::wasm_module::linking::{
     DataSymbol, LinkingSection, RelocationSection, WasmObjectSymbol, WASM_SYM_BINDING_WEAK,
@@ -1024,6 +1024,64 @@ impl<'a> WasmBackend<'a> {
         return_layout: WasmLayout,
         storage: &StoredValue,
     ) {
+        use LowLevel::*;
+
+        match lowlevel {
+            Eq => self.build_eq(arguments, return_sym, return_layout, storage),
+            NotEq => {
+                self.build_eq(arguments, return_sym, return_layout, storage);
+                self.code_builder.i32_eqz();
+            }
+            PtrCast => {
+                // Don't want Zig calling convention when casting pointers.
+                self.storage.load_symbols(&mut self.code_builder, arguments);
+            }
+            Hash => todo!("Generic hash function generation"),
+
+            // Almost all lowlevels take this branch, except for the special cases above
+            _ => {
+                // Load the arguments using Zig calling convention
+                let (param_types, ret_type) = self.storage.load_symbols_for_call(
+                    self.env.arena,
+                    &mut self.code_builder,
+                    arguments,
+                    return_sym,
+                    &return_layout,
+                    CallConv::Zig,
+                );
+
+                // Generate instructions OR decide which Zig function to call
+                let build_result = dispatch_low_level(
+                    &mut self.code_builder,
+                    &mut self.storage,
+                    lowlevel,
+                    arguments,
+                    &return_layout,
+                );
+
+                // Handle the result
+                use LowlevelBuildResult::*;
+                match build_result {
+                    Done => {}
+                    BuiltinCall(name) => {
+                        self.call_zig_builtin(name, param_types, ret_type);
+                    }
+                    NotImplemented => {
+                        todo!("Low level operation {:?}", lowlevel)
+                    }
+                }
+            }
+        }
+    }
+
+    fn build_eq(
+        &mut self,
+        arguments: &'a [Symbol],
+        return_sym: Symbol,
+        return_layout: WasmLayout,
+        storage: &StoredValue,
+    ) {
+        // Load the arguments using Zig calling convention
         let (param_types, ret_type) = self.storage.load_symbols_for_call(
             self.env.arena,
             &mut self.code_builder,
@@ -1033,64 +1091,111 @@ impl<'a> WasmBackend<'a> {
             CallConv::Zig,
         );
 
-        let build_result = decode_low_level(
-            &mut self.code_builder,
-            &mut self.storage,
-            lowlevel,
-            arguments,
-            &return_layout,
-        );
-        use LowlevelBuildResult::*;
+        use StoredValue::*;
+        match self.storage.get(&arguments[0]).to_owned() {
+            VirtualMachineStack { value_type, .. } | Local { value_type, .. } => match value_type {
+                ValueType::I32 => self.code_builder.i32_eq(),
+                ValueType::I64 => self.code_builder.i64_eq(),
+                ValueType::F32 => self.code_builder.f32_eq(),
+                ValueType::F64 => self.code_builder.f64_eq(),
+            },
+            StackMemory {
+                format,
+                location: location0,
+                ..
+            } => {
+                if let StackMemory {
+                    location: location1,
+                    ..
+                } = self.storage.get(&arguments[1]).to_owned()
+                {
+                    let stack_frame_pointer = self.storage.stack_frame_pointer;
+                    let compare_bytes = |code_builder: &mut CodeBuilder| {
+                        let (local0, offset0) = location0.local_and_offset(stack_frame_pointer);
+                        let (local1, offset1) = location1.local_and_offset(stack_frame_pointer);
 
-        match build_result {
-            Done => {}
-            BuiltinCall(name) => {
-                self.call_zig_builtin(name, param_types, ret_type);
-            }
-            SpecializedEq | SpecializedNotEq => {
-                let layout = self.symbol_layouts[&arguments[0]];
-                let layout_rhs = self.symbol_layouts[&arguments[1]];
-                debug_assert!(
-                    layout == layout_rhs,
-                    "Cannot do `==` comparison on different types"
-                );
+                        code_builder.get_local(local0);
+                        code_builder.i64_load(Align::Bytes8, offset0);
+                        code_builder.get_local(local1);
+                        code_builder.i64_load(Align::Bytes8, offset1);
+                        code_builder.i64_eq();
 
-                if layout == Layout::Builtin(Builtin::Str) {
-                    self.call_zig_builtin(bitcode::STR_EQUAL, param_types, ret_type);
-                } else if layout.stack_size(PTR_SIZE) == 0 {
-                    // If the layout has zero size, and it type-checks, the values must be equal
-                    let value = matches!(build_result, SpecializedEq);
-                    self.code_builder.i32_const(value as i32);
-                    return;
-                } else {
-                    let ident_ids = self
-                        .interns
-                        .all_ident_ids
-                        .get_mut(&self.env.module_id)
-                        .unwrap();
+                        code_builder.get_local(local0);
+                        code_builder.i64_load(Align::Bytes8, offset0 + 8);
+                        code_builder.get_local(local1);
+                        code_builder.i64_load(Align::Bytes8, offset1 + 8);
+                        code_builder.i64_eq();
 
-                    let (replacement_expr, new_specializations) = self
-                        .helper_proc_gen
-                        .specialize_equals(ident_ids, &layout, arguments);
+                        code_builder.i32_and();
+                    };
 
-                    // If any new specializations were created, register their symbol data
-                    for spec in new_specializations.into_iter() {
-                        self.register_helper_proc(spec);
+                    match format {
+                        StackMemoryFormat::Decimal => {
+                            // Both args are finite
+                            let first = [arguments[0]];
+                            let second = [arguments[1]];
+                            dispatch_low_level(
+                                &mut self.code_builder,
+                                &mut self.storage,
+                                LowLevel::NumIsFinite,
+                                &first,
+                                &return_layout,
+                            );
+                            dispatch_low_level(
+                                &mut self.code_builder,
+                                &mut self.storage,
+                                LowLevel::NumIsFinite,
+                                &second,
+                                &return_layout,
+                            );
+                            self.code_builder.i32_and();
+
+                            // AND they have the same bytes
+                            compare_bytes(&mut self.code_builder);
+                            self.code_builder.i32_and();
+                        }
+                        StackMemoryFormat::Int128 => compare_bytes(&mut self.code_builder),
+                        StackMemoryFormat::Float128 => todo!("equality for f128"),
+                        StackMemoryFormat::DataStructure => {
+                            let layout = self.symbol_layouts[&arguments[0]];
+                            let layout_rhs = self.symbol_layouts[&arguments[1]];
+                            debug_assert!(
+                                layout == layout_rhs,
+                                "Cannot do `==` comparison on different types"
+                            );
+
+                            if layout == Layout::Builtin(Builtin::Str) {
+                                self.call_zig_builtin(bitcode::STR_EQUAL, param_types, ret_type);
+                            } else if layout.stack_size(PTR_SIZE) == 0 {
+                                // Always true: `Unit == Unit`, or `{} == {}`
+                                self.code_builder.i32_const(1);
+                            } else {
+                                let ident_ids = self
+                                    .interns
+                                    .all_ident_ids
+                                    .get_mut(&self.env.module_id)
+                                    .unwrap();
+
+                                let (replacement_expr, new_specializations) = self
+                                    .helper_proc_gen
+                                    .specialize_equals(ident_ids, &layout, arguments);
+
+                                // If any new specializations were created, register their symbol data
+                                for spec in new_specializations.into_iter() {
+                                    self.register_helper_proc(spec);
+                                }
+
+                                let bool_layout = Layout::Builtin(Builtin::Bool);
+                                self.build_expr(
+                                    &return_sym,
+                                    replacement_expr,
+                                    &bool_layout,
+                                    storage,
+                                );
+                            }
+                        }
                     }
-
-                    let bool_layout = Layout::Builtin(Builtin::Bool);
-                    self.build_expr(&return_sym, replacement_expr, &bool_layout, storage);
                 }
-
-                if matches!(build_result, SpecializedNotEq) {
-                    self.code_builder.i32_eqz();
-                }
-            }
-            SpecializedHash => {
-                todo!("Specialized hash functions")
-            }
-            NotImplemented => {
-                todo!("Low level operation {:?}", lowlevel)
             }
         }
     }

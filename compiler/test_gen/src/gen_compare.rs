@@ -179,7 +179,7 @@ fn record() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn unit() {
     assert_evals_to!("Unit == Unit", true, bool);
     assert_evals_to!("Unit != Unit", false, bool);
@@ -231,7 +231,7 @@ fn large_str() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn eq_result_tag_true() {
     assert_evals_to!(
         indoc!(
