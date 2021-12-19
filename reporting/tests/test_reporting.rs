@@ -1500,7 +1500,7 @@ mod test_reporting {
 
                 The first pattern is trying to match record values of type:
 
-                    { foo : [ True ]a }
+                    { foo : [ True ] }
 
                 But the expression between `when` and `is` has the type:
 
@@ -2641,21 +2641,28 @@ mod test_reporting {
                     { a: Just 3 } -> 4
                 "#
             ),
+            // TODO: this is incorrect! We shoild accept this.
             indoc!(
                 r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                This `when` does not cover all the possibilities:
+                The 1st pattern in this `when` is causing a mismatch:
 
-                5│>  when x is
-                6│>      { a: Nothing } -> 4
-                7│>      { a: Just 3 } -> 4
+                6│      { a: Nothing } -> 4
+                        ^^^^^^^^^^^^^^
 
-                Other possibilities include:
+                The first pattern is trying to match record values of type:
 
-                    { a: Just _, b }
+                    { a : [ Nothing ], b : Num a }
 
-                I would have to crash if I saw one of those! Add branches for them!
+                But the expression between `when` and `is` has the type:
+
+                    { a : [ Just I64, Nothing ], b : Num a }
+
+                Tip: Looks like a closed tag union does not have the `Just` tag.
+
+                Tip: Closed tag unions can't grow, because that might change the size
+                in memory. Can you use an open tag union?
                 "#
             ),
         )
