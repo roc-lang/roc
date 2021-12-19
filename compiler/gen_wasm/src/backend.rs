@@ -1027,11 +1027,7 @@ impl<'a> WasmBackend<'a> {
         use LowLevel::*;
 
         match lowlevel {
-            Eq => self.build_eq(arguments, return_sym, return_layout, storage),
-            NotEq => {
-                self.build_eq(arguments, return_sym, return_layout, storage);
-                self.code_builder.i32_eqz();
-            }
+            Eq | NotEq => self.build_eq(lowlevel, arguments, return_sym, return_layout, storage),
             PtrCast => {
                 // Don't want Zig calling convention when casting pointers.
                 self.storage.load_symbols(&mut self.code_builder, arguments);
@@ -1076,6 +1072,7 @@ impl<'a> WasmBackend<'a> {
 
     fn build_eq(
         &mut self,
+        lowlevel: LowLevel,
         arguments: &'a [Symbol],
         return_sym: Symbol,
         return_layout: WasmLayout,
@@ -1085,11 +1082,20 @@ impl<'a> WasmBackend<'a> {
         match self.storage.get(&arguments[0]).to_owned() {
             VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
                 self.storage.load_symbols(&mut self.code_builder, arguments);
-                match value_type {
-                    ValueType::I32 => self.code_builder.i32_eq(),
-                    ValueType::I64 => self.code_builder.i64_eq(),
-                    ValueType::F32 => self.code_builder.f32_eq(),
-                    ValueType::F64 => self.code_builder.f64_eq(),
+                match lowlevel {
+                    LowLevel::Eq => match value_type {
+                        ValueType::I32 => self.code_builder.i32_eq(),
+                        ValueType::I64 => self.code_builder.i64_eq(),
+                        ValueType::F32 => self.code_builder.f32_eq(),
+                        ValueType::F64 => self.code_builder.f64_eq(),
+                    },
+                    LowLevel::NotEq => match value_type {
+                        ValueType::I32 => self.code_builder.i32_ne(),
+                        ValueType::I64 => self.code_builder.i64_ne(),
+                        ValueType::F32 => self.code_builder.f32_ne(),
+                        ValueType::F64 => self.code_builder.f64_ne(),
+                    },
+                    _ => internal_error!("Low-level op {:?} handled in the wrong place", lowlevel),
                 }
             }
             StackMemory {
@@ -1109,7 +1115,10 @@ impl<'a> WasmBackend<'a> {
                         return_sym,
                         return_layout,
                         storage,
-                    )
+                    );
+                    if matches!(lowlevel, LowLevel::NotEq) {
+                        self.code_builder.i32_eqz();
+                    }
                 }
             }
         };
