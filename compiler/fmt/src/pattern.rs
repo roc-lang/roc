@@ -73,7 +73,7 @@ impl<'a> Formattable for Pattern<'a> {
                 loc_pattern.format_with_options(buf, Parens::InApply, Newlines::No, indent);
 
                 for loc_arg in loc_arg_patterns.iter() {
-                    buf.push(' ');
+                    buf.spaces(1);
                     loc_arg.format_with_options(buf, Parens::InApply, Newlines::No, indent);
                 }
 
@@ -83,7 +83,8 @@ impl<'a> Formattable for Pattern<'a> {
             }
             RecordDestructure(loc_patterns) => {
                 buf.indent(indent);
-                buf.push_str("{ ");
+                buf.push_str("{");
+                buf.spaces(1);
 
                 let mut it = loc_patterns.iter().peekable();
 
@@ -91,7 +92,8 @@ impl<'a> Formattable for Pattern<'a> {
                     loc_pattern.format(buf, indent);
 
                     if it.peek().is_some() {
-                        buf.push_str(", ");
+                        buf.push_str(",");
+                        buf.spaces(1);
                     }
                 }
 
@@ -101,14 +103,16 @@ impl<'a> Formattable for Pattern<'a> {
             RequiredField(name, loc_pattern) => {
                 buf.indent(indent);
                 buf.push_str(name);
-                buf.push_str(": ");
+                buf.push_str(":");
+                buf.spaces(1);
                 loc_pattern.format(buf, indent);
             }
 
             OptionalField(name, loc_pattern) => {
                 buf.indent(indent);
                 buf.push_str(name);
-                buf.push_str(" ? ");
+                buf.push_str(" ?");
+                buf.spaces(1);
                 loc_pattern.format(buf, indent);
             }
 

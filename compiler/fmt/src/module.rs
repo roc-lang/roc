@@ -31,21 +31,21 @@ pub fn fmt_interface_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a Interface
     buf.push_str("interface");
 
     // module name
-    fmt_default_spaces(buf, header.after_interface_keyword, " ", indent);
+    fmt_default_spaces(buf, header.after_interface_keyword, indent);
     buf.push_str(header.name.value.as_str());
 
     // exposes
-    fmt_default_spaces(buf, header.before_exposes, " ", indent);
+    fmt_default_spaces(buf, header.before_exposes, indent);
     buf.indent(indent);
     buf.push_str("exposes");
-    fmt_default_spaces(buf, header.after_exposes, " ", indent);
+    fmt_default_spaces(buf, header.after_exposes, indent);
     fmt_exposes(buf, header.exposes, indent);
 
     // imports
-    fmt_default_spaces(buf, header.before_imports, " ", indent);
+    fmt_default_spaces(buf, header.before_imports, indent);
     buf.indent(indent);
     buf.push_str("imports");
-    fmt_default_spaces(buf, header.after_imports, " ", indent);
+    fmt_default_spaces(buf, header.after_imports, indent);
     fmt_imports(buf, header.imports, indent);
 }
 
@@ -54,33 +54,33 @@ pub fn fmt_app_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a AppHeader<'a>) 
     buf.indent(0);
     buf.push_str("app");
 
-    fmt_default_spaces(buf, header.after_app_keyword, " ", indent);
+    fmt_default_spaces(buf, header.after_app_keyword, indent);
     fmt_str_literal(buf, header.name.value, indent);
 
     // packages
-    fmt_default_spaces(buf, header.before_packages, " ", indent);
+    fmt_default_spaces(buf, header.before_packages, indent);
     buf.indent(indent);
     buf.push_str("packages");
-    fmt_default_spaces(buf, header.after_packages, " ", indent);
+    fmt_default_spaces(buf, header.after_packages, indent);
     fmt_packages(buf, header.packages, indent);
 
     // imports
-    fmt_default_spaces(buf, header.before_imports, " ", indent);
+    fmt_default_spaces(buf, header.before_imports, indent);
     buf.indent(indent);
     buf.push_str("imports");
-    fmt_default_spaces(buf, header.after_imports, " ", indent);
+    fmt_default_spaces(buf, header.after_imports, indent);
     fmt_imports(buf, header.imports, indent);
 
     // provides
-    fmt_default_spaces(buf, header.before_provides, " ", indent);
+    fmt_default_spaces(buf, header.before_provides, indent);
     buf.indent(indent);
     buf.push_str("provides");
-    fmt_default_spaces(buf, header.after_provides, " ", indent);
+    fmt_default_spaces(buf, header.after_provides, indent);
     fmt_provides(buf, header.provides, indent);
-    fmt_default_spaces(buf, header.before_to, " ", indent);
+    fmt_default_spaces(buf, header.before_to, indent);
     buf.indent(indent);
     buf.push_str("to");
-    fmt_default_spaces(buf, header.after_to, " ", indent);
+    fmt_default_spaces(buf, header.after_to, indent);
     fmt_to(buf, header.to.value, indent);
 }
 
@@ -90,42 +90,42 @@ pub fn fmt_platform_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a PlatformHe
     buf.indent(0);
     buf.push_str("platform");
 
-    fmt_default_spaces(buf, header.after_platform_keyword, " ", indent);
+    fmt_default_spaces(buf, header.after_platform_keyword, indent);
     fmt_package_name(buf, header.name.value);
 
     // requires
-    fmt_default_spaces(buf, header.before_requires, " ", indent);
+    fmt_default_spaces(buf, header.before_requires, indent);
     buf.indent(indent);
     buf.push_str("requires");
-    fmt_default_spaces(buf, header.after_requires, " ", indent);
+    fmt_default_spaces(buf, header.after_requires, indent);
     fmt_requires(buf, &header.requires, indent);
 
     // exposes
-    fmt_default_spaces(buf, header.before_exposes, " ", indent);
+    fmt_default_spaces(buf, header.before_exposes, indent);
     buf.indent(indent);
     buf.push_str("exposes");
-    fmt_default_spaces(buf, header.after_exposes, " ", indent);
+    fmt_default_spaces(buf, header.after_exposes, indent);
     fmt_exposes(buf, header.exposes, indent);
 
     // packages
-    fmt_default_spaces(buf, header.before_packages, " ", indent);
+    fmt_default_spaces(buf, header.before_packages, indent);
     buf.indent(indent);
     buf.push_str("packages");
-    fmt_default_spaces(buf, header.after_packages, " ", indent);
+    fmt_default_spaces(buf, header.after_packages, indent);
     fmt_packages(buf, header.packages, indent);
 
     // imports
-    fmt_default_spaces(buf, header.before_imports, " ", indent);
+    fmt_default_spaces(buf, header.before_imports, indent);
     buf.indent(indent);
     buf.push_str("imports");
-    fmt_default_spaces(buf, header.after_imports, " ", indent);
+    fmt_default_spaces(buf, header.after_imports, indent);
     fmt_imports(buf, header.imports, indent);
 
     // provides
-    fmt_default_spaces(buf, header.before_provides, " ", indent);
+    fmt_default_spaces(buf, header.before_provides, indent);
     buf.indent(indent);
     buf.push_str("provides");
-    fmt_default_spaces(buf, header.after_provides, " ", indent);
+    fmt_default_spaces(buf, header.after_provides, indent);
     fmt_provides(buf, header.provides, indent);
 
     fmt_effects(buf, &header.effects, indent);
@@ -134,23 +134,24 @@ pub fn fmt_platform_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a PlatformHe
 fn fmt_requires<'a, 'buf>(buf: &mut Buf<'buf>, requires: &PlatformRequires<'a>, indent: u16) {
     fmt_collection(buf, indent, '{', '}', requires.rigids, Newlines::No);
 
-    buf.push_str(" { ");
+    buf.push_str(" {");
+    buf.spaces(1);
     requires.signature.value.format(buf, indent);
     buf.push_str(" }");
 }
 
 fn fmt_effects<'a, 'buf>(buf: &mut Buf<'buf>, effects: &Effects<'a>, indent: u16) {
-    fmt_default_spaces(buf, effects.spaces_before_effects_keyword, " ", indent);
+    fmt_default_spaces(buf, effects.spaces_before_effects_keyword, indent);
     buf.indent(indent);
     buf.push_str("effects");
-    fmt_default_spaces(buf, effects.spaces_after_effects_keyword, " ", indent);
+    fmt_default_spaces(buf, effects.spaces_after_effects_keyword, indent);
 
     buf.indent(indent);
     buf.push_str(effects.effect_shortname);
     buf.push('.');
     buf.push_str(effects.effect_type_name);
 
-    fmt_default_spaces(buf, effects.spaces_after_type_name, " ", indent);
+    fmt_default_spaces(buf, effects.spaces_after_type_name, indent);
 
     fmt_collection(buf, indent, '{', '}', effects.entries, Newlines::No)
 }
@@ -163,8 +164,9 @@ impl<'a> Formattable for TypedIdent<'a> {
     fn format<'buf>(&self, buf: &mut Buf<'buf>, indent: u16) {
         buf.indent(indent);
         buf.push_str(self.ident.value);
-        fmt_default_spaces(buf, self.spaces_before_colon, " ", indent);
-        buf.push_str(": ");
+        fmt_default_spaces(buf, self.spaces_before_colon, indent);
+        buf.push_str(":");
+        buf.spaces(1);
         self.ann.value.format(buf, indent);
     }
 }
@@ -321,7 +323,7 @@ impl<'a> Formattable for ImportsEntry<'a> {
 fn fmt_packages_entry<'a, 'buf>(buf: &mut Buf<'buf>, entry: &PackageEntry<'a>, indent: u16) {
     buf.push_str(entry.shorthand);
     buf.push(':');
-    fmt_default_spaces(buf, entry.spaces_after_shorthand, " ", indent);
+    fmt_default_spaces(buf, entry.spaces_after_shorthand, indent);
     fmt_package_or_path(buf, &entry.package_or_path.value, indent);
 }
 
