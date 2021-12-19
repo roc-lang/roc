@@ -313,9 +313,6 @@ pub fn constrain_pattern(
             tag_name,
             arguments,
         } => {
-            if destruct_position {
-                // dbg!("destruct_position", at);
-            }
             let mut argument_types = Vec::with_capacity(arguments.len());
             for (index, (pattern_var, loc_pattern)) in arguments.iter().enumerate() {
                 state.vars.push(*pattern_var);

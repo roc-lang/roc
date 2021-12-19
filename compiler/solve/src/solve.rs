@@ -1546,7 +1546,7 @@ fn adjust_rank_content(
                     // we'll wind up with [ Z, S a ]{}, but it will be at rank 0, and "a" will get
                     // over-generalized. Really, the empty tag union should be introduced at
                     // whatever current group rank we're at, and so that's how we encode it here.
-                    if *ext_var == Variable::EMPTY_TAG_UNION {
+                    if *ext_var == Variable::EMPTY_TAG_UNION && rank.is_none() {
                         rank = group_rank;
                     }
 
