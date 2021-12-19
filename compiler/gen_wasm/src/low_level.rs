@@ -605,9 +605,10 @@ pub fn decode_low_level<'a>(
         Not => code_builder.i32_eqz(),
         Hash => return SpecializedHash,
         ExpectTrue => return NotImplemented,
-        RefCountGetPtr => {
-            code_builder.i32_const(4);
-            code_builder.i32_sub();
+        PtrCast => {
+            // We don't need any instructions here, since we've already loaded the value.
+            // PtrCast just creates separate Symbols and Layouts for the argument and return value.
+            // This is used for pointer math in refcounting and for pointer equality
         }
         RefCountInc => return BuiltinCall(bitcode::UTILS_INCREF),
         RefCountDec => return BuiltinCall(bitcode::UTILS_DECREF),

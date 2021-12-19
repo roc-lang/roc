@@ -531,13 +531,13 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
-            LowLevel::RefCountGetPtr => {
+            LowLevel::PtrCast => {
                 debug_assert_eq!(
                     1,
                     args.len(),
                     "RefCountGetPtr: expected to have exactly one argument"
                 );
-                self.build_refcount_getptr(sym, &args[0])
+                self.build_ptr_cast(sym, &args[0])
             }
             LowLevel::RefCountDec => self.build_fn_call(
                 sym,
@@ -642,7 +642,7 @@ trait Backend<'a> {
     );
 
     /// build_refcount_getptr loads the pointer to the reference count of src into dst.
-    fn build_refcount_getptr(&mut self, dst: &Symbol, src: &Symbol);
+    fn build_ptr_cast(&mut self, dst: &Symbol, src: &Symbol);
 
     /// literal_map gets the map from symbol to literal and layout, used for lazy loading and literal folding.
     fn literal_map(&mut self) -> &mut MutMap<Symbol, (*const Literal<'a>, *const Layout<'a>)>;
