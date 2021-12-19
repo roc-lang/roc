@@ -363,22 +363,13 @@ pub fn constrain_pattern(
                 )
             };
 
-            let tag_con = if destruct_position {
-                Constraint::Pattern(
-                    region,
-                    PatternCategory::Ctor(tag_name.clone()),
-                    Type::Variable(*whole_var),
-                    expected,
-                )
-            } else {
-                // dbg!(whole_var);
-                Constraint::Pattern(
-                    region,
-                    PatternCategory::Ctor(tag_name.clone()),
-                    Type::Variable(*whole_var),
-                    expected,
-                )
-            };
+            let tag_con = Constraint::Pattern(
+                region,
+                PatternCategory::Ctor(tag_name.clone()),
+                Type::Variable(*whole_var),
+                expected,
+            );
+
             if destruct_position {
                 // dbg!(&tag_con);
             }

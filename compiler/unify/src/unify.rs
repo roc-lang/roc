@@ -330,6 +330,7 @@ fn unify_structure(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn unify_record(
     subs: &mut Subs,
     pool: &mut Pool,
@@ -718,33 +719,30 @@ fn unify_tag_union_new(
 
     // dbg!(present, tags1, ext1, tags2, ext2);
 
-    match (present, subs.get(ext1).content) {
-        (true, Content::Structure(FlatType::EmptyTagUnion)) => {
-            if !separate.only_in_2.is_empty() {
-                // Create a new extension variable that we'll fill in with the
-                // contents of the tag union from our presence contraint.
-                //
-                // If there's no new tags we need to register for presence, for
-                // example
-                //    [A]      >= [A]
-                //    [A, B]   >= [A]
-                //    [A M, B] >= [A N]
-                // then we don't need to create a fresh ext variable, since the
-                // tag union is definitely not growing on the top level.
-                // Notice that in the last case
-                //    [A M, B] >= [A N]
-                // the nested tag `A` **will** grow, but we don't need to modify
-                // the top level extension variable for that!
-                let new_ext = fresh(subs, pool, ctx, Content::FlexVar(None));
-                let new_un = Structure(FlatType::TagUnion(tags1, new_ext));
-                let mut new_desc = ctx.first_desc.clone();
-                new_desc.content = new_un;
-                subs.set(ctx.first, new_desc);
+    if let (true, Content::Structure(FlatType::EmptyTagUnion)) = (present, subs.get(ext1).content) {
+        if !separate.only_in_2.is_empty() {
+            // Create a new extension variable that we'll fill in with the
+            // contents of the tag union from our presence contraint.
+            //
+            // If there's no new tags we need to register for presence, for
+            // example
+            //    [A]      >= [A]
+            //    [A, B]   >= [A]
+            //    [A M, B] >= [A N]
+            // then we don't need to create a fresh ext variable, since the
+            // tag union is definitely not growing on the top level.
+            // Notice that in the last case
+            //    [A M, B] >= [A N]
+            // the nested tag `A` **will** grow, but we don't need to modify
+            // the top level extension variable for that!
+            let new_ext = fresh(subs, pool, ctx, Content::FlexVar(None));
+            let new_un = Structure(FlatType::TagUnion(tags1, new_ext));
+            let mut new_desc = ctx.first_desc.clone();
+            new_desc.content = new_un;
+            subs.set(ctx.first, new_desc);
 
-                ext1 = new_ext;
-            }
+            ext1 = new_ext;
         }
-        _ => {}
     }
 
     if separate.only_in_1.is_empty() {
@@ -913,6 +911,7 @@ enum OtherTags2 {
     ),
 }
 
+#[allow(clippy::too_many_arguments)]
 fn unify_shared_tags_new(
     subs: &mut Subs,
     pool: &mut Pool,
