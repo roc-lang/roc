@@ -312,7 +312,7 @@ fn unary_negate<'a>() -> impl Parser<'a, (), EExpr<'a>> {
 
         if state.bytes().starts_with(b"-") && !followed_by_whitespace {
             // the negate is only unary if it is not followed by whitespace
-            let mut state = state.advance(Some(Token::UnaryNegate), 1);
+            let mut state = state.advance(Some(Token::Minus), 1);
             state.column += 1;
             Ok((MadeProgress, (), state))
         } else {
@@ -2410,7 +2410,7 @@ where
             let op = state.bytes()[0];
             match op {
                 b'+' => good!(BinOp::Plus, Some(Token::BinOpPlus), 1),
-                b'-' => good!(BinOp::Minus, Some(Token::BinOpMinus), 1),
+                b'-' => good!(BinOp::Minus, Some(Token::Minus), 1),
                 b'*' => good!(BinOp::Star, Some(Token::BinOpStar), 1),
                 b'/' => good!(BinOp::Slash, Some(Token::BinOpSlash), 1),
                 b'%' => good!(BinOp::Percent, Some(Token::BinOpPercent), 1),

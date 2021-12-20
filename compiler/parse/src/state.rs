@@ -41,8 +41,10 @@ impl<'a> State<'a> {
 
         if let Some(expected) = expected_token {
             let (tok, len) = Token::lex_single(expected, self.bytes()).unwrap();
-            assert_eq!(tok, expected);
-            assert_eq!(len, offset);
+            assert_eq!(tok, expected,
+                "token mismatch: [{}]", std::str::from_utf8(&self.bytes()[0..offset]).unwrap());
+            assert_eq!(len, offset,
+                "token len issue: [{}]", std::str::from_utf8(&self.bytes()[0..offset]).unwrap());
         }
 
         let mut state = self.clone();

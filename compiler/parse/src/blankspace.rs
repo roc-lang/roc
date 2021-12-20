@@ -230,7 +230,7 @@ where
                     if col >= min_indent {
                         state.line = row;
                         state.column = col;
-                        state = state.advance(Some(Token::CommentOrNewline), state.bytes().len() - bytes.len());
+                        state = state.advance(None, state.bytes().len() - bytes.len());
 
                         Ok((MadeProgress, comments_and_newlines.into_bump_slice(), state))
                     } else {
@@ -242,7 +242,7 @@ where
                     }
                 } else {
                     state.column = col;
-                    state = state.advance(Some(Token::CommentOrNewline), state.bytes().len() - bytes.len());
+                    state = state.advance(None, state.bytes().len() - bytes.len());
 
                     Ok((MadeProgress, comments_and_newlines.into_bump_slice(), state))
                 }

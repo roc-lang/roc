@@ -68,7 +68,7 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
                 Err((NoProgress, (), state))
             } else {
                 let width = ident.len();
-                match state.advance_without_indenting_ee(Some(Token::LowercaseIdent), width, |_, _| ()) {
+                match state.advance_without_indenting_ee(Some(Token::Ident), width, |_, _| ()) {
                     Ok(state) => Ok((MadeProgress, ident, state)),
                     Err(bad) => Err(bad),
                 }
@@ -107,7 +107,7 @@ pub fn uppercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
         Err(progress) => Err((progress, (), state)),
         Ok(ident) => {
             let width = ident.len();
-            match state.advance_without_indenting_ee(Some(Token::UppercaseIdent), width, |_, _| ()) {
+            match state.advance_without_indenting_ee(Some(Token::Ident), width, |_, _| ()) {
                 Ok(state) => Ok((MadeProgress, ident, state)),
                 Err(bad) => Err(bad),
             }
@@ -123,7 +123,7 @@ pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str, ()> {
                 Err((MadeProgress, (), state))
             } else {
                 let width = ident.len();
-                match state.advance_without_indenting_ee(Some(Token::UnqualifiedIdent), width, |_, _| ()) {
+                match state.advance_without_indenting_ee(Some(Token::Ident), width, |_, _| ()) {
                     Ok(state) => Ok((MadeProgress, ident, state)),
                     Err(bad) => Err(bad),
                 }
@@ -453,7 +453,7 @@ pub fn concrete_type<'a>() -> impl Parser<'a, (&'a str, &'a str), ()> {
     move |_, state: State<'a>| match chomp_concrete_type(state.bytes()) {
         Err(progress) => Err((progress, (), state)),
         Ok((module_name, type_name, width)) => {
-            match state.advance_without_indenting_ee(Some(Token::ConcreteType), width, |_, _| ()) {
+            match state.advance_without_indenting_ee(Some(Token::Ident), width, |_, _| ()) {
                 Ok(state) => Ok((MadeProgress, (module_name, type_name), state)),
                 Err(bad) => Err(bad),
             }

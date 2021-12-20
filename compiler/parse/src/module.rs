@@ -177,7 +177,7 @@ fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, ()> {
         Ok(name) => {
             let width = name.len();
             state.column += width as u16;
-            state = state.advance(Some(Token::ModuleName), width);
+            state = state.advance(Some(Token::Ident), width);
 
             Ok((MadeProgress, ModuleName::new(name), state))
         }

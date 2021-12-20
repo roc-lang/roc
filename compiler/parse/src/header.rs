@@ -336,7 +336,7 @@ pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, EPackageName> {
                         chomped += pkg.len();
 
                         state.column += chomped as u16;
-                        state = state.advance(Some(Token::PackageName), chomped);
+                        state = state.advance(Some(Token::Ident), chomped);
 
                         let value = PackageName { account, pkg };
                         Ok((MadeProgress, value, state))
