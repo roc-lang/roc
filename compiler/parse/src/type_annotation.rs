@@ -13,8 +13,9 @@ use roc_region::all::{Located, Region};
 
 pub fn located_help<'a>(
     min_indent: u16,
+    is_trailing_comma_valid: bool,
 ) -> impl Parser<'a, Located<TypeAnnotation<'a>>, EType<'a>> {
-    expression(min_indent)
+    expression(min_indent, is_trailing_comma_valid)
 }
 
 #[inline(always)]
@@ -101,6 +102,7 @@ fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, ETy
             }
         }
     )
+    .trace("type_annotation:term")
 }
 
 /// The `*` type variable, e.g. in (List *) Wildcard,
@@ -154,7 +156,7 @@ fn loc_type_in_parens<'a>(
     between!(
         word1(b'(', ETypeInParens::Open),
         space0_around_ee(
-            move |arena, state| specialize_ref(ETypeInParens::Type, expression(min_indent))
+            move |arena, state| specialize_ref(ETypeInParens::Type, expression(min_indent, true))
                 .parse(arena, state),
             min_indent,
             ETypeInParens::Space,
@@ -208,7 +210,7 @@ fn record_type_field<'a>(
     use crate::parser::Either::*;
     use AssignedField::*;
 
-    move |arena, state: State<'a>| {
+    (move |arena, state: State<'a>| {
         // You must have a field name, e.g. "email"
         // using the initial row/col is important for error reporting
         let row = state.line;
@@ -231,7 +233,7 @@ fn record_type_field<'a>(
         ))
         .parse(arena, state)?;
 
-        let val_parser = specialize_ref(ETypeRecord::Type, term(min_indent));
+        let val_parser = specialize_ref(ETypeRecord::Type, expression(min_indent, true));
 
         match opt_loc_val {
             Some(First(_)) => {
@@ -276,14 +278,15 @@ fn record_type_field<'a>(
                 Ok((MadeProgress, value, state))
             }
         }
-    }
+    })
+    .trace("type_annotation:record_type_field")
 }
 
 #[inline(always)]
 fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, ETypeRecord<'a>> {
     use crate::type_annotation::TypeAnnotation::*;
 
-    move |arena, state| {
+    (move |arena, state| {
         let (_, fields, state) = collection_trailing_sep_e!(
             // word1_check_indent!(b'{', TRecord::Open, min_indent, TRecord::IndentOpen),
             word1(b'{', ETypeRecord::Open),
@@ -305,7 +308,8 @@ fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, EType
         let result = Record { fields, ext };
 
         Ok((MadeProgress, result, state))
-    }
+    })
+    .trace("type_annotation:record_type")
 }
 
 fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, EType<'a>> {
@@ -331,6 +335,7 @@ fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, ETyp
             }
         }
     )
+    .trace("type_annotation:applied_type")
 }
 
 fn loc_applied_args_e<'a>(
@@ -339,8 +344,11 @@ fn loc_applied_args_e<'a>(
     zero_or_more!(loc_applied_arg(min_indent))
 }
 
-fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, EType<'a>> {
-    move |arena, state: State<'a>| {
+fn expression<'a>(
+    min_indent: u16,
+    is_trailing_comma_valid: bool,
+) -> impl Parser<'a, Located<TypeAnnotation<'a>>, EType<'a>> {
+    (move |arena, state: State<'a>| {
         let (p1, first, state) = space0_before_e(
             term(min_indent),
             min_indent,
@@ -349,65 +357,82 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
         )
         .parse(arena, state)?;
 
-        let (p2, rest, state) = zero_or_more!(skip_first!(
-            word1(b',', EType::TFunctionArgument),
-            one_of![
-                space0_around_ee(
+        let result = and![
+            zero_or_more!(skip_first!(
+                word1(b',', EType::TFunctionArgument),
+                one_of![
+                    space0_around_ee(
+                        term(min_indent),
+                        min_indent,
+                        EType::TSpace,
+                        EType::TIndentStart,
+                        EType::TIndentEnd
+                    ),
+                    |_, state: State<'a>| Err((
+                        NoProgress,
+                        EType::TFunctionArgument(state.line, state.column),
+                        state
+                    ))
+                ]
+            ))
+            .trace("type_annotation:expression:rest_args"),
+            // TODO this space0 is dropped, so newlines just before the function arrow when there
+            // is only one argument are not seen by the formatter. Can we do better?
+            skip_second!(
+                space0_e(min_indent, EType::TSpace, EType::TIndentStart),
+                word2(b'-', b'>', EType::TStart)
+            )
+            .trace("type_annotation:expression:arrow")
+        ]
+        .parse(arena, state.clone());
+
+        match result {
+            Ok((p2, (rest, _dropped_spaces), state)) => {
+                let (p3, return_type, state) = space0_before_e(
                     term(min_indent),
                     min_indent,
                     EType::TSpace,
                     EType::TIndentStart,
-                    EType::TIndentEnd
-                ),
-                |_, state: State<'a>| Err((
-                    NoProgress,
-                    EType::TFunctionArgument(state.line, state.column),
-                    state
-                ))
-            ]
-        ))
-        .parse(arena, state)?;
+                )
+                .parse(arena, state)?;
 
-        // TODO this space0 is dropped, so newlines just before the function arrow when there
-        // is only one argument are not seen by the formatter. Can we do better?
-        let (p3, is_function, state) = optional(skip_first!(
-            space0_e(min_indent, EType::TSpace, EType::TIndentStart),
-            word2(b'-', b'>', EType::TStart)
-        ))
-        .parse(arena, state)?;
+                // prepare arguments
+                let mut arguments = Vec::with_capacity_in(rest.len() + 1, arena);
+                arguments.push(first);
+                arguments.extend(rest);
+                let output = arena.alloc(arguments);
 
-        if is_function.is_some() {
-            let (p4, return_type, state) = space0_before_e(
-                term(min_indent),
-                min_indent,
-                EType::TSpace,
-                EType::TIndentStart,
-            )
-            .parse(arena, state)?;
+                let result = Located {
+                    region: return_type.region,
+                    value: TypeAnnotation::Function(output, arena.alloc(return_type)),
+                };
+                let progress = p1.or(p2).or(p3);
+                Ok((progress, result, state))
+            }
+            Err(err) => {
+                if !is_trailing_comma_valid {
+                    let (_, comma, _) = optional(skip_first!(
+                        space0_e(min_indent, EType::TSpace, EType::TIndentStart),
+                        word1(b',', EType::TStart)
+                    ))
+                    .trace("check trailing comma")
+                    .parse(arena, state.clone())?;
 
-            // prepare arguments
-            let mut arguments = Vec::with_capacity_in(rest.len() + 1, arena);
-            arguments.push(first);
-            arguments.extend(rest);
-            let output = arena.alloc(arguments);
+                    if comma.is_some() {
+                        // If the surrounding scope has declared that a trailing comma is not a valid state
+                        // for a type annotation - and we found one anyway - return an error so that we can
+                        // produce a more useful error message, knowing that the user was probably writing a
+                        // function type and messed up the syntax somehow.
+                        return Err(err);
+                    }
+                }
 
-            let result = Located {
-                region: return_type.region,
-                value: TypeAnnotation::Function(output, arena.alloc(return_type)),
-            };
-            let progress = p1.or(p2).or(p3).or(p4);
-            Ok((progress, result, state))
-        } else {
-            let progress = p1.or(p2).or(p3);
-            // if there is no function arrow, there cannot be more than 1 "argument"
-            if rest.is_empty() {
-                Ok((progress, first, state))
-            } else {
-                // e.g. `Int,Int` without an arrow and return type
-                panic!()
+                // We ran into trouble parsing the function bits; just return the single term
+                Ok((p1, first, state))
             }
         }
-    }
+    })
+    .trace("type_annotation:expression")
 }
 
 /// Parse a basic type annotation that's a combination of variables
