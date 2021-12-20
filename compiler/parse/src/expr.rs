@@ -1,5 +1,6 @@
 use crate::ast::{
-    AssignedField, Collection, CommentOrNewline, Def, Expr, Pattern, Spaceable, TypeAnnotation,
+    AssignedField, Collection, CommentOrNewline, Def, Expr, ExtractSpaces, Pattern, Spaceable,
+    TypeAnnotation,
 };
 use crate::blankspace::{space0_after_e, space0_around_ee, space0_before_e, space0_e};
 use crate::ident::{lowercase_ident, parse_ident, Ident};
@@ -480,7 +481,7 @@ fn parse_expr_final<'a>(
 
 fn to_call<'a>(
     arena: &'a Bump,
-    arguments: Vec<'a, &'a Located<Expr<'a>>>,
+    mut arguments: Vec<'a, &'a Located<Expr<'a>>>,
     loc_expr1: Located<Expr<'a>>,
 ) -> Located<Expr<'a>> {
     if arguments.is_empty() {
@@ -489,11 +490,34 @@ fn to_call<'a>(
         let last = arguments.last().map(|x| x.region).unwrap_or_default();
         let region = Region::span_across(&loc_expr1.region, &last);
 
-        let apply = Expr::Apply(
+        let spaces = if let Some(last) = arguments.last_mut() {
+            let spaces = last.value.extract_spaces();
+
+            if spaces.after.is_empty() {
+                &[]
+            } else {
+                let inner = if !spaces.before.is_empty() {
+                    arena.alloc(spaces.item).before(spaces.before)
+                } else {
+                    spaces.item
+                };
+                *last = arena.alloc(Located::at(last.region, inner));
+
+                spaces.after
+            }
+        } else {
+            &[]
+        };
+
+        let mut apply = Expr::Apply(
             arena.alloc(loc_expr1),
             arguments.into_bump_slice(),
             CalledVia::Space,
         );
+
+        if !spaces.is_empty() {
+            apply = arena.alloc(apply).after(spaces)
+        }
 
         Located::at(region, apply)
     }
