@@ -3,6 +3,7 @@ use bumpalo::Bump;
 
 use roc_collections::all::MutMap;
 use roc_module::symbol::Symbol;
+use roc_mono::layout::Layout;
 use roc_reporting::internal_error;
 
 use crate::layout::{
@@ -84,6 +85,7 @@ impl StoredValue {
 pub struct Storage<'a> {
     pub arg_types: Vec<'a, ValueType>,
     pub local_types: Vec<'a, ValueType>,
+    pub symbol_layouts: MutMap<Symbol, Layout<'a>>,
     pub symbol_storage_map: MutMap<Symbol, StoredValue>,
     pub stack_frame_pointer: Option<LocalId>,
     pub stack_frame_size: i32,
@@ -94,6 +96,7 @@ impl<'a> Storage<'a> {
         Storage {
             arg_types: Vec::with_capacity_in(8, arena),
             local_types: Vec::with_capacity_in(32, arena),
+            symbol_layouts: MutMap::default(),
             symbol_storage_map: MutMap::default(),
             stack_frame_pointer: None,
             stack_frame_size: 0,
@@ -103,6 +106,7 @@ impl<'a> Storage<'a> {
     pub fn clear(&mut self) {
         self.arg_types.clear();
         self.local_types.clear();
+        self.symbol_layouts.clear();
         self.symbol_storage_map.clear();
         self.stack_frame_pointer = None;
         self.stack_frame_size = 0;
@@ -131,26 +135,28 @@ impl<'a> Storage<'a> {
     /// They are allocated a certain offset and size in the stack frame.
     pub fn allocate(
         &mut self,
-        wasm_layout: &WasmLayout,
+        layout: Layout<'a>,
         symbol: Symbol,
         kind: StoredValueKind,
     ) -> StoredValue {
         let next_local_id = self.get_next_local_id();
+        let wasm_layout = WasmLayout::new(&layout);
+        self.symbol_layouts.insert(symbol, layout);
 
         let storage = match wasm_layout {
             WasmLayout::Primitive(value_type, size) => match kind {
                 StoredValueKind::Parameter => {
-                    self.arg_types.push(*value_type);
+                    self.arg_types.push(value_type);
                     StoredValue::Local {
                         local_id: next_local_id,
-                        value_type: *value_type,
-                        size: *size,
+                        value_type,
+                        size,
                     }
                 }
                 _ => StoredValue::VirtualMachineStack {
                     vm_state: VmSymbolState::NotYetPushed,
-                    value_type: *value_type,
-                    size: *size,
+                    value_type,
+                    size,
                 },
             },
 
@@ -161,7 +167,7 @@ impl<'a> Storage<'a> {
             } => {
                 let location = match kind {
                     StoredValueKind::Parameter => {
-                        if *size > 0 {
+                        if size > 0 {
                             self.arg_types.push(PTR_TYPE);
                             StackMemoryLocation::PointerArg(next_local_id)
                         } else {
@@ -172,15 +178,15 @@ impl<'a> Storage<'a> {
                     }
 
                     StoredValueKind::Variable => {
-                        if self.stack_frame_pointer.is_none() && *size > 0 {
+                        if self.stack_frame_pointer.is_none() && size > 0 {
                             self.stack_frame_pointer = Some(next_local_id);
                             self.local_types.push(PTR_TYPE);
                         }
 
                         let offset =
-                            round_up_to_alignment!(self.stack_frame_size, *alignment_bytes as i32);
+                            round_up_to_alignment!(self.stack_frame_size, alignment_bytes as i32);
 
-                        self.stack_frame_size = offset + (*size as i32);
+                        self.stack_frame_size = offset + (size as i32);
 
                         StackMemoryLocation::FrameOffset(offset as u32)
                     }
@@ -190,9 +196,9 @@ impl<'a> Storage<'a> {
 
                 StoredValue::StackMemory {
                     location,
-                    size: *size,
-                    alignment_bytes: *alignment_bytes,
-                    format: *format,
+                    size,
+                    alignment_bytes,
+                    format,
                 }
             }
         };

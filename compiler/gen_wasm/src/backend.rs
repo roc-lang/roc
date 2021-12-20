@@ -58,7 +58,6 @@ pub struct WasmBackend<'a> {
     // Function-level data
     code_builder: CodeBuilder<'a>,
     storage: Storage<'a>,
-    symbol_layouts: MutMap<Symbol, Layout<'a>>,
 
     /// how many blocks deep are we (used for jumps)
     block_depth: u32,
@@ -155,7 +154,6 @@ impl<'a> WasmBackend<'a> {
             joinpoint_label_map: MutMap::default(),
             code_builder: CodeBuilder::new(arena),
             storage: Storage::new(arena),
-            symbol_layouts: MutMap::default(),
 
             debug_current_proc_index: 0,
         }
@@ -231,7 +229,6 @@ impl<'a> WasmBackend<'a> {
 
         self.storage.clear();
         self.joinpoint_label_map.clear();
-        self.symbol_layouts.clear();
         assert_eq!(self.block_depth, 0);
     }
 
@@ -272,10 +269,8 @@ impl<'a> WasmBackend<'a> {
         self.start_block(BlockType::from(ret_type));
 
         for (layout, symbol) in proc.args {
-            self.symbol_layouts.insert(*symbol, *layout);
-            let arg_layout = WasmLayout::new(layout);
             self.storage
-                .allocate(&arg_layout, *symbol, StoredValueKind::Parameter);
+                .allocate(*layout, *symbol, StoredValueKind::Parameter);
         }
 
         self.module.add_function_signature(Signature {
@@ -324,9 +319,7 @@ impl<'a> WasmBackend<'a> {
         expr: &Expr<'a>,
         kind: StoredValueKind,
     ) {
-        let wasm_layout = WasmLayout::new(layout);
-
-        let sym_storage = self.storage.allocate(&wasm_layout, sym, kind);
+        let sym_storage = self.storage.allocate(*layout, sym, kind);
 
         self.build_expr(&sym, expr, layout, &sym_storage);
 
@@ -337,8 +330,6 @@ impl<'a> WasmBackend<'a> {
         {
             *vm_state = self.code_builder.set_top_symbol(sym);
         }
-
-        self.symbol_layouts.insert(sym, *layout);
     }
 
     fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) {
@@ -481,11 +472,8 @@ impl<'a> WasmBackend<'a> {
                 // make locals for join pointer parameters
                 let mut jp_param_storages = Vec::with_capacity_in(parameters.len(), self.env.arena);
                 for parameter in parameters.iter() {
-                    self.symbol_layouts
-                        .insert(parameter.symbol, parameter.layout);
-                    let wasm_layout = WasmLayout::new(&parameter.layout);
                     let mut param_storage = self.storage.allocate(
-                        &wasm_layout,
+                        parameter.layout,
                         parameter.symbol,
                         StoredValueKind::Variable,
                     );
@@ -540,7 +528,7 @@ impl<'a> WasmBackend<'a> {
 
             Stmt::Refcounting(modify, following) => {
                 let value = modify.get_symbol();
-                let layout = self.symbol_layouts.get(&value).unwrap();
+                let layout = self.storage.symbol_layouts[&value];
 
                 let ident_ids = self
                     .interns
@@ -550,7 +538,7 @@ impl<'a> WasmBackend<'a> {
 
                 let (rc_stmt, new_specializations) = self
                     .helper_proc_gen
-                    .expand_refcount_stmt(ident_ids, *layout, modify, *following);
+                    .expand_refcount_stmt(ident_ids, layout, modify, *following);
 
                 if false {
                     self.register_symbol_debug_names();
@@ -1094,8 +1082,8 @@ impl<'a> WasmBackend<'a> {
         return_layout: WasmLayout,
         storage: &StoredValue,
     ) {
-        let arg_layout = self.symbol_layouts[&arguments[0]];
-        let other_arg_layout = self.symbol_layouts[&arguments[1]];
+        let arg_layout = self.storage.symbol_layouts[&arguments[0]];
+        let other_arg_layout = self.storage.symbol_layouts[&arguments[1]];
         debug_assert!(
             arg_layout == other_arg_layout,
             "Cannot do `==` comparison on different types"
