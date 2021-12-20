@@ -176,11 +176,13 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                     );
 
                     if it.peek().is_some() {
-                        buf.push_str(", ");
+                        buf.push_str(",");
+                        buf.spaces(1);
                     }
                 }
 
-                buf.push_str(" -> ");
+                buf.push_str(" ->");
+                buf.spaces(1);
 
                 (&result.value).format_with_options(
                     buf,
@@ -210,7 +212,7 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                 buf.push_str(name);
 
                 for argument in *arguments {
-                    buf.push(' ');
+                    buf.spaces(1);
                     (&argument.value).format_with_options(
                         buf,
                         Parens::InApply,
@@ -246,7 +248,8 @@ impl<'a> Formattable for TypeAnnotation<'a> {
             As(lhs, _spaces, rhs) => {
                 // TODO use spaces?
                 lhs.value.format(buf, indent);
-                buf.push_str(" as ");
+                buf.push_str(" as");
+                buf.spaces(1);
                 rhs.value.format(buf, indent);
             }
 
@@ -288,7 +291,7 @@ impl<'a> Formattable for AssignedField<'a, TypeAnnotation<'a>> {
         indent: u16,
     ) {
         // we abuse the `Newlines` type to decide between multiline or single-line layout
-        format_assigned_field_help(self, buf, parens, indent, " ", newlines == Newlines::Yes);
+        format_assigned_field_help(self, buf, parens, indent, 1, newlines == Newlines::Yes);
     }
 }
 
@@ -305,7 +308,7 @@ impl<'a> Formattable for AssignedField<'a, Expr<'a>> {
         indent: u16,
     ) {
         // we abuse the `Newlines` type to decide between multiline or single-line layout
-        format_assigned_field_help(self, buf, parens, indent, "", newlines == Newlines::Yes);
+        format_assigned_field_help(self, buf, parens, indent, 0, newlines == Newlines::Yes);
     }
 }
 
@@ -327,7 +330,7 @@ fn format_assigned_field_help<'a, 'buf, T>(
     buf: &mut Buf<'buf>,
     parens: Parens,
     indent: u16,
-    separator_prefix: &str,
+    separator_spaces: usize,
     is_multiline: bool,
 ) where
     T: Formattable,
@@ -347,8 +350,9 @@ fn format_assigned_field_help<'a, 'buf, T>(
                 fmt_spaces(buf, spaces.iter(), indent);
             }
 
-            buf.push_str(separator_prefix);
-            buf.push_str(": ");
+            buf.spaces(separator_spaces);
+            buf.push_str(":");
+            buf.spaces(1);
             ann.value.format(buf, indent);
         }
         OptionalValue(name, spaces, ann) => {
@@ -363,7 +367,7 @@ fn format_assigned_field_help<'a, 'buf, T>(
                 fmt_spaces(buf, spaces.iter(), indent);
             }
 
-            buf.push_str(separator_prefix);
+            buf.spaces(separator_spaces);
             buf.push('?');
             ann.value.format(buf, indent);
         }
@@ -382,7 +386,7 @@ fn format_assigned_field_help<'a, 'buf, T>(
                 buf,
                 parens,
                 indent,
-                separator_prefix,
+                separator_spaces,
                 is_multiline,
             );
         }
@@ -392,7 +396,7 @@ fn format_assigned_field_help<'a, 'buf, T>(
                 buf,
                 parens,
                 indent,
-                separator_prefix,
+                separator_spaces,
                 is_multiline,
             );
             fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
@@ -438,7 +442,7 @@ impl<'a> Formattable for Tag<'a> {
                     }
                 } else {
                     for arg in *args {
-                        buf.push(' ');
+                        buf.spaces(1);
                         arg.format_with_options(buf, Parens::InApply, Newlines::No, indent);
                     }
                 }
@@ -456,7 +460,7 @@ impl<'a> Formattable for Tag<'a> {
                     }
                 } else {
                     for arg in *args {
-                        buf.push(' ');
+                        buf.spaces(1);
                         arg.format_with_options(buf, Parens::InApply, Newlines::No, indent);
                     }
                 }

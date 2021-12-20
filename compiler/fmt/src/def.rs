@@ -60,15 +60,16 @@ impl<'a> Formattable for Def<'a> {
                 buf.push_str(name.value);
 
                 if vars.is_empty() {
-                    buf.push(' ');
+                    buf.spaces(1);
                 } else {
                     for var in *vars {
-                        buf.push(' ');
+                        buf.spaces(1);
                         fmt_pattern(buf, &var.value, indent, Parens::NotNeeded);
                     }
                 }
 
-                buf.push_str(" : ");
+                buf.push_str(" :");
+                buf.spaces(1);
 
                 ann.format(buf, indent + INDENT)
             }
@@ -84,10 +85,12 @@ impl<'a> Formattable for Def<'a> {
                 body_expr,
             } => {
                 ann_pattern.format(buf, indent);
-                buf.push_str(" : ");
+                buf.push_str(" :");
+                buf.spaces(1);
                 ann_type.format(buf, indent);
                 if let Some(comment_str) = comment {
-                    buf.push_str(" # ");
+                    buf.push_str(" #");
+                    buf.spaces(1);
                     buf.push_str(comment_str.trim());
                 }
                 buf.newline();
@@ -145,12 +148,12 @@ pub fn fmt_body<'a, 'buf>(
                 body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent + INDENT);
             }
             _ => {
-                buf.push(' ');
+                buf.spaces(1);
                 body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
             }
         }
     } else {
-        buf.push(' ');
+        buf.spaces(1);
         body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
     }
 }
