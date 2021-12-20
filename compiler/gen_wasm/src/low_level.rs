@@ -30,8 +30,9 @@ pub fn decode_low_level<'a>(
         || internal_error!("Invalid return layout for {:?}: {:?}", lowlevel, ret_layout);
 
     match lowlevel {
+        // Str
         StrConcat => return BuiltinCall(bitcode::STR_CONCAT),
-        StrJoinWith => return NotImplemented, // needs Array
+        StrJoinWith => return BuiltinCall(bitcode::STR_JOIN_WITH),
         StrIsEmpty => {
             code_builder.i64_const(i64::MIN);
             code_builder.i64_eq();
@@ -39,23 +40,37 @@ pub fn decode_low_level<'a>(
         StrStartsWith => return BuiltinCall(bitcode::STR_STARTS_WITH),
         StrStartsWithCodePt => return BuiltinCall(bitcode::STR_STARTS_WITH_CODE_PT),
         StrEndsWith => return BuiltinCall(bitcode::STR_ENDS_WITH),
-        StrSplit => return NotImplemented,          // needs Array
-        StrCountGraphemes => return NotImplemented, // test needs Array
-        StrToNum => return NotImplemented,          // choose builtin based on storage size
-        StrFromInt => return NotImplemented,        // choose builtin based on storage size
-        StrFromUtf8 => return NotImplemented,       // needs Array
-        StrTrimLeft => return BuiltinCall(bitcode::STR_TRIM_LEFT),
-        StrTrimRight => return BuiltinCall(bitcode::STR_TRIM_RIGHT),
-        StrFromUtf8Range => return NotImplemented, // needs Array
-        StrToUtf8 => return NotImplemented,        // needs Array
-        StrRepeat => return BuiltinCall(bitcode::STR_REPEAT),
+        StrSplit => {
+            // Roughly we need to:
+            // 1. count segments
+            // 2. make a new pointer
+            // 3. split that pointer in place
+            // see: build_str.rs line 31
+            return NotImplemented;
+        }
+        StrCountGraphemes => return BuiltinCall(bitcode::STR_COUNT_GRAPEHEME_CLUSTERS),
+        StrToNum => return NotImplemented, // choose builtin based on storage size
+        StrFromInt => {
+            // This does not get exposed in user space. We switched to NumToStr instead.
+            // We can probably just leave this as NotImplemented. We may want remove this LowLevel.
+            // see: https://github.com/rtfeldman/roc/pull/2108
+            return NotImplemented;
+        }
         StrFromFloat => {
             // linker errors for __ashlti3, __fixunsdfti, __multi3, __udivti3, __umodti3
             // https://gcc.gnu.org/onlinedocs/gccint/Integer-library-routines.html
             // https://gcc.gnu.org/onlinedocs/gccint/Soft-float-library-routines.html
             return NotImplemented;
         }
+        StrFromUtf8 => return BuiltinCall(bitcode::STR_FROM_UTF8),
+        StrTrimLeft => return BuiltinCall(bitcode::STR_TRIM_LEFT),
+        StrTrimRight => return BuiltinCall(bitcode::STR_TRIM_RIGHT),
+        StrFromUtf8Range => return BuiltinCall(bitcode::STR_FROM_UTF8_RANGE), // refcounting errors
+        StrToUtf8 => return BuiltinCall(bitcode::STR_TO_UTF8),                // refcounting errors
+        StrRepeat => return BuiltinCall(bitcode::STR_REPEAT),
         StrTrim => return BuiltinCall(bitcode::STR_TRIM),
+
+        // List
         ListLen => {
             if let StoredValue::StackMemory { location, .. } = storage.get(&args[0]) {
                 let (local_id, offset) = location.local_and_offset(storage.stack_frame_pointer);
@@ -77,6 +92,7 @@ pub fn decode_low_level<'a>(
             return NotImplemented;
         }
 
+        // Num
         NumAdd => match ret_layout {
             WasmLayout::Primitive(value_type, _) => match value_type {
                 I32 => code_builder.i32_add(),
