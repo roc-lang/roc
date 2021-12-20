@@ -711,8 +711,6 @@ impl<'a> CodeGenHelp<'a> {
     fn if_pointers_equal_return_true(
         &self,
         ident_ids: &mut IdentIds,
-        ptr1: Symbol,
-        ptr2: Symbol,
         following: &'a Stmt<'a>,
     ) -> Stmt<'a> {
         let ptr1_addr = self.create_symbol(ident_ids, "addr1");
@@ -726,7 +724,7 @@ impl<'a> CodeGenHelp<'a> {
                     op: LowLevel::PtrCast,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
-                arguments: self.arena.alloc([ptr1]),
+                arguments: self.arena.alloc([Symbol::ARG_1]),
             }),
             self.layout_isize,
             self.arena.alloc(Stmt::Let(
@@ -736,7 +734,7 @@ impl<'a> CodeGenHelp<'a> {
                         op: LowLevel::PtrCast,
                         update_mode: UpdateModeId::BACKEND_DUMMY,
                     },
-                    arguments: self.arena.alloc([ptr2]),
+                    arguments: self.arena.alloc([Symbol::ARG_2]),
                 }),
                 self.layout_isize,
                 self.arena.alloc(Stmt::Let(
@@ -778,20 +776,8 @@ impl<'a> CodeGenHelp<'a> {
     }
 
     fn eq_struct(&self, ident_ids: &mut IdentIds, field_layouts: &'a [Layout<'a>]) -> Stmt<'a> {
-        let else_clause = self.eq_fields(
-            ident_ids,
-            0,
-            field_layouts,
-            None,
-            &[Symbol::ARG_1, Symbol::ARG_2],
-            Stmt::Ret(Symbol::BOOL_TRUE),
-        );
-        self.if_pointers_equal_return_true(
-            ident_ids,
-            Symbol::ARG_1,
-            Symbol::ARG_2,
-            self.arena.alloc(else_clause),
-        )
+        let else_clause = self.eq_fields(ident_ids, 0, field_layouts, None);
+        self.if_pointers_equal_return_true(ident_ids, self.arena.alloc(else_clause))
     }
 
     fn eq_fields(
@@ -800,16 +786,14 @@ impl<'a> CodeGenHelp<'a> {
         tag_id: u64,
         field_layouts: &'a [Layout<'a>],
         rec_ptr_layout: Option<Layout<'a>>,
-        arguments: &'a [Symbol],
-        following: Stmt<'a>,
     ) -> Stmt<'a> {
-        let mut stmt = following;
+        let mut stmt = Stmt::Ret(Symbol::BOOL_TRUE);
         for (i, layout) in field_layouts.iter().enumerate().rev() {
             let field1_sym = self.create_symbol(ident_ids, &format!("field_1_{}_{}", tag_id, i));
             let field1_expr = Expr::StructAtIndex {
                 index: i as u64,
                 field_layouts,
-                structure: arguments[0],
+                structure: Symbol::ARG_1,
             };
             let field1_stmt = |next| Stmt::Let(field1_sym, field1_expr, *layout, next);
 
@@ -817,7 +801,7 @@ impl<'a> CodeGenHelp<'a> {
             let field2_expr = Expr::StructAtIndex {
                 index: i as u64,
                 field_layouts,
-                structure: arguments[1],
+                structure: Symbol::ARG_2,
             };
             let field2_stmt = |next| Stmt::Let(field2_sym, field2_expr, *layout, next);
 
@@ -860,8 +844,6 @@ impl<'a> CodeGenHelp<'a> {
                 0,
                 field_layouts,
                 Some(Layout::Union(union_layout)),
-                &[Symbol::ARG_1, Symbol::ARG_2],
-                Stmt::Ret(Symbol::BOOL_TRUE),
             ),
 
             NullableWrapped {
@@ -880,12 +862,7 @@ impl<'a> CodeGenHelp<'a> {
             ),
         };
 
-        self.if_pointers_equal_return_true(
-            ident_ids,
-            Symbol::ARG_1,
-            Symbol::ARG_2,
-            self.arena.alloc(main_stmt),
-        )
+        self.if_pointers_equal_return_true(ident_ids, self.arena.alloc(main_stmt))
     }
 
     fn eq_tag_union_help(
@@ -973,14 +950,7 @@ impl<'a> CodeGenHelp<'a> {
             tag_branches.push((
                 tag_id,
                 BranchInfo::None,
-                self.eq_fields(
-                    ident_ids,
-                    tag_id,
-                    field_layouts,
-                    recursive_ptr_layout,
-                    &[Symbol::ARG_1, Symbol::ARG_2],
-                    Stmt::Ret(Symbol::BOOL_TRUE),
-                ),
+                self.eq_fields(ident_ids, tag_id, field_layouts, recursive_ptr_layout),
             ));
 
             tag_id += 1;
@@ -997,8 +967,6 @@ impl<'a> CodeGenHelp<'a> {
                     tag_id,
                     tag_layouts.last().unwrap(),
                     recursive_ptr_layout,
-                    &[Symbol::ARG_1, Symbol::ARG_2],
-                    Stmt::Ret(Symbol::BOOL_TRUE),
                 )),
             ),
             ret_layout: LAYOUT_BOOL,
