@@ -5,6 +5,7 @@ use crate::parser::Progress::{self, *};
 use crate::parser::{specialize, word1, EPackageEntry, EPackageName, EPackageOrPath, Parser};
 use crate::state::State;
 use crate::string_literal;
+use crate::token::Token;
 use bumpalo::collections::Vec;
 use roc_region::all::Loc;
 
@@ -227,7 +228,7 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
         let (_, opt_shorthand, state) = maybe!(and!(
             skip_second!(
                 specialize(|_, r, c| EPackageEntry::Shorthand(r, c), lowercase_ident()),
-                word1(b':', EPackageEntry::Colon)
+                word1(b':', Token::Colon, EPackageEntry::Colon)
             ),
             space0_e(
                 min_indent,
@@ -292,7 +293,7 @@ where
             Ok((NoProgress, (), state))
         } else {
             state.column += chomped as u16;
-            state = state.advance(chomped);
+            state = state.advance(None, chomped);
 
             Ok((MadeProgress, (), state))
         }
@@ -335,7 +336,7 @@ pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, EPackageName> {
                         chomped += pkg.len();
 
                         state.column += chomped as u16;
-                        state = state.advance(chomped);
+                        state = state.advance(Some(Token::PackageName), chomped);
 
                         let value = PackageName { account, pkg };
                         Ok((MadeProgress, value, state))

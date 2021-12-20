@@ -7,6 +7,7 @@ use crate::parser::{
     ParseResult, Parser,
 };
 use crate::state::State;
+use crate::token::Token;
 use bumpalo::collections::string::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -122,7 +123,7 @@ fn loc_pattern_in_parens_help<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Located<Pattern<'a>>, PInParens<'a>> {
     between!(
-        word1(b'(', PInParens::Open),
+        word1(b'(', Token::OpenParen, PInParens::Open),
         space0_around_ee(
             move |arena, state| specialize_ref(PInParens::Pattern, loc_pattern_help(min_indent))
                 .parse(arena, state),
@@ -131,7 +132,7 @@ fn loc_pattern_in_parens_help<'a>(
             PInParens::IndentOpen,
             PInParens::IndentEnd,
         ),
-        word1(b')', PInParens::End)
+        word1(b')', Token::CloseParen, PInParens::End)
     )
 }
 
@@ -292,7 +293,7 @@ fn loc_ident_pattern_help<'a>(
 
 fn underscore_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
-        let (_, _, next_state) = word1(b'_', EPattern::Underscore).parse(arena, state)?;
+        let (_, _, next_state) = word1(b'_', Token::Underscore, EPattern::Underscore).parse(arena, state)?;
 
         let (_, output, final_state) =
             optional(lowercase_ident_pattern).parse(arena, next_state)?;
@@ -319,11 +320,11 @@ fn record_pattern_help<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>, PRec
     move |arena, state| {
         let (_, fields, state) = collection_trailing_sep_e!(
             // word1_check_indent!(b'{', PRecord::Open, min_indent, PRecord::IndentOpen),
-            word1(b'{', PRecord::Open),
+            word1(b'{', Token::OpenCurly, PRecord::Open),
             record_pattern_field(min_indent),
-            word1(b',', PRecord::End),
+            word1(b',', Token::Comma, PRecord::End),
             // word1_check_indent!(b'}', PRecord::End, min_indent, PRecord::IndentEnd),
-            word1(b'}', PRecord::End),
+            word1(b'}', Token::CloseCurly, PRecord::End),
             min_indent,
             PRecord::Open,
             PRecord::Space,
@@ -359,8 +360,8 @@ fn record_pattern_field<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<
         // Having a value is optional; both `{ email }` and `{ email: blah }` work.
         // (This is true in both literals and types.)
         let (_, opt_loc_val, state) = optional(either!(
-            word1(b':', PRecord::Colon),
-            word1(b'?', PRecord::Optional)
+            word1(b':', Token::Colon, PRecord::Colon),
+            word1(b'?', Token::QuestionMark, PRecord::Optional)
         ))
         .parse(arena, state)?;
 

@@ -1,6 +1,7 @@
 use crate::ast::Base;
 use crate::parser::{ENumber, ParseResult, Parser, Progress};
 use crate::state::State;
+use crate::token::Token;
 
 pub enum NumLiteral<'a> {
     Float(&'a str),
@@ -67,7 +68,7 @@ fn chomp_number_base<'a>(
 
     let string = unsafe { std::str::from_utf8_unchecked(&bytes[..chomped]) };
 
-    let new = state.advance_without_indenting_ee(chomped + 2 + is_negative as usize, |_, _| {
+    let new = state.advance_without_indenting_ee(Some(Token::NumberBase), chomped + 2 + is_negative as usize, |_, _| {
         ENumber::LineTooLong
     })?;
 
@@ -102,7 +103,7 @@ fn chomp_number_dec<'a>(
     let string =
         unsafe { std::str::from_utf8_unchecked(&state.bytes()[0..chomped + is_negative as usize]) };
 
-    let new = state.advance_without_indenting_ee(chomped + is_negative as usize, |_, _| {
+    let new = state.advance_without_indenting_ee(Some(Token::Number), chomped + is_negative as usize, |_, _| {
         ENumber::LineTooLong
     })?;
 

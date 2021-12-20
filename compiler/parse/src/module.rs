@@ -13,6 +13,7 @@ use crate::parser::{
 };
 use crate::state::State;
 use crate::string_literal;
+use crate::token::Token;
 use crate::type_annotation;
 use bumpalo::collections::Vec;
 use roc_region::all::Located;
@@ -176,7 +177,7 @@ fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, ()> {
         Ok(name) => {
             let width = name.len();
             state.column += width as u16;
-            state = state.advance(width);
+            state = state.advance(Some(Token::ModuleName), width);
 
             Ok((MadeProgress, ModuleName::new(name), state))
         }
@@ -378,10 +379,10 @@ fn provides_without_to<'a>() -> impl Parser<
             EProvides::IndentListStart
         ),
         collection_trailing_sep_e!(
-            word1(b'[', EProvides::ListStart),
+            word1(b'[', Token::OpenSquare, EProvides::ListStart),
             exposes_entry(EProvides::Identifier),
-            word1(b',', EProvides::ListEnd),
-            word1(b']', EProvides::ListEnd),
+            word1(b',', Token::Comma, EProvides::ListEnd),
+            word1(b']', Token::CloseSquare, EProvides::ListEnd),
             min_indent,
             EProvides::Open,
             EProvides::Space,
@@ -447,10 +448,10 @@ fn requires_rigids<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Collection<'a, Located<Spaced<'a, PlatformRigid<'a>>>>, ERequires<'a>> {
     collection_trailing_sep_e!(
-        word1(b'{', ERequires::ListStart),
+        word1(b'{', Token::OpenCurly, ERequires::ListStart),
         specialize(|_, r, c| ERequires::Rigid(r, c), loc!(requires_rigid())),
-        word1(b',', ERequires::ListEnd),
-        word1(b'}', ERequires::ListEnd),
+        word1(b',', Token::Comma, ERequires::ListEnd),
+        word1(b'}', Token::CloseCurly, ERequires::ListEnd),
         min_indent,
         ERequires::Open,
         ERequires::Space,
@@ -464,7 +465,7 @@ fn requires_rigid<'a>() -> impl Parser<'a, Spaced<'a, PlatformRigid<'a>>, ()> {
     map!(
         and!(
             lowercase_ident(),
-            skip_first!(word2(b'=', b'>', |_, _| ()), uppercase_ident())
+            skip_first!(word2(b'=', b'>', Token::FatArrow, |_, _| ()), uppercase_ident())
         ),
         |(rigid, alias)| Spaced::Item(PlatformRigid { rigid, alias })
     )
@@ -474,7 +475,7 @@ fn requires_rigid<'a>() -> impl Parser<'a, Spaced<'a, PlatformRigid<'a>>, ()> {
 fn requires_typed_ident<'a>() -> impl Parser<'a, Located<Spaced<'a, TypedIdent<'a>>>, ERequires<'a>>
 {
     skip_first!(
-        word1(b'{', ERequires::ListStart),
+        word1(b'{', Token::OpenCurly, ERequires::ListStart),
         skip_second!(
             space0_around_ee(
                 specialize(ERequires::TypedIdent, loc!(typed_ident()),),
@@ -483,7 +484,7 @@ fn requires_typed_ident<'a>() -> impl Parser<'a, Located<Spaced<'a, TypedIdent<'
                 ERequires::ListStart,
                 ERequires::ListEnd
             ),
-            word1(b'}', ERequires::ListStart)
+            word1(b'}', Token::CloseCurly, ERequires::ListStart)
         )
     )
 }
@@ -509,10 +510,10 @@ fn exposes_values<'a>() -> impl Parser<
             EExposes::IndentListStart
         ),
         collection_trailing_sep_e!(
-            word1(b'[', EExposes::ListStart),
+            word1(b'[', Token::OpenSquare, EExposes::ListStart),
             exposes_entry(EExposes::Identifier),
-            word1(b',', EExposes::ListEnd),
-            word1(b']', EExposes::ListEnd),
+            word1(b',', Token::Comma, EExposes::ListEnd),
+            word1(b']', Token::CloseSquare, EExposes::ListEnd),
             min_indent,
             EExposes::Open,
             EExposes::Space,
@@ -563,10 +564,10 @@ fn exposes_modules<'a>() -> impl Parser<
             EExposes::IndentListStart
         ),
         collection_trailing_sep_e!(
-            word1(b'[', EExposes::ListStart),
+            word1(b'[', Token::OpenSquare, EExposes::ListStart),
             exposes_module(EExposes::Identifier),
-            word1(b',', EExposes::ListEnd),
-            word1(b']', EExposes::ListEnd),
+            word1(b',', Token::Comma, EExposes::ListEnd),
+            word1(b']', Token::CloseSquare, EExposes::ListEnd),
             min_indent,
             EExposes::Open,
             EExposes::Space,
@@ -612,10 +613,10 @@ fn packages<'a>() -> impl Parser<'a, Packages<'a>, EPackages<'a>> {
                 EPackages::IndentListStart
             ),
             collection_trailing_sep_e!(
-                word1(b'{', EPackages::ListStart),
+                word1(b'{', Token::OpenCurly, EPackages::ListStart),
                 specialize(EPackages::PackageEntry, loc!(package_entry())),
-                word1(b',', EPackages::ListEnd),
-                word1(b'}', EPackages::ListEnd),
+                word1(b',', Token::Comma, EPackages::ListEnd),
+                word1(b'}', Token::CloseCurly, EPackages::ListEnd),
                 min_indent,
                 EPackages::Open,
                 EPackages::Space,
@@ -657,10 +658,10 @@ fn imports<'a>() -> impl Parser<
             EImports::IndentListStart
         ),
         collection_trailing_sep_e!(
-            word1(b'[', EImports::ListStart),
+            word1(b'[', Token::OpenSquare, EImports::ListStart),
             loc!(imports_entry()),
-            word1(b',', EImports::ListEnd),
-            word1(b']', EImports::ListEnd),
+            word1(b',', Token::Comma, EImports::ListEnd),
+            word1(b']', Token::CloseSquare, EImports::ListEnd),
             min_indent,
             EImports::Open,
             EImports::Space,
@@ -689,7 +690,7 @@ fn effects<'a>() -> impl Parser<'a, Effects<'a>, EEffects<'a>> {
         // e.g. `fx.`
         let (_, type_shortname, state) = skip_second!(
             specialize(|_, r, c| EEffects::Shorthand(r, c), lowercase_ident()),
-            word1(b'.', EEffects::ShorthandDot)
+            word1(b'.', Token::Dot, EEffects::ShorthandDot)
         )
         .parse(arena, state)?;
 
@@ -700,10 +701,10 @@ fn effects<'a>() -> impl Parser<'a, Effects<'a>, EEffects<'a>> {
         )
         .parse(arena, state)?;
         let (_, entries, state) = collection_trailing_sep_e!(
-            word1(b'{', EEffects::ListStart),
+            word1(b'{', Token::OpenCurly, EEffects::ListStart),
             specialize(EEffects::TypedIdent, loc!(typed_ident())),
-            word1(b',', EEffects::ListEnd),
-            word1(b'}', EEffects::ListEnd),
+            word1(b',', Token::Comma, EEffects::ListEnd),
+            word1(b'}', Token::CloseCurly, EEffects::ListEnd),
             min_indent,
             EEffects::Open,
             EEffects::Space,
@@ -744,7 +745,7 @@ fn typed_ident<'a>() -> impl Parser<'a, Spaced<'a, TypedIdent<'a>>, ETypedIdent<
                 space0_e(min_indent, ETypedIdent::Space, ETypedIdent::IndentHasType)
             ),
             skip_first!(
-                word1(b':', ETypedIdent::HasType),
+                word1(b':', Token::Colon, ETypedIdent::HasType),
                 space0_before_e(
                     specialize(ETypedIdent::Type, type_annotation::located_help(min_indent)),
                     min_indent,
@@ -791,19 +792,19 @@ fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports
                 // e.g. `pf.`
                 maybe!(skip_second!(
                     shortname(),
-                    word1(b'.', EImports::ShorthandDot)
+                    word1(b'.', Token::Dot, EImports::ShorthandDot)
                 )),
                 // e.g. `Task`
                 module_name_help(EImports::ModuleName)
             ),
             // e.g. `.{ Task, after}`
             maybe!(skip_first!(
-                word1(b'.', EImports::ExposingDot),
+                word1(b'.', Token::Dot, EImports::ExposingDot),
                 collection_trailing_sep_e!(
-                    word1(b'{', EImports::SetStart),
+                    word1(b'{', Token::OpenCurly, EImports::SetStart),
                     exposes_entry(EImports::Identifier),
-                    word1(b',', EImports::SetEnd),
-                    word1(b'}', EImports::SetEnd),
+                    word1(b',', Token::Comma, EImports::SetEnd),
+                    word1(b'}', Token::CloseCurly, EImports::SetEnd),
                     min_indent,
                     EImports::Open,
                     EImports::Space,

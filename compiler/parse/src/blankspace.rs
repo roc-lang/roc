@@ -2,6 +2,7 @@ use crate::ast::CommentOrNewline;
 use crate::ast::Spaceable;
 use crate::parser::{self, and, backtrackable, BadInputError, Col, Parser, Progress::*, Row};
 use crate::state::State;
+use crate::token::Token;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_region::all::Located;
@@ -229,7 +230,7 @@ where
                     if col >= min_indent {
                         state.line = row;
                         state.column = col;
-                        state = state.advance(state.bytes().len() - bytes.len());
+                        state = state.advance(Some(Token::CommentOrNewline), state.bytes().len() - bytes.len());
 
                         Ok((MadeProgress, comments_and_newlines.into_bump_slice(), state))
                     } else {
@@ -241,7 +242,7 @@ where
                     }
                 } else {
                     state.column = col;
-                    state = state.advance(state.bytes().len() - bytes.len());
+                    state = state.advance(Some(Token::CommentOrNewline), state.bytes().len() - bytes.len());
 
                     Ok((MadeProgress, comments_and_newlines.into_bump_slice(), state))
                 }

@@ -1,7 +1,7 @@
 use crate::ast::{EscapedChar, StrLiteral, StrSegment};
 use crate::expr;
-use crate::parser::Progress::*;
-use crate::parser::{allocated, loc, specialize_ref, word1, BadInputError, EString, Parser};
+use crate::parser::{Progress::*, word1_bypass};
+use crate::parser::{allocated, loc, specialize_ref, BadInputError, EString, Parser};
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
@@ -23,7 +23,7 @@ fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
                     state,
                 ));
             } else {
-                let state = state.advance_without_indenting_ee(buf.len(), |r, c| {
+                let state = state.advance_without_indenting_ee(None, buf.len(), |r, c| {
                     EString::Space(BadInputError::LineTooLong, r, c)
                 })?;
 
@@ -40,8 +40,8 @@ fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
 }
 
 macro_rules! advance_state {
-    ($state:expr, $n:expr) => {
-        $state.advance_without_indenting_ee($n, |r, c| {
+    ($state:expr, $t:expr, $n:expr) => {
+        $state.advance_without_indenting_ee($t, $n, |r, c| {
             EString::Space(BadInputError::LineTooLong, r, c)
         })
     };
@@ -58,12 +58,12 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
             // we will be parsing a multi-string
             is_multiline = true;
             bytes = state.bytes()[3..].iter();
-            state = advance_state!(state, 3)?;
+            state = advance_state!(state, None, 3)?;
         } else if state.bytes().starts_with(b"\"") {
             // we will be parsing a single-string
             is_multiline = false;
             bytes = state.bytes()[1..].iter();
-            state = advance_state!(state, 1)?;
+            state = advance_state!(state, None, 1)?;
         } else {
             return Err((NoProgress, EString::Open(state.line, state.column), state));
         }
@@ -83,7 +83,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                 segments.push(StrSegment::EscapedChar($ch));
 
                 // Advance past the segment we just added
-                state = advance_state!(state, segment_parsed_bytes)?;
+                state = advance_state!(state, None, segment_parsed_bytes)?;
 
                 // Reset the segment
                 segment_parsed_bytes = 0;
@@ -102,7 +102,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
 
                     match std::str::from_utf8(string_bytes) {
                         Ok(string) => {
-                            state = advance_state!(state, string.len())?;
+                            state = advance_state!(state, None, string.len())?;
 
                             segments.push($transform(string));
                         }
@@ -138,7 +138,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                         // special case of the empty string
                         if is_multiline {
                             if bytes.as_slice().starts_with(b"\"\"") {
-                                return Ok((MadeProgress, Block(&[]), advance_state!(state, 3)?));
+                                return Ok((MadeProgress, Block(&[]), advance_state!(state, None, 3)?));
                             } else {
                                 // this quote is in a block string
                                 continue;
@@ -146,7 +146,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                         } else {
                             // This is the end of the string!
                             // Advance 1 for the close quote
-                            return Ok((MadeProgress, PlainLine(""), advance_state!(state, 1)?));
+                            return Ok((MadeProgress, PlainLine(""), advance_state!(state, None, 1)?));
                         }
                     } else {
                         // the string is non-empty, which means we need to convert any previous segments
@@ -168,7 +168,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                                     Block(arena.alloc([segments.into_bump_slice()]))
                                 };
 
-                                return Ok((MadeProgress, expr, advance_state!(state, 3)?));
+                                return Ok((MadeProgress, expr, advance_state!(state, None, 3)?));
                             } else {
                                 // this quote is in a block string
                                 continue;
@@ -188,7 +188,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                             };
 
                             // Advance the state 1 to account for the closing `"`
-                            return Ok((MadeProgress, expr, advance_state!(state, 1)?));
+                            return Ok((MadeProgress, expr, advance_state!(state, None, 1)?));
                         }
                     };
                 }
@@ -223,7 +223,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                     match bytes.next() {
                         Some(b'(') => {
                             // Advance past the `\(` before using the expr parser
-                            state = advance_state!(state, 2)?;
+                            state = advance_state!(state, None, 2)?;
 
                             let original_byte_count = state.bytes().len();
 
@@ -233,7 +233,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                             // is not allowed inside a string interpolation.
                             let (_progress, loc_expr, new_state) = skip_second!(
                                 specialize_ref(EString::Format, loc(allocated(expr::expr_help(0)))),
-                                word1(b')', EString::FormatEnd)
+                                word1_bypass(b')', EString::FormatEnd)
                             )
                             .parse(arena, state)?;
 
@@ -250,7 +250,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                         }
                         Some(b'u') => {
                             // Advance past the `\u` before using the expr parser
-                            state = advance_state!(state, 2)?;
+                            state = advance_state!(state, None, 2)?;
 
                             let original_byte_count = state.bytes().len();
 
@@ -258,9 +258,9 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                             // give a canonicalization error if the digits form
                             // an invalid unicode code point.
                             let (_progress, loc_digits, new_state) = between!(
-                                word1(b'(', EString::CodePtOpen),
+                                word1_bypass(b'(', EString::CodePtOpen),
                                 loc(ascii_hex_digits()),
-                                word1(b')', EString::CodePtEnd)
+                                word1_bypass(b')', EString::CodePtEnd)
                             )
                             .parse(arena, state)?;
 

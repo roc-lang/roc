@@ -1,6 +1,7 @@
 use crate::parser::Progress::{self, *};
 use crate::parser::{BadInputError, Col, EExpr, ParseResult, Parser, Row};
 use crate::state::State;
+use crate::token::Token;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 
@@ -67,7 +68,7 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
                 Err((NoProgress, (), state))
             } else {
                 let width = ident.len();
-                match state.advance_without_indenting_ee(width, |_, _| ()) {
+                match state.advance_without_indenting_ee(Some(Token::LowercaseIdent), width, |_, _| ()) {
                     Ok(state) => Ok((MadeProgress, ident, state)),
                     Err(bad) => Err(bad),
                 }
@@ -84,7 +85,7 @@ pub fn tag_name<'a>() -> impl Parser<'a, &'a str, ()> {
                 Err(_) => Err((MadeProgress, (), state)),
                 Ok(ident) => {
                     let width = ident.len();
-                    match state.advance_without_indenting_ee(width, |_, _| ()) {
+                    match state.advance_without_indenting_ee(Some(Token::PrivateTag), width, |_, _| ()) {
                         Ok(state) => Ok((MadeProgress, ident, state)),
                         Err(bad) => Err(bad),
                     }
@@ -106,7 +107,7 @@ pub fn uppercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
         Err(progress) => Err((progress, (), state)),
         Ok(ident) => {
             let width = ident.len();
-            match state.advance_without_indenting_ee(width, |_, _| ()) {
+            match state.advance_without_indenting_ee(Some(Token::UppercaseIdent), width, |_, _| ()) {
                 Ok(state) => Ok((MadeProgress, ident, state)),
                 Err(bad) => Err(bad),
             }
@@ -122,7 +123,7 @@ pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str, ()> {
                 Err((MadeProgress, (), state))
             } else {
                 let width = ident.len();
-                match state.advance_without_indenting_ee(width, |_, _| ()) {
+                match state.advance_without_indenting_ee(Some(Token::UnqualifiedIdent), width, |_, _| ()) {
                     Ok(state) => Ok((MadeProgress, ident, state)),
                     Err(bad) => Err(bad),
                 }
@@ -132,8 +133,8 @@ pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str, ()> {
 }
 
 macro_rules! advance_state {
-    ($state:expr, $n:expr) => {
-        $state.advance_without_indenting_ee($n, |r, c| {
+    ($state:expr, $ty:expr, $n:expr) => {
+        $state.advance_without_indenting_ee($ty, $n, |r, c| {
             BadIdent::Space(crate::parser::BadInputError::LineTooLong, r, c)
         })
     };
@@ -182,7 +183,7 @@ fn malformed_identifier<'a>(
     let delta = initial_bytes.len() - state.bytes().len();
     let parsed_str = unsafe { std::str::from_utf8_unchecked(&initial_bytes[..chomped + delta]) };
 
-    state = state.advance_without_indenting_ee(chomped, |r, c| {
+    state = state.advance_without_indenting_ee(Some(Token::MalformedIdent), chomped, |r, c| {
         EExpr::Space(crate::parser::BadInputError::LineTooLong, r, c)
     })?;
 
@@ -452,7 +453,7 @@ pub fn concrete_type<'a>() -> impl Parser<'a, (&'a str, &'a str), ()> {
     move |_, state: State<'a>| match chomp_concrete_type(state.bytes()) {
         Err(progress) => Err((progress, (), state)),
         Ok((module_name, type_name, width)) => {
-            match state.advance_without_indenting_ee(width, |_, _| ()) {
+            match state.advance_without_indenting_ee(Some(Token::ConcreteType), width, |_, _| ()) {
                 Ok(state) => Ok((MadeProgress, (module_name, type_name), state)),
                 Err(bad) => Err(bad),
             }
@@ -530,12 +531,12 @@ fn parse_ident_help<'a>(
 ) -> ParseResult<'a, Ident<'a>, BadIdent> {
     match chomp_identifier_chain(arena, state.bytes(), state.line, state.column) {
         Ok((width, ident)) => {
-            state = advance_state!(state, width as usize)?;
+            state = advance_state!(state, Some(Token::Ident), width as usize)?;
             Ok((MadeProgress, ident, state))
         }
         Err((0, fail)) => Err((NoProgress, fail, state)),
         Err((width, fail)) => {
-            state = advance_state!(state, width as usize)?;
+            state = advance_state!(state, Some(Token::Ident), width as usize)?;
             Err((MadeProgress, fail, state))
         }
     }

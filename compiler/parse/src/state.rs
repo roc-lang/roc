@@ -1,5 +1,6 @@
 use crate::parser::Progress::*;
 use crate::parser::{BadInputError, Col, Progress, Row};
+use crate::token::Token;
 use bumpalo::Bump;
 use roc_region::all::{Position, Region};
 use std::fmt;
@@ -35,7 +36,15 @@ impl<'a> State<'a> {
     }
 
     #[must_use]
-    pub fn advance(&self, offset: usize) -> State<'a> {
+    pub fn advance(&self, expected_token: Option<Token>, offset: usize) -> State<'a> {
+        // println!("{:?}", std::str::from_utf8(&self.bytes[..offset]).unwrap());
+
+        if let Some(expected) = expected_token {
+            let (tok, len) = Token::lex_single(expected, self.bytes()).unwrap();
+            assert_eq!(tok, expected);
+            assert_eq!(len, offset);
+        }
+
         let mut state = self.clone();
         state.bytes = &state.bytes[offset..];
         state
@@ -60,19 +69,21 @@ impl<'a> State<'a> {
     /// they weren't eligible to indent anyway.
     pub fn advance_without_indenting_e<TE, E>(
         self,
+        expected_token: Option<Token>,
         quantity: usize,
         to_error: TE,
     ) -> Result<Self, (Progress, E, Self)>
     where
         TE: Fn(BadInputError, Row, Col) -> E,
     {
-        self.advance_without_indenting_ee(quantity, |r, c| {
+        self.advance_without_indenting_ee(expected_token, quantity, |r, c| {
             to_error(BadInputError::LineTooLong, r, c)
         })
     }
 
     pub fn advance_without_indenting_ee<TE, E>(
-        self,
+        mut self,
+        expected_token: Option<Token>,
         quantity: usize,
         to_error: TE,
     ) -> Result<Self, (Progress, E, Self)>
@@ -81,12 +92,8 @@ impl<'a> State<'a> {
     {
         match (self.column as usize).checked_add(quantity) {
             Some(column_usize) if column_usize <= u16::MAX as usize => {
-                Ok(State {
-                    bytes: &self.bytes[quantity..],
-                    column: column_usize as u16,
-                    // Once we hit a nonspace character, we are no longer indenting.
-                    ..self
-                })
+                self.column = column_usize as u16;
+                Ok(self.advance(expected_token, quantity))
             }
             _ => Err((NoProgress, to_error(self.line, self.column), self)),
         }

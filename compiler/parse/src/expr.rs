@@ -7,10 +7,11 @@ use crate::keyword;
 use crate::parser::{
     self, backtrackable, optional, sep_by1, sep_by1_e, specialize, specialize_ref, then,
     trailing_sep_by0, word1, word2, EExpect, EExpr, EIf, EInParens, ELambda, EList, ENumber,
-    EPattern, ERecord, EString, EType, EWhen, Either, ParseResult, Parser,
+    EPattern, ERecord, EString, EType, EWhen, Either, ParseResult, Parser, word1_bypass,
 };
 use crate::pattern::loc_closure_param;
 use crate::state::State;
+use crate::token::Token;
 use crate::type_annotation;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -105,7 +106,7 @@ fn loc_expr_in_parens_help_help<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Located<Expr<'a>>, EInParens<'a>> {
     between!(
-        word1(b'(', EInParens::Open),
+        word1(b'(', Token::OpenParen, EInParens::Open),
         space0_around_ee(
             specialize_ref(EInParens::Expr, move |arena, state| parse_loc_expr(
                 min_indent, arena, state
@@ -115,7 +116,7 @@ fn loc_expr_in_parens_help_help<'a>(
             EInParens::IndentOpen,
             EInParens::IndentEnd,
         ),
-        word1(b')', EInParens::End)
+        word1(b')', Token::CloseParen, EInParens::End)
     )
 }
 
@@ -190,7 +191,7 @@ fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, &'a str>, EExpr<'a
 
 fn record_field_access<'a>() -> impl Parser<'a, &'a str, EExpr<'a>> {
     skip_first!(
-        word1(b'.', EExpr::Access),
+        word1(b'.', Token::Dot, EExpr::Access),
         specialize(|_, r, c| EExpr::Access(r, c), lowercase_ident())
     )
 }
@@ -245,7 +246,7 @@ fn underscore_expression<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
         let row = state.line;
         let col = state.column;
 
-        let (_, _, next_state) = word1(b'_', EExpr::Underscore).parse(arena, state)?;
+        let (_, _, next_state) = word1(b'_', Token::Underscore, EExpr::Underscore).parse(arena, state)?;
 
         let lowercase_ident_expr =
             { specialize(move |_, _, _| EExpr::End(row, col), lowercase_ident()) };
@@ -279,7 +280,7 @@ fn loc_possibly_negative_or_negated_term<'a>(
         // this will parse negative numbers, which the unary negate thing up top doesn't (for now)
         loc!(specialize(EExpr::Number, number_literal_help())),
         loc!(map_with_arena!(
-            and!(loc!(word1(b'!', EExpr::Start)), |a, s| {
+            and!(loc!(word1(b'!', Token::Bang, EExpr::Start)), |a, s| {
                 parse_loc_term(min_indent, options, a, s)
             }),
             |arena: &'a Bump, (loc_op, loc_expr): (Located<_>, _)| {
@@ -311,7 +312,7 @@ fn unary_negate<'a>() -> impl Parser<'a, (), EExpr<'a>> {
 
         if state.bytes().starts_with(b"-") && !followed_by_whitespace {
             // the negate is only unary if it is not followed by whitespace
-            let mut state = state.advance(1);
+            let mut state = state.advance(Some(Token::UnaryNegate), 1);
             state.column += 1;
             Ok((MadeProgress, (), state))
         } else {
@@ -1278,13 +1279,13 @@ fn parse_expr_end<'a>(
                 Err((NoProgress, _, mut state)) => {
                     // try multi-backpassing
                     if options.accept_multi_backpassing && state.bytes().starts_with(b",") {
-                        state = state.advance(1);
+                        state = state.advance(Some(Token::Comma), 1);
                         state.column += 1;
 
                         let (_, mut patterns, state) = specialize_ref(
                             EExpr::Pattern,
                             crate::parser::sep_by0(
-                                word1(b',', EPattern::Start),
+                                word1(b',', Token::Comma, EPattern::Start),
                                 space0_around_ee(
                                     crate::pattern::loc_pattern_help(min_indent),
                                     min_indent,
@@ -1306,7 +1307,7 @@ fn parse_expr_end<'a>(
 
                         patterns.insert(0, loc_pattern);
 
-                        match word2(b'<', b'-', EExpr::BackpassArrow).parse(arena, state) {
+                        match word2(b'<', b'-', Token::BinOpBackpassing, EExpr::BackpassArrow).parse(arena, state) {
                             Err((_, fail, state)) => Err((MadeProgress, fail, state)),
                             Ok((_, _, state)) => {
                                 let min_indent = start.col;
@@ -1592,14 +1593,14 @@ fn closure_help<'a>(
     map_with_arena!(
         skip_first!(
             // All closures start with a '\' - e.g. (\x -> x + 1)
-            word1(b'\\', ELambda::Start),
+            word1(b'\\', Token::LambdaStart, ELambda::Start),
             // Once we see the '\', we're committed to parsing this as a closure.
             // It may turn out to be malformed, but it is definitely a closure.
             and!(
                 // Parse the params
                 // Params are comma-separated
                 sep_by1_e(
-                    word1(b',', ELambda::Comma),
+                    word1(b',', Token::Comma, ELambda::Comma),
                     space0_around_ee(
                         specialize(ELambda::Pattern, loc_closure_param(min_indent)),
                         min_indent,
@@ -1611,7 +1612,7 @@ fn closure_help<'a>(
                 ),
                 skip_first!(
                     // Parse the -> which separates params from body
-                    word2(b'-', b'>', ELambda::Arrow),
+                    word2(b'-', b'>', Token::Arrow, ELambda::Arrow),
                     // Parse the body
                     space0_before_e(
                         specialize_ref(ELambda::Body, move |arena, state| {
@@ -1882,7 +1883,7 @@ mod when {
                             let pattern_indent_col = state.column;
 
                             let parser = sep_by1(
-                                word1(b'|', EWhen::Bar),
+                                word1(b'|', Token::Pipe, EWhen::Bar),
                                 branch_single_alternative(pattern_indent + 1),
                             );
 
@@ -1918,7 +1919,7 @@ mod when {
     /// Parsing the righthandside of a branch in a when conditional.
     fn branch_result<'a>(indent: u16) -> impl Parser<'a, Located<Expr<'a>>, EWhen<'a>> {
         skip_first!(
-            word2(b'-', b'>', EWhen::Arrow),
+            word2(b'-', b'>', Token::Arrow, EWhen::Arrow),
             space0_before_e(
                 specialize_ref(EWhen::Branch, move |arena, state| parse_loc_expr(
                     indent, arena, state
@@ -2136,13 +2137,13 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
 fn list_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EList<'a>> {
     move |arena, state| {
         let (_, elements, state) = collection_trailing_sep_e!(
-            word1(b'[', EList::Open),
+            word1(b'[', Token::OpenSquare, EList::Open),
             specialize_ref(
                 EList::Expr,
                 move |a, s| parse_loc_expr_no_multi_backpassing(min_indent, a, s)
             ),
-            word1(b',', EList::End),
-            word1(b']', EList::End),
+            word1(b',', Token::Comma, EList::End),
+            word1(b']', Token::CloseSquare, EList::End),
             min_indent,
             EList::Open,
             EList::Space,
@@ -2177,8 +2178,8 @@ fn record_field_help<'a>(
         // (This is true in both literals and types.)
         let (_, opt_loc_val, state) = optional(and!(
             either!(
-                word1(b':', ERecord::Colon),
-                word1(b'?', ERecord::QuestionMark)
+                word1(b':', Token::Colon, ERecord::Colon),
+                word1(b'?', Token::QuestionMark, ERecord::QuestionMark)
             ),
             space0_before_e(
                 specialize_ref(ERecord::Expr, move |a, s| {
@@ -2236,7 +2237,7 @@ fn record_help<'a>(
     ERecord<'a>,
 > {
     skip_first!(
-        word1(b'{', ERecord::Open),
+        word1(b'{', Token::OpenCurly, ERecord::Open),
         and!(
             // You can optionally have an identifier followed by an '&' to
             // make this a record update, e.g. { Foo.user & username: "blah" }.
@@ -2252,17 +2253,17 @@ fn record_help<'a>(
                     ERecord::IndentEnd,
                     ERecord::IndentAmpersand,
                 ),
-                word1(b'&', ERecord::Ampersand)
+                word1(b'&', Token::Ampersand, ERecord::Ampersand)
             )),
             loc!(skip_first!(
                 // We specifically allow space characters inside here, so that
                 // `{  }` can be successfully parsed as an empty record, and then
                 // changed by the formatter back into `{}`.
-                zero_or_more!(word1(b' ', ERecord::End)),
+                zero_or_more!(word1_bypass(b' ', ERecord::End)),
                 skip_second!(
                     and!(
                         trailing_sep_by0(
-                            word1(b',', ERecord::End),
+                            word1(b',', Token::Comma, ERecord::End),
                             space0_around_ee(
                                 loc!(record_field_help(min_indent)),
                                 min_indent,
@@ -2273,7 +2274,7 @@ fn record_help<'a>(
                         ),
                         space0_e(min_indent, ERecord::Space, ERecord::IndentEnd)
                     ),
-                    word1(b'}', ERecord::End)
+                    word1(b'}', Token::CloseCurly, ERecord::End)
                 )
             ))
         )
@@ -2389,9 +2390,9 @@ where
     let chomped = chomp_ops(state.bytes());
 
     macro_rules! good {
-        ($op:expr, $width:expr) => {{
+        ($op:expr, $ty:expr, $width:expr) => {{
             state.column += $width;
-            state = state.advance($width);
+            state = state.advance($ty, $width);
 
             Ok((MadeProgress, $op, state))
         }};
@@ -2408,20 +2409,20 @@ where
         1 => {
             let op = state.bytes()[0];
             match op {
-                b'+' => good!(BinOp::Plus, 1),
-                b'-' => good!(BinOp::Minus, 1),
-                b'*' => good!(BinOp::Star, 1),
-                b'/' => good!(BinOp::Slash, 1),
-                b'%' => good!(BinOp::Percent, 1),
-                b'^' => good!(BinOp::Caret, 1),
-                b'>' => good!(BinOp::GreaterThan, 1),
-                b'<' => good!(BinOp::LessThan, 1),
+                b'+' => good!(BinOp::Plus, Some(Token::BinOpPlus), 1),
+                b'-' => good!(BinOp::Minus, Some(Token::BinOpMinus), 1),
+                b'*' => good!(BinOp::Star, Some(Token::BinOpStar), 1),
+                b'/' => good!(BinOp::Slash, Some(Token::BinOpSlash), 1),
+                b'%' => good!(BinOp::Percent, Some(Token::BinOpPercent), 1),
+                b'^' => good!(BinOp::Caret, Some(Token::BinOpCaret), 1),
+                b'>' => good!(BinOp::GreaterThan, Some(Token::BinOpGreaterThan), 1),
+                b'<' => good!(BinOp::LessThan, Some(Token::BinOpLessThan), 1),
                 b'.' => {
                     // a `.` makes no progress, so it does not interfere with `.foo` access(or)
                     Err((NoProgress, to_error(b".", state.line, state.column), state))
                 }
-                b'=' => good!(BinOp::Assignment, 1),
-                b':' => good!(BinOp::HasType, 1),
+                b'=' => good!(BinOp::Assignment, Some(Token::BinOpAssignment), 1),
+                b':' => good!(BinOp::HasType, Some(Token::BinOpHasType), 1),
                 _ => bad_made_progress!(&state.bytes()[0..1]),
             }
         }
@@ -2430,20 +2431,20 @@ where
             let op1 = state.bytes()[1];
 
             match (op0, op1) {
-                (b'|', b'>') => good!(BinOp::Pizza, 2),
-                (b'=', b'=') => good!(BinOp::Equals, 2),
-                (b'!', b'=') => good!(BinOp::NotEquals, 2),
-                (b'>', b'=') => good!(BinOp::GreaterThanOrEq, 2),
-                (b'<', b'=') => good!(BinOp::LessThanOrEq, 2),
-                (b'&', b'&') => good!(BinOp::And, 2),
-                (b'|', b'|') => good!(BinOp::Or, 2),
-                (b'/', b'/') => good!(BinOp::DoubleSlash, 2),
-                (b'%', b'%') => good!(BinOp::DoublePercent, 2),
+                (b'|', b'>') => good!(BinOp::Pizza, Some(Token::BinOpPizza), 2),
+                (b'=', b'=') => good!(BinOp::Equals, Some(Token::BinOpEquals), 2),
+                (b'!', b'=') => good!(BinOp::NotEquals, Some(Token::BinOpNotEquals), 2),
+                (b'>', b'=') => good!(BinOp::GreaterThanOrEq, Some(Token::BinOpGreaterThanOrEq), 2),
+                (b'<', b'=') => good!(BinOp::LessThanOrEq, Some(Token::BinOpLessThanOrEq), 2),
+                (b'&', b'&') => good!(BinOp::And, Some(Token::BinOpAnd), 2),
+                (b'|', b'|') => good!(BinOp::Or, Some(Token::BinOpOr), 2),
+                (b'/', b'/') => good!(BinOp::DoubleSlash, Some(Token::BinOpDoubleSlash), 2),
+                (b'%', b'%') => good!(BinOp::DoublePercent, Some(Token::BinOpDoublePercent), 2),
                 (b'-', b'>') => {
                     // makes no progress, so it does not interfere with `_ if isGood -> ...`
                     Err((NoProgress, to_error(b"->", state.line, state.column), state))
                 }
-                (b'<', b'-') => good!(BinOp::Backpassing, 2),
+                (b'<', b'-') => good!(BinOp::Backpassing, Some(Token::BinOpBackpassing), 2),
                 _ => bad_made_progress!(&state.bytes()[0..2]),
             }
         }

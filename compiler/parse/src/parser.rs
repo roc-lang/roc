@@ -1,4 +1,4 @@
-use crate::state::State;
+use crate::{state::State, token::Token};
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_region::all::{Located, Region};
@@ -652,17 +652,28 @@ where
             return Err((NoProgress, if_error(state.line, state.column), state));
         }
 
+        let tok = match keyword {
+            "if" => Token::KeywordIf,
+            "then" => Token::KeywordThen,
+            "else" => Token::KeywordElse,
+            "when" => Token::KeywordWhen,
+            "as" => Token::KeywordAs,
+            "is" => Token::KeywordIs,
+            "expect" => Token::KeywordExpect,
+            _ => panic!(),
+        };
+
         // the next character should not be an identifier character
         // to prevent treating `whence` or `iffy` as keywords
         match state.bytes().get(width) {
             Some(next) if *next == b' ' || *next == b'#' || *next == b'\n' => {
                 state.column += width as u16;
-                state = state.advance(width);
+                state = state.advance(Some(tok), width);
                 Ok((MadeProgress, (), state))
             }
             None => {
                 state.column += width as u16;
-                state = state.advance(width);
+                state = state.advance(Some(tok), width);
                 Ok((MadeProgress, (), state))
             }
             Some(_) => Err((NoProgress, if_error(state.line, state.column), state)),
@@ -1219,7 +1230,7 @@ where
     }
 }
 
-pub fn word1<'a, ToError, E>(word: u8, to_error: ToError) -> impl Parser<'a, (), E>
+pub fn word1<'a, ToError, E>(word: u8, expected_token: Token, to_error: ToError) -> impl Parser<'a, (), E>
 where
     ToError: Fn(Row, Col) -> E,
     E: 'a,
@@ -1228,7 +1239,7 @@ where
 
     move |_arena: &'a Bump, state: State<'a>| match state.bytes().get(0) {
         Some(x) if *x == word => {
-            let mut state = state.advance(1);
+            let mut state = state.advance(Some(expected_token), 1);
             state.column += 1;
             Ok((MadeProgress, (), state))
         }
@@ -1236,7 +1247,24 @@ where
     }
 }
 
-pub fn word2<'a, ToError, E>(word_1: u8, word_2: u8, to_error: ToError) -> impl Parser<'a, (), E>
+pub fn word1_bypass<'a, ToError, E>(word: u8, to_error: ToError) -> impl Parser<'a, (), E>
+where
+    ToError: Fn(Row, Col) -> E,
+    E: 'a,
+{
+    debug_assert_ne!(word, b'\n');
+
+    move |_arena: &'a Bump, state: State<'a>| match state.bytes().get(0) {
+        Some(x) if *x == word => {
+            let mut state = state.advance(None, 1);
+            state.column += 1;
+            Ok((MadeProgress, (), state))
+        }
+        _ => Err((NoProgress, to_error(state.line, state.column), state)),
+    }
+}
+
+pub fn word2<'a, ToError, E>(word_1: u8, word_2: u8, expected_token: Token, to_error: ToError) -> impl Parser<'a, (), E>
 where
     ToError: Fn(Row, Col) -> E,
     E: 'a,
@@ -1248,7 +1276,7 @@ where
 
     move |_arena: &'a Bump, state: State<'a>| {
         if state.bytes().starts_with(&needle) {
-            let mut state = state.advance(2);
+            let mut state = state.advance(Some(expected_token), 2);
             state.column += 2;
             Ok((MadeProgress, (), state))
         } else {

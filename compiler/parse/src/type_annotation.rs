@@ -7,6 +7,7 @@ use crate::parser::{
     Progress::{self, *},
 };
 use crate::state::State;
+use crate::token::Token;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_region::all::{Located, Region};
@@ -21,10 +22,10 @@ pub fn located_help<'a>(
 fn tag_union_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, ETypeTagUnion<'a>> {
     move |arena, state| {
         let (_, tags, state) = collection_trailing_sep_e!(
-            word1(b'[', ETypeTagUnion::Open),
+            word1(b'[', Token::OpenSquare, ETypeTagUnion::Open),
             loc!(tag_type(min_indent)),
-            word1(b',', ETypeTagUnion::End),
-            word1(b']', ETypeTagUnion::End),
+            word1(b',', Token::Comma, ETypeTagUnion::End),
+            word1(b']', Token::CloseSquare, ETypeTagUnion::End),
             min_indent,
             ETypeTagUnion::Open,
             ETypeTagUnion::Space,
@@ -105,7 +106,7 @@ fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, ETy
 
 /// The `*` type variable, e.g. in (List *) Wildcard,
 fn loc_wildcard<'a>() -> impl Parser<'a, Located<TypeAnnotation<'a>>, EType<'a>> {
-    map!(loc!(word1(b'*', EType::TWildcard)), |loc_val: Located<
+    map!(loc!(word1(b'*', Token::Astrisk, EType::TWildcard)), |loc_val: Located<
         (),
     >| {
         loc_val.map(|_| TypeAnnotation::Wildcard)
@@ -114,7 +115,7 @@ fn loc_wildcard<'a>() -> impl Parser<'a, Located<TypeAnnotation<'a>>, EType<'a>>
 
 /// The `_` indicating an inferred type, e.g. in (List _)
 fn loc_inferred<'a>() -> impl Parser<'a, Located<TypeAnnotation<'a>>, EType<'a>> {
-    map!(loc!(word1(b'_', EType::TInferred)), |loc_val: Located<
+    map!(loc!(word1(b'_', Token::Underscore, EType::TInferred)), |loc_val: Located<
         (),
     >| {
         loc_val.map(|_| TypeAnnotation::Inferred)
@@ -152,7 +153,7 @@ fn loc_type_in_parens<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Located<TypeAnnotation<'a>>, ETypeInParens<'a>> {
     between!(
-        word1(b'(', ETypeInParens::Open),
+        word1(b'(', Token::OpenParen, ETypeInParens::Open),
         space0_around_ee(
             move |arena, state| specialize_ref(ETypeInParens::Type, expression(min_indent))
                 .parse(arena, state),
@@ -161,7 +162,7 @@ fn loc_type_in_parens<'a>(
             ETypeInParens::IndentOpen,
             ETypeInParens::IndentEnd,
         ),
-        word1(b')', ETypeInParens::IndentEnd)
+        word1(b')', Token::CloseParen, ETypeInParens::IndentEnd)
     )
 }
 
@@ -226,8 +227,8 @@ fn record_type_field<'a>(
         // Having a value is optional; both `{ email }` and `{ email: blah }` work.
         // (This is true in both literals and types.)
         let (_, opt_loc_val, state) = optional(either!(
-            word1(b':', ETypeRecord::Colon),
-            word1(b'?', ETypeRecord::Optional)
+            word1(b':', Token::Colon, ETypeRecord::Colon),
+            word1(b'?', Token::QuestionMark, ETypeRecord::Optional)
         ))
         .parse(arena, state)?;
 
@@ -286,11 +287,11 @@ fn record_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, EType
     move |arena, state| {
         let (_, fields, state) = collection_trailing_sep_e!(
             // word1_check_indent!(b'{', TRecord::Open, min_indent, TRecord::IndentOpen),
-            word1(b'{', ETypeRecord::Open),
+            word1(b'{', Token::OpenCurly, ETypeRecord::Open),
             loc!(record_type_field(min_indent)),
-            word1(b',', ETypeRecord::End),
+            word1(b',', Token::Comma, ETypeRecord::End),
             // word1_check_indent!(b'}', TRecord::End, min_indent, TRecord::IndentEnd),
-            word1(b'}', ETypeRecord::End),
+            word1(b'}', Token::CloseCurly, ETypeRecord::End),
             min_indent,
             ETypeRecord::Open,
             ETypeRecord::Space,
@@ -350,7 +351,7 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
         .parse(arena, state)?;
 
         let (p2, rest, state) = zero_or_more!(skip_first!(
-            word1(b',', EType::TFunctionArgument),
+            word1(b',', Token::Comma, EType::TFunctionArgument),
             one_of![
                 space0_around_ee(
                     term(min_indent),
@@ -372,7 +373,7 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
         // is only one argument are not seen by the formatter. Can we do better?
         let (p3, is_function, state) = optional(skip_first!(
             space0_e(min_indent, EType::TSpace, EType::TIndentStart),
-            word2(b'-', b'>', EType::TStart)
+            word2(b'-', b'>', Token::Arrow, EType::TStart)
         ))
         .parse(arena, state)?;
 
@@ -449,7 +450,7 @@ fn parse_concrete_type<'a>(
             let parsed_str =
                 unsafe { std::str::from_utf8_unchecked(&initial_bytes[..chomped + delta]) };
 
-            state = state.advance_without_indenting_ee(chomped, |r, c| {
+            state = state.advance_without_indenting_ee(Some(Token::Malformed), chomped, |r, c| {
                 ETypeApply::Space(crate::parser::BadInputError::LineTooLong, r, c)
             })?;
 
