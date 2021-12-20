@@ -267,7 +267,7 @@ pub enum EExpr<'a> {
     Access(Row, Col),
     UnaryNot(Row, Col),
     UnaryNegate(Row, Col),
-    BadOperator(&'a [u8], Row, Col),
+    BadOperator(&'a str, Row, Col),
 
     DefMissingFinalExpr(Row, Col),
     DefMissingFinalExpr2(&'a EExpr<'a>, Row, Col),
