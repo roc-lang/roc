@@ -272,6 +272,7 @@ impl<'a> WasmBackend<'a> {
         self.start_block(BlockType::from(ret_type));
 
         for (layout, symbol) in proc.args {
+            self.symbol_layouts.insert(*symbol, *layout);
             let arg_layout = WasmLayout::new(layout);
             self.storage
                 .allocate(&arg_layout, *symbol, StoredValueKind::Parameter);
@@ -480,6 +481,8 @@ impl<'a> WasmBackend<'a> {
                 // make locals for join pointer parameters
                 let mut jp_param_storages = Vec::with_capacity_in(parameters.len(), self.env.arena);
                 for parameter in parameters.iter() {
+                    self.symbol_layouts
+                        .insert(parameter.symbol, parameter.layout);
                     let wasm_layout = WasmLayout::new(&parameter.layout);
                     let mut param_storage = self.storage.allocate(
                         &wasm_layout,
