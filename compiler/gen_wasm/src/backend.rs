@@ -645,21 +645,34 @@ impl<'a> WasmBackend<'a> {
                 field_layouts,
                 structure,
             } => {
-                if let StoredValue::StackMemory { location, .. } = self.storage.get(structure) {
-                    let (local_id, mut offset) =
-                        location.local_and_offset(self.storage.stack_frame_pointer);
-                    for field in field_layouts.iter().take(*index as usize) {
-                        offset += field.stack_size(PTR_SIZE);
+                self.storage.ensure_value_has_local(
+                    &mut self.code_builder,
+                    *sym,
+                    storage.to_owned(),
+                );
+                let (local_id, mut offset) = match self.storage.get(structure) {
+                    StoredValue::StackMemory { location, .. } => {
+                        location.local_and_offset(self.storage.stack_frame_pointer)
                     }
-                    self.storage.copy_value_from_memory(
-                        &mut self.code_builder,
-                        *sym,
+
+                    StoredValue::Local {
+                        value_type,
                         local_id,
-                        offset,
-                    );
-                } else {
-                    internal_error!("Unexpected storage for {:?}", structure)
+                        ..
+                    } => {
+                        debug_assert!(matches!(value_type, ValueType::I32));
+                        (*local_id, 0)
+                    }
+
+                    StoredValue::VirtualMachineStack { .. } => {
+                        internal_error!("ensure_value_has_local didn't work")
+                    }
+                };
+                for field in field_layouts.iter().take(*index as usize) {
+                    offset += field.stack_size(PTR_SIZE);
                 }
+                self.storage
+                    .copy_value_from_memory(&mut self.code_builder, *sym, local_id, offset);
             }
 
             Expr::Array { elems, elem_layout } => {
@@ -1078,6 +1091,62 @@ impl<'a> WasmBackend<'a> {
         return_layout: WasmLayout,
         storage: &StoredValue,
     ) {
+        let arg_layout = self.symbol_layouts[&arguments[0]];
+        let other_arg_layout = self.symbol_layouts[&arguments[1]];
+        debug_assert!(
+            arg_layout == other_arg_layout,
+            "Cannot do `==` comparison on different types"
+        );
+
+        match arg_layout {
+            Layout::Builtin(
+                Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal,
+            ) => self.build_eq_number(lowlevel, arguments, return_layout),
+
+            Layout::Builtin(Builtin::Str) => {
+                let (param_types, ret_type) = self.storage.load_symbols_for_call(
+                    self.env.arena,
+                    &mut self.code_builder,
+                    arguments,
+                    return_sym,
+                    &return_layout,
+                    CallConv::Zig,
+                );
+                self.call_zig_builtin(bitcode::STR_EQUAL, param_types, ret_type);
+                if matches!(lowlevel, LowLevel::NotEq) {
+                    self.code_builder.i32_eqz();
+                }
+            }
+
+            Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_) | Builtin::List(_))
+            | Layout::Struct(_)
+            | Layout::Union(_)
+            | Layout::LambdaSet(_) => {
+                if arg_layout.stack_size(PTR_SIZE) == 0 {
+                    // A zero-size type has only one possible value, like `{}` or `Unit`
+                    // The arguments don't exist at runtime. Just emit True (Eq) or False (NotEq).
+                    let result = matches!(lowlevel, LowLevel::Eq);
+                    self.code_builder.i32_const(result as i32);
+                } else {
+                    self.build_eq_specialized(&arg_layout, arguments, return_sym, storage);
+                    if matches!(lowlevel, LowLevel::NotEq) {
+                        self.code_builder.i32_eqz();
+                    }
+                }
+            }
+
+            Layout::RecursivePointer => {
+                internal_error!("`==` on RecursivePointer should be converted to the parent layout")
+            }
+        }
+    }
+
+    fn build_eq_number(
+        &mut self,
+        lowlevel: LowLevel,
+        arguments: &'a [Symbol],
+        return_layout: WasmLayout,
+    ) {
         use StoredValue::*;
         match self.storage.get(&arguments[0]).to_owned() {
             VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
@@ -1108,31 +1177,21 @@ impl<'a> WasmBackend<'a> {
                     ..
                 } = self.storage.get(&arguments[1]).to_owned()
                 {
-                    self.build_eq_memory(
-                        format,
-                        [location0, location1],
-                        arguments,
-                        return_sym,
-                        return_layout,
-                        storage,
-                    );
+                    self.build_eq_num128(format, [location0, location1], arguments, return_layout);
                     if matches!(lowlevel, LowLevel::NotEq) {
                         self.code_builder.i32_eqz();
                     }
                 }
             }
-        };
+        }
     }
 
-    // Equality for values in memory (as opposed to VM stack)
-    fn build_eq_memory(
+    fn build_eq_num128(
         &mut self,
         format: StackMemoryFormat,
         locations: [StackMemoryLocation; 2],
         arguments: &'a [Symbol],
-        return_sym: Symbol,
         return_layout: WasmLayout,
-        storage: &StoredValue,
     ) {
         match format {
             StackMemoryFormat::Decimal => {
@@ -1156,60 +1215,22 @@ impl<'a> WasmBackend<'a> {
                 self.code_builder.i32_and();
 
                 // AND they have the same bytes
-                self.build_eq_help_128bit(locations);
+                self.build_eq_num128_bytes(locations);
                 self.code_builder.i32_and();
             }
 
-            StackMemoryFormat::Int128 => self.build_eq_help_128bit(locations),
+            StackMemoryFormat::Int128 => self.build_eq_num128_bytes(locations),
 
             StackMemoryFormat::Float128 => todo!("equality for f128"),
 
             StackMemoryFormat::DataStructure => {
-                let layout = self.symbol_layouts[&arguments[0]];
-                let layout_rhs = self.symbol_layouts[&arguments[1]];
-                debug_assert!(
-                    layout == layout_rhs,
-                    "Cannot do `==` comparison on different types"
-                );
-
-                if layout == Layout::Builtin(Builtin::Str) {
-                    let (param_types, ret_type) = self.storage.load_symbols_for_call(
-                        self.env.arena,
-                        &mut self.code_builder,
-                        arguments,
-                        return_sym,
-                        &return_layout,
-                        CallConv::Zig,
-                    );
-                    self.call_zig_builtin(bitcode::STR_EQUAL, param_types, ret_type);
-                } else if layout.stack_size(PTR_SIZE) == 0 {
-                    // Always true: `Unit == Unit`, or `{} == {}`
-                    self.code_builder.i32_const(1);
-                } else {
-                    let ident_ids = self
-                        .interns
-                        .all_ident_ids
-                        .get_mut(&self.env.module_id)
-                        .unwrap();
-
-                    let (replacement_expr, new_specializations) = self
-                        .helper_proc_gen
-                        .specialize_equals(ident_ids, &layout, arguments);
-
-                    // If any new specializations were created, register their symbol data
-                    for spec in new_specializations.into_iter() {
-                        self.register_helper_proc(spec);
-                    }
-
-                    let bool_layout = Layout::Builtin(Builtin::Bool);
-                    self.build_expr(&return_sym, replacement_expr, &bool_layout, storage);
-                }
+                internal_error!("Data structure equality is handled elsewhere")
             }
         }
     }
 
-    /// Equality helper for 128-bit numbers
-    fn build_eq_help_128bit(&mut self, locations: [StackMemoryLocation; 2]) {
+    /// Check that two 128-bit numbers contain the same bytes
+    fn build_eq_num128_bytes(&mut self, locations: [StackMemoryLocation; 2]) {
         let (local0, offset0) = locations[0].local_and_offset(self.storage.stack_frame_pointer);
         let (local1, offset1) = locations[1].local_and_offset(self.storage.stack_frame_pointer);
 
@@ -1226,6 +1247,35 @@ impl<'a> WasmBackend<'a> {
         self.code_builder.i64_eq();
 
         self.code_builder.i32_and();
+    }
+
+    /// Call a helper procedure that implements `==` for a specific data structure
+    fn build_eq_specialized(
+        &mut self,
+        arg_layout: &Layout<'a>,
+        arguments: &'a [Symbol],
+        return_sym: Symbol,
+        storage: &StoredValue,
+    ) {
+        let ident_ids = self
+            .interns
+            .all_ident_ids
+            .get_mut(&self.env.module_id)
+            .unwrap();
+
+        // Get an IR expression for the call to the specialized procedure
+        let (specialized_call_expr, new_specializations) = self
+            .helper_proc_gen
+            .call_specialized_equals(ident_ids, arg_layout, arguments);
+
+        // If any new specializations were created, register their symbol data
+        for spec in new_specializations.into_iter() {
+            self.register_helper_proc(spec);
+        }
+
+        // Generate Wasm code for the IR call expression
+        let bool_layout = Layout::Builtin(Builtin::Bool);
+        self.build_expr(&return_sym, specialized_call_expr, &bool_layout, storage);
     }
 
     fn load_literal(

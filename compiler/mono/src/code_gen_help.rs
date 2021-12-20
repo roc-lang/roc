@@ -196,7 +196,7 @@ impl<'a> CodeGenHelp<'a> {
 
     /// Replace a generic `Lowlevel::Eq` call with a specialized helper proc.
     /// The helper procs themselves are to be generated later with `generate_procs`
-    pub fn specialize_equals(
+    pub fn call_specialized_equals(
         &mut self,
         ident_ids: &mut IdentIds,
         layout: &Layout<'a>,
@@ -1048,7 +1048,7 @@ fn layout_needs_helper_proc(layout: &Layout, op: HelperOp) -> bool {
         Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_) | Builtin::List(_))
         | Layout::Struct(_)
         | Layout::Union(_)
-        | Layout::LambdaSet(_)
-        | Layout::RecursivePointer => true,
+        | Layout::LambdaSet(_) => true,
+        Layout::RecursivePointer => false,
     }
 }
