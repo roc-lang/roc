@@ -282,23 +282,25 @@ fn unify_structure(
     match other {
         FlexVar(_) => {
             // If the other is flex, Structure wins!
+            let outcome = merge(subs, ctx, Structure(flat_type.clone()));
+
             // Unless it's a presence variable... TODO more documentation
             match (present, flat_type) {
                 (true, FlatType::TagUnion(tags, _ext)) => {
+                    let new_ext = subs.fresh_unnamed_flex_var();
                     let mut new_desc = ctx.first_desc.clone();
-                    new_desc.content = Structure(FlatType::TagUnion(*tags, ctx.second));
+                    new_desc.content = Structure(FlatType::TagUnion(*tags, new_ext));
                     subs.set(ctx.first, new_desc);
-                    return vec![];
                 }
                 (true, FlatType::FunctionOrTagUnion(tn, sym, _ext)) => {
+                    let new_ext = subs.fresh_unnamed_flex_var();
                     let mut new_desc = ctx.first_desc.clone();
-                    new_desc.content =
-                        Structure(FlatType::FunctionOrTagUnion(*tn, *sym, ctx.second));
+                    new_desc.content = Structure(FlatType::FunctionOrTagUnion(*tn, *sym, new_ext));
                     subs.set(ctx.first, new_desc);
-                    return vec![];
                 }
-                _ => merge(subs, ctx, Structure(flat_type.clone())),
+                _ => {}
             }
+            outcome
         }
         RigidVar(name) => {
             // Type mismatch! Rigid can only unify with flex.

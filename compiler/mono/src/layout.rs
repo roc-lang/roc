@@ -796,9 +796,6 @@ impl<'a> Layout<'a> {
         content: Content,
     ) -> Result<Self, LayoutProblem> {
         use roc_types::subs::Content::*;
-        if matches!(&content, Structure(FlatType::TagUnion(_, _))) {
-            // dbg!(var);
-        }
         match content {
             FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar(var)),
             RecursionVar { structure, .. } => {
