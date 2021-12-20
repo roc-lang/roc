@@ -1,41 +1,44 @@
-# The Roc Code of Conduct
+# Code of Conduct for the Roc GitHub Repository and Zulip Chat
 
-A version of this document [can be found online](https://www.roc-lang.org/conduct).
-It is based on the Rust Code of Conduct, which [can also be found online](https://www.rust-lang.org/conduct).
+## Our Pledge
 
-## Conduct
+In the interest of fostering an open and welcoming environment, we as participants in the Roc GitHub repository and Zulip Chat pledge to make participation in our project and our community a harassment-free experience for everyone, regardless of age, body size, visible or invisible disability, ethnicity, sex characteristics, gender identity and expression, level of experience, education, socio-economic status, nationality, personal appearance, race, caste, color, religion, or sexual identity and orientation.
 
-**Contact**: [roc-mods@roc-lang.org](mailto:roc-mods@roc-lang.org)
+## Our Standards
 
-* We are committed to providing a friendly, safe and welcoming environment for all, regardless of level of experience, gender identity and expression, sexual orientation, disability, personal appearance, body size, race, ethnicity, age, religion, nationality, or other similar characteristic.
-* On IRC, please avoid using overtly sexual nicknames or other nicknames that might detract from a friendly, safe and welcoming environment for all.
-* Please be kind and courteous. There's no need to be mean or rude.
-: Respect that people have differences of opinion and that every design or implementation choice carries a trade-off and numerous costs. There is seldom a right answer.
-* Please keep unstructured critique to a minimum. If you have solid ideas you want to experiment with, make a fork and see how it works.
-* We will exclude you from interaction if you insult, demean or harass anyone. That is not welcome behavior. We interpret the term "harassment" as including the definition in the <a href="http://citizencodeofconduct.org/">Citizen Code of Conduct</a>; if you have any lack of clarity about what might be included in that concept, please read their definition. In particular, we don't tolerate behavior that excludes people in socially marginalized groups.
-* Private harassment is also unacceptable. No matter who you are, if you feel you have been or are being harassed or made uncomfortable by a community member, please contact one of the channel ops or any of the [Roc moderation team][mod_team] immediately. Whether you're a regular contributor or a newcomer, we care about making this community a safe place for you and we've got your back.
-* Likewise any spamming, trolling, flaming, baiting or other attention-stealing behavior is not welcome.
+Examples of behavior that contributes to creating a positive environment include:
 
-## Moderation
+* Demonstrating empathy and kindness toward other people
+* Being respectful of differing opinions, viewpoints, and experiences
+* Kindly giving and gracefully accepting constructive feedback
+* Accepting responsibility and apologizing to those affected by our mistakes, and learning from the experience
+* Focusing on what is best not just for us as individuals, but for the overall
+  community
 
+Examples of unacceptable behavior include:
 
-These are the policies for upholding our community's standards of conduct. If you feel that a thread needs moderation, please contact the [Roc moderation team][mod_team].
+* The use of sexualized language or imagery, and sexual attention or advances of any kind
+* Trolling, insulting or derogatory comments, and personal or political attacks
+* Public or private harassment
+* Publishing others' private information, such as a physical or email address, without their explicit permission
+* Telling others to be less sensitive, or that they should not feel hurt or offended by something
 
-1. Remarks that violate the Roc standards of conduct, including hateful, hurtful, oppressive, or exclusionary remarks, are not allowed. (Cursing is allowed, but never targeting another user, and never in a hateful manner.)
-2. Remarks that moderators find inappropriate, whether listed in the code of conduct or not, are also not allowed.
-3. Moderators will first respond to such remarks with a warning.
-4. If the warning is unheeded, the user will be "kicked," i.e., kicked out of the communication channel to cool off.
-5. If the user comes back and continues to make trouble, they will be banned, i.e., indefinitely excluded.
-6. Moderators may choose at their discretion to un-ban the user if it was a first offense and they offer the offended party a genuine apology.
-7. If a moderator bans someone and you think it was unjustified, please take it up with that moderator, or with a different moderator, **in private**. Complaints about bans in-channel are not allowed.
-8. Moderators are held to a higher standard than other community members. If a moderator creates an inappropriate situation, they should expect less leeway than others.
+## Enforcement Responsibilities
 
-In the Roc community we strive to go the extra step to look out for each other. Don't just aim to be technically unimpeachable, try to be your best self. In particular, avoid flirting with offensive or sensitive issues, particularly if they're off-topic; this all too often leads to unnecessary fights, hurt feelings, and damaged trust; worse, it can drive people away from the community entirely.
+Moderators are responsible for clarifying and enforcing the standards of acceptable behavior and are expected to take appropriate and fair corrective action in response to any instances of unacceptable behavior, including by project leaders or otherwise prominent community members.
 
-And if someone takes issue with something you said or did, resist the urge to be defensive. Just stop doing what it was they complained about and apologize. Even if you feel you were misinterpreted or unfairly accused, chances are good there was something you could've communicated better — remember that it's your responsibility to make your fellow Roc programmers comfortable. Everyone wants to get along and we are all here first and foremost because we want to talk about cool technology. You will find that people will be eager to assume good intent and forgive as long as you earn their trust.
+Moderators have the right and responsibility to remove, edit, or reject comments, commits, code, wiki edits, issues, and other contributions that are not aligned to this Code of Conduct, or to ban temporarily or permanently any contributor for other behaviors that they deem inappropriate, threatening, offensive, or harmful. If a moderator is the subject of a reported code of conduct breach, or has a major conflict of interest, they should recuse themselves from participation in the resolution of that report. An exception to this is if more than 50% of the moderators would recuse themselves for the same reported breach; in such a case, none of them need to.
 
-The enforcement policies listed above apply to all official Roc venues; including official Zulip chat (https://roc.zulipchat.com); and GitHub repositories under the roc-lang organization. If you wish to use this code of conduct (or the Rust code of conduct, on which it is based) for your own project, consider explicitly mentioning your moderation policy or making a copy with your own moderation policy so as to avoid confusion.
+## Scope
 
-*Adapted from the [Node.js Policy on Trolling](http://blog.izs.me/post/30036893703/policy-on-trolling) as well as the [Contributor Covenant v1.3.0](https://www.contributor-covenant.org/version/1/3/0/).*
+This Code of Conduct applies within the Roc GitHub repository as well as the Roc Zulip Chat. It also applies when an individual is officially representing the project or its community in public spaces. Examples of representing the project or community include using an official roc-lang.org e-mail address, posting via an official social media account, or acting as the project's appointed representative at an online or offline event. Representation of the project may be further defined and clarified by moderators.
 
-[mod_team]: https://www.roc-lang.org/moderation
+## Reporting
+
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by contacting the project team at [conduct@roc-lang.org](mailto:conduct@roc-lang.org). All complaints will be reviewed and investigated and will result in a response that is deemed necessary and appropriate to the circumstances. The moderation team is obligated to maintain confidentiality with regard to the reporter of an incident. Further details of specific enforcement policies may be posted separately.
+
+Moderators who do not follow or enforce the Code of Conduct in good faith may face temporary or permanent repercussions as determined by other members of project leadership.
+
+## Attribution
+
+This Code of Conduct is adapted from the Contributor Covenant, version 1.4, available at https://www.contributor-covenant.org/version/1/4/code-of-conduct.html
