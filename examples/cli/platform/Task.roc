@@ -16,11 +16,13 @@ fail = \val ->
     Effect.always (Err val)
 
 attempt : Task a b, (Result a b -> Task c d) -> Task c d
-attempt = \effect, transform ->
-    Effect.after effect \result ->
+attempt = \task, resultToTask ->
+    # TODO replace this with attempt = Effect.after
+    # Effect.after effect resultToTask
+    Effect.after task \result ->
         when result is
-            Ok ok -> transform (Ok ok)
-            Err err -> transform (Err err)
+            Ok ok -> resultToTask (Ok ok)
+            Err err -> resultToTask (Err err)
 
 await : Task a err, (a -> Task b err) -> Task b err
 await = \effect, transform ->

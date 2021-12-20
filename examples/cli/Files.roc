@@ -10,9 +10,13 @@ main =
     task =
         {} <- await (Stdout.line "What file should I read?")
         filename <- await Stdin.line
-        File.readUtf8 filename
+        File.readUtf8Infallible filename
 
-    Task.attempt task \result ->
-        when result is
-            Ok contents -> Stdout.line "Here are its contents:\n\n\(contents)"
-            Err _ -> Stdout.line "Error reading file!"
+    str <- await task
+
+    Stdout.line "it was: \(str)"
+
+    # Task.attempt task \result ->
+    #     when result is
+    #         Ok contents -> Stdout.line "Here are its contents:\n\n\(contents)"
+    #         Err _ -> Stdout.line "Error reading file!"

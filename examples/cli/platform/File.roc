@@ -1,6 +1,6 @@
 interface File
-    exposes [ Path, OpenErr, ReadErr, ReadUtf8Err, WriteErr, DirReadErr, readBytes, readUtf8, writeBytes, writeUtf8 ]
-    imports [ fx.Effect, Task.{ Task } ]
+    exposes [ Path, OpenErr, ReadErr, ReadUtf8Err, WriteErr, DirReadErr, readBytes, readUtf8, readUtf8Infallible, writeBytes, writeUtf8 ]
+    imports [ fx.Effect, Task.{ Task }, Stdout ]
 
 ## A file path. This is an alias for an ordinary string; it isn't guaranteed to be
 ## a valid file path or anything, it's just to make types that deal with file paths
@@ -57,6 +57,19 @@ WriteErr :
     #]OpenErr
     ]
 
+readUtf8Infallible : Path -> Task Str *
+readUtf8Infallible = \path ->
+    Task.await (readBytesInfallible path) \_ ->
+        Task.succeed "ok!"
+    # when result is
+    #     Ok bytes ->
+    #         when Str.fromUtf8 bytes is
+    #             Ok str -> Task.succeed str
+    #             # TODO FIXME replace with:  -> Task.fail (ReadUtf8 (BadUtf8 problem index))
+    #             Err (BadUtf8 problem index) -> Task.succeed "<<bad utf8>>"
+
+    #     Err (ReadBytes problem) -> Task.succeed "<<problem!>>"
+
 ## Read a file's bytes and interpret them as UTF-8 encoded text.
 # TODO FIXME use this instead:
 #readUtf8 : Path -> Task Str [ ReadUtf8 ReadUtf8Err ]*
@@ -73,11 +86,25 @@ readUtf8 = \path ->
 
         Err (ReadBytes problem) -> Task.fail (ReadUtf8 problem)
 
+readBytesInfallible : Path -> Task (List U8) *
+readBytesInfallible = \path ->
+    Effect.after (Effect.readAllBytes path) \_ ->
+        Task.succeed []
+    # Effect.after (Effect.readAllBytes path) \result ->
+    #     when result is
+    #         Ok bytes -> Task.succeed bytes
+    #         Err err -> Task.succeed []
+
 
 readBytes : Path -> Task (List U8) [ ReadBytes ReadErr ]*
 readBytes = \path ->
-    Effect.readAllBytes path
-        |> Task.mapFail ReadBytes
+    Task.succeed [] # TODO FIXME
+    # Effect.readAllBytes path
+    #     |> Task.mapFail ReadBytes
+    # Effect.after (Effect.readAllBytes path) \result ->
+    #     when result is
+    #         Ok bytes -> Task.succeed bytes
+    #         Err err -> Task.fail (ReadBytes err)
 
 
 writeUtf8 : Path, Str -> Task {} [ WriteUtf8 WriteErr ]*
