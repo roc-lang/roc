@@ -36,29 +36,7 @@ impl Serialize for ValueType {
     }
 }
 
-#[derive(PartialEq, Eq, Debug)]
-pub enum BlockType {
-    NoResult,
-    Value(ValueType),
-}
-
-impl BlockType {
-    pub fn as_byte(&self) -> u8 {
-        match self {
-            Self::NoResult => 0x40,
-            Self::Value(t) => *t as u8,
-        }
-    }
-}
-
-impl From<Option<ValueType>> for BlockType {
-    fn from(opt: Option<ValueType>) -> Self {
-        match opt {
-            Some(ty) => BlockType::Value(ty),
-            None => BlockType::NoResult,
-        }
-    }
-}
+const BLOCK_NO_RESULT: u8 = 0x40;
 
 /// A control block in our model of the VM
 /// Child blocks cannot "see" values from their parent block
@@ -579,9 +557,11 @@ impl<'a> CodeBuilder<'a> {
     }
 
     /// Block instruction
-    fn inst_block(&mut self, opcode: OpCode, pops: usize, block_type: BlockType) {
+    fn inst_block(&mut self, opcode: OpCode, pops: usize) {
         self.inst_base(opcode, pops, false);
-        self.code.push(block_type.as_byte());
+
+        // We don't support block result types. Too hard to track types through arbitrary control flow.
+        self.code.push(BLOCK_NO_RESULT);
 
         // Start a new block with a fresh value stack
         self.vm_block_stack.push(VmBlock {
@@ -589,12 +569,7 @@ impl<'a> CodeBuilder<'a> {
             value_stack: Vec::with_capacity_in(8, self.arena),
         });
 
-        log_instruction!(
-            "{:10} {:?}\t{:?}",
-            format!("{:?}", opcode),
-            block_type,
-            &self.vm_block_stack
-        );
+        log_instruction!("{:10}\t{:?}", format!("{:?}", opcode), &self.vm_block_stack);
     }
 
     fn inst_imm32(&mut self, opcode: OpCode, pops: usize, push: bool, immediate: u32) {
@@ -647,14 +622,14 @@ impl<'a> CodeBuilder<'a> {
     instruction_no_args!(unreachable_, UNREACHABLE, 0, false);
     instruction_no_args!(nop, NOP, 0, false);
 
-    pub fn block(&mut self, ty: BlockType) {
-        self.inst_block(BLOCK, 0, ty);
+    pub fn block(&mut self) {
+        self.inst_block(BLOCK, 0);
     }
-    pub fn loop_(&mut self, ty: BlockType) {
-        self.inst_block(LOOP, 0, ty);
+    pub fn loop_(&mut self) {
+        self.inst_block(LOOP, 0);
     }
-    pub fn if_(&mut self, ty: BlockType) {
-        self.inst_block(IF, 1, ty);
+    pub fn if_(&mut self) {
+        self.inst_block(IF, 1);
     }
     pub fn else_(&mut self) {
         // Reuse the 'then' block but clear its value stack
@@ -947,7 +922,7 @@ impl<'a> CodeBuilder<'a> {
         self.i32_const(expected);
         self.i32_eq();
         self.i32_eqz();
-        self.if_(BlockType::NoResult);
+        self.if_();
         self.unreachable_(); // Tell Wasm runtime to throw an exception
         self.end();
         // It matches. Restore the original value to the VM stack and continue the program.

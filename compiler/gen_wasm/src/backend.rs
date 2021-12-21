@@ -26,7 +26,7 @@ use crate::wasm_module::sections::{
     Import, ImportDesc, ImportSection, MemorySection, TypeSection, WasmModule,
 };
 use crate::wasm_module::{
-    code_builder, BlockType, CodeBuilder, ConstExpr, Export, ExportType, Global, GlobalType,
+    code_builder, CodeBuilder, ConstExpr, Export, ExportType, Global, GlobalType,
     LinkingSubSection, LocalId, Signature, SymInfo, ValueType,
 };
 use crate::{
@@ -312,12 +312,12 @@ impl<'a> WasmBackend<'a> {
         // The rules are confusing, and implementing them would add complexity and slow down code gen.
         // Instead we use local variables to move a value from an inner block to an outer one.
         self.block_depth += 1;
-        self.code_builder.block(BlockType::NoResult);
+        self.code_builder.block();
     }
 
     fn start_loop(&mut self) {
         self.block_depth += 1;
-        self.code_builder.loop_(BlockType::NoResult);
+        self.code_builder.loop_();
     }
 
     fn end_block(&mut self) {
@@ -893,7 +893,7 @@ impl<'a> WasmBackend<'a> {
 
                 // null check
                 self.code_builder.i32_eqz();
-                self.code_builder.if_(BlockType::NoResult);
+                self.code_builder.if_();
                 self.code_builder.i32_const(*nullable_id as i32);
                 self.code_builder.set_local(local_id);
                 self.code_builder.else_();
