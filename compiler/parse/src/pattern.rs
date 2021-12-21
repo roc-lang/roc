@@ -4,7 +4,7 @@ use crate::ident::{lowercase_ident, parse_ident, Ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
     backtrackable, optional, specialize, specialize_ref, word1, EPattern, PInParens, PRecord,
-    ParseResult, Parser,
+    ParseResult, Parser, word1_bypass,
 };
 use crate::state::State;
 use crate::token::Token;
@@ -293,10 +293,15 @@ fn loc_ident_pattern_help<'a>(
 
 fn underscore_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
-        let (_, _, next_state) = word1(b'_', Token::Underscore, EPattern::Underscore).parse(arena, state)?;
 
-        let (_, output, final_state) =
-            optional(lowercase_ident_pattern).parse(arena, next_state)?;
+        let (output, final_state) = state.expect_compound_token(Token::Underscore, |state| {
+            let (_, _, next_state) = word1_bypass(b'_', EPattern::Underscore).parse(arena, state)?;
+
+            let (_, output, final_state) =
+                optional(lowercase_ident_pattern).parse(arena, next_state)?;
+
+            Ok((output, final_state))
+        })?;
 
         match output {
             Some(name) => Ok((MadeProgress, Pattern::Underscore(name), final_state)),

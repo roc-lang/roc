@@ -14,7 +14,6 @@ pub enum Token {
     BinOpGreaterThan,
     BinOpLessThan,
     BinOpAssignment,
-    BinOpHasType,
     BinOpPizza,
     BinOpEquals,
     BinOpNotEquals,
@@ -33,6 +32,15 @@ pub enum Token {
     KeywordAs,
     KeywordIs,
     KeywordExpect,
+    KeywordApp,
+    KeywordInterface,
+    KeywordPackages,
+    KeywordImports,
+    KeywordProvides,
+    KeywordTo,
+    KeywordExposes,
+    KeywordEffects,
+    KeywordPlatform,
 
     Ident,
 
@@ -85,9 +93,12 @@ impl Token {
                 b'}' => (Token::CloseCurly, 1),
                 b'[' => (Token::OpenSquare, 1),
                 b']' => (Token::CloseSquare, 1),
-                b'a'..=b'z' => lex_ident(true, bytes),
-                b'A'..=b'Z' => lex_ident(false, bytes),
-                b'0'..=b'9' => lex_int(bytes),
+                b',' => (Token::Comma, 1),
+                b'_' => lex_underscore(bytes),
+                b'@' => lex_private_tag(bytes),
+                b'a'..=b'z' => lex_ident(false, bytes),
+                b'A'..=b'Z' => lex_ident(true, bytes),
+                b'0'..=b'9' => lex_number(bytes),
                 b'-' | b':' | b'!' | b'.' | b'*' | b'/' | b'&' |
                 b'%' | b'^' | b'+' | b'<' | b'=' | b'>' | b'|' | b'\\' => lex_operator(bytes),
                 b' ' => {
@@ -95,10 +106,12 @@ impl Token {
                     continue;
                 }
                 b'\n' => {
+                    // TODO: add newline to side_table
                     bytes = skip_newlines(bytes);
                     continue;
                 }
                 b'#' => {
+                    // TODO: add comment to side_table
                     bytes = skip_comment(bytes);
                     continue;
                 }
@@ -112,6 +125,9 @@ impl Token {
 
 fn skip_comment(mut bytes: &[u8]) -> &[u8] {
     while bytes.len() > 0 && bytes[0] != b'\n' {
+        bytes = &bytes[1..];
+    }
+    if bytes.len() > 0 && bytes[0] == b'\n' {
         bytes = &bytes[1..];
     }
     bytes
@@ -152,7 +168,8 @@ fn lex_operator(bytes: &[u8]) -> (Token, usize) {
         b"<" => Token::BinOpLessThan,
         b"." => Token::Dot,
         b"=" => Token::BinOpAssignment,
-        b":" => Token::BinOpHasType,
+        b":" => Token::Colon,
+        b"|" => Token::Pipe,
         b"\\" => Token::LambdaStart,
         b"|>" => Token::BinOpPizza,
         b"==" => Token::BinOpEquals,
@@ -161,6 +178,7 @@ fn lex_operator(bytes: &[u8]) -> (Token, usize) {
         b">=" => Token::BinOpGreaterThanOrEq,
         b"<=" => Token::BinOpLessThanOrEq,
         b"&&" => Token::BinOpAnd,
+        b"&" => Token::Ampersand,
         b"||" => Token::BinOpOr,
         b"//" => Token::BinOpDoubleSlash,
         b"%%" => Token::BinOpDoublePercent,
@@ -178,6 +196,15 @@ fn is_ident_continue(ch: u8) -> bool {
     matches!(ch, b'a'..=b'z'|b'A'..=b'Z'|b'0'..=b'9'|b'_')
 }
 
+fn lex_private_tag(bytes: &[u8]) -> (Token, usize) {
+    debug_assert!(bytes[0] == b'@');
+    let mut i = 1;
+    while i < bytes.len() && is_ident_continue(bytes[i]) {
+        i += 1;
+    }
+    (Token::PrivateTag, i)
+}
+
 fn lex_ident(uppercase: bool, bytes: &[u8]) -> (Token, usize) {
     let mut i = 0;
     while i < bytes.len() && is_ident_continue(bytes[i]) {
@@ -191,19 +218,50 @@ fn lex_ident(uppercase: bool, bytes: &[u8]) -> (Token, usize) {
         b"as" => Token::KeywordAs,
         b"is" => Token::KeywordIs,
         b"expect" => Token::KeywordExpect,
-        _ => Token::Ident,
+        b"app" => Token::KeywordApp,
+        b"interface" => Token::KeywordInterface,
+        b"packages" => Token::KeywordPackages,
+        b"imports" => Token::KeywordImports,
+        b"provides" => Token::KeywordProvides,
+        b"to" => Token::KeywordTo,
+        b"exposes" => Token::KeywordExposes,
+        b"effects" => Token::KeywordEffects,
+        b"platform" => Token::KeywordPlatform,
+        ident => {
+            if ident.contains(&b'_') {
+                Token::MalformedIdent
+            } else {
+                Token::Ident
+            }
+        },
     };
     (tok, i)
+}
+
+fn lex_underscore(bytes: &[u8]) -> (Token, usize) {
+    let mut i = 0;
+    while i < bytes.len() && is_ident_continue(bytes[i]) {
+        i += 1;
+    }
+    (Token::Underscore, i)
 }
 
 fn is_int_continue(ch: u8) -> bool {
     matches!(ch, b'0'..=b'9' | b'_')
 }
 
-fn lex_int(bytes: &[u8]) -> (Token, usize) {
+fn lex_number(bytes: &[u8]) -> (Token, usize) {
     let mut i = 0;
     while i < bytes.len() && is_int_continue(bytes[i]) {
         i += 1;
     }
+
+    if i < bytes.len() && bytes[i] == b'.' {
+        i += 1;
+        while i < bytes.len() && is_int_continue(bytes[i]) {
+            i += 1;
+        }
+    }
+
     (Token::Number, i)
 }

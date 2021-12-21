@@ -358,6 +358,10 @@ fn chomp_identifier_chain<'a>(
         }
     }
 
+    if crate::keyword::KEYWORDS.contains(&std::str::from_utf8(&buffer[..chomped]).unwrap()) {
+        return Err((0, BadIdent::Start(row, col)));
+    }
+
     if let Ok(('.', _)) = char::from_utf8_slice_start(&buffer[chomped..]) {
         let module_name = if first_is_uppercase {
             match chomp_module_chain(&buffer[chomped..]) {
@@ -453,7 +457,9 @@ pub fn concrete_type<'a>() -> impl Parser<'a, (&'a str, &'a str), ()> {
     move |_, state: State<'a>| match chomp_concrete_type(state.bytes()) {
         Err(progress) => Err((progress, (), state)),
         Ok((module_name, type_name, width)) => {
-            match state.advance_without_indenting_ee(Some(Token::Ident), width, |_, _| ()) {
+            let _ = advance_ident_seq(state.clone(), width as usize);
+
+            match state.advance_without_indenting_ee(None, width, |_, _| ()) {
                 Ok(state) => Ok((MadeProgress, (module_name, type_name), state)),
                 Err(bad) => Err(bad),
             }
@@ -525,18 +531,143 @@ fn chomp_access_chain<'a>(buffer: &'a [u8], parts: &mut Vec<'a, &'a str>) -> Res
     }
 }
 
+fn advance_module_chain<'a>(mut state: State<'a>) -> State<'a> {
+    let buffer = state.bytes();
+    let mut chomped = 0;
+
+    while let Some(b'.') = buffer.get(chomped) {
+        state = state.advance(Some(Token::Dot), 1);
+
+        match &buffer.get(chomped + 1..) {
+            Some(slice) => match chomp_uppercase_part(slice) {
+                Ok(name) => {
+                    chomped += name.len();
+                    state = state.advance(Some(Token::Ident), name.len());
+                }
+                Err(MadeProgress) => panic!(),
+                Err(NoProgress) => break,
+            },
+            None => panic!(),
+        }
+    }
+    
+    state
+}
+
+fn advance_ident_seq<'a>(
+    mut state: State<'a>,
+    width: usize,
+) -> State<'a> {
+    use encode_unicode::CharExt;
+    let buffer = state.bytes();
+
+    let mut first_is_uppercase = false;
+
+    match char::from_utf8_slice_start(buffer) {
+        Ok((ch, width)) => match ch {
+            '.' => {
+                state = state.advance(Some(Token::Dot), 1);
+
+                match chomp_accessor(&buffer[1..], state.line, state.column) {
+                    Ok(accessor) => {
+                        return state.advance(Some(Token::Ident), accessor.len());
+                    }
+                    Err(fail) => panic!(),
+                }
+            },
+            '@' => {
+                match chomp_private_tag(buffer, state.line, state.column) {
+                    Ok(tagname) => {
+                        return state.advance(Some(Token::PrivateTag), tagname.len());
+                    }
+                    Err(fail) => panic!(),
+                }
+            },
+            c if c.is_alphabetic() => {
+                // fall through
+                first_is_uppercase = c.is_uppercase();
+            }
+            _ => {
+                panic!();
+            }
+        },
+        Err(_) => panic!(),
+    }
+
+    let mut chomped = 0;
+
+    while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
+        if ch.is_alphabetic() || ch.is_ascii_digit() {
+            chomped += width;
+        } else {
+            // we're done
+            break;
+        }
+    }
+
+    if crate::keyword::KEYWORDS.contains(&std::str::from_utf8(&buffer[..chomped]).unwrap()) {
+        panic!();
+    }
+
+    state = state.advance(Some(Token::Ident), chomped);
+
+    if let Ok(('.', _)) = char::from_utf8_slice_start(&buffer[chomped..]) {
+        if first_is_uppercase {
+            state = advance_module_chain(state);
+        }
+
+        // match chomp_access_chain(&buffer[chomped..], &mut parts) {
+        //     Ok(width) => {
+        //         chomped += width as usize;
+
+        //         let ident = Ident::Access {
+        //             module_name,
+        //             parts: parts.into_bump_slice(),
+        //         };
+
+        //         Ok((chomped as u16, ident))
+        //     }
+        //     Err(0) if !module_name.is_empty() => Err((
+        //         chomped as u16,
+        //         BadIdent::QualifiedTag(row, chomped as u16 + col),
+        //     )),
+        //     Err(1) if parts.is_empty() => Err((
+        //         chomped as u16 + 1,
+        //         BadIdent::WeirdDotQualified(row, chomped as u16 + col + 1),
+        //     )),
+        //     Err(width) => Err((
+        //         chomped as u16 + width,
+        //         BadIdent::WeirdDotAccess(row, chomped as u16 + col + width),
+        //     )),
+        // }
+    } else if let Ok(('_', _)) = char::from_utf8_slice_start(&buffer[chomped..]) {
+        panic!()
+        // we don't allow underscores in the middle of an identifier
+        // but still parse them (and generate a malformed identifier)
+        // to give good error messages for this case
+        // Err((
+        //     chomped as u16 + 1,
+        //     BadIdent::Underscore(row, col + chomped as u16 + 1),
+        // ))
+    }
+
+    state
+}
+
 fn parse_ident_help<'a>(
     arena: &'a Bump,
     mut state: State<'a>,
 ) -> ParseResult<'a, Ident<'a>, BadIdent> {
     match chomp_identifier_chain(arena, state.bytes(), state.line, state.column) {
         Ok((width, ident)) => {
-            state = advance_state!(state, Some(Token::Ident), width as usize)?;
+            let _ = advance_ident_seq(state.clone(), width as usize);
+            state = advance_state!(state, None, width as usize)?;
             Ok((MadeProgress, ident, state))
         }
         Err((0, fail)) => Err((NoProgress, fail, state)),
         Err((width, fail)) => {
-            state = advance_state!(state, Some(Token::Ident), width as usize)?;
+            // TODO: capture malformed idents
+            state = advance_state!(state, None, width as usize)?;
             Err((MadeProgress, fail, state))
         }
     }

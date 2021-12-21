@@ -2422,7 +2422,7 @@ where
                     Err((NoProgress, to_error(b".", state.line, state.column), state))
                 }
                 b'=' => good!(BinOp::Assignment, Some(Token::BinOpAssignment), 1),
-                b':' => good!(BinOp::HasType, Some(Token::BinOpHasType), 1),
+                b':' => good!(BinOp::HasType, Some(Token::Colon), 1),
                 _ => bad_made_progress!(&state.bytes()[0..1]),
             }
         }

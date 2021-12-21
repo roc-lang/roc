@@ -11,6 +11,8 @@ pub struct State<'a> {
     /// The raw input bytes from the file.
     bytes: &'a [u8],
 
+    in_compound_token: bool,
+
     /// Current line of the input
     pub line: u32,
     /// Current column of the input
@@ -25,6 +27,7 @@ impl<'a> State<'a> {
     pub fn new(bytes: &'a [u8]) -> State<'a> {
         State {
             bytes,
+            in_compound_token: false,
             line: 0,
             column: 0,
             indent_col: 0,
@@ -35,16 +38,43 @@ impl<'a> State<'a> {
         self.bytes
     }
 
+    pub fn expect_compound_token<T, E>(mut self, expected_token: Token, f: impl FnOnce(Self) -> Result<(T, Self), (Progress, E, Self)>) -> Result<(T, Self), (Progress, E, Self)> {
+        self.in_compound_token = true;
+        let me = self.clone();
+
+        let begin = self.bytes.len();
+        let (t, mut new) = match f(self) {
+            Ok(v) => v,
+            Err((p, e, mut s)) => {
+                s.in_compound_token = false;
+                return Err((p, e, s))
+            }
+        };
+        let end = new.bytes.len();
+
+        let _ = me.expect_token(expected_token, begin - end);
+
+        new.in_compound_token = false;
+
+        Ok((t, new))
+    }
+
+    fn expect_token(&self, expected: Token, expected_len: usize) {
+        let (tok, len) = Token::lex_single(expected, self.bytes()).unwrap();
+        assert_eq!(tok, expected,
+            "token mismatch: [{}]", std::str::from_utf8(&self.bytes()[0..expected_len]).unwrap());
+        assert_eq!(len, expected_len,
+            "token len issue: [{}]", std::str::from_utf8(&self.bytes()[0..expected_len]).unwrap());
+    }
+
     #[must_use]
     pub fn advance(&self, expected_token: Option<Token>, offset: usize) -> State<'a> {
         // println!("{:?}", std::str::from_utf8(&self.bytes[..offset]).unwrap());
 
-        if let Some(expected) = expected_token {
-            let (tok, len) = Token::lex_single(expected, self.bytes()).unwrap();
-            assert_eq!(tok, expected,
-                "token mismatch: [{}]", std::str::from_utf8(&self.bytes()[0..offset]).unwrap());
-            assert_eq!(len, offset,
-                "token len issue: [{}]", std::str::from_utf8(&self.bytes()[0..offset]).unwrap());
+        if !self.in_compound_token {
+            if let Some(expected) = expected_token {
+                self.expect_token(expected, offset)
+            }
         }
 
         let mut state = self.clone();

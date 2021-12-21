@@ -660,7 +660,16 @@ where
             "as" => Token::KeywordAs,
             "is" => Token::KeywordIs,
             "expect" => Token::KeywordExpect,
-            _ => panic!(),
+            "app" => Token::KeywordApp,
+            "interface" => Token::KeywordInterface,
+            "packages" => Token::KeywordPackages,
+            "imports" => Token::KeywordImports,
+            "provides" => Token::KeywordProvides,
+            "to" => Token::KeywordTo,
+            "exposes" => Token::KeywordExposes,
+            "effects" => Token::KeywordEffects,
+            "platform" => Token::KeywordPlatform,
+            kw => panic!("{:?}", kw),
         };
 
         // the next character should not be an identifier character
