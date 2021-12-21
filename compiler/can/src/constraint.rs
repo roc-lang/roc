@@ -163,13 +163,13 @@ fn validate_help(constraint: &Constraint, declared: &Declared, accum: &mut Varia
         }
         Constraint::Present(typ, constr) => {
             subtract(declared, &typ.variables_detail(), accum);
-            match &constr {
-                &PresenceConstraint::IncludesTag(_, tys) => {
+            match constr {
+                PresenceConstraint::IncludesTag(_, tys) => {
                     for ty in tys {
                         subtract(declared, &ty.variables_detail(), accum);
                     }
                 }
-                &PresenceConstraint::IsOpen => {}
+                PresenceConstraint::IsOpen => {}
             }
         }
     }
