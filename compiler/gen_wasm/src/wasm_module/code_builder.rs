@@ -551,7 +551,16 @@ impl<'a> CodeBuilder<'a> {
     /// Emits the opcode and simulates VM stack push/pop
     fn inst_base(&mut self, opcode: OpCode, pops: usize, push: bool) {
         let current_stack = self.current_stack_mut();
-        let new_len = current_stack.len() - pops as usize;
+        let stack_size = current_stack.len();
+
+        debug_assert!(
+            stack_size >= pops,
+            "Wasm value stack underflow. Tried to pop {} but only {} available",
+            pops,
+            stack_size
+        );
+
+        let new_len = stack_size - pops as usize;
         current_stack.truncate(new_len);
         if push {
             current_stack.push(Symbol::WASM_TMP);
@@ -571,11 +580,6 @@ impl<'a> CodeBuilder<'a> {
 
     /// Block instruction
     fn inst_block(&mut self, opcode: OpCode, pops: usize, block_type: BlockType) {
-        if block_type != BlockType::NoResult {
-            // Returning from nested blocks is too complicated if we use result types
-            internal_error!("Block results are not supported.");
-        }
-
         self.inst_base(opcode, pops, false);
         self.code.push(block_type.as_byte());
 
