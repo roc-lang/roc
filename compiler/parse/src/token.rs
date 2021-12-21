@@ -79,14 +79,26 @@ pub enum Token {
     Astrisk,
 }
 
+pub struct TokenTable {
+    pub tokens: Vec<Token>,
+    pub offsets: Vec<usize>,
+    pub lengths: Vec<usize>,
+}
+
+pub struct LexState {
+    indents: Vec<usize>,
+}
+
 impl Token {
-    pub fn lex_single(expected: Token, mut bytes: &[u8]) -> Option<(Token, usize)> {
+    pub fn lex_single(state: &mut LexState, mut bytes: &[u8]) -> Option<(Token, usize, usize)> {
+        let mut skip = 0;
         loop {
+            let bytes = &bytes[skip..];
             if bytes.len() == 0 {
                 return None;
             }
 
-            let res = match bytes[0] {
+            let (token, len) = match bytes[0] {
                 b'(' => (Token::OpenParen, 1),
                 b')' => (Token::CloseParen, 1),
                 b'{' => (Token::OpenCurly, 1),
@@ -102,49 +114,83 @@ impl Token {
                 b'-' | b':' | b'!' | b'.' | b'*' | b'/' | b'&' |
                 b'%' | b'^' | b'+' | b'<' | b'=' | b'>' | b'|' | b'\\' => lex_operator(bytes),
                 b' ' => {
-                    bytes = skip_whitespace(bytes);
+                    skip += skip_whitespace(bytes);
                     continue;
                 }
                 b'\n' => {
                     // TODO: add newline to side_table
-                    bytes = skip_newlines(bytes);
+                    skip += skip_newlines(bytes);
                     continue;
                 }
                 b'#' => {
                     // TODO: add comment to side_table
-                    bytes = skip_comment(bytes);
+                    skip += skip_comment(bytes);
                     continue;
                 }
-                b => todo!("handle {:?}; expected {:?}", b as char, expected),
+                b => todo!("handle {:?}", b as char),
             };
 
-            return Some(res)
+            return Some((token, skip, len))
         }
     }
 }
 
-fn skip_comment(mut bytes: &[u8]) -> &[u8] {
-    while bytes.len() > 0 && bytes[0] != b'\n' {
-        bytes = &bytes[1..];
+impl TokenTable {
+    pub fn new(text: &str) -> TokenTable {
+        let mut tt = TokenTable {
+            tokens: Vec::new(),
+            offsets: Vec::new(),
+            lengths: Vec::new(),
+        };
+
+        let mut offset = 0;
+        let mut state = LexState::new();
+
+        while let Some((token, skip, length)) = Token::lex_single(&mut state, &text.as_bytes()[offset..]) {
+            tt.tokens.push(token);
+            offset += skip;
+            tt.offsets.push(offset);
+            offset += length;
+            tt.lengths.push(length);
+        }
+
+        tt
     }
-    if bytes.len() > 0 && bytes[0] == b'\n' {
-        bytes = &bytes[1..];
-    }
-    bytes
 }
 
-fn skip_whitespace(mut bytes: &[u8]) -> &[u8] {
-    while bytes.len() > 0 && bytes[0] == b' ' {
-        bytes = &bytes[1..];
+impl LexState {
+    pub fn new() -> LexState {
+        LexState {
+            indents: Vec::new(),
+        }
     }
-    bytes
 }
 
-fn skip_newlines(mut bytes: &[u8]) -> &[u8] {
-    while bytes.len() > 0 && (bytes[0] == b'\n' || bytes[0] == b' ') {
-        bytes = &bytes[1..];
+fn skip_comment(bytes: &[u8]) -> usize {
+    let mut skip = 0;
+    while skip < bytes.len() && bytes[skip] != b'\n' {
+        skip += 1;
     }
-    bytes
+    if skip < bytes.len() && bytes[skip] == b'\n' {
+        skip += 1;
+    }
+    skip
+}
+
+fn skip_whitespace(bytes: &[u8]) -> usize {
+    let mut skip = 0;
+    while skip < bytes.len() && bytes[skip] == b' ' {
+        skip += 1;
+    }
+    skip
+}
+
+fn skip_newlines(bytes: &[u8]) -> usize {
+    let mut skip = 0;
+    while skip < bytes.len() && (bytes[skip] == b'\n' || bytes[skip] == b' ') {
+        skip += 1;
+    }
+    skip
 }
 
 fn is_op_continue(ch: u8) -> bool {

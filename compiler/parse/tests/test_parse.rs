@@ -23,6 +23,7 @@ mod test_parse {
     use roc_parse::parser::{Parser, SyntaxError};
     use roc_parse::state::State;
     use roc_parse::test_helpers::parse_expr_with;
+    use roc_parse::token::TokenTable;
     use roc_region::all::{Located, Region};
     use roc_test_utils::assert_multiline_str_eq;
     use std::{f64, i64};
@@ -78,7 +79,8 @@ mod test_parse {
                 fn $header_test_name() {
                     snapshot_test(stringify!($header_test_name), "header", |input| {
                         let arena = Bump::new();
-                        let actual_ast = roc_parse::module::parse_header(&arena, State::new(input.as_bytes()))
+                        let tt = TokenTable::new(input);
+                        let actual_ast = roc_parse::module::parse_header(&arena, State::new(input.as_bytes(), arena.alloc(tt.tokens)))
                             .map(|tuple| tuple.0).unwrap();
                         format!("{:#?}\n", actual_ast)
                     });
@@ -90,8 +92,9 @@ mod test_parse {
                 fn $module_test_name() {
                     snapshot_test(stringify!($module_test_name), "module", |input| {
                         let arena = Bump::new();
+                        let tt = TokenTable::new(input);
                         let actual_ast = module_defs()
-                            .parse(&arena, State::new(input.as_bytes()))
+                            .parse(&arena, State::new(input.as_bytes(), arena.alloc(tt.tokens)))
                             .map(|tuple| tuple.1).unwrap();
                         format!("{:#?}\n", actual_ast)
                     });
@@ -826,8 +829,9 @@ mod test_parse {
                     List.map list isTest
             "#
         );
+        let tt = TokenTable::new(src);
         let actual = module_defs()
-            .parse(&arena, State::new(src.as_bytes()))
+            .parse(&arena, State::new(src.as_bytes(), arena.alloc(tt.tokens)))
             .map(|tuple| tuple.1);
 
         // It should occur twice in the debug output - once for the pattern,
@@ -851,7 +855,8 @@ mod test_parse {
             "#
         );
 
-        let state = State::new(src.as_bytes());
+        let tt = TokenTable::new(src);
+        let state = State::new(src.as_bytes(), arena.alloc(tt.tokens));
         let parser = module_defs();
         let parsed = parser.parse(arena, state);
         match parsed {

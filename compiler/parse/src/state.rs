@@ -1,6 +1,6 @@
 use crate::parser::Progress::*;
 use crate::parser::{BadInputError, Col, Progress, Row};
-use crate::token::Token;
+use crate::token::{Token, LexState};
 use bumpalo::Bump;
 use roc_region::all::{Position, Region};
 use std::fmt;
@@ -13,6 +13,10 @@ pub struct State<'a> {
 
     in_compound_token: bool,
 
+    tokens: &'a [Token],
+
+    token_index: usize,
+
     /// Current line of the input
     pub line: u32,
     /// Current column of the input
@@ -24,10 +28,12 @@ pub struct State<'a> {
 }
 
 impl<'a> State<'a> {
-    pub fn new(bytes: &'a [u8]) -> State<'a> {
+    pub fn new(bytes: &'a [u8], tokens: &'a [Token]) -> State<'a> {
         State {
             bytes,
             in_compound_token: false,
+            tokens,
+            token_index: 0,
             line: 0,
             column: 0,
             indent_col: 0,
@@ -60,7 +66,9 @@ impl<'a> State<'a> {
     }
 
     fn expect_token(&self, expected: Token, expected_len: usize) {
-        let (tok, len) = Token::lex_single(expected, self.bytes()).unwrap();
+        let mut lex_state = LexState::new();
+        let (tok, skip, len) = Token::lex_single(&mut lex_state, self.bytes()).unwrap();
+        assert_eq!(skip, 0);
         assert_eq!(tok, expected,
             "token mismatch: [{}]", std::str::from_utf8(&self.bytes()[0..expected_len]).unwrap());
         assert_eq!(len, expected_len,
