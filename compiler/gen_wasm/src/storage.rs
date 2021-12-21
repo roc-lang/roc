@@ -661,15 +661,12 @@ impl<'a> Storage<'a> {
             size,
         } = storage
         {
-            let local_id = self.get_next_local_id();
-            if vm_state != VmSymbolState::NotYetPushed {
-                code_builder.load_symbol(symbol, vm_state, local_id);
-                code_builder.set_local(local_id);
-            }
+            let next_local_id = self.get_next_local_id();
+            code_builder.store_symbol_to_local(symbol, vm_state, next_local_id);
 
             self.local_types.push(value_type);
             let new_storage = StoredValue::Local {
-                local_id,
+                local_id: next_local_id,
                 value_type,
                 size,
             };

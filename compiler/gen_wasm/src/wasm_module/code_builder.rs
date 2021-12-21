@@ -312,30 +312,12 @@ impl<'a> CodeBuilder<'a> {
                     _ => {
                         // Symbol is not on top of the stack.
                         // We should have saved it to a local, so go back and do that now.
-
-                        // It should still be on the stack in the block where it was assigned. Remove it.
-                        let mut found = false;
-                        for block in self.vm_block_stack.iter_mut() {
-                            if let Some(found_index) =
-                                block.value_stack.iter().position(|&s| s == symbol)
-                            {
-                                block.value_stack.remove(found_index);
-                                found = true;
-                            }
-                        }
-
-                        // Go back to the code position where it was pushed, and save it to a local
-                        if found {
-                            self.add_insertion(pushed_at, SETLOCAL, next_local_id.0);
-                        } else {
-                            if ENABLE_DEBUG_LOG {
-                                println!(
-                                    "{:?} has been popped implicitly. Leaving it on the stack.",
-                                    symbol
-                                );
-                            }
-                            self.add_insertion(pushed_at, TEELOCAL, next_local_id.0);
-                        }
+                        self.store_pushed_symbol_to_local(
+                            symbol,
+                            vm_state,
+                            pushed_at,
+                            next_local_id,
+                        );
 
                         // Recover the value again at the current position
                         self.get_local(next_local_id);
@@ -360,6 +342,60 @@ impl<'a> CodeBuilder<'a> {
                 // Tell the caller it no longer has a VirtualMachineSymbolState
                 None
             }
+        }
+    }
+
+    /// Go back and store a Symbol in a local variable, without loading it at the current position
+    pub fn store_symbol_to_local(
+        &mut self,
+        symbol: Symbol,
+        vm_state: VmSymbolState,
+        next_local_id: LocalId,
+    ) {
+        use VmSymbolState::*;
+
+        match vm_state {
+            NotYetPushed => {
+                // Nothing to do
+            }
+            Pushed { pushed_at } => {
+                self.store_pushed_symbol_to_local(symbol, vm_state, pushed_at, next_local_id)
+            }
+            Popped { pushed_at } => {
+                self.add_insertion(pushed_at, TEELOCAL, next_local_id.0);
+            }
+        }
+    }
+
+    fn store_pushed_symbol_to_local(
+        &mut self,
+        symbol: Symbol,
+        vm_state: VmSymbolState,
+        pushed_at: usize,
+        local_id: LocalId,
+    ) {
+        debug_assert!(matches!(vm_state, VmSymbolState::Pushed { .. }));
+
+        // Update our stack model at the position where we're going to set the SETLOCAL
+        let mut found = false;
+        for block in self.vm_block_stack.iter_mut() {
+            if let Some(found_index) = block.value_stack.iter().position(|&s| s == symbol) {
+                block.value_stack.remove(found_index);
+                found = true;
+            }
+        }
+
+        // Go back to the code position where it was pushed, and save it to a local
+        if found {
+            self.add_insertion(pushed_at, SETLOCAL, local_id.0);
+        } else {
+            if ENABLE_DEBUG_LOG {
+                println!(
+                    "{:?} has been popped implicitly. Leaving it on the stack.",
+                    symbol
+                );
+            }
+            self.add_insertion(pushed_at, TEELOCAL, local_id.0);
         }
     }
 
