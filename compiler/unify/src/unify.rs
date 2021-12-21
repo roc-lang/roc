@@ -814,10 +814,7 @@ fn unify_tag_union_new(
 
         subs.commit_snapshot(snapshot);
 
-        let tag_problems =
-            unify_shared_tags_new(subs, pool, ctx, shared_tags, other_tags, ext, recursion_var);
-
-        tag_problems
+        unify_shared_tags_new(subs, pool, ctx, shared_tags, other_tags, ext, recursion_var)
     }
 }
 
