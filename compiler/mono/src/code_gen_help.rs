@@ -16,6 +16,9 @@ const LAYOUT_UNIT: Layout = Layout::Struct(&[]);
 const LAYOUT_PTR: Layout = Layout::RecursivePointer;
 const LAYOUT_U32: Layout = Layout::Builtin(Builtin::Int(IntWidth::U32));
 
+const ARG_1: Symbol = Symbol::ARG_1;
+const ARG_2: Symbol = Symbol::ARG_2;
+
 /// "Infinite" reference count, for static values
 /// Ref counts are encoded as negative numbers where isize::MIN represents 1
 pub const REFCOUNT_MAX: usize = 0;
@@ -374,14 +377,14 @@ impl<'a> CodeGenHelp<'a> {
                 Eq => (LAYOUT_BOOL, self.eq_generic(ident_ids, layout)),
             };
 
-            let roc_value = (layout, Symbol::ARG_1);
+            let roc_value = (layout, ARG_1);
             let args: &'a [(Layout<'a>, Symbol)] = match op {
                 HelperOp::Inc => {
-                    let inc_amount = (self.layout_isize, Symbol::ARG_2);
+                    let inc_amount = (self.layout_isize, ARG_2);
                     self.arena.alloc([roc_value, inc_amount])
                 }
                 HelperOp::Dec | HelperOp::DecRef => self.arena.alloc([roc_value]),
-                HelperOp::Eq => self.arena.alloc([roc_value, (layout, Symbol::ARG_2)]),
+                HelperOp::Eq => self.arena.alloc([roc_value, (layout, ARG_2)]),
             };
 
             Proc {
@@ -559,7 +562,7 @@ impl<'a> CodeGenHelp<'a> {
 
     /// Generate a procedure to modify the reference count of a Str
     fn refcount_str(&self, ident_ids: &mut IdentIds, op: HelperOp) -> Stmt<'a> {
-        let string = Symbol::ARG_1;
+        let string = ARG_1;
         let layout_isize = self.layout_isize;
 
         // Get the string length as a signed int
@@ -613,7 +616,7 @@ impl<'a> CodeGenHelp<'a> {
                     op: LowLevel::RefCountInc,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
-                arguments: self.arena.alloc([rc_ptr, Symbol::ARG_2]),
+                arguments: self.arena.alloc([rc_ptr, ARG_2]),
             }),
             HelperOp::Dec | HelperOp::DecRef => Expr::Call(Call {
                 call_type: CallType::LowLevel {
@@ -724,7 +727,7 @@ impl<'a> CodeGenHelp<'a> {
                     op: LowLevel::PtrCast,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
-                arguments: self.arena.alloc([Symbol::ARG_1]),
+                arguments: self.arena.alloc([ARG_1]),
             }),
             self.layout_isize,
             self.arena.alloc(Stmt::Let(
@@ -734,7 +737,7 @@ impl<'a> CodeGenHelp<'a> {
                         op: LowLevel::PtrCast,
                         update_mode: UpdateModeId::BACKEND_DUMMY,
                     },
-                    arguments: self.arena.alloc([Symbol::ARG_2]),
+                    arguments: self.arena.alloc([ARG_2]),
                 }),
                 self.layout_isize,
                 self.arena.alloc(Stmt::Let(
@@ -793,7 +796,7 @@ impl<'a> CodeGenHelp<'a> {
             let field1_expr = Expr::StructAtIndex {
                 index: i as u64,
                 field_layouts,
-                structure: Symbol::ARG_1,
+                structure: ARG_1,
             };
             let field1_stmt = |next| Stmt::Let(field1_sym, field1_expr, *layout, next);
 
@@ -801,7 +804,7 @@ impl<'a> CodeGenHelp<'a> {
             let field2_expr = Expr::StructAtIndex {
                 index: i as u64,
                 field_layouts,
-                structure: Symbol::ARG_2,
+                structure: ARG_2,
             };
             let field2_stmt = |next| Stmt::Let(field2_sym, field2_expr, *layout, next);
 
@@ -879,7 +882,7 @@ impl<'a> CodeGenHelp<'a> {
             Stmt::Let(
                 tag_id_a,
                 Expr::GetTagId {
-                    structure: Symbol::ARG_1,
+                    structure: ARG_1,
                     union_layout,
                 },
                 tag_id_layout,
@@ -892,7 +895,7 @@ impl<'a> CodeGenHelp<'a> {
             Stmt::Let(
                 tag_id_b,
                 Expr::GetTagId {
-                    structure: Symbol::ARG_2,
+                    structure: ARG_2,
                     union_layout,
                 },
                 tag_id_layout,
