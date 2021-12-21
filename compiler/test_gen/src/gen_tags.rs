@@ -14,7 +14,6 @@ use indoc::indoc;
 use roc_std::{RocList, RocStr};
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
 fn width_and_alignment_u8_u8() {
     use roc_mono::layout::Layout;
     use roc_mono::layout::UnionLayout;
@@ -183,7 +182,7 @@ fn false_is_false() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn basic_enum() {
     assert_evals_to!(
         indoc!(
@@ -553,7 +552,7 @@ fn when_on_single_value_tag() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn if_guard_multiple() {
     assert_evals_to!(
         indoc!(
@@ -574,7 +573,7 @@ fn if_guard_multiple() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn if_guard_constructor_switch() {
     assert_evals_to!(
         indoc!(
@@ -618,7 +617,7 @@ fn if_guard_constructor_switch() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn if_guard_constructor_chain() {
     assert_evals_to!(
         indoc!(
@@ -635,7 +634,7 @@ fn if_guard_constructor_chain() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn if_guard_pattern_false() {
     assert_evals_to!(
         indoc!(
@@ -654,7 +653,7 @@ fn if_guard_pattern_false() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn if_guard_switch() {
     assert_evals_to!(
         indoc!(
@@ -673,7 +672,7 @@ fn if_guard_switch() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn if_guard_pattern_true() {
     assert_evals_to!(
         indoc!(
@@ -1145,7 +1144,7 @@ fn nested_recursive_literal() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn newtype_wrapper() {
     assert_evals_to!(
         indoc!(

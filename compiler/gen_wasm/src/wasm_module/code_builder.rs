@@ -471,7 +471,7 @@ impl<'a> CodeBuilder<'a> {
 
     /// Build the function header: local declarations, stack frame push/pop code, and function length
     /// After this, all bytes have been generated (but not yet serialized) and we know the final size.
-    pub fn build_fn_header(
+    pub fn build_fn_header_and_footer(
         &mut self,
         local_types: &[ValueType],
         frame_size: i32,
@@ -483,7 +483,7 @@ impl<'a> CodeBuilder<'a> {
             if let Some(frame_ptr_id) = frame_pointer {
                 let aligned_size = round_up_to_alignment!(frame_size, FRAME_ALIGNMENT_BYTES);
                 self.build_stack_frame_push(aligned_size, frame_ptr_id);
-                self.build_stack_frame_pop(aligned_size, frame_ptr_id);
+                self.build_stack_frame_pop(aligned_size, frame_ptr_id); // footer
             }
         }
 

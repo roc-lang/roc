@@ -144,8 +144,8 @@ pub fn helper_wasm<'a, T: Wasm32TestResult>(
             debug_dir = format!("/tmp/roc/gen_wasm/{:016x}", src_hash);
             std::fs::create_dir_all(&debug_dir).unwrap();
             println!(
-                "Debug command:\n\twasm-objdump -sdx {}/final.wasm",
-                &debug_dir
+                "Debug commands:\n\twasm-objdump -dx {}/app.o\n\twasm-objdump -dx {}/final.wasm",
+                &debug_dir, &debug_dir,
             );
             Path::new(&debug_dir)
         } else {

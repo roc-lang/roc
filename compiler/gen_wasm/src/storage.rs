@@ -82,6 +82,7 @@ impl StoredValue {
 /// including the VM stack, local variables, and linear memory
 #[derive(Debug)]
 pub struct Storage<'a> {
+    pub return_var: Option<LocalId>,
     pub arg_types: Vec<'a, ValueType>,
     pub local_types: Vec<'a, ValueType>,
     pub symbol_storage_map: MutMap<Symbol, StoredValue>,
@@ -92,6 +93,7 @@ pub struct Storage<'a> {
 impl<'a> Storage<'a> {
     pub fn new(arena: &'a Bump) -> Self {
         Storage {
+            return_var: None,
             arg_types: Vec::with_capacity_in(8, arena),
             local_types: Vec::with_capacity_in(32, arena),
             symbol_storage_map: MutMap::default(),
@@ -101,6 +103,7 @@ impl<'a> Storage<'a> {
     }
 
     pub fn clear(&mut self) {
+        self.return_var = None;
         self.arg_types.clear();
         self.local_types.clear();
         self.symbol_storage_map.clear();
@@ -644,7 +647,8 @@ impl<'a> Storage<'a> {
         }
     }
 
-    /// Ensure a StoredValue has an associated local
+    /// Ensure a StoredValue has an associated local (which could be the frame pointer!)
+    ///
     /// This is useful when a value needs to be accessed from a more deeply-nested block.
     /// In that case we want to make sure it's not just stored in the VM stack, because
     /// blocks can't access the VM stack from outer blocks, but they can access locals.
