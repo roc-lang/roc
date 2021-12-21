@@ -67,21 +67,11 @@ struct VmBlock<'a> {
     opcode: OpCode,
     /// the stack of values for this block
     value_stack: Vec<'a, Symbol>,
-    /// whether this block pushes a result value to its parent
-    has_result: bool,
 }
 
 impl std::fmt::Debug for VmBlock<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!(
-            "{:?} {}",
-            self.opcode,
-            if self.has_result {
-                "Result"
-            } else {
-                "NoResult"
-            }
-        ))
+        f.write_fmt(format_args!("{:?}", self.opcode))
     }
 }
 
@@ -193,7 +183,6 @@ impl<'a> CodeBuilder<'a> {
         let mut vm_block_stack = Vec::with_capacity_in(8, arena);
         let function_block = VmBlock {
             opcode: BLOCK,
-            has_result: true,
             value_stack: Vec::with_capacity_in(8, arena),
         };
         vm_block_stack.push(function_block);
@@ -582,6 +571,11 @@ impl<'a> CodeBuilder<'a> {
 
     /// Block instruction
     fn inst_block(&mut self, opcode: OpCode, pops: usize, block_type: BlockType) {
+        if block_type != BlockType::NoResult {
+            // Returning from nested blocks is too complicated if we use result types
+            internal_error!("Block results are not supported.");
+        }
+
         self.inst_base(opcode, pops, false);
         self.code.push(block_type.as_byte());
 
@@ -589,7 +583,6 @@ impl<'a> CodeBuilder<'a> {
         self.vm_block_stack.push(VmBlock {
             opcode,
             value_stack: Vec::with_capacity_in(8, self.arena),
-            has_result: block_type != BlockType::NoResult,
         });
 
         log_instruction!(
@@ -666,13 +659,20 @@ impl<'a> CodeBuilder<'a> {
     }
 
     pub fn end(&mut self) {
-        self.inst_base(END, 0, false);
+        // We need to drop any unused values from the VM stack in order to pass Wasm validation.
+        // This happens, for example, in test `gen_tags::if_guard_exhaustiveness`
+        let n_unused = self
+            .vm_block_stack
+            .last()
+            .map(|block| block.value_stack.len())
+            .unwrap_or(0);
 
-        let ended_block = self.vm_block_stack.pop().unwrap();
-        if ended_block.has_result {
-            let result = ended_block.value_stack.last().unwrap();
-            self.current_stack_mut().push(*result)
+        for _ in 0..n_unused {
+            self.drop_();
         }
+
+        self.inst_base(END, 0, false);
+        self.vm_block_stack.pop();
 
         log_instruction!("END       \t\t{:?}", &self.vm_block_stack);
     }

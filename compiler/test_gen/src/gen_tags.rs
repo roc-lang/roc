@@ -691,7 +691,7 @@ fn if_guard_pattern_true() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn if_guard_exhaustiveness() {
     assert_evals_to!(
         indoc!(

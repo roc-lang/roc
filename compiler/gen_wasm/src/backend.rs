@@ -313,7 +313,7 @@ impl<'a> WasmBackend<'a> {
     fn start_block(&mut self) {
         // Wasm blocks can have result types, but we don't use them.
         // You need the right type on the stack when you jump from an inner block to an outer one.
-        // The validation rules can be confusing, and implementing them adds complexity.
+        // The rules are confusing, and implementing them would add complexity and slow down code gen.
         // Instead we use local variables to move a value from an inner block to an outer one.
         self.block_depth += 1;
         self.code_builder.block(BlockType::NoResult);
