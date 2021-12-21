@@ -6076,7 +6076,7 @@ I need all branches in an `if` to have the same type!
         report_header_problem_as(
             indoc!(
                 r#"
-                platform folkertdev/foo
+                platform "folkertdev/foo"
                     requires { main : Effect {} }
                     exposes []
                     packages {}
@@ -6096,7 +6096,7 @@ I need all branches in an `if` to have the same type!
 
                 I am partway through parsing a header, but I got stuck here:
 
-                1│  platform folkertdev/foo
+                1│  platform "folkertdev/foo"
                 2│      requires { main : Effect {} }
                                    ^
 

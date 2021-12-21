@@ -79,7 +79,7 @@ pub enum EHeader<'a> {
     Start(Row, Col),
     ModuleName(Row, Col),
     AppName(EString<'a>, Row, Col),
-    PlatformName(EPackageName, Row, Col),
+    PlatformName(EPackageName<'a>, Row, Col),
     IndentStart(Row, Col),
 }
 
@@ -96,7 +96,7 @@ pub enum EProvides<'a> {
     ListStart(Row, Col),
     ListEnd(Row, Col),
     Identifier(Row, Col),
-    Package(EPackageOrPath<'a>, Row, Col),
+    Package(EPackageName<'a>, Row, Col),
     Space(BadInputError, Row, Col),
 }
 
@@ -151,22 +151,16 @@ pub enum EPackages<'a> {
     PackageEntry(EPackageEntry<'a>, Row, Col),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EPackageName {
-    MissingSlash(Row, Col),
-    Account(Row, Col),
-    Pkg(Row, Col),
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EPackageOrPath<'a> {
+pub enum EPackageName<'a> {
     BadPath(EString<'a>, Row, Col),
-    BadPackage(EPackageName, Row, Col),
+    Escapes(Row, Col),
+    Multiline(Row, Col),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EPackageEntry<'a> {
-    BadPackageOrPath(EPackageOrPath<'a>, Row, Col),
+    BadPackageOrPath(EPackageName<'a>, Row, Col),
     Shorthand(Row, Col),
     Colon(Row, Col),
     IndentPackageOrPath(Row, Col),

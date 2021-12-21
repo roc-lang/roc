@@ -7,10 +7,8 @@ App {
             |L 1-1, C 15-31| PackageEntry {
                 shorthand: "pf",
                 spaces_after_shorthand: [],
-                package_or_path: |L 1-1, C 19-31| Path(
-                    PlainLine(
-                        "./platform",
-                    ),
+                package_name: |L 1-1, C 19-31| PackageName(
+                    "./platform",
                 ),
             },
         ],
