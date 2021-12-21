@@ -1,4 +1,4 @@
-platform examples/add
+platform "examples/add"
     requires {} { main : I64 -> I64 }
     exposes []
     packages {}

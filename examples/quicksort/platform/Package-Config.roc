@@ -1,4 +1,4 @@
-platform examples/quicksort
+platform "examples/quicksort"
     requires {} { quicksort : List I64 -> List I64 }
     exposes []
     packages {}

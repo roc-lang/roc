@@ -6,7 +6,7 @@ use crate::Buf;
 use roc_parse::ast::{Collection, Module, Spaced};
 use roc_parse::header::{
     AppHeader, Effects, ExposedName, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
-    PackageName, PackageOrPath, PlatformHeader, PlatformRequires, PlatformRigid, To, TypedIdent,
+    PackageName, PlatformHeader, PlatformRequires, PlatformRigid, To, TypedIdent,
 };
 use roc_region::all::Loc;
 
@@ -91,7 +91,7 @@ pub fn fmt_platform_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a PlatformHe
     buf.push_str("platform");
 
     fmt_default_spaces(buf, header.after_platform_keyword, indent);
-    fmt_package_name(buf, header.name.value);
+    fmt_package_name(buf, header.name.value, indent);
 
     // requires
     fmt_default_spaces(buf, header.before_requires, indent);
@@ -171,10 +171,10 @@ impl<'a> Formattable for TypedIdent<'a> {
     }
 }
 
-fn fmt_package_name<'buf>(buf: &mut Buf<'buf>, name: PackageName) {
-    buf.push_str(name.account);
-    buf.push('/');
-    buf.push_str(name.pkg);
+fn fmt_package_name<'buf>(buf: &mut Buf<'buf>, name: PackageName, _indent: u16) {
+    buf.push('"');
+    buf.push_str_allow_spaces(name.0);
+    buf.push('"');
 }
 
 impl<'a, T: Formattable> Formattable for Spaced<'a, T> {
@@ -239,7 +239,7 @@ fn fmt_to<'buf>(buf: &mut Buf<'buf>, to: To, indent: u16) {
         To::ExistingPackage(name) => {
             buf.push_str(name);
         }
-        To::NewPackage(package_or_path) => fmt_package_or_path(buf, &package_or_path, indent),
+        To::NewPackage(package_name) => fmt_package_name(buf, package_name, indent),
     }
 }
 
@@ -324,20 +324,7 @@ fn fmt_packages_entry<'a, 'buf>(buf: &mut Buf<'buf>, entry: &PackageEntry<'a>, i
     buf.push_str(entry.shorthand);
     buf.push(':');
     fmt_default_spaces(buf, entry.spaces_after_shorthand, indent);
-    fmt_package_or_path(buf, &entry.package_or_path.value, indent);
-}
-
-fn fmt_package_or_path<'a, 'buf>(
-    buf: &mut Buf<'buf>,
-    package_or_path: &PackageOrPath<'a>,
-    indent: u16,
-) {
-    match package_or_path {
-        PackageOrPath::Package(_name, _version) => {
-            todo!("format package");
-        }
-        PackageOrPath::Path(str_literal) => fmt_str_literal(buf, *str_literal, indent),
-    }
+    fmt_package_name(buf, entry.package_name.value, indent);
 }
 
 fn fmt_imports_entry<'a, 'buf>(buf: &mut Buf<'buf>, entry: &ImportsEntry<'a>, indent: u16) {

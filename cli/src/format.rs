@@ -12,7 +12,7 @@ use roc_parse::ast::{
 };
 use roc_parse::header::{
     AppHeader, Effects, ExposedName, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
-    PackageName, PackageOrPath, PlatformHeader, PlatformRequires, PlatformRigid, To, TypedIdent,
+    PackageName, PlatformHeader, PlatformRequires, PlatformRigid, To, TypedIdent,
 };
 use roc_parse::{
     ast::{Def, Module},
@@ -296,16 +296,7 @@ impl<'a> RemoveSpaces<'a> for PackageEntry<'a> {
         PackageEntry {
             shorthand: self.shorthand,
             spaces_after_shorthand: &[],
-            package_or_path: self.package_or_path.remove_spaces(arena),
-        }
-    }
-}
-
-impl<'a> RemoveSpaces<'a> for PackageOrPath<'a> {
-    fn remove_spaces(&self, arena: &'a Bump) -> Self {
-        match *self {
-            PackageOrPath::Package(a, b) => PackageOrPath::Package(a, b),
-            PackageOrPath::Path(p) => PackageOrPath::Path(p.remove_spaces(arena)),
+            package_name: self.package_name.remove_spaces(arena),
         }
     }
 }

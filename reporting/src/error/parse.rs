@@ -2938,8 +2938,8 @@ fn to_header_report<'a>(
                 alloc.region_with_subregion(surroundings, region),
                 alloc.concat(vec![
                     alloc.reflow("I am expecting a platform name next, like "),
-                    alloc.parser_suggestion("roc/core"),
-                    alloc.reflow("."),
+                    alloc.parser_suggestion("\"roc/core\""),
+                    alloc.reflow(". Platform names must be quoted."),
                 ]),
             ]);
 
