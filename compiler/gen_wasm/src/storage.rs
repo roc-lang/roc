@@ -319,9 +319,11 @@ impl<'a> Storage<'a> {
                     code_builder.i64_load(align, offset);
                 } else if *size <= 12 && BUILTINS_ZIG_VERSION == ZigVersion::Zig9 {
                     code_builder.i64_load(align, offset);
+                    code_builder.get_local(local_id);
                     code_builder.i32_load(align, offset + 8);
                 } else {
                     code_builder.i64_load(align, offset);
+                    code_builder.get_local(local_id);
                     code_builder.i64_load(align, offset + 8);
                 }
             }
