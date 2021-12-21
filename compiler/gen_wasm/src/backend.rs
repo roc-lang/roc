@@ -266,11 +266,16 @@ impl<'a> WasmBackend<'a> {
 
         // Create a block so we can exit the function without skipping stack frame "pop" code.
         // We never use the `return` instruction. Instead, we break from this block.
-        self.start_block(BlockType::from(ret_type));
+        self.start_block();
 
         for (layout, symbol) in proc.args {
             self.storage
                 .allocate(*layout, *symbol, StoredValueKind::Parameter);
+        }
+
+        if let Some(ty) = ret_type {
+            let ret_var = self.storage.create_anonymous_local(ty);
+            self.storage.return_var = Some(ret_var);
         }
 
         self.module.add_function_signature(Signature {
@@ -283,8 +288,12 @@ impl<'a> WasmBackend<'a> {
         // end the block from start_proc, to ensure all paths pop stack memory (if any)
         self.end_block();
 
+        if let Some(ret_var) = self.storage.return_var {
+            self.code_builder.get_local(ret_var);
+        }
+
         // Write local declarations and stack frame push/pop code
-        self.code_builder.build_fn_header(
+        self.code_builder.build_fn_header_and_footer(
             &self.storage.local_types,
             self.storage.stack_frame_size,
             self.storage.stack_frame_pointer,
@@ -297,14 +306,18 @@ impl<'a> WasmBackend<'a> {
 
     ***********************************************************/
 
-    fn start_loop(&mut self, block_type: BlockType) {
+    fn start_block(&mut self) {
+        // Wasm blocks can have result types, but we don't use them.
+        // You need the right type on the stack when you jump from an inner block to an outer one.
+        // The rules are confusing, and implementing them would add complexity and slow down code gen.
+        // Instead we use local variables to move a value from an inner block to an outer one.
         self.block_depth += 1;
-        self.code_builder.loop_(block_type);
+        self.code_builder.block(BlockType::NoResult);
     }
 
-    fn start_block(&mut self, block_type: BlockType) {
+    fn start_loop(&mut self) {
         self.block_depth += 1;
-        self.code_builder.block(block_type);
+        self.code_builder.loop_(BlockType::NoResult);
     }
 
     fn end_block(&mut self) {
@@ -381,6 +394,12 @@ impl<'a> WasmBackend<'a> {
 
                     _ => {
                         self.storage.load_symbols(&mut self.code_builder, &[*sym]);
+
+                        // If we have a return value, store it to the return variable
+                        // This avoids complications with block result types when returning from nested blocks
+                        if let Some(ret_var) = self.storage.return_var {
+                            self.code_builder.set_local(ret_var);
+                        }
                     }
                 }
                 // jump to the "stack frame pop" code at the end of the function
@@ -409,7 +428,7 @@ impl<'a> WasmBackend<'a> {
 
                 // create a block for each branch except the default
                 for _ in 0..branches.len() {
-                    self.start_block(BlockType::NoResult)
+                    self.start_block()
                 }
 
                 let is_bool = matches!(cond_layout, Layout::Builtin(Builtin::Bool));
@@ -485,7 +504,7 @@ impl<'a> WasmBackend<'a> {
                     jp_param_storages.push(param_storage);
                 }
 
-                self.start_block(BlockType::NoResult);
+                self.start_block();
 
                 self.joinpoint_label_map
                     .insert(*id, (self.block_depth, jp_param_storages));
@@ -493,15 +512,7 @@ impl<'a> WasmBackend<'a> {
                 self.build_stmt(remainder, ret_layout);
 
                 self.end_block();
-
-                // A loop (or any block) needs to declare the type of the value it leaves on the stack on exit.
-                // The runtime needs this to statically validate the program before running it.
-                let loop_block_type = match WasmLayout::new(ret_layout).return_method() {
-                    ReturnMethod::Primitive(ty) => BlockType::Value(ty),
-                    ReturnMethod::WriteToPointerArg => BlockType::NoResult,
-                    ReturnMethod::NoReturnValue => BlockType::NoResult,
-                };
-                self.start_loop(loop_block_type);
+                self.start_loop();
 
                 self.build_stmt(body, ret_layout);
 
