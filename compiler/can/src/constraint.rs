@@ -1,20 +1,37 @@
 use crate::expected::{Expected, PExpected};
 use roc_collections::all::{MutSet, SendMap};
-use roc_module::symbol::Symbol;
+use roc_module::{ident::TagName, symbol::Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::types::{Category, PatternCategory, Type};
 use roc_types::{subs::Variable, types::VariableDetail};
+
+/// A presence constraint is an additive constraint that defines the lower bound
+/// of a type. For example, `Present(t1, IncludesTag(A, []))` means that the
+/// type `t1` must contain at least the tag `A`. The additive nature of these
+/// constraints makes them behaviorally different from unification-based constraints.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PresenceConstraint {
+    IncludesTag(TagName, Vec<Type>),
+    IsOpen,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Constraint {
     Eq(Type, Expected<Type>, Category, Region),
     Store(Type, Variable, &'static str, u32),
     Lookup(Symbol, Expected<Type>, Region),
-    Pattern(Region, PatternCategory, Type, PExpected<Type>),
+    Pattern(
+        Region,
+        PatternCategory,
+        Type,
+        PExpected<Type>,
+        bool, /* Treat the pattern as a presence constraint */
+    ),
     True, // Used for things that always unify, e.g. blanks and runtime errors
     SaveTheEnvironment,
     Let(Box<LetConstraint>),
     And(Vec<Constraint>),
+    Present(Type, PresenceConstraint),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -66,7 +83,7 @@ impl Constraint {
             Constraint::Eq(_, _, _, _) => false,
             Constraint::Store(_, _, _, _) => false,
             Constraint::Lookup(_, _, _) => false,
-            Constraint::Pattern(_, _, _, _) => false,
+            Constraint::Pattern(_, _, _, _, _) => false,
             Constraint::True => false,
             Constraint::SaveTheEnvironment => true,
             Constraint::Let(boxed) => {
@@ -74,6 +91,7 @@ impl Constraint {
                     || boxed.defs_constraint.contains_save_the_environment()
             }
             Constraint::And(cs) => cs.iter().any(|c| c.contains_save_the_environment()),
+            Constraint::Present(_, _) => false,
         }
     }
 }
@@ -124,7 +142,7 @@ fn validate_help(constraint: &Constraint, declared: &Declared, accum: &mut Varia
             subtract(declared, &typ.variables_detail(), accum);
             subtract(declared, &expected.get_type_ref().variables_detail(), accum);
         }
-        Constraint::Pattern(_, _, typ, expected) => {
+        Constraint::Pattern(_, _, typ, expected, _) => {
             subtract(declared, &typ.variables_detail(), accum);
             subtract(declared, &expected.get_type_ref().variables_detail(), accum);
         }
@@ -141,6 +159,17 @@ fn validate_help(constraint: &Constraint, declared: &Declared, accum: &mut Varia
         Constraint::And(inner) => {
             for c in inner {
                 validate_help(c, declared, accum);
+            }
+        }
+        Constraint::Present(typ, constr) => {
+            subtract(declared, &typ.variables_detail(), accum);
+            match &constr {
+                &PresenceConstraint::IncludesTag(_, tys) => {
+                    for ty in tys {
+                        subtract(declared, &ty.variables_detail(), accum);
+                    }
+                }
+                &PresenceConstraint::IsOpen => {}
             }
         }
     }

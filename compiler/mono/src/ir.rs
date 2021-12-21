@@ -2227,7 +2227,7 @@ fn specialize_external<'a>(
     let snapshot = env.subs.snapshot();
     let cache_snapshot = layout_cache.snapshot();
 
-    let _unified = roc_unify::unify::unify(env.subs, partial_proc.annotation, fn_var);
+    let _unified = roc_unify::unify::unify(env.subs, partial_proc.annotation, fn_var, false);
 
     // This will not hold for programs with type errors
     // let is_valid = matches!(unified, roc_unify::unify::Unified::Success(_));

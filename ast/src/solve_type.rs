@@ -224,7 +224,7 @@ fn solve<'a>(
                 expectation.get_type_ref(),
             );
 
-            match unify(subs, actual, expected) {
+            match unify(subs, actual, expected, false) {
                 Success(vars) => {
                     introduce(subs, rank, pools, &vars);
 
@@ -317,7 +317,7 @@ fn solve<'a>(
                         expectation.get_type_ref(),
                     );
 
-                    match unify(subs, actual, expected) {
+                    match unify(subs, actual, expected, false) {
                         Success(vars) => {
                             introduce(subs, rank, pools, &vars);
 
@@ -386,7 +386,8 @@ fn solve<'a>(
                 expectation.get_type_ref(),
             );
 
-            match unify(subs, actual, expected) {
+            // TODO(ayazhafiz): presence constraints for Expr2/Type2
+            match unify(subs, actual, expected, false) {
                 Success(vars) => {
                     introduce(subs, rank, pools, &vars);
 

@@ -1500,7 +1500,7 @@ mod test_reporting {
 
                 The first pattern is trying to match record values of type:
 
-                    { foo : [ True ]a }
+                    { foo : [ True ] }
 
                 But the expression between `when` and `is` has the type:
 

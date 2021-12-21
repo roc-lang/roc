@@ -1,6 +1,6 @@
 use crate::builtins;
 use crate::expr::{constrain_expr, Env};
-use roc_can::constraint::Constraint;
+use roc_can::constraint::{Constraint, PresenceConstraint};
 use roc_can::expected::{Expected, PExpected};
 use roc_can::pattern::Pattern::{self, *};
 use roc_can::pattern::{DestructType, RecordDestruct};
@@ -127,8 +127,21 @@ pub fn constrain_pattern(
     region: Region,
     expected: PExpected<Type>,
     state: &mut PatternState,
+    destruct_position: bool,
 ) {
     match pattern {
+        Underscore if destruct_position => {
+            // This is an underscore in a position where we destruct a variable,
+            // like a when expression:
+            //   when x is
+            //     A -> ""
+            //     _ -> ""
+            // so, we know that "x" (in this case, a tag union) must be open.
+            state.constraints.push(Constraint::Present(
+                expected.get_type(),
+                PresenceConstraint::IsOpen,
+            ));
+        }
         Underscore | UnsupportedPattern(_) | MalformedPattern(_, _) | Shadowed(_, _) => {
             // Neither the _ pattern nor erroneous ones add any constraints.
         }
@@ -138,9 +151,15 @@ pub fn constrain_pattern(
                 *symbol,
                 Loc {
                     region,
-                    value: expected.get_type(),
+                    value: expected.get_type_ref().clone(),
                 },
             );
+            if destruct_position {
+                state.constraints.push(Constraint::Present(
+                    expected.get_type(),
+                    PresenceConstraint::IsOpen,
+                ));
+            }
         }
 
         NumLiteral(var, _, _) => {
@@ -151,6 +170,7 @@ pub fn constrain_pattern(
                 PatternCategory::Num,
                 builtins::num_num(Type::Variable(*var)),
                 expected,
+                false,
             ));
         }
 
@@ -160,6 +180,7 @@ pub fn constrain_pattern(
                 PatternCategory::Int,
                 builtins::num_int(Type::Variable(*precision_var)),
                 expected,
+                false,
             ));
         }
 
@@ -169,6 +190,7 @@ pub fn constrain_pattern(
                 PatternCategory::Float,
                 builtins::num_float(Type::Variable(*precision_var)),
                 expected,
+                false,
             ));
         }
 
@@ -178,6 +200,7 @@ pub fn constrain_pattern(
                 PatternCategory::Str,
                 builtins::str_type(),
                 expected,
+                false,
             ));
         }
 
@@ -223,10 +246,18 @@ pub fn constrain_pattern(
                                 pat_type.clone(),
                                 loc_guard.region,
                             ),
+                            destruct_position,
                         ));
                         state.vars.push(*guard_var);
 
-                        constrain_pattern(env, &loc_guard.value, loc_guard.region, expected, state);
+                        constrain_pattern(
+                            env,
+                            &loc_guard.value,
+                            loc_guard.region,
+                            expected,
+                            state,
+                            destruct_position,
+                        );
 
                         RecordField::Demanded(pat_type)
                     }
@@ -240,6 +271,7 @@ pub fn constrain_pattern(
                                 pat_type.clone(),
                                 loc_expr.region,
                             ),
+                            destruct_position,
                         ));
 
                         state.vars.push(*expr_var);
@@ -281,6 +313,7 @@ pub fn constrain_pattern(
                 PatternCategory::Record,
                 Type::Variable(*whole_var),
                 expected,
+                destruct_position,
             );
 
             state.constraints.push(whole_con);
@@ -307,24 +340,39 @@ pub fn constrain_pattern(
                     pattern_type,
                     region,
                 );
-                constrain_pattern(env, &loc_pattern.value, loc_pattern.region, expected, state);
+                constrain_pattern(
+                    env,
+                    &loc_pattern.value,
+                    loc_pattern.region,
+                    expected,
+                    state,
+                    destruct_position,
+                );
             }
 
-            let whole_con = Constraint::Eq(
-                Type::Variable(*whole_var),
-                Expected::NoExpectation(Type::TagUnion(
-                    vec![(tag_name.clone(), argument_types)],
-                    Box::new(Type::Variable(*ext_var)),
-                )),
-                Category::Storage(std::file!(), std::line!()),
-                region,
-            );
+            let whole_con = if destruct_position {
+                Constraint::Present(
+                    expected.clone().get_type(),
+                    PresenceConstraint::IncludesTag(tag_name.clone(), argument_types.clone()),
+                )
+            } else {
+                Constraint::Eq(
+                    Type::Variable(*whole_var),
+                    Expected::NoExpectation(Type::TagUnion(
+                        vec![(tag_name.clone(), argument_types)],
+                        Box::new(Type::Variable(*ext_var)),
+                    )),
+                    Category::Storage(std::file!(), std::line!()),
+                    region,
+                )
+            };
 
             let tag_con = Constraint::Pattern(
                 region,
                 PatternCategory::Ctor(tag_name.clone()),
                 Type::Variable(*whole_var),
                 expected,
+                destruct_position,
             );
 
             state.vars.push(*whole_var);
