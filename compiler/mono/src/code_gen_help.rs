@@ -325,7 +325,7 @@ impl<'a> CodeGenHelp<'a> {
             (*existing_symbol, None)
         } else {
             let layout_name = layout_debug_name(layout);
-            let debug_name = format!("#help{:?}_{}", op, layout_name);
+            let debug_name = format!("#help{:?}_{}_{}", op, layout_name, self.specs.len());
             let new_symbol: Symbol = self.create_symbol(ident_ids, &debug_name);
             self.specs.push((*layout, op, new_symbol));
 

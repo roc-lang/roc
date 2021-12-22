@@ -481,7 +481,7 @@ fn list_eq_compare_pointwise() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_eq_nested() {
     assert_evals_to!("[[1]] == [[1]]", true, bool);
     assert_evals_to!("[[2]] == [[1]]", false, bool);
@@ -495,7 +495,7 @@ fn list_neq_compare_pointwise() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_neq_nested() {
     assert_evals_to!("[[1]] != [[1]]", false, bool);
     assert_evals_to!("[[2]] != [[1]]", true, bool);
