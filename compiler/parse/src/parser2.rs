@@ -14,6 +14,8 @@ pub struct TokenLoc(u32);
 
 pub enum Error {
     Expected(Token),
+    ExpectedAppInterfacePackage,
+    UnexpectedEof,
 }
 
 pub struct File {
@@ -21,7 +23,9 @@ pub struct File {
 }
 
 pub enum Header {
-
+    App,
+    Interface,
+    Platform,
 }
 
 impl<'a> Parser<'a> {
@@ -38,5 +42,23 @@ impl<'a> Parser<'a> {
 
     pub fn peek(&self) -> Option<Token> {
         self.tokens.first().copied()
+    }
+}
+
+pub trait Parse: Sized {
+    fn parse(p: &mut Parser) -> Result<Self, Error>;
+}
+
+impl Parse for Header {
+    fn parse(p: &mut Parser) -> Result<Self, Error> {
+        let res = match p.peek() {
+            Some(Token::KeywordApp) => Header::App,
+            Some(Token::KeywordInterface) => Header::Interface,
+            Some(Token::KeywordPlatform) => Header::Platform,
+            Some(t) => return Err(Error::ExpectedAppInterfacePackage),
+            None => return Err(Error::UnexpectedEof),
+        };
+
+        Ok(res)
     }
 }
