@@ -5,7 +5,6 @@ interface Base64.Encode
 InvalidChar : U8
 
 # State : [ None, One U8, Two U8, Three U8 ]
-
 toBytes : Str -> List U8
 toBytes = \str ->
     str
@@ -13,7 +12,6 @@ toBytes = \str ->
         |> encodeChunks
         |> Bytes.Encode.sequence
         |> Bytes.Encode.encode
-
 
 encodeChunks : List U8 -> List Encoder
 encodeChunks = \bytes ->
@@ -26,29 +24,42 @@ coerce = \_, x -> x
 # folder : { output : List Encoder, accum : State }, U8 -> { output : List Encoder, accum : State }
 folder = \{ output, accum }, char ->
     when accum is
-        Unreachable n -> coerce n { output, accum: Unreachable n }
-        None -> { output, accum: One char }
-        One a -> { output, accum: Two a char }
-        Two a b -> { output, accum: Three a b char }
+        Unreachable n ->
+            coerce n { output, accum: Unreachable n }
+
+        None ->
+            { output, accum: One char }
+
+        One a ->
+            { output, accum: Two a char }
+
+        Two a b ->
+            { output, accum: Three a b char }
+
         Three a b c ->
             when encodeCharacters a b c char is
                 Ok encoder ->
                     {
                         output: List.append output encoder,
-                        accum: None
+                        accum: None,
                     }
 
                 Err _ ->
                     { output, accum: None }
 
 #  SGVs bG8g V29y bGQ=
-
 # encodeResidual : { output : List Encoder, accum : State } -> List Encoder
 encodeResidual = \{ output, accum } ->
     when accum is
-        Unreachable _ -> output
-        None ->  output
-        One _ -> output
+        Unreachable _ ->
+            output
+
+        None ->
+            output
+
+        One _ ->
+            output
+
         Two a b ->
             when encodeCharacters a b equals equals is
                 Ok encoder ->
@@ -70,7 +81,7 @@ equals = 61
 
 # Convert 4 characters to 24 bits (as an Encoder)
 encodeCharacters : U8, U8, U8, U8 -> Result Encoder InvalidChar
-encodeCharacters = \a,b,c,d ->
+encodeCharacters = \a, b, c, d ->
     if !(isValidChar a) then
         Err a
     else if !(isValidChar b) then
@@ -96,12 +107,9 @@ encodeCharacters = \a,b,c,d ->
                 b1 = Num.intCast (Num.shiftRightBy 16 n)
 
                 Ok (Bytes.Encode.u8 b1)
-
             else if !(isValidChar c) then
                 Err c
-
             else
-
                 n3 = unsafeConvertChar c
 
                 z : U32
@@ -113,10 +121,8 @@ encodeCharacters = \a,b,c,d ->
                 combined = Num.intCast (Num.shiftRightBy 8 n)
 
                 Ok (Bytes.Encode.u16 BE combined)
-
         else if !(isValidChar d) then
             Err d
-
         else
             n3 = unsafeConvertChar c
             n4 = unsafeConvertChar d
@@ -146,7 +152,6 @@ isValidChar : U8 -> Bool
 isValidChar = \c ->
     if isAlphaNum c then
         True
-
     else
         when c is
             43 ->
@@ -164,7 +169,6 @@ isAlphaNum : U8 -> Bool
 isAlphaNum = \key ->
     (key >= 48 && key <= 57) || (key >= 64 && key <= 90) || (key >= 97 && key <= 122)
 
-
 # Convert a base64 character/digit to its index
 # See also [Wikipedia](https://en.wikipedia.org/wiki/Base64#Base64_table)
 unsafeConvertChar : U8 -> U8
@@ -172,15 +176,12 @@ unsafeConvertChar = \key ->
     if key >= 65 && key <= 90 then
         # A-Z
         key - 65
-
     else if key >= 97 && key <= 122 then
         # a-z
         (key - 97) + 26
-
     else if key >= 48 && key <= 57 then
         # 0-9
         (key - 48) + 26 + 26
-
     else
         when key is
             43 ->

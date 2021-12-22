@@ -63,7 +63,6 @@ mod test_fmt {
                     }
                     Err(error) => panic!("Unexpected parse failure when parsing this for defs formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, error)
                 }
-
                 assert_multiline_str_eq!(expected, buf.as_str())
             }
             Err(error) => panic!("Unexpected parse failure when parsing this for module header formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, error)
@@ -71,8 +70,6 @@ mod test_fmt {
     }
 
     fn module_formats_to(input: &str, expected: &str) {
-        let input = input.trim_end();
-
         // First check that input formats to the expected version
         expect_format_module_helper(input, expected);
 
@@ -2728,7 +2725,7 @@ mod test_fmt {
     fn multiline_tag_union_annotation_beginning_on_same_line() {
         expr_formats_same(indoc!(
             r#"
-            Expr  : [
+            Expr : [
                     Add Expr Expr,
                     Mul Expr Expr,
                     Val I64,
@@ -2939,6 +2936,38 @@ mod test_fmt {
                 42
             "#
         ));
+    }
+
+    #[test]
+    /// Test that everything under examples/ is formatted correctly
+    /// If this test fails on your diff, it probably means you need to re-format the examples.
+    /// Try this:
+    /// `cargo run -- format $(find examples -name \*.roc)`
+    fn test_fmt_examples() {
+        let mut count = 0;
+        let mut root = std::env::current_dir()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_owned();
+        root.push("examples");
+        for entry in walkdir::WalkDir::new(&root) {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.extension() == Some(&std::ffi::OsStr::new("roc")) {
+                count += 1;
+                let src = std::fs::read_to_string(path).unwrap();
+                println!("Now trying to format {}", path.display());
+                module_formats_same(&src);
+            }
+        }
+        assert!(
+            count > 0,
+            "Expecting to find at least 1 .roc file to format under {}",
+            root.display()
+        );
     }
 
     // this is a parse error atm
