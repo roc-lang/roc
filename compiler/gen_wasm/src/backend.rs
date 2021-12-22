@@ -26,7 +26,7 @@ use crate::wasm_module::sections::{
     Import, ImportDesc, ImportSection, MemorySection, TypeSection, WasmModule,
 };
 use crate::wasm_module::{
-    code_builder, BlockType, CodeBuilder, ConstExpr, Export, ExportType, Global, GlobalType,
+    code_builder, CodeBuilder, ConstExpr, Export, ExportType, Global, GlobalType,
     LinkingSubSection, LocalId, Signature, SymInfo, ValueType,
 };
 use crate::{
@@ -312,12 +312,12 @@ impl<'a> WasmBackend<'a> {
         // The rules are confusing, and implementing them would add complexity and slow down code gen.
         // Instead we use local variables to move a value from an inner block to an outer one.
         self.block_depth += 1;
-        self.code_builder.block(BlockType::NoResult);
+        self.code_builder.block();
     }
 
     fn start_loop(&mut self) {
         self.block_depth += 1;
-        self.code_builder.loop_(BlockType::NoResult);
+        self.code_builder.loop_();
     }
 
     fn end_block(&mut self) {
@@ -766,7 +766,7 @@ impl<'a> WasmBackend<'a> {
             Expr::GetTagId {
                 structure,
                 union_layout,
-            } => self.build_get_tag_id(*structure, union_layout),
+            } => self.build_get_tag_id(*structure, union_layout, *sym, storage),
 
             Expr::UnionAtIndex {
                 structure,
@@ -860,35 +860,52 @@ impl<'a> WasmBackend<'a> {
         }
     }
 
-    fn build_get_tag_id(&mut self, structure: Symbol, union_layout: &UnionLayout<'a>) {
+    fn build_get_tag_id(
+        &mut self,
+        structure: Symbol,
+        union_layout: &UnionLayout<'a>,
+        tag_id_symbol: Symbol,
+        stored_value: &StoredValue,
+    ) {
         use UnionLayout::*;
 
-        let mut need_to_close_block = false;
-        match union_layout {
-            NonRecursive(_) => {}
-            Recursive(_) => {}
+        let block_result_id = match union_layout {
+            NonRecursive(_) => None,
+            Recursive(_) => None,
             NonNullableUnwrapped(_) => {
                 self.code_builder.i32_const(0);
                 return;
             }
             NullableWrapped { nullable_id, .. } => {
+                let stored_with_local = self.storage.ensure_value_has_local(
+                    &mut self.code_builder,
+                    tag_id_symbol,
+                    stored_value.to_owned(),
+                );
+                let local_id = match stored_with_local {
+                    StoredValue::Local { local_id, .. } => local_id,
+                    _ => internal_error!("ensure_value_has_local didn't work"),
+                };
+
+                // load pointer
                 self.storage
                     .load_symbols(&mut self.code_builder, &[structure]);
+
+                // null check
                 self.code_builder.i32_eqz();
-                self.code_builder.if_(BlockType::Value(ValueType::I32));
+                self.code_builder.if_();
                 self.code_builder.i32_const(*nullable_id as i32);
+                self.code_builder.set_local(local_id);
                 self.code_builder.else_();
-                need_to_close_block = true;
+                Some(local_id)
             }
             NullableUnwrapped { nullable_id, .. } => {
+                self.code_builder.i32_const(!(*nullable_id) as i32);
+                self.code_builder.i32_const(*nullable_id as i32);
                 self.storage
                     .load_symbols(&mut self.code_builder, &[structure]);
-                self.code_builder.i32_eqz();
-                self.code_builder.if_(BlockType::Value(ValueType::I32));
-                self.code_builder.i32_const(*nullable_id as i32);
-                self.code_builder.else_();
-                self.code_builder.i32_const(!(*nullable_id) as i32);
-                self.code_builder.end();
+                self.code_builder.select();
+                None
             }
         };
 
@@ -916,7 +933,8 @@ impl<'a> WasmBackend<'a> {
             self.code_builder.i32_and();
         }
 
-        if need_to_close_block {
+        if let Some(local_id) = block_result_id {
+            self.code_builder.set_local(local_id);
             self.code_builder.end();
         }
     }

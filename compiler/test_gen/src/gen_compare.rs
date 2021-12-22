@@ -293,7 +293,7 @@ fn eq_expr() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn eq_linked_list() {
     assert_evals_to!(
         indoc!(
@@ -351,7 +351,7 @@ fn eq_linked_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn eq_linked_list_false() {
     assert_evals_to!(
         indoc!(
@@ -373,7 +373,7 @@ fn eq_linked_list_false() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn eq_nullable_expr() {
     assert_evals_to!(
         indoc!(
@@ -546,7 +546,7 @@ fn compare_recursive_union_same_content() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn compare_nullable_recursive_union_same_content() {
     assert_evals_to!(
         indoc!(
