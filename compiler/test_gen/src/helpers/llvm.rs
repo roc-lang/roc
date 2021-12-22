@@ -509,29 +509,14 @@ where
 
 #[allow(unused_macros)]
 macro_rules! assert_wasm_evals_to {
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr, $expect_failure:expr) => {
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
         match $crate::helpers::llvm::assert_wasm_evals_to_help::<$ty>($src, $ignore_problems) {
             Err(msg) => panic!("Wasm test failed: {:?}", msg),
             Ok(actual) => {
-                if $expect_failure {
-                    assert!(false, "Expected failure during wasm execution!")
-                } else {
-                    #[allow(clippy::bool_assert_comparison)]
-                    assert_eq!($transform(actual), $expected, "Wasm test failed")
-                }
+                #[allow(clippy::bool_assert_comparison)]
+                assert_eq!($transform(actual), $expected, "Wasm test failed")
             }
         }
-    };
-
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
-        $crate::helpers::llvm::assert_wasm_evals_to!(
-            $src,
-            $expected,
-            $ty,
-            $crate::helpers::llvm::identity,
-            $ignore_problems,
-            false
-        );
     };
 
     ($src:expr, $expected:expr, $ty:ty) => {
@@ -551,7 +536,7 @@ macro_rules! assert_wasm_evals_to {
 
 #[allow(unused_macros)]
 macro_rules! assert_llvm_evals_to {
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr, $expect_rt_error:expr) => {
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
         use bumpalo::Bump;
         use inkwell::context::Context;
         use roc_gen_llvm::run_jit_function;
@@ -573,30 +558,12 @@ macro_rules! assert_llvm_evals_to {
         );
 
         let transform = |success| {
-            if $expect_rt_error {
-                assert_eq!(
-                    true, false,
-                    "Runtime error expected, but evaluation succeeded!"
-                )
-            } else {
-                let expected = $expected;
-                #[allow(clippy::redundant_closure_call)]
-                let given = $transform(success);
-                assert_eq!(&given, &expected, "LLVM test failed");
-            }
+            let expected = $expected;
+            #[allow(clippy::redundant_closure_call)]
+            let given = $transform(success);
+            assert_eq!(&given, &expected, "LLVM test failed");
         };
         run_jit_function!(lib, main_fn_name, $ty, transform, errors)
-    };
-
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
-        $crate::helpers::llvm::assert_llvm_evals_to!(
-            $src,
-            $expected,
-            $ty,
-            $transform,
-            $ignore_problems,
-            false
-        );
     };
 
     ($src:expr, $expected:expr, $ty:ty) => {
@@ -605,15 +572,12 @@ macro_rules! assert_llvm_evals_to {
             $expected,
             $ty,
             $crate::helpers::llvm::identity,
-            false,
             false
         );
     };
 
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        $crate::helpers::llvm::assert_llvm_evals_to!(
-            $src, $expected, $ty, $transform, false, false
-        );
+        $crate::helpers::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
     };
 }
 
@@ -630,9 +594,7 @@ macro_rules! assert_evals_to {
                 $src, $expected, $ty, $transform, false, false
             );
 
-            $crate::helpers::llvm::assert_llvm_evals_to!(
-                $src, $expected, $ty, $transform, false, false
-            );
+            $crate::helpers::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
         }
     };
 }
@@ -645,8 +607,7 @@ macro_rules! expect_runtime_error_panic {
             false, // fake value/type for eval
             bool,
             $crate::helpers::llvm::identity,
-            true, // ignore problems
-            true  // expect runtime error
+            true // ignore problems
         );
 
         $crate::helpers::llvm::assert_llvm_evals_to!(
@@ -654,8 +615,7 @@ macro_rules! expect_runtime_error_panic {
             false, // fake value/type for eval
             bool,
             $crate::helpers::llvm::identity,
-            true, // ignore problems
-            true  // expect runtime error
+            true // ignore problems
         );
     }};
 }
