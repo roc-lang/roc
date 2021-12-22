@@ -313,7 +313,7 @@ fn unary_negate<'a>() -> impl Parser<'a, (), EExpr<'a>> {
 
         if state.bytes().starts_with(b"-") && !followed_by_whitespace {
             // the negate is only unary if it is not followed by whitespace
-            let mut state = state.advance(Some(Token::Minus), 1);
+            let mut state = state.advance(Some(Token::OpMinus), 1);
             state.column += 1;
             Ok((MadeProgress, (), state))
         } else {
@@ -1329,7 +1329,7 @@ fn parse_expr_end<'a>(
 
                         patterns.insert(0, loc_pattern);
 
-                        match word2(b'<', b'-', Token::BinOpBackpassing, EExpr::BackpassArrow).parse(arena, state) {
+                        match word2(b'<', b'-', Token::OpBackpassing, EExpr::BackpassArrow).parse(arena, state) {
                             Err((_, fail, state)) => Err((MadeProgress, fail, state)),
                             Ok((_, _, state)) => {
                                 let min_indent = start.col;
@@ -2428,34 +2428,34 @@ where
 
     match chomped {
         "" => Err((NoProgress, to_expectation(state.line, state.column), state)),
-        "+" => good!(BinOp::Plus, Some(Token::BinOpPlus), 1),
-        "-" => good!(BinOp::Minus, Some(Token::Minus), 1),
+        "+" => good!(BinOp::Plus, Some(Token::OpPlus), 1),
+        "-" => good!(BinOp::Minus, Some(Token::OpMinus), 1),
         "*" => good!(BinOp::Star, Some(Token::Astrisk), 1),
-        "/" => good!(BinOp::Slash, Some(Token::BinOpSlash), 1),
-        "%" => good!(BinOp::Percent, Some(Token::BinOpPercent), 1),
-        "^" => good!(BinOp::Caret, Some(Token::BinOpCaret), 1),
-        ">" => good!(BinOp::GreaterThan, Some(Token::BinOpGreaterThan), 1),
-        "<" => good!(BinOp::LessThan, Some(Token::BinOpLessThan), 1),
+        "/" => good!(BinOp::Slash, Some(Token::OpSlash), 1),
+        "%" => good!(BinOp::Percent, Some(Token::OpPercent), 1),
+        "^" => good!(BinOp::Caret, Some(Token::OpCaret), 1),
+        ">" => good!(BinOp::GreaterThan, Some(Token::OpGreaterThan), 1),
+        "<" => good!(BinOp::LessThan, Some(Token::OpLessThan), 1),
         "." => {
             // a `.` makes no progress, so it does not interfere with `.foo` access(or)
             Err((NoProgress, to_error(".", state.line, state.column), state))
         }
-        "=" => good!(BinOp::Assignment, Some(Token::BinOpAssignment), 1),
+        "=" => good!(BinOp::Assignment, Some(Token::OpAssignment), 1),
         ":" => good!(BinOp::HasType, Some(Token::Colon), 1),
-        "|>" => good!(BinOp::Pizza, Some(Token::BinOpPizza), 2),
-        "==" => good!(BinOp::Equals, Some(Token::BinOpEquals), 2),
-        "!=" => good!(BinOp::NotEquals, Some(Token::BinOpNotEquals), 2),
-        ">=" => good!(BinOp::GreaterThanOrEq, Some(Token::BinOpGreaterThanOrEq), 2),
-        "<=" => good!(BinOp::LessThanOrEq, Some(Token::BinOpLessThanOrEq), 2),
-        "&&" => good!(BinOp::And, Some(Token::BinOpAnd), 2),
-        "||" => good!(BinOp::Or, Some(Token::BinOpOr), 2),
-        "//" => good!(BinOp::DoubleSlash, Some(Token::BinOpDoubleSlash), 2),
-        "%%" => good!(BinOp::DoublePercent, Some(Token::BinOpDoublePercent), 2),
+        "|>" => good!(BinOp::Pizza, Some(Token::OpPizza), 2),
+        "==" => good!(BinOp::Equals, Some(Token::OpEquals), 2),
+        "!=" => good!(BinOp::NotEquals, Some(Token::OpNotEquals), 2),
+        ">=" => good!(BinOp::GreaterThanOrEq, Some(Token::OpGreaterThanOrEq), 2),
+        "<=" => good!(BinOp::LessThanOrEq, Some(Token::OpLessThanOrEq), 2),
+        "&&" => good!(BinOp::And, Some(Token::OpAnd), 2),
+        "||" => good!(BinOp::Or, Some(Token::OpOr), 2),
+        "//" => good!(BinOp::DoubleSlash, Some(Token::OpDoubleSlash), 2),
+        "%%" => good!(BinOp::DoublePercent, Some(Token::OpDoublePercent), 2),
         "->" => {
             // makes no progress, so it does not interfere with `_ if isGood -> ...`
             Err((NoProgress, to_error("->", state.line, state.column), state))
         }
-        "<-" => good!(BinOp::Backpassing, Some(Token::BinOpBackpassing), 2),
+        "<-" => good!(BinOp::Backpassing, Some(Token::OpBackpassing), 2),
         _ => bad_made_progress!(chomped),
     }
 }

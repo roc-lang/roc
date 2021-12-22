@@ -4,6 +4,7 @@
 
 #[macro_use]
 pub mod parser;
+pub mod parser2;
 pub mod ast;
 pub mod blankspace;
 pub mod expr;

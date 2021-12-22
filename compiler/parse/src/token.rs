@@ -1,48 +1,69 @@
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Tokens are full of very dense information to make checking properties about them
+/// very fast.
+/// Some bits have specific meanings: 
+/// * 0b_001*_****: "Identifier-like" things
+/// * 0b_0100_****: "Punctuation"
+///     * 0b_0100_1***: []{}()
+///         * 0b_0100_1**0 [{(
+///         * 0b_0100_1**1 ]})
+///     * 0b_011*_**** Operators
 pub enum Token {
+    Ident               = 0b_0010_0000,
+    MalformedIdent      = 0b_0010_0001,
+
+    KeywordIf           = 0b_0010_0010,
+    KeywordThen         = 0b_0010_0011,
+    KeywordElse         = 0b_0010_0100,
+    KeywordWhen         = 0b_0010_0101,
+    KeywordAs           = 0b_0010_0110,
+    KeywordIs           = 0b_0010_0111,
+    KeywordExpect       = 0b_0010_1000,
+    KeywordApp          = 0b_0010_1001,
+    KeywordInterface    = 0b_0010_1010,
+    KeywordPackages     = 0b_0010_1011,
+    KeywordImports      = 0b_0010_1100,
+    KeywordProvides     = 0b_0010_1101,
+    KeywordTo           = 0b_0010_1110,
+    KeywordExposes      = 0b_0010_1111,
+    KeywordEffects      = 0b_0011_0000,
+    KeywordPlatform     = 0b_0011_0001,
+    KeywordRequires     = 0b_0011_0010,
+
+    Comma               = 0b_0100_0000,
+    Colon               = 0b_0100_0001,
+
+    OpenParen           = 0b_0100_1000,
+    CloseParen          = 0b_0100_1001,
+    OpenCurly           = 0b_0100_1010,
+    CloseCurly          = 0b_0100_1011,
+    OpenSquare          = 0b_0100_1100,
+    CloseSquare         = 0b_0100_1101,
+
+    OpPlus              = 0b_0110_0000,
+    OpMinus             = 0b_0110_0001,
+    OpSlash             = 0b_0110_0010,
+    OpPercent           = 0b_0110_0011,
+    OpCaret             = 0b_0110_0100,
+    OpGreaterThan       = 0b_0110_0101,
+    OpLessThan          = 0b_0110_0110,
+    OpAssignment        = 0b_0110_0111,
+    OpPizza             = 0b_0110_1000,
+    OpEquals            = 0b_0110_1001,
+    OpNotEquals         = 0b_0110_1010,
+    OpGreaterThanOrEq   = 0b_0110_1011,
+    OpLessThanOrEq      = 0b_0110_1100,
+    OpAnd               = 0b_0110_1101,
+    OpOr                = 0b_0110_1110,
+    OpDoubleSlash       = 0b_0110_1111,
+    OpDoublePercent     = 0b_0111_0001,
+    OpBackpassing       = 0b_0111_1010,
+
+    TodoNextThing       = 0b_1000_0000,
+
     Malformed,
-    MalformedIdent,
     MalformedOperator,
-
-    BinOpPlus,
-    Minus,
-    BinOpSlash,
-    BinOpPercent,
-    BinOpCaret,
-    BinOpGreaterThan,
-    BinOpLessThan,
-    BinOpAssignment,
-    BinOpPizza,
-    BinOpEquals,
-    BinOpNotEquals,
-    BinOpGreaterThanOrEq,
-    BinOpLessThanOrEq,
-    BinOpAnd,
-    BinOpOr,
-    BinOpDoubleSlash,
-    BinOpDoublePercent,
-    BinOpBackpassing,
-
-    KeywordIf,
-    KeywordThen,
-    KeywordElse,
-    KeywordWhen,
-    KeywordAs,
-    KeywordIs,
-    KeywordExpect,
-    KeywordApp,
-    KeywordInterface,
-    KeywordPackages,
-    KeywordImports,
-    KeywordProvides,
-    KeywordTo,
-    KeywordExposes,
-    KeywordEffects,
-    KeywordPlatform,
-    KeywordRequires,
-
-    Ident,
 
     // PackageName, // TODO: this seems to be a combo of two idents, i.e. "rtfeldman/blah"
     // LowercaseIdent, // TODO: maybe this should just be Ident, then checked afterwards?
@@ -56,16 +77,6 @@ pub enum Token {
 
     NumberBase,
     Number,
-
-    Comma,
-    Colon,
-
-    OpenParen,
-    CloseParen,
-    OpenCurly,
-    CloseCurly,
-    OpenSquare,
-    CloseSquare,
 
     QuestionMark,
 
@@ -210,32 +221,32 @@ fn lex_operator(bytes: &[u8]) -> (Token, usize) {
         i += 1;
     }
     let tok = match &bytes[0..i] {
-        b"+" => Token::BinOpPlus,
-        b"-" => Token::Minus,
+        b"+" => Token::OpPlus,
+        b"-" => Token::OpMinus,
         b"*" => Token::Astrisk,
-        b"/" => Token::BinOpSlash,
-        b"%" => Token::BinOpPercent,
-        b"^" => Token::BinOpCaret,
-        b">" => Token::BinOpGreaterThan,
-        b"<" => Token::BinOpLessThan,
+        b"/" => Token::OpSlash,
+        b"%" => Token::OpPercent,
+        b"^" => Token::OpCaret,
+        b">" => Token::OpGreaterThan,
+        b"<" => Token::OpLessThan,
         b"." => Token::Dot,
-        b"=" => Token::BinOpAssignment,
+        b"=" => Token::OpAssignment,
         b":" => Token::Colon,
         b"|" => Token::Pipe,
         b"\\" => Token::LambdaStart,
-        b"|>" => Token::BinOpPizza,
-        b"==" => Token::BinOpEquals,
+        b"|>" => Token::OpPizza,
+        b"==" => Token::OpEquals,
         b"!" => Token::Bang,
-        b"!=" => Token::BinOpNotEquals,
-        b">=" => Token::BinOpGreaterThanOrEq,
-        b"<=" => Token::BinOpLessThanOrEq,
-        b"&&" => Token::BinOpAnd,
+        b"!=" => Token::OpNotEquals,
+        b">=" => Token::OpGreaterThanOrEq,
+        b"<=" => Token::OpLessThanOrEq,
+        b"&&" => Token::OpAnd,
         b"&" => Token::Ampersand,
-        b"||" => Token::BinOpOr,
-        b"//" => Token::BinOpDoubleSlash,
-        b"%%" => Token::BinOpDoublePercent,
+        b"||" => Token::OpOr,
+        b"//" => Token::OpDoubleSlash,
+        b"%%" => Token::OpDoublePercent,
         b"->" => Token::Arrow,
-        b"<-" => Token::BinOpBackpassing,
+        b"<-" => Token::OpBackpassing,
         op => {
             dbg!(std::str::from_utf8(op).unwrap());
             Token::MalformedOperator
