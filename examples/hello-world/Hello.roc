@@ -3,4 +3,7 @@ app "hello-world"
     imports []
     provides [ main ] to pf
 
-main = "Hello, World!\n"
+main =
+    get : {a: Bool} -> Bool
+    get = \{a} -> a
+    get {b: ""}

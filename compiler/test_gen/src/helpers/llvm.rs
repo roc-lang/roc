@@ -28,8 +28,6 @@ pub fn test_builtin_defs(symbol: Symbol, var_store: &mut VarStore) -> Option<Def
     builtin_defs_map(symbol, var_store)
 }
 
-// this is not actually dead code, but only used by cfg_test modules
-// so "normally" it is dead, only at testing time is it used
 #[allow(clippy::too_many_arguments)]
 fn create_llvm_module<'a>(
     arena: &'a bumpalo::Bump,
@@ -511,14 +509,29 @@ where
 
 #[allow(unused_macros)]
 macro_rules! assert_wasm_evals_to {
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr, $expect_failure:expr) => {
         match $crate::helpers::llvm::assert_wasm_evals_to_help::<$ty>($src, $ignore_problems) {
             Err(msg) => panic!("Wasm test failed: {:?}", msg),
             Ok(actual) => {
-                #[allow(clippy::bool_assert_comparison)]
-                assert_eq!($transform(actual), $expected, "Wasm test failed")
+                if $expect_failure {
+                    assert!(false, "Expected failure during wasm execution!")
+                } else {
+                    #[allow(clippy::bool_assert_comparison)]
+                    assert_eq!($transform(actual), $expected, "Wasm test failed")
+                }
             }
         }
+    };
+
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
+        $crate::helpers::llvm::assert_wasm_evals_to!(
+            $src,
+            $expected,
+            $ty,
+            $crate::helpers::llvm::identity,
+            $ignore_problems,
+            false
+        );
     };
 
     ($src:expr, $expected:expr, $ty:ty) => {
@@ -538,7 +551,7 @@ macro_rules! assert_wasm_evals_to {
 
 #[allow(unused_macros)]
 macro_rules! assert_llvm_evals_to {
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr, $expect_rt_error:expr) => {
         use bumpalo::Bump;
         use inkwell::context::Context;
         use roc_gen_llvm::run_jit_function;
@@ -560,12 +573,30 @@ macro_rules! assert_llvm_evals_to {
         );
 
         let transform = |success| {
-            let expected = $expected;
-            #[allow(clippy::redundant_closure_call)]
-            let given = $transform(success);
-            assert_eq!(&given, &expected, "LLVM test failed");
+            if $expect_rt_error {
+                assert_eq!(
+                    true, false,
+                    "Runtime error expected, but evaluation succeeded!"
+                )
+            } else {
+                let expected = $expected;
+                #[allow(clippy::redundant_closure_call)]
+                let given = $transform(success);
+                assert_eq!(&given, &expected, "LLVM test failed");
+            }
         };
         run_jit_function!(lib, main_fn_name, $ty, transform, errors)
+    };
+
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
+        $crate::helpers::llvm::assert_llvm_evals_to!(
+            $src,
+            $expected,
+            $ty,
+            $transform,
+            $ignore_problems,
+            false
+        );
     };
 
     ($src:expr, $expected:expr, $ty:ty) => {
@@ -574,12 +605,15 @@ macro_rules! assert_llvm_evals_to {
             $expected,
             $ty,
             $crate::helpers::llvm::identity,
+            false,
             false
         );
     };
 
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        $crate::helpers::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
+        $crate::helpers::llvm::assert_llvm_evals_to!(
+            $src, $expected, $ty, $transform, false, false
+        );
     };
 }
 
@@ -589,14 +623,41 @@ macro_rules! assert_evals_to {
         assert_evals_to!($src, $expected, $ty, $crate::helpers::llvm::identity);
     }};
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        // Same as above, except with an additional transformation argument.
+        // same as above, except with an additional transformation argument.
         {
             #[cfg(feature = "wasm-cli-run")]
-            $crate::helpers::llvm::assert_wasm_evals_to!($src, $expected, $ty, $transform, false);
+            $crate::helpers::llvm::assert_wasm_evals_to!(
+                $src, $expected, $ty, $transform, false, false
+            );
 
-            $crate::helpers::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
+            $crate::helpers::llvm::assert_llvm_evals_to!(
+                $src, $expected, $ty, $transform, false, false
+            );
         }
     };
+}
+
+macro_rules! expect_runtime_error_panic {
+    ($src:expr) => {{
+        #[cfg(feature = "wasm-cli-run")]
+        $crate::helpers::llvm::assert_wasm_evals_to!(
+            $src,
+            false, // fake value/type for eval
+            bool,
+            $crate::helpers::llvm::identity,
+            true, // ignore problems
+            true  // expect runtime error
+        );
+
+        $crate::helpers::llvm::assert_llvm_evals_to!(
+            $src,
+            false, // fake value/type for eval
+            bool,
+            $crate::helpers::llvm::identity,
+            true, // ignore problems
+            true  // expect runtime error
+        );
+    }};
 }
 
 #[allow(dead_code)]
@@ -617,7 +678,7 @@ macro_rules! assert_non_opt_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
         // Same as above, except with an additional transformation argument.
         {
-            $crate::helpers::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
+            $crate::helpers::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform);
         }
     };
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {{
@@ -633,3 +694,5 @@ pub(crate) use assert_llvm_evals_to;
 pub(crate) use assert_non_opt_evals_to;
 #[allow(unused_imports)]
 pub(crate) use assert_wasm_evals_to;
+#[allow(unused_imports)]
+pub(crate) use expect_runtime_error_panic;

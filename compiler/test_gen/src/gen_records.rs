@@ -1,6 +1,9 @@
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
 
+#[cfg(feature = "gen-llvm")]
+use crate::helpers::llvm::expect_runtime_error_panic;
+
 #[cfg(feature = "gen-dev")]
 use crate::helpers::dev::assert_evals_to;
 
@@ -1006,4 +1009,23 @@ fn both_have_unique_fields() {
         84,
         i64
     );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+#[should_panic(
+    // TODO: something upstream is escaping the '
+    expected = r#"Roc failed with message: "Can\'t create record with improper layout""#
+)]
+fn call_with_bad_record_runtime_error() {
+    expect_runtime_error_panic!(indoc!(
+        r#"
+            app "test" provides [ main ] to "./platform"
+
+            main =
+                get : {a: Bool} -> Bool
+                get = \{a} -> a
+                get {b: ""}
+            "#
+    ))
 }
