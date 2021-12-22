@@ -146,14 +146,40 @@ fn neq_bool_tag() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn empty_record() {
     assert_evals_to!("{} == {}", true, bool);
     assert_evals_to!("{} != {}", false, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn record() {
+    assert_evals_to!(
+        "{ x: 123, y: \"Hello\", z: 3.14 } == { x: 123, y: \"Hello\", z: 3.14 }",
+        true,
+        bool
+    );
+
+    assert_evals_to!(
+        "{ x: 234, y: \"Hello\", z: 3.14 } == { x: 123, y: \"Hello\", z: 3.14 }",
+        false,
+        bool
+    );
+    assert_evals_to!(
+        "{ x: 123, y: \"World\", z: 3.14 } == { x: 123, y: \"Hello\", z: 3.14 }",
+        false,
+        bool
+    );
+    assert_evals_to!(
+        "{ x: 123, y: \"Hello\", z: 1.11 } == { x: 123, y: \"Hello\", z: 3.14 }",
+        false,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn unit() {
     assert_evals_to!("Unit == Unit", true, bool);
     assert_evals_to!("Unit != Unit", false, bool);
@@ -167,7 +193,7 @@ fn newtype() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn small_str() {
     assert_evals_to!("\"aaa\" == \"aaa\"", true, bool);
     assert_evals_to!("\"aaa\" == \"bbb\"", false, bool);
@@ -175,7 +201,7 @@ fn small_str() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn large_str() {
     assert_evals_to!(
         indoc!(
@@ -205,7 +231,7 @@ fn large_str() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn eq_result_tag_true() {
     assert_evals_to!(
         indoc!(
@@ -225,7 +251,7 @@ fn eq_result_tag_true() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn eq_result_tag_false() {
     assert_evals_to!(
         indoc!(
@@ -245,7 +271,7 @@ fn eq_result_tag_false() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn eq_expr() {
     assert_evals_to!(
         indoc!(
@@ -476,7 +502,7 @@ fn list_neq_nested() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn compare_union_same_content() {
     assert_evals_to!(
         indoc!(
@@ -498,7 +524,7 @@ fn compare_union_same_content() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn compare_recursive_union_same_content() {
     assert_evals_to!(
         indoc!(

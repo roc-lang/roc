@@ -207,20 +207,24 @@ pub enum UnionLayout<'a> {
     /// A non-recursive tag union
     /// e.g. `Result a e : [ Ok a, Err e ]`
     NonRecursive(&'a [&'a [Layout<'a>]]),
-    /// A recursive tag union
+    /// A recursive tag union (general case)
     /// e.g. `Expr : [ Sym Str, Add Expr Expr ]`
     Recursive(&'a [&'a [Layout<'a>]]),
     /// A recursive tag union with just one constructor
+    /// Optimization: No need to store a tag ID (the payload is "unwrapped")
     /// e.g. `RoseTree a : [ Tree a (List (RoseTree a)) ]`
     NonNullableUnwrapped(&'a [Layout<'a>]),
-    /// A recursive tag union where the non-nullable variant(s) store the tag id
+    /// A recursive tag union that has an empty variant
+    /// Optimization: Represent the empty variant as null pointer => no memory usage & fast comparison
+    /// It has more than one other variant, so they need tag IDs (payloads are "wrapped")
     /// e.g. `FingerTree a : [ Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a) ]`
     /// see also: https://youtu.be/ip92VMpf_-A?t=164
     NullableWrapped {
         nullable_id: u16,
         other_tags: &'a [&'a [Layout<'a>]],
     },
-    /// A recursive tag union where the non-nullable variant does NOT store the tag id
+    /// A recursive tag union with only two variants, where one is empty.
+    /// Optimizations: Use null for the empty variant AND don't store a tag ID for the other variant.
     /// e.g. `ConsList a : [ Nil, Cons a (ConsList a) ]`
     NullableUnwrapped {
         nullable_id: bool,
@@ -421,6 +425,58 @@ impl<'a> UnionLayout<'a> {
 
         // because we store a refcount, the alignment must be at least the size of a pointer
         allocation.max(pointer_size)
+    }
+
+    /// Size of the data in memory, whether it's stack or heap (for non-null tag ids)
+    pub fn data_size_and_alignment(&self, pointer_size: u32) -> (u32, u32) {
+        let id_data_layout = if self.stores_tag_id_as_data(pointer_size) {
+            Some(self.tag_id_layout())
+        } else {
+            None
+        };
+
+        match self {
+            Self::NonRecursive(tags) => {
+                Self::data_size_and_alignment_help(tags, id_data_layout, pointer_size)
+            }
+            Self::Recursive(tags) => {
+                Self::data_size_and_alignment_help(tags, id_data_layout, pointer_size)
+            }
+            Self::NonNullableUnwrapped(fields) => {
+                Self::data_size_and_alignment_help(&[fields], id_data_layout, pointer_size)
+            }
+            Self::NullableWrapped { other_tags, .. } => {
+                Self::data_size_and_alignment_help(other_tags, id_data_layout, pointer_size)
+            }
+            Self::NullableUnwrapped { other_fields, .. } => {
+                Self::data_size_and_alignment_help(&[other_fields], id_data_layout, pointer_size)
+            }
+        }
+    }
+
+    fn data_size_and_alignment_help(
+        variant_field_layouts: &[&[Layout]],
+        id_data_layout: Option<Layout>,
+        pointer_size: u32,
+    ) -> (u32, u32) {
+        let mut size = 0;
+        let mut alignment_bytes = 0;
+
+        for field_layouts in variant_field_layouts {
+            let mut data = Layout::Struct(field_layouts);
+
+            let fields_and_id;
+            if let Some(id_layout) = id_data_layout {
+                fields_and_id = [data, id_layout];
+                data = Layout::Struct(&fields_and_id);
+            }
+
+            let (variant_size, variant_alignment) = data.stack_size_and_alignment(pointer_size);
+            alignment_bytes = alignment_bytes.max(variant_alignment);
+            size = size.max(variant_size);
+        }
+
+        (size, alignment_bytes)
     }
 }
 
@@ -842,6 +898,14 @@ impl<'a> Layout<'a> {
         round_up_to_alignment(width, alignment)
     }
 
+    pub fn stack_size_and_alignment(&self, pointer_size: u32) -> (u32, u32) {
+        let width = self.stack_size_without_alignment(pointer_size);
+        let alignment = self.alignment_bytes(pointer_size);
+
+        let size = round_up_to_alignment(width, alignment);
+        (size, alignment)
+    }
+
     fn stack_size_without_alignment(&self, pointer_size: u32) -> u32 {
         use Layout::*;
 
@@ -956,14 +1020,9 @@ impl<'a> Layout<'a> {
         use Layout::*;
 
         match self {
-            Union(variant) => {
-                use UnionLayout::*;
+            Union(UnionLayout::NonRecursive(_)) => false,
 
-                matches!(
-                    variant,
-                    Recursive(_) | NullableWrapped { .. } | NullableUnwrapped { .. }
-                )
-            }
+            Union(_) => true,
 
             RecursivePointer => true,
 

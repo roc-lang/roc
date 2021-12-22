@@ -1,7 +1,7 @@
 app "cfold"
-    packages { base: "platform" }
-    imports [base.Task]
-    provides [ main ] to base
+    packages { pf: "platform" }
+    imports [pf.Task]
+    provides [ main ] to pf
 
 # adapted from https://github.com/koka-lang/koka/blob/master/test/bench/haskell/cfold.hs
 
@@ -13,9 +13,9 @@ main =
         optimized = eval (constFolding (reassoc e))
 
         unoptimized
-            |> Str.fromInt
+            |> Num.toStr
             |> Str.concat " & "
-            |> Str.concat (Str.fromInt optimized)
+            |> Str.concat (Num.toStr optimized)
             |> Task.putLine
 
 Expr : [

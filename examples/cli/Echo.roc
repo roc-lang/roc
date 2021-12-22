@@ -1,9 +1,9 @@
 #!/usr/bin/env roc
 
 app "echo"
-    packages { base: "platform" }
-    imports [ base.Task.{ Task, await }, base.Stdout, base.Stdin ]
-    provides [ main ] to base
+    packages { pf: "platform" }
+    imports [ pf.Task.{ Task, await }, pf.Stdout, pf.Stdin ]
+    provides [ main ] to pf
 
 main : Task {} *
 main =

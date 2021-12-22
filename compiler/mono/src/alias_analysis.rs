@@ -702,30 +702,30 @@ fn call_spec(
             call.arguments,
         ),
         HigherOrder(HigherOrderLowLevel {
-            specialization_id,
             closure_env_layout,
             update_mode,
             op,
-            arg_layouts,
-            ret_layout,
-            function_name,
-            function_env,
+            passed_function,
             ..
         }) => {
             use crate::low_level::HigherOrder::*;
 
-            let array = specialization_id.to_bytes();
+            let array = passed_function.specialization_id.to_bytes();
             let spec_var = CalleeSpecVar(&array);
 
             let mode = update_mode.to_bytes();
             let update_mode_var = UpdateModeVar(&mode);
 
-            let it = arg_layouts.iter().copied();
-            let bytes = func_name_bytes_help(*function_name, it, ret_layout);
+            let it = passed_function.argument_layouts.iter().copied();
+            let bytes =
+                func_name_bytes_help(passed_function.name, it, &passed_function.return_layout);
             let name = FuncName(&bytes);
             let module = MOD_APP;
 
-            let closure_env = env.symbols[function_env];
+            let closure_env = env.symbols[&passed_function.captured_environment];
+
+            let return_layout = &passed_function.return_layout;
+            let argument_layouts = passed_function.argument_layouts;
 
             macro_rules! call_function {
                 ($builder: expr, $block:expr, [$($arg:expr),+ $(,)?]) => {{
@@ -757,7 +757,7 @@ fn call_spec(
                         Ok(new_state)
                     };
 
-                    let state_layout = arg_layouts[0];
+                    let state_layout = argument_layouts[0];
                     let state_type = layout_spec(builder, &state_layout)?;
                     let init_state = state;
 
@@ -778,7 +778,7 @@ fn call_spec(
                         Ok(new_state)
                     };
 
-                    let state_layout = arg_layouts[0];
+                    let state_layout = argument_layouts[0];
                     let state_type = layout_spec(builder, &state_layout)?;
                     let init_state = state;
 
@@ -802,7 +802,7 @@ fn call_spec(
                         Ok(new_state)
                     };
 
-                    let state_layout = arg_layouts[0];
+                    let state_layout = argument_layouts[0];
                     let state_type = layout_spec(builder, &state_layout)?;
                     let init_state = state;
 
@@ -823,9 +823,9 @@ fn call_spec(
                         list_append(builder, block, update_mode_var, state, new_element)
                     };
 
-                    let output_element_type = layout_spec(builder, ret_layout)?;
+                    let output_element_type = layout_spec(builder, return_layout)?;
 
-                    let state_layout = Layout::Builtin(Builtin::List(ret_layout));
+                    let state_layout = Layout::Builtin(Builtin::List(return_layout));
                     let state_type = layout_spec(builder, &state_layout)?;
 
                     let init_state = new_list(builder, block, output_element_type)?;
@@ -846,9 +846,9 @@ fn call_spec(
                         list_append(builder, block, update_mode_var, state, new_element)
                     };
 
-                    let output_element_type = layout_spec(builder, ret_layout)?;
+                    let output_element_type = layout_spec(builder, return_layout)?;
 
-                    let state_layout = Layout::Builtin(Builtin::List(ret_layout));
+                    let state_layout = Layout::Builtin(Builtin::List(return_layout));
                     let state_type = layout_spec(builder, &state_layout)?;
 
                     let init_state = new_list(builder, block, output_element_type)?;
@@ -873,7 +873,7 @@ fn call_spec(
                         with_new_heap_cell(builder, block, bag)
                     };
 
-                    let state_layout = Layout::Builtin(Builtin::List(&arg_layouts[0]));
+                    let state_layout = Layout::Builtin(Builtin::List(&argument_layouts[0]));
                     let state_type = layout_spec(builder, &state_layout)?;
                     let init_state = list;
 
@@ -898,9 +898,9 @@ fn call_spec(
                         list_append(builder, block, update_mode_var, state, new_element)
                     };
 
-                    let output_element_type = layout_spec(builder, ret_layout)?;
+                    let output_element_type = layout_spec(builder, return_layout)?;
 
-                    let state_layout = Layout::Builtin(Builtin::List(ret_layout));
+                    let state_layout = Layout::Builtin(Builtin::List(return_layout));
                     let state_type = layout_spec(builder, &state_layout)?;
 
                     let init_state = new_list(builder, block, output_element_type)?;
@@ -931,9 +931,9 @@ fn call_spec(
                         list_append(builder, block, update_mode_var, state, new_element)
                     };
 
-                    let output_element_type = layout_spec(builder, ret_layout)?;
+                    let output_element_type = layout_spec(builder, return_layout)?;
 
-                    let state_layout = Layout::Builtin(Builtin::List(ret_layout));
+                    let state_layout = Layout::Builtin(Builtin::List(return_layout));
                     let state_type = layout_spec(builder, &state_layout)?;
 
                     let init_state = new_list(builder, block, output_element_type)?;
@@ -970,9 +970,9 @@ fn call_spec(
                         list_append(builder, block, update_mode_var, state, new_element)
                     };
 
-                    let output_element_type = layout_spec(builder, ret_layout)?;
+                    let output_element_type = layout_spec(builder, return_layout)?;
 
-                    let state_layout = Layout::Builtin(Builtin::List(ret_layout));
+                    let state_layout = Layout::Builtin(Builtin::List(return_layout));
                     let state_type = layout_spec(builder, &state_layout)?;
 
                     let init_state = new_list(builder, block, output_element_type)?;
@@ -1004,7 +1004,7 @@ fn call_spec(
                         with_new_heap_cell(builder, block, new_bag)
                     };
 
-                    let state_layout = Layout::Builtin(Builtin::List(&arg_layouts[0]));
+                    let state_layout = Layout::Builtin(Builtin::List(&argument_layouts[0]));
                     let state_type = layout_spec(builder, &state_layout)?;
                     let init_state = list;
 
@@ -1019,7 +1019,7 @@ fn call_spec(
                         _ => unreachable!(),
                     };
 
-                    let result_repr = ResultRepr::from_layout(ret_layout);
+                    let result_repr = ResultRepr::from_layout(return_layout);
 
                     let output_element_layout = match (keep_result, result_repr) {
                         (KeepResult::Errs, ResultRepr::ResultConcrete { err, .. }) => err,
@@ -1132,7 +1132,7 @@ fn call_spec(
                     let list = env.symbols[xs];
 
                     // ListFindUnsafe returns { value: v, found: Bool=Int1 }
-                    let output_layouts = vec![arg_layouts[0], Layout::Builtin(Builtin::Bool)];
+                    let output_layouts = vec![argument_layouts[0], Layout::Builtin(Builtin::Bool)];
                     let output_layout = Layout::Struct(&output_layouts);
                     let output_type = layout_spec(builder, &output_layout)?;
 

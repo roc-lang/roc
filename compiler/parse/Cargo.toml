@@ -5,6 +5,9 @@ authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2018"
 
+[features]
+"parse_debug_trace" = []
+
 [dependencies]
 roc_collections = { path = "../collections" }
 roc_region = { path = "../region" }
@@ -17,5 +20,4 @@ pretty_assertions = "1.0.0"
 indoc = "1.0.3"
 quickcheck = "1.0.3"
 quickcheck_macros = "1.0.0"
-diff = "0.1.12"
-ansi_term = "0.12.1"
+roc_test_utils = { path = "../../test_utils" }

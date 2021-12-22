@@ -406,7 +406,7 @@ pub fn str_from_utf8<'a, 'ctx, 'env>(
     decode_from_utf8_result(env, result_ptr).into()
 }
 
-/// Str.fromInt : Int -> Str
+/// Str.fromFloat : Int -> Str
 pub fn str_from_float<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
@@ -431,13 +431,4 @@ pub fn str_equal<'a, 'ctx, 'env>(
         &[str1_i128.into(), str2_i128.into()],
         bitcode::STR_EQUAL,
     )
-}
-
-// TODO investigate: does this cause problems when the layout is known? this value is now not refcounted!
-pub fn empty_str<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
-    let struct_type = super::convert::zig_str_type(env);
-
-    // The pointer should be null (aka zero) and the length should be zero,
-    // so the whole struct should be a const_zero
-    BasicValueEnum::StructValue(struct_type.const_zero())
 }

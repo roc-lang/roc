@@ -254,7 +254,7 @@ fn twice_record_access() {
     );
 }
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn empty_record() {
     assert_evals_to!(
         indoc!(
@@ -803,6 +803,24 @@ fn return_nested_record() {
         ),
         (0x0, (6.28, 3.14, 0.1)),
         (i64, (f64, f64, f64))
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn nested_record_load() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                x = { a : { b : 0x5 } }
+
+                y = x.a
+
+                y.b
+                "#
+        ),
+        5,
+        i64
     );
 }
 

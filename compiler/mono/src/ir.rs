@@ -31,14 +31,14 @@ pub const PRETTY_PRINT_IR_SYMBOLS: bool = false;
 static_assertions::assert_eq_size!([u8; 4 * 8], Literal);
 #[cfg(not(target_arch = "aarch64"))]
 static_assertions::assert_eq_size!([u8; 3 * 8], Literal);
-static_assertions::assert_eq_size!([u8; 11 * 8], Expr);
+static_assertions::assert_eq_size!([u8; 10 * 8], Expr);
 #[cfg(not(target_arch = "aarch64"))]
 static_assertions::assert_eq_size!([u8; 19 * 8], Stmt);
 #[cfg(target_arch = "aarch64")]
 static_assertions::assert_eq_size!([u8; 20 * 8], Stmt);
 static_assertions::assert_eq_size!([u8; 6 * 8], ProcLayout);
-static_assertions::assert_eq_size!([u8; 8 * 8], Call);
-static_assertions::assert_eq_size!([u8; 6 * 8], CallType);
+static_assertions::assert_eq_size!([u8; 7 * 8], Call);
+static_assertions::assert_eq_size!([u8; 5 * 8], CallType);
 
 macro_rules! return_on_layout_error {
     ($env:expr, $layout_result:expr) => {
@@ -995,7 +995,7 @@ pub struct Env<'a, 'i> {
     pub ident_ids: &'i mut IdentIds,
     pub ptr_bytes: u32,
     pub update_mode_ids: &'i mut UpdateModeIds,
-    pub call_specialization_counter: u64,
+    pub call_specialization_counter: u32,
 }
 
 impl<'a, 'i> Env<'a, 'i> {
@@ -1282,29 +1282,37 @@ impl<'a> Call<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CallSpecId {
-    id: u64,
+    id: u32,
 }
 
 impl CallSpecId {
-    pub fn to_bytes(self) -> [u8; 8] {
+    pub fn to_bytes(self) -> [u8; 4] {
         self.id.to_ne_bytes()
     }
+
+    /// Dummy value for generating refcount helper procs in the backends
+    /// This happens *after* specialization so it's safe
+    pub const BACKEND_DUMMY: Self = Self { id: 0 };
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UpdateModeId {
-    id: u64,
+    id: u32,
 }
 
 impl UpdateModeId {
-    pub fn to_bytes(self) -> [u8; 8] {
+    pub fn to_bytes(self) -> [u8; 4] {
         self.id.to_ne_bytes()
     }
+
+    /// Dummy value for generating refcount helper procs in the backends
+    /// This happens *after* alias analysis so it's safe
+    pub const BACKEND_DUMMY: Self = Self { id: 0 };
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UpdateModeIds {
-    next: u64,
+    next: u32,
 }
 
 impl UpdateModeIds {
@@ -1338,31 +1346,35 @@ pub enum CallType<'a> {
     HigherOrder(&'a HigherOrderLowLevel<'a>),
 }
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct PassedFunction<'a> {
+    /// name of the top-level function that is passed as an argument
+    /// e.g. in `List.map xs Num.abs` this would be `Num.abs`
+    pub name: Symbol,
+
+    pub argument_layouts: &'a [Layout<'a>],
+    pub return_layout: Layout<'a>,
+
+    pub specialization_id: CallSpecId,
+
+    /// Symbol of the environment captured by the function argument
+    pub captured_environment: Symbol,
+
+    pub owns_captured_environment: bool,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct HigherOrderLowLevel<'a> {
     pub op: crate::low_level::HigherOrder,
+
+    /// TODO I _think_  we can get rid of this, perhaps only keeping track of
     /// the layout of the closure argument, if any
     pub closure_env_layout: Option<Layout<'a>>,
-
-    /// name of the top-level function that is passed as an argument
-    /// e.g. in `List.map xs Num.abs` this would be `Num.abs`
-    pub function_name: Symbol,
-
-    /// Symbol of the environment captured by the function argument
-    pub function_env: Symbol,
-
-    /// does the function argument need to own the closure data
-    pub function_owns_closure_data: bool,
-
-    /// specialization id of the function argument, used for name generation
-    pub specialization_id: CallSpecId,
 
     /// update mode of the higher order lowlevel itself
     pub update_mode: UpdateModeId,
 
-    /// function layout, used for name generation
-    pub arg_layouts: &'a [Layout<'a>],
-    pub ret_layout: Layout<'a>,
+    pub passed_function: PassedFunction<'a>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1586,6 +1598,17 @@ impl<'a> Expr<'a> {
                 .text(format!("UnionAtIndex (Id {}) (Index {}) ", tag_id, index))
                 .append(symbol_to_doc(alloc, *structure)),
         }
+    }
+
+    pub fn to_pretty(&self, width: usize) -> String {
+        let allocator = BoxAllocator;
+        let mut w = std::vec::Vec::new();
+        self.to_doc::<_, ()>(&allocator)
+            .1
+            .render(width, &mut w)
+            .unwrap();
+        w.push(b'\n');
+        String::from_utf8(w).unwrap()
     }
 }
 
@@ -2140,10 +2163,7 @@ fn specialize_external_help<'a>(
 
             procs.specialized.insert_specialized(name, top_level, proc);
         }
-        Err(SpecializeFailure {
-            problem: _,
-            attempted_layout,
-        }) => {
+        Err(SpecializeFailure { attempted_layout }) => {
             let proc = generate_runtime_error_function(env, name, attempted_layout);
 
             let top_level = ProcLayout::from_raw(env.arena, attempted_layout);
@@ -2712,8 +2732,6 @@ fn build_specialized_proc<'a>(
 struct SpecializeFailure<'a> {
     /// The layout we attempted to create
     attempted_layout: RawFunctionLayout<'a>,
-    /// The problem we ran into while creating it
-    problem: LayoutProblem,
 }
 
 type SpecializeSuccess<'a> = (Proc<'a>, RawFunctionLayout<'a>);
@@ -2808,8 +2826,11 @@ where
             env.subs.rollback_to(snapshot);
             layout_cache.rollback_to(cache_snapshot);
 
+            // earlier we made this information available where we handle the failure
+            // but we didn't do anything useful with it. So it's here if we ever need it again
+            let _ = error;
+
             Err(SpecializeFailure {
-                problem: error,
                 attempted_layout: raw,
             })
         }
@@ -4174,16 +4195,21 @@ pub fn with_hole<'a>(
                                 op,
                                 closure_data_symbol,
                                 |(top_level_function, closure_data, closure_env_layout,  specialization_id, update_mode)| {
+                                    let passed_function = PassedFunction {
+                                        name: top_level_function,
+                                        captured_environment: closure_data_symbol,
+                                        owns_captured_environment: false,
+                                        specialization_id,
+                                        argument_layouts: arg_layouts,
+                                        return_layout: ret_layout,
+                                    };
+
+
                                     let higher_order = HigherOrderLowLevel {
                                         op: crate::low_level::HigherOrder::$ho { $($x,)* },
                                         closure_env_layout,
-                                        specialization_id,
                                         update_mode,
-                                        function_owns_closure_data: false,
-                                        function_env: closure_data_symbol,
-                                        function_name: top_level_function,
-                                        arg_layouts,
-                                        ret_layout,
+                                        passed_function,
                                     };
 
                                     self::Call {
@@ -6913,10 +6939,7 @@ fn call_by_name_help<'a>(
                                     hole,
                                 )
                             }
-                            Err(SpecializeFailure {
-                                attempted_layout,
-                                problem: _,
-                            }) => {
+                            Err(SpecializeFailure { attempted_layout }) => {
                                 let proc = generate_runtime_error_function(
                                     env,
                                     proc_name,
@@ -7039,10 +7062,7 @@ fn call_by_name_module_thunk<'a>(
 
                                 force_thunk(env, proc_name, inner_layout, assigned, hole)
                             }
-                            Err(SpecializeFailure {
-                                attempted_layout,
-                                problem: _,
-                            }) => {
+                            Err(SpecializeFailure { attempted_layout }) => {
                                 let proc = generate_runtime_error_function(
                                     env,
                                     proc_name,

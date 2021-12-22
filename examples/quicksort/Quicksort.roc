@@ -1,7 +1,7 @@
 app "quicksort"
-    packages { base: "platform" }
+    packages { pf: "platform" }
     imports []
-    provides [ quicksort ] to base
+    provides [ quicksort ] to pf
 
 quicksort = \originalList ->
     n = List.len originalList

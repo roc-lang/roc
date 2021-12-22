@@ -1,7 +1,7 @@
 app "rbtree-insert"
-    packages { base: "platform" }
-    imports [base.Task]
-    provides [ main ] to base
+    packages { pf: "platform" }
+    imports [pf.Task]
+    provides [ main ] to pf
 
 main : Task.Task {} []
 main =
@@ -13,7 +13,7 @@ main =
         |> Task.putLine
 
 show : RedBlackTree I64 {} -> Str
-show = \tree -> showRBTree tree Str.fromInt (\{} -> "{}") 
+show = \tree -> showRBTree tree Num.toStr (\{} -> "{}") 
 
 showRBTree : RedBlackTree k v, (k -> Str), (v -> Str) -> Str
 showRBTree = \tree, showKey, showValue ->

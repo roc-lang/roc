@@ -1,7 +1,7 @@
 app "test-astar"
-    packages { base: "platform" }
-    imports [base.Task, AStar]
-    provides [ main ] to base
+    packages { pf: "platform" }
+    imports [pf.Task, AStar]
+    provides [ main ] to pf
 
 main : Task.Task {} []
 main =
@@ -13,7 +13,7 @@ main =
 #                 Task.putLine (showBool test1)
 # 
 #             _ -> 
-#                 ns = Str.fromInt n
+#                 ns = Num.toStr n
 #                 Task.putLine "No test \(ns)"
 
 showBool : Bool -> Str

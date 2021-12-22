@@ -1,56 +1,39 @@
-use bumpalo::collections::String;
 use roc_parse::ast::CommentOrNewline;
+
+use crate::Buf;
 
 /// The number of spaces to indent.
 pub const INDENT: u16 = 4;
 
-pub fn newline(buf: &mut String<'_>, indent: u16) {
-    buf.push('\n');
-
-    add_spaces(buf, indent);
-}
-
-pub fn add_spaces(buf: &mut String<'_>, spaces: u16) {
-    for _ in 0..spaces {
-        buf.push(' ');
-    }
-}
-
-pub fn fmt_default_spaces<'a>(
-    buf: &mut String<'a>,
+pub fn fmt_default_spaces<'a, 'buf>(
+    buf: &mut Buf<'buf>,
     spaces: &[CommentOrNewline<'a>],
-    default: &str,
     indent: u16,
 ) {
     if spaces.is_empty() {
-        buf.push_str(default);
+        buf.spaces(1);
     } else {
         fmt_spaces(buf, spaces.iter(), indent);
     }
 }
 
-pub fn fmt_spaces<'a, 'b, I>(buf: &mut String<'a>, spaces: I, indent: u16)
+pub fn fmt_spaces<'a, 'buf, I>(buf: &mut Buf<'buf>, spaces: I, indent: u16)
 where
-    I: Iterator<Item = &'b CommentOrNewline<'b>>,
+    I: Iterator<Item = &'a CommentOrNewline<'a>>,
 {
     use self::CommentOrNewline::*;
 
     // Only ever print two newlines back to back.
     // (Two newlines renders as one blank line.)
     let mut consecutive_newlines = 0;
-    let mut iter = spaces.peekable();
 
     let mut encountered_comment = false;
 
-    while let Some(space) = iter.next() {
+    for space in spaces {
         match space {
             Newline => {
                 if !encountered_comment && (consecutive_newlines < 2) {
-                    if iter.peek() == Some(&&Newline) {
-                        buf.push('\n');
-                    } else {
-                        newline(buf, indent);
-                    }
+                    buf.newline();
 
                     // Don't bother incrementing it if we're already over the limit.
                     // There's no upside, and it might eventually overflow,
@@ -58,14 +41,16 @@ where
                 }
             }
             LineComment(comment) => {
+                buf.indent(indent);
                 fmt_comment(buf, comment);
-                newline(buf, indent);
+                buf.newline();
 
                 encountered_comment = true;
             }
             DocComment(docs) => {
+                buf.indent(indent);
                 fmt_docs(buf, docs);
-                newline(buf, indent);
+                buf.newline();
 
                 encountered_comment = true;
             }
@@ -85,13 +70,13 @@ pub enum NewlineAt {
 /// The `new_line_at` argument describes how new lines should be inserted
 /// at the beginning or at the end of the block
 /// in the case of there is some comment in the `spaces` argument.
-pub fn fmt_comments_only<'a, 'b, I>(
-    buf: &mut String<'a>,
+pub fn fmt_comments_only<'a, 'buf, I>(
+    buf: &mut Buf<'buf>,
     spaces: I,
     new_line_at: NewlineAt,
     indent: u16,
 ) where
-    I: Iterator<Item = &'b CommentOrNewline<'b>>,
+    I: Iterator<Item = &'a CommentOrNewline<'a>>,
 {
     use self::CommentOrNewline::*;
     use NewlineAt::*;
@@ -103,37 +88,39 @@ pub fn fmt_comments_only<'a, 'b, I>(
             Newline => {}
             LineComment(comment) => {
                 if comment_seen || new_line_at == Top || new_line_at == Both {
-                    newline(buf, indent);
+                    buf.newline();
                 }
+                buf.indent(indent);
                 fmt_comment(buf, comment);
                 comment_seen = true;
             }
             DocComment(docs) => {
                 if comment_seen || new_line_at == Top || new_line_at == Both {
-                    newline(buf, indent);
+                    buf.newline();
                 }
+                buf.indent(indent);
                 fmt_docs(buf, docs);
                 comment_seen = true;
             }
         }
     }
     if comment_seen && (new_line_at == Bottom || new_line_at == Both) {
-        newline(buf, indent);
+        buf.newline();
     }
 }
 
-fn fmt_comment<'a>(buf: &mut String<'a>, comment: &str) {
+fn fmt_comment<'buf>(buf: &mut Buf<'buf>, comment: &str) {
     buf.push('#');
     if !comment.starts_with(' ') {
-        buf.push(' ');
+        buf.spaces(1);
     }
-    buf.push_str(comment);
+    buf.push_str(comment.trim_end());
 }
 
-fn fmt_docs<'a>(buf: &mut String<'a>, docs: &str) {
+fn fmt_docs<'buf>(buf: &mut Buf<'buf>, docs: &str) {
     buf.push_str("##");
     if !docs.starts_with(' ') {
-        buf.push(' ');
+        buf.spaces(1);
     }
     buf.push_str(docs);
 }

@@ -1,8 +1,8 @@
 #!/usr/bin/env roc
 app "false"
-    packages { base: "platform" }
-    imports [ base.Task.{ Task }, base.Stdout, base.Stdin, Context.{ Context }, Variable.{ Variable } ]
-    provides [ main ] to base
+    packages { pf: "platform" }
+    imports [ pf.Task.{ Task }, pf.Stdout, pf.Stdin, Context.{ Context }, Variable.{ Variable } ]
+    provides [ main ] to pf
 
 # An interpreter for the False programming language: https://strlen.com/false-language/
 # This is just a silly example to test this variety of program.
@@ -203,7 +203,7 @@ interpretCtx = \ctx ->
                     # This is supposed to flush io buffers. We don't buffer, so it does nothing
                     interpretCtx newCtx
                 Ok (T x _) ->
-                    data = Str.fromInt (Num.intCast x)
+                    data = Num.toStr (Num.intCast x)
                     Task.fail (InvalidChar data)
                 Err NoScope ->
                     Task.fail NoScope
@@ -358,7 +358,7 @@ stepExecCtx = \ctx, char ->
         0x2E -> # `.` write int
             when popNumber ctx is
                 Ok (T popCtx num) ->
-                    {} <- Task.await (Stdout.raw (Str.fromInt (Num.intCast num)))
+                    {} <- Task.await (Stdout.raw (Num.toStr (Num.intCast num)))
                     Task.succeed popCtx
                 Err e ->
                     Task.fail e
@@ -395,7 +395,7 @@ stepExecCtx = \ctx, char ->
                 Ok var ->
                     Task.succeed (Context.pushStack ctx (Var var))
                 Err _ ->
-                    data = Str.fromInt (Num.intCast x)
+                    data = Num.toStr (Num.intCast x)
                     Task.fail (InvalidChar data)
 
 unaryOp: Context, (I32 -> I32) -> Result Context InterpreterErrors

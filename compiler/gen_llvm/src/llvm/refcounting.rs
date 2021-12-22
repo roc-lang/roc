@@ -10,7 +10,7 @@ use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
-use inkwell::types::{AnyTypeEnum, BasicType, BasicTypeEnum};
+use inkwell::types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{
     BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue,
 };
@@ -19,6 +19,8 @@ use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 
+/// "Infinite" reference count, for static values
+/// Ref counts are encoded as negative numbers where isize::MIN represents 1
 pub const REFCOUNT_MAX: usize = 0_usize;
 
 pub fn refcount_1(ctx: &Context, ptr_bytes: u32) -> IntValue<'_> {
@@ -565,9 +567,11 @@ fn call_help<'a, 'ctx, 'env>(
     let call = match call_mode {
         CallMode::Inc(inc_amount) => {
             env.builder
-                .build_call(function, &[value, inc_amount.into()], "increment")
+                .build_call(function, &[value.into(), inc_amount.into()], "increment")
         }
-        CallMode::Dec => env.builder.build_call(function, &[value], "decrement"),
+        CallMode::Dec => env
+            .builder
+            .build_call(function, &[value.into()], "decrement"),
     };
 
     call.set_call_convention(FAST_CALL_CONV);
@@ -1051,6 +1055,11 @@ pub fn build_header_help<'a, 'ctx, 'env>(
     arguments: &[BasicTypeEnum<'ctx>],
 ) -> FunctionValue<'ctx> {
     use inkwell::types::AnyTypeEnum::*;
+
+    let it = arguments.iter().map(|x| BasicMetadataTypeEnum::from(*x));
+    let vec = Vec::from_iter_in(it, env.arena);
+    let arguments = vec.as_slice();
+
     let fn_type = match return_type {
         ArrayType(t) => t.fn_type(arguments, false),
         FloatType(t) => t.fn_type(arguments, false),

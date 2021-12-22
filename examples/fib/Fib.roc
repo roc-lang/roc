@@ -1,7 +1,7 @@
 app "fib"
-    packages { base: "platform" }
+    packages { pf: "platform" }
     imports []
-    provides [ main ] to base
+    provides [ main ] to pf
 
 main = \n -> fib n 0 1
 
