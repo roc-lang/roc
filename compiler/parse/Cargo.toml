@@ -21,3 +21,4 @@ indoc = "1.0.3"
 quickcheck = "1.0.3"
 quickcheck_macros = "1.0.0"
 roc_test_utils = { path = "../../test_utils" }
+walkdir = "2.3.2"

@@ -915,4 +915,37 @@ mod test_parse {
     //
     // TODO verify that when a string literal contains a newline before the
     // closing " it correctly updates both the line *and* column in the State.
+
+    #[test]
+    /// Test that everything under examples/ is formatted correctly
+    /// If this test fails on your diff, it probably means you need to re-format the examples.
+    /// Try this:
+    /// `cargo run -- format $(find examples -name \*.roc)`
+    fn test_tokenize_examples() {
+        let mut count = 0;
+        let mut root = std::env::current_dir()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_owned();
+        root.push("examples");
+        for entry in walkdir::WalkDir::new(&root) {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.extension() == Some(&std::ffi::OsStr::new("roc")) {
+                count += 1;
+                let src = std::fs::read_to_string(path).unwrap();
+                println!("Now trying to tokenize {}", path.display());
+                
+                let tt = TokenTable::new(&src);
+            }
+        }
+        assert!(
+            count > 0,
+            "Expecting to find at least 1 .roc file to tokenize under {}",
+            root.display()
+        );
+    }
 }
