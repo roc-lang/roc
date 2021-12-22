@@ -1,0 +1,112 @@
+Defs(
+    [
+        |L 0-6, C 0-5| Annotation(
+            |L 0-0, C 0-1| Identifier(
+                "f",
+            ),
+            |L 1-6, C 4-5| SpaceBefore(
+                Record {
+                    fields: [
+                        |L 2-2, C 8-28| SpaceBefore(
+                            RequiredValue(
+                                |L 2-2, C 8-15| "getLine",
+                                [],
+                                |L 2-2, C 18-28| Apply(
+                                    "",
+                                    "Effect",
+                                    [
+                                        |L 2-2, C 25-28| Apply(
+                                            "",
+                                            "Str",
+                                            [],
+                                        ),
+                                    ],
+                                ),
+                            ),
+                            [
+                                Newline,
+                            ],
+                        ),
+                        |L 3-3, C 8-35| SpaceBefore(
+                            RequiredValue(
+                                |L 3-3, C 8-15| "putLine",
+                                [],
+                                |L 3-3, C 25-35| Function(
+                                    [
+                                        |L 3-3, C 18-21| Apply(
+                                            "",
+                                            "Str",
+                                            [],
+                                        ),
+                                    ],
+                                    |L 3-3, C 25-35| Apply(
+                                        "",
+                                        "Effect",
+                                        [
+                                            |L 3-3, C 32-35| Apply(
+                                                "",
+                                                "Int",
+                                                [],
+                                            ),
+                                        ],
+                                    ),
+                                ),
+                            ),
+                            [
+                                Newline,
+                            ],
+                        ),
+                        |L 4-4, C 8-17| SpaceBefore(
+                            RequiredValue(
+                                |L 4-4, C 8-12| "text",
+                                [],
+                                |L 4-4, C 14-17| Apply(
+                                    "",
+                                    "Str",
+                                    [],
+                                ),
+                            ),
+                            [
+                                Newline,
+                            ],
+                        ),
+                        |L 5-5, C 8-20| SpaceBefore(
+                            SpaceAfter(
+                                RequiredValue(
+                                    |L 5-5, C 8-13| "value",
+                                    [],
+                                    |L 5-5, C 15-20| Apply(
+                                        "",
+                                        "Int",
+                                        [
+                                            |L 5-5, C 19-20| Wildcard,
+                                        ],
+                                    ),
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                            [
+                                Newline,
+                            ],
+                        ),
+                    ],
+                    ext: None,
+                },
+                [
+                    Newline,
+                ],
+            ),
+        ),
+    ],
+    |L 8-8, C 0-2| SpaceBefore(
+        Num(
+            "42",
+        ),
+        [
+            Newline,
+            Newline,
+        ],
+    ),
+)

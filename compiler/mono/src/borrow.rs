@@ -1007,8 +1007,8 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
 
         ExpectTrue => arena.alloc_slice_copy(&[irrelevant]),
 
-        RefCountGetPtr | RefCountInc | RefCountDec => {
-            unreachable!("Refcounting lowlevel calls are inserted *after* borrow checking");
+        PtrCast | RefCountInc | RefCountDec => {
+            unreachable!("Only inserted *after* borrow checking: {:?}", op);
         }
     }
 }

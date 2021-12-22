@@ -527,7 +527,7 @@ fn strSplitInPlace(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
     const delimiter_bytes_ptrs = delimiter.asU8ptr();
     const delimiter_len = delimiter.len();
 
-    if (str_len > delimiter_len) {
+    if (str_len > delimiter_len and delimiter_len > 0) {
         const end_index: usize = str_len - delimiter_len + 1;
         while (str_index <= end_index) {
             var delimiter_index: usize = 0;
@@ -559,6 +559,40 @@ fn strSplitInPlace(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
     }
 
     array[ret_array_index] = RocStr.init(str_bytes + slice_start_index, str_len - slice_start_index);
+}
+
+test "strSplitInPlace: empty delimiter" {
+    // Str.split "abc" "" == [ "abc" ]
+    const str_arr = "abc";
+    const str = RocStr.init(str_arr, str_arr.len);
+
+    const delimiter_arr = "";
+    const delimiter = RocStr.init(delimiter_arr, delimiter_arr.len);
+
+    var array: [1]RocStr = undefined;
+    const array_ptr: [*]RocStr = &array;
+
+    strSplitInPlace(array_ptr, str, delimiter);
+
+    var expected = [1]RocStr{
+        str,
+    };
+
+    defer {
+        for (array) |roc_str| {
+            roc_str.deinit();
+        }
+
+        for (expected) |roc_str| {
+            roc_str.deinit();
+        }
+
+        str.deinit();
+        delimiter.deinit();
+    }
+
+    try expectEqual(array.len, expected.len);
+    try expect(array[0].eq(expected[0]));
 }
 
 test "strSplitInPlace: no delimiter" {
@@ -734,7 +768,7 @@ pub fn countSegments(string: RocStr, delimiter: RocStr) callconv(.C) usize {
 
     var count: usize = 1;
 
-    if (str_len > delimiter_len) {
+    if (str_len > delimiter_len and delimiter_len > 0) {
         var str_index: usize = 0;
         const end_cond: usize = str_len - delimiter_len + 1;
 

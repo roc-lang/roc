@@ -2,18 +2,18 @@ interface Set
     exposes
         [
             Set,
-            empty,
-            single,
-            len,
-            insert,
-            remove,
-            union,
+            contains,
             difference,
-            intersection,
-            toList,
+            empty,
             fromList,
-            walk,
-            contains
+            insert,
+            intersection,
+            len,
+            remove,
+            single,
+            toList,
+            union,
+            walk
         ]
     imports []
 

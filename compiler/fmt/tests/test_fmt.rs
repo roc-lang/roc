@@ -2574,6 +2574,17 @@ mod test_fmt {
         );
     }
 
+    #[test]
+    fn pipline_op_with_apply() {
+        expr_formats_same(indoc!(
+            r#"
+            output
+                |> List.set (offset + 0) b
+                |> List.set (offset + 1) a
+            "#
+        ));
+    }
+
     // MODULES
 
     #[test]
@@ -2643,7 +2654,7 @@ mod test_fmt {
     #[test]
     fn single_line_platform() {
         module_formats_same(
-            "platform folkertdev/foo \
+            "platform \"folkertdev/foo\" \
             requires { model=>Model, msg=>Msg } { main : Effect {} } \
             exposes [] \
             packages {} \

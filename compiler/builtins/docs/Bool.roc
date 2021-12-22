@@ -1,5 +1,5 @@
 interface Bool
-    exposes [ not, and, or, xor, isEq, isNotEq ]
+    exposes [ and, isEq, isNotEq, not, or, xor ]
     imports []
 
 ## Returns `False` when given `True`, and vice versa.

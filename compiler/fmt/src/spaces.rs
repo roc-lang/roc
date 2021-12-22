@@ -1,4 +1,3 @@
-use bumpalo::collections::String;
 use roc_parse::ast::CommentOrNewline;
 
 use crate::Buf;
@@ -6,26 +5,13 @@ use crate::Buf;
 /// The number of spaces to indent.
 pub const INDENT: u16 = 4;
 
-pub fn newline(buf: &mut String<'_>, indent: u16) {
-    buf.push('\n');
-
-    add_spaces(buf, indent);
-}
-
-pub fn add_spaces(buf: &mut String<'_>, spaces: u16) {
-    for _ in 0..spaces {
-        buf.push(' ');
-    }
-}
-
 pub fn fmt_default_spaces<'a, 'buf>(
     buf: &mut Buf<'buf>,
     spaces: &[CommentOrNewline<'a>],
-    default: &str,
     indent: u16,
 ) {
     if spaces.is_empty() {
-        buf.push_str(default);
+        buf.spaces(1);
     } else {
         fmt_spaces(buf, spaces.iter(), indent);
     }
@@ -126,15 +112,15 @@ pub fn fmt_comments_only<'a, 'buf, I>(
 fn fmt_comment<'buf>(buf: &mut Buf<'buf>, comment: &str) {
     buf.push('#');
     if !comment.starts_with(' ') {
-        buf.push(' ');
+        buf.spaces(1);
     }
-    buf.push_str(comment);
+    buf.push_str(comment.trim_end());
 }
 
 fn fmt_docs<'buf>(buf: &mut Buf<'buf>, docs: &str) {
     buf.push_str("##");
     if !docs.starts_with(' ') {
-        buf.push(' ');
+        buf.spaces(1);
     }
     buf.push_str(docs);
 }

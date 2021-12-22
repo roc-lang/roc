@@ -187,7 +187,7 @@ impl<'a> Formattable for Expr<'a> {
                     }
                 } else {
                     for loc_arg in loc_args.iter() {
-                        buf.push(' ');
+                        buf.spaces(1);
                         loc_arg.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
                     }
                 }
@@ -294,7 +294,7 @@ fn format_str_segment<'a, 'buf>(seg: &StrSegment<'a>, buf: &mut Buf<'buf>, inden
 
     match seg {
         Plaintext(string) => {
-            buf.push_str(string);
+            buf.push_str_allow_spaces(string);
         }
         Unicode(loc_str) => {
             buf.push_str("\\u(");
@@ -351,7 +351,7 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
     buf.push('"');
     match literal {
         PlainLine(string) => {
-            buf.push_str(string);
+            buf.push_str_allow_spaces(string);
         }
         Line(segments) => {
             for seg in segments.iter() {
@@ -416,12 +416,12 @@ fn fmt_bin_ops<'a, 'buf>(
             buf.newline();
             buf.indent(indent + INDENT);
         } else {
-            buf.push(' ');
+            buf.spaces(1);
         }
 
         push_op(buf, bin_op);
 
-        buf.push(' ');
+        buf.spaces(1);
     }
 
     loc_right_side.format_with_options(buf, apply_needs_parens, Newlines::Yes, indent);
@@ -502,9 +502,9 @@ fn fmt_when<'a, 'buf>(
         }
         buf.indent(indent);
     } else {
-        buf.push(' ');
+        buf.spaces(1);
         loc_condition.format(buf, indent);
-        buf.push(' ');
+        buf.spaces(1);
     }
     buf.push_str("is");
     buf.newline();
@@ -530,12 +530,14 @@ fn fmt_when<'a, 'buf>(
                 buf.newline();
                 buf.indent(indent + INDENT);
             }
-            buf.push_str(" | ");
+            buf.push_str(" |");
+            buf.spaces(1);
             fmt_pattern(buf, &when_pattern.value, indent + INDENT, Parens::NotNeeded);
         }
 
         if let Some(guard_expr) = &branch.guard {
-            buf.push_str(" if ");
+            buf.push_str(" if");
+            buf.spaces(1);
             guard_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent + INDENT);
         }
 
@@ -612,7 +614,8 @@ fn fmt_if<'a, 'buf>(
         buf.indent(indent);
 
         if i > 0 {
-            buf.push_str("else ");
+            buf.push_str("else");
+            buf.spaces(1);
         }
 
         buf.push_str("if");
@@ -656,9 +659,9 @@ fn fmt_if<'a, 'buf>(
             }
             buf.indent(indent);
         } else {
-            buf.push(' ');
+            buf.spaces(1);
             loc_condition.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
-            buf.push(' ');
+            buf.spaces(1);
         }
 
         buf.push_str("then");
@@ -693,7 +696,8 @@ fn fmt_if<'a, 'buf>(
                 }
             }
         } else {
-            buf.push_str(" ");
+            buf.push_str("");
+            buf.spaces(1);
             loc_then.format(buf, return_indent);
         }
     }
@@ -703,7 +707,8 @@ fn fmt_if<'a, 'buf>(
         buf.push_str("else");
         buf.newline();
     } else {
-        buf.push_str(" else ");
+        buf.push_str(" else");
+        buf.spaces(1);
     }
 
     final_else.format(buf, return_indent);
@@ -742,7 +747,8 @@ fn fmt_closure<'a, 'buf>(
                 buf.push(',');
                 buf.newline();
             } else {
-                buf.push_str(", ");
+                buf.push_str(",");
+                buf.spaces(1);
             }
         }
     }
@@ -751,7 +757,7 @@ fn fmt_closure<'a, 'buf>(
         buf.newline();
         buf.indent(indent);
     } else {
-        buf.push(' ');
+        buf.spaces(1);
     }
 
     buf.push_str("->");
@@ -775,7 +781,7 @@ fn fmt_closure<'a, 'buf>(
         }
         _ => {
             // add a space after the `->`
-            buf.push(' ');
+            buf.spaces(1);
         }
     };
 
@@ -821,7 +827,8 @@ fn fmt_backpassing<'a, 'buf>(
                 buf.push(',');
                 buf.newline();
             } else {
-                buf.push_str(", ");
+                buf.push_str(",");
+                buf.spaces(1);
             }
         }
     }
@@ -834,7 +841,7 @@ fn fmt_backpassing<'a, 'buf>(
         buf.newline();
         buf.indent(indent);
     } else {
-        buf.push(' ');
+        buf.spaces(1);
     }
 
     buf.push_str("<-");
@@ -858,7 +865,7 @@ fn fmt_backpassing<'a, 'buf>(
         }
         _ => {
             // add a space after the `<-`
-            buf.push(' ');
+            buf.spaces(1);
         }
     };
 
@@ -897,7 +904,7 @@ fn fmt_record<'a, 'buf>(
             // it this far. For example "{ 4 & hello = 9 }"
             // doesnt make sense.
             Some(record_var) => {
-                buf.push(' ');
+                buf.spaces(1);
                 record_var.format(buf, indent);
                 buf.push_str(" &");
             }
@@ -923,17 +930,18 @@ fn fmt_record<'a, 'buf>(
             buf.newline();
         } else {
             // is_multiline == false
-            buf.push(' ');
+            buf.spaces(1);
             let field_indent = indent;
             let mut iter = loc_fields.iter().peekable();
             while let Some(field) = iter.next() {
                 field.format_with_options(buf, Parens::NotNeeded, Newlines::No, field_indent);
 
                 if iter.peek().is_some() {
-                    buf.push_str(", ");
+                    buf.push_str(",");
+                    buf.spaces(1);
                 }
             }
-            buf.push(' ');
+            buf.spaces(1);
             // if we are here, that means that `final_comments` is empty, thus we don't have
             // to add a comment. Anyway, it is not possible to have a single line record with
             // a comment in it.
@@ -965,7 +973,8 @@ fn format_field_multiline<'a, 'buf, T>(
             }
 
             buf.push_str(separator_prefix);
-            buf.push_str(": ");
+            buf.push_str(":");
+            buf.spaces(1);
             ann.value.format(buf, indent);
             buf.push(',');
         }
@@ -979,7 +988,8 @@ fn format_field_multiline<'a, 'buf, T>(
             }
 
             buf.push_str(separator_prefix);
-            buf.push_str("? ");
+            buf.push_str("?");
+            buf.spaces(1);
             ann.value.format(buf, indent);
             buf.push(',');
         }

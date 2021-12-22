@@ -6,9 +6,7 @@ platform "examples/cli"
     provides [ mainForHost ]
     effects fx.Effect
         {
+            getLine : Effect Str,
             putLine : Str -> Effect {},
-            getLine : Effect Str
+            twoArguments : Int, Int -> Effect {}
         }
-
-mainForHost : Task {} [] as Fx
-mainForHost = main

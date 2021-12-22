@@ -1,5 +1,6 @@
 use crate::ast::{
-    AssignedField, Collection, CommentOrNewline, Def, Expr, Pattern, Spaceable, TypeAnnotation,
+    AssignedField, Collection, CommentOrNewline, Def, Expr, ExtractSpaces, Pattern, Spaceable,
+    TypeAnnotation,
 };
 use crate::blankspace::{space0_after_e, space0_around_ee, space0_before_e, space0_e};
 use crate::ident::{lowercase_ident, parse_ident, Ident};
@@ -417,8 +418,8 @@ impl<'a> ExprState<'a> {
         if !self.operators.is_empty() {
             // this `=` or `<-` likely occurred inline; treat it as an invalid operator
             let opchar = match loc_op.value {
-                BinOp::Assignment => arena.alloc([b'=']) as &[_],
-                BinOp::Backpassing => arena.alloc([b'<', b'-']) as &[_],
+                BinOp::Assignment => "=",
+                BinOp::Backpassing => "<-",
                 _ => unreachable!(),
             };
 
@@ -449,10 +450,7 @@ impl<'a> ExprState<'a> {
 
         if !self.operators.is_empty() {
             // this `:` likely occurred inline; treat it as an invalid operator
-            let opchar = arena.alloc([b':']) as &[_];
-
-            let fail =
-                EExpr::BadOperator(opchar, loc_op.region.start_line, loc_op.region.start_col);
+            let fail = EExpr::BadOperator(":", loc_op.region.start_line, loc_op.region.start_col);
 
             Err(fail)
         } else {
@@ -484,7 +482,7 @@ fn parse_expr_final<'a>(
 
 fn to_call<'a>(
     arena: &'a Bump,
-    arguments: Vec<'a, &'a Located<Expr<'a>>>,
+    mut arguments: Vec<'a, &'a Located<Expr<'a>>>,
     loc_expr1: Located<Expr<'a>>,
 ) -> Located<Expr<'a>> {
     if arguments.is_empty() {
@@ -493,11 +491,34 @@ fn to_call<'a>(
         let last = arguments.last().map(|x| x.region).unwrap_or_default();
         let region = Region::span_across(&loc_expr1.region, &last);
 
-        let apply = Expr::Apply(
+        let spaces = if let Some(last) = arguments.last_mut() {
+            let spaces = last.value.extract_spaces();
+
+            if spaces.after.is_empty() {
+                &[]
+            } else {
+                let inner = if !spaces.before.is_empty() {
+                    arena.alloc(spaces.item).before(spaces.before)
+                } else {
+                    spaces.item
+                };
+                *last = arena.alloc(Located::at(last.region, inner));
+
+                spaces.after
+            }
+        } else {
+            &[]
+        };
+
+        let mut apply = Expr::Apply(
             arena.alloc(loc_expr1),
             arguments.into_bump_slice(),
             CalledVia::Space,
         );
+
+        if !spaces.is_empty() {
+            apply = arena.alloc(apply).after(spaces)
+        }
 
         Located::at(region, apply)
     }
@@ -856,7 +877,7 @@ fn parse_defs_end<'a>(
                 let (_, ann_type, state) = specialize(
                     EExpr::Type,
                     space0_before_e(
-                        type_annotation::located_help(min_indent + 1),
+                        type_annotation::located_help(min_indent + 1, false),
                         min_indent + 1,
                         EType::TSpace,
                         EType::TIndentStart,
@@ -999,7 +1020,7 @@ fn parse_expr_operator<'a>(
                     Err(_) => {
                         // this `=` likely occurred inline; treat it as an invalid operator
                         let fail = EExpr::BadOperator(
-                            arena.alloc([b'=']),
+                            arena.alloc("="),
                             loc_op.region.start_line,
                             loc_op.region.start_col,
                         );
@@ -1022,7 +1043,7 @@ fn parse_expr_operator<'a>(
 
             let call = expr_state
                 .validate_assignment_or_backpassing(arena, loc_op, |_, r, c| {
-                    EExpr::BadOperator(&[b'<', b'-'], r, c)
+                    EExpr::BadOperator("<-", r, c)
                 })
                 .map_err(|fail| (MadeProgress, fail, state.clone()))?;
 
@@ -1043,7 +1064,7 @@ fn parse_expr_operator<'a>(
                     Err(_) => {
                         // this `=` likely occurred inline; treat it as an invalid operator
                         let fail = EExpr::BadOperator(
-                            arena.alloc([b'=']),
+                            "=",
                             loc_op.region.start_line,
                             loc_op.region.start_col,
                         );
@@ -1094,7 +1115,7 @@ fn parse_expr_operator<'a>(
                     let (_, ann_type, state) = specialize(
                         EExpr::Type,
                         space0_before_e(
-                            type_annotation::located_help(indented_more),
+                            type_annotation::located_help(indented_more, true),
                             min_indent,
                             EType::TSpace,
                             EType::TIndentStart,
@@ -1121,7 +1142,7 @@ fn parse_expr_operator<'a>(
                             let parser = specialize(
                                 EExpr::Type,
                                 space0_before_e(
-                                    type_annotation::located_help(indented_more),
+                                    type_annotation::located_help(indented_more, false),
                                     min_indent,
                                     EType::TSpace,
                                     EType::TIndentStart,
@@ -1152,7 +1173,7 @@ fn parse_expr_operator<'a>(
                         Err(_) => {
                             // this `:` likely occurred inline; treat it as an invalid operator
                             let fail = EExpr::BadOperator(
-                                arena.alloc([b':']),
+                                ":",
                                 loc_op.region.start_line,
                                 loc_op.region.start_col,
                             );
@@ -1342,7 +1363,7 @@ fn parse_expr_end<'a>(
                     } else if options.check_for_arrow && state.bytes().starts_with(b"->") {
                         Err((
                             MadeProgress,
-                            EExpr::BadOperator(&[b'-', b'>'], state.line, state.column),
+                            EExpr::BadOperator("->", state.line, state.column),
                             state,
                         ))
                     } else {
@@ -2384,7 +2405,7 @@ fn operator_help<'a, F, G, E>(
 ) -> ParseResult<'a, BinOp, E>
 where
     F: Fn(Row, Col) -> E,
-    G: Fn(&'a [u8], Row, Col) -> E,
+    G: Fn(&'a str, Row, Col) -> E,
     E: 'a,
 {
     let chomped = chomp_ops(state.bytes());
@@ -2405,62 +2426,51 @@ where
     }
 
     match chomped {
-        0 => Err((NoProgress, to_expectation(state.line, state.column), state)),
-        1 => {
-            let op = state.bytes()[0];
-            match op {
-                b'+' => good!(BinOp::Plus, Some(Token::BinOpPlus), 1),
-                b'-' => good!(BinOp::Minus, Some(Token::Minus), 1),
-                b'*' => good!(BinOp::Star, Some(Token::BinOpStar), 1),
-                b'/' => good!(BinOp::Slash, Some(Token::BinOpSlash), 1),
-                b'%' => good!(BinOp::Percent, Some(Token::BinOpPercent), 1),
-                b'^' => good!(BinOp::Caret, Some(Token::BinOpCaret), 1),
-                b'>' => good!(BinOp::GreaterThan, Some(Token::BinOpGreaterThan), 1),
-                b'<' => good!(BinOp::LessThan, Some(Token::BinOpLessThan), 1),
-                b'.' => {
-                    // a `.` makes no progress, so it does not interfere with `.foo` access(or)
-                    Err((NoProgress, to_error(b".", state.line, state.column), state))
-                }
-                b'=' => good!(BinOp::Assignment, Some(Token::BinOpAssignment), 1),
-                b':' => good!(BinOp::HasType, Some(Token::Colon), 1),
-                _ => bad_made_progress!(&state.bytes()[0..1]),
-            }
+        "" => Err((NoProgress, to_expectation(state.line, state.column), state)),
+        "+" => good!(BinOp::Plus, Some(Token::BinOpPlus), 1),
+        "-" => good!(BinOp::Minus, Some(Token::Minus), 1),
+        "*" => good!(BinOp::Star, Some(Token::BinOpStar), 1),
+        "/" => good!(BinOp::Slash, Some(Token::BinOpSlash), 1),
+        "%" => good!(BinOp::Percent, Some(Token::BinOpPercent), 1),
+        "^" => good!(BinOp::Caret, Some(Token::BinOpCaret), 1),
+        ">" => good!(BinOp::GreaterThan, Some(Token::BinOpGreaterThan), 1),
+        "<" => good!(BinOp::LessThan, Some(Token::BinOpLessThan), 1),
+        "." => {
+            // a `.` makes no progress, so it does not interfere with `.foo` access(or)
+            Err((NoProgress, to_error(".", state.line, state.column), state))
         }
-        2 => {
-            let op0 = state.bytes()[0];
-            let op1 = state.bytes()[1];
-
-            match (op0, op1) {
-                (b'|', b'>') => good!(BinOp::Pizza, Some(Token::BinOpPizza), 2),
-                (b'=', b'=') => good!(BinOp::Equals, Some(Token::BinOpEquals), 2),
-                (b'!', b'=') => good!(BinOp::NotEquals, Some(Token::BinOpNotEquals), 2),
-                (b'>', b'=') => good!(BinOp::GreaterThanOrEq, Some(Token::BinOpGreaterThanOrEq), 2),
-                (b'<', b'=') => good!(BinOp::LessThanOrEq, Some(Token::BinOpLessThanOrEq), 2),
-                (b'&', b'&') => good!(BinOp::And, Some(Token::BinOpAnd), 2),
-                (b'|', b'|') => good!(BinOp::Or, Some(Token::BinOpOr), 2),
-                (b'/', b'/') => good!(BinOp::DoubleSlash, Some(Token::BinOpDoubleSlash), 2),
-                (b'%', b'%') => good!(BinOp::DoublePercent, Some(Token::BinOpDoublePercent), 2),
-                (b'-', b'>') => {
-                    // makes no progress, so it does not interfere with `_ if isGood -> ...`
-                    Err((NoProgress, to_error(b"->", state.line, state.column), state))
-                }
-                (b'<', b'-') => good!(BinOp::Backpassing, Some(Token::BinOpBackpassing), 2),
-                _ => bad_made_progress!(&state.bytes()[0..2]),
-            }
+        "=" => good!(BinOp::Assignment, Some(Token::BinOpAssignment), 1),
+        ":" => good!(BinOp::HasType, Some(Token::Colon), 1),
+        "|>" => good!(BinOp::Pizza, Some(Token::BinOpPizza), 2),
+        "==" => good!(BinOp::Equals, Some(Token::BinOpEquals), 2),
+        "!=" => good!(BinOp::NotEquals, Some(Token::BinOpNotEquals), 2),
+        ">=" => good!(BinOp::GreaterThanOrEq, Some(Token::BinOpGreaterThanOrEq), 2),
+        "<=" => good!(BinOp::LessThanOrEq, Some(Token::BinOpLessThanOrEq), 2),
+        "&&" => good!(BinOp::And, Some(Token::BinOpAnd), 2),
+        "||" => good!(BinOp::Or, Some(Token::BinOpOr), 2),
+        "//" => good!(BinOp::DoubleSlash, Some(Token::BinOpDoubleSlash), 2),
+        "%%" => good!(BinOp::DoublePercent, Some(Token::BinOpDoublePercent), 2),
+        "->" => {
+            // makes no progress, so it does not interfere with `_ if isGood -> ...`
+            Err((NoProgress, to_error("->", state.line, state.column), state))
         }
-        _ => bad_made_progress!(&state.bytes()[0..chomped]),
+        "<-" => good!(BinOp::Backpassing, Some(Token::BinOpBackpassing), 2),
+        _ => bad_made_progress!(chomped),
     }
 }
 
-fn chomp_ops(bytes: &[u8]) -> usize {
+fn chomp_ops(bytes: &[u8]) -> &str {
     let mut chomped = 0;
 
     for c in bytes.iter() {
         if !BINOP_CHAR_SET.contains(c) {
-            return chomped;
+            break;
         }
         chomped += 1;
     }
 
-    chomped
+    unsafe {
+        // Safe because BINOP_CHAR_SET only contains ascii chars
+        std::str::from_utf8_unchecked(&bytes[..chomped])
+    }
 }

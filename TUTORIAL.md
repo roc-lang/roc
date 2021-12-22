@@ -275,7 +275,7 @@ convention is to write `else if` on the same line.
 
 ## Records
 
-Currently our `addAndStringify` funcion takes two arguments. We can instead make
+Currently our `addAndStringify` function takes two arguments. We can instead make
 it take one argument like so:
 
 ```coffee
