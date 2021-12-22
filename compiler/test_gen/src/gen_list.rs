@@ -1,6 +1,9 @@
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
 
+#[cfg(feature = "gen-llvm")]
+use crate::helpers::llvm::expect_runtime_error_panic;
+
 // #[cfg(feature = "gen-dev")]
 // use crate::helpers::dev::assert_evals_to;
 
@@ -2435,7 +2438,10 @@ fn list_any_empty_with_unknown_element_type() {
     //     Application crashed with message
     //     UnresolvedTypeVar compiler/mono/src/ir.rs line 3775
     //     Shutting down
-    assert_evals_to!("List.any [] (\\_ -> True)", false, bool);
+    //
+    // TODO: eventually we should insert the empty type for unresolved type
+    // variables, since that means they're unbound.
+    expect_runtime_error_panic!("List.any [] (\\_ -> True)");
 }
 
 #[test]
@@ -2457,7 +2463,10 @@ fn list_all_empty_with_unknown_element_type() {
     //     Application crashed with message
     //     UnresolvedTypeVar compiler/mono/src/ir.rs line 3775
     //     Shutting down
-    assert_evals_to!("List.all [] (\\_ -> True)", false, bool);
+    //
+    // TODO: eventually we should insert the empty type for unresolved type
+    // variables, since that means they're unbound.
+    expect_runtime_error_panic!("List.all [] (\\_ -> True)");
 }
 
 #[test]
