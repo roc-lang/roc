@@ -1669,20 +1669,16 @@ fn sort_record_fields_help<'a>(
     let mut sorted_fields = Vec::with_capacity_in(fields_map.size_hint().0, env.arena);
 
     for (label, field) in fields_map {
-        // TODO: make prettier by pulling out Ok/Err
-        let var = match field {
-            RecordField::Demanded(v) => v,
-            RecordField::Required(v) => v,
+        match field {
+            RecordField::Demanded(v) | RecordField::Required(v) => {
+                let layout = Layout::from_var(env, v)?;
+                sorted_fields.push((label, v, Ok(layout)));
+            }
             RecordField::Optional(v) => {
                 let layout = Layout::from_var(env, v)?;
                 sorted_fields.push((label, v, Err(layout)));
-                continue;
             }
         };
-
-        let layout = Layout::from_var(env, var)?;
-
-        sorted_fields.push((label, var, Ok(layout)));
     }
 
     sorted_fields.sort_by(
