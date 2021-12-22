@@ -48,7 +48,7 @@ extend = \n, acc, solutions ->
         Cons soln rest -> extend n (appendSafe n soln acc) rest
 
 findSolutions = \n, k ->
-    if k == 0 then
+    if k <= 0 then
         Cons Nil Nil
 
     else
