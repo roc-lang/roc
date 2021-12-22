@@ -1680,7 +1680,7 @@ pub fn strTrimLeft(string: RocStr) callconv(.C) RocStr {
 }
 
 pub fn strTrimRight(string: RocStr) callconv(.C) RocStr {
-    if (string.str_bytes) |bytes_ptr| {
+    if (string.str_bytes) |_| {
         const trailing_bytes = countTrailingWhitespaceBytes(string);
         const original_len = string.len();
 
@@ -1769,7 +1769,7 @@ fn prefixMatch(string: RocStr, prefix: RocStr) bool {
 
 // NOTE this is unsafe in that it ignores unicode correctness
 // it's the caller's responsibility to ensure that
-// the right n bytes are a group full codepoints
+// the right n bytes are a valid group of full codepoints
 fn dropRightNBytesUnsafe(string: RocStr, n: usize) RocStr {
     if (n == 0) {
         return string;
@@ -1796,7 +1796,7 @@ fn dropRightNBytesUnsafe(string: RocStr, n: usize) RocStr {
 
 // NOTE this is unsafe in that it ignores unicode correctness
 // it's the caller's responsibility to ensure that
-// the left n bytes are a group full codepoints
+// the left n bytes are a valid group of full codepoints
 fn dropLeftNBytesUnsafe(string: RocStr, n: usize) RocStr {
     if (n == 0) {
         return string;
@@ -1922,6 +1922,20 @@ fn utf8BeginByte(byte: u8) bool {
         0b1000_0000...0b1011_1111 => false,
         else => true,
     };
+}
+
+test "trim prefix: empty result" {
+    const string_bytes = "this is a laaaaaaaaaaaaaaaaarge string";
+    const string = RocStr.init(string_bytes);
+
+    const prefix_bytes = "this is a laaaaaaaaaaaaaaaaarge string";
+    const prefix = RocStr.init(prefix_bytes);
+
+    const match = prefixMatch(string, prefix);
+    try expect(match);
+
+    const result = dropLeftNBytesUnsafe(string, prefix.len());
+    try expect(result.eq(RocStr.empty()));
 }
 
 test "strTrim: empty" {
@@ -2153,7 +2167,7 @@ test "ReverseUtf8View: empty" {
     const original_bytes = "";
 
     var iter = ReverseUtf8View.initUnchecked(original_bytes).iterator();
-    while (iter.nextCodepoint()) |codepoint| {
+    while (iter.nextCodepoint()) |_| {
         try expect(false);
     }
 }
