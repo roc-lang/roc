@@ -3375,6 +3375,7 @@ dependencies = [
  "roc_parse",
  "roc_region",
  "roc_test_utils",
+ "walkdir",
 ]
 
 [[package]]
