@@ -2940,6 +2940,9 @@ mod test_fmt {
 
     #[test]
     /// Test that everything under examples/ is formatted correctly
+    /// If this test fails on your diff, it probably means you need to re-format the examples.
+    /// Try this:
+    /// `cargo run -- format $(find examples -name \*.roc)`
     fn test_fmt_examples() {
         let mut count = 0;
         let mut root = std::env::current_dir()
@@ -2956,7 +2959,7 @@ mod test_fmt {
             if path.extension() == Some(&std::ffi::OsStr::new("roc")) {
                 count += 1;
                 let src = std::fs::read_to_string(path).unwrap();
-                println!("{}", path.display());
+                println!("Now trying to format {}", path.display());
                 module_formats_same(&src);
             }
         }
