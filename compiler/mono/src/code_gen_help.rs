@@ -1002,6 +1002,7 @@ impl<'a> CodeGenHelp<'a> {
     /// Another way to dereference a heap pointer is to use `Expr::UnionAtIndex`.
     /// To achieve this we use `PtrCast` to cast the element pointer to a "Box" layout.
     /// Then we can increment the Box pointer in a loop, dereferencing it each time.
+    /// (An alternative approach would be to create a new lowlevel like ListPeekUnsafe.)
     fn eq_list(&self, ident_ids: &mut IdentIds, elem_layout: &Layout<'a>) -> Stmt<'a> {
         use LowLevel::*;
         let layout_isize = self.layout_isize;
