@@ -634,6 +634,9 @@ impl<'a> Specialized<'a> {
     }
 
     fn insert_specialized(&mut self, symbol: Symbol, layout: ProcLayout<'a>, proc: Proc<'a>) {
+        if format!("{:?}", symbol).contains("joinMapConcat") {
+            panic!("");
+        }
         for (i, s) in self.symbols.iter().enumerate() {
             if *s == symbol && self.proc_layouts[i] == layout {
                 match &self.procedures[i] {
@@ -4294,7 +4297,20 @@ pub fn with_hole<'a>(
                 ListKeepIf => {
                     debug_assert_eq!(arg_symbols.len(), 2);
                     let xs = arg_symbols[0];
-                    match_on_closure_argument!(ListKeepIf, [xs])
+                    let stmt = match_on_closure_argument!(ListKeepIf, [xs]);
+
+                    // See the comment in `walk!`. We use List.keepIf to implement
+                    // other builtins, where the closure can be an actual closure rather
+                    // than a symbol.
+                    assign_to_symbol(
+                        env,
+                        procs,
+                        layout_cache,
+                        args[1].0, // the closure
+                        Located::at_zero(args[1].1.clone()),
+                        arg_symbols[1],
+                        stmt,
+                    )
                 }
                 ListAny => {
                     debug_assert_eq!(arg_symbols.len(), 2);
@@ -6229,6 +6245,7 @@ fn store_record_destruct<'a>(
 /// for any other expression, we create a new symbol, and will
 /// later make sure it gets assigned the correct value.
 
+#[derive(Debug)]
 enum ReuseSymbol {
     Imported(Symbol),
     LocalFunction(Symbol),

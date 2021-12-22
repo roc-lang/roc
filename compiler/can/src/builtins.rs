@@ -113,6 +113,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_DROP => list_drop,
         LIST_DROP_AT => list_drop_at,
         LIST_DROP_FIRST => list_drop_first,
+        LIST_DROP_IF => list_drop_if,
         LIST_DROP_LAST => list_drop_last,
         LIST_SWAP => list_swap,
         LIST_MAP_WITH_INDEX => list_map_with_index,
@@ -2482,6 +2483,7 @@ fn list_drop_at(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
+/// List.dropFirst : List elem -> Result { first: elem, others : List elem } [ ListWasEmpty ]*
 fn list_drop_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let index_var = var_store.fresh();
@@ -2503,6 +2505,61 @@ fn list_drop_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         list_var,
+    )
+}
+
+/// List.dropIf : List elem, (elem -> Bool) -> List elem
+fn list_drop_if(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let sym_list = Symbol::ARG_1;
+    let sym_predicate = Symbol::ARG_2;
+    let t_list = var_store.fresh();
+    let t_predicate = var_store.fresh();
+    let t_keep_predicate = var_store.fresh();
+    let t_elem = var_store.fresh();
+
+    // Defer to keepIf for implementation
+    // List.dropIf l p = List.keepIf l (\e -> Bool.not (p e))
+
+    let keep_predicate = Closure(ClosureData {
+        function_type: t_keep_predicate,
+        closure_type: var_store.fresh(),
+        closure_ext_var: var_store.fresh(),
+        return_type: Variable::BOOL,
+        name: Symbol::LIST_DROP_IF_PREDICATE,
+        recursive: Recursive::NotRecursive,
+        captured_symbols: vec![(sym_predicate, t_predicate)],
+        arguments: vec![(t_elem, no_region(Pattern::Identifier(Symbol::ARG_3)))],
+        loc_body: {
+            let should_drop = Call(
+                Box::new((
+                    t_predicate,
+                    no_region(Var(sym_predicate)),
+                    var_store.fresh(),
+                    Variable::BOOL,
+                )),
+                vec![(t_elem, no_region(Var(Symbol::ARG_3)))],
+                CalledVia::Space,
+            );
+            Box::new(no_region(RunLowLevel {
+                op: LowLevel::Not,
+                args: vec![(Variable::BOOL, should_drop)],
+                ret_var: Variable::BOOL,
+            }))
+        },
+    });
+
+    let body = RunLowLevel {
+        op: LowLevel::ListKeepIf,
+        args: vec![(t_list, Var(sym_list)), (t_keep_predicate, keep_predicate)],
+        ret_var: t_list,
+    };
+
+    defn(
+        symbol,
+        vec![(t_list, sym_list), (t_predicate, sym_predicate)],
+        var_store,
+        body,
+        t_list,
     )
 }
 
