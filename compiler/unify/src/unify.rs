@@ -749,6 +749,20 @@ enum OtherTags2 {
     ),
 }
 
+fn maybe_mark_tag_union_recursive(subs: &mut Subs, tag_union_var: Variable) {
+    while let Err((recursive, _chain)) = subs.occurs(tag_union_var) {
+        let description = subs.get(recursive);
+
+        match description.content {
+            Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
+                subs.mark_tag_union_recursive(recursive, tags, ext_var);
+            }
+            // We'll pick this up as an error elsewhere
+            _ => {}
+        }
+    }
+}
+
 fn unify_shared_tags_new(
     subs: &mut Subs,
     pool: &mut Pool,
@@ -773,6 +787,8 @@ fn unify_shared_tags_new(
             let expected = subs[expected_index];
             // NOTE the arguments of a tag can be recursive. For instance in the expression
             //
+            //  ConsList a : [ Nil, Cons a (ConsList a) ]
+            //
             //  Cons 1 (Cons "foo" Nil)
             //
             // We need to not just check the outer layer (inferring ConsList Int)
@@ -791,6 +807,15 @@ fn unify_shared_tags_new(
             // > RecursiveTagUnion(rvar, [ Cons a [ Cons a rvar, Nil ], Nil ], ext)
             //
             // and so on until the whole non-recursive tag union can be unified with it.
+            //
+            // One thing we have to watch out for is that a tag union we're hoping to
+            // match a recursive tag union with didn't itself become recursive. If it has,
+            // since we're expanding tag unions to equal depths as described above,
+            // we'll always pass through this branch. So, we promote tag unions to recursive
+            // ones here if it turns out they are that.
+            maybe_mark_tag_union_recursive(subs, actual);
+            maybe_mark_tag_union_recursive(subs, expected);
+
             let mut problems = Vec::new();
 
             problems.extend(unify_pool(subs, pool, actual, expected));
@@ -1062,7 +1087,6 @@ fn unify_flat_type(
             let tags1 = UnionTags::from_tag_name_index(*tag_name);
             let rec = Rec::Right(*recursion_var);
 
-            // NOTE arguments are flipped by design
             unify_tag_union_new(subs, pool, ctx, tags1, *ext1, *tags2, *ext2, rec)
         }
 
