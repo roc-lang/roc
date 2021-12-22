@@ -460,7 +460,7 @@ fn rosetree_with_tag() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_eq_empty() {
     assert_evals_to!("[] == []", true, bool);
     assert_evals_to!("[] != []", false, bool);

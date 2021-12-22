@@ -269,7 +269,7 @@ impl<'a> CodeGenHelp<'a> {
             new_procs_info.push((symbol, proc_layout));
 
             let mut visit_child = |child| {
-                if layout_needs_helper_proc(child, op) && child.stack_size(self.ptr_size) > 0 {
+                if layout_needs_helper_proc(child, op) {
                     self.get_or_create_proc_symbols_visit(ident_ids, new_procs_info, op, child);
                 }
             };
@@ -411,10 +411,6 @@ impl<'a> CodeGenHelp<'a> {
         sub_layout: &Layout<'a>,
         arguments: &[Symbol],
     ) -> Expr<'a> {
-        if matches!(op, HelperOp::Eq) && sub_layout.stack_size(self.ptr_size) == 0 {
-            return Expr::Literal(Literal::Int(1));
-        }
-
         let found = self
             .specs
             .iter()
@@ -1293,13 +1289,22 @@ fn layout_needs_helper_proc(layout: &Layout, op: HelperOp) -> bool {
         Layout::Builtin(Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal) => {
             false
         }
+
         Layout::Builtin(Builtin::Str) => {
+            // Str type can use either Zig functions or generated IR, since it's not generic.
+            // Eq uses a Zig function, refcount uses generated IR.
+            // Both are fine, they were just developed at different times.
             matches!(op, HelperOp::Inc | HelperOp::Dec | HelperOp::DecRef)
         }
-        Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_) | Builtin::List(_))
-        | Layout::Struct(_)
-        | Layout::Union(_)
-        | Layout::LambdaSet(_) => true,
-        Layout::RecursivePointer => false,
+
+        Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_) | Builtin::List(_)) => true,
+
+        Layout::Struct(fields) => !fields.is_empty(),
+
+        Layout::Union(UnionLayout::NonRecursive(tags)) => !tags.is_empty(),
+
+        Layout::Union(_) => true,
+
+        Layout::LambdaSet(_) | Layout::RecursivePointer => false,
     }
 }
