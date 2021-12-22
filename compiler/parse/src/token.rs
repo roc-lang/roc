@@ -7,7 +7,6 @@ pub enum Token {
 
     BinOpPlus,
     Minus,
-    BinOpStar,
     BinOpSlash,
     BinOpPercent,
     BinOpCaret,
@@ -41,6 +40,7 @@ pub enum Token {
     KeywordExposes,
     KeywordEffects,
     KeywordPlatform,
+    KeywordRequires,
 
     Ident,
 
@@ -51,6 +51,8 @@ pub enum Token {
     // ModuleName, // TODO: maybe this should just be Ident, then checked afterwards?
     // ConcreteType, // TODO: made of two idents separated by a '.'
     PrivateTag,
+
+    String,
 
     NumberBase,
     Number,
@@ -94,7 +96,9 @@ impl Token {
         let mut skip = 0;
         loop {
             let bytes = &bytes[skip..];
+            // println!("at {:?}", std::str::from_utf8(bytes).unwrap());
             if bytes.len() == 0 {
+                // println!("return");
                 return None;
             }
 
@@ -127,9 +131,11 @@ impl Token {
                     skip += skip_comment(bytes);
                     continue;
                 }
+                b'"' => lex_string(bytes),
                 b => todo!("handle {:?}", b as char),
             };
 
+            // println!("return");
             return Some((token, skip, len))
         }
     }
@@ -206,7 +212,7 @@ fn lex_operator(bytes: &[u8]) -> (Token, usize) {
     let tok = match &bytes[0..i] {
         b"+" => Token::BinOpPlus,
         b"-" => Token::Minus,
-        b"*" => Token::BinOpStar,
+        b"*" => Token::Astrisk,
         b"/" => Token::BinOpSlash,
         b"%" => Token::BinOpPercent,
         b"^" => Token::BinOpCaret,
@@ -273,6 +279,7 @@ fn lex_ident(uppercase: bool, bytes: &[u8]) -> (Token, usize) {
         b"exposes" => Token::KeywordExposes,
         b"effects" => Token::KeywordEffects,
         b"platform" => Token::KeywordPlatform,
+        b"requires" => Token::KeywordRequires,
         ident => {
             if ident.contains(&b'_') {
                 Token::MalformedIdent
@@ -310,4 +317,23 @@ fn lex_number(bytes: &[u8]) -> (Token, usize) {
     }
 
     (Token::Number, i)
+}
+
+fn lex_string(bytes: &[u8]) -> (Token, usize) {
+    let mut i = 0;
+    assert_eq!(bytes[i], b'"');
+    i += 1;
+
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => break,
+            // TODO: escapes
+            _ => i += 1,
+        }
+    }
+
+    assert_eq!(bytes[i], b'"');
+    i += 1;
+
+    (Token::String, i)
 }

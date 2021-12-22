@@ -183,7 +183,7 @@ fn malformed_identifier<'a>(
     let delta = initial_bytes.len() - state.bytes().len();
     let parsed_str = unsafe { std::str::from_utf8_unchecked(&initial_bytes[..chomped + delta]) };
 
-    state = state.advance_without_indenting_ee(Some(Token::MalformedIdent), chomped, |r, c| {
+    state = state.advance_without_indenting_ee(None, chomped, |r, c| {
         EExpr::Space(crate::parser::BadInputError::LineTooLong, r, c)
     })?;
 

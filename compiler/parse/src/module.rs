@@ -172,15 +172,18 @@ fn chomp_module_name(buffer: &[u8]) -> Result<&str, Progress> {
 
 #[inline(always)]
 fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, ()> {
-    |_, mut state: State<'a>| match chomp_module_name(state.bytes()) {
-        Ok(name) => {
-            let width = name.len();
-            state.column += width as u16;
-            state = state.advance(Some(Token::Ident), width);
+    |_, mut state: State<'a>| {
+        match chomp_module_name(state.bytes()) {
+            Ok(name) => {
+                let width = name.len();
+                state.column += width as u16;
 
-            Ok((MadeProgress, ModuleName::new(name), state))
+                state = state.advance(None, width);
+
+                Ok((MadeProgress, ModuleName::new(name), state))
+            }
+            Err(progress) => Err((progress, (), state)),
         }
-        Err(progress) => Err((progress, (), state)),
     }
 }
 

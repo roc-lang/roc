@@ -1281,6 +1281,7 @@ fn parse_expr_end<'a>(
                     expr_state.end = new_end;
                     expr_state.spaces_after = new_spaces;
 
+                    println!("now parsing {:?}", std::str::from_utf8(state.bytes()).unwrap());
                     parse_expr_end(min_indent, options, start, expr_state, arena, state)
                 }
             }
@@ -2429,7 +2430,7 @@ where
         "" => Err((NoProgress, to_expectation(state.line, state.column), state)),
         "+" => good!(BinOp::Plus, Some(Token::BinOpPlus), 1),
         "-" => good!(BinOp::Minus, Some(Token::Minus), 1),
-        "*" => good!(BinOp::Star, Some(Token::BinOpStar), 1),
+        "*" => good!(BinOp::Star, Some(Token::Astrisk), 1),
         "/" => good!(BinOp::Slash, Some(Token::BinOpSlash), 1),
         "%" => good!(BinOp::Percent, Some(Token::BinOpPercent), 1),
         "^" => good!(BinOp::Caret, Some(Token::BinOpCaret), 1),

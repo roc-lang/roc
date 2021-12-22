@@ -744,6 +744,7 @@ where
             "exposes" => Token::KeywordExposes,
             "effects" => Token::KeywordEffects,
             "platform" => Token::KeywordPlatform,
+            "requires" => Token::KeywordRequires,
             kw => panic!("{:?}", kw),
         };
 
