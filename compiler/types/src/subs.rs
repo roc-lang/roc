@@ -1968,7 +1968,8 @@ impl RecordFields {
         subs: &'a Subs,
         ext: Variable,
     ) -> impl Iterator<Item = (&Lowercase, RecordField<Variable>)> + 'a {
-        let (it, _) = crate::types::gather_fields_unsorted_iter(subs, *self, ext);
+        let (it, _) = crate::types::gather_fields_unsorted_iter(subs, *self, ext)
+            .expect("Something weird ended up in a record type");
 
         it
     }
@@ -2003,7 +2004,8 @@ impl RecordFields {
                 ext,
             )
         } else {
-            let record_structure = crate::types::gather_fields(subs, *self, ext);
+            let record_structure = crate::types::gather_fields(subs, *self, ext)
+                .expect("Something ended up weird in this record type");
 
             (
                 Box::new(record_structure.fields.into_iter()),

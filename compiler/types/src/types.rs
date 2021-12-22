@@ -1701,14 +1701,20 @@ pub fn name_type_var(letters_used: u32, taken: &mut MutSet<Lowercase>) -> (Lower
     }
 }
 
+#[derive(Debug, Copy, Clone)]
+pub struct RecordFieldsError;
+
 pub fn gather_fields_unsorted_iter(
     subs: &Subs,
     other_fields: RecordFields,
     mut var: Variable,
-) -> (
-    impl Iterator<Item = (&Lowercase, RecordField<Variable>)> + '_,
-    Variable,
-) {
+) -> Result<
+    (
+        impl Iterator<Item = (&Lowercase, RecordField<Variable>)> + '_,
+        Variable,
+    ),
+    RecordFieldsError,
+> {
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
@@ -1733,7 +1739,7 @@ pub fn gather_fields_unsorted_iter(
             // TODO investigate apparently this one pops up in the reporting tests!
             RigidVar(_) => break,
 
-            other => unreachable!("something weird ended up in a record type: {:?}", other),
+            _ => return Err(RecordFieldsError),
         }
     }
 
@@ -1749,11 +1755,15 @@ pub fn gather_fields_unsorted_iter(
             (field_name, record_field)
         });
 
-    (it, var)
+    Ok((it, var))
 }
 
-pub fn gather_fields(subs: &Subs, other_fields: RecordFields, var: Variable) -> RecordStructure {
-    let (it, ext) = gather_fields_unsorted_iter(subs, other_fields, var);
+pub fn gather_fields(
+    subs: &Subs,
+    other_fields: RecordFields,
+    var: Variable,
+) -> Result<RecordStructure, RecordFieldsError> {
+    let (it, ext) = gather_fields_unsorted_iter(subs, other_fields, var)?;
 
     let mut result: Vec<_> = it
         .map(|(ref_label, field)| (ref_label.clone(), field))
@@ -1761,10 +1771,10 @@ pub fn gather_fields(subs: &Subs, other_fields: RecordFields, var: Variable) -> 
 
     result.sort_by(|(a, _), (b, _)| a.cmp(b));
 
-    RecordStructure {
+    Ok(RecordStructure {
         fields: result,
         ext,
-    }
+    })
 }
 
 pub fn gather_tags_unsorted_iter(
