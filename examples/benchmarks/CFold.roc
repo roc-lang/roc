@@ -19,7 +19,7 @@ main =
                 |> Str.concat (Num.toStr optimized)
                 |> Task.putLine
 
-Expr  : [
+Expr : [
         Add Expr Expr,
         Mul Expr Expr,
         Val I64,

@@ -2,7 +2,7 @@ interface Base64.Encode
     exposes [ toBytes ]
     imports [ Bytes.Encode.{ Encoder } ]
 
-InvalidChar  : U8
+InvalidChar : U8
 
 # State : [ None, One U8, Two U8, Three U8 ]
 toBytes : Str -> List U8

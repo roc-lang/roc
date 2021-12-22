@@ -2725,7 +2725,7 @@ mod test_fmt {
     fn multiline_tag_union_annotation_beginning_on_same_line() {
         expr_formats_same(indoc!(
             r#"
-            Expr  : [
+            Expr : [
                     Add Expr Expr,
                     Mul Expr Expr,
                     Val I64,

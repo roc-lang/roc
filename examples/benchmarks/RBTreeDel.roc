@@ -3,11 +3,11 @@ app "rbtree-del"
     imports [ pf.Task ]
     provides [ main ] to pf
 
-Color  : [ Red, Black ]
+Color : [ Red, Black ]
 
 Tree a b : [ Leaf, Node Color (Tree a b) a b (Tree a b) ]
 
-Map  : Tree I64 Bool
+Map : Tree I64 Bool
 
 ConsList a : [ Nil, Cons a (ConsList a) ]
 

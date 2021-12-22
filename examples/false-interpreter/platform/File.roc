@@ -2,7 +2,7 @@ interface File
     exposes [ line, Handle, withOpen, chunk ]
     imports [ fx.Effect, Task.{ Task } ]
 
-Handle  : [ @Handle U64 ]
+Handle : [ @Handle U64 ]
 
 line : Handle -> Task.Task Str *
 line = \@Handle handle -> Effect.after (Effect.getFileLine handle) Task.succeed

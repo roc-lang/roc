@@ -16,7 +16,7 @@ app "false"
 # In an imperative language, a few of these pieces would be in while loops and it would basically never overflow.
 # This implementation is easy to overflow, either make the input long enough or make a false while loop run long enough.
 # I assume all of the Task.awaits are the cause of this, but I am not 100% sure.
-InterpreterErrors  : [ BadUtf8, DivByZero, EmptyStack, InvalidBooleanValue, InvalidChar Str, MaxInputNumber, NoLambdaOnStack, NoNumberOnStack, NoVariableOnStack, NoScope, OutOfBounds, UnexpectedEndOfData ]
+InterpreterErrors : [ BadUtf8, DivByZero, EmptyStack, InvalidBooleanValue, InvalidChar Str, MaxInputNumber, NoLambdaOnStack, NoNumberOnStack, NoVariableOnStack, NoScope, OutOfBounds, UnexpectedEndOfData ]
 
 main : Str -> Task {} []
 main = \filename ->

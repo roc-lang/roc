@@ -50,7 +50,7 @@ showColor = \color ->
         Black ->
             "Black"
 
-NodeColor  : [ Red, Black ]
+NodeColor : [ Red, Black ]
 
 RedBlackTree k v : [ Node NodeColor k v (RedBlackTree k v) (RedBlackTree k v), Empty ]
 

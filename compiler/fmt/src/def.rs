@@ -59,13 +59,9 @@ impl<'a> Formattable for Def<'a> {
                 buf.indent(indent);
                 buf.push_str(name.value);
 
-                if vars.is_empty() {
+                for var in *vars {
                     buf.spaces(1);
-                } else {
-                    for var in *vars {
-                        buf.spaces(1);
-                        fmt_pattern(buf, &var.value, indent, Parens::NotNeeded);
-                    }
+                    fmt_pattern(buf, &var.value, indent, Parens::NotNeeded);
                 }
 
                 buf.push_str(" :");

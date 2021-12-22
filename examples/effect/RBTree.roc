@@ -1,7 +1,7 @@
 interface RBTree exposes [ Dict, empty, size, singleton, isEmpty, insert, remove, update, fromList, toList, balance ] imports []
 
 # The color of a node. Leaves are considered Black.
-NodeColor  : [ Red, Black ]
+NodeColor : [ Red, Black ]
 
 Dict k v : [ Node NodeColor k v (Dict k v) (Dict k v), Empty ]
 
