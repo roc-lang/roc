@@ -7808,7 +7808,7 @@ fn from_can_pattern_help<'a>(
             // sorted fields based on the type
             let sorted_fields =
                 crate::layout::sort_record_fields(env.arena, *whole_var, env.subs, env.ptr_bytes)
-                    .map_err(Into::into)?;
+                    .map_err(RuntimeError::from)?;
 
             // sorted fields based on the destruct
             let mut mono_destructs = Vec::with_capacity_in(destructs.len(), env.arena);

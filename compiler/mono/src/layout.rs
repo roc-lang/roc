@@ -32,9 +32,9 @@ pub enum LayoutProblem {
     Erroneous,
 }
 
-impl Into<RuntimeError> for LayoutProblem {
-    fn into(self) -> RuntimeError {
-        match self {
+impl From<LayoutProblem> for RuntimeError {
+    fn from(lp: LayoutProblem) -> Self {
+        match lp {
             LayoutProblem::UnresolvedTypeVar(_) => RuntimeError::UnresolvedTypeVar,
             LayoutProblem::Erroneous => RuntimeError::ErroneousType,
         }
@@ -1634,12 +1634,14 @@ fn layout_from_flat_type<'a>(
     }
 }
 
+pub type SortedField<'a> = (Lowercase, Variable, Result<Layout<'a>, Layout<'a>>);
+
 pub fn sort_record_fields<'a>(
     arena: &'a Bump,
     var: Variable,
     subs: &Subs,
     ptr_bytes: u32,
-) -> Result<Vec<'a, (Lowercase, Variable, Result<Layout<'a>, Layout<'a>>)>, LayoutProblem> {
+) -> Result<Vec<'a, SortedField<'a>>, LayoutProblem> {
     let mut env = Env {
         arena,
         subs,
@@ -1662,7 +1664,7 @@ pub fn sort_record_fields<'a>(
 fn sort_record_fields_help<'a>(
     env: &mut Env<'a, '_>,
     fields_map: impl Iterator<Item = (Lowercase, RecordField<Variable>)>,
-) -> Result<Vec<'a, (Lowercase, Variable, Result<Layout<'a>, Layout<'a>>)>, LayoutProblem> {
+) -> Result<Vec<'a, SortedField<'a>>, LayoutProblem> {
     let ptr_bytes = env.ptr_bytes;
 
     // Sort the fields by label
