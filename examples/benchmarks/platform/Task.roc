@@ -35,15 +35,14 @@ putLine = \line -> Effect.map (Effect.putLine line) (\_ -> Ok {})
 putInt : I64 -> Task {} *
 putInt = \line -> Effect.map (Effect.putInt line) (\_ -> Ok {})
 
-getInt : Task I64 []
+getInt : Task I64 [InvalidCharacter, IOError]
 getInt =
     Effect.after Effect.getInt \{ isError, value, errorCode } ->
         when isError is
             True ->
                 when errorCode is
-                    # A -> Task.fail InvalidCharacter
-                    # B -> Task.fail IOError
-                    _ -> Task.succeed -1
+                    InvalidCharacter -> Task.fail InvalidCharacter
+                    IOError -> Task.fail IOError
 
             False ->
                 Task.succeed value

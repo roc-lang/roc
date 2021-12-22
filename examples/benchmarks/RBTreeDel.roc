@@ -12,7 +12,7 @@ Map : Tree I64 Bool
 
 ConsList a : [ Nil, Cons a (ConsList a) ]
 
-main : Task.Task {} []
+main : Task.Task {} _
 main =
     Task.after Task.getInt \n ->
         m = makeMap n # koka original n = 4_200_000

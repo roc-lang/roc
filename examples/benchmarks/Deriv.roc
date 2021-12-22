@@ -5,7 +5,7 @@ app "deriv"
 
 # based on: https://github.com/koka-lang/koka/blob/master/test/bench/haskell/deriv.hs
 
-IO a : Task.Task a []
+IO a : Task.Task a [IOError, InvalidCharacter]
 
 main : IO {}
 main =

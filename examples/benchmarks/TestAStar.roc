@@ -3,7 +3,7 @@ app "test-astar"
     imports [pf.Task, AStar]
     provides [ main ] to pf
 
-main : Task.Task {} []
+main : Task.Task {} _
 main =
     Task.putLine (showBool test1)
 

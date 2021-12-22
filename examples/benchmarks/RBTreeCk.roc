@@ -45,7 +45,7 @@ resultWithDefault = \res, default ->
         Ok v -> v
         Err _ -> default
 
-main : Task.Task {} []
+main : Task.Task {} _
 main =
     Task.after Task.getInt \n ->
         # original koka n = 4_200_000

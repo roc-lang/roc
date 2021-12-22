@@ -5,7 +5,7 @@ app "closure"
 
 # see https://github.com/rtfeldman/roc/issues/985
 
-main : Task.Task {} []
+main : Task.Task {} _
 main = closure1 {}
     # |> Task.after (\_ -> closure2 {})
     # |> Task.after (\_ -> closure3 {})
@@ -13,7 +13,7 @@ main = closure1 {}
 
 # ---
 
-closure1 : {} -> Task.Task {} []
+closure1 : {} -> Task.Task {} _
 closure1 = \_ ->
     Task.succeed (foo toUnitBorrowed "a long string such that it's malloced")
         |> Task.map (\_ -> {})
@@ -24,7 +24,7 @@ foo = \f, x -> f x
 
 # ---
 
-closure2 : {} -> Task.Task {} []
+closure2 : {} -> Task.Task {} _
 closure2 = \_ ->
     x : Str
     x = "a long string such that it's malloced"

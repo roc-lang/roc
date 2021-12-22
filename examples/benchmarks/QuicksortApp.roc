@@ -3,7 +3,6 @@ app "quicksortapp"
     imports [pf.Task, Quicksort]
     provides [ main ] to pf
 
-main : Task.Task {} []
 main =
     Task.after Task.getInt \n ->
         unsortedList =

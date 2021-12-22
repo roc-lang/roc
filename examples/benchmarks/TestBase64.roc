@@ -3,9 +3,9 @@ app "test-base64"
     imports [pf.Task, Base64 ]
     provides [ main ] to pf
 
-IO a : Task.Task a []
+IO a b : Task.Task a b
 
-main : IO {}
+main : IO {} _
 main =
     when Base64.fromBytes (Str.toUtf8 "Hello World") is
         Err _ ->

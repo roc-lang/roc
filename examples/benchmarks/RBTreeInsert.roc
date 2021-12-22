@@ -3,7 +3,7 @@ app "rbtree-insert"
     imports [pf.Task]
     provides [ main ] to pf
 
-main : Task.Task {} []
+main : Task.Task {} _
 main =
     tree : RedBlackTree I64 {}
     tree = insert 0 {} Empty 

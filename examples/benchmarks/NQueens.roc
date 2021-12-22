@@ -3,7 +3,7 @@ app "nqueens"
     imports [pf.Task]
     provides [ main ] to pf
 
-main : Task.Task {} []
+main : Task.Task {} _
 main =
     Task.after Task.getInt \n ->
         queens n # original koka 13

@@ -5,7 +5,7 @@ app "cfold"
 
 # adapted from https://github.com/koka-lang/koka/blob/master/test/bench/haskell/cfold.hs
 
-main : Task.Task {} []
+main : Task.Task {} _
 main =
     Task.after Task.getInt \n ->
         e = mkExpr n 1 # original koka n = 20 (set `ulimit -s unlimited` to avoid stack overflow for n = 20)
