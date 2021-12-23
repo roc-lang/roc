@@ -4,7 +4,7 @@ use crate::parser::{self, and, backtrackable, BadInputError, Col, Parser, Progre
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_region::all::Located;
+use roc_region::all::Loc;
 
 pub fn space0_around_ee<'a, P, S, E>(
     parser: P,
@@ -12,11 +12,11 @@ pub fn space0_around_ee<'a, P, S, E>(
     space_problem: fn(BadInputError, Row, Col) -> E,
     indent_before_problem: fn(Row, Col) -> E,
     indent_after_problem: fn(Row, Col) -> E,
-) -> impl Parser<'a, Located<S>, E>
+) -> impl Parser<'a, Loc<S>, E>
 where
     S: Spaceable<'a>,
     S: 'a,
-    P: Parser<'a, Located<S>, E>,
+    P: Parser<'a, Loc<S>, E>,
     P: 'a,
     E: 'a,
 {
@@ -38,11 +38,11 @@ pub fn space0_before_optional_after<'a, P, S, E>(
     space_problem: fn(BadInputError, Row, Col) -> E,
     indent_before_problem: fn(Row, Col) -> E,
     indent_after_problem: fn(Row, Col) -> E,
-) -> impl Parser<'a, Located<S>, E>
+) -> impl Parser<'a, Loc<S>, E>
 where
     S: Spaceable<'a>,
     S: 'a,
-    P: Parser<'a, Located<S>, E>,
+    P: Parser<'a, Loc<S>, E>,
     P: 'a,
     E: 'a,
 {
@@ -65,9 +65,9 @@ fn spaces_around_help<'a, S>(
     arena: &'a Bump,
     tuples: (
         &'a [CommentOrNewline<'a>],
-        (Located<S>, &'a [CommentOrNewline<'a>]),
+        (Loc<S>, &'a [CommentOrNewline<'a>]),
     ),
-) -> Located<S>
+) -> Loc<S>
 where
     S: Spaceable<'a>,
     S: 'a,
@@ -102,17 +102,17 @@ pub fn space0_before_e<'a, P, S, E>(
     min_indent: u16,
     space_problem: fn(BadInputError, Row, Col) -> E,
     indent_problem: fn(Row, Col) -> E,
-) -> impl Parser<'a, Located<S>, E>
+) -> impl Parser<'a, Loc<S>, E>
 where
     S: Spaceable<'a>,
     S: 'a,
-    P: Parser<'a, Located<S>, E>,
+    P: Parser<'a, Loc<S>, E>,
     P: 'a,
     E: 'a,
 {
     parser::map_with_arena(
         and!(space0_e(min_indent, space_problem, indent_problem), parser),
-        |arena: &'a Bump, (space_list, loc_expr): (&'a [CommentOrNewline<'a>], Located<S>)| {
+        |arena: &'a Bump, (space_list, loc_expr): (&'a [CommentOrNewline<'a>], Loc<S>)| {
             if space_list.is_empty() {
                 loc_expr
             } else {
@@ -129,17 +129,17 @@ pub fn space0_after_e<'a, P, S, E>(
     min_indent: u16,
     space_problem: fn(BadInputError, Row, Col) -> E,
     indent_problem: fn(Row, Col) -> E,
-) -> impl Parser<'a, Located<S>, E>
+) -> impl Parser<'a, Loc<S>, E>
 where
     S: Spaceable<'a>,
     S: 'a,
-    P: Parser<'a, Located<S>, E>,
+    P: Parser<'a, Loc<S>, E>,
     P: 'a,
     E: 'a,
 {
     parser::map_with_arena(
         and!(parser, space0_e(min_indent, space_problem, indent_problem)),
-        |arena: &'a Bump, (loc_expr, space_list): (Located<S>, &'a [CommentOrNewline<'a>])| {
+        |arena: &'a Bump, (loc_expr, space_list): (Loc<S>, &'a [CommentOrNewline<'a>])| {
             if space_list.is_empty() {
                 loc_expr
             } else {

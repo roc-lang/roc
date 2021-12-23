@@ -1,8 +1,5 @@
 use std::fmt;
 
-/// TODO replace Located with this
-pub type Loc<T> = Located<T>;
-
 #[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash, Default)]
 pub struct Region {
     pub start_line: u32,
@@ -162,58 +159,58 @@ pub struct Position {
 }
 
 #[derive(Clone, Eq, Copy, PartialEq, PartialOrd, Ord, Hash)]
-pub struct Located<T> {
+pub struct Loc<T> {
     pub region: Region,
     pub value: T,
 }
 
-impl<T> Located<T> {
+impl<T> Loc<T> {
     pub fn new(
         start_line: u32,
         end_line: u32,
         start_col: u16,
         end_col: u16,
         value: T,
-    ) -> Located<T> {
+    ) -> Loc<T> {
         let region = Region {
             start_line,
             end_line,
             start_col,
             end_col,
         };
-        Located { region, value }
+        Loc { region, value }
     }
 
-    pub fn at(region: Region, value: T) -> Located<T> {
-        Located { region, value }
+    pub fn at(region: Region, value: T) -> Loc<T> {
+        Loc { region, value }
     }
 
-    pub fn at_zero(value: T) -> Located<T> {
+    pub fn at_zero(value: T) -> Loc<T> {
         let region = Region::zero();
-        Located { region, value }
+        Loc { region, value }
     }
 }
 
-impl<T> Located<T> {
-    pub fn with_value<U>(&self, value: U) -> Located<U> {
-        Located {
+impl<T> Loc<T> {
+    pub fn with_value<U>(&self, value: U) -> Loc<U> {
+        Loc {
             region: self.region,
             value,
         }
     }
 
-    pub fn map<U, F>(&self, transform: F) -> Located<U>
+    pub fn map<U, F>(&self, transform: F) -> Loc<U>
     where
         F: (FnOnce(&T) -> U),
     {
-        Located {
+        Loc {
             region: self.region,
             value: transform(&self.value),
         }
     }
 }
 
-impl<T> fmt::Debug for Located<T>
+impl<T> fmt::Debug for Loc<T>
 where
     T: fmt::Debug,
 {

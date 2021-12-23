@@ -1,7 +1,7 @@
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use Progress::*;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1050,7 +1050,7 @@ where
 macro_rules! loc {
     ($parser:expr) => {
         move |arena, state: $crate::state::State<'a>| {
-            use roc_region::all::{Located, Region};
+            use roc_region::all::{Loc, Region};
 
             let start_col = state.column;
             let start_line = state.line;
@@ -1066,7 +1066,7 @@ macro_rules! loc {
                         end_col,
                     };
 
-                    Ok((progress, Located { region, value }, state))
+                    Ok((progress, Loc { region, value }, state))
                 }
                 Err(err) => Err(err),
             }
@@ -1534,7 +1534,7 @@ where
 
 /// For some reason, some usages won't compile unless they use this instead of the macro version
 #[inline(always)]
-pub fn loc<'a, P, Val, Error>(parser: P) -> impl Parser<'a, Located<Val>, Error>
+pub fn loc<'a, P, Val, Error>(parser: P) -> impl Parser<'a, Loc<Val>, Error>
 where
     P: Parser<'a, Val, Error>,
     Error: 'a,

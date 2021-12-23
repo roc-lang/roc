@@ -3,7 +3,7 @@ use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_parse::parser::{Col, Row};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{BadPattern, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use std::path::PathBuf;
 
 use crate::error::r#type::suggest;
@@ -774,7 +774,7 @@ where
 fn report_shadowing<'b>(
     alloc: &'b RocDocAllocator<'b>,
     original_region: Region,
-    shadow: Located<Ident>,
+    shadow: Loc<Ident>,
 ) -> RocDocBuilder<'b> {
     let line = r#"Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#;
 

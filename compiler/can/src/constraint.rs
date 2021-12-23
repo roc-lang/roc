@@ -1,7 +1,7 @@
 use crate::expected::{Expected, PExpected};
 use roc_collections::all::{MutSet, SendMap};
 use roc_module::symbol::Symbol;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::types::{Category, PatternCategory, Type};
 use roc_types::{subs::Variable, types::VariableDetail};
 
@@ -21,7 +21,7 @@ pub enum Constraint {
 pub struct LetConstraint {
     pub rigid_vars: Vec<Variable>,
     pub flex_vars: Vec<Variable>,
-    pub def_types: SendMap<Symbol, Located<Type>>,
+    pub def_types: SendMap<Symbol, Loc<Type>>,
     pub defs_constraint: Constraint,
     pub ret_constraint: Constraint,
 }

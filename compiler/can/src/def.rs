@@ -16,7 +16,7 @@ use roc_module::symbol::Symbol;
 use roc_parse::ast;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{CycleEntry, Problem, RuntimeError};
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{Alias, Type};
 use std::collections::HashMap;
@@ -25,8 +25,8 @@ use ven_graph::{strongly_connected_components, topological_sort_into_groups};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Def {
-    pub loc_pattern: Located<Pattern>,
-    pub loc_expr: Located<Expr>,
+    pub loc_pattern: Loc<Pattern>,
+    pub loc_expr: Loc<Expr>,
     pub expr_var: Variable,
     pub pattern_vars: SendMap<Symbol, Variable>,
     pub annotation: Option<Annotation>,
@@ -53,29 +53,29 @@ pub struct CanDefs {
 enum PendingDef<'a> {
     /// A standalone annotation with no body
     AnnotationOnly(
-        &'a Located<ast::Pattern<'a>>,
-        Located<Pattern>,
-        &'a Located<ast::TypeAnnotation<'a>>,
+        &'a Loc<ast::Pattern<'a>>,
+        Loc<Pattern>,
+        &'a Loc<ast::TypeAnnotation<'a>>,
     ),
     /// A body with no type annotation
     Body(
-        &'a Located<ast::Pattern<'a>>,
-        Located<Pattern>,
-        &'a Located<ast::Expr<'a>>,
+        &'a Loc<ast::Pattern<'a>>,
+        Loc<Pattern>,
+        &'a Loc<ast::Expr<'a>>,
     ),
     /// A body with a type annotation
     TypedBody(
-        &'a Located<ast::Pattern<'a>>,
-        Located<Pattern>,
-        &'a Located<ast::TypeAnnotation<'a>>,
-        &'a Located<ast::Expr<'a>>,
+        &'a Loc<ast::Pattern<'a>>,
+        Loc<Pattern>,
+        &'a Loc<ast::TypeAnnotation<'a>>,
+        &'a Loc<ast::Expr<'a>>,
     ),
 
     /// A type alias, e.g. `Ints : List Int`
     Alias {
-        name: Located<Symbol>,
-        vars: Vec<Located<Lowercase>>,
-        ann: &'a Located<ast::TypeAnnotation<'a>>,
+        name: Loc<Symbol>,
+        vars: Vec<Loc<Lowercase>>,
+        ann: &'a Loc<ast::TypeAnnotation<'a>>,
     },
 
     /// An invalid alias, that is ignored in the rest of the pipeline
@@ -112,7 +112,7 @@ pub fn canonicalize_defs<'a>(
     mut output: Output,
     var_store: &mut VarStore,
     original_scope: &Scope,
-    loc_defs: &'a [&'a Located<ast::Def<'a>>],
+    loc_defs: &'a [&'a Loc<ast::Def<'a>>],
     pattern_type: PatternType,
 ) -> (CanDefs, Scope, Output, MutMap<Symbol, Region>) {
     // Canonicalizing defs while detecting shadowing involves a multi-step process:
@@ -192,7 +192,7 @@ pub fn canonicalize_defs<'a>(
                     output.references.referenced_aliases.insert(symbol);
                 }
 
-                let mut can_vars: Vec<Located<(Lowercase, Variable)>> =
+                let mut can_vars: Vec<Loc<(Lowercase, Variable)>> =
                     Vec::with_capacity(vars.len());
                 let mut is_phantom = false;
 
@@ -202,7 +202,7 @@ pub fn canonicalize_defs<'a>(
                         .var_by_name(&loc_lowercase.value)
                     {
                         // This is a valid lowercase rigid var for the alias.
-                        can_vars.push(Located {
+                        can_vars.push(Loc {
                             value: (loc_lowercase.value.clone(), *var),
                             region: loc_lowercase.region,
                         });
@@ -813,7 +813,7 @@ fn canonicalize_pending_def<'a>(
             let value = Expr::RuntimeError(problem);
             let is_closure = arity > 0;
             let loc_can_expr = if !is_closure {
-                Located {
+                Loc {
                     value,
                     region: loc_ann.region,
                 }
@@ -825,7 +825,7 @@ fn canonicalize_pending_def<'a>(
                 let mut underscores = Vec::with_capacity(arity);
 
                 for _ in 0..arity {
-                    let underscore: Located<Pattern> = Located {
+                    let underscore: Loc<Pattern> = Loc {
                         value: Pattern::Underscore,
                         region: Region::zero(),
                     };
@@ -833,12 +833,12 @@ fn canonicalize_pending_def<'a>(
                     underscores.push((var_store.fresh(), underscore));
                 }
 
-                let body_expr = Located {
+                let body_expr = Loc {
                     value,
                     region: loc_ann.region,
                 };
 
-                Located {
+                Loc {
                     value: Closure(ClosureData {
                         function_type: var_store.fresh(),
                         closure_type: var_store.fresh(),
@@ -867,7 +867,7 @@ fn canonicalize_pending_def<'a>(
                         expr_var,
                         // TODO try to remove this .clone()!
                         loc_pattern: loc_can_pattern.clone(),
-                        loc_expr: Located {
+                        loc_expr: Loc {
                             region: loc_can_expr.region,
                             // TODO try to remove this .clone()!
                             value: loc_can_expr.value.clone(),
@@ -897,7 +897,7 @@ fn canonicalize_pending_def<'a>(
                 output.references.referenced_aliases.insert(symbol);
             }
 
-            let mut can_vars: Vec<Located<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
+            let mut can_vars: Vec<Loc<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
 
             for loc_lowercase in vars {
                 if let Some(var) = can_ann
@@ -905,7 +905,7 @@ fn canonicalize_pending_def<'a>(
                     .var_by_name(&loc_lowercase.value)
                 {
                     // This is a valid lowercase rigid var for the alias.
-                    can_vars.push(Located {
+                    can_vars.push(Loc {
                         value: (loc_lowercase.value.clone(), *var),
                         region: loc_lowercase.region,
                     });
@@ -1088,7 +1088,7 @@ fn canonicalize_pending_def<'a>(
                         expr_var,
                         // TODO try to remove this .clone()!
                         loc_pattern: loc_can_pattern.clone(),
-                        loc_expr: Located {
+                        loc_expr: Loc {
                             region: loc_can_expr.region,
                             // TODO try to remove this .clone()!
                             value: loc_can_expr.value.clone(),
@@ -1226,7 +1226,7 @@ fn canonicalize_pending_def<'a>(
                         expr_var,
                         // TODO try to remove this .clone()!
                         loc_pattern: loc_can_pattern.clone(),
-                        loc_expr: Located {
+                        loc_expr: Loc {
                             // TODO try to remove this .clone()!
                             region: loc_can_expr.region,
                             value: loc_can_expr.value.clone(),
@@ -1249,8 +1249,8 @@ pub fn can_defs_with_return<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
     scope: Scope,
-    loc_defs: &'a [&'a Located<ast::Def<'a>>],
-    loc_ret: &'a Located<ast::Expr<'a>>,
+    loc_defs: &'a [&'a Loc<ast::Def<'a>>],
+    loc_ret: &'a Loc<ast::Expr<'a>>,
 ) -> (Expr, Output) {
     let (unsorted, mut scope, defs_output, symbols_introduced) = canonicalize_defs(
         env,
@@ -1283,10 +1283,10 @@ pub fn can_defs_with_return<'a>(
 
     match can_defs {
         Ok(decls) => {
-            let mut loc_expr: Located<Expr> = ret_expr;
+            let mut loc_expr: Loc<Expr> = ret_expr;
 
             for declaration in decls.into_iter().rev() {
-                loc_expr = Located {
+                loc_expr = Loc {
                     region: Region::zero(),
                     value: decl_to_let(var_store, declaration, loc_expr),
                 };
@@ -1298,7 +1298,7 @@ pub fn can_defs_with_return<'a>(
     }
 }
 
-fn decl_to_let(var_store: &mut VarStore, decl: Declaration, loc_ret: Located<Expr>) -> Expr {
+fn decl_to_let(var_store: &mut VarStore, decl: Declaration, loc_ret: Loc<Expr>) -> Expr {
     match decl {
         Declaration::Declare(def) => {
             Expr::LetNonRec(Box::new(def), Box::new(loc_ret), var_store.fresh())
@@ -1439,7 +1439,7 @@ fn to_pending_def<'a>(
                 region,
             ) {
                 Ok(symbol) => {
-                    let mut can_rigids: Vec<Located<Lowercase>> = Vec::with_capacity(vars.len());
+                    let mut can_rigids: Vec<Loc<Lowercase>> = Vec::with_capacity(vars.len());
 
                     for loc_var in vars.iter() {
                         match loc_var.value {
@@ -1447,7 +1447,7 @@ fn to_pending_def<'a>(
                                 if name.chars().next().unwrap().is_lowercase() =>
                             {
                                 let lowercase = Lowercase::from(name);
-                                can_rigids.push(Located {
+                                can_rigids.push(Loc {
                                     value: lowercase,
                                     region: loc_var.region,
                                 });
@@ -1467,7 +1467,7 @@ fn to_pending_def<'a>(
                     Some((
                         Output::default(),
                         PendingDef::Alias {
-                            name: Located {
+                            name: Loc {
                                 region: name.region,
                                 value: symbol,
                             },
@@ -1500,9 +1500,9 @@ fn to_pending_def<'a>(
 
 fn pending_typed_body<'a>(
     env: &mut Env<'a>,
-    loc_pattern: &'a Located<ast::Pattern<'a>>,
-    loc_ann: &'a Located<ast::TypeAnnotation<'a>>,
-    loc_expr: &'a Located<ast::Expr<'a>>,
+    loc_pattern: &'a Loc<ast::Pattern<'a>>,
+    loc_ann: &'a Loc<ast::TypeAnnotation<'a>>,
+    loc_expr: &'a Loc<ast::Expr<'a>>,
     var_store: &mut VarStore,
     scope: &mut Scope,
     pattern_type: PatternType,

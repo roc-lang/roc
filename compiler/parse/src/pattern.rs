@@ -10,7 +10,7 @@ use crate::state::State;
 use bumpalo::collections::string::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 
 /// Different patterns are supported in different circumstances.
 /// For example, when branches can pattern match on number literals, but
@@ -26,7 +26,7 @@ pub enum PatternType {
 
 pub fn loc_closure_param<'a>(
     min_indent: u16,
-) -> impl Parser<'a, Located<Pattern<'a>>, EPattern<'a>> {
+) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     move |arena, state| parse_closure_param(arena, state, min_indent)
 }
 
@@ -34,7 +34,7 @@ fn parse_closure_param<'a>(
     arena: &'a Bump,
     state: State<'a>,
     min_indent: u16,
-) -> ParseResult<'a, Located<Pattern<'a>>, EPattern<'a>> {
+) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     one_of!(
         // An ident is the most common param, e.g. \foo -> ...
         loc_ident_pattern_help(min_indent, true),
@@ -54,7 +54,7 @@ fn parse_closure_param<'a>(
 
 pub fn loc_pattern_help<'a>(
     min_indent: u16,
-) -> impl Parser<'a, Located<Pattern<'a>>, EPattern<'a>> {
+) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     one_of!(
         specialize(EPattern::PInParens, loc_pattern_in_parens_help(min_indent)),
         loc!(underscore_pattern_help()),
@@ -70,11 +70,11 @@ pub fn loc_pattern_help<'a>(
 
 fn loc_tag_pattern_args_help<'a>(
     min_indent: u16,
-) -> impl Parser<'a, Vec<'a, Located<Pattern<'a>>>, EPattern<'a>> {
+) -> impl Parser<'a, Vec<'a, Loc<Pattern<'a>>>, EPattern<'a>> {
     zero_or_more!(loc_tag_pattern_arg(min_indent))
 }
 
-fn loc_tag_pattern_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>, EPattern<'a>> {
+fn loc_tag_pattern_arg<'a>(min_indent: u16) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     // Don't parse operators, because they have a higher precedence than function application.
     // If we encounter one, we're done parsing function args!
     move |arena, state| {
@@ -84,14 +84,14 @@ fn loc_tag_pattern_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'
 
         let (_, loc_pat, state) = loc_parse_tag_pattern_arg(min_indent, arena, state)?;
 
-        let Located { region, value } = loc_pat;
+        let Loc { region, value } = loc_pat;
 
         Ok((
             MadeProgress,
             if spaces.is_empty() {
-                Located::at(region, value)
+                Loc::at(region, value)
             } else {
-                Located::at(region, Pattern::SpaceBefore(arena.alloc(value), spaces))
+                Loc::at(region, Pattern::SpaceBefore(arena.alloc(value), spaces))
             },
             state,
         ))
@@ -102,7 +102,7 @@ fn loc_parse_tag_pattern_arg<'a>(
     min_indent: u16,
     arena: &'a Bump,
     state: State<'a>,
-) -> ParseResult<'a, Located<Pattern<'a>>, EPattern<'a>> {
+) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     one_of!(
         specialize(EPattern::PInParens, loc_pattern_in_parens_help(min_indent)),
         loc!(underscore_pattern_help()),
@@ -120,7 +120,7 @@ fn loc_parse_tag_pattern_arg<'a>(
 
 fn loc_pattern_in_parens_help<'a>(
     min_indent: u16,
-) -> impl Parser<'a, Located<Pattern<'a>>, PInParens<'a>> {
+) -> impl Parser<'a, Loc<Pattern<'a>>, PInParens<'a>> {
     between!(
         word1(b'(', PInParens::Open),
         space0_around_ee(
@@ -168,7 +168,7 @@ fn string_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
 fn loc_ident_pattern_help<'a>(
     min_indent: u16,
     can_have_arguments: bool,
-) -> impl Parser<'a, Located<Pattern<'a>>, EPattern<'a>> {
+) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
         let original_state = state.clone();
 
@@ -177,7 +177,7 @@ fn loc_ident_pattern_help<'a>(
 
         match loc_ident.value {
             Ident::GlobalTag(tag) => {
-                let loc_tag = Located {
+                let loc_tag = Loc {
                     region: loc_ident.region,
                     value: Pattern::GlobalTag(tag),
                 };
@@ -197,14 +197,14 @@ fn loc_ident_pattern_help<'a>(
                         let value =
                             Pattern::Apply(&*arena.alloc(loc_tag), loc_args.into_bump_slice());
 
-                        Ok((MadeProgress, Located { region, value }, state))
+                        Ok((MadeProgress, Loc { region, value }, state))
                     }
                 } else {
                     Ok((MadeProgress, loc_tag, state))
                 }
             }
             Ident::PrivateTag(tag) => {
-                let loc_tag = Located {
+                let loc_tag = Loc {
                     region: loc_ident.region,
                     value: Pattern::PrivateTag(tag),
                 };
@@ -224,7 +224,7 @@ fn loc_ident_pattern_help<'a>(
                         let value =
                             Pattern::Apply(&*arena.alloc(loc_tag), loc_args.into_bump_slice());
 
-                        Ok((MadeProgress, Located { region, value }, state))
+                        Ok((MadeProgress, Loc { region, value }, state))
                     }
                 } else {
                     Ok((MadeProgress, loc_tag, state))
@@ -242,7 +242,7 @@ fn loc_ident_pattern_help<'a>(
                 } else if module_name.is_empty() && parts.len() == 1 {
                     Ok((
                         MadeProgress,
-                        Located {
+                        Loc {
                             region: loc_ident.region,
                             value: Pattern::Identifier(parts[0]),
                         },
@@ -256,7 +256,7 @@ fn loc_ident_pattern_help<'a>(
                     };
                     Ok((
                         MadeProgress,
-                        Located {
+                        Loc {
                             region: loc_ident.region,
                             value: Pattern::Malformed(
                                 String::from_str_in(&malformed_str, arena).into_bump_str(),
@@ -268,7 +268,7 @@ fn loc_ident_pattern_help<'a>(
             }
             Ident::AccessorFunction(string) => Ok((
                 MadeProgress,
-                Located {
+                Loc {
                     region: loc_ident.region,
                     value: Pattern::Malformed(string),
                 },
@@ -279,7 +279,7 @@ fn loc_ident_pattern_help<'a>(
 
                 Ok((
                     MadeProgress,
-                    Located {
+                    Loc {
                         region: loc_ident.region,
                         value: Pattern::MalformedIdent(malformed, problem),
                     },
@@ -338,7 +338,7 @@ fn record_pattern_help<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>, PRec
     }
 }
 
-fn record_pattern_field<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>, PRecord<'a>> {
+fn record_pattern_field<'a>(min_indent: u16) -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> {
     use crate::parser::Either::*;
 
     move |arena, state: State<'a>| {
@@ -371,7 +371,7 @@ fn record_pattern_field<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<
                     space0_before_e(val_parser, min_indent, PRecord::Space, PRecord::IndentColon)
                         .parse(arena, state)?;
 
-                let Located {
+                let Loc {
                     value: label,
                     region,
                 } = loc_label;
@@ -380,7 +380,7 @@ fn record_pattern_field<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<
 
                 Ok((
                     MadeProgress,
-                    Located::at(
+                    Loc::at(
                         region,
                         Pattern::RequiredField(
                             label,
@@ -401,7 +401,7 @@ fn record_pattern_field<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<
                     space0_before_e(val_parser, min_indent, PRecord::Space, PRecord::IndentColon)
                         .parse(arena, state)?;
 
-                let Located {
+                let Loc {
                     value: label,
                     region,
                 } = loc_label;
@@ -410,7 +410,7 @@ fn record_pattern_field<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<
 
                 Ok((
                     MadeProgress,
-                    Located::at(
+                    Loc::at(
                         region,
                         Pattern::OptionalField(
                             label,
@@ -425,14 +425,14 @@ fn record_pattern_field<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<
             // If no value was provided, record it as a Var.
             // Canonicalize will know what to do with a Var later.
             None => {
-                let Located { value, region } = loc_label;
+                let Loc { value, region } = loc_label;
                 let value = if !spaces.is_empty() {
                     Pattern::SpaceAfter(arena.alloc(Pattern::Identifier(value)), spaces)
                 } else {
                     Pattern::Identifier(value)
                 };
 
-                Ok((MadeProgress, Located::at(region, value), state))
+                Ok((MadeProgress, Loc::at(region, value), state))
             }
         }
     }

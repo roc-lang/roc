@@ -9,12 +9,12 @@ use crate::parser::{
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 
 pub fn located_help<'a>(
     min_indent: u16,
     is_trailing_comma_valid: bool,
-) -> impl Parser<'a, Located<TypeAnnotation<'a>>, EType<'a>> {
+) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
     expression(min_indent, is_trailing_comma_valid)
 }
 
@@ -51,7 +51,7 @@ fn fail_type_start<'a, T: 'a>() -> impl Parser<'a, T, EType<'a>> {
     |_arena, state: State<'a>| Err((NoProgress, EType::TStart(state.line, state.column), state))
 }
 
-fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, EType<'a>> {
+fn term<'a>(min_indent: u16) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
     map_with_arena!(
         and!(
             one_of!(
@@ -86,8 +86,8 @@ fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, ETy
         ),
         |arena: &'a Bump,
          (loc_ann, opt_as): (
-            Located<TypeAnnotation<'a>>,
-            Option<(&'a [_], Located<TypeAnnotation<'a>>)>
+            Loc<TypeAnnotation<'a>>,
+            Option<(&'a [_], Loc<TypeAnnotation<'a>>)>
         )| {
             match opt_as {
                 Some((spaces, loc_as)) => {
@@ -95,7 +95,7 @@ fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, ETy
                     let value =
                         TypeAnnotation::As(arena.alloc(loc_ann), spaces, arena.alloc(loc_as));
 
-                    Located { region, value }
+                    Loc { region, value }
                 }
 
                 None => loc_ann,
@@ -106,8 +106,8 @@ fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, ETy
 }
 
 /// The `*` type variable, e.g. in (List *) Wildcard,
-fn loc_wildcard<'a>() -> impl Parser<'a, Located<TypeAnnotation<'a>>, EType<'a>> {
-    map!(loc!(word1(b'*', EType::TWildcard)), |loc_val: Located<
+fn loc_wildcard<'a>() -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
+    map!(loc!(word1(b'*', EType::TWildcard)), |loc_val: Loc<
         (),
     >| {
         loc_val.map(|_| TypeAnnotation::Wildcard)
@@ -115,15 +115,15 @@ fn loc_wildcard<'a>() -> impl Parser<'a, Located<TypeAnnotation<'a>>, EType<'a>>
 }
 
 /// The `_` indicating an inferred type, e.g. in (List _)
-fn loc_inferred<'a>() -> impl Parser<'a, Located<TypeAnnotation<'a>>, EType<'a>> {
-    map!(loc!(word1(b'_', EType::TInferred)), |loc_val: Located<
+fn loc_inferred<'a>() -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
+    map!(loc!(word1(b'_', EType::TInferred)), |loc_val: Loc<
         (),
     >| {
         loc_val.map(|_| TypeAnnotation::Inferred)
     })
 }
 
-fn loc_applied_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, EType<'a>> {
+fn loc_applied_arg<'a>(min_indent: u16) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
     use crate::ast::Spaceable;
 
     map_with_arena!(
@@ -139,11 +139,11 @@ fn loc_applied_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotatio
                 loc!(parse_type_variable)
             )
         ),
-        |arena: &'a Bump, (spaces, argument): (&'a [_], Located<TypeAnnotation<'a>>)| {
+        |arena: &'a Bump, (spaces, argument): (&'a [_], Loc<TypeAnnotation<'a>>)| {
             if spaces.is_empty() {
                 argument
             } else {
-                let Located { region, value } = argument;
+                let Loc { region, value } = argument;
                 arena.alloc(value).with_spaces_before(spaces, region)
             }
         }
@@ -152,7 +152,7 @@ fn loc_applied_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotatio
 
 fn loc_type_in_parens<'a>(
     min_indent: u16,
-) -> impl Parser<'a, Located<TypeAnnotation<'a>>, ETypeInParens<'a>> {
+) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, ETypeInParens<'a>> {
     between!(
         word1(b'(', ETypeInParens::Open),
         space0_around_ee(
@@ -320,7 +320,7 @@ fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, ETyp
             // e.g. `Str Float` in `Map Str Float`
             loc_applied_args_e(min_indent)
         ),
-        |(ctor, args): (TypeAnnotation<'a>, Vec<'a, Located<TypeAnnotation<'a>>>)| {
+        |(ctor, args): (TypeAnnotation<'a>, Vec<'a, Loc<TypeAnnotation<'a>>>)| {
             match &ctor {
                 TypeAnnotation::Apply(module_name, name, _) => {
                     if args.is_empty() {
@@ -340,14 +340,14 @@ fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, ETyp
 
 fn loc_applied_args_e<'a>(
     min_indent: u16,
-) -> impl Parser<'a, Vec<'a, Located<TypeAnnotation<'a>>>, EType<'a>> {
+) -> impl Parser<'a, Vec<'a, Loc<TypeAnnotation<'a>>>, EType<'a>> {
     zero_or_more!(loc_applied_arg(min_indent))
 }
 
 fn expression<'a>(
     min_indent: u16,
     is_trailing_comma_valid: bool,
-) -> impl Parser<'a, Located<TypeAnnotation<'a>>, EType<'a>> {
+) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
     (move |arena, state: State<'a>| {
         let (p1, first, state) = space0_before_e(
             term(min_indent),
@@ -402,7 +402,7 @@ fn expression<'a>(
                 arguments.extend(rest);
                 let output = arena.alloc(arguments);
 
-                let result = Located {
+                let result = Loc {
                     region: return_type.region,
                     value: TypeAnnotation::Function(output, arena.alloc(return_type)),
                 };

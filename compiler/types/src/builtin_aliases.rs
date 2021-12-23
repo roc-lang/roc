@@ -4,7 +4,7 @@ use crate::types::RecordField;
 use roc_collections::all::{default_hasher, MutMap};
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use std::collections::HashMap;
 
 const NUM_BUILTIN_IMPORTS: usize = 8;
@@ -34,7 +34,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         Symbol::NUM_INT,
         BuiltinAlias {
             region: Region::zero(),
-            vars: vec![Located::at(Region::zero(), "range".into())],
+            vars: vec![Loc::at(Region::zero(), "range".into())],
             typ: int_alias_content(flex(TVAR1)),
         },
     );
@@ -44,7 +44,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         Symbol::NUM_FLOAT,
         BuiltinAlias {
             region: Region::zero(),
-            vars: vec![Located::at(Region::zero(), "range".into())],
+            vars: vec![Loc::at(Region::zero(), "range".into())],
             typ: float_alias_content(flex(TVAR1)),
         },
     );
@@ -54,7 +54,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         Symbol::NUM_NUM,
         BuiltinAlias {
             region: Region::zero(),
-            vars: vec![Located::at(Region::zero(), "range".into())],
+            vars: vec![Loc::at(Region::zero(), "range".into())],
             typ: num_alias_content(flex(TVAR1)),
         },
     );
@@ -64,7 +64,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         Symbol::NUM_INTEGER,
         BuiltinAlias {
             region: Region::zero(),
-            vars: vec![Located::at(Region::zero(), "range".into())],
+            vars: vec![Loc::at(Region::zero(), "range".into())],
             typ: integer_alias_content(flex(TVAR1)),
         },
     );
@@ -274,7 +274,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         Symbol::NUM_FLOATINGPOINT,
         BuiltinAlias {
             region: Region::zero(),
-            vars: vec![Located::at(Region::zero(), "range".into())],
+            vars: vec![Loc::at(Region::zero(), "range".into())],
             typ: floatingpoint_alias_content(flex(TVAR1)),
         },
     );
@@ -325,8 +325,8 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         BuiltinAlias {
             region: Region::zero(),
             vars: vec![
-                Located::at(Region::zero(), "ok".into()),
-                Located::at(Region::zero(), "err".into()),
+                Loc::at(Region::zero(), "ok".into()),
+                Loc::at(Region::zero(), "err".into()),
             ],
             typ: result_alias_content(flex(TVAR1), flex(TVAR2)),
         },

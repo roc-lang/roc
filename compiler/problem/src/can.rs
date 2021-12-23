@@ -4,7 +4,7 @@ use roc_module::ident::{Ident, Lowercase, ModuleName, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_parse::ast::Base;
 use roc_parse::pattern::PatternType;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CycleEntry {
@@ -33,7 +33,7 @@ pub enum Problem {
     UnsupportedPattern(BadPattern, Region),
     ShadowingInAnnotation {
         original_region: Region,
-        shadow: Located<Ident>,
+        shadow: Loc<Ident>,
     },
     CyclicAlias(Symbol, Region, Vec<Symbol>),
     BadRecursion(Vec<CycleEntry>),
@@ -82,7 +82,7 @@ pub enum Problem {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PrecedenceProblem {
-    BothNonAssociative(Region, Located<BinOp>, Located<BinOp>),
+    BothNonAssociative(Region, Loc<BinOp>, Loc<BinOp>),
 }
 
 /// Enum to store the various types of errors that can cause parsing an integer to fail.
@@ -119,7 +119,7 @@ pub enum FloatErrorKind {
 pub enum RuntimeError {
     Shadowing {
         original_region: Region,
-        shadow: Located<Ident>,
+        shadow: Loc<Ident>,
     },
     InvalidOptionalValue {
         field_name: Lowercase,
@@ -134,7 +134,7 @@ pub enum RuntimeError {
     UnresolvedTypeVar,
     ErroneousType,
 
-    LookupNotInScope(Located<Ident>, MutSet<Box<str>>),
+    LookupNotInScope(Loc<Ident>, MutSet<Box<str>>),
     ValueNotExposed {
         module_name: ModuleName,
         ident: Ident,

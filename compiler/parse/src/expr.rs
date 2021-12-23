@@ -16,7 +16,7 @@ use crate::type_annotation;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
-use roc_region::all::{Located, Position, Region};
+use roc_region::all::{Loc, Position, Region};
 
 use crate::parser::Progress::{self, *};
 
@@ -38,7 +38,7 @@ pub fn test_parse_expr<'a>(
     min_indent: u16,
     arena: &'a bumpalo::Bump,
     state: State<'a>,
-) -> Result<Located<Expr<'a>>, EExpr<'a>> {
+) -> Result<Loc<Expr<'a>>, EExpr<'a>> {
     let parser = skip_second!(
         space0_before_e(
             move |a, s| parse_loc_expr(min_indent, a, s),
@@ -87,13 +87,13 @@ pub fn expr_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
 
 fn loc_expr_in_parens_help<'a>(
     min_indent: u16,
-) -> impl Parser<'a, Located<Expr<'a>>, EInParens<'a>> {
+) -> impl Parser<'a, Loc<Expr<'a>>, EInParens<'a>> {
     move |arena, state| {
         let (_, loc_expr, state) = loc_expr_in_parens_help_help(min_indent).parse(arena, state)?;
 
         Ok((
             MadeProgress,
-            Located {
+            Loc {
                 region: loc_expr.region,
                 value: Expr::ParensAround(arena.alloc(loc_expr.value)),
             },
@@ -104,7 +104,7 @@ fn loc_expr_in_parens_help<'a>(
 
 fn loc_expr_in_parens_help_help<'a>(
     min_indent: u16,
-) -> impl Parser<'a, Located<Expr<'a>>, EInParens<'a>> {
+) -> impl Parser<'a, Loc<Expr<'a>>, EInParens<'a>> {
     between!(
         word1(b'(', EInParens::Open),
         space0_around_ee(
@@ -122,7 +122,7 @@ fn loc_expr_in_parens_help_help<'a>(
 
 fn loc_expr_in_parens_etc_help<'a>(
     min_indent: u16,
-) -> impl Parser<'a, Located<Expr<'a>>, EExpr<'a>> {
+) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
     move |arena, state: State<'a>| {
         let parser = loc!(and!(
             specialize(EExpr::InParens, loc_expr_in_parens_help(min_indent)),
@@ -135,7 +135,7 @@ fn loc_expr_in_parens_etc_help<'a>(
 
         let (
             _,
-            Located {
+            Loc {
                 mut region,
                 value: (loc_expr, field_accesses),
             },
@@ -157,7 +157,7 @@ fn loc_expr_in_parens_etc_help<'a>(
             }
         }
 
-        let loc_expr = Located::at(region, value);
+        let loc_expr = Loc::at(region, value);
 
         Ok((MadeProgress, loc_expr, state))
     }
@@ -203,7 +203,7 @@ fn parse_loc_term_or_underscore<'a>(
     options: ExprParseOptions,
     arena: &'a Bump,
     state: State<'a>,
-) -> ParseResult<'a, Located<Expr<'a>>, EExpr<'a>> {
+) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
     one_of!(
         loc_expr_in_parens_etc_help(min_indent),
         loc!(specialize(EExpr::Str, string_literal_help())),
@@ -225,7 +225,7 @@ fn parse_loc_term<'a>(
     options: ExprParseOptions,
     arena: &'a Bump,
     state: State<'a>,
-) -> ParseResult<'a, Located<Expr<'a>>, EExpr<'a>> {
+) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
     one_of!(
         loc_expr_in_parens_etc_help(min_indent),
         loc!(specialize(EExpr::Str, string_literal_help())),
@@ -263,7 +263,7 @@ fn underscore_expression<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
 fn loc_possibly_negative_or_negated_term<'a>(
     min_indent: u16,
     options: ExprParseOptions,
-) -> impl Parser<'a, Located<Expr<'a>>, EExpr<'a>> {
+) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
     one_of![
         |arena, state: State<'a>| {
             let initial = state.clone();
@@ -283,10 +283,10 @@ fn loc_possibly_negative_or_negated_term<'a>(
             and!(loc!(word1(b'!', EExpr::Start)), |a, s| {
                 parse_loc_term(min_indent, options, a, s)
             }),
-            |arena: &'a Bump, (loc_op, loc_expr): (Located<_>, _)| {
+            |arena: &'a Bump, (loc_op, loc_expr): (Loc<_>, _)| {
                 Expr::UnaryOp(
                     arena.alloc(loc_expr),
-                    Located::at(loc_op.region, UnaryOp::Not),
+                    Loc::at(loc_op.region, UnaryOp::Not),
                 )
             }
         )),
@@ -328,7 +328,7 @@ fn parse_expr_start<'a>(
     start: Position,
     arena: &'a Bump,
     state: State<'a>,
-) -> ParseResult<'a, Located<Expr<'a>>, EExpr<'a>> {
+) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
     one_of![
         loc!(specialize(EExpr::If, if_expr_help(min_indent, options))),
         loc!(specialize(
@@ -375,9 +375,9 @@ fn parse_expr_operator_chain<'a>(
 
 #[derive(Debug)]
 struct ExprState<'a> {
-    operators: Vec<'a, (Located<Expr<'a>>, Located<BinOp>)>,
-    arguments: Vec<'a, &'a Located<Expr<'a>>>,
-    expr: Located<Expr<'a>>,
+    operators: Vec<'a, (Loc<Expr<'a>>, Loc<BinOp>)>,
+    arguments: Vec<'a, &'a Loc<Expr<'a>>>,
+    expr: Loc<Expr<'a>>,
     spaces_after: &'a [CommentOrNewline<'a>],
     initial: State<'a>,
     end: Position,
@@ -408,9 +408,9 @@ impl<'a> ExprState<'a> {
     fn validate_assignment_or_backpassing<F>(
         mut self,
         arena: &'a Bump,
-        loc_op: Located<BinOp>,
+        loc_op: Loc<BinOp>,
         argument_error: F,
-    ) -> Result<Located<Expr<'a>>, EExpr<'a>>
+    ) -> Result<Loc<Expr<'a>>, EExpr<'a>>
     where
         F: Fn(Region, Row, Col) -> EExpr<'a>,
     {
@@ -443,8 +443,8 @@ impl<'a> ExprState<'a> {
     fn validate_has_type(
         mut self,
         arena: &'a Bump,
-        loc_op: Located<BinOp>,
-    ) -> Result<(Located<Expr<'a>>, Vec<'a, &'a Located<Expr<'a>>>), EExpr<'a>> {
+        loc_op: Loc<BinOp>,
+    ) -> Result<(Loc<Expr<'a>>, Vec<'a, &'a Loc<Expr<'a>>>), EExpr<'a>> {
         debug_assert_eq!(loc_op.value, BinOp::HasType);
 
         if !self.operators.is_empty() {
@@ -481,9 +481,9 @@ fn parse_expr_final<'a>(
 
 fn to_call<'a>(
     arena: &'a Bump,
-    mut arguments: Vec<'a, &'a Located<Expr<'a>>>,
-    loc_expr1: Located<Expr<'a>>,
-) -> Located<Expr<'a>> {
+    mut arguments: Vec<'a, &'a Loc<Expr<'a>>>,
+    loc_expr1: Loc<Expr<'a>>,
+) -> Loc<Expr<'a>> {
     if arguments.is_empty() {
         loc_expr1
     } else {
@@ -501,7 +501,7 @@ fn to_call<'a>(
                 } else {
                     spaces.item
                 };
-                *last = arena.alloc(Located::at(last.region, inner));
+                *last = arena.alloc(Loc::at(last.region, inner));
 
                 spaces.after
             }
@@ -519,17 +519,17 @@ fn to_call<'a>(
             apply = arena.alloc(apply).after(spaces)
         }
 
-        Located::at(region, apply)
+        Loc::at(region, apply)
     }
 }
 
 fn numeric_negate_expression<'a, T>(
     arena: &'a Bump,
     state: State<'a>,
-    loc_op: Located<T>,
-    expr: Located<Expr<'a>>,
+    loc_op: Loc<T>,
+    expr: Loc<Expr<'a>>,
     spaces: &'a [CommentOrNewline<'a>],
-) -> Located<Expr<'a>> {
+) -> Loc<Expr<'a>> {
     debug_assert_eq!(state.bytes().get(0), Some(&b'-'));
     // for overflow reasons, we must make the unary minus part of the number literal.
     let mut region = expr.region;
@@ -562,11 +562,11 @@ fn numeric_negate_expression<'a, T>(
         }
         _ => Expr::UnaryOp(
             arena.alloc(expr),
-            Located::at(loc_op.region, UnaryOp::Negate),
+            Loc::at(loc_op.region, UnaryOp::Negate),
         ),
     };
 
-    let new_loc_expr = Located::at(region, new_expr);
+    let new_loc_expr = Loc::at(region, new_expr);
 
     if spaces.is_empty() {
         new_loc_expr
@@ -579,17 +579,17 @@ fn numeric_negate_expression<'a, T>(
 
 fn append_body_definition<'a>(
     arena: &'a Bump,
-    defs: &mut Vec<'a, &'a Located<Def<'a>>>,
+    defs: &mut Vec<'a, &'a Loc<Def<'a>>>,
     spaces: &'a [CommentOrNewline<'a>],
-    loc_pattern: Located<Pattern<'a>>,
-    loc_def_body: Located<Expr<'a>>,
+    loc_pattern: Loc<Pattern<'a>>,
+    loc_def_body: Loc<Expr<'a>>,
 ) {
     let region = Region::span_across(&loc_pattern.region, &loc_def_body.region);
 
     if spaces.len() <= 1 {
         let last = defs.pop();
         match last {
-            Some(Located {
+            Some(Loc {
                 value: Def::Annotation(ann_pattern, ann_type),
                 ..
             }) => {
@@ -605,7 +605,7 @@ fn append_body_definition<'a>(
                     ann_type,
                 );
             }
-            Some(Located {
+            Some(Loc {
                 value: Def::SpaceBefore(Def::Annotation(ann_pattern, ann_type), before_ann_spaces),
                 ..
             }) => {
@@ -628,7 +628,7 @@ fn append_body_definition<'a>(
     }
 
     // the previous and current def can't be joined up
-    let mut loc_def = Located::at(
+    let mut loc_def = Loc::at(
         region,
         Def::Body(arena.alloc(loc_pattern), &*arena.alloc(loc_def_body)),
     );
@@ -645,14 +645,14 @@ fn append_body_definition<'a>(
 #[allow(clippy::too_many_arguments)]
 fn append_body_definition_help<'a>(
     arena: &'a Bump,
-    defs: &mut Vec<'a, &'a Located<Def<'a>>>,
+    defs: &mut Vec<'a, &'a Loc<Def<'a>>>,
     region: Region,
     before_ann_spaces: &'a [CommentOrNewline<'a>],
     before_body_spaces: &'a [CommentOrNewline<'a>],
-    loc_pattern_body: Located<Pattern<'a>>,
-    loc_def_body: Located<Expr<'a>>,
-    loc_pattern_ann: &'a Located<Pattern<'a>>,
-    loc_ann: &'a Located<TypeAnnotation<'a>>,
+    loc_pattern_body: Loc<Pattern<'a>>,
+    loc_def_body: Loc<Expr<'a>>,
+    loc_pattern_ann: &'a Loc<Pattern<'a>>,
+    loc_ann: &'a Loc<TypeAnnotation<'a>>,
 ) {
     let comment = match before_body_spaces.get(0) {
         Some(CommentOrNewline::LineComment(s)) => Some(*s),
@@ -660,7 +660,7 @@ fn append_body_definition_help<'a>(
         _ => None,
     };
 
-    let mut loc_def = Located::at(
+    let mut loc_def = Loc::at(
         region,
         Def::AnnotatedBody {
             ann_pattern: loc_pattern_ann,
@@ -682,17 +682,17 @@ fn append_body_definition_help<'a>(
 
 fn append_annotation_definition<'a>(
     arena: &'a Bump,
-    defs: &mut Vec<'a, &'a Located<Def<'a>>>,
+    defs: &mut Vec<'a, &'a Loc<Def<'a>>>,
     spaces: &'a [CommentOrNewline<'a>],
-    loc_pattern: Located<Pattern<'a>>,
-    loc_ann: Located<TypeAnnotation<'a>>,
+    loc_pattern: Loc<Pattern<'a>>,
+    loc_ann: Loc<TypeAnnotation<'a>>,
 ) {
     let region = Region::span_across(&loc_pattern.region, &loc_ann.region);
 
     // the previous and current def can't be joined up
     match &loc_pattern.value {
         Pattern::Apply(
-            Located {
+            Loc {
                 value: Pattern::GlobalTag(name),
                 ..
             },
@@ -702,7 +702,7 @@ fn append_annotation_definition<'a>(
             defs,
             region,
             spaces,
-            Located::at(loc_pattern.region, name),
+            Loc::at(loc_pattern.region, name),
             alias_arguments,
             loc_ann,
         ),
@@ -711,12 +711,12 @@ fn append_annotation_definition<'a>(
             defs,
             region,
             spaces,
-            Located::at(loc_pattern.region, name),
+            Loc::at(loc_pattern.region, name),
             &[],
             loc_ann,
         ),
         _ => {
-            let mut loc_def = Located::at(region, Def::Annotation(loc_pattern, loc_ann));
+            let mut loc_def = Loc::at(region, Def::Annotation(loc_pattern, loc_ann));
             if !spaces.is_empty() {
                 loc_def = arena
                     .alloc(loc_def.value)
@@ -730,17 +730,17 @@ fn append_annotation_definition<'a>(
 
 fn append_expect_definition<'a>(
     arena: &'a Bump,
-    defs: &mut Vec<'a, &'a Located<Def<'a>>>,
+    defs: &mut Vec<'a, &'a Loc<Def<'a>>>,
     start: Position,
     spaces: &'a [CommentOrNewline<'a>],
-    loc_expect_body: Located<Expr<'a>>,
+    loc_expect_body: Loc<Expr<'a>>,
 ) {
     let def = Def::Expect(arena.alloc(loc_expect_body));
 
     let end = loc_expect_body.region.end();
     let region = Region::between(start, end);
 
-    let mut loc_def = Located::at(region, def);
+    let mut loc_def = Loc::at(region, def);
 
     if !spaces.is_empty() {
         loc_def = arena
@@ -753,19 +753,19 @@ fn append_expect_definition<'a>(
 
 fn append_alias_definition<'a>(
     arena: &'a Bump,
-    defs: &mut Vec<'a, &'a Located<Def<'a>>>,
+    defs: &mut Vec<'a, &'a Loc<Def<'a>>>,
     region: Region,
     spaces: &'a [CommentOrNewline<'a>],
-    name: Located<&'a str>,
-    pattern_arguments: &'a [Located<Pattern<'a>>],
-    loc_ann: Located<TypeAnnotation<'a>>,
+    name: Loc<&'a str>,
+    pattern_arguments: &'a [Loc<Pattern<'a>>],
+    loc_ann: Loc<TypeAnnotation<'a>>,
 ) {
     let def = Def::Alias {
         name,
         vars: pattern_arguments,
         ann: loc_ann,
     };
-    let mut loc_def = Located::at(region, def);
+    let mut loc_def = Loc::at(region, def);
 
     if !spaces.is_empty() {
         loc_def = arena
@@ -778,7 +778,7 @@ fn append_alias_definition<'a>(
 
 #[derive(Debug)]
 struct DefState<'a> {
-    defs: Vec<'a, &'a Located<Def<'a>>>,
+    defs: Vec<'a, &'a Loc<Def<'a>>>,
     spaces_after: &'a [CommentOrNewline<'a>],
 }
 
@@ -945,7 +945,7 @@ fn parse_expr_operator<'a>(
     options: ExprParseOptions,
     start: Position,
     mut expr_state: ExprState<'a>,
-    loc_op: Located<BinOp>,
+    loc_op: Loc<BinOp>,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
@@ -1010,11 +1010,11 @@ fn parse_expr_operator<'a>(
                         let alias_region = Region::span_across(&call.region, &ann_type.region);
 
                         let alias = Def::Body(
-                            arena.alloc(Located::at(expr_region, good)),
+                            arena.alloc(Loc::at(expr_region, good)),
                             arena.alloc(ann_type),
                         );
 
-                        (&*arena.alloc(Located::at(alias_region, alias)), state)
+                        (&*arena.alloc(Loc::at(alias_region, alias)), state)
                     }
                     Err(_) => {
                         // this `=` likely occurred inline; treat it as an invalid operator
@@ -1058,7 +1058,7 @@ fn parse_expr_operator<'a>(
                                 .with_spaces_before(spaces_after_operator, ann_type.region);
                         }
 
-                        (Located::at(expr_region, good), ann_type, state)
+                        (Loc::at(expr_region, good), ann_type, state)
                     }
                     Err(_) => {
                         // this `=` likely occurred inline; treat it as an invalid operator
@@ -1105,7 +1105,7 @@ fn parse_expr_operator<'a>(
                     for argument in arguments {
                         match expr_to_pattern_help(arena, &argument.value) {
                             Ok(good) => {
-                                type_arguments.push(Located::at(argument.region, good));
+                                type_arguments.push(Loc::at(argument.region, good));
                             }
                             Err(_) => panic!(),
                         }
@@ -1125,12 +1125,12 @@ fn parse_expr_operator<'a>(
                     let alias_region = Region::span_across(&expr.region, &ann_type.region);
 
                     let alias = Def::Alias {
-                        name: Located::at(expr.region, name),
+                        name: Loc::at(expr.region, name),
                         vars: type_arguments.into_bump_slice(),
                         ann: ann_type,
                     };
 
-                    (&*arena.alloc(Located::at(alias_region, alias)), state)
+                    (&*arena.alloc(Loc::at(alias_region, alias)), state)
                 }
 
                 _ => {
@@ -1163,9 +1163,9 @@ fn parse_expr_operator<'a>(
                                         Region::span_across(&call.region, &ann_type.region);
 
                                     let alias =
-                                        Def::Annotation(Located::at(expr_region, good), ann_type);
+                                        Def::Annotation(Loc::at(expr_region, good), ann_type);
 
-                                    (&*arena.alloc(Located::at(alias_region, alias)), state)
+                                    (&*arena.alloc(Loc::at(alias_region, alias)), state)
                                 }
                             }
                         }
@@ -1320,7 +1320,7 @@ fn parse_expr_end<'a>(
                         expr_state.consume_spaces(arena);
                         let call = to_call(arena, expr_state.arguments, expr_state.expr);
 
-                        let loc_pattern = Located::at(
+                        let loc_pattern = Loc::at(
                             call.region,
                             expr_to_pattern_help(arena, &call.value).unwrap(),
                         );
@@ -1381,7 +1381,7 @@ pub fn parse_loc_expr<'a>(
     min_indent: u16,
     arena: &'a Bump,
     state: State<'a>,
-) -> ParseResult<'a, Located<Expr<'a>>, EExpr<'a>> {
+) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
     parse_loc_expr_with_options(
         min_indent,
         ExprParseOptions {
@@ -1397,7 +1397,7 @@ pub fn parse_loc_expr_no_multi_backpassing<'a>(
     min_indent: u16,
     arena: &'a Bump,
     state: State<'a>,
-) -> ParseResult<'a, Located<Expr<'a>>, EExpr<'a>> {
+) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
     parse_loc_expr_with_options(
         min_indent,
         ExprParseOptions {
@@ -1414,7 +1414,7 @@ fn parse_loc_expr_with_options<'a>(
     options: ExprParseOptions,
     arena: &'a Bump,
     state: State<'a>,
-) -> ParseResult<'a, Located<Expr<'a>>, EExpr<'a>> {
+) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
     let start = state.get_position();
     parse_expr_start(min_indent, options, start, arena, state)
 }
@@ -1436,7 +1436,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         Expr::Apply(loc_val, loc_args, _) => {
             let region = loc_val.region;
             let value = expr_to_pattern_help(arena, &loc_val.value)?;
-            let val_pattern = arena.alloc(Located { region, value });
+            let val_pattern = arena.alloc(Loc { region, value });
 
             let mut arg_patterns = Vec::with_capacity_in(loc_args.len(), arena);
 
@@ -1444,7 +1444,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
                 let region = loc_arg.region;
                 let value = expr_to_pattern_help(arena, &loc_arg.value)?;
 
-                arg_patterns.push(Located { region, value });
+                arg_patterns.push(Loc { region, value });
             }
 
             let pattern = Pattern::Apply(val_pattern, arg_patterns.into_bump_slice());
@@ -1467,7 +1467,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
             let patterns = fields.map_items_result(arena, |loc_assigned_field| {
                 let region = loc_assigned_field.region;
                 let value = assigned_expr_field_to_pattern_help(arena, &loc_assigned_field.value)?;
-                Ok(Located { region, value })
+                Ok(Loc { region, value })
             })?;
 
             Ok(Pattern::RecordDestructure(patterns))
@@ -1513,7 +1513,7 @@ fn assigned_expr_field_to_pattern_help<'a>(
     Ok(match assigned_field {
         AssignedField::RequiredValue(name, spaces, value) => {
             let pattern = expr_to_pattern_help(arena, &value.value)?;
-            let result = arena.alloc(Located {
+            let result = arena.alloc(Loc {
                 region: value.region,
                 value: pattern,
             });
@@ -1527,7 +1527,7 @@ fn assigned_expr_field_to_pattern_help<'a>(
             }
         }
         AssignedField::OptionalValue(name, spaces, value) => {
-            let result = arena.alloc(Located {
+            let result = arena.alloc(Loc {
                 region: value.region,
                 value: value.value,
             });
@@ -1553,7 +1553,7 @@ fn assigned_expr_field_to_pattern_help<'a>(
     })
 }
 
-pub fn defs<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located<Def<'a>>>, EExpr<'a>> {
+pub fn defs<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Loc<Def<'a>>>, EExpr<'a>> {
     move |arena, state: State<'a>| {
         let def_state = DefState {
             defs: Vec::new_in(arena),
@@ -1646,8 +1646,8 @@ fn closure_help<'a>(
             )
         ),
         |arena: &'a Bump, (params, loc_body)| {
-            let params: Vec<'a, Located<Pattern<'a>>> = params;
-            let params: &'a [Located<Pattern<'a>>] = params.into_bump_slice();
+            let params: Vec<'a, Loc<Pattern<'a>>> = params;
+            let params: &'a [Loc<Pattern<'a>>] = params.into_bump_slice();
 
             Expr::Closure(params, arena.alloc(loc_body))
         }
@@ -1803,8 +1803,8 @@ mod when {
     ) -> impl Parser<
         'a,
         (
-            (Col, Vec<'a, Located<Pattern<'a>>>),
-            Option<Located<Expr<'a>>>,
+            (Col, Vec<'a, Loc<Pattern<'a>>>),
+            Option<Loc<Expr<'a>>>,
         ),
         EWhen<'a>,
     > {
@@ -1838,7 +1838,7 @@ mod when {
 
     fn branch_single_alternative<'a>(
         min_indent: u16,
-    ) -> impl Parser<'a, Located<Pattern<'a>>, EWhen<'a>> {
+    ) -> impl Parser<'a, Loc<Pattern<'a>>, EWhen<'a>> {
         move |arena, state| {
             let (_, spaces, state) =
                 backtrackable(space0_e(min_indent, EWhen::Space, EWhen::IndentPattern))
@@ -1869,7 +1869,7 @@ mod when {
     fn branch_alternatives_help<'a>(
         min_indent: u16,
         pattern_indent_level: Option<u16>,
-    ) -> impl Parser<'a, (Col, Vec<'a, Located<Pattern<'a>>>), EWhen<'a>> {
+    ) -> impl Parser<'a, (Col, Vec<'a, Loc<Pattern<'a>>>), EWhen<'a>> {
         move |arena, state: State<'a>| {
             let initial = state.clone();
 
@@ -1937,7 +1937,7 @@ mod when {
     }
 
     /// Parsing the righthandside of a branch in a when conditional.
-    fn branch_result<'a>(indent: u16) -> impl Parser<'a, Located<Expr<'a>>, EWhen<'a>> {
+    fn branch_result<'a>(indent: u16) -> impl Parser<'a, Loc<Expr<'a>>, EWhen<'a>> {
         skip_first!(
             word2(b'-', b'>', EWhen::Arrow),
             space0_before_e(
@@ -1954,7 +1954,7 @@ mod when {
 
 fn if_branch<'a>(
     min_indent: u16,
-) -> impl Parser<'a, (Located<Expr<'a>>, Located<Expr<'a>>), EIf<'a>> {
+) -> impl Parser<'a, (Loc<Expr<'a>>, Loc<Expr<'a>>), EIf<'a>> {
     move |arena, state| {
         // NOTE: only parse spaces before the expression
         let (_, cond, state) = space0_around_ee(
@@ -2248,9 +2248,9 @@ fn record_help<'a>(
 ) -> impl Parser<
     'a,
     (
-        Option<Located<Expr<'a>>>,
-        Located<(
-            Vec<'a, Located<AssignedField<'a, Expr<'a>>>>,
+        Option<Loc<Expr<'a>>>,
+        Loc<(
+            Vec<'a, Loc<AssignedField<'a, Expr<'a>>>>,
             &'a [CommentOrNewline<'a>],
         )>,
     ),

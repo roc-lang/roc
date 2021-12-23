@@ -9,7 +9,7 @@ use roc_parse::ast::{
     AssignedField, Base, Collection, CommentOrNewline, Expr, Pattern, WhenBranch,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
-use roc_region::all::Located;
+use roc_region::all::Loc;
 
 impl<'a> Formattable for Expr<'a> {
     fn is_multiline(&self) -> bool {
@@ -397,8 +397,8 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
 
 fn fmt_bin_ops<'a, 'buf>(
     buf: &mut Buf<'buf>,
-    lefts: &'a [(Located<Expr<'a>>, Located<BinOp>)],
-    loc_right_side: &'a Located<Expr<'a>>,
+    lefts: &'a [(Loc<Expr<'a>>, Loc<BinOp>)],
+    loc_right_side: &'a Loc<Expr<'a>>,
     part_of_multi_line_bin_ops: bool,
     apply_needs_parens: Parens,
     indent: u16,
@@ -456,7 +456,7 @@ fn empty_line_before_expr<'a>(expr: &'a Expr<'a>) -> bool {
 
 fn fmt_when<'a, 'buf>(
     buf: &mut Buf<'buf>,
-    loc_condition: &'a Located<Expr<'a>>,
+    loc_condition: &'a Loc<Expr<'a>>,
     branches: &[&'a WhenBranch<'a>],
     indent: u16,
 ) {
@@ -573,8 +573,8 @@ fn fmt_when<'a, 'buf>(
 
 fn fmt_expect<'a, 'buf>(
     buf: &mut Buf<'buf>,
-    condition: &'a Located<Expr<'a>>,
-    continuation: &'a Located<Expr<'a>>,
+    condition: &'a Loc<Expr<'a>>,
+    continuation: &'a Loc<Expr<'a>>,
     is_multiline: bool,
     indent: u16,
 ) {
@@ -592,8 +592,8 @@ fn fmt_expect<'a, 'buf>(
 
 fn fmt_if<'a, 'buf>(
     buf: &mut Buf<'buf>,
-    branches: &'a [(Located<Expr<'a>>, Located<Expr<'a>>)],
-    final_else: &'a Located<Expr<'a>>,
+    branches: &'a [(Loc<Expr<'a>>, Loc<Expr<'a>>)],
+    final_else: &'a Loc<Expr<'a>>,
     is_multiline: bool,
     indent: u16,
 ) {
@@ -716,8 +716,8 @@ fn fmt_if<'a, 'buf>(
 
 fn fmt_closure<'a, 'buf>(
     buf: &mut Buf<'buf>,
-    loc_patterns: &'a [Located<Pattern<'a>>],
-    loc_ret: &'a Located<Expr<'a>>,
+    loc_patterns: &'a [Loc<Pattern<'a>>],
+    loc_ret: &'a Loc<Expr<'a>>,
     indent: u16,
 ) {
     use self::Expr::*;
@@ -790,9 +790,9 @@ fn fmt_closure<'a, 'buf>(
 
 fn fmt_backpassing<'a, 'buf>(
     buf: &mut Buf<'buf>,
-    loc_patterns: &'a [Located<Pattern<'a>>],
-    loc_body: &'a Located<Expr<'a>>,
-    loc_ret: &'a Located<Expr<'a>>,
+    loc_patterns: &'a [Loc<Pattern<'a>>],
+    loc_body: &'a Loc<Expr<'a>>,
+    loc_ret: &'a Loc<Expr<'a>>,
     indent: u16,
 ) {
     use self::Expr::*;
@@ -885,8 +885,8 @@ fn pattern_needs_parens_when_backpassing(pat: &Pattern) -> bool {
 
 fn fmt_record<'a, 'buf>(
     buf: &mut Buf<'buf>,
-    update: Option<&'a Located<Expr<'a>>>,
-    fields: Collection<'a, Located<AssignedField<'a, Expr<'a>>>>,
+    update: Option<&'a Loc<Expr<'a>>>,
+    fields: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
     indent: u16,
 ) {
     let loc_fields = fields.items;

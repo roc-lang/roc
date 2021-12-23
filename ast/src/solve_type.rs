@@ -5,7 +5,7 @@ use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{BumpMap, BumpMapDefault, MutMap};
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
-use roc_region::all::{Located, Region};
+use roc_region::all::{Loc, Region};
 use roc_types::solved_types::Solved;
 use roc_types::subs::{
     AliasVariables, Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields, Subs,
@@ -459,7 +459,7 @@ fn solve<'a>(
                         // TODO: region should come from typ
                         local_def_vars.insert(
                             *symbol,
-                            Located {
+                            Loc {
                                 value: var,
                                 region: Region::zero(),
                             },
@@ -542,7 +542,7 @@ fn solve<'a>(
                         // TODO: region should come from type
                         local_def_vars.insert(
                             *symbol,
-                            Located {
+                            Loc {
                                 value: var,
                                 region: Region::zero(),
                             },
@@ -1013,7 +1013,7 @@ fn check_for_infinite_type(
     subs: &mut Subs,
     problems: &mut Vec<TypeError>,
     symbol: Symbol,
-    loc_var: Located<Variable>,
+    loc_var: Loc<Variable>,
 ) {
     let var = loc_var.value;
 
@@ -1066,7 +1066,7 @@ fn circular_error(
     subs: &mut Subs,
     problems: &mut Vec<TypeError>,
     symbol: Symbol,
-    loc_var: &Located<Variable>,
+    loc_var: &Loc<Variable>,
 ) {
     let var = loc_var.value;
     let (error_type, _) = subs.var_to_error_type(var);

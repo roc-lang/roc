@@ -8,7 +8,7 @@ use roc_parse::header::{
     AppHeader, Effects, ExposedName, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
     PackageName, PackageOrPath, PlatformHeader, PlatformRequires, PlatformRigid, To, TypedIdent,
 };
-use roc_region::all::Located;
+use roc_region::all::Loc;
 
 pub fn fmt_module<'a, 'buf>(buf: &mut Buf<'buf>, module: &'a Module<'a>) {
     match module {
@@ -220,7 +220,7 @@ impl<'a> Formattable for PlatformRigid<'a> {
 
 fn fmt_imports<'a, 'buf>(
     buf: &mut Buf<'buf>,
-    loc_entries: Collection<'a, Located<Spaced<'a, ImportsEntry<'a>>>>,
+    loc_entries: Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>,
     indent: u16,
 ) {
     fmt_collection(buf, indent, '[', ']', loc_entries, Newlines::No)
@@ -228,7 +228,7 @@ fn fmt_imports<'a, 'buf>(
 
 fn fmt_provides<'a, 'buf>(
     buf: &mut Buf<'buf>,
-    loc_entries: Collection<'a, Located<Spaced<'a, ExposedName<'a>>>>,
+    loc_entries: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
     indent: u16,
 ) {
     fmt_collection(buf, indent, '[', ']', loc_entries, Newlines::No)
@@ -245,7 +245,7 @@ fn fmt_to<'buf>(buf: &mut Buf<'buf>, to: To, indent: u16) {
 
 fn fmt_exposes<'buf, N: Formattable + Copy>(
     buf: &mut Buf<'buf>,
-    loc_entries: Collection<'_, Located<Spaced<'_, N>>>,
+    loc_entries: Collection<'_, Loc<Spaced<'_, N>>>,
     indent: u16,
 ) {
     fmt_collection(buf, indent, '[', ']', loc_entries, Newlines::No)
@@ -295,7 +295,7 @@ impl<'a> FormatName for ExposedName<'a> {
 
 fn fmt_packages<'a, 'buf>(
     buf: &mut Buf<'buf>,
-    loc_entries: Collection<'a, Located<Spaced<'a, PackageEntry<'a>>>>,
+    loc_entries: Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>,
     indent: u16,
 ) {
     fmt_collection(buf, indent, '{', '}', loc_entries, Newlines::No)
