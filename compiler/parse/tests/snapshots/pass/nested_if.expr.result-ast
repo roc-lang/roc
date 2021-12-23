@@ -1,0 +1,50 @@
+If(
+    [
+        (
+            |L 0-0, C 3-5| Var {
+                module_name: "",
+                ident: "t1",
+            },
+            |L 1-1, C 2-3| SpaceBefore(
+                SpaceAfter(
+                    Num(
+                        "1",
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+                [
+                    Newline,
+                ],
+            ),
+        ),
+        (
+            |L 2-2, C 8-10| Var {
+                module_name: "",
+                ident: "t2",
+            },
+            |L 3-3, C 2-3| SpaceBefore(
+                SpaceAfter(
+                    Num(
+                        "2",
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+                [
+                    Newline,
+                ],
+            ),
+        ),
+    ],
+    |L 5-5, C 2-3| SpaceBefore(
+        Num(
+            "3",
+        ),
+        [
+            Newline,
+        ],
+    ),
+)
