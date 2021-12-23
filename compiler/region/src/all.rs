@@ -1,4 +1,4 @@
-use std::fmt;
+use std::fmt::{self, Debug};
 
 #[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash, Default)]
 pub struct Region {
@@ -152,7 +152,7 @@ impl fmt::Debug for Region {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Default)]
+#[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash, Default)]
 pub struct Position {
     pub line: u32,
     pub column: u16,
@@ -164,6 +164,12 @@ impl Position {
             line: self.line,
             column: self.column + count,
         }
+    }
+}
+
+impl Debug for Position {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}", self.line, self.column)
     }
 }
 
