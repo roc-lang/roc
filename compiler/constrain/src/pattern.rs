@@ -164,19 +164,19 @@ pub fn constrain_pattern(
         }
 
         Identifier(symbol) => {
+            if destruct_position {
+                state.constraints.push(Constraint::Present(
+                    expected.get_type_ref().clone(),
+                    PresenceConstraint::IsOpen,
+                ));
+            }
             state.headers.insert(
                 *symbol,
                 Loc {
                     region,
-                    value: expected.get_type_ref().clone(),
+                    value: expected.get_type(),
                 },
             );
-            if destruct_position {
-                state.constraints.push(Constraint::Present(
-                    expected.get_type(),
-                    PresenceConstraint::IsOpen,
-                ));
-            }
         }
 
         NumLiteral(var, _, _) => {
