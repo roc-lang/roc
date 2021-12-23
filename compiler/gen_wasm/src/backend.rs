@@ -160,14 +160,7 @@ impl<'a> WasmBackend<'a> {
     }
 
     pub fn generate_helpers(&mut self) -> Vec<'a, Proc<'a>> {
-        let ident_ids = self
-            .interns
-            .all_ident_ids
-            .get_mut(&self.env.module_id)
-            .unwrap();
-
-        self.helper_proc_gen
-            .generate_procs(self.env.arena, ident_ids)
+        self.helper_proc_gen.take_procs()
     }
 
     fn register_helper_proc(&mut self, new_proc_info: (Symbol, ProcLayout<'a>)) {
@@ -1060,7 +1053,9 @@ impl<'a> WasmBackend<'a> {
         use LowLevel::*;
 
         match lowlevel {
-            Eq | NotEq => self.build_eq(lowlevel, arguments, return_sym, return_layout, storage),
+            Eq | NotEq => {
+                self.build_eq_or_neq(lowlevel, arguments, return_sym, return_layout, storage)
+            }
             PtrCast => {
                 // Don't want Zig calling convention when casting pointers.
                 self.storage.load_symbols(&mut self.code_builder, arguments);
@@ -1103,7 +1098,7 @@ impl<'a> WasmBackend<'a> {
         }
     }
 
-    fn build_eq(
+    fn build_eq_or_neq(
         &mut self,
         lowlevel: LowLevel,
         arguments: &'a [Symbol],
@@ -1121,7 +1116,7 @@ impl<'a> WasmBackend<'a> {
         match arg_layout {
             Layout::Builtin(
                 Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal,
-            ) => self.build_eq_number(lowlevel, arguments, return_layout),
+            ) => self.build_eq_or_neq_number(lowlevel, arguments, return_layout),
 
             Layout::Builtin(Builtin::Str) => {
                 let (param_types, ret_type) = self.storage.load_symbols_for_call(
@@ -1161,7 +1156,7 @@ impl<'a> WasmBackend<'a> {
         }
     }
 
-    fn build_eq_number(
+    fn build_eq_or_neq_number(
         &mut self,
         lowlevel: LowLevel,
         arguments: &'a [Symbol],
@@ -1295,7 +1290,12 @@ impl<'a> WasmBackend<'a> {
 
         // Generate Wasm code for the IR call expression
         let bool_layout = Layout::Builtin(Builtin::Bool);
-        self.build_expr(&return_sym, specialized_call_expr, &bool_layout, storage);
+        self.build_expr(
+            &return_sym,
+            self.env.arena.alloc(specialized_call_expr),
+            &bool_layout,
+            storage,
+        );
     }
 
     fn load_literal(

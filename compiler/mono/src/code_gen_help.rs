@@ -23,8 +23,8 @@ const ARG_2: Symbol = Symbol::ARG_2;
 /// Ref counts are encoded as negative numbers where isize::MIN represents 1
 pub const REFCOUNT_MAX: usize = 0;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum HelperOp {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HelperOp {
     Inc,
     Dec,
     DecRef,
@@ -39,6 +39,19 @@ impl From<&ModifyRc> for HelperOp {
             ModifyRc::DecRef(_) => Self::DecRef,
         }
     }
+}
+
+struct SpecializedProc<'a> {
+    op: HelperOp,
+    layout: Layout<'a>,
+    proc: Proc<'a>,
+}
+
+#[derive(Debug)]
+struct Context<'a> {
+    new_linker_data: Vec<'a, (Symbol, ProcLayout<'a>)>,
+    rec_ptr_layout: Option<UnionLayout<'a>>,
+    op: HelperOp,
 }
 
 /// Generate specialized helper procs for code gen
@@ -64,9 +77,7 @@ pub struct CodeGenHelp<'a> {
     home: ModuleId,
     ptr_size: u32,
     layout_isize: Layout<'a>,
-    /// Specializations to generate
-    /// Order of insertion is preserved, since it is important for Wasm backend
-    specs: Vec<'a, (Layout<'a>, HelperOp, Symbol)>,
+    specialized_procs: Vec<'a, SpecializedProc<'a>>,
 }
 
 impl<'a> CodeGenHelp<'a> {
@@ -76,8 +87,17 @@ impl<'a> CodeGenHelp<'a> {
             home,
             ptr_size: intwidth_isize.stack_size(),
             layout_isize: Layout::Builtin(Builtin::Int(intwidth_isize)),
-            specs: Vec::with_capacity_in(16, arena),
+            specialized_procs: Vec::with_capacity_in(16, arena),
         }
+    }
+
+    pub fn take_procs(&mut self) -> Vec<'a, Proc<'a>> {
+        let procs_iter = self
+            .specialized_procs
+            .drain(0..)
+            .map(|SpecializedProc { proc, .. }| proc);
+
+        Vec::from_iter_in(procs_iter, self.arena)
     }
 
     // ============================================================================
@@ -107,12 +127,15 @@ impl<'a> CodeGenHelp<'a> {
 
         let arena = self.arena;
 
+        let mut ctx = Context {
+            new_linker_data: Vec::new_in(self.arena),
+            rec_ptr_layout: None,
+            op: HelperOp::from(modify),
+        };
+
         match modify {
             ModifyRc::Inc(structure, amount) => {
                 let layout_isize = self.layout_isize;
-
-                let (proc_name, new_procs_info) =
-                    self.get_or_create_proc_symbols_recursive(ident_ids, &layout, HelperOp::Inc);
 
                 // Define a constant for the amount to increment
                 let amount_sym = self.create_symbol(ident_ids, "amount");
@@ -120,38 +143,28 @@ impl<'a> CodeGenHelp<'a> {
                 let amount_stmt = |next| Stmt::Let(amount_sym, amount_expr, layout_isize, next);
 
                 // Call helper proc, passing the Roc structure and constant amount
-                let arg_layouts = arena.alloc([layout, layout_isize]);
                 let call_result_empty = self.create_symbol(ident_ids, "call_result_empty");
-                let call_expr = Expr::Call(Call {
-                    call_type: CallType::ByName {
-                        name: proc_name,
-                        ret_layout: &LAYOUT_UNIT,
-                        arg_layouts,
-                        specialization_id: CallSpecId::BACKEND_DUMMY,
-                    },
-                    arguments: arena.alloc([*structure, amount_sym]),
-                });
+                let call_expr = self.call_specialized_op(
+                    ident_ids,
+                    &mut ctx,
+                    layout,
+                    arena.alloc([*structure, amount_sym]),
+                );
                 let call_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
                 let rc_stmt = arena.alloc(amount_stmt(arena.alloc(call_stmt)));
 
-                (rc_stmt, new_procs_info)
+                (rc_stmt, ctx.new_linker_data)
             }
 
             ModifyRc::Dec(structure) => {
-                let (proc_name, new_procs_info) =
-                    self.get_or_create_proc_symbols_recursive(ident_ids, &layout, HelperOp::Dec);
-
                 // Call helper proc, passing the Roc structure
                 let call_result_empty = self.create_symbol(ident_ids, "call_result_empty");
-                let call_expr = Expr::Call(Call {
-                    call_type: CallType::ByName {
-                        name: proc_name,
-                        ret_layout: &LAYOUT_UNIT,
-                        arg_layouts: arena.alloc([layout]),
-                        specialization_id: CallSpecId::BACKEND_DUMMY,
-                    },
-                    arguments: arena.alloc([*structure]),
-                });
+                let call_expr = self.call_specialized_op(
+                    ident_ids,
+                    &mut ctx,
+                    layout,
+                    arena.alloc([*structure]),
+                );
 
                 let rc_stmt = arena.alloc(Stmt::Let(
                     call_result_empty,
@@ -160,7 +173,7 @@ impl<'a> CodeGenHelp<'a> {
                     following,
                 ));
 
-                (rc_stmt, new_procs_info)
+                (rc_stmt, ctx.new_linker_data)
             }
 
             ModifyRc::DecRef(structure) => {
@@ -185,7 +198,7 @@ impl<'a> CodeGenHelp<'a> {
                     arena.alloc(call_stmt),
                 ));
 
-                (rc_stmt, Vec::new_in(self.arena))
+                (rc_stmt, ctx.new_linker_data)
             }
         }
     }
@@ -204,234 +217,49 @@ impl<'a> CodeGenHelp<'a> {
         ident_ids: &mut IdentIds,
         layout: &Layout<'a>,
         arguments: &'a [Symbol],
-    ) -> (&'a Expr<'a>, Vec<'a, (Symbol, ProcLayout<'a>)>) {
-        // Record a specialization and get its name
-        let (proc_name, new_procs_info) =
-            self.get_or_create_proc_symbols_recursive(ident_ids, layout, HelperOp::Eq);
+    ) -> (Expr<'a>, Vec<'a, (Symbol, ProcLayout<'a>)>) {
+        let mut ctx = Context {
+            new_linker_data: Vec::new_in(self.arena),
+            rec_ptr_layout: None,
+            op: HelperOp::Eq,
+        };
 
-        // Call the specialized helper
-        let arg_layouts = self.arena.alloc([*layout, *layout]);
-        let expr = self.arena.alloc(Expr::Call(Call {
-            call_type: CallType::ByName {
-                name: proc_name,
-                ret_layout: &LAYOUT_BOOL,
-                arg_layouts,
-                specialization_id: CallSpecId::BACKEND_DUMMY,
-            },
-            arguments,
-        }));
+        let expr = self.call_specialized_op(ident_ids, &mut ctx, *layout, arguments);
 
-        (expr, new_procs_info)
+        dbg!(&ctx);
+
+        (expr, ctx.new_linker_data)
     }
 
     // ============================================================================
     //
-    //              CREATE SPECIALIZATIONS
+    //              CALL SPECIALIZED OP
     //
     // ============================================================================
 
-    /// Find the Symbol of the procedure for this layout and operation
-    /// If any new helper procs are needed for this layout or its children,
-    /// return their details in a vector.
-    fn get_or_create_proc_symbols_recursive(
+    fn call_specialized_op(
         &mut self,
         ident_ids: &mut IdentIds,
-        layout: &Layout<'a>,
-        op: HelperOp,
-    ) -> (Symbol, Vec<'a, (Symbol, ProcLayout<'a>)>) {
-        let mut new_procs_info = Vec::new_in(self.arena);
-
-        let proc_symbol =
-            self.get_or_create_proc_symbols_visit(ident_ids, &mut new_procs_info, op, layout);
-
-        (proc_symbol, new_procs_info)
-    }
-
-    fn get_or_create_proc_symbols_visit(
-        &mut self,
-        ident_ids: &mut IdentIds,
-        new_procs_info: &mut Vec<'a, (Symbol, ProcLayout<'a>)>,
-        op: HelperOp,
-        layout: &Layout<'a>,
-    ) -> Symbol {
-        if let Layout::LambdaSet(lambda_set) = layout {
-            return self.get_or_create_proc_symbols_visit(
-                ident_ids,
-                new_procs_info,
-                op,
-                &lambda_set.runtime_representation(),
-            );
-        }
-
-        let (symbol, new_proc_layout) = self.get_or_create_proc_symbol(ident_ids, layout, op);
-
-        if let Some(proc_layout) = new_proc_layout {
-            new_procs_info.push((symbol, proc_layout));
-
-            let mut visit_child = |child| {
-                if layout_needs_helper_proc(child, op) {
-                    self.get_or_create_proc_symbols_visit(ident_ids, new_procs_info, op, child);
-                }
-            };
-
-            let mut visit_children = |children: &'a [Layout]| {
-                for child in children {
-                    visit_child(child);
-                }
-            };
-
-            let mut visit_tags = |tags: &'a [&'a [Layout]]| {
-                for tag in tags {
-                    visit_children(tag);
-                }
-            };
-
-            match layout {
-                Layout::Builtin(builtin) => match builtin {
-                    Builtin::Dict(key, value) => {
-                        visit_child(key);
-                        visit_child(value);
-                    }
-                    Builtin::Set(element) | Builtin::List(element) => visit_child(element),
-                    _ => {}
-                },
-                Layout::Struct(fields) => visit_children(fields),
-                Layout::Union(union_layout) => match union_layout {
-                    UnionLayout::NonRecursive(tags) => visit_tags(tags),
-                    UnionLayout::Recursive(tags) => visit_tags(tags),
-                    UnionLayout::NonNullableUnwrapped(fields) => visit_children(fields),
-                    UnionLayout::NullableWrapped { other_tags, .. } => visit_tags(other_tags),
-                    UnionLayout::NullableUnwrapped { other_fields, .. } => {
-                        visit_children(other_fields)
-                    }
-                },
-                Layout::LambdaSet(_) => unreachable!(),
-                Layout::RecursivePointer => {}
-            }
-        }
-
-        symbol
-    }
-
-    fn get_or_create_proc_symbol(
-        &mut self,
-        ident_ids: &mut IdentIds,
-        layout: &Layout<'a>,
-        op: HelperOp,
-    ) -> (Symbol, Option<ProcLayout<'a>>) {
-        let found = self.specs.iter().find(|(l, o, _)| l == layout && *o == op);
-
-        if let Some((_, _, existing_symbol)) = found {
-            (*existing_symbol, None)
-        } else {
-            let layout_name = layout_debug_name(layout);
-            let debug_name = format!("#help{:?}_{}_{}", op, layout_name, self.specs.len());
-            let new_symbol: Symbol = self.create_symbol(ident_ids, &debug_name);
-            self.specs.push((*layout, op, new_symbol));
-
-            let new_proc_layout = match op {
-                HelperOp::Inc => Some(ProcLayout {
-                    arguments: self.arena.alloc([*layout, self.layout_isize]),
-                    result: LAYOUT_UNIT,
-                }),
-                HelperOp::Dec => Some(ProcLayout {
-                    arguments: self.arena.alloc([*layout]),
-                    result: LAYOUT_UNIT,
-                }),
-                HelperOp::DecRef => None,
-                HelperOp::Eq => Some(ProcLayout {
-                    arguments: self.arena.alloc([*layout, *layout]),
-                    result: LAYOUT_BOOL,
-                }),
-            };
-
-            (new_symbol, new_proc_layout)
-        }
-    }
-
-    fn create_symbol(&self, ident_ids: &mut IdentIds, debug_name: &str) -> Symbol {
-        let ident_id = ident_ids.add(Ident::from(debug_name));
-        Symbol::new(self.home, ident_id)
-    }
-
-    // ============================================================================
-    //
-    //              GENERATE PROCS
-    //
-    // ============================================================================
-
-    /// Generate refcounting helper procs, each specialized to a particular Layout.
-    /// For example `List (Result { a: Str, b: Int } Str)` would get its own helper
-    /// to update the refcounts on the List, the Result and the strings.
-    pub fn generate_procs(&self, arena: &'a Bump, ident_ids: &mut IdentIds) -> Vec<'a, Proc<'a>> {
-        use HelperOp::*;
-
-        // Clone the specializations so we can loop over them safely
-        // We need to keep self.specs for lookups of sub-procedures during generation
-        // Maybe could avoid this by separating specs vector from CodeGenHelp, letting backend own both.
-        let mut specs = self.specs.clone();
-
-        let procs_iter = specs.drain(0..).map(|(layout, op, proc_symbol)| {
-            let (ret_layout, body) = match op {
-                Inc | Dec | DecRef => (LAYOUT_UNIT, self.refcount_generic(ident_ids, layout, op)),
-                Eq => (LAYOUT_BOOL, self.eq_generic(ident_ids, layout)),
-            };
-
-            let roc_value = (layout, ARG_1);
-            let args: &'a [(Layout<'a>, Symbol)] = match op {
-                HelperOp::Inc => {
-                    let inc_amount = (self.layout_isize, ARG_2);
-                    self.arena.alloc([roc_value, inc_amount])
-                }
-                HelperOp::Dec | HelperOp::DecRef => self.arena.alloc([roc_value]),
-                HelperOp::Eq => self.arena.alloc([roc_value, (layout, ARG_2)]),
-            };
-
-            Proc {
-                name: proc_symbol,
-                args,
-                body,
-                closure_data_layout: None,
-                ret_layout,
-                is_self_recursive: SelfRecursive::NotSelfRecursive,
-                must_own_arguments: false,
-                host_exposed_layouts: HostExposedLayouts::NotHostExposed,
-            }
-        });
-
-        Vec::from_iter_in(procs_iter, arena)
-    }
-
-    /// Apply the HelperOp to a field of a data structure
-    /// Only called while generating bodies of helper procs
-    /// The list of specializations should be complete by this time
-    fn apply_op_to_sub_layout(
-        &self,
-        op: HelperOp,
-        sub_layout: &Layout<'a>,
+        ctx: &mut Context<'a>,
+        layout: Layout<'a>,
         arguments: &[Symbol],
     ) -> Expr<'a> {
-        let found = self
-            .specs
-            .iter()
-            .find(|(l, o, _)| l == sub_layout && *o == op);
+        use HelperOp::*;
 
-        if let Some((_, _, proc_name)) = found {
-            let arg_layouts: &[Layout<'a>] = match op {
-                HelperOp::Eq => self.arena.alloc([*sub_layout, *sub_layout]),
-                HelperOp::Inc => self.arena.alloc([*sub_layout, self.layout_isize]),
-                HelperOp::Dec => self.arena.alloc([*sub_layout]),
-                HelperOp::DecRef => unreachable!("DecRef is not recursive"),
-            };
-            let ret_layout = if matches!(op, HelperOp::Eq) {
-                &LAYOUT_BOOL
-            } else {
-                &LAYOUT_UNIT
+        if layout_needs_helper_proc(&layout, ctx.op) {
+            let proc_name = self.find_or_create_proc(ident_ids, ctx, layout);
+
+            let (ret_layout, arg_layouts): (&'a Layout<'a>, &'a [Layout<'a>]) = {
+                match ctx.op {
+                    Dec | DecRef => (&LAYOUT_UNIT, self.arena.alloc([layout])),
+                    Inc => (&LAYOUT_UNIT, self.arena.alloc([layout, self.layout_isize])),
+                    Eq => (&LAYOUT_BOOL, self.arena.alloc([layout, layout])),
+                }
             };
 
             Expr::Call(Call {
                 call_type: CallType::ByName {
-                    name: *proc_name,
+                    name: proc_name,
                     ret_layout,
                     arg_layouts,
                     specialization_id: CallSpecId::BACKEND_DUMMY,
@@ -439,25 +267,113 @@ impl<'a> CodeGenHelp<'a> {
                 arguments: self.arena.alloc_slice_copy(arguments),
             })
         } else {
-            // By the time we get here (generating helper procs), the list of specializations is complete.
-            // So if we didn't find one, we must be at a leaf of the layout tree.
-            debug_assert!(!layout_needs_helper_proc(sub_layout, op));
-
-            let lowlevel = match op {
-                HelperOp::Eq => LowLevel::Eq,
-                HelperOp::Inc => LowLevel::RefCountInc,
-                HelperOp::Dec => LowLevel::RefCountDec,
-                HelperOp::DecRef => unreachable!("DecRef is not recursive"),
-            };
-
             Expr::Call(Call {
                 call_type: CallType::LowLevel {
-                    op: lowlevel,
+                    op: LowLevel::Eq,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
                 arguments: self.arena.alloc_slice_copy(arguments),
             })
         }
+    }
+
+    fn find_or_create_proc(
+        &mut self,
+        ident_ids: &mut IdentIds,
+        ctx: &mut Context<'a>,
+        layout: Layout<'a>,
+    ) -> Symbol {
+        use HelperOp::*;
+
+        let mut new_procs_info = Vec::new_in(self.arena);
+
+        let found = self
+            .specialized_procs
+            .iter()
+            .find(|spec| spec.op == ctx.op && spec.layout == layout);
+
+        if let Some(spec) = found {
+            return spec.proc.name;
+        }
+
+        let (proc_symbol, proc_layout) = self.create_proc_symbol(ident_ids, ctx, &layout);
+        new_procs_info.push((proc_symbol, proc_layout));
+
+        // Generate the body of the Proc
+        let (ret_layout, body) = match ctx.op {
+            Inc | Dec | DecRef => (LAYOUT_UNIT, self.refcount_generic(ident_ids, ctx, layout)),
+            Eq => (LAYOUT_BOOL, self.eq_generic(ident_ids, ctx, layout)),
+        };
+
+        let args: &'a [(Layout<'a>, Symbol)] = {
+            let roc_value = (layout, ARG_1);
+            match ctx.op {
+                Inc => {
+                    let inc_amount = (self.layout_isize, ARG_2);
+                    self.arena.alloc([roc_value, inc_amount])
+                }
+                Dec | DecRef => self.arena.alloc([roc_value]),
+                Eq => self.arena.alloc([roc_value, (layout, ARG_2)]),
+            }
+        };
+
+        let proc = Proc {
+            name: proc_symbol,
+            args,
+            body,
+            closure_data_layout: None,
+            ret_layout,
+            is_self_recursive: SelfRecursive::NotSelfRecursive,
+            must_own_arguments: false,
+            host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+        };
+
+        self.specialized_procs.push(SpecializedProc {
+            op: ctx.op,
+            layout,
+            proc,
+        });
+
+        proc_symbol
+    }
+
+    fn create_proc_symbol(
+        &self,
+        ident_ids: &mut IdentIds,
+        ctx: &mut Context<'a>,
+        layout: &Layout<'a>,
+    ) -> (Symbol, Option<ProcLayout<'a>>) {
+        let layout_name = layout_debug_name(layout);
+        let debug_name = format!(
+            "#help{:?}_{}_{}",
+            ctx.op,
+            layout_name,
+            self.specialized_procs.len()
+        );
+        let proc_symbol: Symbol = self.create_symbol(ident_ids, &debug_name);
+
+        let proc_layout = match ctx.op {
+            HelperOp::Inc => Some(ProcLayout {
+                arguments: self.arena.alloc([*layout, self.layout_isize]),
+                result: LAYOUT_UNIT,
+            }),
+            HelperOp::Dec => Some(ProcLayout {
+                arguments: self.arena.alloc([*layout]),
+                result: LAYOUT_UNIT,
+            }),
+            HelperOp::DecRef => None,
+            HelperOp::Eq => Some(ProcLayout {
+                arguments: self.arena.alloc([*layout, *layout]),
+                result: LAYOUT_BOOL,
+            }),
+        };
+
+        (proc_symbol, proc_layout)
+    }
+
+    fn create_symbol(&self, ident_ids: &mut IdentIds, debug_name: &str) -> Symbol {
+        let ident_id = ident_ids.add(Ident::from(debug_name));
+        Symbol::new(self.home, ident_id)
     }
 
     // ============================================================================
@@ -469,8 +385,8 @@ impl<'a> CodeGenHelp<'a> {
     fn refcount_generic(
         &self,
         ident_ids: &mut IdentIds,
+        ctx: &mut Context<'a>,
         layout: Layout<'a>,
-        op: HelperOp,
     ) -> Stmt<'a> {
         debug_assert!(Self::is_rc_implemented_yet(&layout));
         let rc_todo = || todo!("Please update is_rc_implemented_yet for `{:?}`", layout);
@@ -479,7 +395,7 @@ impl<'a> CodeGenHelp<'a> {
             Layout::Builtin(
                 Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal,
             ) => unreachable!("Not refcounted: {:?}", layout),
-            Layout::Builtin(Builtin::Str) => self.refcount_str(ident_ids, op),
+            Layout::Builtin(Builtin::Str) => self.refcount_str(ident_ids, ctx),
             Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_) | Builtin::List(_)) => rc_todo(),
             Layout::Struct(_) => rc_todo(),
             Layout::Union(_) => rc_todo(),
@@ -561,7 +477,9 @@ impl<'a> CodeGenHelp<'a> {
     }
 
     /// Generate a procedure to modify the reference count of a Str
-    fn refcount_str(&self, ident_ids: &mut IdentIds, op: HelperOp) -> Stmt<'a> {
+    fn refcount_str(&self, ident_ids: &mut IdentIds, ctx: &mut Context<'a>) -> Stmt<'a> {
+        let op = ctx.op;
+
         let string = ARG_1;
         let layout_isize = self.layout_isize;
 
@@ -678,7 +596,12 @@ impl<'a> CodeGenHelp<'a> {
     //
     // ============================================================================
 
-    fn eq_generic(&self, ident_ids: &mut IdentIds, layout: Layout<'a>) -> Stmt<'a> {
+    fn eq_generic(
+        &mut self,
+        ident_ids: &mut IdentIds,
+        ctx: &mut Context<'a>,
+        layout: Layout<'a>,
+    ) -> Stmt<'a> {
         let eq_todo = || todo!("Specialized `==` operator for `{:?}`", layout);
 
         let main_body = match layout {
@@ -692,9 +615,11 @@ impl<'a> CodeGenHelp<'a> {
                 unreachable!("No generated helper proc for `==` on Str. Use Zig function.")
             }
             Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_)) => eq_todo(),
-            Layout::Builtin(Builtin::List(elem_layout)) => self.eq_list(ident_ids, elem_layout),
-            Layout::Struct(field_layouts) => self.eq_struct(ident_ids, field_layouts),
-            Layout::Union(union_layout) => self.eq_tag_union(ident_ids, union_layout),
+            Layout::Builtin(Builtin::List(elem_layout)) => {
+                self.eq_list(ident_ids, ctx, elem_layout)
+            }
+            Layout::Struct(field_layouts) => self.eq_struct(ident_ids, ctx, field_layouts),
+            Layout::Union(union_layout) => self.eq_tag_union(ident_ids, ctx, union_layout),
             Layout::LambdaSet(_) => unreachable!("`==` is not defined on functions"),
             Layout::RecursivePointer => eq_todo(),
         };
@@ -779,17 +704,22 @@ impl<'a> CodeGenHelp<'a> {
         }
     }
 
-    fn eq_struct(&self, ident_ids: &mut IdentIds, field_layouts: &'a [Layout<'a>]) -> Stmt<'a> {
-        let else_clause = self.eq_fields(ident_ids, 0, field_layouts, None);
+    fn eq_struct(
+        &mut self,
+        ident_ids: &mut IdentIds,
+        ctx: &mut Context<'a>,
+        field_layouts: &'a [Layout<'a>],
+    ) -> Stmt<'a> {
+        let else_clause = self.eq_fields(ident_ids, ctx, 0, field_layouts);
         self.if_pointers_equal_return_true(ident_ids, self.arena.alloc(else_clause))
     }
 
     fn eq_fields(
-        &self,
+        &mut self,
         ident_ids: &mut IdentIds,
+        ctx: &mut Context<'a>,
         tag_id: u64,
         field_layouts: &'a [Layout<'a>],
-        rec_ptr_layout: Option<Layout<'a>>,
     ) -> Stmt<'a> {
         let mut stmt = Stmt::Ret(Symbol::BOOL_TRUE);
         for (i, layout) in field_layouts.iter().enumerate().rev() {
@@ -809,13 +739,13 @@ impl<'a> CodeGenHelp<'a> {
             };
             let field2_stmt = |next| Stmt::Let(field2_sym, field2_expr, *layout, next);
 
-            let sub_layout = match (layout, rec_ptr_layout) {
-                (Layout::RecursivePointer, Some(rec_layout)) => self.arena.alloc(rec_layout),
-                _ => layout,
-            };
+            let eq_call_expr = self.call_specialized_op(
+                ident_ids,
+                ctx,
+                *layout,
+                self.arena.alloc([field1_sym, field2_sym]),
+            );
 
-            let eq_call_expr =
-                self.apply_op_to_sub_layout(HelperOp::Eq, sub_layout, &[field1_sym, field2_sym]);
             let eq_call_name = format!("eq_call_{}", i);
             let eq_call_sym = self.create_symbol(ident_ids, &eq_call_name);
             let eq_call_stmt = |next| Stmt::Let(eq_call_sym, eq_call_expr, LAYOUT_BOOL, next);
@@ -834,43 +764,54 @@ impl<'a> CodeGenHelp<'a> {
         stmt
     }
 
-    fn eq_tag_union(&self, ident_ids: &mut IdentIds, union_layout: UnionLayout<'a>) -> Stmt<'a> {
+    fn eq_tag_union(
+        &mut self,
+        ident_ids: &mut IdentIds,
+        ctx: &mut Context<'a>,
+        union_layout: UnionLayout<'a>,
+    ) -> Stmt<'a> {
         use UnionLayout::*;
 
+        let parent_rec_ptr_layout = ctx.rec_ptr_layout;
+        if !matches!(union_layout, NonRecursive(_)) {
+            ctx.rec_ptr_layout = Some(union_layout);
+        }
+
         let main_stmt = match union_layout {
-            NonRecursive(tags) => self.eq_tag_union_help(ident_ids, union_layout, tags, None),
+            NonRecursive(tags) => self.eq_tag_union_help(ident_ids, ctx, union_layout, tags, None),
 
-            Recursive(tags) => self.eq_tag_union_help(ident_ids, union_layout, tags, None),
+            Recursive(tags) => self.eq_tag_union_help(ident_ids, ctx, union_layout, tags, None),
 
-            NonNullableUnwrapped(field_layouts) => self.eq_fields(
-                ident_ids,
-                0,
-                field_layouts,
-                Some(Layout::Union(union_layout)),
-            ),
+            NonNullableUnwrapped(field_layouts) => self.eq_fields(ident_ids, ctx, 0, field_layouts),
 
             NullableWrapped {
                 other_tags,
                 nullable_id,
-            } => self.eq_tag_union_help(ident_ids, union_layout, other_tags, Some(nullable_id)),
+            } => {
+                self.eq_tag_union_help(ident_ids, ctx, union_layout, other_tags, Some(nullable_id))
+            }
 
             NullableUnwrapped {
                 other_fields,
                 nullable_id: n,
             } => self.eq_tag_union_help(
                 ident_ids,
+                ctx,
                 union_layout,
                 self.arena.alloc([other_fields]),
                 Some(n as u16),
             ),
         };
 
+        ctx.rec_ptr_layout = parent_rec_ptr_layout;
+
         self.if_pointers_equal_return_true(ident_ids, self.arena.alloc(main_stmt))
     }
 
     fn eq_tag_union_help(
-        &self,
+        &mut self,
         ident_ids: &mut IdentIds,
+        ctx: &mut Context<'a>,
         union_layout: UnionLayout<'a>,
         tag_layouts: &'a [&'a [Layout<'a>]],
         nullable_id: Option<u16>,
@@ -904,30 +845,18 @@ impl<'a> CodeGenHelp<'a> {
         };
 
         let tag_ids_eq = self.create_symbol(ident_ids, "tag_ids_eq");
-        let tag_ids_eq_stmt = |next| {
-            Stmt::Let(
-                tag_ids_eq,
-                Expr::Call(Call {
-                    call_type: CallType::LowLevel {
-                        op: LowLevel::Eq,
-                        update_mode: UpdateModeId::BACKEND_DUMMY,
-                    },
-                    arguments: self.arena.alloc([tag_id_a, tag_id_b]),
-                }),
-                LAYOUT_BOOL,
-                next,
-            )
-        };
+        let tag_ids_expr = Expr::Call(Call {
+            call_type: CallType::LowLevel {
+                op: LowLevel::Eq,
+                update_mode: UpdateModeId::BACKEND_DUMMY,
+            },
+            arguments: self.arena.alloc([tag_id_a, tag_id_b]),
+        });
+        let tag_ids_eq_stmt = |next| Stmt::Let(tag_ids_eq, tag_ids_expr, LAYOUT_BOOL, next);
 
-        let if_equal_ids_stmt = |next| Stmt::Switch {
-            cond_symbol: tag_ids_eq,
-            cond_layout: LAYOUT_BOOL,
-            branches: self
-                .arena
-                .alloc([(0, BranchInfo::None, Stmt::Ret(Symbol::BOOL_FALSE))]),
-            default_branch: (BranchInfo::None, next),
-            ret_layout: LAYOUT_BOOL,
-        };
+        let if_equal_ids_branches =
+            self.arena
+                .alloc([(0, BranchInfo::None, Stmt::Ret(Symbol::BOOL_FALSE))]);
 
         //
         // Switch statement by tag ID
@@ -940,8 +869,6 @@ impl<'a> CodeGenHelp<'a> {
             tag_branches.push((id as u64, BranchInfo::None, Stmt::Ret(Symbol::BOOL_TRUE)))
         }
 
-        let recursive_ptr_layout = Some(Layout::Union(union_layout));
-
         let mut tag_id: u64 = 0;
         for field_layouts in tag_layouts.iter().take(tag_layouts.len() - 1) {
             if let Some(null_id) = nullable_id {
@@ -950,11 +877,8 @@ impl<'a> CodeGenHelp<'a> {
                 }
             }
 
-            tag_branches.push((
-                tag_id,
-                BranchInfo::None,
-                self.eq_fields(ident_ids, tag_id, field_layouts, recursive_ptr_layout),
-            ));
+            let tag_stmt = self.eq_fields(ident_ids, ctx, tag_id, field_layouts);
+            tag_branches.push((tag_id, BranchInfo::None, tag_stmt));
 
             tag_id += 1;
         }
@@ -967,11 +891,19 @@ impl<'a> CodeGenHelp<'a> {
                 BranchInfo::None,
                 self.arena.alloc(self.eq_fields(
                     ident_ids,
+                    ctx,
                     tag_id,
                     tag_layouts.last().unwrap(),
-                    recursive_ptr_layout,
                 )),
             ),
+            ret_layout: LAYOUT_BOOL,
+        };
+
+        let if_equal_ids_stmt = Stmt::Switch {
+            cond_symbol: tag_ids_eq,
+            cond_layout: LAYOUT_BOOL,
+            branches: if_equal_ids_branches,
+            default_branch: (BranchInfo::None, self.arena.alloc(tag_switch_stmt)),
             ret_layout: LAYOUT_BOOL,
         };
 
@@ -984,10 +916,7 @@ impl<'a> CodeGenHelp<'a> {
                 //
                 tag_ids_eq_stmt(self.arena.alloc(
                     //
-                    if_equal_ids_stmt(self.arena.alloc(
-                        //
-                        tag_switch_stmt,
-                    )),
+                    if_equal_ids_stmt,
                 )),
             )),
         ))
@@ -999,9 +928,15 @@ impl<'a> CodeGenHelp<'a> {
     /// To achieve this we use `PtrCast` to cast the element pointer to a "Box" layout.
     /// Then we can increment the Box pointer in a loop, dereferencing it each time.
     /// (An alternative approach would be to create a new lowlevel like ListPeekUnsafe.)
-    fn eq_list(&self, ident_ids: &mut IdentIds, elem_layout: &Layout<'a>) -> Stmt<'a> {
+    fn eq_list(
+        &mut self,
+        ident_ids: &mut IdentIds,
+        ctx: &mut Context<'a>,
+        elem_layout: &Layout<'a>,
+    ) -> Stmt<'a> {
         use LowLevel::*;
         let layout_isize = self.layout_isize;
+        let arena = self.arena;
 
         // A "Box" layout (heap pointer to a single list element)
         let box_union_layout = UnionLayout::NonNullableUnwrapped(self.arena.alloc([*elem_layout]));
@@ -1011,11 +946,12 @@ impl<'a> CodeGenHelp<'a> {
 
         let len_1 = self.create_symbol(ident_ids, "len_1");
         let len_2 = self.create_symbol(ident_ids, "len_2");
-        let len_1_stmt = |next| self.let_lowlevel(layout_isize, len_1, ListLen, &[ARG_1], next);
-        let len_2_stmt = |next| self.let_lowlevel(layout_isize, len_2, ListLen, &[ARG_2], next);
+        let len_1_stmt = |next| let_lowlevel(arena, layout_isize, len_1, ListLen, &[ARG_1], next);
+        let len_2_stmt = |next| let_lowlevel(arena, layout_isize, len_2, ListLen, &[ARG_2], next);
 
         let eq_len = self.create_symbol(ident_ids, "eq_len");
-        let eq_len_stmt = |next| self.let_lowlevel(LAYOUT_BOOL, eq_len, Eq, &[len_1, len_2], next);
+        let eq_len_stmt =
+            |next| let_lowlevel(arena, LAYOUT_BOOL, eq_len, Eq, &[len_1, len_2], next);
 
         // if lengths are equal...
 
@@ -1038,10 +974,26 @@ impl<'a> CodeGenHelp<'a> {
         // Cast to integers
         let start_addr_1 = self.create_symbol(ident_ids, "start_addr_1");
         let start_addr_2 = self.create_symbol(ident_ids, "start_addr_2");
-        let start_addr_1_stmt =
-            |next| self.let_lowlevel(layout_isize, start_addr_1, PtrCast, &[elements_1], next);
-        let start_addr_2_stmt =
-            |next| self.let_lowlevel(layout_isize, start_addr_2, PtrCast, &[elements_2], next);
+        let start_addr_1_stmt = |next| {
+            let_lowlevel(
+                arena,
+                layout_isize,
+                start_addr_1,
+                PtrCast,
+                &[elements_1],
+                next,
+            )
+        };
+        let start_addr_2_stmt = |next| {
+            let_lowlevel(
+                arena,
+                layout_isize,
+                start_addr_2,
+                PtrCast,
+                &[elements_2],
+                next,
+            )
+        };
 
         //
         // Loop initialisation
@@ -1055,13 +1007,22 @@ impl<'a> CodeGenHelp<'a> {
 
         // let list_size = len_1 * elem_size
         let list_size = self.create_symbol(ident_ids, "list_size");
-        let list_size_stmt =
-            |next| self.let_lowlevel(layout_isize, list_size, NumMul, &[len_1, elem_size], next);
+        let list_size_stmt = |next| {
+            let_lowlevel(
+                arena,
+                layout_isize,
+                list_size,
+                NumMul,
+                &[len_1, elem_size],
+                next,
+            )
+        };
 
         // let end_addr_1 = start_addr_1 + list_size
         let end_addr_1 = self.create_symbol(ident_ids, "end_addr_1");
         let end_addr_1_stmt = |next| {
-            self.let_lowlevel(
+            let_lowlevel(
+                arena,
                 layout_isize,
                 end_addr_1,
                 NumAdd,
@@ -1097,8 +1058,8 @@ impl<'a> CodeGenHelp<'a> {
         // Cast integers to box pointers
         let box1 = self.create_symbol(ident_ids, "box1");
         let box2 = self.create_symbol(ident_ids, "box2");
-        let box1_stmt = |next| self.let_lowlevel(box_layout, box1, PtrCast, &[addr1], next);
-        let box2_stmt = |next| self.let_lowlevel(box_layout, box2, PtrCast, &[addr2], next);
+        let box1_stmt = |next| let_lowlevel(arena, box_layout, box1, PtrCast, &[addr1], next);
+        let box2_stmt = |next| let_lowlevel(arena, box_layout, box2, PtrCast, &[addr2], next);
 
         // Dereference the box pointers to get the current elements
         let elem1 = self.create_symbol(ident_ids, "elem1");
@@ -1120,16 +1081,33 @@ impl<'a> CodeGenHelp<'a> {
 
         // Compare the two current elements
         let eq_elems = self.create_symbol(ident_ids, "eq_elems");
-        let eq_elems_expr = self.apply_op_to_sub_layout(HelperOp::Eq, elem_layout, &[elem1, elem2]);
+        let eq_elems_expr = self.call_specialized_op(ident_ids, ctx, *elem_layout, &[elem1, elem2]);
+
         let eq_elems_stmt = |next| Stmt::Let(eq_elems, eq_elems_expr, LAYOUT_BOOL, next);
 
         // If current elements are equal, loop back again
         let next_addr_1 = self.create_symbol(ident_ids, "next_addr_1");
         let next_addr_2 = self.create_symbol(ident_ids, "next_addr_2");
-        let next_addr_1_stmt =
-            |next| self.let_lowlevel(layout_isize, next_addr_1, NumAdd, &[addr1, elem_size], next);
-        let next_addr_2_stmt =
-            |next| self.let_lowlevel(layout_isize, next_addr_2, NumAdd, &[addr2, elem_size], next);
+        let next_addr_1_stmt = |next| {
+            let_lowlevel(
+                arena,
+                layout_isize,
+                next_addr_1,
+                NumAdd,
+                &[addr1, elem_size],
+                next,
+            )
+        };
+        let next_addr_2_stmt = |next| {
+            let_lowlevel(
+                arena,
+                layout_isize,
+                next_addr_2,
+                NumAdd,
+                &[addr2, elem_size],
+                next,
+            )
+        };
 
         let jump_back = Stmt::Jump(elems_loop, self.arena.alloc([next_addr_1, next_addr_2]));
 
@@ -1138,8 +1116,16 @@ impl<'a> CodeGenHelp<'a> {
         //
 
         let is_end = self.create_symbol(ident_ids, "is_end");
-        let is_end_stmt =
-            |next| self.let_lowlevel(LAYOUT_BOOL, is_end, NumGte, &[addr1, end_addr_1], next);
+        let is_end_stmt = |next| {
+            let_lowlevel(
+                arena,
+                LAYOUT_BOOL,
+                is_end,
+                NumGte,
+                &[addr1, end_addr_1],
+                next,
+            )
+        };
 
         let if_elems_not_equal = self.if_false_return_false(
             eq_elems,
@@ -1246,28 +1232,28 @@ impl<'a> CodeGenHelp<'a> {
 
         self.if_pointers_equal_return_true(ident_ids, self.arena.alloc(pointers_else))
     }
+}
 
-    fn let_lowlevel(
-        &self,
-        result_layout: Layout<'a>,
-        result: Symbol,
-        op: LowLevel,
-        args: &[Symbol],
-        next: &'a Stmt<'a>,
-    ) -> Stmt<'a> {
-        Stmt::Let(
-            result,
-            Expr::Call(Call {
-                call_type: CallType::LowLevel {
-                    op,
-                    update_mode: UpdateModeId::BACKEND_DUMMY,
-                },
-                arguments: self.arena.alloc_slice_copy(args),
-            }),
-            result_layout,
-            next,
-        )
-    }
+fn let_lowlevel<'a>(
+    arena: &'a Bump,
+    result_layout: Layout<'a>,
+    result: Symbol,
+    op: LowLevel,
+    arguments: &[Symbol],
+    next: &'a Stmt<'a>,
+) -> Stmt<'a> {
+    Stmt::Let(
+        result,
+        Expr::Call(Call {
+            call_type: CallType::LowLevel {
+                op,
+                update_mode: UpdateModeId::BACKEND_DUMMY,
+            },
+            arguments: arena.alloc_slice_copy(arguments),
+        }),
+        result_layout,
+        next,
+    )
 }
 
 /// Helper to derive a debug function name from a layout
