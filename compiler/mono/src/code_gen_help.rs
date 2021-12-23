@@ -972,61 +972,36 @@ impl<'a> CodeGenHelp<'a> {
         let elements_2_stmt = |next| Stmt::Let(elements_2, elements_2_expr, box_layout, next);
 
         // Cast to integers
-        let start_addr_1 = self.create_symbol(ident_ids, "start_addr_1");
-        let start_addr_2 = self.create_symbol(ident_ids, "start_addr_2");
-        let start_addr_1_stmt = |next| {
-            let_lowlevel(
-                arena,
-                layout_isize,
-                start_addr_1,
-                PtrCast,
-                &[elements_1],
-                next,
-            )
-        };
-        let start_addr_2_stmt = |next| {
-            let_lowlevel(
-                arena,
-                layout_isize,
-                start_addr_2,
-                PtrCast,
-                &[elements_2],
-                next,
-            )
-        };
+        let start_1 = self.create_symbol(ident_ids, "start_1");
+        let start_2 = self.create_symbol(ident_ids, "start_2");
+        let start_1_stmt =
+            |next| let_lowlevel(arena, layout_isize, start_1, PtrCast, &[elements_1], next);
+        let start_2_stmt =
+            |next| let_lowlevel(arena, layout_isize, start_2, PtrCast, &[elements_2], next);
 
         //
         // Loop initialisation
         //
 
-        // let elem_size = literal int
-        let elem_size = self.create_symbol(ident_ids, "elem_size");
-        let elem_size_expr =
-            Expr::Literal(Literal::Int(elem_layout.stack_size(self.ptr_size) as i128));
-        let elem_size_stmt = |next| Stmt::Let(elem_size, elem_size_expr, layout_isize, next);
+        // let size = literal int
+        let size = self.create_symbol(ident_ids, "size");
+        let size_expr = Expr::Literal(Literal::Int(elem_layout.stack_size(self.ptr_size) as i128));
+        let size_stmt = |next| Stmt::Let(size, size_expr, layout_isize, next);
 
-        // let list_size = len_1 * elem_size
+        // let list_size = len_1 * size
         let list_size = self.create_symbol(ident_ids, "list_size");
-        let list_size_stmt = |next| {
-            let_lowlevel(
-                arena,
-                layout_isize,
-                list_size,
-                NumMul,
-                &[len_1, elem_size],
-                next,
-            )
-        };
+        let list_size_stmt =
+            |next| let_lowlevel(arena, layout_isize, list_size, NumMul, &[len_1, size], next);
 
-        // let end_addr_1 = start_addr_1 + list_size
-        let end_addr_1 = self.create_symbol(ident_ids, "end_addr_1");
-        let end_addr_1_stmt = |next| {
+        // let end_1 = start_1 + list_size
+        let end_1 = self.create_symbol(ident_ids, "end_1");
+        let end_1_stmt = |next| {
             let_lowlevel(
                 arena,
                 layout_isize,
-                end_addr_1,
+                end_1,
                 NumAdd,
-                &[start_addr_1, list_size],
+                &[start_1, list_size],
                 next,
             )
         };
@@ -1086,55 +1061,31 @@ impl<'a> CodeGenHelp<'a> {
         let eq_elems_stmt = |next| Stmt::Let(eq_elems, eq_elems_expr, LAYOUT_BOOL, next);
 
         // If current elements are equal, loop back again
-        let next_addr_1 = self.create_symbol(ident_ids, "next_addr_1");
-        let next_addr_2 = self.create_symbol(ident_ids, "next_addr_2");
-        let next_addr_1_stmt = |next| {
-            let_lowlevel(
-                arena,
-                layout_isize,
-                next_addr_1,
-                NumAdd,
-                &[addr1, elem_size],
-                next,
-            )
-        };
-        let next_addr_2_stmt = |next| {
-            let_lowlevel(
-                arena,
-                layout_isize,
-                next_addr_2,
-                NumAdd,
-                &[addr2, elem_size],
-                next,
-            )
-        };
+        let next_1 = self.create_symbol(ident_ids, "next_1");
+        let next_2 = self.create_symbol(ident_ids, "next_2");
+        let next_1_stmt =
+            |next| let_lowlevel(arena, layout_isize, next_1, NumAdd, &[addr1, size], next);
+        let next_2_stmt =
+            |next| let_lowlevel(arena, layout_isize, next_2, NumAdd, &[addr2, size], next);
 
-        let jump_back = Stmt::Jump(elems_loop, self.arena.alloc([next_addr_1, next_addr_2]));
+        let jump_back = Stmt::Jump(elems_loop, self.arena.alloc([next_1, next_2]));
 
         //
         // Control flow
         //
 
         let is_end = self.create_symbol(ident_ids, "is_end");
-        let is_end_stmt = |next| {
-            let_lowlevel(
-                arena,
-                LAYOUT_BOOL,
-                is_end,
-                NumGte,
-                &[addr1, end_addr_1],
-                next,
-            )
-        };
+        let is_end_stmt =
+            |next| let_lowlevel(arena, LAYOUT_BOOL, is_end, NumGte, &[addr1, end_1], next);
 
         let if_elems_not_equal = self.if_false_return_false(
             eq_elems,
             // else
             self.arena.alloc(
                 //
-                next_addr_1_stmt(self.arena.alloc(
+                next_1_stmt(self.arena.alloc(
                     //
-                    next_addr_2_stmt(self.arena.alloc(
+                    next_2_stmt(self.arena.alloc(
                         //
                         jump_back,
                     )),
@@ -1183,10 +1134,9 @@ impl<'a> CodeGenHelp<'a> {
                     self.arena.alloc(if_end_of_list),
                 ),
             ),
-            remainder: self.arena.alloc(Stmt::Jump(
-                elems_loop,
-                self.arena.alloc([start_addr_1, start_addr_2]),
-            )),
+            remainder: self
+                .arena
+                .alloc(Stmt::Jump(elems_loop, self.arena.alloc([start_1, start_2]))),
         };
 
         let if_different_lengths = self.if_false_return_false(
@@ -1198,15 +1148,15 @@ impl<'a> CodeGenHelp<'a> {
                     //
                     elements_2_stmt(self.arena.alloc(
                         //
-                        start_addr_1_stmt(self.arena.alloc(
+                        start_1_stmt(self.arena.alloc(
                             //
-                            start_addr_2_stmt(self.arena.alloc(
+                            start_2_stmt(self.arena.alloc(
                                 //
-                                elem_size_stmt(self.arena.alloc(
+                                size_stmt(self.arena.alloc(
                                     //
                                     list_size_stmt(self.arena.alloc(
                                         //
-                                        end_addr_1_stmt(self.arena.alloc(
+                                        end_1_stmt(self.arena.alloc(
                                             //
                                             joinpoint_loop,
                                         )),
