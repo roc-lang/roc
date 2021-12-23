@@ -6,17 +6,17 @@ pub fn WithOverflow(comptime T: type) type {
 }
 
 // If allocation fails, this must cxa_throw - it must not return a null pointer!
-extern fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void;
+extern fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*anyopaque;
 
 // This should never be passed a null pointer.
 // If allocation fails, this must cxa_throw - it must not return a null pointer!
-extern fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*c_void;
+extern fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*anyopaque;
 
 // This should never be passed a null pointer.
-extern fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void;
+extern fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void;
 
 // Signals to the host that the program has panicked
-extern fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void;
+extern fn roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void;
 
 comptime {
     const builtin = @import("builtin");
@@ -29,24 +29,24 @@ comptime {
     }
 }
 
-fn testing_roc_alloc(size: usize, _: u32) callconv(.C) ?*c_void {
-    return @ptrCast(?*c_void, std.testing.allocator.alloc(u8, size) catch unreachable);
+fn testing_roc_alloc(size: usize, _: u32) callconv(.C) ?*anyopaque {
+    return @ptrCast(?*anyopaque, std.testing.allocator.alloc(u8, size) catch unreachable);
 }
 
-fn testing_roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, _: u32) callconv(.C) ?*c_void {
+fn testing_roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, _: u32) callconv(.C) ?*anyopaque {
     const ptr = @ptrCast([*]u8, @alignCast(16, c_ptr));
     const slice = ptr[0..old_size];
 
-    return @ptrCast(?*c_void, std.testing.allocator.realloc(slice, new_size) catch unreachable);
+    return @ptrCast(?*anyopaque, std.testing.allocator.realloc(slice, new_size) catch unreachable);
 }
 
-fn testing_roc_dealloc(c_ptr: *c_void, _: u32) callconv(.C) void {
+fn testing_roc_dealloc(c_ptr: *anyopaque, _: u32) callconv(.C) void {
     const ptr = @ptrCast([*]u8, @alignCast(16, c_ptr));
 
     std.testing.allocator.destroy(ptr);
 }
 
-fn testing_roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
+fn testing_roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void {
     _ = c_ptr;
     _ = tag_id;
 
@@ -66,13 +66,13 @@ pub fn dealloc(c_ptr: [*]u8, alignment: u32) void {
 }
 
 // must export this explicitly because right now it is not used from zig code
-pub fn panic(c_ptr: *c_void, alignment: u32) callconv(.C) void {
+pub fn panic(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
     return @call(.{ .modifier = always_inline }, roc_panic, .{ c_ptr, alignment });
 }
 
 // indirection because otherwise zig creates an alias to the panic function which our LLVM code
 // does not know how to deal with
-pub fn test_panic(c_ptr: *c_void, alignment: u32) callconv(.C) void {
+pub fn test_panic(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
     _ = c_ptr;
     _ = alignment;
     // const cstr = @ptrCast([*:0]u8, c_ptr);

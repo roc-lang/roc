@@ -933,7 +933,6 @@ pub fn list_find_unsafe<'a, 'ctx, 'env>(
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
             roc_function_call.data_is_owned.into(),
-            env.alignment_intvalue(element_layout),
             layout_width(env, element_layout),
             inc_element_fn.as_global_value().as_pointer_value().into(),
             dec_element_fn.as_global_value().as_pointer_value().into(),

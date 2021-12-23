@@ -218,7 +218,7 @@ pub const RocStr = extern struct {
     }
 
     pub fn isEmpty(self: RocStr) bool {
-        comptime const empty_len = RocStr.empty().str_len;
+        const empty_len = comptime RocStr.empty().str_len;
         return self.str_len == empty_len;
     }
 
@@ -2037,7 +2037,7 @@ test "ReverseUtf8View: empty" {
     const original_bytes = "";
 
     var iter = ReverseUtf8View.initUnchecked(original_bytes).iterator();
-    while (iter.nextCodepoint()) |codepoint| {
+    while (iter.nextCodepoint()) |_| {
         try expect(false);
     }
 }

@@ -24,7 +24,7 @@ pub fn exportParseInt(comptime T: type, comptime name: []const u8) void {
             const radix = 0;
             if (std.fmt.parseInt(T, buf.asSlice(), radix)) |success| {
                 return .{ .errorcode = 0, .value = success };
-            } else |err| {
+            } else |_| {
                 return .{ .errorcode = 1, .value = 0 };
             }
         }
@@ -37,7 +37,7 @@ pub fn exportParseFloat(comptime T: type, comptime name: []const u8) void {
         fn func(buf: RocStr) callconv(.C) NumParseResult(T) {
             if (std.fmt.parseFloat(T, buf.asSlice())) |success| {
                 return .{ .errorcode = 0, .value = success };
-            } else |err| {
+            } else |_| {
                 return .{ .errorcode = 1, .value = 0 };
             }
         }

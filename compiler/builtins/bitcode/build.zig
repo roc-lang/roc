@@ -55,8 +55,8 @@ fn generateLlvmIrFile(
     const obj = b.addObject(object_name, main_path);
     obj.setBuildMode(mode);
     obj.strip = true;
-    obj.emit_llvm_ir = true;
-    obj.emit_bin = false;
+    obj.emit_llvm_ir = .emit;
+    obj.emit_bin = .no_emit;
     obj.target = target;
 
     const ir = b.step(step_name, "Build LLVM ir");

@@ -1347,7 +1347,6 @@ pub fn listFindUnsafe(
     data: Opaque,
     inc_n_data: IncN,
     data_is_owned: bool,
-    alignment: u32,
     element_width: usize,
     inc: Inc,
     dec: Dec,
