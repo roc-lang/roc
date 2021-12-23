@@ -764,7 +764,8 @@ fn type_to_variable<'a>(
             let temp_ext_var = type_to_variable(subs, rank, pools, arena, ext);
 
             let (it, new_ext_var) =
-                gather_fields_unsorted_iter(subs, RecordFields::empty(), temp_ext_var);
+                gather_fields_unsorted_iter(subs, RecordFields::empty(), temp_ext_var)
+                    .expect("Something ended up weird in this record type");
 
             let it = it
                 .into_iter()

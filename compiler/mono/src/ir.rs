@@ -3325,8 +3325,15 @@ pub fn with_hole<'a>(
             mut fields,
             ..
         } => {
-            let sorted_fields =
-                crate::layout::sort_record_fields(env.arena, record_var, env.subs, env.ptr_bytes);
+            let sorted_fields = match crate::layout::sort_record_fields(
+                env.arena,
+                record_var,
+                env.subs,
+                env.ptr_bytes,
+            ) {
+                Ok(fields) => fields,
+                Err(_) => return Stmt::RuntimeError("Can't create record with improper layout"),
+            };
 
             let mut field_symbols = Vec::with_capacity_in(fields.len(), env.arena);
             let mut can_fields = Vec::with_capacity_in(fields.len(), env.arena);
@@ -3678,8 +3685,15 @@ pub fn with_hole<'a>(
             loc_expr,
             ..
         } => {
-            let sorted_fields =
-                crate::layout::sort_record_fields(env.arena, record_var, env.subs, env.ptr_bytes);
+            let sorted_fields = match crate::layout::sort_record_fields(
+                env.arena,
+                record_var,
+                env.subs,
+                env.ptr_bytes,
+            ) {
+                Ok(fields) => fields,
+                Err(_) => return Stmt::RuntimeError("Can't access record with improper layout"),
+            };
 
             let mut index = None;
             let mut field_layouts = Vec::with_capacity_in(sorted_fields.len(), env.arena);
@@ -3821,8 +3835,15 @@ pub fn with_hole<'a>(
             // This has the benefit that we don't need to do anything special for reference
             // counting
 
-            let sorted_fields =
-                crate::layout::sort_record_fields(env.arena, record_var, env.subs, env.ptr_bytes);
+            let sorted_fields = match crate::layout::sort_record_fields(
+                env.arena,
+                record_var,
+                env.subs,
+                env.ptr_bytes,
+            ) {
+                Ok(fields) => fields,
+                Err(_) => return Stmt::RuntimeError("Can't update record with improper layout"),
+            };
 
             let mut field_layouts = Vec::with_capacity_in(sorted_fields.len(), env.arena);
 
@@ -4391,11 +4412,7 @@ pub fn with_hole<'a>(
                 }
             }
         }
-        RuntimeError(e) => {
-            eprintln!("emitted runtime error {:?}", &e);
-
-            Stmt::RuntimeError(env.arena.alloc(format!("{:?}", e)))
-        }
+        RuntimeError(e) => Stmt::RuntimeError(env.arena.alloc(format!("{:?}", e))),
     }
 }
 
@@ -7383,7 +7400,8 @@ fn from_can_pattern_help<'a>(
             use crate::layout::UnionVariant::*;
 
             let res_variant =
-                crate::layout::union_sorted_tags(env.arena, *whole_var, env.subs, env.ptr_bytes);
+                crate::layout::union_sorted_tags(env.arena, *whole_var, env.subs, env.ptr_bytes)
+                    .map_err(Into::into);
 
             let variant = match res_variant {
                 Ok(cached) => cached,
@@ -7803,7 +7821,8 @@ fn from_can_pattern_help<'a>(
         } => {
             // sorted fields based on the type
             let sorted_fields =
-                crate::layout::sort_record_fields(env.arena, *whole_var, env.subs, env.ptr_bytes);
+                crate::layout::sort_record_fields(env.arena, *whole_var, env.subs, env.ptr_bytes)
+                    .map_err(RuntimeError::from)?;
 
             // sorted fields based on the destruct
             let mut mono_destructs = Vec::with_capacity_in(destructs.len(), env.arena);

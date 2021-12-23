@@ -5,6 +5,7 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{default_hasher, MutMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
+use roc_problem::can::RuntimeError;
 use roc_types::subs::{
     Content, FlatType, RecordFields, Subs, UnionTags, Variable, VariableSubsSlice,
 };
@@ -29,6 +30,15 @@ const GENERATE_NULLABLE: bool = true;
 pub enum LayoutProblem {
     UnresolvedTypeVar(Variable),
     Erroneous,
+}
+
+impl From<LayoutProblem> for RuntimeError {
+    fn from(lp: LayoutProblem) -> Self {
+        match lp {
+            LayoutProblem::UnresolvedTypeVar(_) => RuntimeError::UnresolvedTypeVar,
+            LayoutProblem::Erroneous => RuntimeError::ErroneousType,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1495,23 +1505,17 @@ fn layout_from_flat_type<'a>(
         Record(fields, ext_var) => {
             // extract any values from the ext_var
 
-            let pairs_it = fields
-                .unsorted_iterator(subs, ext_var)
-                .filter_map(|(label, field)| {
-                    // drop optional fields
-                    let var = match field {
-                        RecordField::Optional(_) => return None,
-                        RecordField::Required(var) => var,
-                        RecordField::Demanded(var) => var,
-                    };
+            let mut pairs = Vec::with_capacity_in(fields.len(), arena);
+            for (label, field) in fields.unsorted_iterator(subs, ext_var) {
+                // drop optional fields
+                let var = match field {
+                    RecordField::Optional(_) => continue,
+                    RecordField::Required(var) => var,
+                    RecordField::Demanded(var) => var,
+                };
 
-                    Some((
-                        label,
-                        Layout::from_var(env, var).expect("invalid layout from var"),
-                    ))
-                });
-
-            let mut pairs = Vec::from_iter_in(pairs_it, arena);
+                pairs.push((label, Layout::from_var(env, var)?));
+            }
 
             pairs.sort_by(|(label1, layout1), (label2, layout2)| {
                 let size1 = layout1.alignment_bytes(ptr_bytes);
@@ -1630,12 +1634,14 @@ fn layout_from_flat_type<'a>(
     }
 }
 
+pub type SortedField<'a> = (Lowercase, Variable, Result<Layout<'a>, Layout<'a>>);
+
 pub fn sort_record_fields<'a>(
     arena: &'a Bump,
     var: Variable,
     subs: &Subs,
     ptr_bytes: u32,
-) -> Vec<'a, (Lowercase, Variable, Result<Layout<'a>, Layout<'a>>)> {
+) -> Result<Vec<'a, SortedField<'a>>, LayoutProblem> {
     let mut env = Env {
         arena,
         subs,
@@ -1643,7 +1649,10 @@ pub fn sort_record_fields<'a>(
         ptr_bytes,
     };
 
-    let (it, _) = gather_fields_unsorted_iter(subs, RecordFields::empty(), var);
+    let (it, _) = match gather_fields_unsorted_iter(subs, RecordFields::empty(), var) {
+        Ok(it) => it,
+        Err(_) => return Err(LayoutProblem::Erroneous),
+    };
 
     let it = it
         .into_iter()
@@ -1655,26 +1664,23 @@ pub fn sort_record_fields<'a>(
 fn sort_record_fields_help<'a>(
     env: &mut Env<'a, '_>,
     fields_map: impl Iterator<Item = (Lowercase, RecordField<Variable>)>,
-) -> Vec<'a, (Lowercase, Variable, Result<Layout<'a>, Layout<'a>>)> {
+) -> Result<Vec<'a, SortedField<'a>>, LayoutProblem> {
     let ptr_bytes = env.ptr_bytes;
 
     // Sort the fields by label
     let mut sorted_fields = Vec::with_capacity_in(fields_map.size_hint().0, env.arena);
 
     for (label, field) in fields_map {
-        let var = match field {
-            RecordField::Demanded(v) => v,
-            RecordField::Required(v) => v,
+        match field {
+            RecordField::Demanded(v) | RecordField::Required(v) => {
+                let layout = Layout::from_var(env, v)?;
+                sorted_fields.push((label, v, Ok(layout)));
+            }
             RecordField::Optional(v) => {
-                let layout = Layout::from_var(env, v).expect("invalid layout from var");
+                let layout = Layout::from_var(env, v)?;
                 sorted_fields.push((label, v, Err(layout)));
-                continue;
             }
         };
-
-        let layout = Layout::from_var(env, var).expect("invalid layout from var");
-
-        sorted_fields.push((label, var, Ok(layout)));
     }
 
     sorted_fields.sort_by(
@@ -1690,7 +1696,7 @@ fn sort_record_fields_help<'a>(
         },
     );
 
-    sorted_fields
+    Ok(sorted_fields)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -2428,7 +2434,10 @@ fn layout_from_tag_union<'a>(
 #[cfg(debug_assertions)]
 pub fn ext_var_is_empty_record(subs: &Subs, ext_var: Variable) -> bool {
     // the ext_var is empty
-    let fields = roc_types::types::gather_fields(subs, RecordFields::empty(), ext_var);
+    let fields = match roc_types::types::gather_fields(subs, RecordFields::empty(), ext_var) {
+        Ok(fields) => fields,
+        Err(_) => return false,
+    };
 
     fields.fields.is_empty()
 }
