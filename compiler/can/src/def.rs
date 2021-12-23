@@ -192,8 +192,7 @@ pub fn canonicalize_defs<'a>(
                     output.references.referenced_aliases.insert(symbol);
                 }
 
-                let mut can_vars: Vec<Loc<(Lowercase, Variable)>> =
-                    Vec::with_capacity(vars.len());
+                let mut can_vars: Vec<Loc<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
                 let mut is_phantom = false;
 
                 for loc_lowercase in vars {

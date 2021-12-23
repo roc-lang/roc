@@ -162,7 +162,7 @@ impl Position {
     pub fn bump_column(self, count: u16) -> Self {
         Self {
             line: self.line,
-            column: self.column + count
+            column: self.column + count,
         }
     }
 }
@@ -174,13 +174,7 @@ pub struct Loc<T> {
 }
 
 impl<T> Loc<T> {
-    pub fn new(
-        start_line: u32,
-        end_line: u32,
-        start_col: u16,
-        end_col: u16,
-        value: T,
-    ) -> Loc<T> {
+    pub fn new(start_line: u32, end_line: u32, start_col: u16, end_col: u16, value: T) -> Loc<T> {
         let region = Region {
             start_line,
             end_line,

@@ -24,9 +24,7 @@ pub enum PatternType {
     WhenBranch,
 }
 
-pub fn loc_closure_param<'a>(
-    min_indent: u16,
-) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
+pub fn loc_closure_param<'a>(min_indent: u16) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     move |arena, state| parse_closure_param(arena, state, min_indent)
 }
 
@@ -52,9 +50,7 @@ fn parse_closure_param<'a>(
     .parse(arena, state)
 }
 
-pub fn loc_pattern_help<'a>(
-    min_indent: u16,
-) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
+pub fn loc_pattern_help<'a>(min_indent: u16) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     one_of!(
         specialize(EPattern::PInParens, loc_pattern_in_parens_help(min_indent)),
         loc!(underscore_pattern_help()),

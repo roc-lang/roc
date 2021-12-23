@@ -150,11 +150,7 @@ pub fn parse_ident<'a>(arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Ide
                     if let Some(first) = parts.first() {
                         for keyword in crate::keyword::KEYWORDS.iter() {
                             if first == keyword {
-                                return Err((
-                                    NoProgress,
-                                    EExpr::Start(initial.pos),
-                                    initial,
-                                ));
+                                return Err((NoProgress, EExpr::Start(initial.pos), initial));
                             }
                         }
                     }
@@ -163,9 +159,7 @@ pub fn parse_ident<'a>(arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Ide
 
             Ok((progress, ident, state))
         }
-        Err((NoProgress, _, state)) => {
-            Err((NoProgress, EExpr::Start(state.pos), state))
-        }
+        Err((NoProgress, _, state)) => Err((NoProgress, EExpr::Start(state.pos), state)),
         Err((MadeProgress, fail, state)) => match fail {
             BadIdent::Start(pos) => Err((NoProgress, EExpr::Start(pos), state)),
             BadIdent::Space(e, pos) => Err((NoProgress, EExpr::Space(e, pos), state)),
@@ -282,7 +276,10 @@ fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
         }
         Err(_) => {
             // we've already made progress with the initial `.`
-            Err(BadIdent::StrayDot(Position { line: pos.line, column: pos.column + 1 }))
+            Err(BadIdent::StrayDot(Position {
+                line: pos.line,
+                column: pos.column + 1,
+            }))
         }
     }
 }
@@ -304,7 +301,10 @@ fn chomp_private_tag(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
                 Ok(value)
             }
         }
-        Err(_) => Err(BadIdent::BadPrivateTag(Position { line: pos.line, column: pos.column + 1})),
+        Err(_) => Err(BadIdent::BadPrivateTag(Position {
+            line: pos.line,
+            column: pos.column + 1,
+        })),
     }
 }
 

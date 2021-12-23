@@ -9,7 +9,7 @@ use crate::parser::{
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_region::all::{Loc, Region, Position};
+use roc_region::all::{Loc, Position, Region};
 
 pub fn located_help<'a>(
     min_indent: u16,
@@ -107,18 +107,14 @@ fn term<'a>(min_indent: u16) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'
 
 /// The `*` type variable, e.g. in (List *) Wildcard,
 fn loc_wildcard<'a>() -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
-    map!(loc!(word1(b'*', EType::TWildcard)), |loc_val: Loc<
-        (),
-    >| {
+    map!(loc!(word1(b'*', EType::TWildcard)), |loc_val: Loc<()>| {
         loc_val.map(|_| TypeAnnotation::Wildcard)
     })
 }
 
 /// The `_` indicating an inferred type, e.g. in (List _)
 fn loc_inferred<'a>() -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
-    map!(loc!(word1(b'_', EType::TInferred)), |loc_val: Loc<
-        (),
-    >| {
+    map!(loc!(word1(b'_', EType::TInferred)), |loc_val: Loc<()>| {
         loc_val.map(|_| TypeAnnotation::Inferred)
     })
 }
@@ -461,9 +457,7 @@ fn parse_concrete_type<'a>(
 
             Ok((MadeProgress, answer, state))
         }
-        Err((NoProgress, _, state)) => {
-            Err((NoProgress, ETypeApply::End(state.pos), state))
-        }
+        Err((NoProgress, _, state)) => Err((NoProgress, ETypeApply::End(state.pos), state)),
         Err((MadeProgress, _, mut state)) => {
             // we made some progress, but ultimately failed.
             // that means a malformed type name
@@ -491,10 +485,6 @@ fn parse_type_variable<'a>(
 
             Ok((MadeProgress, answer, state))
         }
-        Err((progress, _, state)) => Err((
-            progress,
-            EType::TBadTypeVariable(state.pos),
-            state,
-        )),
+        Err((progress, _, state)) => Err((progress, EType::TBadTypeVariable(state.pos), state)),
     }
 }

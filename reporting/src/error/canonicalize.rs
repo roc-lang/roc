@@ -2,7 +2,7 @@ use roc_collections::all::MutSet;
 use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{BadPattern, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
-use roc_region::all::{Loc, Region, Position};
+use roc_region::all::{Loc, Position, Region};
 use std::path::PathBuf;
 
 use crate::error::r#type::suggest;
@@ -552,8 +552,7 @@ fn to_bad_ident_expr_report<'b>(
         }
 
         Underscore(pos) => {
-            let region =
-                Region::new(surroundings.start(), pos);
+            let region = Region::new(surroundings.start(), pos);
             alloc.stack(vec![
                 alloc.reflow("Underscores are not allowed in identifier names:"),
                 alloc.region_with_subregion(surroundings, region),
@@ -592,10 +591,8 @@ fn to_bad_ident_expr_report<'b>(
                     ])
                 }
                 Other(Some(c)) if c.is_lowercase() => {
-                    let region = Region::new(
-                        surroundings.start().bump_column(1),
-                        pos.bump_column(1),
-                    );
+                    let region =
+                        Region::new(surroundings.start().bump_column(1), pos.bump_column(1));
                     alloc.stack(vec![
                         alloc.reflow("I am trying to parse a private tag here:"),
                         alloc.region_with_subregion(surroundings, region),
@@ -690,7 +687,10 @@ fn to_bad_ident_pattern_report<'b>(
         }
 
         Underscore(pos) => {
-            let region = Region::from_pos(Position { line: pos.line, column: pos.column - 1 });
+            let region = Region::from_pos(Position {
+                line: pos.line,
+                column: pos.column - 1,
+            });
 
             alloc.stack(vec![
                 alloc.reflow("I am trying to parse an identifier here:"),

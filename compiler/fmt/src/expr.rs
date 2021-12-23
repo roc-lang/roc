@@ -516,7 +516,9 @@ fn fmt_when<'a, 'buf>(
         let (first_pattern, rest) = patterns.split_first().unwrap();
         let is_multiline = match rest.last() {
             None => false,
-            Some(last_pattern) => first_pattern.region.start().line != last_pattern.region.end().line,
+            Some(last_pattern) => {
+                first_pattern.region.start().line != last_pattern.region.end().line
+            }
         };
 
         fmt_pattern(

@@ -316,11 +316,7 @@ pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, EPackageName> {
     // They must be ASCII.
 
     |_, mut state: State<'a>| match chomp_package_part(state.bytes()) {
-        Err(progress) => Err((
-            progress,
-            EPackageName::Account(state.pos),
-            state,
-        )),
+        Err(progress) => Err((progress, EPackageName::Account(state.pos), state)),
         Ok(account) => {
             let mut chomped = account.len();
             if let Ok(('/', width)) = char::from_utf8_slice_start(&state.bytes()[chomped..]) {

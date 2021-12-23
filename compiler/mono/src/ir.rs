@@ -1788,14 +1788,7 @@ fn patterns_to_when<'a>(
     patterns: std::vec::Vec<(Variable, Loc<roc_can::pattern::Pattern>)>,
     body_var: Variable,
     body: Loc<roc_can::expr::Expr>,
-) -> Result<
-    (
-        Vec<'a, Variable>,
-        Vec<'a, Symbol>,
-        Loc<roc_can::expr::Expr>,
-    ),
-    Loc<RuntimeError>,
-> {
+) -> Result<(Vec<'a, Variable>, Vec<'a, Symbol>, Loc<roc_can::expr::Expr>), Loc<RuntimeError>> {
     let mut arg_vars = Vec::with_capacity_in(patterns.len(), env.arena);
     let mut symbols = Vec::with_capacity_in(patterns.len(), env.arena);
     let mut body = Ok(body);

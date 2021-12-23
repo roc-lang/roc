@@ -101,11 +101,7 @@ pub enum PendingDef<'a> {
         &'a Loc<ast::TypeAnnotation<'a>>,
     ),
     /// A body with no type annotation
-    Body(
-        &'a Loc<ast::Pattern<'a>>,
-        PatternId,
-        &'a Loc<ast::Expr<'a>>,
-    ),
+    Body(&'a Loc<ast::Pattern<'a>>, PatternId, &'a Loc<ast::Expr<'a>>),
     /// A body with a type annotation
     TypedBody(
         &'a Loc<ast::Pattern<'a>>,

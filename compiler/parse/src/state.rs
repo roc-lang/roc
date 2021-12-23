@@ -61,9 +61,7 @@ impl<'a> State<'a> {
     where
         TE: Fn(BadInputError, Position) -> E,
     {
-        self.advance_without_indenting_ee(quantity, |p| {
-            to_error(BadInputError::LineTooLong, p)
-        })
+        self.advance_without_indenting_ee(quantity, |p| to_error(BadInputError::LineTooLong, p))
     }
 
     pub fn advance_without_indenting_ee<TE, E>(
@@ -95,7 +93,8 @@ impl<'a> State<'a> {
     /// useful when parsing something "manually" (using input.chars())
     /// and thus wanting a Region while not having access to loc().
     pub fn len_region(&self, length: u16) -> Region {
-        Region::new(self.pos,
+        Region::new(
+            self.pos,
             Position {
                 line: self.pos.line,
                 column: self
@@ -103,7 +102,7 @@ impl<'a> State<'a> {
                     .column
                     .checked_add(length)
                     .unwrap_or_else(|| panic!("len_region overflowed")),
-            }
+            },
         )
     }
 
@@ -127,7 +126,11 @@ impl<'a> fmt::Debug for State<'a> {
             Err(_) => write!(f, "\n\tbytes: [invalid utf8] {:?}", self.bytes)?,
         }
 
-        write!(f, "\n\t(line, col): ({}, {}),", self.pos.line, self.pos.column)?;
+        write!(
+            f,
+            "\n\t(line, col): ({}, {}),",
+            self.pos.line, self.pos.column
+        )?;
         write!(f, "\n\tindent_column: {}", self.indent_column)?;
         write!(f, "\n}}")
     }

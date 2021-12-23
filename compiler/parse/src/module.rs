@@ -22,11 +22,7 @@ fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
         if state.has_reached_end() {
             Ok((NoProgress, (), state))
         } else {
-            Err((
-                NoProgress,
-                SyntaxError::NotEndOfFile(state.pos),
-                state,
-            ))
+            Err((NoProgress, SyntaxError::NotEndOfFile(state.pos), state))
         }
     }
 }
@@ -36,10 +32,7 @@ pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Loc<Def<'a>>>, SyntaxError<'
     // force that we parse until the end of the input
     let min_indent = 0;
     skip_second!(
-        specialize(
-            |e, _| SyntaxError::Expr(e),
-            crate::expr::defs(min_indent),
-        ),
+        specialize(|e, _| SyntaxError::Expr(e), crate::expr::defs(min_indent),),
         end_of_file()
     )
 }
@@ -471,8 +464,7 @@ fn requires_rigid<'a>() -> impl Parser<'a, Spaced<'a, PlatformRigid<'a>>, ()> {
 }
 
 #[inline(always)]
-fn requires_typed_ident<'a>() -> impl Parser<'a, Loc<Spaced<'a, TypedIdent<'a>>>, ERequires<'a>>
-{
+fn requires_typed_ident<'a>() -> impl Parser<'a, Loc<Spaced<'a, TypedIdent<'a>>>, ERequires<'a>> {
     skip_first!(
         word1(b'{', ERequires::ListStart),
         skip_second!(

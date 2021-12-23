@@ -456,18 +456,24 @@ impl<'a> RocDocAllocator<'a> {
 
             let highlight = if overlapping {
                 self.text(
-                    ERROR_UNDERLINE.repeat((sub_region2.end().column - sub_region1.start().column) as usize),
+                    ERROR_UNDERLINE
+                        .repeat((sub_region2.end().column - sub_region1.start().column) as usize),
                 )
             } else {
-                let highlight1 =
-                    ERROR_UNDERLINE.repeat((sub_region1.end().column - sub_region1.start().column) as usize);
+                let highlight1 = ERROR_UNDERLINE
+                    .repeat((sub_region1.end().column - sub_region1.start().column) as usize);
                 let highlight2 = if sub_region1 == sub_region2 {
                     "".repeat(0)
                 } else {
-                    ERROR_UNDERLINE.repeat((sub_region2.end().column - sub_region2.start().column) as usize)
+                    ERROR_UNDERLINE
+                        .repeat((sub_region2.end().column - sub_region2.start().column) as usize)
                 };
-                let in_between = " "
-                    .repeat((sub_region2.start().column.saturating_sub(sub_region1.end().column)) as usize);
+                let in_between = " ".repeat(
+                    (sub_region2
+                        .start()
+                        .column
+                        .saturating_sub(sub_region1.end().column)) as usize,
+                );
 
                 self.text(highlight1)
                     .append(self.text(in_between))
@@ -560,8 +566,8 @@ impl<'a> RocDocAllocator<'a> {
         }
 
         if error_highlight_line {
-            let highlight_text =
-                ERROR_UNDERLINE.repeat((sub_region.end().column - sub_region.start().column) as usize);
+            let highlight_text = ERROR_UNDERLINE
+                .repeat((sub_region.end().column - sub_region.start().column) as usize);
 
             let highlight_line = self
                 .line()
@@ -594,7 +600,8 @@ impl<'a> RocDocAllocator<'a> {
         for i in region.start().line..=region.end().line {
             let line = if i == region.start().line {
                 if i == region.end().line {
-                    &self.src_lines[i as usize][region.start().column as usize..region.end().column as usize]
+                    &self.src_lines[i as usize]
+                        [region.start().column as usize..region.end().column as usize]
                 } else {
                     &self.src_lines[i as usize][region.start().column as usize..]
                 }

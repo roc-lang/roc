@@ -102,9 +102,8 @@ fn chomp_number_dec<'a>(
     let string =
         unsafe { std::str::from_utf8_unchecked(&state.bytes()[0..chomped + is_negative as usize]) };
 
-    let new = state.advance_without_indenting_ee(chomped + is_negative as usize, |_| {
-        ENumber::LineTooLong
-    })?;
+    let new = state
+        .advance_without_indenting_ee(chomped + is_negative as usize, |_| ENumber::LineTooLong)?;
 
     Ok((
         Progress::MadeProgress,

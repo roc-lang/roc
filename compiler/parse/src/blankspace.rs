@@ -193,11 +193,7 @@ where
     move |arena, mut state: State<'a>| {
         let comments_and_newlines = Vec::new_in(arena);
 
-        match eat_spaces(
-            state.bytes(),
-            state.pos,
-            comments_and_newlines,
-        ) {
+        match eat_spaces(state.bytes(), state.pos, comments_and_newlines) {
             HasTab(pos) => {
                 // there was a tab character
                 let mut state = state;
@@ -230,11 +226,7 @@ where
 
                         Ok((MadeProgress, comments_and_newlines.into_bump_slice(), state))
                     } else {
-                        Err((
-                            MadeProgress,
-                            indent_problem(state.pos),
-                            state,
-                        ))
+                        Err((MadeProgress, indent_problem(state.pos), state))
                     }
                 } else {
                     state.pos.column = pos.column;

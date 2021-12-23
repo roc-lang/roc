@@ -1,7 +1,7 @@
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_region::all::{Loc, Region, Position};
+use roc_region::all::{Loc, Position, Region};
 use Progress::*;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -221,10 +221,7 @@ pub enum BadInputError {
     BadUtf8,
 }
 
-pub fn bad_input_to_syntax_error<'a>(
-    bad_input: BadInputError,
-    pos: Position,
-) -> SyntaxError<'a> {
+pub fn bad_input_to_syntax_error<'a>(bad_input: BadInputError, pos: Position) -> SyntaxError<'a> {
     use crate::parser::BadInputError::*;
     match bad_input {
         HasTab => SyntaxError::NotYetImplemented("call error on tabs".to_string()),
@@ -965,11 +962,7 @@ where
                                     return Err((MadeProgress, fail, state));
                                 }
                                 Err((NoProgress, _fail, state)) => {
-                                    return Err((
-                                        NoProgress,
-                                        to_element_error(state.pos),
-                                        state,
-                                    ));
+                                    return Err((NoProgress, to_element_error(state.pos), state));
                                 }
                             }
                         }
@@ -993,11 +986,9 @@ where
             }
 
             Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state)),
-            Err((NoProgress, _fail, state)) => Err((
-                NoProgress,
-                to_element_error(state.pos),
-                state,
-            )),
+            Err((NoProgress, _fail, state)) => {
+                Err((NoProgress, to_element_error(state.pos), state))
+            }
         }
     }
 }
@@ -1458,11 +1449,9 @@ macro_rules! one_or_more {
                         }
                     }
                 }
-                Err((progress, _, new_state)) => Err((
-                    progress,
-                    $to_error(new_state.pos),
-                    new_state,
-                )),
+                Err((progress, _, new_state)) => {
+                    Err((progress, $to_error(new_state.pos), new_state))
+                }
             }
         }
     };

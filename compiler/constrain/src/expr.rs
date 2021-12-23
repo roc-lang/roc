@@ -1127,11 +1127,7 @@ pub fn constrain_decls(home: ModuleId, decls: &[Declaration]) -> Constraint {
     constraint
 }
 
-fn constrain_def_pattern(
-    env: &Env,
-    loc_pattern: &Loc<Pattern>,
-    expr_type: Type,
-) -> PatternState {
+fn constrain_def_pattern(env: &Env, loc_pattern: &Loc<Pattern>, expr_type: Type) -> PatternState {
     let pattern_expected = PExpected::NoExpectation(expr_type);
 
     let mut state = PatternState {
