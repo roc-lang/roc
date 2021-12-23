@@ -367,6 +367,99 @@ fn list_drop_at_shared() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn list_drop_if_empty_list_of_int() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            empty : List I64
+            empty = []
+
+            List.dropIf empty \_ -> True
+            "#
+        ),
+        RocList::from_slice(&[]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_drop_if_empty_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            alwaysTrue : I64 -> Bool
+            alwaysTrue = \_ -> True
+
+            List.dropIf [] alwaysTrue
+            "#
+        ),
+        RocList::from_slice(&[]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_drop_if_always_false_for_non_empty_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.dropIf [1,2,3,4,5,6,7,8] (\_ -> False)
+            "#
+        ),
+        RocList::from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_drop_if_always_true_for_non_empty_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.dropIf [1,2,3,4,5,6,7,8] (\_ -> True)
+            "#
+        ),
+        RocList::from_slice(&[]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_drop_if_geq3() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.dropIf [1,2,3,4,5,6,7,8] (\n -> n >= 3)
+            "#
+        ),
+        RocList::from_slice(&[1, 2]),
+        RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_drop_if_string_eq() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+             List.dropIf ["x", "y", "x"] (\s -> s == "y")
+             "#
+        ),
+        RocList::from_slice(&[
+            RocStr::from_slice("x".as_bytes()),
+            RocStr::from_slice("x".as_bytes())
+        ]),
+        RocList<RocStr>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn list_drop_last() {
     assert_evals_to!(
         "List.dropLast [1, 2, 3]",
