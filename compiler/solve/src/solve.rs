@@ -1227,44 +1227,11 @@ fn check_for_infinite_type(
 
     while let Err((recursive, _chain)) = subs.occurs(var) {
         let description = subs.get(recursive);
-        let content = description.content;
 
         // try to make a tag union recursive, see if that helps
-        match content {
+        match description.content {
             Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
-                let rec_var = subs.fresh_unnamed_flex_var();
-                subs.set_rank(rec_var, description.rank);
-                subs.set_content(
-                    rec_var,
-                    Content::RecursionVar {
-                        opt_name: None,
-                        structure: recursive,
-                    },
-                );
-
-                let new_variable_slices = SubsSlice::reserve_variable_slices(subs, tags.len());
-
-                let it = new_variable_slices.indices().zip(tags.iter_all());
-                for (variable_slice_index, (_, slice_index)) in it {
-                    let slice = subs[slice_index];
-
-                    let new_variables = VariableSubsSlice::reserve_into_subs(subs, slice.len());
-                    for (target_index, var_index) in new_variables.indices().zip(slice) {
-                        let var = subs[var_index];
-                        subs.variables[target_index] =
-                            subs.explicit_substitute(recursive, rec_var, var);
-                    }
-
-                    subs.variable_slices[variable_slice_index] = new_variables;
-                }
-
-                let new_ext_var = subs.explicit_substitute(recursive, rec_var, ext_var);
-
-                let new_tags = UnionTags::from_slices(tags.tag_names(), new_variable_slices);
-
-                let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, new_ext_var);
-
-                subs.set_content(recursive, Content::Structure(flat_type));
+                subs.mark_tag_union_recursive(recursive, tags, ext_var);
             }
 
             _other => circular_error(subs, problems, symbol, &loc_var),

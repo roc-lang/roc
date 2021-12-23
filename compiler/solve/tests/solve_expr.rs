@@ -4717,4 +4717,36 @@ mod solve_expr {
             "{ email : Str, name : Str }a -> { email : Str, name : Str }a",
         )
     }
+
+    #[test]
+    fn issue_2217() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                LinkedList elem : [Empty, Prepend (LinkedList elem) elem]
+
+                fromList : List elem -> LinkedList elem
+                fromList = \elems -> List.walk elems Empty Prepend
+
+                fromList
+                "#
+            ),
+            "List elem -> LinkedList elem",
+        )
+    }
+
+    #[test]
+    fn issue_2217_inlined() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                fromList : List elem -> [ Empty, Prepend (LinkedList elem) elem ] as LinkedList elem
+                fromList = \elems -> List.walk elems Empty Prepend
+
+                fromList
+                "#
+            ),
+            "List elem -> LinkedList elem",
+        )
+    }
 }
