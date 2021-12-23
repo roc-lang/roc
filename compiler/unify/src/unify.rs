@@ -752,13 +752,8 @@ enum OtherTags2 {
 fn maybe_mark_tag_union_recursive(subs: &mut Subs, tag_union_var: Variable) {
     while let Err((recursive, _chain)) = subs.occurs(tag_union_var) {
         let description = subs.get(recursive);
-
-        match description.content {
-            Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
-                subs.mark_tag_union_recursive(recursive, tags, ext_var);
-            }
-            // We'll pick this up as an error elsewhere
-            _ => {}
+        if let Content::Structure(FlatType::TagUnion(tags, ext_var)) = description.content {
+            subs.mark_tag_union_recursive(recursive, tags, ext_var);
         }
     }
 }
