@@ -634,9 +634,6 @@ impl<'a> Specialized<'a> {
     }
 
     fn insert_specialized(&mut self, symbol: Symbol, layout: ProcLayout<'a>, proc: Proc<'a>) {
-        if format!("{:?}", symbol).contains("joinMapConcat") {
-            panic!("");
-        }
         for (i, s) in self.symbols.iter().enumerate() {
             if *s == symbol && self.proc_layouts[i] == layout {
                 match &self.procedures[i] {
