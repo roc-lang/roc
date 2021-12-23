@@ -1,8 +1,8 @@
 use crate::token::Token;
 
-#[derive(Clone)]
-pub struct Parser<'a> {
-    tokens: &'a [Token],
+pub struct Parser<'src, 'env> {
+    tokens: &'src [Token],
+    env: &'env mut Env,
 }
 
 /// Location in a file, expressed in number of tokens before the end of the source
@@ -18,17 +18,13 @@ pub enum Error {
     UnexpectedEof,
 }
 
-pub struct File {
-    header: Header,
-}
-
-pub enum Header {
-    App,
-    Interface,
-    Platform,
-}
-
 impl<'a> Parser<'a> {
+    pub fn new(tokens: &'a [Token]) -> Parser<'a> {
+        Parser {
+            tokens,
+        }
+    }
+
     pub fn check(&mut self, expected: Token) -> Result<TokenLoc, Error> {
         if let Some((first, rest)) = self.tokens.split_first() {
             if *first == expected {
