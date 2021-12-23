@@ -2,7 +2,6 @@ use crate::token::Token;
 
 pub struct Parser<'src, 'env> {
     tokens: &'src [Token],
-    env: &'env mut Env,
 }
 
 /// Location in a file, expressed in number of tokens before the end of the source
