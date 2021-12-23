@@ -12,7 +12,7 @@ use roc_types::subs::{
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{gather_fields_unsorted_iter, Alias, Category, ErrorType, PatternCategory};
-use roc_unify::unify::{unify, Unified::*};
+use roc_unify::unify::{unify, Mode, Unified::*};
 use std::collections::hash_map::Entry;
 
 // Type checking system adapted from Elm by Evan Czaplicki, BSD-3-Clause Licensed
@@ -206,7 +206,7 @@ fn solve(
                 expectation.get_type_ref(),
             );
 
-            match unify(subs, actual, expected, false) {
+            match unify(subs, actual, expected, Mode::Eq) {
                 Success(vars) => {
                     introduce(subs, rank, pools, &vars);
 
@@ -241,7 +241,7 @@ fn solve(
             let actual = type_to_var(subs, rank, pools, cached_aliases, source);
             let target = *target;
 
-            match unify(subs, actual, target, false) {
+            match unify(subs, actual, target, Mode::Eq) {
                 Success(vars) => {
                     introduce(subs, rank, pools, &vars);
 
@@ -295,7 +295,7 @@ fn solve(
                         cached_aliases,
                         expectation.get_type_ref(),
                     );
-                    match unify(subs, actual, expected, false) {
+                    match unify(subs, actual, expected, Mode::Eq) {
                         Success(vars) => {
                             introduce(subs, rank, pools, &vars);
 
@@ -361,9 +361,12 @@ fn solve(
                 expectation.get_type_ref(),
             );
 
-            let presence_con = matches!(constraint, Present(_, _));
+            let mode = match constraint {
+                Present(_, _) => Mode::Present,
+                _ => Mode::Eq,
+            };
 
-            match unify(subs, actual, expected, presence_con) {
+            match unify(subs, actual, expected, mode) {
                 Success(vars) => {
                     introduce(subs, rank, pools, &vars);
 
@@ -657,7 +660,7 @@ fn solve(
                     );
                     let includes = type_to_var(subs, rank, pools, cached_aliases, &tag_ty);
 
-                    match unify(subs, actual, includes, true) {
+                    match unify(subs, actual, includes, Mode::Present) {
                         Success(vars) => {
                             introduce(subs, rank, pools, &vars);
 

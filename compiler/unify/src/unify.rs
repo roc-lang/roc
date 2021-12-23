@@ -56,18 +56,26 @@ macro_rules! mismatch {
 
 type Pool = Vec<Variable>;
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Mode {
+    /// Instructs the unifier to solve two types for eqaulity.
+    ///
+    /// For example, { n : Str }a ~ { n: Str, m : Str } will solve "a" to "{ m : Str }".
+    Eq,
+    /// Instructs the unifier to treat the right-hand-side of a constraint as
+    /// present in the left-hand-side, rather than strictly equal.
+    ///
+    /// For example, t1 += [A Str] says we should "add" the tag "A Str" to the type of "t1".
+    Present,
+}
+
 #[derive(Debug)]
 pub struct Context {
     first: Variable,
     first_desc: Descriptor,
     second: Variable,
     second_desc: Descriptor,
-    // Whether this unification context should be treated as a presence constraint.
-    // When true, we should treat "second" as additive to "first", rather than
-    // strictly equal.
-    // For example, if present=true and first=t1 and second=A Str, we should "add"
-    // the tag "A Str" to the type of "t1".
-    presence: bool,
+    mode: Mode,
 }
 
 #[derive(Debug)]
@@ -80,9 +88,9 @@ pub enum Unified {
 type Outcome = Vec<Mismatch>;
 
 #[inline(always)]
-pub fn unify(subs: &mut Subs, var1: Variable, var2: Variable, presence: bool) -> Unified {
+pub fn unify(subs: &mut Subs, var1: Variable, var2: Variable, mode: Mode) -> Unified {
     let mut vars = Vec::new();
-    let mismatches = unify_pool(subs, &mut vars, var1, var2, presence);
+    let mismatches = unify_pool(subs, &mut vars, var1, var2, mode);
 
     if mismatches.is_empty() {
         Unified::Success(vars)
@@ -108,7 +116,7 @@ pub fn unify_pool(
     pool: &mut Pool,
     var1: Variable,
     var2: Variable,
-    presence: bool,
+    mode: Mode,
 ) -> Outcome {
     if subs.equivalent(var1, var2) {
         Vec::new()
@@ -118,7 +126,7 @@ pub fn unify_pool(
             first_desc: subs.get(var1),
             second: var2,
             second_desc: subs.get(var2),
-            presence,
+            mode,
         };
 
         unify_context(subs, pool, ctx)
@@ -190,10 +198,8 @@ fn unify_alias(
             // Alias wins
             merge(subs, ctx, Alias(symbol, args, real_var))
         }
-        RecursionVar { structure, .. } => {
-            unify_pool(subs, pool, real_var, *structure, ctx.presence)
-        }
-        RigidVar(_) => unify_pool(subs, pool, real_var, ctx.second, ctx.presence),
+        RecursionVar { structure, .. } => unify_pool(subs, pool, real_var, *structure, ctx.mode),
+        RigidVar(_) => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
         Alias(other_symbol, other_args, other_real_var) => {
             if symbol == *other_symbol {
                 if args.len() == other_args.len() {
@@ -206,7 +212,7 @@ fn unify_alias(
                     for (l, r) in it {
                         let l_var = subs[l];
                         let r_var = subs[r];
-                        problems.extend(unify_pool(subs, pool, l_var, r_var, ctx.presence));
+                        problems.extend(unify_pool(subs, pool, l_var, r_var, ctx.mode));
                     }
 
                     if problems.is_empty() {
@@ -221,10 +227,10 @@ fn unify_alias(
                     mismatch!("{:?}", symbol)
                 }
             } else {
-                unify_pool(subs, pool, real_var, *other_real_var, ctx.presence)
+                unify_pool(subs, pool, real_var, *other_real_var, ctx.mode)
             }
         }
-        Structure(_) => unify_pool(subs, pool, real_var, ctx.second, ctx.presence),
+        Structure(_) => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
         Error => merge(subs, ctx, Error),
     }
 }
@@ -244,14 +250,14 @@ fn unify_structure(
 
             // And if we see a flex variable on the right hand side of a presence
             // constraint, we know we need to open up the structure we're trying to unify with.
-            match (ctx.presence, flat_type) {
-                (true, FlatType::TagUnion(tags, _ext)) => {
+            match (ctx.mode, flat_type) {
+                (Mode::Present, FlatType::TagUnion(tags, _ext)) => {
                     let new_ext = subs.fresh_unnamed_flex_var();
                     let mut new_desc = ctx.first_desc.clone();
                     new_desc.content = Structure(FlatType::TagUnion(*tags, new_ext));
                     subs.set(ctx.first, new_desc);
                 }
-                (true, FlatType::FunctionOrTagUnion(tn, sym, _ext)) => {
+                (Mode::Present, FlatType::FunctionOrTagUnion(tn, sym, _ext)) => {
                     let new_ext = subs.fresh_unnamed_flex_var();
                     let mut new_desc = ctx.first_desc.clone();
                     new_desc.content = Structure(FlatType::FunctionOrTagUnion(*tn, *sym, new_ext));
@@ -268,16 +274,16 @@ fn unify_structure(
         RecursionVar { structure, .. } => match flat_type {
             FlatType::TagUnion(_, _) => {
                 // unify the structure with this unrecursive tag union
-                unify_pool(subs, pool, ctx.first, *structure, ctx.presence)
+                unify_pool(subs, pool, ctx.first, *structure, ctx.mode)
             }
             FlatType::RecursiveTagUnion(rec, _, _) => {
                 debug_assert!(is_recursion_var(subs, *rec));
                 // unify the structure with this recursive tag union
-                unify_pool(subs, pool, ctx.first, *structure, ctx.presence)
+                unify_pool(subs, pool, ctx.first, *structure, ctx.mode)
             }
             FlatType::FunctionOrTagUnion(_, _, _) => {
                 // unify the structure with this unrecursive tag union
-                unify_pool(subs, pool, ctx.first, *structure, ctx.presence)
+                unify_pool(subs, pool, ctx.first, *structure, ctx.mode)
             }
             _ => todo!("rec structure {:?}", &flat_type),
         },
@@ -289,7 +295,7 @@ fn unify_structure(
         Alias(_, _, real_var) => {
             // NB: not treating this as a presence constraint seems pivotal! I
             // can't quite figure out why, but it doesn't seem to impact other types.
-            unify_pool(subs, pool, ctx.first, *real_var, false)
+            unify_pool(subs, pool, ctx.first, *real_var, Mode::Eq)
         }
         Error => merge(subs, ctx, Error),
     }
@@ -311,7 +317,7 @@ fn unify_record(
     if separate.only_in_1.is_empty() {
         if separate.only_in_2.is_empty() {
             // these variable will be the empty record, but we must still unify them
-            let ext_problems = unify_pool(subs, pool, ext1, ext2, ctx.presence);
+            let ext_problems = unify_pool(subs, pool, ext1, ext2, ctx.mode);
 
             if !ext_problems.is_empty() {
                 return ext_problems;
@@ -327,7 +333,7 @@ fn unify_record(
             let only_in_2 = RecordFields::insert_into_subs(subs, separate.only_in_2);
             let flat_type = FlatType::Record(only_in_2, ext2);
             let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
-            let ext_problems = unify_pool(subs, pool, ext1, sub_record, ctx.presence);
+            let ext_problems = unify_pool(subs, pool, ext1, sub_record, ctx.mode);
 
             if !ext_problems.is_empty() {
                 return ext_problems;
@@ -350,7 +356,7 @@ fn unify_record(
         let only_in_1 = RecordFields::insert_into_subs(subs, separate.only_in_1);
         let flat_type = FlatType::Record(only_in_1, ext1);
         let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
-        let ext_problems = unify_pool(subs, pool, sub_record, ext2, ctx.presence);
+        let ext_problems = unify_pool(subs, pool, sub_record, ext2, ctx.mode);
 
         if !ext_problems.is_empty() {
             return ext_problems;
@@ -381,12 +387,12 @@ fn unify_record(
         let sub1 = fresh(subs, pool, ctx, Structure(flat_type1));
         let sub2 = fresh(subs, pool, ctx, Structure(flat_type2));
 
-        let rec1_problems = unify_pool(subs, pool, ext1, sub2, ctx.presence);
+        let rec1_problems = unify_pool(subs, pool, ext1, sub2, ctx.mode);
         if !rec1_problems.is_empty() {
             return rec1_problems;
         }
 
-        let rec2_problems = unify_pool(subs, pool, sub1, ext2, ctx.presence);
+        let rec2_problems = unify_pool(subs, pool, sub1, ext2, ctx.mode);
         if !rec2_problems.is_empty() {
             return rec2_problems;
         }
@@ -426,7 +432,7 @@ fn unify_shared_fields(
             pool,
             actual.into_inner(),
             expected.into_inner(),
-            ctx.presence,
+            ctx.mode,
         );
 
         if local_problems.is_empty() {
@@ -663,8 +669,8 @@ fn unify_tag_union_new(
 
     let shared_tags = separate.in_both;
 
-    if let (true, Content::Structure(FlatType::EmptyTagUnion)) =
-        (ctx.presence, subs.get(ext1).content)
+    if let (Mode::Present, Content::Structure(FlatType::EmptyTagUnion)) =
+        (ctx.mode, subs.get(ext1).content)
     {
         if !separate.only_in_2.is_empty() {
             // Create a new extension variable that we'll fill in with the
@@ -693,8 +699,8 @@ fn unify_tag_union_new(
 
     if separate.only_in_1.is_empty() {
         if separate.only_in_2.is_empty() {
-            let ext_problems = if !ctx.presence {
-                unify_pool(subs, pool, ext1, ext2, ctx.presence)
+            let ext_problems = if ctx.mode == Mode::Eq {
+                unify_pool(subs, pool, ext1, ext2, ctx.mode)
             } else {
                 // In a presence context, we don't care about ext2 being equal to ext1
                 vec![]
@@ -721,7 +727,7 @@ fn unify_tag_union_new(
             let unique_tags2 = UnionTags::insert_slices_into_subs(subs, separate.only_in_2);
             let flat_type = FlatType::TagUnion(unique_tags2, ext2);
             let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
-            let ext_problems = unify_pool(subs, pool, ext1, sub_record, ctx.presence);
+            let ext_problems = unify_pool(subs, pool, ext1, sub_record, ctx.mode);
 
             if !ext_problems.is_empty() {
                 return ext_problems;
@@ -747,8 +753,8 @@ fn unify_tag_union_new(
         let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
 
         // In a presence context, we don't care about ext2 being equal to tags1
-        if !ctx.presence {
-            let ext_problems = unify_pool(subs, pool, sub_record, ext2, ctx.presence);
+        if ctx.mode == Mode::Eq {
+            let ext_problems = unify_pool(subs, pool, sub_record, ext2, ctx.mode);
 
             if !ext_problems.is_empty() {
                 return ext_problems;
@@ -770,7 +776,7 @@ fn unify_tag_union_new(
         let unique_tags1 = UnionTags::insert_slices_into_subs(subs, separate.only_in_1);
         let unique_tags2 = UnionTags::insert_slices_into_subs(subs, separate.only_in_2);
 
-        let ext_content = if ctx.presence {
+        let ext_content = if ctx.mode == Mode::Present {
             Content::Structure(FlatType::EmptyTagUnion)
         } else {
             Content::FlexVar(None)
@@ -798,14 +804,14 @@ fn unify_tag_union_new(
 
         let snapshot = subs.snapshot();
 
-        let ext1_problems = unify_pool(subs, pool, ext1, sub2, ctx.presence);
+        let ext1_problems = unify_pool(subs, pool, ext1, sub2, ctx.mode);
         if !ext1_problems.is_empty() {
             subs.rollback_to(snapshot);
             return ext1_problems;
         }
 
-        if !ctx.presence {
-            let ext2_problems = unify_pool(subs, pool, sub1, ext2, ctx.presence);
+        if ctx.mode == Mode::Eq {
+            let ext2_problems = unify_pool(subs, pool, sub1, ext2, ctx.mode);
             if !ext2_problems.is_empty() {
                 subs.rollback_to(snapshot);
                 return ext2_problems;
@@ -890,7 +896,7 @@ fn unify_shared_tags_new(
 
             let mut problems = Vec::new();
 
-            problems.extend(unify_pool(subs, pool, actual, expected, ctx.presence));
+            problems.extend(unify_pool(subs, pool, actual, expected, ctx.mode));
 
             // clearly, this is very suspicious: these variables have just been unified. And yet,
             // not doing this leads to stack overflows
@@ -1004,11 +1010,11 @@ fn unify_flat_type(
         (EmptyRecord, EmptyRecord) => merge(subs, ctx, Structure(left.clone())),
 
         (Record(fields, ext), EmptyRecord) if fields.has_only_optional_fields(subs) => {
-            unify_pool(subs, pool, *ext, ctx.second, ctx.presence)
+            unify_pool(subs, pool, *ext, ctx.second, ctx.mode)
         }
 
         (EmptyRecord, Record(fields, ext)) if fields.has_only_optional_fields(subs) => {
-            unify_pool(subs, pool, ctx.first, *ext, ctx.presence)
+            unify_pool(subs, pool, ctx.first, *ext, ctx.mode)
         }
 
         (Record(fields1, ext1), Record(fields2, ext2)) => {
@@ -1018,11 +1024,11 @@ fn unify_flat_type(
         (EmptyTagUnion, EmptyTagUnion) => merge(subs, ctx, Structure(left.clone())),
 
         (TagUnion(tags, ext), EmptyTagUnion) if tags.is_empty() => {
-            unify_pool(subs, pool, *ext, ctx.second, ctx.presence)
+            unify_pool(subs, pool, *ext, ctx.second, ctx.mode)
         }
 
         (EmptyTagUnion, TagUnion(tags, ext)) if tags.is_empty() => {
-            unify_pool(subs, pool, ctx.first, *ext, ctx.presence)
+            unify_pool(subs, pool, ctx.first, *ext, ctx.mode)
         }
 
         (TagUnion(tags1, ext1), TagUnion(tags2, ext2)) => {
@@ -1053,7 +1059,7 @@ fn unify_flat_type(
             let rec = Rec::Both(*rec1, *rec2);
             let mut problems =
                 unify_tag_union_new(subs, pool, ctx, *tags1, *ext1, *tags2, *ext2, rec);
-            problems.extend(unify_pool(subs, pool, *rec1, *rec2, ctx.presence));
+            problems.extend(unify_pool(subs, pool, *rec1, *rec2, ctx.mode));
 
             problems
         }
@@ -1071,8 +1077,8 @@ fn unify_flat_type(
             if l_args.len() == r_args.len() =>
         {
             let arg_problems = unify_zip_slices(subs, pool, *l_args, *r_args);
-            let ret_problems = unify_pool(subs, pool, *l_ret, *r_ret, ctx.presence);
-            let closure_problems = unify_pool(subs, pool, *l_closure, *r_closure, ctx.presence);
+            let ret_problems = unify_pool(subs, pool, *l_ret, *r_ret, ctx.mode);
+            let closure_problems = unify_pool(subs, pool, *l_closure, *r_closure, ctx.mode);
 
             if arg_problems.is_empty() && closure_problems.is_empty() && ret_problems.is_empty() {
                 merge(subs, ctx, Structure(Func(*r_args, *r_closure, *r_ret)))
@@ -1118,7 +1124,7 @@ fn unify_flat_type(
             let tag_name_2_ref = &subs[*tag_name_2];
 
             if tag_name_1_ref == tag_name_2_ref {
-                let problems = unify_pool(subs, pool, *ext1, *ext2, ctx.presence);
+                let problems = unify_pool(subs, pool, *ext1, *ext2, ctx.mode);
                 if problems.is_empty() {
                     let content = subs.get_content_without_compacting(ctx.second).clone();
                     merge(subs, ctx, content)
@@ -1187,9 +1193,7 @@ fn unify_zip_slices(
         let l_var = subs[l_index];
         let r_var = subs[r_index];
 
-        problems.extend(unify_pool(
-            subs, pool, l_var, r_var, false, /* presence */
-        ));
+        problems.extend(unify_pool(subs, pool, l_var, r_var, Mode::Eq));
     }
 
     problems
@@ -1267,7 +1271,7 @@ fn unify_recursion(
 
         Structure(_) => {
             // unify the structure variable with this Structure
-            unify_pool(subs, pool, structure, ctx.second, ctx.presence)
+            unify_pool(subs, pool, structure, ctx.second, ctx.mode)
         }
         RigidVar(_) => mismatch!("RecursionVar {:?} with rigid {:?}", ctx.first, &other),
 
@@ -1283,7 +1287,7 @@ fn unify_recursion(
         Alias(_, _, actual) => {
             // look at the type the alias stands for
 
-            unify_pool(subs, pool, ctx.first, *actual, ctx.presence)
+            unify_pool(subs, pool, ctx.first, *actual, ctx.mode)
         }
 
         Error => merge(subs, ctx, Error),
@@ -1353,9 +1357,9 @@ fn unify_function_or_tag_union_and_func(
     let new_tag_union_var = fresh(subs, pool, ctx, content);
 
     let mut problems = if left {
-        unify_pool(subs, pool, new_tag_union_var, function_return, ctx.presence)
+        unify_pool(subs, pool, new_tag_union_var, function_return, ctx.mode)
     } else {
-        unify_pool(subs, pool, function_return, new_tag_union_var, ctx.presence)
+        unify_pool(subs, pool, function_return, new_tag_union_var, ctx.mode)
     };
 
     {
@@ -1377,21 +1381,9 @@ fn unify_function_or_tag_union_and_func(
         );
 
         let closure_problems = if left {
-            unify_pool(
-                subs,
-                pool,
-                tag_lambda_set,
-                function_lambda_set,
-                ctx.presence,
-            )
+            unify_pool(subs, pool, tag_lambda_set, function_lambda_set, ctx.mode)
         } else {
-            unify_pool(
-                subs,
-                pool,
-                function_lambda_set,
-                tag_lambda_set,
-                ctx.presence,
-            )
+            unify_pool(subs, pool, function_lambda_set, tag_lambda_set, ctx.mode)
         };
 
         problems.extend(closure_problems);

@@ -15,6 +15,7 @@ use roc_types::types::{
     gather_fields_unsorted_iter, Alias, Category, ErrorType, PatternCategory, RecordField,
 };
 use roc_unify::unify::unify;
+use roc_unify::unify::Mode;
 use roc_unify::unify::Unified::*;
 
 use crate::constrain::Constraint;
@@ -224,7 +225,7 @@ fn solve<'a>(
                 expectation.get_type_ref(),
             );
 
-            match unify(subs, actual, expected, false) {
+            match unify(subs, actual, expected, Mode::Eq) {
                 Success(vars) => {
                     introduce(subs, rank, pools, &vars);
 
@@ -317,7 +318,7 @@ fn solve<'a>(
                         expectation.get_type_ref(),
                     );
 
-                    match unify(subs, actual, expected, false) {
+                    match unify(subs, actual, expected, Mode::Eq) {
                         Success(vars) => {
                             introduce(subs, rank, pools, &vars);
 
@@ -387,7 +388,7 @@ fn solve<'a>(
             );
 
             // TODO(ayazhafiz): presence constraints for Expr2/Type2
-            match unify(subs, actual, expected, false) {
+            match unify(subs, actual, expected, Mode::Eq) {
                 Success(vars) => {
                     introduce(subs, rank, pools, &vars);
 
