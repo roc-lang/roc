@@ -9,7 +9,7 @@ use crate::parser::{
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_region::all::{Loc, Region};
+use roc_region::all::{Loc, Region, Position};
 
 pub fn located_help<'a>(
     min_indent: u16,
@@ -48,7 +48,7 @@ fn tag_union_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, ET
 }
 
 fn fail_type_start<'a, T: 'a>() -> impl Parser<'a, T, EType<'a>> {
-    |_arena, state: State<'a>| Err((NoProgress, EType::TStart(state.line, state.column), state))
+    |_arena, state: State<'a>| Err((NoProgress, EType::TStart(state.pos), state))
 }
 
 fn term<'a>(min_indent: u16) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
@@ -191,15 +191,14 @@ fn tag_type<'a>(min_indent: u16) -> impl Parser<'a, Tag<'a>, ETypeTagUnion<'a>> 
     }
 }
 
-use crate::parser::{Col, Row};
 fn parse_tag_name<'a, F, E>(to_problem: F) -> impl Parser<'a, &'a str, E>
 where
-    F: Fn(Row, Col) -> E,
+    F: Fn(Position) -> E,
     E: 'a,
 {
     move |arena, state: State<'a>| match crate::ident::tag_name().parse(arena, state) {
         Ok(good) => Ok(good),
-        Err((progress, _, state)) => Err((progress, to_problem(state.line, state.column), state)),
+        Err((progress, _, state)) => Err((progress, to_problem(state.pos), state)),
     }
 }
 
@@ -213,10 +212,9 @@ fn record_type_field<'a>(
     (move |arena, state: State<'a>| {
         // You must have a field name, e.g. "email"
         // using the initial row/col is important for error reporting
-        let row = state.line;
-        let col = state.column;
+        let pos = state.pos;
         let (progress, loc_label, state) = loc!(specialize(
-            move |_, _, _| ETypeRecord::Field(row, col),
+            move |_, _| ETypeRecord::Field(pos),
             lowercase_ident()
         ))
         .parse(arena, state)?;
@@ -370,7 +368,7 @@ fn expression<'a>(
                     ),
                     |_, state: State<'a>| Err((
                         NoProgress,
-                        EType::TFunctionArgument(state.line, state.column),
+                        EType::TFunctionArgument(state.pos),
                         state
                     ))
                 ]
@@ -464,7 +462,7 @@ fn parse_concrete_type<'a>(
             Ok((MadeProgress, answer, state))
         }
         Err((NoProgress, _, state)) => {
-            Err((NoProgress, ETypeApply::End(state.line, state.column), state))
+            Err((NoProgress, ETypeApply::End(state.pos), state))
         }
         Err((MadeProgress, _, mut state)) => {
             // we made some progress, but ultimately failed.
@@ -474,8 +472,8 @@ fn parse_concrete_type<'a>(
             let parsed_str =
                 unsafe { std::str::from_utf8_unchecked(&initial_bytes[..chomped + delta]) };
 
-            state = state.advance_without_indenting_ee(chomped, |r, c| {
-                ETypeApply::Space(crate::parser::BadInputError::LineTooLong, r, c)
+            state = state.advance_without_indenting_ee(chomped, |pos| {
+                ETypeApply::Space(crate::parser::BadInputError::LineTooLong, pos)
             })?;
 
             Ok((MadeProgress, TypeAnnotation::Malformed(parsed_str), state))
@@ -495,7 +493,7 @@ fn parse_type_variable<'a>(
         }
         Err((progress, _, state)) => Err((
             progress,
-            EType::TBadTypeVariable(state.line, state.column),
+            EType::TBadTypeVariable(state.pos),
             state,
         )),
     }

@@ -160,7 +160,7 @@ fn number_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
 
 fn string_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
     specialize(
-        |_, r, c| EPattern::Start(r, c),
+        |_, pos| EPattern::Start(pos),
         map!(crate::string_literal::parse(), Pattern::StrLiteral),
     )
 }
@@ -173,7 +173,7 @@ fn loc_ident_pattern_help<'a>(
         let original_state = state.clone();
 
         let (_, loc_ident, state) =
-            specialize(|_, r, c| EPattern::Start(r, c), loc!(parse_ident)).parse(arena, state)?;
+            specialize(|_, pos| EPattern::Start(pos), loc!(parse_ident)).parse(arena, state)?;
 
         match loc_ident.value {
             Ident::GlobalTag(tag) => {
@@ -236,7 +236,7 @@ fn loc_ident_pattern_help<'a>(
                 if crate::keyword::KEYWORDS.contains(&parts[0]) {
                     Err((
                         NoProgress,
-                        EPattern::End(original_state.line, original_state.column),
+                        EPattern::End(original_state.pos),
                         original_state,
                     ))
                 } else if module_name.is_empty() && parts.len() == 1 {
@@ -308,10 +308,9 @@ fn lowercase_ident_pattern<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, &'a str, EPattern<'a>> {
-    let row = state.line;
-    let col = state.column;
+    let pos = state.pos;
 
-    specialize(move |_, _, _| EPattern::End(row, col), lowercase_ident()).parse(arena, state)
+    specialize(move |_, _| EPattern::End(pos), lowercase_ident()).parse(arena, state)
 }
 
 #[inline(always)]
@@ -344,10 +343,9 @@ fn record_pattern_field<'a>(min_indent: u16) -> impl Parser<'a, Loc<Pattern<'a>>
     move |arena, state: State<'a>| {
         // You must have a field name, e.g. "email"
         // using the initial row/col is important for error reporting
-        let row = state.line;
-        let col = state.column;
+        let pos = state.pos;
         let (progress, loc_label, state) = loc!(specialize(
-            move |_, _, _| PRecord::Field(row, col),
+            move |_, _| PRecord::Field(pos),
             lowercase_ident()
         ))
         .parse(arena, state)?;

@@ -1,5 +1,5 @@
 use crate::parser::Progress::*;
-use crate::parser::{BadInputError, Col, Progress, Row};
+use crate::parser::{BadInputError, Progress};
 use bumpalo::Bump;
 use roc_region::all::{Position, Region};
 use std::fmt;
@@ -10,10 +10,8 @@ pub struct State<'a> {
     /// The raw input bytes from the file.
     bytes: &'a [u8],
 
-    /// Current line of the input
-    pub line: u32,
-    /// Current column of the input
-    pub column: u16,
+    /// Current position within the input (line/column)
+    pub pos: Position,
 
     /// Current indentation level, in columns
     /// (so no indent is col 1 - this saves an arithmetic operation.)
@@ -24,8 +22,7 @@ impl<'a> State<'a> {
     pub fn new(bytes: &'a [u8]) -> State<'a> {
         State {
             bytes,
-            line: 0,
-            column: 0,
+            pos: Position::default(),
             indent_col: 0,
         }
     }
@@ -41,12 +38,10 @@ impl<'a> State<'a> {
         state
     }
 
-    /// Returns whether the parser has reached the end of the input
+    /// Returns the current position
+    // TODO: replace this with just accessing the field
     pub const fn get_position(&self) -> Position {
-        Position {
-            row: self.line,
-            col: self.column,
-        }
+        self.pos
     }
 
     /// Returns whether the parser has reached the end of the input
@@ -64,10 +59,10 @@ impl<'a> State<'a> {
         to_error: TE,
     ) -> Result<Self, (Progress, E, Self)>
     where
-        TE: Fn(BadInputError, Row, Col) -> E,
+        TE: Fn(BadInputError, Position) -> E,
     {
-        self.advance_without_indenting_ee(quantity, |r, c| {
-            to_error(BadInputError::LineTooLong, r, c)
+        self.advance_without_indenting_ee(quantity, |p| {
+            to_error(BadInputError::LineTooLong, p)
         })
     }
 
@@ -77,18 +72,21 @@ impl<'a> State<'a> {
         to_error: TE,
     ) -> Result<Self, (Progress, E, Self)>
     where
-        TE: Fn(Row, Col) -> E,
+        TE: Fn(Position) -> E,
     {
-        match (self.column as usize).checked_add(quantity) {
+        match (self.pos.column as usize).checked_add(quantity) {
             Some(column_usize) if column_usize <= u16::MAX as usize => {
                 Ok(State {
                     bytes: &self.bytes[quantity..],
-                    column: column_usize as u16,
+                    pos: Position {
+                        line: self.pos.line,
+                        column: column_usize as u16,
+                    },
                     // Once we hit a nonspace character, we are no longer indenting.
                     ..self
                 })
             }
-            _ => Err((NoProgress, to_error(self.line, self.column), self)),
+            _ => Err((NoProgress, to_error(self.pos), self)),
         }
     }
 
@@ -97,15 +95,16 @@ impl<'a> State<'a> {
     /// useful when parsing something "manually" (using input.chars())
     /// and thus wanting a Region while not having access to loc().
     pub fn len_region(&self, length: u16) -> Region {
-        Region {
-            start_col: self.column,
-            start_line: self.line,
-            end_col: self
-                .column
-                .checked_add(length)
-                .unwrap_or_else(|| panic!("len_region overflowed")),
-            end_line: self.line,
-        }
+        Region::new(self.pos,
+            Position {
+                line: self.pos.line,
+                column: self
+                    .pos
+                    .column
+                    .checked_add(length)
+                    .unwrap_or_else(|| panic!("len_region overflowed")),
+            }
+        )
     }
 
     /// Return a failing ParseResult for the given FailReason
@@ -128,7 +127,7 @@ impl<'a> fmt::Debug for State<'a> {
             Err(_) => write!(f, "\n\tbytes: [invalid utf8] {:?}", self.bytes)?,
         }
 
-        write!(f, "\n\t(line, col): ({}, {}),", self.line, self.column)?;
+        write!(f, "\n\t(line, col): ({}, {}),", self.pos.line, self.pos.column)?;
         write!(f, "\n\tindent_col: {}", self.indent_col)?;
         write!(f, "\n}}")
     }

@@ -67,7 +67,7 @@ fn chomp_number_base<'a>(
 
     let string = unsafe { std::str::from_utf8_unchecked(&bytes[..chomped]) };
 
-    let new = state.advance_without_indenting_ee(chomped + 2 + is_negative as usize, |_, _| {
+    let new = state.advance_without_indenting_ee(chomped + 2 + is_negative as usize, |_| {
         ENumber::LineTooLong
     })?;
 
@@ -102,7 +102,7 @@ fn chomp_number_dec<'a>(
     let string =
         unsafe { std::str::from_utf8_unchecked(&state.bytes()[0..chomped + is_negative as usize]) };
 
-    let new = state.advance_without_indenting_ee(chomped + is_negative as usize, |_, _| {
+    let new = state.advance_without_indenting_ee(chomped + is_negative as usize, |_| {
         ENumber::LineTooLong
     })?;
 

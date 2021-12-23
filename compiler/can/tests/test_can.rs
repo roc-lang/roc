@@ -17,7 +17,7 @@ mod test_can {
     use roc_can::expr::Expr::{self, *};
     use roc_can::expr::{ClosureData, Recursive};
     use roc_problem::can::{CycleEntry, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
-    use roc_region::all::Region;
+    use roc_region::all::{Region, Position};
     use std::{f64, i64};
 
     fn assert_can(input: &str, expected: Expr) {
@@ -943,8 +943,8 @@ mod test_can {
 
         let problem = Problem::RuntimeError(RuntimeError::CircularDef(vec![CycleEntry {
             symbol: interns.symbol(home, "x".into()),
-            symbol_region: Region::new(0, 0, 0, 1),
-            expr_region: Region::new(0, 0, 4, 5),
+            symbol_region: Region::new(Position { line: 0, column: 0 }, Position { line: 0, column: 1 }),
+            expr_region: Region::new(Position { line: 0, column: 4 }, Position { line: 0, column: 5}),
         }]));
 
         assert_eq!(is_circular_def, true);
@@ -974,18 +974,18 @@ mod test_can {
         let problem = Problem::RuntimeError(RuntimeError::CircularDef(vec![
             CycleEntry {
                 symbol: interns.symbol(home, "x".into()),
-                symbol_region: Region::new(0, 0, 0, 1),
-                expr_region: Region::new(0, 0, 4, 5),
+                symbol_region: Region::new(Position { line: 0, column: 0 }, Position { line: 0, column: 1}),
+                expr_region: Region::new(Position { line: 0, column: 4 }, Position { line: 0, column: 5}),
             },
             CycleEntry {
                 symbol: interns.symbol(home, "y".into()),
-                symbol_region: Region::new(1, 1, 0, 1),
-                expr_region: Region::new(1, 1, 4, 5),
+                symbol_region: Region::new(Position { line: 1, column: 0 }, Position { line: 1, column: 1}),
+                expr_region: Region::new(Position { line: 1, column: 4 }, Position { line: 1, column: 5}),
             },
             CycleEntry {
                 symbol: interns.symbol(home, "z".into()),
-                symbol_region: Region::new(2, 2, 0, 1),
-                expr_region: Region::new(2, 2, 4, 5),
+                symbol_region: Region::new(Position { line: 2, column: 0}, Position { line: 2, column: 1}),
+                expr_region: Region::new(Position { line: 2, column: 4}, Position { line: 2, column: 5}),
             },
         ]));
 

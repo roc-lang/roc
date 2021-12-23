@@ -8,14 +8,14 @@ use crate::header::{
 use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    backtrackable, specialize, word1, word2, Col, EEffects, EExposes, EHeader, EImports, EPackages,
-    EProvides, ERequires, ETypedIdent, Parser, Row, SyntaxError,
+    backtrackable, specialize, word1, word2, EEffects, EExposes, EHeader, EImports, EPackages,
+    EProvides, ERequires, ETypedIdent, Parser, SyntaxError,
 };
 use crate::state::State;
 use crate::string_literal;
 use crate::type_annotation;
 use bumpalo::collections::Vec;
-use roc_region::all::Loc;
+use roc_region::all::{Loc, Position};
 
 fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
     |_arena, state: State<'a>| {
@@ -24,7 +24,7 @@ fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
         } else {
             Err((
                 NoProgress,
-                SyntaxError::NotEndOfFile(state.line, state.column),
+                SyntaxError::NotEndOfFile(state.pos),
                 state,
             ))
         }
@@ -37,7 +37,7 @@ pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Loc<Def<'a>>>, SyntaxError<'
     let min_indent = 0;
     skip_second!(
         specialize(
-            |e, _, _| SyntaxError::Expr(e),
+            |e, _| SyntaxError::Expr(e),
             crate::expr::defs(min_indent),
         ),
         end_of_file()
@@ -175,7 +175,7 @@ fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, ()> {
     |_, mut state: State<'a>| match chomp_module_name(state.bytes()) {
         Ok(name) => {
             let width = name.len();
-            state.column += width as u16;
+            state.pos.column += width as u16;
             state = state.advance(width);
 
             Ok((MadeProgress, ModuleName::new(name), state))
@@ -316,7 +316,7 @@ struct ProvidesTo<'a> {
 fn provides_to_package<'a>() -> impl Parser<'a, To<'a>, EProvides<'a>> {
     one_of![
         specialize(
-            |_, r, c| EProvides::Identifier(r, c),
+            |_, pos| EProvides::Identifier(pos),
             map!(lowercase_ident(), To::ExistingPackage)
         ),
         specialize(EProvides::Package, map!(package_or_path(), To::NewPackage))
@@ -395,12 +395,12 @@ fn exposes_entry<'a, F, E>(
     to_expectation: F,
 ) -> impl Parser<'a, Loc<Spaced<'a, ExposedName<'a>>>, E>
 where
-    F: Fn(crate::parser::Row, crate::parser::Col) -> E,
+    F: Fn(Position) -> E,
     F: Copy,
     E: 'a,
 {
     loc!(map!(
-        specialize(|_, r, c| to_expectation(r, c), unqualified_ident()),
+        specialize(|_, pos| to_expectation(pos), unqualified_ident()),
         |n| Spaced::Item(ExposedName::new(n))
     ))
 }
@@ -448,7 +448,7 @@ fn requires_rigids<'a>(
 ) -> impl Parser<'a, Collection<'a, Loc<Spaced<'a, PlatformRigid<'a>>>>, ERequires<'a>> {
     collection_trailing_sep_e!(
         word1(b'{', ERequires::ListStart),
-        specialize(|_, r, c| ERequires::Rigid(r, c), loc!(requires_rigid())),
+        specialize(|_, pos| ERequires::Rigid(pos), loc!(requires_rigid())),
         word1(b',', ERequires::ListEnd),
         word1(b'}', ERequires::ListEnd),
         min_indent,
@@ -464,7 +464,7 @@ fn requires_rigid<'a>() -> impl Parser<'a, Spaced<'a, PlatformRigid<'a>>, ()> {
     map!(
         and!(
             lowercase_ident(),
-            skip_first!(word2(b'=', b'>', |_, _| ()), uppercase_ident())
+            skip_first!(word2(b'=', b'>', |_| ()), uppercase_ident())
         ),
         |(rigid, alias)| Spaced::Item(PlatformRigid { rigid, alias })
     )
@@ -525,10 +525,10 @@ fn exposes_values<'a>() -> impl Parser<
 fn spaces_around_keyword<'a, E>(
     min_indent: u16,
     keyword: &'static str,
-    expectation: fn(Row, Col) -> E,
-    space_problem: fn(crate::parser::BadInputError, Row, Col) -> E,
-    indent_problem1: fn(Row, Col) -> E,
-    indent_problem2: fn(Row, Col) -> E,
+    expectation: fn(Position) -> E,
+    space_problem: fn(crate::parser::BadInputError, Position) -> E,
+    indent_problem1: fn(Position) -> E,
+    indent_problem2: fn(Position) -> E,
 ) -> impl Parser<'a, (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]), E>
 where
     E: 'a,
@@ -580,12 +580,12 @@ fn exposes_module<'a, F, E>(
     to_expectation: F,
 ) -> impl Parser<'a, Loc<Spaced<'a, ModuleName<'a>>>, E>
 where
-    F: Fn(crate::parser::Row, crate::parser::Col) -> E,
+    F: Fn(Position) -> E,
     F: Copy,
     E: 'a,
 {
     loc!(map!(
-        specialize(|_, r, c| to_expectation(r, c), module_name()),
+        specialize(|_, pos| to_expectation(pos), module_name()),
         Spaced::Item
     ))
 }
@@ -688,14 +688,14 @@ fn effects<'a>() -> impl Parser<'a, Effects<'a>, EEffects<'a>> {
 
         // e.g. `fx.`
         let (_, type_shortname, state) = skip_second!(
-            specialize(|_, r, c| EEffects::Shorthand(r, c), lowercase_ident()),
+            specialize(|_, pos| EEffects::Shorthand(pos), lowercase_ident()),
             word1(b'.', EEffects::ShorthandDot)
         )
         .parse(arena, state)?;
 
         // the type name, e.g. Effects
         let (_, (type_name, spaces_after_type_name), state) = and!(
-            specialize(|_, r, c| EEffects::TypeName(r, c), uppercase_ident()),
+            specialize(|_, pos| EEffects::TypeName(pos), uppercase_ident()),
             space0_e(min_indent, EEffects::Space, EEffects::IndentListStart)
         )
         .parse(arena, state)?;
@@ -738,7 +738,7 @@ fn typed_ident<'a>() -> impl Parser<'a, Spaced<'a, TypedIdent<'a>>, ETypedIdent<
         and!(
             and!(
                 loc!(specialize(
-                    |_, r, c| ETypedIdent::Identifier(r, c),
+                    |_, pos| ETypedIdent::Identifier(pos),
                     lowercase_ident()
                 )),
                 space0_e(min_indent, ETypedIdent::Space, ETypedIdent::IndentHasType)
@@ -767,16 +767,16 @@ fn typed_ident<'a>() -> impl Parser<'a, Spaced<'a, TypedIdent<'a>>, ETypedIdent<
 }
 
 fn shortname<'a>() -> impl Parser<'a, &'a str, EImports> {
-    specialize(|_, r, c| EImports::Shorthand(r, c), lowercase_ident())
+    specialize(|_, pos| EImports::Shorthand(pos), lowercase_ident())
 }
 
 fn module_name_help<'a, F, E>(to_expectation: F) -> impl Parser<'a, ModuleName<'a>, E>
 where
-    F: Fn(crate::parser::Row, crate::parser::Col) -> E,
+    F: Fn(Position) -> E,
     E: 'a,
     F: 'a,
 {
-    specialize(move |_, r, c| to_expectation(r, c), module_name())
+    specialize(move |_, pos| to_expectation(pos), module_name())
 }
 
 #[inline(always)]

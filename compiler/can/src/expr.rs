@@ -439,7 +439,7 @@ pub fn canonicalize_expr<'a>(
             // we parse underscores, but they are not valid expression syntax
             let problem = roc_problem::can::RuntimeError::MalformedIdentifier(
                 (*name).into(),
-                roc_parse::ident::BadIdent::Underscore(region.start_line, region.start_col),
+                roc_parse::ident::BadIdent::Underscore(region.start()),
                 region,
             );
 
@@ -757,18 +757,14 @@ pub fn canonicalize_expr<'a>(
             use roc_problem::can::RuntimeError::*;
 
             let region1 = Region::new(
-                binop1_position.row,
-                binop1_position.row,
-                binop1_position.col,
-                binop1_position.col + binop1.width(),
+                *binop1_position,
+                binop1_position.bump_column(binop1.width()),
             );
             let loc_binop1 = Loc::at(region1, *binop1);
 
             let region2 = Region::new(
-                binop2_position.row,
-                binop2_position.row,
-                binop2_position.col,
-                binop2_position.col + binop2.width(),
+                *binop2_position,
+                binop2_position.bump_column(binop2.width()),
             );
             let loc_binop2 = Loc::at(region2, *binop2);
 
