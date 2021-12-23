@@ -4318,7 +4318,7 @@ pub fn with_hole<'a>(
                         procs,
                         layout_cache,
                         args[1].0, // the closure
-                        Located::at_zero(args[1].1.clone()),
+                        Loc::at_zero(args[1].1.clone()),
                         arg_symbols[1],
                         stmt,
                     )
