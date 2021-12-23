@@ -58,7 +58,7 @@ type Pool = Vec<Variable>;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Mode {
-    /// Instructs the unifier to solve two types for eqaulity.
+    /// Instructs the unifier to solve two types for equality.
     ///
     /// For example, { n : Str }a ~ { n: Str, m : Str } will solve "a" to "{ m : Str }".
     Eq,
